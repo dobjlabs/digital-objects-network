@@ -20,14 +20,16 @@ html,
 body,
 #root {
   width: 100%;
-  min-height: 100%;
+  height: 100%;
   margin: 0;
+  overflow: hidden;
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   background: #ececec;
+  overflow: hidden;
 }
 
 .objects-pane {
@@ -66,10 +68,11 @@ body,
 .workspace {
   flex: 1;
   display: grid;
-  grid-template-rows: minmax(280px, 1fr) auto minmax(220px, 0.62fr);
+  grid-template-rows: minmax(0, 3fr) auto minmax(0, 2fr);
   border: 1px solid #323232;
   border-left: none;
   min-width: 0;
+  min-height: 0;
 }
 
 .stage {
@@ -77,6 +80,7 @@ body,
   align-items: center;
   justify-content: center;
   background: #efefef;
+  min-height: 0;
 }
 
 .mine-button {
@@ -147,13 +151,19 @@ body,
 .metrics-panel {
   padding: 18px;
   background: #efefef;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .console-card {
   max-width: 760px;
+  height: 100%;
   border: 1px solid #cfd4db;
   background: #f0f0f0;
   padding: 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .cpu-label {
@@ -164,18 +174,22 @@ body,
 }
 
 .console-box {
-  height: 290px;
+  flex: 1;
   border: 2px solid #c6ccd3;
   background: #eceff2;
   padding: 12px 12px 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .cpu-chart {
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+  display: block;
 }
 
 .grid-line {
@@ -203,6 +217,7 @@ body,
 @media (max-width: 920px) {
   .app-shell {
     flex-direction: column;
+    overflow: auto;
   }
 
   .objects-pane {
@@ -213,6 +228,7 @@ body,
   .workspace {
     border-left: 1px solid #323232;
     border-top: none;
+    min-height: 0;
   }
 
   .cpu-label {
@@ -220,6 +236,6 @@ body,
   }
 
   .console-box {
-    height: 220px;
+    min-height: 140px;
   }
 }
