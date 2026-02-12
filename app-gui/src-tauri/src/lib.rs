@@ -124,6 +124,17 @@ fn run_cpu_burn(duration: Duration) {
     }
 }
 
+fn short_hash_id(seed: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(seed.as_bytes());
+    let digest = hasher.finalize();
+    // 8 hex chars is short but still practical for local uniqueness.
+    digest[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
 #[tauri::command]
 fn sample_app_cpu(monitor: tauri::State<'_, CpuMonitor>) -> f32 {
     let mut system = match monitor.system.lock() {
@@ -163,8 +174,26 @@ async fn mine_copper(
         run_cpu_burn(Duration::from_secs(10));
 
         let objects_path = objects_dir(&app_handle)?;
-        let file_name = "copper.pod";
-        let file_path = objects_path.join(file_name);
+        let mut file_name = String::new();
+        for nonce in 0..1000_u32 {
+            let seed = format!(
+                "{}:{}:{:?}",
+                std::process::id(),
+                nonce,
+                std::time::SystemTime::now()
+            );
+            let id = short_hash_id(&seed);
+            let candidate = format!("copper_{id}.pod");
+            if !objects_path.join(&candidate).exists() {
+                file_name = candidate;
+                break;
+            }
+        }
+        if file_name.is_empty() {
+            return Err("failed to allocate unique copper file id".to_string());
+        }
+
+        let file_path = objects_path.join(&file_name);
         let timestamp = format!("{:?}", std::time::SystemTime::now());
         let contents = format!("resource=copper\nstatus=mined\ncreated_at={timestamp}\n");
         fs::write(&file_path, contents).map_err(|err| format!("failed to write pod file: {err}"))?;
