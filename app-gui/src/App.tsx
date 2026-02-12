@@ -1,41 +1,61 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
+const MAX_CPU_POINTS = 120;
+
 function App() {
   const [isMining, setIsMining] = useState(false);
-  const [cpuSeconds, setCpuSeconds] = useState(0);
-  const [logs, setLogs] = useState<string[]>([
-    "[ready] Miner initialized.",
-    "[ready] Waiting for command.",
-  ]);
+  const [cpuUsage, setCpuUsage] = useState(0);
+  const [cpuHistory, setCpuHistory] = useState<number[]>([]);
 
   useEffect(() => {
-    if (!isMining) {
-      return;
-    }
+    let isMounted = true;
 
-    const tickInterval = setInterval(() => {
-      setCpuSeconds((value) => value + 1);
-    }, 1000);
+    const sampleCpu = async () => {
+      try {
+        const sample = await invoke<number>("sample_app_cpu");
+        if (!isMounted) {
+          return;
+        }
 
-    const logInterval = setInterval(() => {
-      setLogs((prev) => {
-        const timestamp = new Date().toLocaleTimeString();
-        const next = [...prev, `[${timestamp}] mining copper shard...`];
-        return next.slice(-10);
-      });
-    }, 2500);
+        const bounded = Math.max(0, Math.min(sample, 100));
+        setCpuUsage(bounded);
+        setCpuHistory((prev) => [...prev, bounded].slice(-MAX_CPU_POINTS));
+      } catch {
+        if (!isMounted) {
+          return;
+        }
+        setCpuUsage(0);
+      }
+    };
+
+    sampleCpu();
+    const intervalId = setInterval(sampleCpu, 500);
 
     return () => {
-      clearInterval(tickInterval);
-      clearInterval(logInterval);
+      isMounted = false;
+      clearInterval(intervalId);
     };
-  }, [isMining]);
+  }, []);
 
   const buttonLabel = useMemo(
     () => (isMining ? "Mining Copper..." : "Mine Copper"),
     [isMining],
   );
+  const chartPoints = useMemo(() => {
+    if (cpuHistory.length < 2) {
+      return "";
+    }
+
+    return cpuHistory
+      .map((value, index) => {
+        const x = (index / (MAX_CPU_POINTS - 1)) * 100;
+        const y = 100 - value;
+        return `${x},${y}`;
+      })
+      .join(" ");
+  }, [cpuHistory]);
 
   return (
     <div className="app-shell">
@@ -75,13 +95,18 @@ function App() {
 
         <section className="metrics-panel">
           <div className="console-card">
-            <p className="cpu-label">CPU Time Spent: {cpuSeconds}s</p>
+            <p className="cpu-label">App CPU Usage: {cpuUsage.toFixed(1)}%</p>
             <div className="console-box" aria-live="polite">
-              {logs.map((entry, index) => (
-                <p key={`${entry}-${index}`} className="console-line">
-                  {entry}
-                </p>
-              ))}
+              <svg className="cpu-chart" viewBox="0 0 100 100" preserveAspectRatio="none">
+                <line className="grid-line" x1="0" y1="25" x2="100" y2="25" />
+                <line className="grid-line" x1="0" y1="50" x2="100" y2="50" />
+                <line className="grid-line" x1="0" y1="75" x2="100" y2="75" />
+                <polyline className="cpu-line" points={chartPoints} />
+              </svg>
+              <div className="cpu-axis-labels">
+                <span>100%</span>
+                <span>0%</span>
+              </div>
             </div>
           </div>
         </section>
