@@ -9,7 +9,8 @@ function App() {
   const [cpuUsage, setCpuUsage] = useState(0);
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
   const [objects, setObjects] = useState<string[]>([]);
-  const [mineStatus, setMineStatus] = useState("Ready.");
+  const [mineStatus, setMineStatus] = useState("");
+  const [openStatus, setOpenStatus] = useState("");
 
   const loadObjects = async () => {
     try {
@@ -78,7 +79,7 @@ function App() {
     }
 
     setIsMining(true);
-    setMineStatus("Mining started. Running hash workload for 10 seconds...");
+    setMineStatus("Mining started. Running hash workload...");
     try {
       const objectName = await invoke<string>("mine_copper");
       await loadObjects();
@@ -91,27 +92,57 @@ function App() {
     }
   };
 
+  const handleOpenObjectsFolder = async () => {
+    try {
+      await invoke("open_objects_folder");
+      setOpenStatus("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setOpenStatus(`Failed to open folder: ${message}`);
+    }
+  };
+
   return (
     <div className="app-shell">
       <aside className="objects-pane">
-        <h2 className="objects-title">
-          <span className="icon-folder" aria-hidden="true">
-            <svg viewBox="0 0 24 24" role="img" focusable="false">
-              <path d="M3 6.75A1.75 1.75 0 0 1 4.75 5h4.1c.46 0 .9.19 1.23.52l1.4 1.4c.14.14.34.23.54.23h7.23A1.75 1.75 0 0 1 21 8.9v8.35A1.75 1.75 0 0 1 19.25 19H4.75A1.75 1.75 0 0 1 3 17.25z" />
-            </svg>
-          </span>
-          Your Objects
-        </h2>
+        <h2 className="objects-title">Your Objects</h2>
         <div className="objects-list" aria-live="polite">
+          <button
+            type="button"
+            className="tree-row root-row"
+            onClick={handleOpenObjectsFolder}
+          >
+            <span className="tree-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img" focusable="false">
+                <path d="M3 6.75A1.75 1.75 0 0 1 4.75 5h4.1c.46 0 .9.19 1.23.52l1.4 1.4c.14.14.34.23.54.23h7.23A1.75 1.75 0 0 1 21 8.9v8.35A1.75 1.75 0 0 1 19.25 19H4.75A1.75 1.75 0 0 1 3 17.25z" />
+              </svg>
+            </span>
+            <span className="tree-label">objects/</span>
+          </button>
+
           {objects.length === 0 ? (
             <p className="objects-empty">No objects yet.</p>
           ) : (
-            <ul>
+            <ul className="tree-list">
               {objects.map((objectName) => (
-                <li key={objectName}>{objectName}</li>
+                <li key={objectName}>
+                  <button
+                    type="button"
+                    className="tree-row file-row"
+                    onClick={handleOpenObjectsFolder}
+                  >
+                    <span className="tree-icon file-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" role="img" focusable="false">
+                        <path d="M7 3.5A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10A1.5 1.5 0 0 0 18.5 19V8.7a1.5 1.5 0 0 0-.44-1.06l-3.2-3.2A1.5 1.5 0 0 0 13.8 4H7z" />
+                      </svg>
+                    </span>
+                    <span className="tree-label">{objectName}</span>
+                  </button>
+                </li>
               ))}
             </ul>
           )}
+          {openStatus ? <p className="objects-status">{openStatus}</p> : null}
         </div>
       </aside>
 
@@ -146,7 +177,11 @@ function App() {
           <div className="console-card">
             <p className="cpu-label">App CPU Usage: {cpuUsage.toFixed(1)}%</p>
             <div className="console-box" aria-live="polite">
-              <svg className="cpu-chart" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <svg
+                className="cpu-chart"
+                viewBox="0 0 100 100"
+                preserveAspectRatio="none"
+              >
                 <line className="grid-line" x1="0" y1="25" x2="100" y2="25" />
                 <line className="grid-line" x1="0" y1="50" x2="100" y2="50" />
                 <line className="grid-line" x1="0" y1="75" x2="100" y2="75" />

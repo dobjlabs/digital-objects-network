@@ -8,6 +8,7 @@ use std::{
 };
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::Manager;
+use tauri_plugin_opener::OpenerExt;
 
 struct CpuMonitor {
     pid: Pid,
@@ -159,6 +160,14 @@ fn list_objects(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     Ok(objects)
 }
 
+#[tauri::command]
+fn open_objects_folder(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = objects_dir(&app)?;
+    app.opener()
+        .open_path(dir.to_string_lossy().into_owned(), None::<String>)
+        .map_err(|err| format!("failed to open objects folder: {err}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -170,7 +179,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sample_app_cpu,
             mine_copper,
-            list_objects
+            list_objects,
+            open_objects_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
