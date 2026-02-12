@@ -8,6 +8,17 @@ function App() {
   const [isMining, setIsMining] = useState(false);
   const [cpuUsage, setCpuUsage] = useState(0);
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
+  const [objects, setObjects] = useState<string[]>([]);
+  const [mineStatus, setMineStatus] = useState("Ready.");
+
+  const loadObjects = async () => {
+    try {
+      const items = await invoke<string[]>("list_objects");
+      setObjects(items);
+    } catch {
+      setObjects([]);
+    }
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -39,6 +50,10 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    void loadObjects();
+  }, []);
+
   const buttonLabel = useMemo(
     () => (isMining ? "Mining Copper..." : "Mine Copper"),
     [isMining],
@@ -57,6 +72,25 @@ function App() {
       .join(" ");
   }, [cpuHistory]);
 
+  const handleMine = async () => {
+    if (isMining) {
+      return;
+    }
+
+    setIsMining(true);
+    setMineStatus("Mining started. Running hash workload for 10 seconds...");
+    try {
+      const objectName = await invoke<string>("mine_copper");
+      await loadObjects();
+      setMineStatus(`Mining complete. Created ${objectName}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setMineStatus(`Mining failed: ${message}`);
+    } finally {
+      setIsMining(false);
+    }
+  };
+
   return (
     <div className="app-shell">
       <aside className="objects-pane">
@@ -68,23 +102,38 @@ function App() {
           </span>
           Your Objects
         </h2>
+        <div className="objects-list" aria-live="polite">
+          {objects.length === 0 ? (
+            <p className="objects-empty">No objects yet.</p>
+          ) : (
+            <ul>
+              {objects.map((objectName) => (
+                <li key={objectName}>{objectName}</li>
+              ))}
+            </ul>
+          )}
+        </div>
       </aside>
 
       <main className="workspace">
         <section className="stage">
-          <button
-            type="button"
-            className="mine-button"
-            onClick={() => setIsMining((value) => !value)}
-          >
-            <span className="icon-play" aria-hidden="true">
-              <svg viewBox="0 0 24 24" role="img" focusable="false">
-                <circle cx="12" cy="12" r="10.5" />
-                <path d="M10 8.5l6.25 3.5L10 15.5z" />
-              </svg>
-            </span>
-            {buttonLabel}
-          </button>
+          <div className="stage-content">
+            <button
+              type="button"
+              className="mine-button"
+              onClick={handleMine}
+              disabled={isMining}
+            >
+              <span className="icon-play" aria-hidden="true">
+                <svg viewBox="0 0 24 24" role="img" focusable="false">
+                  <circle cx="12" cy="12" r="10.5" />
+                  <path d="M10 8.5l6.25 3.5L10 15.5z" />
+                </svg>
+              </span>
+              {buttonLabel}
+            </button>
+            <p className="mine-status">{mineStatus}</p>
+          </div>
         </section>
 
         <div className="panel-divider" aria-hidden="true">

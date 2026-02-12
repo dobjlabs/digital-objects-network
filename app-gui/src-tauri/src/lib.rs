@@ -1,9 +1,21 @@
-use std::sync::Mutex;
+use sha2::{Digest, Sha256};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::Mutex,
+    thread,
+    time::{Duration, Instant},
+};
 use sysinfo::{Pid, ProcessesToUpdate, System};
+use tauri::Manager;
 
 struct CpuMonitor {
     pid: Pid,
     system: Mutex<System>,
+}
+
+struct MiningState {
+    active: Mutex<bool>,
 }
 
 impl CpuMonitor {
@@ -16,6 +28,52 @@ impl CpuMonitor {
             pid,
             system: Mutex::new(system),
         }
+    }
+}
+
+fn objects_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let path = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|err| format!("failed to resolve app local data dir: {err}"))?
+        .join("objects");
+    fs::create_dir_all(&path).map_err(|err| format!("failed to create objects dir: {err}"))?;
+    Ok(path)
+}
+
+fn run_cpu_burn(duration: Duration) {
+    let available_cores = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    let worker_count = available_cores.saturating_sub(1).max(1);
+    let deadline = Instant::now() + duration;
+
+    let mut handles = Vec::with_capacity(worker_count);
+    for worker_id in 0..worker_count {
+        handles.push(thread::spawn(move || {
+            let mut nonce = worker_id as u64 + 1;
+            let mut rounds: u64 = 0;
+            while Instant::now() < deadline {
+                let mut hasher = Sha256::new();
+                hasher.update(nonce.to_le_bytes());
+                hasher.update(nonce.rotate_left(7).to_le_bytes());
+                let digest = hasher.finalize();
+                let mut next = [0_u8; 8];
+                next.copy_from_slice(&digest[..8]);
+                nonce = nonce.wrapping_add(u64::from_le_bytes(next));
+                std::hint::black_box(nonce);
+                rounds = rounds.wrapping_add(1);
+
+                // Periodic yielding keeps the WebView thread responsive.
+                if rounds % 8192 == 0 {
+                    thread::yield_now();
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        let _ = handle.join();
     }
 }
 
@@ -37,12 +95,83 @@ fn sample_app_cpu(monitor: tauri::State<'_, CpuMonitor>) -> f32 {
     (raw_cpu / cpu_count).max(0.0)
 }
 
+#[tauri::command]
+async fn mine_copper(
+    app: tauri::AppHandle,
+    mining_state: tauri::State<'_, MiningState>,
+) -> Result<String, String> {
+    {
+        let mut active = mining_state
+            .active
+            .lock()
+            .map_err(|_| "failed to lock mining state".to_string())?;
+        if *active {
+            return Err("mining is already running".to_string());
+        }
+        *active = true;
+    }
+
+    let app_handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        run_cpu_burn(Duration::from_secs(10));
+
+        let objects_path = objects_dir(&app_handle)?;
+        let file_name = "copper.pod";
+        let file_path = objects_path.join(file_name);
+        let timestamp = format!("{:?}", std::time::SystemTime::now());
+        let contents = format!("resource=copper\nstatus=mined\ncreated_at={timestamp}\n");
+        fs::write(&file_path, contents).map_err(|err| format!("failed to write pod file: {err}"))?;
+
+        Ok(file_name.to_string())
+    })
+    .await
+    .map_err(|err| format!("mining task failed: {err}"))?;
+
+    if let Ok(mut active) = mining_state.active.lock() {
+        *active = false;
+    }
+
+    result
+}
+
+#[tauri::command]
+fn list_objects(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let dir = objects_dir(&app)?;
+    let mut objects = Vec::new();
+
+    let entries = fs::read_dir(dir).map_err(|err| format!("failed to read objects dir: {err}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("failed to read object entry: {err}"))?;
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("pod"))
+        {
+            if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
+                objects.push(name.to_string());
+            }
+        }
+    }
+
+    objects.sort_unstable();
+    Ok(objects)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(CpuMonitor::new())
+        .manage(MiningState {
+            active: Mutex::new(false),
+        })
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![sample_app_cpu])
+        .invoke_handler(tauri::generate_handler![
+            sample_app_cpu,
+            mine_copper,
+            list_objects
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
