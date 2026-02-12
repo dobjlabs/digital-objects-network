@@ -1,3 +1,4 @@
+use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -7,8 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 use sysinfo::{Pid, ProcessesToUpdate, System};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
+
+const OBJECTS_CHANGED_EVENT: &str = "objects-changed";
 
 struct CpuMonitor {
     pid: Pid,
@@ -40,6 +43,49 @@ fn objects_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .join("objects");
     fs::create_dir_all(&path).map_err(|err| format!("failed to create objects dir: {err}"))?;
     Ok(path)
+}
+
+fn is_pod_change(event: &Event, watch_dir: &std::path::Path) -> bool {
+    event.paths.iter().any(|path| {
+        path.starts_with(watch_dir)
+            && (path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("pod"))
+                || path == watch_dir)
+    })
+}
+
+fn start_objects_watcher(app: tauri::AppHandle) -> Result<(), String> {
+    let watch_dir = objects_dir(&app)?;
+
+    thread::spawn(move || {
+        let app_handle = app.clone();
+        let watch_dir_for_event = watch_dir.clone();
+        let mut watcher = match RecommendedWatcher::new(
+            move |result: notify::Result<Event>| {
+                if let Ok(event) = result {
+                    if is_pod_change(&event, &watch_dir_for_event) {
+                        let _ = app_handle.emit(OBJECTS_CHANGED_EVENT, ());
+                    }
+                }
+            },
+            Config::default(),
+        ) {
+            Ok(watcher) => watcher,
+            Err(_) => return,
+        };
+
+        if watcher.watch(&watch_dir, RecursiveMode::NonRecursive).is_err() {
+            return;
+        }
+
+        loop {
+            thread::park_timeout(Duration::from_secs(3600));
+        }
+    });
+
+    Ok(())
 }
 
 fn run_cpu_burn(duration: Duration) {
@@ -174,6 +220,11 @@ pub fn run() {
         .manage(CpuMonitor::new())
         .manage(MiningState {
             active: Mutex::new(false),
+        })
+        .setup(|app| {
+            start_objects_watcher(app.handle().clone())
+                .map_err(|err| std::io::Error::other(err))?;
+            Ok(())
         })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![

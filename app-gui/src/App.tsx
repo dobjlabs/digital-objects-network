@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 
 const MAX_CPU_POINTS = 120;
@@ -12,14 +13,14 @@ function App() {
   const [mineStatus, setMineStatus] = useState("");
   const [openStatus, setOpenStatus] = useState("");
 
-  const loadObjects = async () => {
+  const loadObjects = useCallback(async () => {
     try {
       const items = await invoke<string[]>("list_objects");
       setObjects(items);
     } catch {
       setObjects([]);
     }
-  };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -53,7 +54,31 @@ function App() {
 
   useEffect(() => {
     void loadObjects();
-  }, []);
+  }, [loadObjects]);
+
+  useEffect(() => {
+    let isMounted = true;
+    let unlisten: (() => void) | undefined;
+
+    const subscribe = async () => {
+      const stop = await listen("objects-changed", async () => {
+        if (!isMounted) {
+          return;
+        }
+        await loadObjects();
+      });
+      unlisten = stop;
+    };
+
+    void subscribe();
+
+    return () => {
+      isMounted = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [loadObjects]);
 
   const buttonLabel = useMemo(
     () => (isMining ? "Mining Copper..." : "Mine Copper"),
