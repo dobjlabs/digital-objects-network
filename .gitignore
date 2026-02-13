@@ -23,3 +23,6 @@ target
 .DS_Store
 .env
 data/
+
+# Bundled native SCIP dylibs copied during local Tauri build
+app-gui/src-tauri/libs/
