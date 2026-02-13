@@ -76,7 +76,10 @@ fn start_objects_watcher(app: tauri::AppHandle) -> Result<(), String> {
             Err(_) => return,
         };
 
-        if watcher.watch(&watch_dir, RecursiveMode::NonRecursive).is_err() {
+        if watcher
+            .watch(&watch_dir, RecursiveMode::NonRecursive)
+            .is_err()
+        {
             return;
         }
 
@@ -196,7 +199,8 @@ async fn mine_copper(
         let file_path = objects_path.join(&file_name);
         let timestamp = format!("{:?}", std::time::SystemTime::now());
         let contents = format!("resource=copper\nstatus=mined\ncreated_at={timestamp}\n");
-        fs::write(&file_path, contents).map_err(|err| format!("failed to write pod file: {err}"))?;
+        fs::write(&file_path, contents)
+            .map_err(|err| format!("failed to write pod file: {err}"))?;
 
         Ok(file_name.to_string())
     })
