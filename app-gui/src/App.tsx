@@ -7,6 +7,7 @@ const MAX_CPU_POINTS = 120;
 
 function App() {
   const [isMining, setIsMining] = useState(false);
+  const [isGraphCollapsed, setIsGraphCollapsed] = useState(false);
   const [cpuUsage, setCpuUsage] = useState(0);
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
   const [objects, setObjects] = useState<string[]>([]);
@@ -171,7 +172,7 @@ function App() {
         </div>
       </aside>
 
-      <main className="workspace">
+      <main className={`workspace ${isGraphCollapsed ? "graph-collapsed" : ""}`}>
         <section className="stage">
           <div className="stage-content">
             <button
@@ -192,33 +193,42 @@ function App() {
           </div>
         </section>
 
-        <div className="panel-divider" aria-hidden="true">
+        <button
+          type="button"
+          className="panel-divider"
+          aria-label={isGraphCollapsed ? "Show CPU graph" : "Hide CPU graph"}
+          onClick={() => setIsGraphCollapsed((value) => !value)}
+        >
           <span />
           <span />
           <span />
-        </div>
+        </button>
 
-        <section className="metrics-panel">
-          <div className="console-card">
-            <p className="cpu-label">App CPU Usage: {cpuUsage.toFixed(1)}%</p>
-            <div className="console-box" aria-live="polite">
-              <svg
-                className="cpu-chart"
-                viewBox="0 0 100 100"
-                preserveAspectRatio="none"
-              >
-                <line className="grid-line" x1="0" y1="25" x2="100" y2="25" />
-                <line className="grid-line" x1="0" y1="50" x2="100" y2="50" />
-                <line className="grid-line" x1="0" y1="75" x2="100" y2="75" />
-                <polyline className="cpu-line" points={chartPoints} />
-              </svg>
-              <div className="cpu-axis-labels">
-                <span>100%</span>
-                <span>0%</span>
+        {!isGraphCollapsed ? (
+          <section className="metrics-panel">
+            <div className="console-card">
+              <p className="cpu-label">App CPU Usage: {cpuUsage.toFixed(1)}%</p>
+              <div className="console-box" aria-live="polite">
+                <div className="cpu-chart-layout">
+                  <div className="cpu-axis-y" aria-hidden="true">
+                    <span>100%</span>
+                    <span>0%</span>
+                  </div>
+                  <svg
+                    className="cpu-chart"
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                  >
+                    <line className="grid-line" x1="0" y1="25" x2="100" y2="25" />
+                    <line className="grid-line" x1="0" y1="50" x2="100" y2="50" />
+                    <line className="grid-line" x1="0" y1="75" x2="100" y2="75" />
+                    <polyline className="cpu-line" points={chartPoints} />
+                  </svg>
+                </div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
+        ) : null}
       </main>
     </div>
   );
