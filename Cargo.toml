@@ -6,7 +6,12 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "cdf227e3530247e07e375daed007cae7d443b4ae", default-features = false, features = ["backend_plonky2", "disk_cache", "zk"] }
+pod2 = { git = "https://github.com/0xPARC/pod2", default-features = false, features = ["backend_plonky2", "disk_cache", "zk"] }
 plonky2 = { git = "https://github.com/0xPARC/plonky2.git", rev = "109d517d09c210ae4c2cee381d3e3fbc04aa3812" }
 serde = { version = "1.0.150", features = ["derive"] }
 serde_json = "1.0.143"
+
+# temporarily patch pod2 version, since it is constantly updated, to avoid
+# updating pod2-onchain usage of it each time
+[patch."https://github.com/0xPARC/pod2"]
+pod2 = { git = "https://github.com/0xPARC/pod2?rev=main", rev = "acab26e5c1ef0767eaf35f0f8df40845c9376896" }
