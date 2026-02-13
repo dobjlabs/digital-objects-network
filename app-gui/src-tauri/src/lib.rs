@@ -9,13 +9,7 @@ use pod2::{
     middleware::{hash_values, MainPodProver, Params, Value},
 };
 use sha2::{Digest, Sha256};
-use std::{
-    fs,
-    path::PathBuf,
-    sync::Mutex,
-    thread,
-    time::Duration,
-};
+use std::{any::Any, fs, path::PathBuf, sync::Mutex, thread, time::Duration};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
@@ -110,6 +104,21 @@ fn short_hash_id(seed: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>()
+}
+
+fn panic_payload_to_string(payload: Box<dyn Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic payload".to_string()
+}
+
+fn emit_mining_log(app: &tauri::AppHandle, message: &str) {
+    eprintln!("[mine] {message}");
+    let _ = app.emit(MINING_LOG_EVENT, message.to_string());
 }
 
 fn build_copper_pod_json(log: &mut dyn FnMut(&str)) -> Result<Vec<u8>, String> {
@@ -280,11 +289,18 @@ async fn mine_copper(
     let _ = app.emit(MINING_LOG_EVENT, "Queued mining job...".to_string());
     let app_handle = app.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let mut emit_log = |message: &str| {
-            let _ = app_handle.emit(MINING_LOG_EVENT, message.to_string());
-        };
+        let mut emit_log = |message: &str| emit_mining_log(&app_handle, message);
         emit_log("Mining started.");
-        let pod_bytes = build_copper_pod_json(&mut emit_log)?;
+        let pod_bytes = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build_copper_pod_json(&mut emit_log)
+        })) {
+            Ok(result) => result?,
+            Err(payload) => {
+                let panic_message = panic_payload_to_string(payload);
+                emit_log(&format!("PANIC during proving: {panic_message}"));
+                return Err(format!("mining panicked: {panic_message}"));
+            }
+        };
 
         let objects_path = objects_dir(&app_handle)?;
         emit_log("Selecting output filename...");
