@@ -6,7 +6,7 @@ use pod2::{
     },
     frontend::{MainPodBuilder, Operation, SignedDictBuilder},
     lang::load_module,
-    middleware::{hash_values, Params, Value},
+    middleware::{hash_values, MainPodProver, Params, Value},
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -115,8 +115,9 @@ fn short_hash_id(seed: &[u8]) -> String {
 fn build_copper_pod_json(log: &mut dyn FnMut(&str)) -> Result<Vec<u8>, String> {
     log("Initializing pod params...");
     let params = Params::default();
-    let prover = Prover {};
+    let real_prover = Prover {};
     let vd_set = &*DEFAULT_VD_SET;
+    let prover: &dyn MainPodProver = &real_prover;
 
     log("Generating signer key...");
     let signer = Signer(SecretKey::new_rand());
@@ -210,9 +211,10 @@ fn build_copper_pod_json(log: &mut dyn FnMut(&str)) -> Result<Vec<u8>, String> {
         .map_err(|err| format!("failed eq action.type op: {err}"))?;
 
     log("Loading predicate module...");
-    let module = load_module(predicate_src, "copper_module", &params, vec![])
+    let module = load_module(predicate_src, "copper_module", &params, &[])
         .map_err(|err| format!("failed to load custom predicate module: {err}"))?;
-    let predicate = module
+    let batch = module.batch.clone();
+    let predicate = batch
         .predicate_ref_by_name("LightSwitch_base")
         .ok_or_else(|| "custom predicate LightSwitch_base not found".to_string())?;
 
@@ -231,7 +233,7 @@ fn build_copper_pod_json(log: &mut dyn FnMut(&str)) -> Result<Vec<u8>, String> {
 
     log("Proving pod (this is the slow step)...");
     let pod = builder
-        .prove(&prover)
+        .prove(prover)
         .map_err(|err| format!("pod proving failed: {err}"))?;
     log("Verifying pod...");
     pod.pod
