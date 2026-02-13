@@ -81,6 +81,30 @@ function App() {
     };
   }, [loadObjects]);
 
+  useEffect(() => {
+    let isMounted = true;
+    let unlisten: (() => void) | undefined;
+
+    const subscribe = async () => {
+      const stop = await listen<string>("mining-log", (event) => {
+        if (!isMounted) {
+          return;
+        }
+        setMineStatus(event.payload);
+      });
+      unlisten = stop;
+    };
+
+    void subscribe();
+
+    return () => {
+      isMounted = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
+
   const buttonLabel = useMemo(
     () => (isMining ? "Mining Copper..." : "Mine Copper"),
     [isMining],
@@ -105,7 +129,7 @@ function App() {
     }
 
     setIsMining(true);
-    setMineStatus("Mining started. Running hash workload...");
+    setMineStatus("Mining started...");
     try {
       const objectName = await invoke<string>("mine_copper");
       await loadObjects();
