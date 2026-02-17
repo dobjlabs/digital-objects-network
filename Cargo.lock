@@ -6644,6 +6644,7 @@ dependencies = [
  "clap",
  "dotenv",
  "dotenvy",
+ "futures-util",
  "hex",
  "minicbor-serde",
  "rand 0.8.5",

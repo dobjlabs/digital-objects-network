@@ -36,3 +36,4 @@ chrono = "0.4.42"
 minicbor-serde = { version = "0.6.1", features = ["std"] }
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres"] }
 axum = "0.8.6"
+futures-util = "0.3.31"
