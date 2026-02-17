@@ -1,8 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs::{create_dir_all, read_dir, rename, File},
-    io::{self, Read, Write},
-    path::PathBuf,
     str::FromStr,
     sync::RwLock,
     time::Duration,
@@ -27,21 +24,24 @@ use alloy::{
 };
 use alloy_network::Ethereum;
 use alloy_provider::{Provider, RootProvider};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
 use tracing::{debug, info, trace};
 
+use crate::db::{Db, DerivedState};
+
 #[derive(Debug)]
 pub struct State {
-    created_objects: HashSet<String>,
-    consumed_objects: HashSet<String>,
+    transactions: HashSet<String>,
+    nullifiers: HashSet<String>,
 }
 
 pub struct Node {
     pub beacon_cli: BeaconClient,
     pub rpc_cli: RootProvider,
-    // Mutable state
+    db: Db,
+    // Mutable state.
     state: RwLock<State>,
 }
 
@@ -53,127 +53,69 @@ impl Node {
             .build()?;
         let rpc_url: String = dotenvy::var("RPC_URL")?;
         let beacon_url: String = dotenvy::var("BEACON_URL")?;
+        let database_url: String = dotenvy::var("DATABASE_URL")?;
 
         let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
         let beacon_cli_cfg = beacon::Config {
-            base_url: beacon_url.clone(),
+            base_url: beacon_url,
             exp_backoff,
         };
         let beacon_cli = BeaconClient::try_with_client(http_cli, beacon_cli_cfg)?;
         let rpc_cli = RootProvider::<Ethereum>::new_http(rpc_url.parse()?);
 
+        let db = Db::connect(&database_url).await?;
+        db.init().await?;
+        let DerivedState {
+            transactions,
+            nullifiers,
+        } = db.load_state().await?;
         let state = State {
-            created_objects: HashSet::new(),
-            consumed_objects: HashSet::new(),
+            transactions,
+            nullifiers,
         };
+
         Ok(Self {
             beacon_cli,
             rpc_cli,
+            db,
             state: RwLock::new(state),
         })
     }
 
-    fn slot_dir(&self, slot: u32) -> PathBuf {
-        let slot_hi = slot / 1_000_000;
-        let slot_mid = (slot - slot_hi * 1_000_000) / 1_000;
-        let slot_lo = slot - slot_hi * 1_000_000 - slot_mid * 1_000;
-        let slot_dir: PathBuf = [
-            &dotenvy::var("BLOBS_PATH").expect("blobs path expected"),
-            &format!("{:03}", slot_hi),
-            &format!("{:03}", slot_mid),
-            &format!("{:03}", slot_lo),
-        ]
-        .iter()
-        .collect();
-        slot_dir
+    pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
+        self.db.last_processed_slot().await
     }
 
-    async fn load_blobs_disk(&self, slot: u32) -> Result<HashMap<B256, Blob>> {
-        let slot_dir = self.slot_dir(slot);
-        let rd = match read_dir(&slot_dir) {
-            Err(e) => {
-                if e.kind() == io::ErrorKind::NotFound {
-                    return Ok(HashMap::new());
-                } else {
-                    return Err(e.into());
-                }
-            }
-            Ok(rd) => rd,
-        };
-        debug!("loading blobs of slot {} from {:?}", slot, slot_dir);
-        let mut blobs = HashMap::new();
-        for entry in rd {
-            let entry = entry?;
-            let file_name = entry.file_name();
-            let file_name = file_name.to_str().unwrap_or("");
-            if file_name.starts_with("blob-") && file_name.ends_with(".cbor") {
-                let file_path = slot_dir.join(file_name);
-                let mut file = File::open(&file_path)?;
-                let mut data_cbor = Vec::new();
-                file.read_to_end(&mut data_cbor)?;
-                let blob: Blob = minicbor_serde::from_slice(&data_cbor)?;
-                let versioned_hash = kzg_to_versioned_hash(blob.kzg_commitment.as_ref());
-                blobs.insert(versioned_hash, blob);
-            }
-        }
-        Ok(blobs)
-    }
-
-    async fn store_blobs_disk(&self, slot: u32, blobs: &HashMap<B256, Blob>) -> Result<()> {
-        let slot_dir = self.slot_dir(slot);
-        debug!("storing blobs of slot {} to {:?}", slot, slot_dir);
-        create_dir_all(&slot_dir)?;
-        for (vh, blob) in blobs {
-            let name = format!("blob-{}.cbor", vh);
-            let blob_path = slot_dir.join(&name);
-            let blob_path_tmp = slot_dir.join(format!("{}.tmp", name));
-            let mut file_tmp = File::create(&blob_path_tmp)?;
-            let blob_cbor = minicbor_serde::to_vec(blob)?;
-            file_tmp.write_all(&blob_cbor)?;
-            rename(blob_path_tmp, blob_path)?;
-        }
-        Ok(())
-    }
-
-    // Checks that the blobs contain all the blobs identified by `versioned_hashes`.  If some are
-    // missing, return the versioned_hash of the first missing one.
-    fn validate_blobs(blobs: &HashMap<B256, Blob>, versioned_hashes: &[B256]) -> Option<B256> {
-        for vh in versioned_hashes.iter() {
-            if !blobs.contains_key(vh) {
-                return Some(*vh);
-            }
-        }
-        None
+    pub async fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
+        self.db.mark_slot_processed(slot, block_number).await
     }
 
     async fn get_blobs(&self, slot: u32, versioned_hashes: &[B256]) -> Result<HashMap<B256, Blob>> {
-        let blobs = self.load_blobs_disk(slot).await?;
-        if Self::validate_blobs(&blobs, versioned_hashes).is_some() {
-            let blobs = self.beacon_cli.get_blobs(slot.into()).await?;
-            debug!("got {} DO blobs from beacon_cli", blobs.len());
-            let blobs: HashMap<_, _> = blobs
-                .into_iter()
-                .filter_map(|blob| {
-                    let versioned_hash = kzg_to_versioned_hash(blob.kzg_commitment.as_ref());
-                    versioned_hashes
-                        .contains(&versioned_hash)
-                        .then_some((versioned_hash, blob))
-                })
-                .collect();
-            if let Some(vh) = Self::validate_blobs(&blobs, versioned_hashes) {
+        let blobs = self.beacon_cli.get_blobs(slot.into()).await?;
+        debug!("got {} blobs from beacon_cli", blobs.len());
+        let blobs: HashMap<_, _> = blobs
+            .into_iter()
+            .filter_map(|blob| {
+                let versioned_hash = kzg_to_versioned_hash(blob.kzg_commitment.as_ref());
+                versioned_hashes
+                    .contains(&versioned_hash)
+                    .then_some((versioned_hash, blob))
+            })
+            .collect();
+
+        for vh in versioned_hashes {
+            if !blobs.contains_key(vh) {
                 return Err(anyhow!("Blob {} not found in beacon_cli response", vh));
             }
-            self.store_blobs_disk(slot, &blobs).await?;
-            Ok(blobs)
-        } else {
-            Ok(blobs)
         }
+
+        Ok(blobs)
     }
 
     pub async fn process_beacon_block_header(
         &self,
         beacon_block_header: &BlockHeader,
-    ) -> Result<Option<()>> {
+    ) -> Result<Option<u32>> {
         let beacon_block_root = beacon_block_header.root;
         let slot = beacon_block_header.slot;
 
@@ -207,9 +149,9 @@ impl Node {
                 .unwrap_or_default(),
         );
         info!(
-            "current state: created_objects={:?}, consumed_objects={:?}, ",
-            self.state.read().expect("lock").created_objects,
-            self.state.read().expect("lock").consumed_objects,
+            "current state: transactions={:?}, nullifiers={:?}, ",
+            self.state.read().expect("lock").transactions,
+            self.state.read().expect("lock").nullifiers,
         );
 
         let has_kzg_blob_commitments = match beacon_block.blob_kzg_commitments {
@@ -218,7 +160,7 @@ impl Node {
         };
         if !has_kzg_blob_commitments {
             debug!("slot {} has no blobs", slot);
-            return Ok(None);
+            return Ok(Some(execution_payload.block_number));
         }
 
         let execution_block_hash = execution_payload.block_hash;
@@ -249,7 +191,7 @@ impl Node {
         };
 
         if indexed_do_blob_txs.is_empty() {
-            return Ok(None);
+            return Ok(Some(execution_payload.block_number));
         }
 
         let txs_blobs_vhs: Vec<B256> = indexed_do_blob_txs
@@ -277,7 +219,10 @@ impl Node {
             trace!(?hash, ?from, ?to);
 
             for blob in tx_blobs.iter() {
-                match self.process_do_blob(blob).await {
+                match self
+                    .process_do_blob(blob, slot, Some(execution_payload.block_number))
+                    .await
+                {
                     Ok(_) => {
                         info!("Valid do_blob at slot {}, blob_index {}!", slot, blob.index);
                     }
@@ -288,23 +233,38 @@ impl Node {
                 };
             }
         }
-        Ok(Some(()))
+        Ok(Some(execution_payload.block_number))
     }
 }
 
 impl Node {
-    // This is the main function that processes the digital object blob and updates the state accordingly.
-    async fn process_do_blob(&self, blob: &Blob) -> Result<()> {
+    // This processes the digital object blob and updates in-memory and persisted state.
+    async fn process_do_blob(
+        &self,
+        blob: &Blob,
+        slot: u32,
+        block_number: Option<u32>,
+    ) -> Result<()> {
         let bytes =
             bytes_from_simple_blob(blob.blob.inner()).context("Invalid byte encoding in blob")?;
-        // let payload = Payload::from_bytes(&bytes, &self.common_circuit_data)?;
         let commit_proof_hash = hex::encode(bytes);
         info!("Processing commitment {}", commit_proof_hash);
-        let mut state = self.state.write().expect("lock");
+
+        let inserted = {
+            let mut state = self.state.write().expect("lock");
+            state.transactions.insert(commit_proof_hash.clone())
+        };
+
+        if inserted {
+            self.db
+                .persist_transaction(&commit_proof_hash, slot, block_number)
+                .await?;
+        }
 
         info!(
-            "state update: created_objects={:?}, consumed_objects={:?}, ",
-            state.created_objects, state.consumed_objects,
+            "state update: transactions={:?}, nullifiers={:?}, ",
+            self.state.read().expect("lock").transactions,
+            self.state.read().expect("lock").nullifiers,
         );
         Ok(())
     }

@@ -5,6 +5,7 @@ use synchronizer::clients::beacon::types::BlockId;
 use anyhow::Result;
 use tracing::{debug, info};
 
+mod db;
 mod node;
 use node::Node;
 
@@ -26,7 +27,12 @@ async fn main() -> Result<()> {
         .expect("head is not None");
     info!(?head, "Beacon head");
 
-    let mut slot = head.slot;
+    let start_slot = match node.last_processed_slot().await? {
+        Some(last_slot) => last_slot.saturating_add(1),
+        None => head.slot,
+    };
+    info!(start_slot, "Starting slot");
+    let mut slot = start_slot;
     loop {
         debug!("checking slot {}", slot);
         let some_beacon_block_header = if slot <= head.slot {
@@ -62,13 +68,16 @@ async fn main() -> Result<()> {
             Some(block) => block,
             None => {
                 debug!("slot {} has empty block", slot);
+                node.mark_slot_processed(slot, None).await?;
                 slot += 1;
                 continue;
             }
         };
 
-        node.process_beacon_block_header(&beacon_block_header)
+        let block_number = node
+            .process_beacon_block_header(&beacon_block_header)
             .await?;
+        node.mark_slot_processed(slot, block_number).await?;
         // TODO: read from env
         let request_rate = 15;
 
