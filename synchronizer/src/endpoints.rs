@@ -3,6 +3,7 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Serialize;
+use tokio::sync::watch;
 use tracing::info;
 
 use crate::node::Node;
@@ -20,21 +21,37 @@ struct StateResponse {
     last_processed_block_number: Option<u32>,
 }
 
-pub async fn run_server(node: Arc<Node>, bind_addr: SocketAddr) -> Result<()> {
+pub async fn run_server(
+    node: Arc<Node>,
+    bind_addr: SocketAddr,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> Result<()> {
     let app = Router::new()
         .route("/state", get(get_state))
         .with_state(AppState { node });
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     info!(%bind_addr, "State API listening");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            loop {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+                if shutdown_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await?;
     Ok(())
 }
 
 async fn get_state(
     State(app_state): State<AppState>,
 ) -> Result<Json<StateResponse>, (StatusCode, String)> {
-    let (mut transactions, mut nullifiers) = app_state.node.state_snapshot();
+    let (mut transactions, mut nullifiers) =
+        app_state.node.state_snapshot().map_err(internal_error)?;
     transactions.sort_unstable();
     nullifiers.sort_unstable();
 

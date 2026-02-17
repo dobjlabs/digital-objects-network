@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
-    sync::RwLock,
+    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::Duration,
 };
 
@@ -40,6 +40,7 @@ pub struct State {
 pub struct Node {
     pub beacon_cli: BeaconClient,
     pub rpc_cli: RootProvider,
+    to_address: Address,
     db: Db,
     // Mutable state.
     state: RwLock<State>,
@@ -53,6 +54,7 @@ impl Node {
             .build()?;
         let rpc_url: String = dotenvy::var("RPC_URL")?;
         let beacon_url: String = dotenvy::var("BEACON_URL")?;
+        let to_address: Address = Address::from_str(&dotenvy::var("TO_ADDRESS")?)?;
 
         let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
         let beacon_cli_cfg = beacon::Config {
@@ -76,6 +78,7 @@ impl Node {
         Ok(Self {
             beacon_cli,
             rpc_cli,
+            to_address,
             db,
             state: RwLock::new(state),
         })
@@ -89,12 +92,12 @@ impl Node {
         self.db.last_progress().await
     }
 
-    pub fn state_snapshot(&self) -> (Vec<String>, Vec<String>) {
-        let state = self.state.read().expect("lock");
-        (
+    pub fn state_snapshot(&self) -> Result<(Vec<String>, Vec<String>)> {
+        let state = self.read_state()?;
+        Ok((
             state.transactions.iter().cloned().collect(),
             state.nullifiers.iter().cloned().collect(),
-        )
+        ))
     }
 
     pub async fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
@@ -159,11 +162,13 @@ impl Node {
             DateTime::<Utc>::from_timestamp_secs(execution_payload.timestamp as i64)
                 .unwrap_or_default(),
         );
-        info!(
-            "current state: transactions={:?}, nullifiers={:?}, ",
-            self.state.read().expect("lock").transactions,
-            self.state.read().expect("lock").nullifiers,
-        );
+        {
+            let state = self.read_state()?;
+            info!(
+                "current state: transactions={:?}, nullifiers={:?}, ",
+                state.transactions, state.nullifiers,
+            );
+        }
 
         let has_kzg_blob_commitments = match beacon_block.blob_kzg_commitments {
             Some(commitments) => !commitments.is_empty(),
@@ -184,14 +189,13 @@ impl Node {
             .await?
             .with_context(|| format!("Execution block {execution_block_hash} not found"))?;
 
-        let to_addr: Address = Address::from_str(&dotenvy::var("TO_ADDRESS")?)?;
         let indexed_do_blob_txs: Vec<_> = match execution_block.transactions.as_transactions() {
             Some(txs) => txs
                 .iter()
                 .enumerate()
                 .filter(|(_index, tx)| {
                     tx.inner.blob_versioned_hashes().is_some()
-                        && tx.as_recovered().to() == Some(to_addr)
+                        && tx.as_recovered().to() == Some(self.to_address)
                 })
                 .collect(),
             None => {
@@ -249,6 +253,18 @@ impl Node {
 }
 
 impl Node {
+    fn read_state(&self) -> Result<RwLockReadGuard<'_, State>> {
+        self.state
+            .read()
+            .map_err(|e| anyhow!("state read lock poisoned: {e}"))
+    }
+
+    fn write_state(&self) -> Result<RwLockWriteGuard<'_, State>> {
+        self.state
+            .write()
+            .map_err(|e| anyhow!("state write lock poisoned: {e}"))
+    }
+
     // This processes the digital object blob and updates in-memory and persisted state.
     async fn process_do_blob(
         &self,
@@ -262,7 +278,7 @@ impl Node {
         info!("Processing commitment {}", commit_proof_hash);
 
         let inserted = {
-            let mut state = self.state.write().expect("lock");
+            let mut state = self.write_state()?;
             state.transactions.insert(commit_proof_hash.clone())
         };
 
@@ -272,10 +288,10 @@ impl Node {
                 .await?;
         }
 
+        let state = self.read_state()?;
         info!(
             "state update: transactions={:?}, nullifiers={:?}, ",
-            self.state.read().expect("lock").transactions,
-            self.state.read().expect("lock").nullifiers,
+            state.transactions, state.nullifiers,
         );
         Ok(())
     }

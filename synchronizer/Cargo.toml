@@ -16,7 +16,7 @@ alloy = { version = "1.2.1", features = [
     "rpc-client",
     "rpc-types-beacon"
 ] }
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "time", "net"] }
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "time", "net", "signal", "sync"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 serde = { version = "1.0.200", default-features = false, features = ["derive"] }

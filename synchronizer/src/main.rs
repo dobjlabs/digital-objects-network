@@ -1,8 +1,9 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use synchronizer::clients::beacon::types::BlockId;
+use synchronizer::clients::beacon::types::{BlockHeader, BlockId};
 
 use anyhow::Result;
+use tokio::sync::watch;
 use tracing::{debug, error, info};
 
 mod db;
@@ -31,13 +32,93 @@ async fn main() -> Result<()> {
     let http_bind: SocketAddr = http_bind.parse()?;
 
     let node = Arc::new(Node::new(&database_url).await?);
-    let endpoint_node = Arc::clone(&node);
-    tokio::spawn(async move {
-        if let Err(err) = run_server(endpoint_node, http_bind).await {
-            error!(?err, "State API server exited");
-        }
-    });
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+    let server_task = tokio::spawn(run_server(
+        Arc::clone(&node),
+        http_bind,
+        shutdown_rx.clone(),
+    ));
+    let sync_task = tokio::spawn(run_sync_loop(Arc::clone(&node), shutdown_rx));
+
+    let mut server_task = Some(server_task);
+    let mut sync_task = Some(sync_task);
+
+    tokio::select! {
+        signal_res = tokio::signal::ctrl_c() => {
+            signal_res?;
+            info!("Shutdown signal received");
+            let _ = shutdown_tx.send(true);
+        }
+        sync_join = async { sync_task.as_mut().expect("task present").await } => {
+            match sync_join {
+                Ok(Ok(())) => info!("Sync loop exited"),
+                Ok(Err(err)) => {
+                    error!(?err, "Sync loop stopped with error");
+                    let _ = shutdown_tx.send(true);
+                    return Err(err);
+                }
+                Err(err) => {
+                    let join_err = anyhow::anyhow!("sync loop join error: {err}");
+                    error!(?join_err, "Sync loop join failed");
+                    let _ = shutdown_tx.send(true);
+                    return Err(join_err);
+                }
+            }
+            let _ = shutdown_tx.send(true);
+            sync_task = None;
+        }
+        server_join = async { server_task.as_mut().expect("task present").await } => {
+            match server_join {
+                Ok(Ok(())) => info!("HTTP server exited"),
+                Ok(Err(err)) => {
+                    error!(?err, "HTTP server stopped with error");
+                    let _ = shutdown_tx.send(true);
+                    return Err(err);
+                }
+                Err(err) => {
+                    let join_err = anyhow::anyhow!("HTTP server join error: {err}");
+                    error!(?join_err, "HTTP server join failed");
+                    let _ = shutdown_tx.send(true);
+                    return Err(join_err);
+                }
+            }
+            let _ = shutdown_tx.send(true);
+            server_task = None;
+        }
+    }
+
+    if let Some(task) = server_task {
+        match task.await {
+            Ok(Ok(())) => info!("HTTP server stopped"),
+            Ok(Err(err)) => return Err(err),
+            Err(err) => return Err(anyhow::anyhow!("HTTP server join error: {err}")),
+        }
+    }
+    if let Some(task) = sync_task {
+        match task.await {
+            Ok(Ok(())) => info!("Sync loop stopped"),
+            Ok(Err(err)) => return Err(err),
+            Err(err) => return Err(anyhow::anyhow!("sync loop join error: {err}")),
+        }
+    }
+
+    Ok(())
+}
+
+async fn wait_or_shutdown(duration: Duration, shutdown_rx: &mut watch::Receiver<bool>) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(duration) => false,
+        changed = shutdown_rx.changed() => {
+            if changed.is_err() {
+                return true;
+            }
+            *shutdown_rx.borrow()
+        }
+    }
+}
+
+async fn run_sync_loop(node: Arc<Node>, mut shutdown_rx: watch::Receiver<bool>) -> Result<()> {
     let spec = node.beacon_cli.get_spec().await?;
     info!(?spec, "Beacon spec");
     let mut head = node
@@ -54,45 +135,28 @@ async fn main() -> Result<()> {
     info!(start_slot, "Starting slot");
     let mut slot = start_slot;
     loop {
+        if *shutdown_rx.borrow() {
+            info!("Sync loop shutting down");
+            return Ok(());
+        }
+
         debug!("checking slot {}", slot);
-        let some_beacon_block_header = if slot <= head.slot {
-            node.beacon_cli
-                .get_block_header(BlockId::Slot(slot))
-                .await?
-        } else {
-            // TODO: Be more fancy and replace this with a stream from an event subscription to
-            // Beacon Headers
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            loop {
-                head = node
-                    .beacon_cli
-                    .get_block_header(BlockId::Head)
-                    .await?
-                    .expect("head is not None");
-                if head.slot > slot {
-                    debug!(
-                        "head is {}, slot {} was skipped, retrieving...",
-                        head.slot, slot
-                    );
-                    break node
-                        .beacon_cli
-                        .get_block_header(BlockId::Slot(slot))
-                        .await?;
-                } else if head.slot == slot {
-                    break Some(head.clone());
+        let beacon_block_header =
+            match next_slot_header(&node, slot, &mut head, &mut shutdown_rx).await? {
+                NextSlotHeader::Shutdown => {
+                    info!("Sync loop shutting down");
+                    return Ok(());
                 }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        };
-        let beacon_block_header = match some_beacon_block_header {
-            Some(block) => block,
-            None => {
-                debug!("slot {} has empty block", slot);
-                node.mark_slot_processed(slot, None).await?;
-                slot += 1;
-                continue;
-            }
-        };
+                NextSlotHeader::Header(some_header) => match some_header {
+                    Some(block) => block,
+                    None => {
+                        debug!("slot {} has empty block", slot);
+                        node.mark_slot_processed(slot, None).await?;
+                        slot += 1;
+                        continue;
+                    }
+                },
+            };
 
         let block_number = node
             .process_beacon_block_header(&beacon_block_header)
@@ -103,8 +167,61 @@ async fn main() -> Result<()> {
 
         let requests = 5;
         let delay_ms = 1000 * requests / request_rate;
-        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        if wait_or_shutdown(Duration::from_millis(delay_ms), &mut shutdown_rx).await {
+            info!("Sync loop shutting down");
+            return Ok(());
+        }
 
         slot += 1;
     }
+}
+
+async fn next_slot_header(
+    node: &Node,
+    slot: u32,
+    head: &mut BlockHeader,
+    shutdown_rx: &mut watch::Receiver<bool>,
+) -> Result<NextSlotHeader> {
+    if slot <= head.slot {
+        return Ok(NextSlotHeader::Header(
+            node.beacon_cli
+                .get_block_header(BlockId::Slot(slot))
+                .await?,
+        ));
+    }
+
+    // TODO: Be more fancy and replace this with a stream from an event subscription to Beacon Headers
+    if wait_or_shutdown(Duration::from_secs(5), shutdown_rx).await {
+        return Ok(NextSlotHeader::Shutdown);
+    }
+
+    loop {
+        *head = node
+            .beacon_cli
+            .get_block_header(BlockId::Head)
+            .await?
+            .expect("head is not None");
+        if head.slot > slot {
+            debug!(
+                "head is {}, slot {} was skipped, retrieving...",
+                head.slot, slot
+            );
+            return Ok(NextSlotHeader::Header(
+                node.beacon_cli
+                    .get_block_header(BlockId::Slot(slot))
+                    .await?,
+            ));
+        } else if head.slot == slot {
+            return Ok(NextSlotHeader::Header(Some(head.clone())));
+        }
+
+        if wait_or_shutdown(Duration::from_secs(1), shutdown_rx).await {
+            return Ok(NextSlotHeader::Shutdown);
+        }
+    }
+}
+
+enum NextSlotHeader {
+    Shutdown,
+    Header(Option<BlockHeader>),
 }
