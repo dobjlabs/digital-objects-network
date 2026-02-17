@@ -47,13 +47,12 @@ pub struct Node {
 
 // This node code is adapted from https://github.com/0xPARC/digital-objects-e2e-poc/blob/main/synchronizer/src/main.rs
 impl Node {
-    pub async fn new() -> Result<Self> {
+    pub async fn new(database_url: &str) -> Result<Self> {
         let http_cli = reqwest::Client::builder()
             .timeout(Duration::from_secs(8))
             .build()?;
         let rpc_url: String = dotenvy::var("RPC_URL")?;
         let beacon_url: String = dotenvy::var("BEACON_URL")?;
-        let database_url: String = dotenvy::var("DATABASE_URL")?;
 
         let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
         let beacon_cli_cfg = beacon::Config {
@@ -63,7 +62,7 @@ impl Node {
         let beacon_cli = BeaconClient::try_with_client(http_cli, beacon_cli_cfg)?;
         let rpc_cli = RootProvider::<Ethereum>::new_http(rpc_url.parse()?);
 
-        let db = Db::connect(&database_url).await?;
+        let db = Db::connect(database_url).await?;
         db.init().await?;
         let DerivedState {
             transactions,

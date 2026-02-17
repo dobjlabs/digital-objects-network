@@ -7,7 +7,10 @@ use tracing::{debug, info};
 
 mod db;
 mod node;
+use db::ensure_database_exists;
 use node::Node;
+
+const DEFAULT_DATABASE_URL: &str = "postgres://postgres@localhost:5432/synchronizer";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,7 +19,12 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::filter::EnvFilter::from_default_env())
         .init();
 
-    let node = Arc::new(Node::new().await?);
+    let database_url =
+        dotenvy::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
+    info!(%database_url, "Using database URL");
+    ensure_database_exists(&database_url).await?;
+
+    let node = Arc::new(Node::new(&database_url).await?);
 
     let spec = node.beacon_cli.get_spec().await?;
     info!(?spec, "Beacon spec");

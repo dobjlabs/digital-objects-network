@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
+use url::Url;
 
 #[derive(Debug)]
 pub struct DerivedState {
@@ -11,6 +12,42 @@ pub struct DerivedState {
 
 pub struct Db {
     pool: PgPool,
+}
+
+pub async fn ensure_database_exists(database_url: &str) -> Result<()> {
+    let parsed = Url::parse(database_url).context("Invalid DATABASE_URL")?;
+    let db_name = parsed.path().trim_start_matches('/').to_string();
+    if db_name.is_empty() {
+        anyhow::bail!("DATABASE_URL must include a database name in the path");
+    }
+
+    let mut admin_url = parsed;
+    admin_url.set_path("/postgres");
+    admin_url.set_query(None);
+    admin_url.set_fragment(None);
+
+    let admin_pool = PgPool::connect(admin_url.as_str())
+        .await
+        .context("Failed to connect to postgres admin database")?;
+
+    let exists = sqlx::query("SELECT 1 FROM pg_database WHERE datname = $1")
+        .bind(&db_name)
+        .fetch_optional(&admin_pool)
+        .await?
+        .is_some();
+
+    if !exists {
+        let escaped_db_name = db_name.replace('"', "\"\"");
+        let create_query = format!("CREATE DATABASE \"{}\"", escaped_db_name);
+        if let Err(err) = sqlx::query(&create_query).execute(&admin_pool).await {
+            match &err {
+                sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("42P04") => {}
+                _ => return Err(err.into()),
+            }
+        }
+    }
+
+    Ok(())
 }
 
 impl Db {
