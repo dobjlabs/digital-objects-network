@@ -23,7 +23,9 @@ fn find_scip_lib_dir_from_target(manifest_dir: &Path) -> Option<PathBuf> {
             }
 
             let candidate = entry.path().join("out/scip_install/lib");
-            if candidate.join("libscip.9.2.dylib").exists() || candidate.join("libscip.dylib").exists() {
+            if candidate.join("libscip.9.2.dylib").exists()
+                || candidate.join("libscip.dylib").exists()
+            {
                 return Some(candidate);
             }
         }
