@@ -1,16 +1,19 @@
-use std::{sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use synchronizer::clients::beacon::types::BlockId;
 
 use anyhow::Result;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 mod db;
+mod endpoints;
 mod node;
 use db::ensure_database_exists;
+use endpoints::run_server;
 use node::Node;
 
 const DEFAULT_DATABASE_URL: &str = "postgres://postgres@localhost:5432/synchronizer";
+const DEFAULT_HTTP_BIND: &str = "127.0.0.1:3000";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,7 +27,16 @@ async fn main() -> Result<()> {
     info!(%database_url, "Using database URL");
     ensure_database_exists(&database_url).await?;
 
+    let http_bind = dotenvy::var("HTTP_BIND").unwrap_or_else(|_| DEFAULT_HTTP_BIND.to_string());
+    let http_bind: SocketAddr = http_bind.parse()?;
+
     let node = Arc::new(Node::new(&database_url).await?);
+    let endpoint_node = Arc::clone(&node);
+    tokio::spawn(async move {
+        if let Err(err) = run_server(endpoint_node, http_bind).await {
+            error!(?err, "State API server exited");
+        }
+    });
 
     let spec = node.beacon_cli.get_spec().await?;
     info!(?spec, "Beacon spec");

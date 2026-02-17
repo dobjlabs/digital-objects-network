@@ -29,7 +29,7 @@ use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
 use tracing::{debug, info, trace};
 
-use crate::db::{Db, DerivedState};
+use crate::db::{Db, DerivedState, SyncProgress};
 
 #[derive(Debug)]
 pub struct State {
@@ -83,6 +83,18 @@ impl Node {
 
     pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
         self.db.last_processed_slot().await
+    }
+
+    pub async fn last_progress(&self) -> Result<Option<SyncProgress>> {
+        self.db.last_progress().await
+    }
+
+    pub fn state_snapshot(&self) -> (Vec<String>, Vec<String>) {
+        let state = self.state.read().expect("lock");
+        (
+            state.transactions.iter().cloned().collect(),
+            state.nullifiers.iter().cloned().collect(),
+        )
     }
 
     pub async fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {

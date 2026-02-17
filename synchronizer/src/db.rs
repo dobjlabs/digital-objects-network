@@ -10,6 +10,12 @@ pub struct DerivedState {
     pub nullifiers: HashSet<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SyncProgress {
+    pub last_processed_slot: u32,
+    pub last_processed_block_number: Option<u32>,
+}
+
 pub struct Db {
     pool: PgPool,
 }
@@ -123,9 +129,18 @@ impl Db {
     }
 
     pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
-        let row = sqlx::query("SELECT last_processed_slot FROM sync_state WHERE id = 1")
-            .fetch_optional(&self.pool)
-            .await?;
+        Ok(self
+            .last_progress()
+            .await?
+            .map(|progress| progress.last_processed_slot))
+    }
+
+    pub async fn last_progress(&self) -> Result<Option<SyncProgress>> {
+        let row = sqlx::query(
+            "SELECT last_processed_slot, last_processed_block_number FROM sync_state WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Ok(None);
@@ -133,8 +148,20 @@ impl Db {
 
         let slot_i64: i64 = row.get("last_processed_slot");
         let slot =
-            u32::try_from(slot_i64).context("Stored last_processed_slot does not fit in u32")?;
-        Ok(Some(slot))
+            u32::try_from(slot_i64).context("Stored last_processed_slot does not fit u32")?;
+        let block_i64: Option<i64> = row.get("last_processed_block_number");
+        let block = match block_i64 {
+            Some(value) => Some(
+                u32::try_from(value)
+                    .context("Stored last_processed_block_number does not fit u32")?,
+            ),
+            None => None,
+        };
+
+        Ok(Some(SyncProgress {
+            last_processed_slot: slot,
+            last_processed_block_number: block,
+        }))
     }
 
     pub async fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
