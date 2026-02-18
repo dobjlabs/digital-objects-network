@@ -1,8 +1,13 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use anyhow::{Context, Result};
-use sqlx::{PgPool, Row};
-use url::Url;
+use rocksdb::{IteratorMode, Options, WriteBatch, DB};
+use serde::{Deserialize, Serialize};
+
+const SYNC_SLOT_KEY: &[u8] = b"sync:last_processed_slot";
+const SYNC_BLOCK_KEY: &[u8] = b"sync:last_processed_block_number";
+const TX_PREFIX: &[u8] = b"tx:";
+const NULLIFIER_PREFIX: &[u8] = b"nullifier:";
 
 #[derive(Debug)]
 pub struct DerivedState {
@@ -16,111 +21,45 @@ pub struct SyncProgress {
     pub last_processed_block_number: Option<u32>,
 }
 
-pub struct Db {
-    pool: PgPool,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct SeenAt {
+    slot: u32,
+    block_number: Option<u32>,
 }
 
-pub async fn ensure_database_exists(database_url: &str) -> Result<()> {
-    let parsed = Url::parse(database_url).context("Invalid DATABASE_URL")?;
-    let db_name = parsed.path().trim_start_matches('/').to_string();
-    if db_name.is_empty() {
-        anyhow::bail!("DATABASE_URL must include a database name in the path");
-    }
-
-    let mut admin_url = parsed;
-    admin_url.set_path("/postgres");
-    admin_url.set_query(None);
-    admin_url.set_fragment(None);
-
-    let admin_pool = PgPool::connect(admin_url.as_str())
-        .await
-        .context("Failed to connect to postgres admin database")?;
-
-    let exists = sqlx::query("SELECT 1 FROM pg_database WHERE datname = $1")
-        .bind(&db_name)
-        .fetch_optional(&admin_pool)
-        .await?
-        .is_some();
-
-    if !exists {
-        let escaped_db_name = db_name.replace('"', "\"\"");
-        let create_query = format!("CREATE DATABASE \"{}\"", escaped_db_name);
-        if let Err(err) = sqlx::query(&create_query).execute(&admin_pool).await {
-            match &err {
-                sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("42P04") => {}
-                _ => return Err(err.into()),
-            }
-        }
-    }
-
-    Ok(())
+pub struct Db {
+    db: Arc<DB>,
 }
 
 impl Db {
-    pub async fn connect(database_url: &str) -> Result<Self> {
-        let pool = PgPool::connect(database_url).await?;
-        Ok(Self { pool })
+    pub async fn connect(db_path: &str) -> Result<Self> {
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+        let db = DB::open(&opts, db_path)
+            .with_context(|| format!("Failed to open RocksDB at path {db_path}"))?;
+        Ok(Self { db: Arc::new(db) })
     }
 
     pub async fn init(&self) -> Result<()> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS sync_state (
-                id SMALLINT PRIMARY KEY CHECK (id = 1),
-                last_processed_slot BIGINT NOT NULL,
-                last_processed_block_number BIGINT,
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS transactions (
-                object_id TEXT PRIMARY KEY,
-                first_seen_slot BIGINT NOT NULL,
-                first_seen_block_number BIGINT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS nullifiers (
-                object_id TEXT PRIMARY KEY,
-                first_seen_slot BIGINT NOT NULL,
-                first_seen_block_number BIGINT,
-                consumed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
         Ok(())
     }
 
     pub async fn load_state(&self) -> Result<DerivedState> {
-        let transaction_rows = sqlx::query("SELECT object_id FROM transactions")
-            .fetch_all(&self.pool)
-            .await?;
-        let nullifier_rows = sqlx::query("SELECT object_id FROM nullifiers")
-            .fetch_all(&self.pool)
-            .await?;
+        let mut transactions = HashSet::new();
+        let mut nullifiers = HashSet::new();
 
-        let transactions = transaction_rows
-            .into_iter()
-            .map(|row| row.get::<String, _>("object_id"))
-            .collect();
-        let nullifiers = nullifier_rows
-            .into_iter()
-            .map(|row| row.get::<String, _>("object_id"))
-            .collect();
+        for entry in self.db.iterator(IteratorMode::Start) {
+            let (key, _value) = entry?;
+            if key.starts_with(TX_PREFIX) {
+                if let Ok(id) = String::from_utf8(key[TX_PREFIX.len()..].to_vec()) {
+                    transactions.insert(id);
+                }
+            } else if key.starts_with(NULLIFIER_PREFIX) {
+                if let Ok(id) = String::from_utf8(key[NULLIFIER_PREFIX.len()..].to_vec()) {
+                    nullifiers.insert(id);
+                }
+            }
+        }
 
         Ok(DerivedState {
             transactions,
@@ -136,25 +75,15 @@ impl Db {
     }
 
     pub async fn last_progress(&self) -> Result<Option<SyncProgress>> {
-        let row = sqlx::query(
-            "SELECT last_processed_slot, last_processed_block_number FROM sync_state WHERE id = 1",
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-
-        let Some(row) = row else {
+        let Some(slot_bytes) = self.db.get(SYNC_SLOT_KEY)? else {
             return Ok(None);
         };
+        let slot = decode_u32(&slot_bytes).context("Invalid stored last_processed_slot")?;
 
-        let slot_i64: i64 = row.get("last_processed_slot");
-        let slot =
-            u32::try_from(slot_i64).context("Stored last_processed_slot does not fit u32")?;
-        let block_i64: Option<i64> = row.get("last_processed_block_number");
-        let block = match block_i64 {
-            Some(value) => Some(
-                u32::try_from(value)
-                    .context("Stored last_processed_block_number does not fit u32")?,
-            ),
+        let block = match self.db.get(SYNC_BLOCK_KEY)? {
+            Some(bytes) => {
+                Some(decode_u32(&bytes).context("Invalid stored last_processed_block_number")?)
+            }
             None => None,
         };
 
@@ -165,22 +94,13 @@ impl Db {
     }
 
     pub async fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO sync_state (id, last_processed_slot, last_processed_block_number, updated_at)
-            VALUES (1, $1, $2, NOW())
-            ON CONFLICT (id) DO UPDATE
-            SET
-                last_processed_slot = EXCLUDED.last_processed_slot,
-                last_processed_block_number = EXCLUDED.last_processed_block_number,
-                updated_at = NOW()
-            "#,
-        )
-        .bind(i64::from(slot))
-        .bind(block_number.map(i64::from))
-        .execute(&self.pool)
-        .await?;
-
+        let mut batch = WriteBatch::default();
+        batch.put(SYNC_SLOT_KEY, slot.to_be_bytes());
+        match block_number {
+            Some(block) => batch.put(SYNC_BLOCK_KEY, block.to_be_bytes()),
+            None => batch.delete(SYNC_BLOCK_KEY),
+        }
+        self.db.write(batch)?;
         Ok(())
     }
 
@@ -190,18 +110,9 @@ impl Db {
         slot: u32,
         block_number: Option<u32>,
     ) -> Result<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO transactions (object_id, first_seen_slot, first_seen_block_number)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (object_id) DO NOTHING
-            "#,
-        )
-        .bind(object_id)
-        .bind(i64::from(slot))
-        .bind(block_number.map(i64::from))
-        .execute(&self.pool)
-        .await?;
+        let key = tx_key(object_id);
+        let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
+        self.db.put(key, value)?;
         Ok(())
     }
 
@@ -211,18 +122,24 @@ impl Db {
         slot: u32,
         block_number: Option<u32>,
     ) -> Result<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO nullifiers (object_id, first_seen_slot, first_seen_block_number)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (object_id) DO NOTHING
-            "#,
-        )
-        .bind(object_id)
-        .bind(i64::from(slot))
-        .bind(block_number.map(i64::from))
-        .execute(&self.pool)
-        .await?;
+        let key = nullifier_key(object_id);
+        let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
+        self.db.put(key, value)?;
         Ok(())
     }
+}
+
+fn tx_key(id: &str) -> Vec<u8> {
+    [TX_PREFIX, id.as_bytes()].concat()
+}
+
+fn nullifier_key(id: &str) -> Vec<u8> {
+    [NULLIFIER_PREFIX, id.as_bytes()].concat()
+}
+
+fn decode_u32(bytes: &[u8]) -> Result<u32> {
+    let arr: [u8; 4] = bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("expected exactly 4 bytes"))?;
+    Ok(u32::from_be_bytes(arr))
 }

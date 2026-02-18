@@ -11,11 +11,10 @@ use tracing::{debug, error, info, warn};
 mod db;
 mod endpoints;
 mod node;
-use db::ensure_database_exists;
 use endpoints::run_server;
 use node::Node;
 
-const DEFAULT_DATABASE_URL: &str = "postgres://postgres@localhost:5432/synchronizer";
+const DEFAULT_ROCKSDB_PATH: &str = "data/synchronizer-rocksdb";
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1:3000";
 const DEFAULT_SYNC_DELAY_MS: u64 = 333;
 const DEFAULT_INITIAL_START_SLOT: u32 = 0;
@@ -28,10 +27,9 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::filter::EnvFilter::from_default_env())
         .init();
 
-    let database_url =
-        dotenvy::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
-    info!("Using configured database URL");
-    ensure_database_exists(&database_url).await?;
+    let rocksdb_path =
+        dotenvy::var("ROCKSDB_PATH").unwrap_or_else(|_| DEFAULT_ROCKSDB_PATH.to_string());
+    info!(%rocksdb_path, "Using RocksDB path");
 
     let http_bind = dotenvy::var("HTTP_BIND").unwrap_or_else(|_| DEFAULT_HTTP_BIND.to_string());
     let http_bind: SocketAddr = http_bind.parse()?;
@@ -44,7 +42,7 @@ async fn main() -> Result<()> {
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(DEFAULT_INITIAL_START_SLOT);
 
-    let node = Arc::new(Node::new(&database_url).await?);
+    let node = Arc::new(Node::new(&rocksdb_path).await?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let server_task = tokio::spawn(run_server(
@@ -153,7 +151,13 @@ async fn run_sync_loop(
 
     let start_slot = match node.last_processed_slot().await? {
         Some(last_slot) => last_slot.saturating_add(1),
-        None => initial_start_slot,
+        None => {
+            if initial_start_slot == 0 {
+                head.slot
+            } else {
+                initial_start_slot
+            }
+        }
     };
     info!(start_slot, head_slot = head.slot, "Starting slot");
     let mut slot = start_slot;
