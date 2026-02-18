@@ -172,7 +172,7 @@ impl Db {
             ON CONFLICT (id) DO UPDATE
             SET
                 last_processed_slot = EXCLUDED.last_processed_slot,
-                last_processed_block_number = COALESCE(EXCLUDED.last_processed_block_number, sync_state.last_processed_block_number),
+                last_processed_block_number = EXCLUDED.last_processed_block_number,
                 updated_at = NOW()
             "#,
         )
@@ -193,6 +193,27 @@ impl Db {
         sqlx::query(
             r#"
             INSERT INTO transactions (object_id, first_seen_slot, first_seen_block_number)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (object_id) DO NOTHING
+            "#,
+        )
+        .bind(object_id)
+        .bind(i64::from(slot))
+        .bind(block_number.map(i64::from))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn persist_nullifier(
+        &self,
+        object_id: &str,
+        slot: u32,
+        block_number: Option<u32>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO nullifiers (object_id, first_seen_slot, first_seen_block_number)
             VALUES ($1, $2, $3)
             ON CONFLICT (object_id) DO NOTHING
             "#,

@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
 
     let database_url =
         dotenvy::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
-    info!(%database_url, "Using database URL");
+    info!("Using configured database URL");
     ensure_database_exists(&database_url).await?;
 
     let http_bind = dotenvy::var("HTTP_BIND").unwrap_or_else(|_| DEFAULT_HTTP_BIND.to_string());
