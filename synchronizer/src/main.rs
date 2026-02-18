@@ -18,6 +18,8 @@ use node::Node;
 const DEFAULT_DATABASE_URL: &str = "postgres://postgres@localhost:5432/synchronizer";
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1:3000";
 const DEFAULT_SYNC_DELAY_MS: u64 = 333;
+const DEFAULT_INITIAL_START_SLOT: u32 = 0;
+const HEAD_CHECK_INTERVAL: Duration = Duration::from_secs(12);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,6 +39,10 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_SYNC_DELAY_MS);
+    let initial_start_slot = dotenvy::var("INITIAL_START_SLOT")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_INITIAL_START_SLOT);
 
     let node = Arc::new(Node::new(&database_url).await?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -50,6 +56,7 @@ async fn main() -> Result<()> {
         Arc::clone(&node),
         shutdown_rx,
         Duration::from_millis(sync_delay_ms),
+        initial_start_slot,
     ));
 
     let mut server_task = Some(server_task);
@@ -133,6 +140,7 @@ async fn run_sync_loop(
     node: Arc<Node>,
     mut shutdown_rx: watch::Receiver<bool>,
     sync_delay: Duration,
+    initial_start_slot: u32,
 ) -> Result<()> {
     let spec = node.beacon_cli.get_spec().await?;
     info!(?spec, "Beacon spec");
@@ -145,9 +153,9 @@ async fn run_sync_loop(
 
     let start_slot = match node.last_processed_slot().await? {
         Some(last_slot) => last_slot.saturating_add(1),
-        None => head.slot,
+        None => initial_start_slot,
     };
-    info!(start_slot, "Starting slot");
+    info!(start_slot, head_slot = head.slot, "Starting slot");
     let mut slot = start_slot;
     let mut head_events: Option<EventSource> = None;
     loop {
@@ -168,7 +176,7 @@ async fn run_sync_loop(
                 NextSlotHeader::Header(some_header) => match some_header {
                     Some(block) => block,
                     None => {
-                        debug!("slot {} has empty block", slot);
+                        info!("slot {} has empty block", slot);
                         node.mark_slot_processed(slot, None).await?;
                         slot += 1;
                         continue;
@@ -209,6 +217,9 @@ async fn next_slot_header(
             let stream = node.beacon_cli.subscribe_to_events(&[Topic::Head])?;
             info!("Subscribed to beacon head events");
             *head_events = Some(stream);
+            if let Some(header) = resolve_slot_from_head(node, slot, head).await? {
+                return Ok(NextSlotHeader::Header(header));
+            }
         }
         let event_source = head_events.as_mut().expect("head events present");
 
@@ -216,6 +227,12 @@ async fn next_slot_header(
             changed = shutdown_rx.changed() => {
                 if changed.is_err() || *shutdown_rx.borrow() {
                     return Ok(NextSlotHeader::Shutdown);
+                }
+                continue;
+            }
+            _ = tokio::time::sleep(HEAD_CHECK_INTERVAL) => {
+                if let Some(header) = resolve_slot_from_head(node, slot, head).await? {
+                    return Ok(NextSlotHeader::Header(header));
                 }
                 continue;
             }
@@ -235,24 +252,8 @@ async fn next_slot_header(
                     continue;
                 }
 
-                *head = node
-                    .beacon_cli
-                    .get_block_header(BlockId::Head)
-                    .await?
-                    .expect("head is not None");
-                if head.slot > slot {
-                    debug!(
-                        "head is {}, slot {} was skipped, retrieving...",
-                        head.slot, slot
-                    );
-                    return Ok(NextSlotHeader::Header(
-                        node.beacon_cli
-                            .get_block_header(BlockId::Slot(slot))
-                            .await?,
-                    ));
-                }
-                if head.slot == slot {
-                    return Ok(NextSlotHeader::Header(Some(head.clone())));
+                if let Some(header) = resolve_slot_from_head(node, slot, head).await? {
+                    return Ok(NextSlotHeader::Header(header));
                 }
             }
             Some(Err(err)) => {
@@ -271,6 +272,35 @@ async fn next_slot_header(
             }
         }
     }
+}
+
+async fn resolve_slot_from_head(
+    node: &Node,
+    slot: u32,
+    head: &mut BlockHeader,
+) -> Result<Option<Option<BlockHeader>>> {
+    *head = node
+        .beacon_cli
+        .get_block_header(BlockId::Head)
+        .await?
+        .expect("head is not None");
+
+    if head.slot < slot {
+        return Ok(None);
+    }
+    if head.slot == slot {
+        return Ok(Some(Some(head.clone())));
+    }
+
+    debug!(
+        "head is {}, slot {} was skipped, retrieving...",
+        head.slot, slot
+    );
+    Ok(Some(
+        node.beacon_cli
+            .get_block_header(BlockId::Slot(slot))
+            .await?,
+    ))
 }
 
 enum NextSlotHeader {
