@@ -42,8 +42,16 @@ pub struct Node {
     pub rpc_cli: RootProvider,
     pub config: AppConfig,
     db: Db,
-    // Mutable state.
     state: RwLock<State>,
+}
+
+struct SlotContext {
+    slot: u32,
+    beacon_block_root: B256,
+    execution_block_hash: B256,
+    execution_block_number: u32,
+    execution_timestamp: u64,
+    has_blob_commitments: bool,
 }
 
 impl Node {
@@ -135,10 +143,28 @@ impl Node {
         Ok(blobs)
     }
 
-    pub async fn process_beacon_block_header(
+    fn log_current_state(&self) -> Result<()> {
+        let state: RwLockReadGuard<'_, State> = self.read_state()?;
+        info!(
+            "current state: transactions={:?}, nullifiers={:?}, ",
+            state.transactions, state.nullifiers,
+        );
+        Ok(())
+    }
+
+    fn log_slot_start(ctx: &SlotContext) {
+        info!(
+            "processing slot {} from {}",
+            ctx.slot,
+            DateTime::<Utc>::from_timestamp_secs(ctx.execution_timestamp as i64)
+                .unwrap_or_default(),
+        );
+    }
+
+    async fn build_slot_context(
         &self,
         beacon_block_header: &BlockHeader,
-    ) -> Result<Option<u32>> {
+    ) -> Result<Option<SlotContext>> {
         let beacon_block_root = beacon_block_header.root;
         let slot = beacon_block_header.slot;
 
@@ -153,55 +179,75 @@ impl Node {
                 return Ok(None);
             }
         };
-        let execution_payload = match beacon_block.execution_payload {
+
+        let execution_payload = match beacon_block.execution_payload.as_ref() {
             Some(payload) => payload,
             None => {
                 debug!("slot {} has no execution payload", slot);
                 return Ok(None);
             }
         };
-        debug!(
-            "slot {} has execution block {} at height {}",
-            slot, execution_payload.block_hash, execution_payload.block_number
-        );
 
-        info!(
-            "processing slot {} from {}",
+        let has_blob_commitments = self.has_blob_commitments(&beacon_block);
+
+        Ok(Some(SlotContext {
             slot,
-            DateTime::<Utc>::from_timestamp_secs(execution_payload.timestamp as i64)
-                .unwrap_or_default(),
-        );
-        {
-            let state = self.read_state()?;
-            info!(
-                "current state: transactions={:?}, nullifiers={:?}, ",
-                state.transactions, state.nullifiers,
-            );
-        }
+            beacon_block_root,
+            execution_block_hash: execution_payload.block_hash,
+            execution_block_number: execution_payload.block_number,
+            execution_timestamp: execution_payload.timestamp,
+            has_blob_commitments,
+        }))
+    }
 
-        let has_kzg_blob_commitments = match beacon_block.blob_kzg_commitments {
+    fn has_blob_commitments(
+        &self,
+        beacon_block: &synchronizer::clients::beacon::types::Block,
+    ) -> bool {
+        match &beacon_block.blob_kzg_commitments {
             Some(commitments) => !commitments.is_empty(),
             None => false,
+        }
+    }
+
+    pub async fn process_beacon_block_header(
+        &self,
+        beacon_block_header: &BlockHeader,
+    ) -> Result<Option<u32>> {
+        let Some(slot_ctx) = self.build_slot_context(beacon_block_header).await? else {
+            return Ok(None);
         };
-        if !has_kzg_blob_commitments {
-            debug!("slot {} has no blobs", slot);
-            return Ok(Some(execution_payload.block_number));
+
+        debug!(
+            "slot {} has execution block {} at height {}",
+            slot_ctx.slot, slot_ctx.execution_block_hash, slot_ctx.execution_block_number
+        );
+        Self::log_slot_start(&slot_ctx);
+        self.log_current_state()?;
+        if !slot_ctx.has_blob_commitments {
+            debug!("slot {} has no blobs", slot_ctx.slot);
+            return Ok(Some(slot_ctx.execution_block_number));
         }
 
-        let execution_block_hash = execution_payload.block_hash;
-
-        let execution_block_id = alloy_eips::eip1898::BlockId::Hash(execution_block_hash.into());
+        let execution_block_id =
+            alloy_eips::eip1898::BlockId::Hash(slot_ctx.execution_block_hash.into());
         let execution_block = self
             .rpc_cli
             .get_block(execution_block_id)
             .full()
             .await?
-            .with_context(|| format!("Execution block {execution_block_hash} not found"))?;
+            .with_context(|| {
+                format!(
+                    "Execution block {} not found",
+                    slot_ctx.execution_block_hash
+                )
+            })?;
 
         let indexed_do_blob_txs: Vec<_> = match execution_block.transactions.as_transactions() {
             Some(txs) => txs
                 .iter()
                 .enumerate()
+                // Target Digital Object blob txs: blob-carrying txs sent to configured recipient.
                 .filter(|(_index, tx)| {
                     tx.inner.blob_versioned_hashes().is_some()
                         && tx.as_recovered().to() == Some(self.config.to_address)
@@ -209,16 +255,17 @@ impl Node {
                 .collect(),
             None => {
                 return Err(anyhow!(
-                    "Consensus block {beacon_block_root} has blobs but the execution block doesn't have txs"
+                    "Consensus block {} has blobs but the execution block doesn't have txs",
+                    slot_ctx.beacon_block_root
                 ));
             }
         };
 
         if indexed_do_blob_txs.is_empty() {
-            return Ok(Some(execution_payload.block_number));
+            return Ok(Some(slot_ctx.execution_block_number));
         }
 
-        let txs_blobs_vhs: Vec<B256> = indexed_do_blob_txs
+        let blob_versioned_hashes: Vec<B256> = indexed_do_blob_txs
             .iter()
             .flat_map(|(_, tx)| {
                 tx.as_recovered()
@@ -227,7 +274,9 @@ impl Node {
             })
             .cloned()
             .collect();
-        let blobs = self.get_blobs(slot, &txs_blobs_vhs).await?;
+        let blobs = self
+            .get_blobs(slot_ctx.slot, &blob_versioned_hashes)
+            .await?;
 
         for (_tx_index, tx) in indexed_do_blob_txs {
             let tx = tx.as_recovered();
@@ -243,22 +292,23 @@ impl Node {
             trace!(?hash, ?from, ?to);
 
             for blob in tx_blobs.iter() {
-                self.process_do_blob(blob, slot, Some(execution_payload.block_number))
+                self.process_do_blob(blob, slot_ctx.slot, Some(slot_ctx.execution_block_number))
                     .await
                     .with_context(|| {
                         format!(
                             "Failed to process do_blob at slot {}, blob_index {}",
-                            slot, blob.index
+                            slot_ctx.slot, blob.index
                         )
                     })?;
-                info!("Valid do_blob at slot {}, blob_index {}!", slot, blob.index);
+                info!(
+                    "Valid do_blob at slot {}, blob_index {}!",
+                    slot_ctx.slot, blob.index
+                );
             }
         }
-        Ok(Some(execution_payload.block_number))
+        Ok(Some(slot_ctx.execution_block_number))
     }
-}
 
-impl Node {
     // This processes the digital object blob
     async fn process_do_blob(
         &self,
