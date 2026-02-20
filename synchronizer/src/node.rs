@@ -17,7 +17,7 @@ use alloy::{
     consensus::Transaction,
     eips::{self as alloy_eips, eip4844::kzg_to_versioned_hash},
     network as alloy_network,
-    primitives::{Address, B256},
+    primitives::B256,
     providers as alloy_provider,
     transports::http::reqwest,
 };
@@ -40,14 +40,14 @@ pub struct State {
 pub struct Node {
     pub beacon_cli: BeaconClient,
     pub rpc_cli: RootProvider,
-    to_address: Address,
+    pub config: AppConfig,
     db: Db,
     // Mutable state.
     state: RwLock<State>,
 }
 
 impl Node {
-    pub async fn new(cfg: &AppConfig) -> Result<Self> {
+    pub async fn new(cfg: AppConfig) -> Result<Self> {
         let http_cli = reqwest::Client::builder()
             .timeout(Duration::from_secs(8))
             .build()?;
@@ -74,7 +74,7 @@ impl Node {
         Ok(Self {
             beacon_cli,
             rpc_cli,
-            to_address: cfg.to_address,
+            config: cfg,
             db,
             state: RwLock::new(state),
         })
@@ -191,7 +191,7 @@ impl Node {
                 .enumerate()
                 .filter(|(_index, tx)| {
                     tx.inner.blob_versioned_hashes().is_some()
-                        && tx.as_recovered().to() == Some(self.to_address)
+                        && tx.as_recovered().to() == Some(self.config.to_address)
                 })
                 .collect(),
             None => {

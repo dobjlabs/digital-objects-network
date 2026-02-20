@@ -25,19 +25,19 @@ async fn main() -> Result<()> {
     let cfg = load_config()?;
     debug!(?cfg, "Loaded config");
 
-    let node: Arc<Node> = Arc::new(Node::new(&cfg).await?);
+    let node: Arc<Node> = Arc::new(Node::new(cfg).await?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let server_task = tokio::spawn(run_api_server(
         Arc::clone(&node),
-        cfg.http_bind,
+        node.config.http_bind,
         shutdown_rx.clone(),
     ));
     let sync_task = tokio::spawn(run_sync_loop(
         Arc::clone(&node),
         shutdown_rx,
-        cfg.sync_delay,
-        cfg.initial_start_slot,
+        node.config.sync_delay,
+        node.config.initial_start_slot,
     ));
 
     let mut server_task = Some(server_task);
