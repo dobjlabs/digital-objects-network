@@ -269,6 +269,8 @@ impl Node {
             bytes_from_simple_blob(blob.blob.inner()).context("Invalid byte encoding in blob")?;
 
         // TODO: process the blob bytes and update the state accordingly
+        self.db.persist_transaction("", slot, block_number).await?;
+        self.db.persist_nullifier("", slot, block_number).await?;
 
         let state = self.read_state()?;
         info!(
