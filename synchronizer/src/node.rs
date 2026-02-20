@@ -1,11 +1,10 @@
 use std::{
-    collections::{HashMap, HashSet},
-    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
+    collections::HashMap,
+    sync::RwLock,
     time::Duration,
 };
 
 use synchronizer::{
-    bytes_from_simple_blob,
     clients::beacon::{
         self,
         types::{Blob, BlockHeader, BlockId},
@@ -31,11 +30,9 @@ use tracing::{debug, info, trace};
 use crate::config::AppConfig;
 use crate::db::{Db, DerivedState, SyncProgress};
 
-#[derive(Debug)]
-pub struct State {
-    transactions: HashSet<String>,
-    nullifiers: HashSet<String>,
-}
+#[path = "state.rs"]
+mod state;
+use state::State;
 
 pub struct Node {
     pub beacon_cli: BeaconClient,
@@ -96,27 +93,6 @@ impl Node {
         self.db.last_progress().await
     }
 
-    fn read_state(&self) -> Result<RwLockReadGuard<'_, State>> {
-        self.state
-            .read()
-            .map_err(|e| anyhow!("state read lock poisoned: {e}"))
-    }
-
-    #[allow(dead_code)]
-    fn write_state(&self) -> Result<RwLockWriteGuard<'_, State>> {
-        self.state
-            .write()
-            .map_err(|e| anyhow!("state write lock poisoned: {e}"))
-    }
-
-    pub fn state_snapshot(&self) -> Result<(Vec<String>, Vec<String>)> {
-        let state = self.read_state()?;
-        Ok((
-            state.transactions.iter().cloned().collect(),
-            state.nullifiers.iter().cloned().collect(),
-        ))
-    }
-
     pub async fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
         self.db.mark_slot_processed(slot, block_number).await
     }
@@ -141,15 +117,6 @@ impl Node {
         }
 
         Ok(blobs)
-    }
-
-    fn log_current_state(&self) -> Result<()> {
-        let state: RwLockReadGuard<'_, State> = self.read_state()?;
-        info!(
-            "current state: transactions={:?}, nullifiers={:?}, ",
-            state.transactions, state.nullifiers,
-        );
-        Ok(())
     }
 
     fn log_slot_start(ctx: &SlotContext) {
@@ -307,27 +274,5 @@ impl Node {
             }
         }
         Ok(Some(slot_ctx.execution_block_number))
-    }
-
-    // This processes the digital object blob
-    async fn process_do_blob(
-        &self,
-        blob: &Blob,
-        slot: u32,
-        block_number: Option<u32>,
-    ) -> Result<()> {
-        let _bytes =
-            bytes_from_simple_blob(blob.blob.inner()).context("Invalid byte encoding in blob")?;
-
-        // TODO: process the blob bytes and update the state accordingly
-        self.db.persist_transaction("", slot, block_number).await?;
-        self.db.persist_nullifier("", slot, block_number).await?;
-
-        let state = self.read_state()?;
-        info!(
-            "state update: transactions={:?}, nullifiers={:?}, ",
-            state.transactions, state.nullifiers,
-        );
-        Ok(())
     }
 }
