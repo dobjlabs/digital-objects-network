@@ -28,10 +28,10 @@ Service that tracks Digital Object blob transactions on Ethereum and exposes cur
 
 ## Optional env vars
 
-- `ROCKSDB_PATH` (default: `data/synchronizer-rocksdb`)
+- `DB_PATH` (default: `data/synchronizer-db`)
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
 - `SYNC_DELAY_MS` (default: `333`)
-- `INITIAL_START_SLOT` (default: `0`, meaning start from current head on first run)
+- `INITIAL_START_SLOT` (default: unset, meaning start from current head on first run)
 
 ## Run
 

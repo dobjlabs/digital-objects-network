@@ -60,7 +60,7 @@ impl Node {
         let beacon_cli = BeaconClient::try_with_client(http_cli, beacon_cli_cfg)?;
         let rpc_cli = RootProvider::<Ethereum>::new_http(cfg.rpc_url.parse()?);
 
-        let db = Db::connect(&cfg.rocksdb_path).await?;
+        let db = Db::connect(&cfg.db_path).await?;
         db.init().await?;
         let DerivedState {
             transactions,

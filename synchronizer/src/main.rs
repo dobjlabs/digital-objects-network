@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::watch;
 use tokio::task::JoinError;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 mod api;
 mod config;
@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
         .init();
 
     let cfg = load_config()?;
-    info!(rocksdb_path = %cfg.rocksdb_path, "Using RocksDB path");
+    debug!(?cfg, "Loaded config");
 
     let node: Arc<Node> = Arc::new(Node::new(&cfg).await?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -70,6 +70,7 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
+
 fn handle_task_exit(task_name: &str, join_result: Result<Result<()>, JoinError>) -> Result<()> {
     match join_result {
         Ok(Ok(())) => {

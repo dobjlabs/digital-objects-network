@@ -20,7 +20,7 @@ pub async fn run_sync_loop(
     node: Arc<Node>,
     mut shutdown_rx: watch::Receiver<bool>,
     sync_delay: Duration,
-    initial_start_slot: u32,
+    initial_start_slot: Option<u32>,
 ) -> Result<()> {
     let spec = node.beacon_cli.get_spec().await?;
     info!(?spec, "Beacon spec");
@@ -32,17 +32,11 @@ pub async fn run_sync_loop(
     info!(?head, "Beacon head");
 
     let start_slot = match node.last_processed_slot().await? {
-        Some(last_slot) => last_slot.saturating_add(1),
-        None => {
-            if initial_start_slot == 0 {
-                head.slot
-            } else {
-                initial_start_slot
-            }
-        }
+        Some(last_slot) => last_slot + 1,
+        None => initial_start_slot.unwrap_or(head.slot),
     };
     info!(start_slot, head_slot = head.slot, "Starting slot");
-    let mut slot = start_slot;
+    let mut slot: u32 = start_slot;
     let mut head_events: Option<EventSource> = None;
     loop {
         if *shutdown_rx.borrow() {
