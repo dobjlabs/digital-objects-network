@@ -31,8 +31,9 @@ impl Node {
     pub(super) fn log_current_state(&self) -> Result<()> {
         let state = self.read_state()?;
         info!(
-            "current state: transactions={:?}, nullifiers={:?}, ",
-            state.transactions, state.nullifiers,
+            transaction_count = state.transactions.len(),
+            nullifier_count = state.nullifiers.len(),
+            "Current in-memory state snapshot"
         );
         Ok(())
     }
@@ -53,8 +54,11 @@ impl Node {
 
         let state = self.read_state()?;
         info!(
-            "state update: transactions={:?}, nullifiers={:?}, ",
-            state.transactions, state.nullifiers,
+            slot,
+            block_number,
+            transaction_count = state.transactions.len(),
+            nullifier_count = state.nullifiers.len(),
+            "Applied blob state update"
         );
         Ok(())
     }

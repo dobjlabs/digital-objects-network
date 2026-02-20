@@ -55,7 +55,7 @@ pub async fn run_sync_loop(
             return Ok(());
         }
 
-        debug!("checking slot {}", next_slot);
+        debug!(slot = next_slot, "Checking slot");
         let beacon_block_header = match head_tracker
             .next_slot_header(&node, next_slot, &mut shutdown_rx)
             .await?
@@ -65,7 +65,7 @@ pub async fn run_sync_loop(
                 return Ok(());
             }
             SlotHeaderState::Missing => {
-                info!("slot {} has empty block", next_slot);
+                info!(slot = next_slot, "No block produced for slot");
                 node.mark_slot_processed(next_slot, None)?;
                 next_slot += 1;
                 continue;
@@ -90,20 +90,20 @@ pub async fn run_sync_loop(
 
 async fn initialize_sync(node: &Node, initial_start_slot: Option<u32>) -> Result<SyncStart> {
     let spec = node.beacon_cli.get_spec().await?;
-    info!(?spec, "Beacon spec");
+    info!(?spec, "Loaded beacon spec");
 
     let head = node
         .beacon_cli
         .get_block_header(BlockId::Head)
         .await?
         .expect("head is not None");
-    info!(?head, "Beacon head");
+    info!(head_slot = head.slot, head_root = ?head.root, "Fetched initial beacon head");
 
     let start_slot = match node.last_processed_slot()? {
         Some(last_slot) => last_slot + 1,
         None => initial_start_slot.unwrap_or(head.slot),
     };
-    info!(start_slot, head_slot = head.slot, "Starting slot");
+    info!(start_slot, head_slot = head.slot, "Initialized sync cursor");
 
     Ok(SyncStart {
         next_slot: start_slot,
@@ -146,7 +146,7 @@ impl HeadTracker {
         loop {
             if self.events.is_none() {
                 let stream = node.beacon_cli.subscribe_to_events(&[Topic::Head])?;
-                info!("Subscribed to beacon head events");
+                info!(target_slot = slot, "Subscribed to beacon head events");
                 self.events = Some(stream);
 
                 match Self::decide_after_head_check(self.resolve_slot_from_head(node, slot).await?)
@@ -179,7 +179,7 @@ impl HeadTracker {
                 }
                 Some(Ok(Event::Message(msg))) => {
                     let Ok(head_event) = serde_json::from_str::<HeadEventData>(&msg.data) else {
-                        debug!("Ignoring non-head event payload: {}", msg.data);
+                        debug!(payload = %msg.data, "Ignoring unexpected beacon event payload");
                         continue;
                     };
                     if head_event.slot < slot {
@@ -194,14 +194,14 @@ impl HeadTracker {
                     }
                 }
                 Some(Err(err)) => {
-                    warn!(?err, "Beacon event stream error, reconnecting");
+                    warn!(?err, target_slot = slot, "Beacon event stream error; reconnecting");
                     self.events = None;
                     if wait_or_shutdown(Duration::from_secs(1), shutdown_rx).await {
                         return Ok(SlotHeaderState::Shutdown);
                     }
                 }
                 None => {
-                    warn!("Beacon event stream ended, reconnecting");
+                    warn!(target_slot = slot, "Beacon event stream ended; reconnecting");
                     self.events = None;
                     if wait_or_shutdown(Duration::from_secs(1), shutdown_rx).await {
                         return Ok(SlotHeaderState::Shutdown);
@@ -225,10 +225,7 @@ impl HeadTracker {
             return Ok(HeadCheckResult::Present(self.head.clone()));
         }
 
-        debug!(
-            "head is {}, slot {} was skipped, retrieving...",
-            self.head.slot, slot
-        );
+        debug!(head_slot = self.head.slot, target_slot = slot, "Target slot behind head; fetching explicit slot header");
         Ok(
             match node
                 .beacon_cli

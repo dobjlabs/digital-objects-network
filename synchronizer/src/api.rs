@@ -31,7 +31,7 @@ pub async fn run_api_server(
         .with_state(AppState { node });
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
-    info!(%bind_addr, "State API listening");
+    info!(%bind_addr, "API server listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             wait_for_shutdown(&mut shutdown_rx).await;

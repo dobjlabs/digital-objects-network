@@ -97,7 +97,7 @@ impl Node {
 
     async fn get_blobs(&self, slot: u32, versioned_hashes: &[B256]) -> Result<HashMap<B256, Blob>> {
         let blobs = self.beacon_cli.get_blobs(slot.into()).await?;
-        debug!("got {} blobs from beacon_cli", blobs.len());
+        debug!(slot, blob_count = blobs.len(), "Fetched blobs from beacon");
         let blobs: HashMap<_, _> = blobs
             .into_iter()
             .filter_map(|blob| {
@@ -110,7 +110,9 @@ impl Node {
 
         for vh in versioned_hashes {
             if !blobs.contains_key(vh) {
-                return Err(anyhow!("Blob {} not found in beacon_cli response", vh));
+                return Err(anyhow!(
+                    "Missing requested blob in beacon response: slot={slot}, versioned_hash={vh}"
+                ));
             }
         }
 
@@ -140,7 +142,7 @@ impl Node {
         {
             Some(block) => block,
             None => {
-                debug!("slot {} has empty block", slot);
+                debug!(slot, "No consensus block for slot");
                 return Ok(None);
             }
         };
@@ -148,7 +150,7 @@ impl Node {
         let execution_payload = match beacon_block.execution_payload.as_ref() {
             Some(payload) => payload,
             None => {
-                debug!("slot {} has no execution payload", slot);
+                debug!(slot, "Consensus block has no execution payload");
                 return Ok(None);
             }
         };
@@ -177,13 +179,15 @@ impl Node {
         };
 
         debug!(
-            "slot {} has execution block {} at height {}",
-            slot_ctx.slot, slot_ctx.execution_block_hash, slot_ctx.execution_block_number
+            slot = slot_ctx.slot,
+            execution_block_hash = ?slot_ctx.execution_block_hash,
+            execution_block_number = slot_ctx.execution_block_number,
+            "Resolved execution payload for slot"
         );
         Self::log_slot_start(&slot_ctx);
         self.log_current_state()?;
         if !slot_ctx.has_blob_commitments {
-            debug!("slot {} has no blobs", slot_ctx.slot);
+            debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
             return Ok(Some(slot_ctx.execution_block_number));
         }
 
@@ -220,6 +224,12 @@ impl Node {
         };
 
         if indexed_do_blob_txs.is_empty() {
+            debug!(
+                slot = slot_ctx.slot,
+                execution_block_number = slot_ctx.execution_block_number,
+                to_address = ?self.config.to_address,
+                "No matching target blob transactions in execution block"
+            );
             return Ok(Some(slot_ctx.execution_block_number));
         }
 
@@ -259,8 +269,10 @@ impl Node {
                         )
                     })?;
                 info!(
-                    "Valid do_blob at slot {}, blob_index {}!",
-                    slot_ctx.slot, blob.index
+                    slot = slot_ctx.slot,
+                    blob_index = blob.index,
+                    tx_hash = ?hash,
+                    "Processed target blob"
                 );
             }
         }

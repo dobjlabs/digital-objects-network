@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
         .init();
 
     let cfg = load_config()?;
-    debug!(?cfg, "Loaded config");
+    debug!(?cfg, "Loaded synchronizer config");
 
     let node: Arc<Node> = Arc::new(Node::new(cfg).await?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
     tokio::select! {
         signal_res = tokio::signal::ctrl_c() => {
             signal_res?;
-            info!("Shutdown signal received");
+            info!("Received shutdown signal");
             let _ = shutdown_tx.send(true);
         }
         sync_join = &mut sync_task => {
@@ -77,16 +77,16 @@ async fn main() -> Result<()> {
 fn handle_task_exit(task_name: &str, join_result: Result<Result<()>, JoinError>) -> Result<()> {
     match join_result {
         Ok(Ok(())) => {
-            info!("{task_name} exited");
+            info!(task = task_name, "Task exited cleanly");
             Ok(())
         }
         Ok(Err(err)) => {
-            error!(?err, "{task_name} stopped with error");
+            error!(task = task_name, ?err, "Task stopped with error");
             Err(err)
         }
         Err(err) => {
             let join_err = anyhow::anyhow!("{task_name} join error: {err}");
-            error!(?join_err, "{task_name} join failed");
+            error!(task = task_name, ?join_err, "Task join failed");
             Err(join_err)
         }
     }
