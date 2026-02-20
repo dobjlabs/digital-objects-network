@@ -95,6 +95,7 @@ impl<T> ClientResponse<T> {
         }
     }
 
+    #[allow(dead_code)]
     /// True if the response is an API error
     pub fn is_err(&self) -> bool {
         matches!(self, Self::Error(_))
