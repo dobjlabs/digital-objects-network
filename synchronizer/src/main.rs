@@ -6,6 +6,7 @@ use tokio::task::JoinError;
 use tracing::{debug, error, info};
 
 mod api;
+mod clients;
 mod config;
 mod db;
 mod node;

@@ -1,10 +1,11 @@
 use std::{collections::HashSet, sync::RwLockReadGuard};
 
+use alloy::eips::eip4844::FIELD_ELEMENT_BYTES_USIZE;
 use anyhow::{anyhow, Context, Result};
-use synchronizer::{bytes_from_simple_blob, clients::beacon::types::Blob};
 use tracing::info;
 
 use super::Node;
+use crate::clients::beacon::types::Blob;
 
 #[derive(Debug)]
 pub(super) struct State {
@@ -57,4 +58,45 @@ impl Node {
         );
         Ok(())
     }
+}
+
+/// Extracts bytes from a blob in the "simple" encoding.
+fn bytes_from_simple_blob(blob_bytes: &[u8]) -> Result<Vec<u8>> {
+    if blob_bytes.len() < 9 {
+        return Err(anyhow!(
+            "Invalid blob length {}; expected at least 9 bytes",
+            blob_bytes.len()
+        ));
+    }
+    if !blob_bytes.len().is_multiple_of(FIELD_ELEMENT_BYTES_USIZE) {
+        return Err(anyhow!(
+            "Invalid blob length {}; expected multiple of {}",
+            blob_bytes.len(),
+            FIELD_ELEMENT_BYTES_USIZE
+        ));
+    }
+
+    // Blob = [0x00] ++ 8_BYTE_LEN ++ [0x00,...,0x00] ++ X.
+    let data_len = u64::from_be_bytes(std::array::from_fn(|i| blob_bytes[1 + i])) as usize;
+
+    // Sanity check: Blob must be able to accommodate the specified data length.
+    let field_elements = blob_bytes.len() / FIELD_ELEMENT_BYTES_USIZE;
+    if field_elements < 1 {
+        return Err(anyhow!("Invalid blob length {}", blob_bytes.len()));
+    }
+    let max_data_len = (field_elements - 1) * (FIELD_ELEMENT_BYTES_USIZE - 1);
+    if data_len > max_data_len {
+        return Err(anyhow!(
+            "Given blob of length {} cannot accommodate {} bytes.",
+            blob_bytes.len(),
+            data_len
+        ));
+    }
+
+    Ok(blob_bytes
+        .chunks(FIELD_ELEMENT_BYTES_USIZE)
+        .skip(1)
+        .flat_map(|chunk| chunk[1..].to_vec())
+        .take(data_len)
+        .collect())
 }

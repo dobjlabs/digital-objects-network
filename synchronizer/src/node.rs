@@ -4,12 +4,10 @@ use std::{
     time::Duration,
 };
 
-use synchronizer::{
-    clients::beacon::{
-        self,
-        types::{Blob, BlockHeader, BlockId},
-        BeaconClient,
-    },
+use crate::clients::beacon::{
+    self,
+    types::{Blob, BlockHeader, BlockId},
+    BeaconClient,
 };
 
 use alloy::{
@@ -169,7 +167,7 @@ impl Node {
 
     fn has_blob_commitments(
         &self,
-        beacon_block: &synchronizer::clients::beacon::types::Block,
+        beacon_block: &crate::clients::beacon::types::Block,
     ) -> bool {
         match &beacon_block.blob_kzg_commitments {
             Some(commitments) => !commitments.is_empty(),

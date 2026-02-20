@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Result;
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
-use synchronizer::clients::beacon::types::{BlockHeader, BlockId, HeadEventData, Topic};
+use crate::clients::beacon::types::{BlockHeader, BlockId, HeadEventData, Topic};
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
