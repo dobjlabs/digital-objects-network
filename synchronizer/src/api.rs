@@ -34,14 +34,7 @@ pub async fn run_api_server(
     info!(%bind_addr, "State API listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            loop {
-                if *shutdown_rx.borrow() {
-                    break;
-                }
-                if shutdown_rx.changed().await.is_err() {
-                    break;
-                }
-            }
+            wait_for_shutdown(&mut shutdown_rx).await;
         })
         .await?;
     Ok(())
@@ -55,11 +48,7 @@ async fn get_state(
     transactions.sort_unstable();
     nullifiers.sort_unstable();
 
-    let progress = app_state
-        .node
-        .last_progress()
-        .await
-        .map_err(internal_error)?;
+    let progress = app_state.node.last_progress().map_err(internal_error)?;
     let (last_processed_slot, last_processed_block_number) = match progress {
         Some(progress) => (
             Some(progress.last_processed_slot),
@@ -78,4 +67,15 @@ async fn get_state(
 
 fn internal_error(err: anyhow::Error) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+}
+
+async fn wait_for_shutdown(shutdown_rx: &mut watch::Receiver<bool>) {
+    loop {
+        if *shutdown_rx.borrow() {
+            break;
+        }
+        if shutdown_rx.changed().await.is_err() {
+            break;
+        }
+    }
 }

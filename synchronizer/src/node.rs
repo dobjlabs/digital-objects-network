@@ -63,12 +63,12 @@ impl Node {
         let beacon_cli = BeaconClient::try_with_client(http_cli, beacon_cli_cfg)?;
         let rpc_cli = RootProvider::<Ethereum>::new_http(cfg.rpc_url.parse()?);
 
-        let db = Db::connect(&cfg.db_path).await?;
-        db.init().await?;
+        let db = Db::connect(&cfg.db_path)?;
+        db.init()?;
         let DerivedState {
             transactions,
             nullifiers,
-        } = db.load_state().await?;
+        } = db.load_state()?;
         let state = State {
             transactions,
             nullifiers,
@@ -83,16 +83,16 @@ impl Node {
         })
     }
 
-    pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
-        self.db.last_processed_slot().await
+    pub fn last_processed_slot(&self) -> Result<Option<u32>> {
+        self.db.last_processed_slot()
     }
 
-    pub async fn last_progress(&self) -> Result<Option<SyncProgress>> {
-        self.db.last_progress().await
+    pub fn last_progress(&self) -> Result<Option<SyncProgress>> {
+        self.db.last_progress()
     }
 
-    pub async fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
-        self.db.mark_slot_processed(slot, block_number).await
+    pub fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
+        self.db.mark_slot_processed(slot, block_number)
     }
 
     async fn get_blobs(&self, slot: u32, versioned_hashes: &[B256]) -> Result<HashMap<B256, Blob>> {
@@ -153,7 +153,10 @@ impl Node {
             }
         };
 
-        let has_blob_commitments = self.has_blob_commitments(&beacon_block);
+        let has_blob_commitments = beacon_block
+            .blob_kzg_commitments
+            .as_ref()
+            .is_some_and(|commitments| !commitments.is_empty());
 
         Ok(Some(SlotContext {
             slot,
@@ -163,16 +166,6 @@ impl Node {
             execution_timestamp: execution_payload.timestamp,
             has_blob_commitments,
         }))
-    }
-
-    fn has_blob_commitments(
-        &self,
-        beacon_block: &crate::clients::beacon::types::Block,
-    ) -> bool {
-        match &beacon_block.blob_kzg_commitments {
-            Some(commitments) => !commitments.is_empty(),
-            None => false,
-        }
     }
 
     pub async fn process_beacon_block_header(

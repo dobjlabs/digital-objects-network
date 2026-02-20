@@ -41,8 +41,10 @@ async fn main() -> Result<()> {
         node.config.initial_start_slot,
     ));
 
-    let mut server_task = Some(server_task);
-    let mut sync_task = Some(sync_task);
+    let mut server_task = server_task;
+    let mut sync_task = sync_task;
+    let mut server_finished = false;
+    let mut sync_finished = false;
 
     tokio::select! {
         signal_res = tokio::signal::ctrl_c() => {
@@ -50,23 +52,23 @@ async fn main() -> Result<()> {
             info!("Shutdown signal received");
             let _ = shutdown_tx.send(true);
         }
-        sync_join = async { sync_task.as_mut().expect("task present").await } => {
+        sync_join = &mut sync_task => {
             handle_task_exit("Sync loop", sync_join)?;
             let _ = shutdown_tx.send(true);
-            sync_task = None;
+            sync_finished = true;
         }
-        server_join = async { server_task.as_mut().expect("task present").await } => {
+        server_join = &mut server_task => {
             handle_task_exit("HTTP server", server_join)?;
             let _ = shutdown_tx.send(true);
-            server_task = None;
+            server_finished = true;
         }
     }
 
-    if let Some(task) = server_task {
-        handle_task_exit("HTTP server", task.await)?;
+    if !server_finished {
+        handle_task_exit("HTTP server", server_task.await)?;
     }
-    if let Some(task) = sync_task {
-        handle_task_exit("Sync loop", task.await)?;
+    if !sync_finished {
+        handle_task_exit("Sync loop", sync_task.await)?;
     }
 
     Ok(())

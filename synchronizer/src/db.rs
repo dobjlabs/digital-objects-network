@@ -32,7 +32,7 @@ pub struct Db {
 }
 
 impl Db {
-    pub async fn connect(db_path: &str) -> Result<Self> {
+    pub fn connect(db_path: &str) -> Result<Self> {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         let db = DB::open(&opts, db_path)
@@ -40,11 +40,11 @@ impl Db {
         Ok(Self { db: Arc::new(db) })
     }
 
-    pub async fn init(&self) -> Result<()> {
+    pub fn init(&self) -> Result<()> {
         Ok(())
     }
 
-    pub async fn load_state(&self) -> Result<DerivedState> {
+    pub fn load_state(&self) -> Result<DerivedState> {
         let mut transactions = HashSet::new();
         let mut nullifiers = HashSet::new();
 
@@ -67,14 +67,11 @@ impl Db {
         })
     }
 
-    pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
-        Ok(self
-            .last_progress()
-            .await?
-            .map(|progress| progress.last_processed_slot))
+    pub fn last_processed_slot(&self) -> Result<Option<u32>> {
+        Ok(self.last_progress()?.map(|progress| progress.last_processed_slot))
     }
 
-    pub async fn last_progress(&self) -> Result<Option<SyncProgress>> {
+    pub fn last_progress(&self) -> Result<Option<SyncProgress>> {
         let Some(slot_bytes) = self.db.get(SYNC_SLOT_KEY)? else {
             return Ok(None);
         };
@@ -93,7 +90,7 @@ impl Db {
         }))
     }
 
-    pub async fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
+    pub fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
         let mut batch = WriteBatch::default();
         batch.put(SYNC_SLOT_KEY, slot.to_be_bytes());
         match block_number {
@@ -104,7 +101,7 @@ impl Db {
         Ok(())
     }
 
-    pub async fn persist_transaction(
+    pub fn persist_transaction(
         &self,
         object_id: &str,
         slot: u32,
@@ -116,7 +113,7 @@ impl Db {
         Ok(())
     }
 
-    pub async fn persist_nullifier(
+    pub fn persist_nullifier(
         &self,
         object_id: &str,
         slot: u32,

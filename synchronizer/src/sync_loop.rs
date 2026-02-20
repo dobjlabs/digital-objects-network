@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
+use crate::clients::beacon::types::{BlockHeader, BlockId, HeadEventData, Topic};
 use anyhow::Result;
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
-use crate::clients::beacon::types::{BlockHeader, BlockId, HeadEventData, Topic};
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
@@ -21,6 +21,11 @@ enum HeadCheckResult {
     BehindTarget,
     Missing,
     Present(BlockHeader),
+}
+
+enum AdvanceDecision {
+    ContinueWaiting,
+    Return(SlotHeaderState),
 }
 
 struct HeadTracker {
@@ -61,7 +66,7 @@ pub async fn run_sync_loop(
             }
             SlotHeaderState::Missing => {
                 info!("slot {} has empty block", next_slot);
-                node.mark_slot_processed(next_slot, None).await?;
+                node.mark_slot_processed(next_slot, None)?;
                 next_slot += 1;
                 continue;
             }
@@ -72,7 +77,7 @@ pub async fn run_sync_loop(
             .process_beacon_block_header(&beacon_block_header)
             .await?;
 
-        node.mark_slot_processed(next_slot, block_number).await?;
+        node.mark_slot_processed(next_slot, block_number)?;
 
         if wait_or_shutdown(sync_delay, &mut shutdown_rx).await {
             info!("Sync loop shutting down");
@@ -94,7 +99,7 @@ async fn initialize_sync(node: &Node, initial_start_slot: Option<u32>) -> Result
         .expect("head is not None");
     info!(?head, "Beacon head");
 
-    let start_slot = match node.last_processed_slot().await? {
+    let start_slot = match node.last_processed_slot()? {
         Some(last_slot) => last_slot + 1,
         None => initial_start_slot.unwrap_or(head.slot),
     };
@@ -144,12 +149,10 @@ impl HeadTracker {
                 info!("Subscribed to beacon head events");
                 self.events = Some(stream);
 
-                match self.resolve_slot_from_head(node, slot).await? {
-                    HeadCheckResult::BehindTarget => {}
-                    HeadCheckResult::Missing => return Ok(SlotHeaderState::Missing),
-                    HeadCheckResult::Present(header) => {
-                        return Ok(SlotHeaderState::Present(header))
-                    }
+                match Self::decide_after_head_check(self.resolve_slot_from_head(node, slot).await?)
+                {
+                    AdvanceDecision::ContinueWaiting => {}
+                    AdvanceDecision::Return(state) => return Ok(state),
                 }
             }
             let event_source = self.events.as_mut().expect("head events present");
@@ -162,10 +165,9 @@ impl HeadTracker {
                     continue;
                 }
                 _ = tokio::time::sleep(HEAD_CHECK_INTERVAL) => {
-                    match self.resolve_slot_from_head(node, slot).await? {
-                        HeadCheckResult::BehindTarget => continue,
-                        HeadCheckResult::Missing => return Ok(SlotHeaderState::Missing),
-                        HeadCheckResult::Present(header) => return Ok(SlotHeaderState::Present(header)),
+                    match Self::decide_after_head_check(self.resolve_slot_from_head(node, slot).await?) {
+                        AdvanceDecision::ContinueWaiting => continue,
+                        AdvanceDecision::Return(state) => return Ok(state),
                     }
                 }
                 event = event_source.next() => event,
@@ -184,12 +186,11 @@ impl HeadTracker {
                         continue;
                     }
 
-                    match self.resolve_slot_from_head(node, slot).await? {
-                        HeadCheckResult::BehindTarget => {}
-                        HeadCheckResult::Missing => return Ok(SlotHeaderState::Missing),
-                        HeadCheckResult::Present(header) => {
-                            return Ok(SlotHeaderState::Present(header));
-                        }
+                    match Self::decide_after_head_check(
+                        self.resolve_slot_from_head(node, slot).await?,
+                    ) {
+                        AdvanceDecision::ContinueWaiting => {}
+                        AdvanceDecision::Return(state) => return Ok(state),
                     }
                 }
                 Some(Err(err)) => {
@@ -238,5 +239,15 @@ impl HeadTracker {
                 None => HeadCheckResult::Missing,
             },
         )
+    }
+
+    fn decide_after_head_check(result: HeadCheckResult) -> AdvanceDecision {
+        match result {
+            HeadCheckResult::BehindTarget => AdvanceDecision::ContinueWaiting,
+            HeadCheckResult::Missing => AdvanceDecision::Return(SlotHeaderState::Missing),
+            HeadCheckResult::Present(header) => {
+                AdvanceDecision::Return(SlotHeaderState::Present(header))
+            }
+        }
     }
 }
