@@ -5,9 +5,9 @@ use tokio::sync::watch;
 use tokio::task::JoinError;
 use tracing::{error, info};
 
-mod db;
 mod api;
 mod config;
+mod db;
 mod node;
 mod sync_loop;
 use api::run_api_server;

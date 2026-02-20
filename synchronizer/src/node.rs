@@ -26,7 +26,6 @@ use alloy_provider::{Provider, RootProvider};
 use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
 use tracing::{debug, info, trace};
 
 use crate::config::AppConfig;
@@ -47,7 +46,6 @@ pub struct Node {
     state: RwLock<State>,
 }
 
-// This node code is adapted from https://github.com/0xPARC/digital-objects-e2e-poc/blob/main/synchronizer/src/main.rs
 impl Node {
     pub async fn new(cfg: &AppConfig) -> Result<Self> {
         let http_cli = reqwest::Client::builder()
@@ -96,11 +94,6 @@ impl Node {
             state.transactions.iter().cloned().collect(),
             state.nullifiers.iter().cloned().collect(),
         ))
-    }
-
-    fn has_transaction(&self, object_id: &str) -> Result<bool> {
-        let state = self.read_state()?;
-        Ok(state.transactions.contains(object_id))
     }
 
     pub async fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
@@ -252,28 +245,7 @@ impl Node {
     }
 }
 
-#[derive(Deserialize)]
-struct NullifierPayload {
-    #[serde(default)]
-    nullifiers: Vec<String>,
-    nullifier: Option<String>,
-}
-
 impl Node {
-    fn extract_nullifiers(blob_payload: &[u8]) -> Vec<String> {
-        let Ok(mut payload) = serde_json::from_slice::<NullifierPayload>(blob_payload) else {
-            return Vec::new();
-        };
-        if let Some(n) = payload.nullifier.take() {
-            payload.nullifiers.push(n);
-        }
-        payload
-            .nullifiers
-            .into_iter()
-            .filter(|v| !v.is_empty())
-            .collect()
-    }
-
     fn read_state(&self) -> Result<RwLockReadGuard<'_, State>> {
         self.state
             .read()
@@ -295,24 +267,8 @@ impl Node {
     ) -> Result<()> {
         let bytes =
             bytes_from_simple_blob(blob.blob.inner()).context("Invalid byte encoding in blob")?;
-        let commit_proof_hash = hex::encode(&bytes);
-        info!("Processing commitment {}", commit_proof_hash);
 
-        if !self.has_transaction(&commit_proof_hash)? {
-            self.db
-                .persist_transaction(&commit_proof_hash, slot, block_number)
-                .await?;
-            let mut state = self.write_state()?;
-            state.transactions.insert(commit_proof_hash.clone());
-        }
-
-        for nullifier in Self::extract_nullifiers(&bytes) {
-            self.db
-                .persist_nullifier(&nullifier, slot, block_number)
-                .await?;
-            let mut state = self.write_state()?;
-            state.nullifiers.insert(nullifier);
-        }
+        // TODO: process the blob bytes and update the state accordingly
 
         let state = self.read_state()?;
         info!(
