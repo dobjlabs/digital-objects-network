@@ -88,6 +88,19 @@ impl Node {
         self.db.last_progress().await
     }
 
+    fn read_state(&self) -> Result<RwLockReadGuard<'_, State>> {
+        self.state
+            .read()
+            .map_err(|e| anyhow!("state read lock poisoned: {e}"))
+    }
+
+    #[allow(dead_code)]
+    fn write_state(&self) -> Result<RwLockWriteGuard<'_, State>> {
+        self.state
+            .write()
+            .map_err(|e| anyhow!("state write lock poisoned: {e}"))
+    }
+
     pub fn state_snapshot(&self) -> Result<(Vec<String>, Vec<String>)> {
         let state = self.read_state()?;
         Ok((
@@ -246,26 +259,14 @@ impl Node {
 }
 
 impl Node {
-    fn read_state(&self) -> Result<RwLockReadGuard<'_, State>> {
-        self.state
-            .read()
-            .map_err(|e| anyhow!("state read lock poisoned: {e}"))
-    }
-
-    fn write_state(&self) -> Result<RwLockWriteGuard<'_, State>> {
-        self.state
-            .write()
-            .map_err(|e| anyhow!("state write lock poisoned: {e}"))
-    }
-
-    // This processes the digital object blob and updates in-memory and persisted state.
+    // This processes the digital object blob
     async fn process_do_blob(
         &self,
         blob: &Blob,
         slot: u32,
         block_number: Option<u32>,
     ) -> Result<()> {
-        let bytes =
+        let _bytes =
             bytes_from_simple_blob(blob.blob.inner()).context("Invalid byte encoding in blob")?;
 
         // TODO: process the blob bytes and update the state accordingly
