@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    str::FromStr,
     sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::Duration,
 };
@@ -30,6 +29,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use tracing::{debug, info, trace};
 
+use crate::config::AppConfig;
 use crate::db::{Db, DerivedState, SyncProgress};
 
 #[derive(Debug)]
@@ -49,23 +49,20 @@ pub struct Node {
 
 // This node code is adapted from https://github.com/0xPARC/digital-objects-e2e-poc/blob/main/synchronizer/src/main.rs
 impl Node {
-    pub async fn new(rocksdb_path: &str) -> Result<Self> {
+    pub async fn new(cfg: &AppConfig) -> Result<Self> {
         let http_cli = reqwest::Client::builder()
             .timeout(Duration::from_secs(8))
             .build()?;
-        let rpc_url: String = dotenvy::var("RPC_URL")?;
-        let beacon_url: String = dotenvy::var("BEACON_URL")?;
-        let to_address: Address = Address::from_str(&dotenvy::var("TO_ADDRESS")?)?;
 
         let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
         let beacon_cli_cfg = beacon::Config {
-            base_url: beacon_url,
+            base_url: cfg.beacon_url.clone(),
             exp_backoff,
         };
         let beacon_cli = BeaconClient::try_with_client(http_cli, beacon_cli_cfg)?;
-        let rpc_cli = RootProvider::<Ethereum>::new_http(rpc_url.parse()?);
+        let rpc_cli = RootProvider::<Ethereum>::new_http(cfg.rpc_url.parse()?);
 
-        let db = Db::connect(rocksdb_path).await?;
+        let db = Db::connect(&cfg.rocksdb_path).await?;
         db.init().await?;
         let DerivedState {
             transactions,
@@ -79,7 +76,7 @@ impl Node {
         Ok(Self {
             beacon_cli,
             rpc_cli,
-            to_address,
+            to_address: cfg.to_address,
             db,
             state: RwLock::new(state),
         })

@@ -21,7 +21,7 @@ struct StateResponse {
     last_processed_block_number: Option<u32>,
 }
 
-pub async fn run_server(
+pub async fn run_api_server(
     node: Arc<Node>,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
