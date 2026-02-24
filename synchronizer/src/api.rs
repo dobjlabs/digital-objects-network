@@ -6,29 +6,31 @@ use serde::Serialize;
 use tokio::sync::watch;
 use tracing::info;
 
-use crate::node::Node;
+use crate::db::hash_to_hex;
+use crate::state_machine::StateMachine;
 
 #[derive(Clone)]
 struct AppState {
-    node: Arc<Node>,
+    state_machine: Arc<StateMachine>,
 }
 
 #[derive(Serialize)]
 struct StateResponse {
     transactions: Vec<String>,
     nullifiers: Vec<String>,
+    current_gsr: Option<String>,
     last_processed_slot: Option<u32>,
     last_processed_block_number: Option<u32>,
 }
 
 pub async fn run_api_server(
-    node: Arc<Node>,
+    state_machine: Arc<StateMachine>,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     let app = Router::new()
         .route("/state", get(get_state))
-        .with_state(AppState { node });
+        .with_state(AppState { state_machine });
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     info!(%bind_addr, "API server listening");
@@ -43,12 +45,22 @@ pub async fn run_api_server(
 async fn get_state(
     State(app_state): State<AppState>,
 ) -> Result<Json<StateResponse>, (StatusCode, String)> {
-    let (mut transactions, mut nullifiers) =
-        app_state.node.state_snapshot().map_err(internal_error)?;
+    let (transactions, nullifiers, global_state_roots) = app_state
+        .state_machine
+        .state_snapshot()
+        .map_err(internal_error)?;
+
+    let mut transactions: Vec<String> = transactions.iter().map(hash_to_hex).collect();
+    let mut nullifiers: Vec<String> = nullifiers.iter().map(hash_to_hex).collect();
     transactions.sort_unstable();
     nullifiers.sort_unstable();
 
-    let progress = app_state.node.last_progress().map_err(internal_error)?;
+    let current_gsr = global_state_roots.last().map(hash_to_hex);
+
+    let progress = app_state
+        .state_machine
+        .last_progress()
+        .map_err(internal_error)?;
     let (last_processed_slot, last_processed_block_number) = match progress {
         Some(progress) => (
             Some(progress.last_processed_slot),
@@ -60,6 +72,7 @@ async fn get_state(
     Ok(Json(StateResponse {
         transactions,
         nullifiers,
+        current_gsr,
         last_processed_slot,
         last_processed_block_number,
     }))

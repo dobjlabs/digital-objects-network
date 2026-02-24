@@ -37,3 +37,5 @@ minicbor-serde = { version = "0.6.1", features = ["std"] }
 axum = "0.8.6"
 futures-util = "0.3.31"
 rocksdb = "0.23.0"
+pod2 = { workspace = true }
+tempfile = "3"

@@ -6,14 +6,22 @@ use tokio::task::JoinError;
 use tracing::{debug, error, info};
 
 mod api;
+mod blob;
 mod clients;
 mod config;
 mod db;
+mod gsr;
 mod node;
+mod proof;
+mod state_machine;
 mod sync_loop;
+
 use api::run_api_server;
 use config::load_config;
+use db::Db;
 use node::Node;
+use proof::MockProofParser;
+use state_machine::StateMachine;
 use sync_loop::run_sync_loop;
 
 #[tokio::main]
@@ -26,11 +34,13 @@ async fn main() -> Result<()> {
     let cfg = load_config()?;
     debug!(?cfg, "Loaded synchronizer config");
 
-    let node: Arc<Node> = Arc::new(Node::new(cfg).await?);
+    let db = Db::connect(&cfg.db_path)?;
+    let state_machine = Arc::new(StateMachine::new(db, Arc::new(MockProofParser))?);
+    let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine)).await?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let server_task = tokio::spawn(run_api_server(
-        Arc::clone(&node),
+        Arc::clone(&state_machine),
         node.config.http_bind,
         shutdown_rx.clone(),
     ));
