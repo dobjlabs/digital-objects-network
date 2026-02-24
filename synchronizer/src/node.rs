@@ -95,6 +95,26 @@ impl Node {
         self.db.mark_slot_processed(slot, block_number)
     }
 
+    pub fn set_slot_root(&self, slot: u32, root: Option<B256>) -> Result<()> {
+        self.db.set_slot_root(slot, root)
+    }
+
+    pub fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
+        self.db.slot_root(slot)
+    }
+
+    pub fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
+        self.db.rollback_to_slot(keep_slot)?;
+        let DerivedState {
+            transactions,
+            nullifiers,
+        } = self.db.load_state()?;
+        let mut state = self.write_state()?;
+        state.transactions = transactions;
+        state.nullifiers = nullifiers;
+        Ok(())
+    }
+
     async fn get_blobs(&self, slot: u32, versioned_hashes: &[B256]) -> Result<HashMap<B256, Blob>> {
         let blobs = self.beacon_cli.get_blobs(slot.into()).await?;
         debug!(slot, blob_count = blobs.len(), "Fetched blobs from beacon");

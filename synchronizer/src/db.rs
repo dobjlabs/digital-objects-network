@@ -1,11 +1,13 @@
 use std::{collections::HashSet, sync::Arc};
 
+use alloy::primitives::B256;
 use anyhow::{Context, Result};
 use rocksdb::{IteratorMode, Options, WriteBatch, DB};
 use serde::{Deserialize, Serialize};
 
 const SYNC_SLOT_KEY: &[u8] = b"sync:last_processed_slot";
 const SYNC_BLOCK_KEY: &[u8] = b"sync:last_processed_block_number";
+const SLOT_ROOT_PREFIX: &[u8] = b"slot_root:";
 const TX_PREFIX: &[u8] = b"tx:";
 const NULLIFIER_PREFIX: &[u8] = b"nullifier:";
 
@@ -101,6 +103,26 @@ impl Db {
         Ok(())
     }
 
+    pub fn set_slot_root(&self, slot: u32, root: Option<B256>) -> Result<()> {
+        let key = slot_root_key(slot);
+        match root {
+            Some(root) => self.db.put(key, root.as_slice())?,
+            None => self.db.delete(key)?,
+        }
+        Ok(())
+    }
+
+    pub fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
+        let Some(bytes) = self.db.get(slot_root_key(slot))? else {
+            return Ok(None);
+        };
+        let raw: &[u8] = bytes.as_ref();
+        let arr: [u8; 32] = raw
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid stored slot root bytes"))?;
+        Ok(Some(B256::from(arr)))
+    }
+
     pub fn persist_transaction(
         &self,
         object_id: &str,
@@ -124,6 +146,48 @@ impl Db {
         self.db.put(key, value)?;
         Ok(())
     }
+
+    pub fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
+        let mut batch = WriteBatch::default();
+
+        for entry in self.db.iterator(IteratorMode::Start) {
+            let (key, value) = entry?;
+            if key.starts_with(TX_PREFIX) || key.starts_with(NULLIFIER_PREFIX) {
+                let should_delete = match keep_slot {
+                    Some(keep) => match serde_json::from_slice::<SeenAt>(&value) {
+                        Ok(seen_at) => seen_at.slot > keep,
+                        Err(_) => true,
+                    },
+                    None => true,
+                };
+                if should_delete {
+                    batch.delete(key);
+                }
+            } else if key.starts_with(SLOT_ROOT_PREFIX) {
+                let should_delete = match keep_slot {
+                    Some(keep) => slot_root_key_slot(&key).is_none_or(|slot| slot > keep),
+                    None => true,
+                };
+                if should_delete {
+                    batch.delete(key);
+                }
+            }
+        }
+
+        match keep_slot {
+            Some(keep) => {
+                batch.put(SYNC_SLOT_KEY, keep.to_be_bytes());
+                batch.delete(SYNC_BLOCK_KEY);
+            }
+            None => {
+                batch.delete(SYNC_SLOT_KEY);
+                batch.delete(SYNC_BLOCK_KEY);
+            }
+        }
+
+        self.db.write(batch)?;
+        Ok(())
+    }
 }
 
 fn tx_key(id: &str) -> Vec<u8> {
@@ -132,6 +196,16 @@ fn tx_key(id: &str) -> Vec<u8> {
 
 fn nullifier_key(id: &str) -> Vec<u8> {
     [NULLIFIER_PREFIX, id.as_bytes()].concat()
+}
+
+fn slot_root_key(slot: u32) -> Vec<u8> {
+    [SLOT_ROOT_PREFIX, &slot.to_be_bytes()].concat()
+}
+
+fn slot_root_key_slot(key: &[u8]) -> Option<u32> {
+    let raw = key.strip_prefix(SLOT_ROOT_PREFIX)?;
+    let arr: [u8; 4] = raw.try_into().ok()?;
+    Some(u32::from_be_bytes(arr))
 }
 
 fn decode_u32(bytes: &[u8]) -> Result<u32> {

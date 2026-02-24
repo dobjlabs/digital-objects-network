@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::RwLockReadGuard};
+use std::{
+    collections::HashSet,
+    sync::{RwLockReadGuard, RwLockWriteGuard},
+};
 
 use alloy::eips::eip4844::FIELD_ELEMENT_BYTES_USIZE;
 use anyhow::{anyhow, Context, Result};
@@ -18,6 +21,12 @@ impl Node {
         self.state
             .read()
             .map_err(|e| anyhow!("state read lock poisoned: {e}"))
+    }
+
+    pub(super) fn write_state(&self) -> Result<RwLockWriteGuard<'_, State>> {
+        self.state
+            .write()
+            .map_err(|e| anyhow!("state write lock poisoned: {e}"))
     }
 
     pub fn state_snapshot(&self) -> Result<(Vec<String>, Vec<String>)> {

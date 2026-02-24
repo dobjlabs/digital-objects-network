@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 use crate::node::Node;
 
 const HEAD_CHECK_INTERVAL: Duration = Duration::from_secs(12);
+const REORG_REWIND_SLOTS: u32 = 32;
 
 enum SlotHeaderState {
     Shutdown,
@@ -65,8 +66,16 @@ pub async fn run_sync_loop(
                 return Ok(());
             }
             SlotHeaderState::Missing => {
-                // Empty slots are valid on beacon; persist progress so sync stays in-order.
+                if node.slot_root(next_slot)?.is_some() {
+                    warn!(
+                        slot = next_slot,
+                        "Detected reorg: slot was previously canonical but is now missing; rewinding"
+                    );
+                    next_slot = rewind_for_reorg(&node, next_slot)?;
+                    continue;
+                }
                 info!(slot = next_slot, "No block produced for slot");
+                node.set_slot_root(next_slot, None)?;
                 node.mark_slot_processed(next_slot, None)?;
                 next_slot += 1;
                 continue;
@@ -74,10 +83,38 @@ pub async fn run_sync_loop(
             SlotHeaderState::Present(header) => header,
         };
 
+        if let Some(stored_root) = node.slot_root(next_slot)? {
+            if stored_root != beacon_block_header.root {
+                warn!(
+                    slot = next_slot,
+                    stored_root = ?stored_root,
+                    fetched_root = ?beacon_block_header.root,
+                    "Detected reorg: canonical root changed for slot; rewinding"
+                );
+                next_slot = rewind_for_reorg(&node, next_slot)?;
+                continue;
+            }
+        }
+        if let Some(prev_slot) = next_slot.checked_sub(1) {
+            if let Some(prev_root) = node.slot_root(prev_slot)? {
+                if beacon_block_header.parent_root != prev_root {
+                    warn!(
+                        slot = next_slot,
+                        expected_parent = ?prev_root,
+                        actual_parent = ?beacon_block_header.parent_root,
+                        "Detected reorg: parent linkage mismatch; rewinding"
+                    );
+                    next_slot = rewind_for_reorg(&node, next_slot)?;
+                    continue;
+                }
+            }
+        }
+
         let block_number = node
             .process_beacon_block_header(&beacon_block_header)
             .await?;
 
+        node.set_slot_root(next_slot, Some(beacon_block_header.root))?;
         node.mark_slot_processed(next_slot, block_number)?;
 
         if wait_or_shutdown(sync_delay, &mut shutdown_rx).await {
@@ -87,6 +124,17 @@ pub async fn run_sync_loop(
 
         next_slot += 1;
     }
+}
+
+fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
+    let rewind_start = current_slot.saturating_sub(REORG_REWIND_SLOTS);
+    let keep_slot = rewind_start.checked_sub(1);
+    node.rollback_to_slot(keep_slot)?;
+    info!(
+        current_slot,
+        rewind_start, keep_slot, "Rewound state to recover from reorg"
+    );
+    Ok(rewind_start)
 }
 
 async fn initialize_sync(node: &Node, initial_start_slot: Option<u32>) -> Result<SyncStart> {
@@ -198,14 +246,21 @@ impl HeadTracker {
                     }
                 }
                 Some(Err(err)) => {
-                    warn!(?err, target_slot = slot, "Beacon event stream error; reconnecting");
+                    warn!(
+                        ?err,
+                        target_slot = slot,
+                        "Beacon event stream error; reconnecting"
+                    );
                     self.events = None;
                     if wait_or_shutdown(Duration::from_secs(1), shutdown_rx).await {
                         return Ok(SlotHeaderState::Shutdown);
                     }
                 }
                 None => {
-                    warn!(target_slot = slot, "Beacon event stream ended; reconnecting");
+                    warn!(
+                        target_slot = slot,
+                        "Beacon event stream ended; reconnecting"
+                    );
                     self.events = None;
                     if wait_or_shutdown(Duration::from_secs(1), shutdown_rx).await {
                         return Ok(SlotHeaderState::Shutdown);
@@ -230,7 +285,11 @@ impl HeadTracker {
         }
 
         // Head passed target: explicit target lookup distinguishes produced vs skipped slot.
-        debug!(head_slot = self.head.slot, target_slot = slot, "Target slot behind head; fetching explicit slot header");
+        debug!(
+            head_slot = self.head.slot,
+            target_slot = slot,
+            "Target slot behind head; fetching explicit slot header"
+        );
         Ok(
             match node
                 .beacon_cli
