@@ -10,7 +10,6 @@ use tracing::{debug, info, warn};
 use crate::node::Node;
 
 const HEAD_CHECK_INTERVAL: Duration = Duration::from_secs(12);
-const REORG_REWIND_SLOTS: u32 = 32;
 
 enum SlotHeaderState {
     Shutdown,
@@ -71,7 +70,7 @@ pub async fn run_sync_loop(
                         slot = next_slot,
                         "Detected reorg: slot was previously canonical but is now missing; rewinding"
                     );
-                    next_slot = rewind_for_reorg(&node, next_slot)?;
+                    next_slot = rewind_for_reorg(&node, next_slot).await?;
                     continue;
                 }
                 info!(slot = next_slot, "No block produced for slot");
@@ -91,7 +90,7 @@ pub async fn run_sync_loop(
                     fetched_root = ?beacon_block_header.root,
                     "Detected reorg: canonical root changed for slot; rewinding"
                 );
-                next_slot = rewind_for_reorg(&node, next_slot)?;
+                next_slot = rewind_for_reorg(&node, next_slot).await?;
                 continue;
             }
         }
@@ -104,7 +103,7 @@ pub async fn run_sync_loop(
                         actual_parent = ?beacon_block_header.parent_root,
                         "Detected reorg: parent linkage mismatch; rewinding"
                     );
-                    next_slot = rewind_for_reorg(&node, next_slot)?;
+                    next_slot = rewind_for_reorg(&node, next_slot).await?;
                     continue;
                 }
             }
@@ -126,15 +125,32 @@ pub async fn run_sync_loop(
     }
 }
 
-fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
-    let rewind_start = current_slot.saturating_sub(REORG_REWIND_SLOTS);
+async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
+    let rewind_start = find_divergence_slot(node, current_slot).await?;
     let keep_slot = rewind_start.checked_sub(1);
     node.rollback_to_slot(keep_slot)?;
     info!(
         current_slot,
-        rewind_start, keep_slot, "Rewound state to recover from reorg"
+        rewind_start, keep_slot, "Rewound state to divergence boundary"
     );
     Ok(rewind_start)
+}
+
+async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
+    let mut slot = current_slot;
+    while let Some(prev_slot) = slot.checked_sub(1) {
+        let stored_root = node.slot_root(prev_slot)?;
+        let live_root = node
+            .beacon_cli
+            .get_block_header(BlockId::Slot(prev_slot))
+            .await?
+            .map(|header| header.root);
+        if stored_root == live_root {
+            return Ok(prev_slot + 1);
+        }
+        slot = prev_slot;
+    }
+    Ok(0)
 }
 
 async fn initialize_sync(node: &Node, initial_start_slot: Option<u32>) -> Result<SyncStart> {
