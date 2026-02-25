@@ -73,6 +73,7 @@ pub async fn run_sync_loop(
                     next_slot = rewind_for_reorg(&node, next_slot).await?;
                     continue;
                 }
+                // Empty slots are valid on beacon; persist progress so sync stays in-order.
                 info!(slot = next_slot, "No block produced for slot");
                 node.set_slot_root(next_slot, None)?;
                 node.mark_slot_processed(next_slot, None)?;
