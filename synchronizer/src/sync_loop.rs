@@ -65,6 +65,7 @@ pub async fn run_sync_loop(
                 return Ok(());
             }
             SlotHeaderState::Missing => {
+                // Empty slots are valid on beacon; persist progress so sync stays in-order.
                 info!(slot = next_slot, "No block produced for slot");
                 node.mark_slot_processed(next_slot, None)?;
                 next_slot += 1;
@@ -149,6 +150,7 @@ impl HeadTracker {
                 info!(target_slot = slot, "Subscribed to beacon head events");
                 self.events = Some(stream);
 
+                // Re-check immediately after subscribe to close subscribe-vs-head race windows.
                 match Self::decide_after_head_check(self.resolve_slot_from_head(node, slot).await?)
                 {
                     AdvanceDecision::ContinueWaiting => {}
@@ -165,6 +167,7 @@ impl HeadTracker {
                     continue;
                 }
                 _ = tokio::time::sleep(HEAD_CHECK_INTERVAL) => {
+                    // Polling fallback keeps liveness if the SSE stream is stale but not closed.
                     match Self::decide_after_head_check(self.resolve_slot_from_head(node, slot).await?) {
                         AdvanceDecision::ContinueWaiting => continue,
                         AdvanceDecision::Return(state) => return Ok(state),
@@ -186,6 +189,7 @@ impl HeadTracker {
                         continue;
                     }
 
+                    // Events are hints; re-read canonical head/slot before deciding.
                     match Self::decide_after_head_check(
                         self.resolve_slot_from_head(node, slot).await?,
                     ) {
@@ -225,6 +229,7 @@ impl HeadTracker {
             return Ok(HeadCheckResult::Present(self.head.clone()));
         }
 
+        // Head passed target: explicit target lookup distinguishes produced vs skipped slot.
         debug!(head_slot = self.head.slot, target_slot = slot, "Target slot behind head; fetching explicit slot header");
         Ok(
             match node
