@@ -150,6 +150,7 @@ impl Db {
     pub fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
         let mut batch = WriteBatch::default();
 
+        // Remove any derived records written after the retained canonical slot.
         for entry in self.db.iterator(IteratorMode::Start) {
             let (key, value) = entry?;
             if key.starts_with(TX_PREFIX) || key.starts_with(NULLIFIER_PREFIX) {
@@ -174,6 +175,7 @@ impl Db {
             }
         }
 
+        // Move sync cursor back to the retained slot (or reset completely).
         match keep_slot {
             Some(keep) => {
                 batch.put(SYNC_SLOT_KEY, keep.to_be_bytes());
