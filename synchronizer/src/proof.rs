@@ -1,36 +1,61 @@
-use anyhow::{Context, Result};
-use hex::FromHex;
-use pod2::middleware::Hash;
-use serde::Deserialize;
+use std::collections::HashSet;
 
-pub struct TxnFinalized {
-    pub tx_hash: Hash,
-    pub nullifiers: Vec<Hash>,
-    pub state_root_hash: Hash,
+use anyhow::{anyhow, Context, Result};
+use common::{
+    payload::{Payload, PayloadProof},
+    shrink::cache_get_shrunk_main_pod_circuit_data,
+};
+use plonky2::plonk::proof::CompressedProofWithPublicInputs;
+use pod2::{
+    backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::calculate_statements_hash},
+    middleware::{
+        containers::Set, CommonCircuitData, CustomPredicateRef, Hash, Params, Statement, Value,
+        VerifierCircuitData,
+    },
+};
+
+/// A minimal compilable TxnFinalized predicate.
+/// The body is a placeholder (Equal(1,1)) so the podlang parser accepts it.
+/// The real constraint is that the prover commits to (tx_hash, nullifiers, state_root) via a
+/// Statement::Custom in their MainPod.
+pub const TXN_FINALIZED_PREDICATE: &str = "
+TxnFinalized(tx_final, input_nullifiers, state_root) = AND(
+    Equal(1, 1)
+)
+";
+
+pub trait BlobParser: Send + Sync {
+    fn parse_blob(&self, blob_bytes: &[u8]) -> Result<Option<Payload>>;
 }
 
-pub trait ProofParser: Send + Sync {
-    fn parse_blob(&self, blob_bytes: &[u8]) -> Result<Option<TxnFinalized>>;
-}
+// ---------------------------------------------------------------------------
+// MockBlobParser
+// ---------------------------------------------------------------------------
 
 /// Mock parser: accepts JSON `{ "tx_hash": "0x...", "nullifiers": [...], "state_root_hash": "0x..." }`
 /// Hash bytes serialized as lowercase hex strings (with or without "0x" prefix).
-pub struct MockProofParser;
+/// Returns a `Payload` with a dummy `PayloadProof::Groth16(vec![])` since no real proof is needed
+/// for mock testing.
+#[cfg(test)]
+pub struct MockBlobParser;
 
-#[derive(Deserialize)]
+#[cfg(test)]
+#[derive(serde::Deserialize)]
 struct MockProofJson {
     tx_hash: String,
     nullifiers: Vec<String>,
     state_root_hash: String,
 }
 
+#[cfg(test)]
 pub fn parse_hex_hash(s: &str) -> Result<Hash> {
     let hex = s.strip_prefix("0x").unwrap_or(s);
-    Hash::from_hex(hex).context("Invalid Hash hex")
+    <Hash as hex::FromHex>::from_hex(hex).context("Invalid Hash hex")
 }
 
-impl ProofParser for MockProofParser {
-    fn parse_blob(&self, blob_bytes: &[u8]) -> Result<Option<TxnFinalized>> {
+#[cfg(test)]
+impl BlobParser for MockBlobParser {
+    fn parse_blob(&self, blob_bytes: &[u8]) -> Result<Option<Payload>> {
         let json: MockProofJson = match serde_json::from_slice(blob_bytes) {
             Ok(j) => j,
             Err(_) => return Ok(None),
@@ -42,13 +67,106 @@ impl ProofParser for MockProofParser {
             .map(|s| parse_hex_hash(s))
             .collect::<Result<Vec<_>>>()?;
         let state_root_hash = parse_hex_hash(&json.state_root_hash)?;
-        Ok(Some(TxnFinalized {
+        Ok(Some(Payload {
+            proof: PayloadProof::Groth16(vec![]),
             tx_hash,
-            nullifiers,
             state_root_hash,
+            nullifiers,
         }))
     }
 }
+
+// ---------------------------------------------------------------------------
+// ProofParser — real Plonky2 proof verification
+// ---------------------------------------------------------------------------
+
+/// Parses binary blob payloads (`common::payload::Payload`) and verifies the
+/// embedded shrunk Plonky2 MainPod proof against the TxnFinalized custom predicate.
+pub struct ProofParser {
+    txn_finalized_pred: CustomPredicateRef,
+    vds_root: Hash,
+    common_circuit_data: CommonCircuitData,
+    verifier_circuit_data: VerifierCircuitData,
+}
+
+impl ProofParser {
+    pub fn new() -> Result<Self> {
+        let params = Params::default();
+        let module =
+            pod2::lang::load_module(TXN_FINALIZED_PREDICATE, "txn_finalized", &params, &[])
+                .context("parse TxnFinalized predicate")?;
+        let txn_finalized_pred = module
+            .predicate_ref_by_name("TxnFinalized")
+            .ok_or_else(|| anyhow!("TxnFinalized not found in parsed batch"))?;
+        let vds_root = DEFAULT_VD_SET.root();
+        let (common_circuit_data, verifier_circuit_data) =
+            &*cache_get_shrunk_main_pod_circuit_data(&params);
+        Ok(Self {
+            txn_finalized_pred,
+            vds_root,
+            common_circuit_data: (**common_circuit_data).clone(),
+            verifier_circuit_data: (**verifier_circuit_data).clone(),
+        })
+    }
+
+    fn verify_shrunk_main_pod(&self, proof: PayloadProof, st: Statement) -> Result<()> {
+        let sts_hash = calculate_statements_hash(&[st.into()]);
+        let public_inputs = [sts_hash.0, self.vds_root.0].concat();
+        let compressed_proof = match proof {
+            PayloadProof::Plonky2(proof) => proof,
+            PayloadProof::Groth16(_) => todo!("Groth16 verification not yet implemented"),
+        };
+        let proof_with_pis = CompressedProofWithPublicInputs {
+            proof: *compressed_proof,
+            public_inputs,
+        };
+        let proof = proof_with_pis
+            .decompress(
+                &self.verifier_circuit_data.verifier_only.circuit_digest,
+                &self.common_circuit_data,
+            )
+            .map_err(|e| anyhow!("decompress proof: {e}"))?;
+        self.verifier_circuit_data
+            .verify(proof)
+            .map_err(|e| anyhow!("proof verification failed: {e}"))
+    }
+}
+
+impl BlobParser for ProofParser {
+    fn parse_blob(&self, blob_bytes: &[u8]) -> Result<Option<Payload>> {
+        // 1. Decode payload using common::payload; return None if not our format.
+        let payload = match Payload::from_bytes(blob_bytes, &self.common_circuit_data) {
+            Ok(p) => p,
+            Err(_) => return Ok(None),
+        };
+
+        // 2. Build nullifiers Set and Statement::Custom for the TxnFinalized predicate.
+        let nullifiers_set = Set::new(
+            payload
+                .nullifiers
+                .iter()
+                .map(|h| Value::from(*h))
+                .collect::<HashSet<_>>(),
+        );
+        let statement = Statement::Custom(
+            self.txn_finalized_pred.clone(),
+            vec![
+                Value::from(payload.tx_hash),
+                Value::from(nullifiers_set),
+                Value::from(payload.state_root_hash),
+            ],
+        );
+
+        // 3. Verify the proof against the statement.
+        self.verify_shrunk_main_pod(payload.proof.clone(), statement)?;
+
+        Ok(Some(payload))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -62,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_mock_proof_parser_round_trip() {
-        let parser = MockProofParser;
+        let parser = MockBlobParser;
 
         let tx_hash = EMPTY_HASH;
         let nullifier = EMPTY_HASH;
@@ -79,23 +197,23 @@ mod tests {
 
         let result = parser.parse_blob(json.as_bytes()).unwrap();
         assert!(result.is_some());
-        let txn = result.unwrap();
-        assert_eq!(txn.tx_hash, tx_hash);
-        assert_eq!(txn.nullifiers.len(), 1);
-        assert_eq!(txn.nullifiers[0], nullifier);
-        assert_eq!(txn.state_root_hash, state_root);
+        let payload = result.unwrap();
+        assert_eq!(payload.tx_hash, tx_hash);
+        assert_eq!(payload.nullifiers.len(), 1);
+        assert_eq!(payload.nullifiers[0], nullifier);
+        assert_eq!(payload.state_root_hash, state_root);
     }
 
     #[test]
     fn test_mock_proof_parser_invalid_returns_none() {
-        let parser = MockProofParser;
+        let parser = MockBlobParser;
         let result = parser.parse_blob(b"not json").unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn test_mock_proof_parser_no_prefix() {
-        let parser = MockProofParser;
+        let parser = MockBlobParser;
 
         let tx_hash = EMPTY_HASH;
         let tx_hex = hash_to_hex(&tx_hash); // no "0x" prefix
@@ -107,7 +225,7 @@ mod tests {
 
         let result = parser.parse_blob(json.as_bytes()).unwrap();
         assert!(result.is_some());
-        let txn = result.unwrap();
-        assert_eq!(txn.tx_hash, tx_hash);
+        let payload = result.unwrap();
+        assert_eq!(payload.tx_hash, tx_hash);
     }
 }

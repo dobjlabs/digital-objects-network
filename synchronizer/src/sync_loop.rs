@@ -198,14 +198,21 @@ impl HeadTracker {
                     }
                 }
                 Some(Err(err)) => {
-                    warn!(?err, target_slot = slot, "Beacon event stream error; reconnecting");
+                    warn!(
+                        ?err,
+                        target_slot = slot,
+                        "Beacon event stream error; reconnecting"
+                    );
                     self.events = None;
                     if wait_or_shutdown(Duration::from_secs(1), shutdown_rx).await {
                         return Ok(SlotHeaderState::Shutdown);
                     }
                 }
                 None => {
-                    warn!(target_slot = slot, "Beacon event stream ended; reconnecting");
+                    warn!(
+                        target_slot = slot,
+                        "Beacon event stream ended; reconnecting"
+                    );
                     self.events = None;
                     if wait_or_shutdown(Duration::from_secs(1), shutdown_rx).await {
                         return Ok(SlotHeaderState::Shutdown);
@@ -230,7 +237,11 @@ impl HeadTracker {
         }
 
         // Head passed target: explicit target lookup distinguishes produced vs skipped slot.
-        debug!(head_slot = self.head.slot, target_slot = slot, "Target slot behind head; fetching explicit slot header");
+        debug!(
+            head_slot = self.head.slot,
+            target_slot = slot,
+            "Target slot behind head; fetching explicit slot header"
+        );
         Ok(
             match node
                 .beacon_cli

@@ -20,7 +20,7 @@ use api::run_api_server;
 use config::load_config;
 use db::Db;
 use node::Node;
-use proof::MockProofParser;
+use proof::ProofParser;
 use state_machine::StateMachine;
 use sync_loop::run_sync_loop;
 
@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     debug!(?cfg, "Loaded synchronizer config");
 
     let db = Db::connect(&cfg.db_path)?;
-    let state_machine = Arc::new(StateMachine::new(db, Arc::new(MockProofParser))?);
+    let state_machine = Arc::new(StateMachine::new(db, Arc::new(ProofParser::new()?))?);
     let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine)).await?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 

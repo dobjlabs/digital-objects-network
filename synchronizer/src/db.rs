@@ -68,8 +68,7 @@ impl Db {
             } else if key.starts_with(GSR_PREFIX) {
                 let block_bytes = &key[GSR_PREFIX.len()..];
                 if block_bytes.len() == 8 {
-                    let block_number =
-                        u64::from_be_bytes(block_bytes.try_into().expect("8 bytes"));
+                    let block_number = u64::from_be_bytes(block_bytes.try_into().expect("8 bytes"));
                     if let Ok(hash) = db_bytes_to_hash(&value) {
                         gsr_entries.push((block_number, hash));
                     }
@@ -89,7 +88,9 @@ impl Db {
     }
 
     pub fn last_processed_slot(&self) -> Result<Option<u32>> {
-        Ok(self.last_progress()?.map(|progress| progress.last_processed_slot))
+        Ok(self
+            .last_progress()?
+            .map(|progress| progress.last_processed_slot))
     }
 
     pub fn last_progress(&self) -> Result<Option<SyncProgress>> {
@@ -122,14 +123,24 @@ impl Db {
         Ok(())
     }
 
-    pub fn persist_transaction(&self, hash: Hash, slot: u32, block_number: Option<u32>) -> Result<()> {
+    pub fn persist_transaction(
+        &self,
+        hash: Hash,
+        slot: u32,
+        block_number: Option<u32>,
+    ) -> Result<()> {
         let key = tx_key(hash);
         let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
         self.db.put(key, value)?;
         Ok(())
     }
 
-    pub fn persist_nullifier(&self, hash: Hash, slot: u32, block_number: Option<u32>) -> Result<()> {
+    pub fn persist_nullifier(
+        &self,
+        hash: Hash,
+        slot: u32,
+        block_number: Option<u32>,
+    ) -> Result<()> {
         let key = nullifier_key(hash);
         let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
         self.db.put(key, value)?;
@@ -151,8 +162,7 @@ impl Db {
             if key.starts_with(GSR_PREFIX) {
                 let block_bytes = &key[GSR_PREFIX.len()..];
                 if block_bytes.len() == 8 {
-                    let block_number =
-                        u64::from_be_bytes(block_bytes.try_into().expect("8 bytes"));
+                    let block_number = u64::from_be_bytes(block_bytes.try_into().expect("8 bytes"));
                     if let Ok(hash) = db_bytes_to_hash(&value) {
                         entries.push((block_number, hash));
                     }
