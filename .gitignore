@@ -21,3 +21,5 @@ target
 #.idea/
 
 .DS_Store
+.env
+data/
