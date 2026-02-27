@@ -7,8 +7,9 @@ use anyhow::{anyhow, Result};
 use pod2::middleware::Hash;
 use tracing::{info, warn};
 
+use txlib::StateRoot;
+
 use crate::db::{Db, DerivedState, SyncProgress};
-use crate::gsr::compute_global_state_root;
 use crate::proof::BlobParser;
 
 /// In-memory view of the consensus state, kept in sync with the database.
@@ -59,13 +60,13 @@ impl StateMachine {
     ///    Blobs that don't match our format are silently skipped (they may belong to other apps).
     /// 2. Reject payloads whose `state_root_hash` is not in our GSR history.
     ///    This ensures every transaction is grounded in a state root we have computed ourselves.
-    /// 3. Check for duplicate `tx_hash` and spent nullifiers before writing anything,
+    /// 3. Check for duplicate `tx_final` and spent nullifiers before writing anything,
     ///    so the update is all-or-nothing: either all nullifiers are accepted or none are.
     pub fn process_blob(&self, bytes: &[u8], slot: u32, block_number: Option<u32>) -> Result<()> {
         let Some(payload) = self.proof_parser.parse_blob(bytes)? else {
             info!(
                 slot,
-                block_number, "Blob did not contain a valid TxnFinalized proof; skipping"
+                block_number, "Blob did not contain a valid TxFinalized proof; skipping"
             );
             return Ok(());
         };
@@ -91,8 +92,8 @@ impl StateMachine {
         // All uniqueness checks and DB writes happen under the write lock so that
         // concurrent calls cannot interleave partial state.
         //
-        // Strategy: insert tx_hash optimistically, then scan all nullifiers.
-        // On any collision, roll back the tx_hash insertion and bail without touching the DB.
+        // Strategy: insert tx_final optimistically, then scan all nullifiers.
+        // On any collision, roll back the tx_final insertion and bail without touching the DB.
         // Only after all checks pass do we write nullifiers to the DB.
         {
             let mut state = self
@@ -100,22 +101,22 @@ impl StateMachine {
                 .write()
                 .map_err(|e| anyhow!("state write lock poisoned: {e}"))?;
 
-            if !state.transactions.insert(payload.tx_hash) {
-                warn!(slot, block_number, "Duplicate tx_hash; rejecting");
+            if !state.transactions.insert(payload.tx_final) {
+                warn!(slot, block_number, "Duplicate tx_final; rejecting");
                 return Ok(());
             }
 
             for nullifier in &payload.nullifiers {
                 if state.nullifiers.contains(nullifier) {
                     warn!(slot, block_number, "Duplicate nullifier; rejecting");
-                    // Roll back the optimistic tx_hash insertion.
-                    state.transactions.remove(&payload.tx_hash);
+                    // Roll back the optimistic tx_final insertion.
+                    state.transactions.remove(&payload.tx_final);
                     return Ok(());
                 }
             }
 
             self.db
-                .persist_transaction(payload.tx_hash, slot, block_number)?;
+                .persist_transaction(payload.tx_final, slot, block_number)?;
             for nullifier in &payload.nullifiers {
                 state.nullifiers.insert(*nullifier);
                 self.db.persist_nullifier(*nullifier, slot, block_number)?;
@@ -136,21 +137,21 @@ impl StateMachine {
     /// Compute and persist a new GSR for the given block, appending it to the history.
     ///
     /// Must be called exactly once per block, **after** all blobs for that block have been
-    /// processed. The new GSR commits to the complete set of transactions, nullifiers, and
-    /// prior GSRs at that block height, so subsequent provers can reference it as their
-    /// `state_root_hash`.
+    /// processed. The new GSR commits to the accumulated set of transaction commitments and
+    /// nullifiers so far, so subsequent provers can reference it as their `state_root_hash`.
     pub fn advance_block(&self, block_number: i64) -> Result<()> {
         let mut state = self
             .state
             .write()
             .map_err(|e| anyhow!("state write lock poisoned: {e}"))?;
 
-        let new_gsr = compute_global_state_root(
+        let new_gsr = StateRoot::new(
+            block_number,
             &state.transactions,
             &state.nullifiers,
             &state.global_state_roots,
-            block_number,
-        );
+        )
+        .hash();
         state.global_state_roots.push(new_gsr);
         self.db.persist_global_state_root(block_number, new_gsr)?;
 
@@ -223,15 +224,15 @@ mod tests {
         hash_values(&[Value::from(n)])
     }
 
-    fn mock_txn_bytes(tx_hash: Hash, nullifiers: &[Hash], state_root: Hash) -> Vec<u8> {
+    fn mock_txn_bytes(tx_final: Hash, nullifiers: &[Hash], state_root: Hash) -> Vec<u8> {
         let nullifiers_json = nullifiers
             .iter()
             .map(|h| format!("\"{}\"", h.encode_hex::<String>()))
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            r#"{{"tx_hash":"{}","nullifiers":[{}],"state_root_hash":"{}"}}"#,
-            tx_hash.encode_hex::<String>(),
+            r#"{{"tx_final":"{}","nullifiers":[{}],"state_root_hash":"{}"}}"#,
+            tx_final.encode_hex::<String>(),
             nullifiers_json,
             state_root.encode_hex::<String>()
         )
@@ -310,8 +311,8 @@ mod tests {
         sm.advance_block(0).unwrap();
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
-        let tx_hash = unique_hash(1);
-        let bytes = mock_txn_bytes(tx_hash, &[], gsr0);
+        let tx_final = unique_hash(1);
+        let bytes = mock_txn_bytes(tx_final, &[], gsr0);
 
         sm.process_blob(&bytes, 1, Some(1)).unwrap();
         sm.process_blob(&bytes, 1, Some(1)).unwrap(); // duplicate; silently rejected
@@ -377,8 +378,8 @@ mod tests {
         sm.advance_block(0).unwrap();
 
         let bogus_gsr = unique_hash(999);
-        let tx_hash = unique_hash(1);
-        sm.process_blob(&mock_txn_bytes(tx_hash, &[], bogus_gsr), 1, Some(1))
+        let tx_final = unique_hash(1);
+        sm.process_blob(&mock_txn_bytes(tx_final, &[], bogus_gsr), 1, Some(1))
             .unwrap();
 
         let (txns, _, _) = sm.state_snapshot().unwrap();
@@ -406,72 +407,81 @@ mod tests {
         };
         use pod2::{
             backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover},
-            frontend::{MainPodBuilder, Operation},
-            middleware::{containers::Set, Params, Value},
+            frontend::MultiPodBuilder,
+            middleware::Params,
         };
+        use pod2utils::macros::BuildContext;
         use std::collections::HashSet;
+        use txlib::{Object, TxBuilder};
 
         let params = Params::default();
         let vd_set = &*DEFAULT_VD_SET;
         let shrunk_main_pod_build = ShrunkMainPodSetup::new(&params).build().unwrap();
 
+        // Set up state machine with real ProofParser.
         let dir = TempDir::new().unwrap();
         let db = Db::connect(dir.path().to_str().unwrap()).unwrap();
         let sm =
             StateMachine::new(db, Arc::new(crate::proof::ProofParser::new().unwrap())).unwrap();
 
+        // Seed GSR0 (empty state).
         sm.advance_block(0).unwrap();
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
-        let tx_hash = unique_hash(42);
-        let null1 = unique_hash(43);
-        let null2 = unique_hash(44);
+        // Build a txlib StateRoot matching the empty GSR0 and verify it agrees.
+        let state_root = Arc::new(StateRoot {
+            block_number: 0,
+            transactions: pod2::middleware::containers::Set::new(HashSet::new()),
+            nullifiers: pod2::middleware::containers::Set::new(HashSet::new()),
+            gsrs: pod2::middleware::containers::Array::new(vec![]),
+        });
+        assert_eq!(
+            state_root.hash(),
+            gsr0,
+            "txlib StateRoot must match computed GSR0"
+        );
 
-        let module = pod2::lang::load_module(
-            crate::proof::TXN_FINALIZED_PREDICATE,
-            "txn_finalized",
-            &params,
-            &[],
-        )
-        .unwrap();
-        let pred = module.predicate_ref_by_name("TxnFinalized").unwrap();
+        // Prove a transaction using txlib's TxBuilder.
+        let txlib_modules = vec![Arc::new(txlib::predicates::module())];
+        let mut builder = MultiPodBuilder::new(&params, vd_set);
+        let mut ctx = BuildContext {
+            builder: &mut builder,
+            modules: &txlib_modules,
+        };
 
-        let nullifiers_set = Value::from(Set::new(
-            [null1, null2]
-                .iter()
-                .map(|h| Value::from(*h))
-                .collect::<HashSet<_>>(),
-        ));
+        let obj = Object::new(std::collections::HashMap::new());
+        let mut tx_builder = TxBuilder::new(&mut ctx, &[], state_root);
+        tx_builder.insert(&mut ctx, obj);
+        let (st_finalized, tx) = tx_builder.finalize(&mut ctx);
+        ctx.builder.reveal(&st_finalized).unwrap();
 
-        let mut builder = MainPodBuilder::new(&params, vd_set);
-        let st0 = builder.priv_op(Operation::eq(1, 1)).unwrap();
-        builder
-            .op(
-                true,
-                vec![
-                    (0, Value::from(tx_hash)),
-                    (1, nullifiers_set),
-                    (2, Value::from(gsr0)),
-                ],
-                Operation::custom(pred, [st0]),
-            )
-            .unwrap();
-
-        let pod = builder.prove(&Prover {}).unwrap();
+        let solution = builder.solve().unwrap();
+        let pod = solution.prove(&Prover {}).unwrap().pods.pop().unwrap();
         pod.pod.verify().unwrap();
+
         let compressed_proof = shrink_compress_pod(&shrunk_main_pod_build, pod).unwrap();
+
+        // tx.dict().commitment() is the public tx_final value committed to in the proof.
+        let tx_final = tx.dict().commitment();
+        let nullifiers: Vec<Hash> = tx
+            .nullifiers
+            .set()
+            .iter()
+            .map(|v| Hash(v.raw().0))
+            .collect();
 
         let payload = Payload {
             proof: PayloadProof::Plonky2(Box::new(compressed_proof)),
-            tx_hash,
+            tx_final,
             state_root_hash: gsr0,
-            nullifiers: vec![null1, null2],
+            nullifiers: nullifiers.clone(),
         };
         sm.process_blob(&payload.to_bytes(), 1, Some(1)).unwrap();
 
-        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
-        assert!(txns.contains(&tx_hash));
-        assert!(nullifiers.contains(&null1));
-        assert!(nullifiers.contains(&null2));
+        let (txns, spent_nullifiers, _) = sm.state_snapshot().unwrap();
+        assert!(txns.contains(&tx_final));
+        for n in &nullifiers {
+            assert!(spent_nullifiers.contains(n));
+        }
     }
 }

@@ -37,7 +37,8 @@ pub fn read_elems<const N: usize>(bytes: &mut impl Read) -> Result<[F; N]> {
 #[allow(clippy::large_enum_variant)]
 pub struct Payload {
     pub proof: PayloadProof,
-    pub tx_hash: Hash,
+    /// Commitment of the finalized transaction dictionary `{live, nullifiers, state_root_hash}`.
+    pub tx_final: Hash,
     pub state_root_hash: Hash,
     pub nullifiers: Vec<Hash>,
 }
@@ -51,7 +52,7 @@ impl Payload {
             .write_all(&PAYLOAD_MAGIC.to_le_bytes())
             .expect("vec write");
         self.proof.write_bytes(&mut buffer);
-        write_elems(&mut buffer, &self.tx_hash.0);
+        write_elems(&mut buffer, &self.tx_final.0);
         write_elems(&mut buffer, &self.state_root_hash.0);
         assert!(self.nullifiers.len() <= 255);
         buffer
@@ -76,7 +77,7 @@ impl Payload {
 
         let (proof, len) = PayloadProof::from_bytes(bytes, common_data)?;
         bytes = &bytes[len..];
-        let tx_hash = Hash(read_elems(&mut bytes)?);
+        let tx_final = Hash(read_elems(&mut bytes)?);
         let state_root_hash = Hash(read_elems(&mut bytes)?);
         let nullifiers_len = {
             let mut buffer = [0; 1];
@@ -89,7 +90,7 @@ impl Payload {
         }
         Ok(Self {
             proof,
-            tx_hash,
+            tx_final,
             state_root_hash,
             nullifiers,
         })
@@ -179,7 +180,7 @@ mod tests {
         let vds_root = vd_set.root();
 
         let input = r#"
-        TxnFinalized(tx_hash, nullifiers, state_root) = AND(
+        TxnFinalized(tx_final, nullifiers, state_root) = AND(
             Equal(0, 0)
         )
         "#;
@@ -192,7 +193,7 @@ mod tests {
 
         let payload = {
             let mut builder = MainPodBuilder::new(&params, vd_set);
-            let tx_hash = Value::from("dummy_tx_hash");
+            let tx_final = Value::from("dummy_tx_final");
             let nullifiers = vec![
                 Hash(Value::from(1i64).raw().0),
                 Hash(Value::from(2i64).raw().0),
@@ -207,7 +208,7 @@ mod tests {
                 .op(
                     true,
                     vec![
-                        (0, tx_hash.clone()),
+                        (0, tx_final.clone()),
                         (1, nullifiers_set.clone()),
                         (2, state_root.clone()),
                     ],
@@ -227,7 +228,7 @@ mod tests {
 
             Payload {
                 proof: PayloadProof::Plonky2(Box::new(shrunk_main_pod_proof.clone())),
-                tx_hash: Hash(tx_hash.raw().0),
+                tx_final: Hash(tx_final.raw().0),
                 state_root_hash: Hash(state_root.raw().0),
                 nullifiers: nullifiers.clone(),
             }
@@ -246,7 +247,7 @@ mod tests {
         let st = Statement::Custom(
             pred,
             vec![
-                Value::from(payload.tx_hash),
+                Value::from(payload.tx_final),
                 nullifiers_set,
                 Value::from(payload.state_root_hash),
             ],

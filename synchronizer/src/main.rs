@@ -10,7 +10,6 @@ mod blob;
 mod clients;
 mod config;
 mod db;
-mod gsr;
 mod node;
 mod proof;
 mod state_machine;
