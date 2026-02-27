@@ -24,6 +24,12 @@ TxnFinalized(tx_final, input_nullifiers, state_root) = AND(
 )
 ";
 
+/// Decodes and validates a raw blob payload.
+///
+/// Returns `Ok(Some(payload))` when the blob contains a valid, cryptographically verified
+/// `TxnFinalized` proof. Returns `Ok(None)` when the bytes are not in our format (the blob
+/// belongs to another application and should be silently skipped). Returns `Err` only for
+/// I/O or proof verification failures that warrant logging.
 pub trait BlobParser: Send + Sync {
     fn parse_blob(&self, blob_bytes: &[u8]) -> Result<Option<Payload>>;
 }
@@ -33,7 +39,7 @@ pub trait BlobParser: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Mock parser: accepts JSON `{ "tx_hash": "0x...", "nullifiers": [...], "state_root_hash": "0x..." }`
-/// Hash bytes serialized as lowercase hex strings (with or without "0x" prefix).
+/// Hash bytes serialized as lowercase hex strings.
 /// Returns a `Payload` with a dummy `PayloadProof::Groth16(vec![])` since no real proof is needed
 /// for mock testing.
 #[cfg(test)]
@@ -90,8 +96,14 @@ pub struct ProofParser {
 }
 
 impl ProofParser {
+    /// Build a `ProofParser`, loading the shrunk MainPod circuit data from the pod2 disk cache.
+    ///
+    /// On first call the wrapper circuit is built and cached under `~/.cache/pod2/`; subsequent
+    /// calls return the cached entry immediately. The `TXN_FINALIZED_PREDICATE` is compiled once
+    /// here so it does not need to be re-parsed on every blob.
     pub fn new() -> Result<Self> {
         let params = Params::default();
+        // TODO: when txlib is integrated, use the txlib predicate instead of the hardcoded one.
         let module =
             pod2::lang::load_module(TXN_FINALIZED_PREDICATE, "txn_finalized", &params, &[])
                 .context("parse TxnFinalized predicate")?;
@@ -109,12 +121,20 @@ impl ProofParser {
         })
     }
 
+    /// Verify a shrunk MainPod proof against a single expected `Statement`.
+    ///
+    /// The shrunk wrapper circuit re-exposes the original MainPod public inputs unchanged:
+    /// `[statements_hash (4 field elems) || vds_root (4 field elems)]`.
+    /// We reconstruct those expected public inputs from `st` and `self.vds_root`, then
+    /// decompress and verify the Plonky2 proof.
     fn verify_shrunk_main_pod(&self, proof: PayloadProof, st: Statement) -> Result<()> {
         let sts_hash = calculate_statements_hash(&[st.into()]);
         let public_inputs = [sts_hash.0, self.vds_root.0].concat();
         let compressed_proof = match proof {
             PayloadProof::Plonky2(proof) => proof,
-            PayloadProof::Groth16(_) => todo!("Groth16 verification not yet implemented"),
+            PayloadProof::Groth16(_) => {
+                return Err(anyhow!("Groth16 proof verification is not yet implemented"))
+            }
         };
         let proof_with_pis = CompressedProofWithPublicInputs {
             proof: *compressed_proof,

@@ -11,12 +11,22 @@ use crate::db::{Db, DerivedState, SyncProgress};
 use crate::gsr::compute_global_state_root;
 use crate::proof::BlobParser;
 
+/// In-memory view of the consensus state, kept in sync with the database.
 struct InnerState {
+    /// Set of accepted transaction hashes; used for duplicate detection.
     transactions: HashSet<Hash>,
+    /// Set of spent nullifiers; a nullifier appearing twice indicates a double-spend.
     nullifiers: HashSet<Hash>,
+    /// Ordered history of Global State Roots, one per processed block.
+    /// Blobs may reference any GSR in this history, not just the latest.
     global_state_roots: Vec<Hash>,
 }
 
+/// Domain logic for the synchronizer: proof verification, state validation, and persistence.
+///
+/// `StateMachine` is intentionally decoupled from networking — it operates entirely on
+/// raw byte slices and block numbers, making it straightforward to unit-test without a
+/// live beacon node.
 pub struct StateMachine {
     db: Db,
     state: RwLock<InnerState>,
@@ -24,6 +34,7 @@ pub struct StateMachine {
 }
 
 impl StateMachine {
+    /// Restore in-memory state from the database and return a ready `StateMachine`.
     pub fn new(db: Db, proof_parser: Arc<dyn BlobParser>) -> Result<Self> {
         let DerivedState {
             transactions,
@@ -42,7 +53,14 @@ impl StateMachine {
     }
 
     /// Process raw blob content (post-blob-encoding extraction).
-    /// Parses the proof, validates it against known state, and updates state on success.
+    ///
+    /// Steps:
+    /// 1. Attempt to parse and cryptographically verify the blob as a `TxnFinalized` payload.
+    ///    Blobs that don't match our format are silently skipped (they may belong to other apps).
+    /// 2. Reject payloads whose `state_root_hash` is not in our GSR history.
+    ///    This ensures every transaction is grounded in a state root we have computed ourselves.
+    /// 3. Check for duplicate `tx_hash` and spent nullifiers before writing anything,
+    ///    so the update is all-or-nothing: either all nullifiers are accepted or none are.
     pub fn process_blob(&self, bytes: &[u8], slot: u32, block_number: Option<u32>) -> Result<()> {
         let Some(payload) = self.proof_parser.parse_blob(bytes)? else {
             info!(
@@ -52,7 +70,9 @@ impl StateMachine {
             return Ok(());
         };
 
-        // Validate that the payload's state_root_hash is in our known history.
+        // A payload is only valid if it references a GSR we have previously computed.
+        // We accept any historical GSR, not just the latest, to tolerate blobs that were
+        // proven against a state root that has since been superseded.
         {
             let state = self
                 .state
@@ -68,7 +88,12 @@ impl StateMachine {
             }
         }
 
-        // Apply state updates atomically: check uniqueness before writing anything.
+        // All uniqueness checks and DB writes happen under the write lock so that
+        // concurrent calls cannot interleave partial state.
+        //
+        // Strategy: insert tx_hash optimistically, then scan all nullifiers.
+        // On any collision, roll back the tx_hash insertion and bail without touching the DB.
+        // Only after all checks pass do we write nullifiers to the DB.
         {
             let mut state = self
                 .state
@@ -83,6 +108,7 @@ impl StateMachine {
             for nullifier in &payload.nullifiers {
                 if state.nullifiers.contains(nullifier) {
                     warn!(slot, block_number, "Duplicate nullifier; rejecting");
+                    // Roll back the optimistic tx_hash insertion.
                     state.transactions.remove(&payload.tx_hash);
                     return Ok(());
                 }
@@ -108,7 +134,11 @@ impl StateMachine {
     }
 
     /// Compute and persist a new GSR for the given block, appending it to the history.
-    /// Must be called once per processed block, after all blobs for that block have been applied.
+    ///
+    /// Must be called exactly once per block, **after** all blobs for that block have been
+    /// processed. The new GSR commits to the complete set of transactions, nullifiers, and
+    /// prior GSRs at that block height, so subsequent provers can reference it as their
+    /// `state_root_hash`.
     pub fn advance_block(&self, block_number: i64) -> Result<()> {
         let mut state = self
             .state
@@ -132,6 +162,8 @@ impl StateMachine {
         Ok(())
     }
 
+    /// Returns `(transactions, nullifiers, global_state_roots)` as owned vecs.
+    /// Primarily used in tests; callers that need only one field should add a dedicated accessor.
     pub fn state_snapshot(&self) -> Result<(Vec<Hash>, Vec<Hash>, Vec<Hash>)> {
         let state = self
             .state
