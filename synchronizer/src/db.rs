@@ -44,10 +44,6 @@ impl Db {
         Ok(Self { db: Arc::new(db) })
     }
 
-    pub fn init(&self) -> Result<()> {
-        Ok(())
-    }
-
     pub fn load_state(&self) -> Result<DerivedState> {
         let mut transactions = HashSet::new();
         let mut nullifiers = HashSet::new();
@@ -153,26 +149,6 @@ impl Db {
         self.db.put(key, value)?;
         Ok(())
     }
-
-    pub fn load_global_state_roots(&self) -> Result<Vec<Hash>> {
-        let mut entries: Vec<(u64, Hash)> = Vec::new();
-
-        for entry in self.db.iterator(IteratorMode::Start) {
-            let (key, value) = entry?;
-            if key.starts_with(GSR_PREFIX) {
-                let block_bytes = &key[GSR_PREFIX.len()..];
-                if block_bytes.len() == 8 {
-                    let block_number = u64::from_be_bytes(block_bytes.try_into().expect("8 bytes"));
-                    if let Ok(hash) = db_bytes_to_hash(&value) {
-                        entries.push((block_number, hash));
-                    }
-                }
-            }
-        }
-
-        entries.sort_by_key(|(block, _)| *block);
-        Ok(entries.into_iter().map(|(_, h)| h).collect())
-    }
 }
 
 fn tx_key(hash: Hash) -> Vec<u8> {
@@ -221,7 +197,6 @@ mod tests {
     fn open_test_db() -> (Db, TempDir) {
         let dir = TempDir::new().expect("tempdir");
         let db = Db::connect(dir.path().to_str().unwrap()).expect("connect");
-        db.init().expect("init");
         (db, dir)
     }
 
@@ -255,11 +230,6 @@ mod tests {
         db.persist_global_state_root(5, h0).unwrap();
         db.persist_global_state_root(20, h0).unwrap();
 
-        let roots = db.load_global_state_roots().unwrap();
-        assert_eq!(roots.len(), 3);
-
-        // Verify they came back in block-number order
-        // (all same value in this test, but we verified via sorted block numbers)
         let state = db.load_state().unwrap();
         assert_eq!(state.global_state_roots.len(), 3);
     }
