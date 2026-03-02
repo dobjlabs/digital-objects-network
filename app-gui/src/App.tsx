@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ContextPanel } from "./features/context/ContextPanel";
+import { FeedPanel } from "./features/feed/FeedPanel";
 import { InventoryPanel } from "./features/inventory/InventoryPanel";
 import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { RecipeGrid } from "./features/recipes/RecipeGrid";
@@ -21,8 +22,6 @@ function App() {
   const proofRunning = useUiStore(
     (state) => state.proof.status === "generating" || state.proof.status === "committing",
   );
-
-  const activePostCount = useMemo(() => mockFeed.length, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,7 +77,7 @@ function App() {
           activeRecipeId={activeRecipeId}
           onSelectRecipe={selectRecipe}
         />
-        <section className="feed-panel">Feed panel scaffold ({activePostCount} mock posts)</section>
+        <FeedPanel posts={mockFeed} />
       </div>
     </main>
   );
