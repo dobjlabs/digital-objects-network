@@ -260,6 +260,7 @@ body {
 
 .feed-toolbar {
   display: flex;
+  gap: 8px;
 }
 
 .feed-search {
@@ -357,6 +358,33 @@ body {
   color: var(--text);
   font-size: 11px;
   line-height: 1.5;
+}
+
+.feed-compose-context {
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  padding: 8px;
+}
+
+.feed-compose-context-title {
+  color: var(--text-bright);
+  font-size: 10px;
+}
+
+.feed-compose-textarea {
+  width: 100%;
+  min-height: 90px;
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  color: var(--text);
+  padding: 8px;
+  font: inherit;
+  resize: vertical;
+}
+
+.feed-compose-claims {
+  display: flex;
+  gap: 8px;
 }
 
 .feed-verify-bar {
