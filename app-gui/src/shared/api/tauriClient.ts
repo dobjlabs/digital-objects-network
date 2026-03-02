@@ -63,6 +63,18 @@ export interface AttachClaimResult {
   hash: string;
 }
 
+export function getThingsDir(): Promise<string> {
+  return invoke<string>("get_things_dir");
+}
+
+export function ensureThingsDir(): Promise<string> {
+  return invoke<string>("ensure_things_dir");
+}
+
+export function openThingsDir(): Promise<string> {
+  return invoke<string>("open_things_dir");
+}
+
 export function getMockState(): Promise<MockStateDto> {
   return invoke<MockStateDto>("get_mock_state");
 }

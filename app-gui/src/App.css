@@ -49,6 +49,38 @@ body {
   font-size: 11px;
 }
 
+.panel-header-button {
+  position: relative;
+  width: 100%;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.panel-header-button:hover {
+  color: var(--accent-hover);
+}
+
+.panel-header-button::after {
+  content: "open folder";
+  position: absolute;
+  left: 12px;
+  top: calc(100% + 4px);
+  padding: 3px 7px;
+  font-size: 9px;
+  color: #0e1e1a;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+  z-index: 20;
+}
+
+.panel-header-button:hover::after {
+  opacity: 1;
+}
+
 .inventory-panel {
   display: flex;
   flex-direction: column;
@@ -113,6 +145,14 @@ body {
   margin: 0 0 8px;
   color: var(--text-bright);
   font-size: 14px;
+}
+
+.path-line {
+  margin-top: 10px;
+  color: #918d88;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
 }
 
 .cpu-panel {

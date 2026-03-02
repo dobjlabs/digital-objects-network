@@ -4,9 +4,10 @@ interface ContextPanelProps {
   selection: ContextSelection;
   items: InventoryItem[];
   recipes: Recipe[];
+  thingsDirPath: string;
 }
 
-export function ContextPanel({ selection, items, recipes }: ContextPanelProps) {
+export function ContextPanel({ selection, items, recipes, thingsDirPath }: ContextPanelProps) {
   if (selection.kind === "none") {
     return <section className="context-panel">Select an item or recipe.</section>;
   }
@@ -24,6 +25,9 @@ export function ContextPanel({ selection, items, recipes }: ContextPanelProps) {
           Validity: <strong>{item.validity}</strong>
         </p>
         <p>{item.validity === "live" ? item.stateRoot : item.nullifier}</p>
+        <p className="path-line">
+          {thingsDirPath}/{item.name}
+        </p>
       </section>
     );
   }

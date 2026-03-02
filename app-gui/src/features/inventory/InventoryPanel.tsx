@@ -2,25 +2,36 @@ import type { InventoryItem } from "../../shared/types/domain";
 
 interface InventoryPanelProps {
   items: InventoryItem[];
+  thingsDirPath: string;
   activeItemId: string | null;
   showNullifiedItems: boolean;
   onSelectItem: (itemId: string) => void;
   onToggleNullified: () => void;
+  onOpenThingsDir: () => void;
 }
 
 export function InventoryPanel({
   items,
+  thingsDirPath,
   activeItemId,
   showNullifiedItems,
   onSelectItem,
   onToggleNullified,
+  onOpenThingsDir,
 }: InventoryPanelProps) {
   const liveItems = items.filter((item) => item.validity === "live");
   const nullifiedItems = items.filter((item) => item.validity === "nullified");
 
   return (
     <section className="inventory-panel">
-      <header className="panel-header">Your Things</header>
+      <button
+        type="button"
+        className="panel-header panel-header-button"
+        onClick={onOpenThingsDir}
+        title={thingsDirPath}
+      >
+        Your Things
+      </button>
 
       <div className="inventory-list">
         {liveItems.map((item) => (
