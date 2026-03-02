@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ContextPanel } from "./features/context/ContextPanel";
 import { InventoryPanel } from "./features/inventory/InventoryPanel";
+import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { RecipeGrid } from "./features/recipes/RecipeGrid";
 import { getThingsDir, openThingsDir } from "./shared/api/tauriClient";
 import { mockFeed, mockItems, mockRecipes } from "./shared/data/mockData";
@@ -16,6 +17,10 @@ function App() {
   const selectItem = useUiStore((state) => state.selectItem);
   const selectRecipe = useUiStore((state) => state.selectRecipe);
   const toggleNullified = useUiStore((state) => state.toggleNullified);
+  const runProof = useUiStore((state) => state.runProof);
+  const proofRunning = useUiStore(
+    (state) => state.proof.status === "generating" || state.proof.status === "committing",
+  );
 
   const activePostCount = useMemo(() => mockFeed.length, []);
 
@@ -61,8 +66,10 @@ function App() {
           items={mockItems}
           recipes={mockRecipes}
           thingsDirPath={thingsDirPath}
+          onRunProof={runProof}
+          proofRunning={proofRunning}
         />
-        <section className="cpu-panel">CPU / proof runner panel (next step)</section>
+        <ProofRunnerPanel />
       </div>
 
       <div className="right-column">

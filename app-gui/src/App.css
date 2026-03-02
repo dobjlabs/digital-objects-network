@@ -155,13 +155,62 @@ body {
   word-break: break-all;
 }
 
+.context-action {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  background: var(--accent);
+  color: #102420;
+  padding: 7px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.context-action:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .cpu-panel {
   border-right: 2px solid var(--col-border);
   background: var(--panel-alt);
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   color: #8c8884;
+  padding: 12px;
+}
+
+.proof-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.proof-title {
+  color: var(--text-bright);
+  font-size: 12px;
+}
+
+.proof-line {
+  color: var(--text);
+  font-size: 10px;
+  word-break: break-all;
+}
+
+.proof-muted {
+  color: #8c8884;
+}
+
+.proof-log {
+  margin-top: 6px;
+  font-size: 10px;
+  color: #8c8884;
+}
+
+.proof-error {
+  color: #d16a6a;
+  font-size: 10px;
 }
 
 .right-column {
