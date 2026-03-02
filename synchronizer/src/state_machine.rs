@@ -35,6 +35,18 @@ pub struct StateMachine {
 }
 
 impl StateMachine {
+    fn read_state(&self) -> Result<std::sync::RwLockReadGuard<'_, InnerState>> {
+        self.state
+            .read()
+            .map_err(|e| anyhow!("state read lock poisoned: {e}"))
+    }
+
+    fn write_state(&self) -> Result<std::sync::RwLockWriteGuard<'_, InnerState>> {
+        self.state
+            .write()
+            .map_err(|e| anyhow!("state write lock poisoned: {e}"))
+    }
+
     /// Restore in-memory state from the database and return a ready `StateMachine`.
     pub fn new(db: Db, proof_parser: Arc<dyn BlobParser>) -> Result<Self> {
         let DerivedState {
@@ -75,10 +87,7 @@ impl StateMachine {
         // We accept any historical GSR, not just the latest, to tolerate blobs that were
         // proven against a state root that has since been superseded.
         {
-            let state = self
-                .state
-                .read()
-                .map_err(|e| anyhow!("state read lock poisoned: {e}"))?;
+            let state = self.read_state()?;
             if !state.global_state_roots.contains(&payload.state_root_hash) {
                 warn!(
                     slot,
@@ -96,10 +105,7 @@ impl StateMachine {
         // On any collision, roll back the tx_final insertion and bail without touching the DB.
         // Only after all checks pass do we write nullifiers to the DB.
         {
-            let mut state = self
-                .state
-                .write()
-                .map_err(|e| anyhow!("state write lock poisoned: {e}"))?;
+            let mut state = self.write_state()?;
 
             if !state.transactions.insert(payload.tx_final) {
                 warn!(slot, block_number, "Duplicate tx_final; rejecting");
@@ -140,10 +146,7 @@ impl StateMachine {
     /// processed. The new GSR commits to the accumulated set of transaction commitments and
     /// nullifiers so far, so subsequent provers can reference it as their `state_root_hash`.
     pub fn advance_block(&self, block_number: i64) -> Result<()> {
-        let mut state = self
-            .state
-            .write()
-            .map_err(|e| anyhow!("state write lock poisoned: {e}"))?;
+        let mut state = self.write_state()?;
 
         let new_gsr = StateRoot::new(
             block_number,
@@ -166,10 +169,7 @@ impl StateMachine {
     /// Returns `(transactions, nullifiers, global_state_roots)` as owned vecs.
     /// Primarily used in tests; callers that need only one field should add a dedicated accessor.
     pub fn state_snapshot(&self) -> Result<(Vec<Hash>, Vec<Hash>, Vec<Hash>)> {
-        let state = self
-            .state
-            .read()
-            .map_err(|e| anyhow!("state read lock poisoned: {e}"))?;
+        let state = self.read_state()?;
         Ok((
             state.transactions.iter().copied().collect(),
             state.nullifiers.iter().copied().collect(),
@@ -178,10 +178,7 @@ impl StateMachine {
     }
 
     pub fn log_current_state(&self) -> Result<()> {
-        let state = self
-            .state
-            .read()
-            .map_err(|e| anyhow!("state read lock poisoned: {e}"))?;
+        let state = self.read_state()?;
         info!(
             transaction_count = state.transactions.len(),
             nullifier_count = state.nullifiers.len(),
