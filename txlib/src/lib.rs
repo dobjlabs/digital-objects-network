@@ -1,6 +1,10 @@
 // pub mod examples;
 pub mod predicates;
-use std::{array, collections::{HashMap, HashSet}, sync::Arc};
+use std::{
+    array,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use plonky2::field::types::Field;
 use pod2::middleware::{
@@ -127,22 +131,26 @@ impl TxBuilder {
         let state_root_hash = state_root.hash();
         let [s0, s1, s2, tx_after] = dict_define!({"live" => &inputs_set, "state_root_hash" => &state_root_hash, "nullifiers" => set!()});
 
-        let st_tx_init = st_custom!(ctx,
+        let st_tx_init = st_custom!(
+            ctx,
             TxInit() = (
                 Equal(dict!(), dict!()),
                 DictInsert(s1, s0, "live", inputs_set),
                 DictInsert(s2, s1, "state_root_hash", state_root_hash),
                 DictInsert(tx_after, s2, "nullifiers", set!()),
                 st_inputs_grounded
-            ))
+            )
+        )
         .unwrap();
-        let st_tx = st_custom!(ctx,
+        let st_tx = st_custom!(
+            ctx,
             Tx() = (
                 st_tx_init,
                 Statement::None,
                 Statement::None,
                 Statement::None
-            ))
+            )
+        )
         .unwrap();
         Self { st_tx, tx }
     }
@@ -161,50 +169,46 @@ impl TxBuilder {
             Value::from(transactions.clone()),
             Value::from(nullifiers.clone()),
         ]);
-        let block_number_gsrs_hash = hash_values(&[
-            Value::from(block_number),
-            Value::from(gsrs.clone()),
-        ]);
-        let mut st = st_custom!(ctx,
-            InputsGrounded(state_root_hash=state_root_hash) = (
-                Equal(set!(), set!()),
-                Statement::None
-            ))
+        let block_number_gsrs_hash =
+            hash_values(&[Value::from(block_number), Value::from(gsrs.clone())]);
+        let mut st = st_custom!(
+            ctx,
+            InputsGrounded(state_root_hash = state_root_hash) =
+                (Equal(set!(), set!()), Statement::None)
+        )
         .unwrap();
         let mut prev_inputs_set = set!();
         for (obj, source_tx) in inputs {
             let obj_dict = obj.dict();
             let mut inputs_set = prev_inputs_set.clone();
             inputs_set.insert(&Value::from(obj_dict.clone())).unwrap();
-            let st_state_root = st_custom!(ctx,
+            let st_state_root = st_custom!(
+                ctx,
                 StateRoot() = (
                     HashOf(txn_nullifiers_hash, transactions, nullifiers),
                     HashOf(block_number_gsrs_hash, block_number, gsrs),
                     HashOf(state_root_hash, txn_nullifiers_hash, block_number_gsrs_hash)
-                ))
+                )
+            )
             .unwrap();
-            let st_tx_in_state_root = st_custom!(ctx,
-                TxInStateRoot() = (
-                    st_state_root,
-                    SetContains(transactions, source_tx.dict())
-                ))
+            let st_tx_in_state_root = st_custom!(
+                ctx,
+                TxInStateRoot() = (st_state_root, SetContains(transactions, source_tx.dict()))
+            )
             .unwrap();
-            let st_rec = st_custom!(ctx,
+            let st_rec = st_custom!(
+                ctx,
                 InputsGroundedRecursive() = (
                     st_tx_in_state_root,
                     SetContains((&source_tx.dict(), "live"), obj_dict),
                     SetInsert(inputs_set, prev_inputs_set, obj_dict),
                     st
-                ))
+                )
+            )
             .unwrap();
             prev_inputs_set = inputs_set;
 
-            st = st_custom!(ctx,
-                InputsGrounded() = (
-                    Statement::None,
-                    st_rec
-                ))
-            .unwrap();
+            st = st_custom!(ctx, InputsGrounded() = (Statement::None, st_rec)).unwrap();
         }
         (st, prev_inputs_set)
     }
@@ -213,20 +217,24 @@ impl TxBuilder {
         let new = Value::from(new.dict());
         let tx_before = self.tx.dict();
         self.tx.live.insert(&new).unwrap();
-        let st_tx_inserted = st_custom!(ctx,
+        let st_tx_inserted = st_custom!(
+            ctx,
             TxInserted() = (
                 self.st_tx.clone(),
                 SetInsert(self.tx.live, (&tx_before, "live"), new),
                 DictUpdate(self.tx.dict(), tx_before, "live", self.tx.live)
-            ))
+            )
+        )
         .unwrap();
-        self.st_tx = st_custom!(ctx,
+        self.st_tx = st_custom!(
+            ctx,
             Tx() = (
                 Statement::None,
                 Statement::None,
                 Statement::None,
                 st_tx_inserted.clone()
-            ))
+            )
+        )
         .unwrap();
         st_tx_inserted
     }
@@ -241,13 +249,19 @@ impl TxBuilder {
             .nullifiers
             .insert(&Value::from(obj_nullifier))
             .unwrap();
-        st_custom!(ctx,
-            TxObjectStateNullified(tx_before=tx_before) = (
+        st_custom!(
+            ctx,
+            TxObjectStateNullified(tx_before = tx_before) = (
                 HashOf(obj_key_hash, obj_dict, (&obj_dict, "key")),
                 HashOf(obj_nullifier, obj_key_hash, "txlib-nullifier-v1"),
-                SetInsert(self.tx.nullifiers, (&tx_before, "nullifiers"), obj_nullifier),
+                SetInsert(
+                    self.tx.nullifiers,
+                    (&tx_before, "nullifiers"),
+                    obj_nullifier
+                ),
                 DictUpdate(self.tx.dict(), tx_before, "nullifiers", self.tx.nullifiers)
-            ))
+            )
+        )
         .unwrap()
     }
 
@@ -259,21 +273,25 @@ impl TxBuilder {
             .live
             .delete(&Value::from(obj_dict.commitment()))
             .unwrap();
-        let st_tx_deleted = st_custom!(ctx,
+        let st_tx_deleted = st_custom!(
+            ctx,
             TxDeleted() = (
                 self.st_tx.clone(),
                 st_tx_obj_nullified,
                 SetDelete(self.tx.live, (&tx_after_nullified, "live"), obj_dict),
                 DictUpdate(self.tx.dict(), tx_after_nullified, "live", self.tx.live)
-            ))
+            )
+        )
         .unwrap();
-        self.st_tx = st_custom!(ctx,
+        self.st_tx = st_custom!(
+            ctx,
             Tx() = (
                 Statement::None,
                 st_tx_deleted.clone(),
                 Statement::None,
                 Statement::None
-            ))
+            )
+        )
         .unwrap();
         st_tx_deleted
     }
@@ -289,34 +307,40 @@ impl TxBuilder {
             .unwrap();
         let live_mid = self.tx.live.clone();
         self.tx.live.insert(&Value::from(new_dict.clone())).unwrap();
-        let st_tx_mutated = st_custom!(ctx,
+        let st_tx_mutated = st_custom!(
+            ctx,
             TxMutated() = (
                 self.st_tx.clone(),
                 st_tx_obj_nullified,
                 SetDelete(live_mid, (&tx_after_nullified, "live"), old_dict),
                 SetInsert(self.tx.live, live_mid, new_dict),
                 DictUpdate(self.tx.dict(), tx_after_nullified, "live", self.tx.live)
-            ))
+            )
+        )
         .unwrap();
-        self.st_tx = st_custom!(ctx,
+        self.st_tx = st_custom!(
+            ctx,
             Tx() = (
                 Statement::None,
                 Statement::None,
                 st_tx_mutated.clone(),
                 Statement::None
-            ))
+            )
+        )
         .unwrap();
         st_tx_mutated
     }
 
     pub fn finalize(self, ctx: &mut BuildContext) -> (Statement, Tx) {
         let tx_final = self.tx.dict();
-        let st = st_custom!(ctx,
+        let st = st_custom!(
+            ctx,
             TxFinalized() = (
                 self.st_tx.clone(),
                 DictContains(tx_final, "nullifiers", self.tx.nullifiers),
                 DictContains(tx_final, "state_root_hash", self.tx.state_root.hash())
-            ))
+            )
+        )
         .unwrap();
         (st, self.tx)
     }
