@@ -1,4 +1,6 @@
+import { useRef } from "react";
 import type { InventoryItem } from "../../shared/types/domain";
+import type { DragEvent } from "react";
 
 interface InventoryPanelProps {
   items: InventoryItem[];
@@ -8,6 +10,7 @@ interface InventoryPanelProps {
   onSelectItem: (itemId: string) => void;
   onToggleNullified: () => void;
   onOpenThingsDir: () => void;
+  onDragItemStart: (itemName: string) => void;
 }
 
 export function InventoryPanel({
@@ -18,7 +21,29 @@ export function InventoryPanel({
   onSelectItem,
   onToggleNullified,
   onOpenThingsDir,
+  onDragItemStart,
 }: InventoryPanelProps) {
+  const isDraggingRef = useRef(false);
+
+  const handleDragStart = (event: DragEvent<HTMLButtonElement>, item: InventoryItem) => {
+    const payload = JSON.stringify({ itemId: item.id, name: item.name });
+    event.dataTransfer.setData("application/x-zkcraft-item", payload);
+    event.dataTransfer.setData("text/plain", item.name);
+    event.dataTransfer.setData("text", item.name);
+    event.dataTransfer.effectAllowed = "copy";
+    isDraggingRef.current = true;
+    onDragItemStart(item.name);
+  };
+
+  const handleDragEnd = () => {
+    isDraggingRef.current = false;
+  };
+
+  const handleClickItem = (itemId: string) => {
+    if (isDraggingRef.current) return;
+    onSelectItem(itemId);
+  };
+
   const liveItems = items.filter((item) => item.validity === "live");
   const nullifiedItems = items.filter((item) => item.validity === "nullified");
 
@@ -39,7 +64,10 @@ export function InventoryPanel({
             key={item.id}
             type="button"
             className={`inventory-item ${activeItemId === item.id ? "active" : ""}`}
-            onClick={() => onSelectItem(item.id)}
+            onClick={() => handleClickItem(item.id)}
+            draggable
+            onDragStart={(event) => handleDragStart(event, item)}
+            onDragEnd={handleDragEnd}
           >
             <span>{item.emoji}</span>
             <span>{item.name}</span>
@@ -57,7 +85,10 @@ export function InventoryPanel({
                   key={item.id}
                   type="button"
                   className={`inventory-item ${activeItemId === item.id ? "active" : ""}`}
-                  onClick={() => onSelectItem(item.id)}
+                  onClick={() => handleClickItem(item.id)}
+                  draggable
+                  onDragStart={(event) => handleDragStart(event, item)}
+                  onDragEnd={handleDragEnd}
                 >
                   <span>{item.emoji}</span>
                   <span>{item.name}</span>

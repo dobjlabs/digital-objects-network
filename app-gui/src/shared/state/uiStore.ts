@@ -17,15 +17,19 @@ interface ProofState {
 }
 
 interface UiStoreState extends AppUiState {
+  dragItemName: string | null;
   proof: ProofState;
   selectItem: (itemId: string) => void;
   selectRecipe: (recipeId: string) => void;
   toggleNullified: () => void;
+  beginDragItem: (itemName: string) => void;
+  endDragItem: () => void;
   runProof: (input: { methodName: string; args: string[]; cpuCost: string }) => Promise<void>;
 }
 
 export const useUiStore = create<UiStoreState>((set) => ({
   ...initialUiState,
+  dragItemName: null,
   proof: {
     status: "idle",
     methodName: null,
@@ -54,6 +58,16 @@ export const useUiStore = create<UiStoreState>((set) => ({
     set((prev) => ({
       ...prev,
       showNullifiedItems: !prev.showNullifiedItems,
+    })),
+  beginDragItem: (itemName) =>
+    set((prev) => ({
+      ...prev,
+      dragItemName: itemName,
+    })),
+  endDragItem: () =>
+    set((prev) => ({
+      ...prev,
+      dragItemName: null,
     })),
   runProof: async ({ methodName, args, cpuCost }) => {
     set((prev) => {

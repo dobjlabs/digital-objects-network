@@ -18,6 +18,9 @@ function App() {
   const selectItem = useUiStore((state) => state.selectItem);
   const selectRecipe = useUiStore((state) => state.selectRecipe);
   const toggleNullified = useUiStore((state) => state.toggleNullified);
+  const dragItemName = useUiStore((state) => state.dragItemName);
+  const beginDragItem = useUiStore((state) => state.beginDragItem);
+  const endDragItem = useUiStore((state) => state.endDragItem);
   const runProof = useUiStore((state) => state.runProof);
   const proofRunning = useUiStore(
     (state) => state.proof.status === "generating" || state.proof.status === "committing",
@@ -49,15 +52,16 @@ function App() {
 
   return (
     <main className="app-shell">
-      <InventoryPanel
+        <InventoryPanel
         items={mockItems}
         thingsDirPath={thingsDirPath}
         activeItemId={activeItemId}
         showNullifiedItems={showNullifiedItems}
         onSelectItem={selectItem}
-        onToggleNullified={toggleNullified}
-        onOpenThingsDir={handleOpenThingsDir}
-      />
+          onToggleNullified={toggleNullified}
+          onOpenThingsDir={handleOpenThingsDir}
+          onDragItemStart={beginDragItem}
+        />
 
       <div className="main-column">
         <ContextPanel
@@ -65,6 +69,8 @@ function App() {
           items={mockItems}
           recipes={mockRecipes}
           thingsDirPath={thingsDirPath}
+          dragItemName={dragItemName}
+          onConsumeDragItem={endDragItem}
           onRunProof={runProof}
           proofRunning={proofRunning}
         />
