@@ -261,6 +261,7 @@ body {
 .feed-toolbar {
   display: flex;
   gap: 8px;
+  align-items: center;
 }
 
 .feed-search {
@@ -270,6 +271,55 @@ body {
   color: var(--text);
   padding: 6px 8px;
   font: inherit;
+}
+
+.feed-live-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #8c8884;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.feed-filter-btn {
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.feed-filter-btn.active {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.feed-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.feed-chip {
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  color: var(--text);
+  padding: 3px 8px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.feed-chip.active {
+  border-color: var(--accent);
+  background: #1f312d;
+}
+
+.feed-chip-count {
+  color: #8c8884;
+  font-size: 9px;
 }
 
 .feed-list {
@@ -393,6 +443,34 @@ body {
   gap: 8px;
 }
 
+.feed-responses {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feed-response-count {
+  color: #8c8884;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.feed-response-item {
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.feed-response-desc {
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .feed-verify-btn {
   border: 1px solid var(--border);
   background: var(--accent);
@@ -400,6 +478,8 @@ body {
   padding: 4px 10px;
   font-size: 10px;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .feed-verify-msg {

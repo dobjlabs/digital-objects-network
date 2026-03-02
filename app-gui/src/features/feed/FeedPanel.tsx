@@ -9,6 +9,9 @@ interface FeedPanelProps {
 export function FeedPanel({ posts }: FeedPanelProps) {
   const [localPosts, setLocalPosts] = useState<FeedPost[]>(posts);
   const [search, setSearch] = useState("");
+  const [liveOnly, setLiveOnly] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [activeTypes, setActiveTypes] = useState<string[]>([]);
   const [activePostId, setActivePostId] = useState<string | null>(null);
   const [composeMode, setComposeMode] = useState<"closed" | "new" | "reply">("closed");
   const [replyToPostId, setReplyToPostId] = useState<string | null>(null);
@@ -25,14 +28,39 @@ export function FeedPanel({ posts }: FeedPanelProps) {
   }>({ status: "idle", checkedBlock: null, error: null });
 
   const toValidity = (value: string) => (value === "nullified" ? "nullified" : "live");
+  const nowLabel = () => new Date().toLocaleString();
+
+  const proofTypeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const post of localPosts) {
+      const uniqueInPost = new Set(post.proofs.map((proof) => proof.name));
+      for (const type of uniqueInPost) {
+        counts.set(type, (counts.get(type) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [localPosts]);
+
+  const allProofTypes = useMemo(() => Array.from(proofTypeCounts.keys()).sort(), [proofTypeCounts]);
 
   const filteredPosts = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return localPosts;
-    return localPosts.filter(
-      (post) => post.title.toLowerCase().includes(q) || post.desc.toLowerCase().includes(q),
-    );
-  }, [localPosts, search]);
+    return localPosts.filter((post) => {
+      if (q && !post.title.toLowerCase().includes(q) && !post.desc.toLowerCase().includes(q)) {
+        return false;
+      }
+      if (liveOnly && !post.proofs.every((proof) => proof.validity === "live")) {
+        return false;
+      }
+      if (
+        activeTypes.length > 0 &&
+        !post.proofs.some((proof) => activeTypes.includes(proof.name))
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [localPosts, search, liveOnly, activeTypes]);
 
   const activePost = activePostId
     ? localPosts.find((post) => post.id === activePostId) ?? null
@@ -61,6 +89,10 @@ export function FeedPanel({ posts }: FeedPanelProps) {
         error: error instanceof Error ? error.message : "Verification failed",
       });
     }
+  };
+
+  const toggleType = (type: string) => {
+    setActiveTypes((prev) => (prev.includes(type) ? prev.filter((value) => value !== type) : [...prev, type]));
   };
 
   const handleAttachClaim = async () => {
@@ -121,6 +153,24 @@ export function FeedPanel({ posts }: FeedPanelProps) {
           desc,
           proofNames,
         });
+        setLocalPosts((prev) =>
+          prev.map((post) => {
+            if (post.id !== replyToPostId) return post;
+            return {
+              ...post,
+              responses: [
+                ...post.responses,
+                {
+                  id: `resp-${Date.now()}`,
+                  peer: "127.0.0.1",
+                  time: nowLabel(),
+                  desc,
+                  proofs: [...composeProofs],
+                },
+              ],
+            };
+          }),
+        );
         resetCompose();
       }
     } catch (error) {
@@ -223,6 +273,29 @@ export function FeedPanel({ posts }: FeedPanelProps) {
           ))}
         </div>
         <p className="feed-desc">{activePost.desc}</p>
+        <div className="feed-responses">
+          <div className="feed-response-count">
+            {activePost.responses.length} response{activePost.responses.length === 1 ? "" : "s"}
+          </div>
+          {activePost.responses.length === 0 && (
+            <div className="feed-empty">No responses yet.</div>
+          )}
+          {activePost.responses.map((response) => (
+            <div key={response.id} className="feed-response-item">
+              <div className="feed-item-meta">
+                {response.time} · {response.peer}
+              </div>
+              <div className="feed-proof-row">
+                {response.proofs.map((proof, index) => (
+                  <span key={`${response.id}-${proof.hash}-${index}`} className={`proof-pill ${proof.validity}`}>
+                    {proof.validity === "live" ? "✓" : "✗"} {proof.name}
+                  </span>
+                ))}
+              </div>
+              <div className="feed-response-desc">{response.desc}</div>
+            </div>
+          ))}
+        </div>
         <div className="feed-verify-bar">
           <button
             type="button"
@@ -265,6 +338,21 @@ export function FeedPanel({ posts }: FeedPanelProps) {
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
+        <label className="feed-live-toggle">
+          <input
+            type="checkbox"
+            checked={liveOnly}
+            onChange={(event) => setLiveOnly(event.target.checked)}
+          />
+          Live only
+        </label>
+        <button
+          type="button"
+          className={`feed-filter-btn ${filterOpen ? "active" : ""}`}
+          onClick={() => setFilterOpen((prev) => !prev)}
+        >
+          Filter ▾
+        </button>
         <button
           type="button"
           className="feed-verify-btn"
@@ -279,6 +367,20 @@ export function FeedPanel({ posts }: FeedPanelProps) {
           + Post
         </button>
       </div>
+      {filterOpen && (
+        <div className="feed-filter-chips">
+          {allProofTypes.map((type) => (
+            <button
+              key={type}
+              type="button"
+              className={`feed-chip ${activeTypes.includes(type) ? "active" : ""}`}
+              onClick={() => toggleType(type)}
+            >
+              {type} <span className="feed-chip-count">{proofTypeCounts.get(type) ?? 0}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="feed-list">
         {filteredPosts.length === 0 && <div className="feed-empty">No posts match.</div>}
         {filteredPosts.map((post) => (
