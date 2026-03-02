@@ -1,49 +1,65 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { useMemo, useState } from "react";
+import { ContextPanel } from "./features/context/ContextPanel";
+import { InventoryPanel } from "./features/inventory/InventoryPanel";
+import { RecipeGrid } from "./features/recipes/RecipeGrid";
+import { mockFeed, mockItems, mockRecipes } from "./shared/data/mockData";
+import { initialUiState } from "./shared/state/initialState";
+import type { AppUiState } from "./shared/types/domain";
 import "./App.css";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [uiState, setUiState] = useState<AppUiState>(initialUiState);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  const activePostCount = useMemo(() => mockFeed.length, []);
+
+  const handleSelectItem = (itemId: string) => {
+    setUiState((prev) => ({
+      ...prev,
+      activeItemId: itemId,
+      activeRecipeId: null,
+      contextSelection: { kind: "item", itemId },
+    }));
+  };
+
+  const handleSelectRecipe = (recipeId: string) => {
+    setUiState((prev) => ({
+      ...prev,
+      activeItemId: null,
+      activeRecipeId: recipeId,
+      contextSelection: { kind: "recipe", recipeId },
+    }));
+  };
+
+  const handleToggleNullified = () => {
+    setUiState((prev) => ({
+      ...prev,
+      showNullifiedItems: !prev.showNullifiedItems,
+    }));
+  };
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <main className="app-shell">
+      <InventoryPanel
+        items={mockItems}
+        activeItemId={uiState.activeItemId}
+        showNullifiedItems={uiState.showNullifiedItems}
+        onSelectItem={handleSelectItem}
+        onToggleNullified={handleToggleNullified}
+      />
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+      <div className="main-column">
+        <ContextPanel selection={uiState.contextSelection} items={mockItems} recipes={mockRecipes} />
+        <section className="cpu-panel">CPU / proof runner panel (next step)</section>
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
+      <div className="right-column">
+        <RecipeGrid
+          recipes={mockRecipes}
+          activeRecipeId={uiState.activeRecipeId}
+          onSelectRecipe={handleSelectRecipe}
         />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
+        <section className="feed-panel">Feed panel scaffold ({activePostCount} mock posts)</section>
+      </div>
     </main>
   );
 }
