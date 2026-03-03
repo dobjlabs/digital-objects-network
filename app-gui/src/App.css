@@ -134,7 +134,7 @@ body {
 
 .main-column {
   display: grid;
-  grid-template-rows: 1fr 220px;
+  grid-template-rows: 1fr 320px;
   min-width: 0;
 }
 
@@ -301,14 +301,54 @@ body {
   align-items: flex-start;
   justify-content: flex-start;
   color: #8c8884;
-  padding: 12px;
+  padding: 10px 12px;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .proof-panel {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   overflow-y: auto;
+  overflow-x: hidden;
+  width: 100%;
+  min-height: 0;
+}
+
+.idle-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.idle-cpu {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.idle-roots {
+  padding-top: 2px;
+  gap: 6px;
+}
+
+.dash-cpu-bars {
+  height: 120px;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  border: 1px solid var(--border);
+  padding: 6px;
+  background: var(--bg);
+}
+
+.dash-cpu-bar {
+  flex: 1;
+  min-width: 3px;
+  background: #4a9e30;
+  opacity: 0.8;
 }
 
 .proof-title {
@@ -361,6 +401,23 @@ body {
 .proof-error {
   color: #d16a6a;
   font-size: 10px;
+}
+
+.root-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.root-dot.live {
+  background: #4a9e30;
+}
+
+.root-dot.nullified {
+  background: #c84030;
 }
 
 .right-column {

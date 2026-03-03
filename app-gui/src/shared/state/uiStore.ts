@@ -13,6 +13,17 @@ interface ProofStep {
   status: StepStatus;
 }
 
+interface RootSnapshot {
+  hash: string;
+  state: "live" | "nullified";
+}
+
+interface ProofStats {
+  cpuHistory: number[];
+  totalCpuSecs: number;
+  roots: RootSnapshot[];
+}
+
 interface ProofState {
   status: ProofStatus;
   methodName: string | null;
@@ -23,6 +34,7 @@ interface ProofState {
   oldRoot: string | null;
   newRoot: string | null;
   error: string | null;
+  stats: ProofStats;
 }
 
 interface UiStoreState extends AppUiState {
@@ -31,6 +43,14 @@ interface UiStoreState extends AppUiState {
   selectRecipe: (recipeId: string) => void;
   toggleNullified: () => void;
   runProof: (input: { methodName: string; args: string[]; cpuCost: string }) => Promise<void>;
+}
+
+function estimateCpuSecs(cpuCost: string): number {
+  const match = cpuCost.match(/\d+/);
+  const n = match ? Number(match[0]) : 1;
+  if (cpuCost.includes("h")) return n * 3600;
+  if (cpuCost.includes("m")) return n * 60;
+  return n;
 }
 
 export const useUiStore = create<UiStoreState>((set) => ({
@@ -45,6 +65,17 @@ export const useUiStore = create<UiStoreState>((set) => ({
     oldRoot: null,
     newRoot: null,
     error: null,
+    stats: {
+      cpuHistory: [4, 8, 12, 8, 22, 18, 38, 42, 60, 55, 48, 52, 65, 58, 70, 62],
+      totalCpuSecs: 47 * 60 + 38,
+      roots: [
+        { hash: "0x1b89...cc41", state: "live" },
+        { hash: "0x7c44...a203", state: "live" },
+        { hash: "0x9cd4...e223", state: "live" },
+        { hash: "0x9d01...f334", state: "nullified" },
+        { hash: "0x2e55...7710", state: "nullified" },
+      ],
+    },
   },
   selectItem: (itemId) =>
     set((prev) => {
@@ -110,6 +141,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           oldRoot: null,
           newRoot: null,
           error: null,
+          stats: prev.proof.stats,
         },
       };
     });
@@ -153,6 +185,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           oldRoot: result.oldRoot,
           newRoot: result.newRoot,
           error: null,
+          stats: prev.proof.stats,
         },
       }));
 
@@ -180,13 +213,25 @@ export const useUiStore = create<UiStoreState>((set) => ({
 
       await new Promise((resolve) => setTimeout(resolve, 250));
 
-      set((prev) => ({
-        ...prev,
-        proof: {
-          ...prev.proof,
-          status: "done",
-        },
-      }));
+      set((prev) => {
+        const nextCpu = Math.max(2, Math.min(100, Math.round(Math.random() * 40 + 30)));
+        return {
+          ...prev,
+          proof: {
+            ...prev.proof,
+            status: "done",
+            stats: {
+              cpuHistory: [...prev.proof.stats.cpuHistory, nextCpu].slice(-24),
+              totalCpuSecs: prev.proof.stats.totalCpuSecs + estimateCpuSecs(cpuCost),
+              roots: [
+                { hash: result.newRoot, state: "live" },
+                { hash: result.oldRoot, state: "nullified" },
+                ...prev.proof.stats.roots.slice(0, 6),
+              ],
+            },
+          },
+        };
+      });
     } catch (error) {
       set((prev) => ({
         ...prev,
@@ -200,6 +245,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           oldRoot: null,
           newRoot: null,
           error: error instanceof Error ? error.message : "Failed to run proof",
+          stats: prev.proof.stats,
         },
       }));
     }

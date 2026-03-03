@@ -2,9 +2,39 @@ import { useUiStore } from "../../shared/state/uiStore";
 
 export function ProofRunnerPanel() {
   const proof = useUiStore((state) => state.proof);
+  const liveCount = proof.stats.roots.filter((root) => root.state === "live").length;
+  const nullifiedCount = proof.stats.roots.filter((root) => root.state === "nullified").length;
 
   if (proof.status === "idle") {
-    return <section className="cpu-panel">Run a method to generate and commit proof.</section>;
+    const maxCpu = Math.max(...proof.stats.cpuHistory, 1);
+    return (
+      <section className="cpu-panel proof-panel">
+        <div className="idle-section idle-cpu">
+          <div className="proof-title">CPU Usage</div>
+          <div className="dash-cpu-bars">
+            {proof.stats.cpuHistory.map((value, index) => (
+              <div
+                key={`${index}-${value}`}
+                className="dash-cpu-bar"
+                style={{ height: `${Math.max(4, Math.round((value / maxCpu) * 100))}%` }}
+              />
+            ))}
+          </div>
+          <div className="proof-line">
+            Total CPU time: <span className="proof-muted">{proof.stats.totalCpuSecs}s</span>
+          </div>
+        </div>
+        <div className="idle-section idle-roots">
+          <div className="proof-title">Global Roots</div>
+          <div className="proof-line">
+            <span className="root-dot live" /> live: {liveCount}
+          </div>
+          <div className="proof-line">
+            <span className="root-dot nullified" /> nullified: {nullifiedCount}
+          </div>
+        </div>
+      </section>
+    );
   }
 
   if (proof.status === "generating" || proof.status === "committing") {
