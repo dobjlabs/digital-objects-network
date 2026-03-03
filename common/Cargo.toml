@@ -1,0 +1,22 @@
+[package]
+name = "common"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pod2_onchain = { git = "https://github.com/0xPARC/pod2-onchain.git", rev = "5f2047752349a0f06665bc8f6ba82f50bc5ad435", default-features = false, features = [
+  "disk_cache",
+], optional = true }
+pod2 = { workspace = true }
+plonky2 = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+dotenvy = { workspace = true }
+itertools = "0.14.0"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+time = { workspace = true }
+
+[features]
+default = []
+groth16 = ["pod2_onchain"]
