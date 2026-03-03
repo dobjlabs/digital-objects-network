@@ -22,6 +22,20 @@ export interface InventoryItem {
   validity: Validity;
   stateRoot: string;
   nullifier?: string;
+  charge?: number;
+  rechargeRate?: string;
+  qty?: number;
+  decay?: string;
+  durability?: number;
+  maxDurability?: number;
+  tier?: number;
+  skill?: number;
+  hunger?: number;
+  health?: number;
+  lastFed?: string;
+  fuel?: number;
+  condition?: number;
+  value?: number;
 }
 
 export interface RecipeRequirement {

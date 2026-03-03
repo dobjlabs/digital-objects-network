@@ -33,6 +33,11 @@ export function FeedPanel({ posts }: FeedPanelProps) {
 
   const toValidity = (value: string) => (value === "nullified" ? "nullified" : "live");
   const nowLabel = () => new Date().toLocaleString();
+  const countProofs = (proofs: Array<{ validity: "live" | "nullified" }>) => ({
+    live: proofs.filter((proof) => proof.validity === "live").length,
+    nullified: proofs.filter((proof) => proof.validity === "nullified").length,
+    total: proofs.length,
+  });
 
   const proofTypeCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -285,6 +290,8 @@ export function FeedPanel({ posts }: FeedPanelProps) {
   }
 
   if (activePost) {
+    const allProofs = [...activePost.proofs, ...activePost.responses.flatMap((response) => response.proofs)];
+    const proofCounts = countProofs(allProofs);
     return (
       <section className="feed-panel">
         <div className="feed-detail-header">
@@ -292,6 +299,27 @@ export function FeedPanel({ posts }: FeedPanelProps) {
             ← back
           </button>
           <div className="feed-title">{activePost.title}</div>
+        </div>
+        <div className="feed-verify-summary">
+          <span className="feed-verify-stat live">✓ {proofCounts.live} live</span>
+          {proofCounts.nullified > 0 && (
+            <span className="feed-verify-stat nullified">✗ {proofCounts.nullified} nullified</span>
+          )}
+          <span className="feed-verify-block">
+            {verifyState.status === "done"
+              ? `checked block #${verifyState.checkedBlock}`
+              : verifyState.status === "running"
+                ? "verifying..."
+                : "unchecked"}
+          </span>
+          <button
+            type="button"
+            className="feed-verify-btn"
+            disabled={verifyState.status === "running"}
+            onClick={() => handleVerify(activePost.id)}
+          >
+            {verifyState.status === "running" ? "verifying..." : "verify all"}
+          </button>
         </div>
         <div className="feed-meta">
           {activePost.time} · {activePost.peer}
@@ -313,8 +341,10 @@ export function FeedPanel({ posts }: FeedPanelProps) {
                   ? "verified-null"
                   : ""
               }`}
+              title={`${proof.hash} · ${proof.validity}`}
             >
               {proof.validity === "live" ? "✓" : "✗"} {proof.name}
+              {proof.validity === "nullified" && <span className="proof-note"> · spent after post</span>}
             </span>
           ))}
         </div>
@@ -348,6 +378,7 @@ export function FeedPanel({ posts }: FeedPanelProps) {
                         ? "verified-null"
                         : ""
                     }`}
+                    title={`${proof.hash} · ${proof.validity}`}
                   >
                     {proof.validity === "live" ? "✓" : "✗"} {proof.name}
                   </span>
@@ -371,17 +402,6 @@ export function FeedPanel({ posts }: FeedPanelProps) {
           >
             respond
           </button>
-          <button
-            type="button"
-            className="feed-verify-btn"
-            disabled={verifyState.status === "running"}
-            onClick={() => handleVerify(activePost.id)}
-          >
-            {verifyState.status === "running" ? "verifying..." : "verify all"}
-          </button>
-          {verifyState.status === "done" && (
-            <span className="feed-verify-msg">checked block #{verifyState.checkedBlock}</span>
-          )}
           {verifyState.status === "error" && (
             <span className="feed-verify-error">{verifyState.error}</span>
           )}
@@ -454,7 +474,14 @@ export function FeedPanel({ posts }: FeedPanelProps) {
               setActivePostId(post.id);
             }}
           >
-            <div className="feed-item-title">{post.title}</div>
+            <div className="feed-item-title">
+              {post.title}
+              {post.responses.length > 0 && (
+                <span className="feed-item-replies">
+                  {post.responses.length} repl{post.responses.length === 1 ? "y" : "ies"}
+                </span>
+              )}
+            </div>
             <div className="feed-item-meta">
               {post.time} · {post.peer}
             </div>

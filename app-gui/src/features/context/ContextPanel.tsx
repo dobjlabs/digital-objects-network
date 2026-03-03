@@ -99,6 +99,7 @@ export function ContextPanel({
   };
 
   const renderMethodCard = (config: {
+    methodId: string;
     methodName: string;
     cpuCost: string;
     readsBlock: boolean;
@@ -107,7 +108,7 @@ export function ContextPanel({
   }) => (
     (() => {
       const boundArgs = config.args.map(
-        (arg, index) => argBindings[argKey(config.methodName, arg, index)] ?? "",
+        (arg, index) => argBindings[argKey(config.methodId, arg, index)] ?? "",
       );
       const filledCount = boundArgs.filter((value) => value.trim().length > 0).length;
       const allArgsBound = config.args.length === 0 || filledCount === config.args.length;
@@ -117,7 +118,7 @@ export function ContextPanel({
           {config.args.length > 0 && (
             <div className="method-args">
               {config.args.map((arg, index) => {
-                const key = argKey(config.methodName, arg, index);
+                const key = argKey(config.methodId, arg, index);
                 const bound = argBindings[key];
                 const isDropActive = hoverArgKey === key;
                 const err = argErrors[key];
@@ -136,7 +137,7 @@ export function ContextPanel({
                       event.dataTransfer.dropEffect = "copy";
                       if (hoverArgKey !== key) setHoverArgKey(key);
                     }}
-                    onDrop={(event) => handleDropArg(event, config.methodName, arg, index)}
+                    onDrop={(event) => handleDropArg(event, config.methodId, arg, index)}
                   >
                     <span className="method-arg-label">{arg}</span>
                     {isManualArg(arg) ? (
@@ -228,16 +229,156 @@ export function ContextPanel({
     if (item.validity !== "live") return null;
     switch (item.type) {
       case "source":
-        return { methodName: "extract", cpuCost: "5-15m", readsBlock: true, args: ["Pickaxe"] };
+        return [
+          { methodName: "extract", cpuCost: "5-15m", readsBlock: true, args: ["Pickaxe"] },
+          { methodName: "survey", cpuCost: "2-5m", readsBlock: true, args: [] },
+        ];
       case "tool":
-        return { methodName: "use", cpuCost: "30s-2m", readsBlock: false, args: ["Asteroid"] };
+        return [
+          { methodName: "repair", cpuCost: "1-3m", readsBlock: false, args: ["CopperIngot"] },
+          { methodName: "use", cpuCost: "30s-2m", readsBlock: false, args: ["Asteroid"] },
+        ];
       case "creature":
-        return { methodName: "feed", cpuCost: "20-40s", readsBlock: true, args: ["Bread"] };
+        return [
+          { methodName: "feed", cpuCost: "20-40s", readsBlock: true, args: ["Bread"] },
+          { methodName: "inspect", cpuCost: "10-20s", readsBlock: false, args: [] },
+        ];
       case "coin":
-        return { methodName: "send", cpuCost: "10s", readsBlock: false, args: ["0x...recipient"] };
+        return [
+          { methodName: "send", cpuCost: "10s", readsBlock: false, args: ["0x...recipient"] },
+          { methodName: "bundle", cpuCost: "10-20s", readsBlock: false, args: ["Coin"] },
+        ];
       default:
-        return { methodName: "inspect", cpuCost: "30s", readsBlock: false, args: [item.name] };
+        return [{ methodName: "inspect", cpuCost: "30s", readsBlock: false, args: [item.name] }];
     }
+  };
+
+  const progressClass = (value: number, lowDanger = false) => {
+    if (lowDanger) {
+      if (value < 25) return "danger";
+      if (value < 50) return "warn";
+      return "good";
+    }
+    if (value > 80) return "danger";
+    if (value > 50) return "warn";
+    return "good";
+  };
+
+  const renderItemStats = (item: InventoryItem) => {
+    if (item.type === "source" && item.charge !== undefined) {
+      return (
+        <div className="item-stats">
+          <div className="stat-row">
+            <span className="stat-key">charge</span>
+            <span className="stat-val good">{item.charge}%</span>
+          </div>
+          <div className="stat-progress">
+            <div className="stat-progress-fill good" style={{ width: `${item.charge}%` }} />
+          </div>
+          <div className="stat-row">
+            <span className="stat-key">recharge rate</span>
+            <span className="stat-val good">{item.rechargeRate}</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (item.type === "tool" && item.durability !== undefined && item.maxDurability) {
+      const pct = Math.round((item.durability / item.maxDurability) * 100);
+      const cls = progressClass(pct, true);
+      return (
+        <div className="item-stats">
+          <div className="stat-row">
+            <span className="stat-key">tier</span>
+            <span className="stat-val good">{item.tier ?? 1}</span>
+          </div>
+          <div className="stat-row">
+            <span className="stat-key">durability</span>
+            <span className={`stat-val ${cls}`}>
+              {item.durability}/{item.maxDurability}
+            </span>
+          </div>
+          <div className="stat-progress">
+            <div className={`stat-progress-fill ${cls}`} style={{ width: `${pct}%` }} />
+          </div>
+          <div className="stat-row">
+            <span className="stat-key">skill</span>
+            <span className="stat-val good">{item.skill ?? 0}</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (item.type === "creature" && item.hunger !== undefined && item.health !== undefined) {
+      const hungerCls = progressClass(item.hunger);
+      const healthCls = progressClass(100 - item.health);
+      return (
+        <div className="item-stats">
+          <div className="stat-row">
+            <span className="stat-key">hunger</span>
+            <span className={`stat-val ${hungerCls}`}>{item.hunger}%</span>
+          </div>
+          <div className="stat-progress">
+            <div className={`stat-progress-fill ${hungerCls}`} style={{ width: `${item.hunger}%` }} />
+          </div>
+          <div className="stat-row">
+            <span className="stat-key">health</span>
+            <span className={`stat-val ${healthCls}`}>{item.health}%</span>
+          </div>
+          <div className="stat-row">
+            <span className="stat-key">last fed</span>
+            <span className="stat-val warn">{item.lastFed}</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (item.type === "vehicle" && item.fuel !== undefined && item.condition !== undefined) {
+      const fuelCls = progressClass(item.fuel, true);
+      return (
+        <div className="item-stats">
+          <div className="stat-row">
+            <span className="stat-key">fuel</span>
+            <span className={`stat-val ${fuelCls}`}>{item.fuel}%</span>
+          </div>
+          <div className="stat-progress">
+            <div className={`stat-progress-fill ${fuelCls}`} style={{ width: `${item.fuel}%` }} />
+          </div>
+          <div className="stat-row">
+            <span className="stat-key">condition</span>
+            <span className="stat-val good">{item.condition}%</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (item.type === "raw" && item.qty !== undefined) {
+      return (
+        <div className="item-stats">
+          <div className="stat-row">
+            <span className="stat-key">quantity</span>
+            <span className="stat-val good">{item.qty}</span>
+          </div>
+          <div className="stat-row">
+            <span className="stat-key">decay</span>
+            <span className="stat-val danger">{item.decay}</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (item.type === "coin" && item.value !== undefined) {
+      return (
+        <div className="item-stats">
+          <div className="stat-row">
+            <span className="stat-key">value</span>
+            <span className="stat-val good">{item.value}¢</span>
+          </div>
+        </div>
+      );
+    }
+
+    return null;
   };
 
   if (selection.kind === "none") {
@@ -257,17 +398,25 @@ export function ContextPanel({
           Validity: <strong>{item.validity}</strong>
         </p>
         <p>{item.validity === "live" ? item.stateRoot : item.nullifier}</p>
+        {renderItemStats(item)}
         {(() => {
-          const method = itemMethod(item);
-          if (!method) return null;
-          return renderMethodCard({
-            ...method,
-            onRun: (boundArgs) =>
-              onRunProof({
-                ...method,
-                args: boundArgs,
-              }),
-          });
+          const methods = itemMethod(item);
+          if (!methods) return null;
+          return (
+            <div className="method-list">
+              {methods.map((method, index) =>
+                renderMethodCard({
+                  ...method,
+                  methodId: `${item.id}:${method.methodName}:${index}`,
+                  onRun: (boundArgs) =>
+                    onRunProof({
+                      ...method,
+                      args: boundArgs,
+                    }),
+                }),
+              )}
+            </div>
+          );
         })()}
         <p className="path-line">
           {thingsDirPath}/{item.name}
@@ -286,6 +435,7 @@ export function ContextPanel({
       </h2>
       <p>{recipe.desc}</p>
       {renderMethodCard({
+        methodId: `${recipe.id}:${recipe.verb}`,
         methodName: recipe.verb,
         cpuCost: recipe.cpu,
         readsBlock: recipe.readsBlock,
