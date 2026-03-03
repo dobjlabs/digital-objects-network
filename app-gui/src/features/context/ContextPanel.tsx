@@ -12,8 +12,9 @@ interface ContextPanelProps {
   recipes: Recipe[];
   thingsDirPath: string;
   onRunProof: (input: {
+    id: string;
     methodName: string;
-    args: string[];
+    inputFiles: string[];
     cpuCost: string;
   }) => void;
   proofRunning: boolean;
@@ -530,8 +531,9 @@ export function ContextPanel({
                   methodId: `${item.id}:${method.methodName}:${index}`,
                   onRun: (boundArgs) =>
                     onRunProof({
+                      id: item.id,
                       ...method,
-                      args: boundArgs,
+                      inputFiles: boundArgs,
                     }),
                 }),
               )}
@@ -567,8 +569,9 @@ export function ContextPanel({
         ],
         onRun: (boundArgs) =>
           onRunProof({
+            id: recipe.id,
             methodName: recipe.verb,
-            args: boundArgs,
+            inputFiles: boundArgs,
             cpuCost: recipe.cpu,
           }),
       })}

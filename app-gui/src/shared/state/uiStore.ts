@@ -44,8 +44,9 @@ interface UiStoreState extends AppUiState {
   toggleNullified: () => void;
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   runProof: (input: {
+    id: string;
     methodName: string;
-    args: string[];
+    inputFiles: string[];
     cpuCost: string;
   }) => Promise<void>;
 }
@@ -129,7 +130,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
         },
       };
     }),
-  runProof: async ({ methodName, args, cpuCost }) => {
+  runProof: async ({ id, methodName, inputFiles, cpuCost }) => {
     const hashStepDelayMs = 650;
     const verifyStepDelayMs = 650;
     const commitTransitionDelayMs = 900;
@@ -147,7 +148,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           status: "generating",
           methodName,
           cpuCost,
-          args,
+          args: inputFiles,
           messages: ["Generating recursive proof..."],
           steps: [
             {
@@ -156,7 +157,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
               detail: cpuCost,
               status: "running",
             },
-            ...args.map((arg, i) => ({
+            ...inputFiles.map((arg, i) => ({
               id: `verify-${i}`,
               label: "Verifying Input",
               detail: arg,
@@ -195,7 +196,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
         },
       }));
 
-      for (const [index, arg] of args.entries()) {
+      for (const [index, arg] of inputFiles.entries()) {
         set((prev) => ({
           ...prev,
           proof: {
@@ -222,14 +223,19 @@ export const useUiStore = create<UiStoreState>((set) => ({
         }));
       }
 
-      const result = await runMethod({ methodName, args, cpuCost });
+      const result = await runMethod({
+        id,
+        methodName,
+        inputFiles,
+        cpuCost,
+      });
       set((prev) => ({
         ...prev,
         proof: {
           status: "committing",
           methodName: result.methodName,
           cpuCost,
-          args,
+          args: inputFiles,
           messages: [
             ...result.stageMessages,
             `Nullifying old root ${result.oldRoot}`,
@@ -320,7 +326,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           status: "error",
           methodName,
           cpuCost,
-          args,
+          args: inputFiles,
           messages: [],
           steps: [],
           oldRoot: null,

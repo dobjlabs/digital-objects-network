@@ -6,8 +6,9 @@ export interface MockStateDto {
 }
 
 export interface RunMethodInput {
+  id: string;
   methodName: string;
-  args: string[];
+  inputFiles: string[];
   cpuCost: string;
 }
 

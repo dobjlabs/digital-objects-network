@@ -65,8 +65,9 @@ struct MockStateDto {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RunMethodInput {
+    id: String,
     method_name: String,
-    args: Vec<String>,
+    input_files: Vec<String>,
     cpu_cost: String,
 }
 
@@ -248,7 +249,13 @@ fn get_mock_state(state: tauri::State<'_, AppState>) -> MockStateDto {
 
 #[tauri::command]
 fn run_method(input: RunMethodInput) -> ProofRunResult {
-    let seed = format!("{}-{}-{}", input.method_name, input.args.join(","), input.cpu_cost);
+    let seed = format!(
+        "{}-{}-{}-{}",
+        input.id,
+        input.method_name,
+        input.input_files.join(","),
+        input.cpu_cost
+    );
     let old_root = fake_hash(&format!("{seed}-old"));
     let new_root = fake_hash(&format!("{seed}-new"));
     ProofRunResult {
