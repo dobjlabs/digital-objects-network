@@ -847,11 +847,6 @@ body {
   flex-shrink: 0;
 }
 
-.feed-verify-msg {
-  color: #90d098;
-  font-size: 10px;
-}
-
 .feed-verify-error {
   color: #d59292;
   font-size: 10px;
