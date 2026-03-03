@@ -1,7 +1,23 @@
+import { useEffect, useRef, useState } from "react";
 import { useUiStore } from "../../shared/state/uiStore";
 
 export function ProofRunnerPanel() {
   const proof = useUiStore((state) => state.proof);
+  const prevStatusRef = useRef(proof.status);
+  const [idleFadeIn, setIdleFadeIn] = useState(false);
+
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    if (proof.status === "idle" && prev === "done") {
+      setIdleFadeIn(true);
+      const timer = window.setTimeout(() => setIdleFadeIn(false), 420);
+      prevStatusRef.current = proof.status;
+      return () => window.clearTimeout(timer);
+    }
+    prevStatusRef.current = proof.status;
+    return undefined;
+  }, [proof.status]);
+
   const liveRoots = proof.stats.roots.filter((root) => root.state === "live");
   const nullifiedRoots = proof.stats.roots.filter(
     (root) => root.state === "nullified",
@@ -33,9 +49,11 @@ export function ProofRunnerPanel() {
   if (proof.status === "idle") {
     const maxCpu = Math.max(...proof.stats.cpuHistory, 1);
     return (
-      <section className="cpu-panel proof-panel proof-panel-idle">
+      <section
+        className={`cpu-panel proof-panel proof-panel-idle ${idleFadeIn ? "idle-fade-in" : ""}`}
+      >
         <div className="idle-section idle-cpu">
-          <div className="proof-title">CPU Usage</div>
+          <div className="proof-title cpu-title">CPU Usage</div>
           <div className="dash-cpu-bars">
             {proof.stats.cpuHistory.map((value, index) => (
               <div
@@ -47,7 +65,7 @@ export function ProofRunnerPanel() {
               />
             ))}
           </div>
-          <div className="proof-line">
+          <div className="proof-line cpu-total">
             Total:{" "}
             <span className="proof-muted">
               {formatCpuDuration(proof.stats.totalCpuSecs)}

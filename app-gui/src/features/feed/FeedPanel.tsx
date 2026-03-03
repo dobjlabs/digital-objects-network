@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { DragEvent } from "react";
 import {
   attachClaim,
   createPost,
@@ -24,8 +25,8 @@ export function FeedPanel({ posts }: FeedPanelProps) {
   const [replyToPostId, setReplyToPostId] = useState<string | null>(null);
   const [composeTitle, setComposeTitle] = useState("");
   const [composeDesc, setComposeDesc] = useState("");
-  const [claimName, setClaimName] = useState("");
   const [composeProofs, setComposeProofs] = useState<FeedPost["proofs"]>([]);
+  const [composeDropActive, setComposeDropActive] = useState(false);
   const [composeError, setComposeError] = useState<string | null>(null);
   const [composeSubmitting, setComposeSubmitting] = useState(false);
   const [verifyState, setVerifyState] = useState<{
@@ -140,7 +141,6 @@ export function FeedPanel({ posts }: FeedPanelProps) {
     setReplyToPostId(null);
     setComposeTitle("");
     setComposeDesc("");
-    setClaimName("");
     setComposeProofs([]);
     setComposeError(null);
     setComposeSubmitting(false);
@@ -201,8 +201,8 @@ export function FeedPanel({ posts }: FeedPanelProps) {
     );
   };
 
-  const handleAttachClaim = async () => {
-    const value = claimName.trim();
+  const attachClaimByName = async (claimFileName: string) => {
+    const value = claimFileName.trim();
     if (!value) return;
     try {
       const claim = await attachClaim(
@@ -212,13 +212,34 @@ export function FeedPanel({ posts }: FeedPanelProps) {
         ...prev,
         { ...claim, validity: toValidity(claim.validity) },
       ]);
-      setClaimName("");
       setComposeError(null);
     } catch (error) {
       setComposeError(
         error instanceof Error ? error.message : "Failed to attach claim",
       );
     }
+  };
+
+  const parseDroppedName = (raw: string) => {
+    try {
+      const parsed = JSON.parse(raw) as { name?: string };
+      return parsed.name ?? raw;
+    } catch {
+      return raw;
+    }
+  };
+
+  const handleComposeDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setComposeDropActive(false);
+    const raw =
+      event.dataTransfer.getData("application/x-zkcraft-item") ||
+      event.dataTransfer.getData("text/plain") ||
+      event.dataTransfer.getData("text");
+    if (!raw) return;
+    const dropped = parseDroppedName(raw);
+    await attachClaimByName(dropped);
   };
 
   const handleSubmitCompose = async () => {
@@ -302,8 +323,8 @@ export function FeedPanel({ posts }: FeedPanelProps) {
     const isReply = composeMode === "reply";
 
     return (
-      <section className="feed-panel">
-        <div className="feed-detail-header">
+      <section className="feed-panel feed-compose-panel">
+        <div className="feed-compose-header">
           <button
             type="button"
             className="feed-back-btn"
@@ -311,61 +332,9 @@ export function FeedPanel({ posts }: FeedPanelProps) {
           >
             ← back
           </button>
-          <div className="feed-title">{isReply ? "Respond" : "New Post"}</div>
-        </div>
-
-        {isReply && replyTo && (
-          <div className="feed-compose-context">
-            <div className="feed-compose-context-title">{replyTo.title}</div>
+          <div className="feed-compose-header-title">
+            {isReply ? "Respond" : "New Post"}
           </div>
-        )}
-
-        {!isReply && (
-          <input
-            className="feed-search feed-compose-input"
-            placeholder="Title"
-            value={composeTitle}
-            onChange={(event) => setComposeTitle(event.target.value)}
-          />
-        )}
-
-        <textarea
-          className="feed-compose-textarea"
-          placeholder="Description"
-          value={composeDesc}
-          onChange={(event) => setComposeDesc(event.target.value)}
-        />
-
-        <div className="feed-compose-claims">
-          <input
-            className="feed-search"
-            placeholder="claim file (e.g. Asteroid.dobj)"
-            value={claimName}
-            onChange={(event) => setClaimName(event.target.value)}
-          />
-          <button
-            type="button"
-            className="feed-attach-btn"
-            onClick={handleAttachClaim}
-          >
-            Attach Claim
-          </button>
-        </div>
-
-        <div className="feed-proof-row">
-          {composeProofs.map((proof, index) => (
-            renderProofTag({
-              proof,
-              key: `compose:${proof.hash}:${index}`,
-            })
-          ))}
-        </div>
-
-        {composeError && (
-          <div className="feed-verify-error">{composeError}</div>
-        )}
-
-        <div className="feed-verify-bar">
           <button
             type="button"
             className="feed-compose-submit"
@@ -375,6 +344,78 @@ export function FeedPanel({ posts }: FeedPanelProps) {
             {composeSubmitting ? "Submitting..." : "Submit"}
           </button>
         </div>
+
+        {isReply && replyTo && (
+          <div className="feed-compose-context-card">
+            <div className="feed-compose-context-title">{replyTo.title}</div>
+            <div className="feed-proof-row">
+              {replyTo.proofs.map((proof, index) =>
+                renderProofTag({
+                  proof,
+                  key: `replyctx:${proof.hash}:${index}`,
+                }),
+              )}
+            </div>
+          </div>
+        )}
+
+        {!isReply && (
+          <div className="feed-compose-field">
+            <span className="feed-compose-label">TITLE</span>
+            <input
+              className="feed-compose-input"
+              placeholder="e.g. WTB Dragon Gem — offering 10x Gold"
+              value={composeTitle}
+              onChange={(event) => setComposeTitle(event.target.value)}
+            />
+          </div>
+        )}
+
+        <div className="feed-compose-field">
+          <span className="feed-compose-label">ATTACH CLAIMS</span>
+          <div
+            className={`feed-compose-dropzone ${composeDropActive ? "drop-active" : ""}`}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+              if (!composeDropActive) setComposeDropActive(true);
+            }}
+            onDragLeave={() => setComposeDropActive(false)}
+            onDrop={handleComposeDrop}
+          >
+            <div className="feed-compose-drop-main">
+              {composeDropActive
+                ? "Release to attach claim."
+                : "Drag .dobj files here."}
+            </div>
+            <div className="feed-compose-drop-sub">
+              Your files stay on your machine - only a verifiable claim that it
+              corresponds to a committed state root is published in this post.
+            </div>
+          </div>
+          <div className="feed-proof-row feed-compose-proof-row">
+            {composeProofs.map((proof, index) =>
+              renderProofTag({
+                proof,
+                key: `compose:${proof.hash}:${index}`,
+              }),
+            )}
+          </div>
+        </div>
+
+        <div className="feed-compose-field">
+          <span className="feed-compose-label">DESCRIPTION</span>
+          <textarea
+            className="feed-compose-textarea"
+            placeholder="What you have, what you want, where to reach you..."
+            value={composeDesc}
+            onChange={(event) => setComposeDesc(event.target.value)}
+          />
+        </div>
+
+        {composeError && (
+          <div className="feed-verify-error">{composeError}</div>
+        )}
       </section>
     );
   }

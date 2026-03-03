@@ -124,7 +124,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
     const hashStepDelayMs = 650;
     const verifyStepDelayMs = 650;
     const commitTransitionDelayMs = 900;
-    const postDoneHoldMs = 2600;
+    const postDoneHoldMs = 1200;
 
     set((prev) => {
       if (
