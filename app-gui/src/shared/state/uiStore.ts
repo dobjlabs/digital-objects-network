@@ -4,6 +4,14 @@ import { initialUiState } from "./initialState";
 import type { AppUiState } from "../types/domain";
 
 type ProofStatus = "idle" | "generating" | "committing" | "done" | "error";
+type StepStatus = "pending" | "running" | "done";
+
+interface ProofStep {
+  id: string;
+  label: string;
+  detail: string;
+  status: StepStatus;
+}
 
 interface ProofState {
   status: ProofStatus;
@@ -11,6 +19,7 @@ interface ProofState {
   cpuCost: string | null;
   args: string[];
   messages: string[];
+  steps: ProofStep[];
   oldRoot: string | null;
   newRoot: string | null;
   error: string | null;
@@ -32,6 +41,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
     cpuCost: null,
     args: [],
     messages: [],
+    steps: [],
     oldRoot: null,
     newRoot: null,
     error: null,
@@ -86,6 +96,17 @@ export const useUiStore = create<UiStoreState>((set) => ({
           cpuCost,
           args,
           messages: ["Generating recursive proof..."],
+          steps: [
+            { id: "hash", label: "Hashing", detail: cpuCost, status: "running" },
+            ...args.map((arg, i) => ({
+              id: `verify-${i}`,
+              label: "Verifying Input",
+              detail: arg,
+              status: "pending" as StepStatus,
+            })),
+            { id: "nullify", label: "Nullifying Root", detail: "pending", status: "pending" },
+            { id: "commit", label: "Committing New Root", detail: "pending", status: "pending" },
+          ],
           oldRoot: null,
           newRoot: null,
           error: null,
@@ -94,6 +115,22 @@ export const useUiStore = create<UiStoreState>((set) => ({
     });
 
     try {
+      for (const [index, arg] of args.entries()) {
+        await new Promise((resolve) => setTimeout(resolve, 180));
+        set((prev) => ({
+          ...prev,
+          proof: {
+            ...prev.proof,
+            steps: prev.proof.steps.map((step) => {
+              if (step.id === `verify-${index}`) {
+                return { ...step, detail: arg, status: "done" };
+              }
+              return step;
+            }),
+          },
+        }));
+      }
+
       const result = await runMethod({ methodName, args, cpuCost });
       set((prev) => ({
         ...prev,
@@ -107,13 +144,41 @@ export const useUiStore = create<UiStoreState>((set) => ({
             `Nullifying old root ${result.oldRoot}`,
             `Committing new root ${result.newRoot}`,
           ],
+          steps: prev.proof.steps.map((step) => {
+            if (step.id === "hash") return { ...step, status: "done" };
+            if (step.id === "nullify") return { ...step, detail: result.oldRoot, status: "running" };
+            if (step.id === "commit") return { ...step, detail: result.newRoot, status: "pending" };
+            return step;
+          }),
           oldRoot: result.oldRoot,
           newRoot: result.newRoot,
           error: null,
         },
       }));
 
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      set((prev) => ({
+        ...prev,
+        proof: {
+          ...prev.proof,
+          steps: prev.proof.steps.map((step) =>
+            step.id === "nullify" ? { ...step, status: "done" } : step,
+          ),
+        },
+      }));
+
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      set((prev) => ({
+        ...prev,
+        proof: {
+          ...prev.proof,
+          steps: prev.proof.steps.map((step) =>
+            step.id === "commit" ? { ...step, status: "done" } : step,
+          ),
+        },
+      }));
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
 
       set((prev) => ({
         ...prev,
@@ -131,6 +196,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           cpuCost,
           args,
           messages: [],
+          steps: [],
           oldRoot: null,
           newRoot: null,
           error: error instanceof Error ? error.message : "Failed to run proof",

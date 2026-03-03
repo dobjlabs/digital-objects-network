@@ -239,6 +239,22 @@ body {
   color: #f0b3b3;
 }
 
+.method-arg-input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 10px;
+  padding: 5px 8px;
+  min-height: 24px;
+  width: 100%;
+}
+
+.method-arg-input.error {
+  border-color: #d16a6a;
+  background: #311717;
+  color: #f0b3b3;
+}
+
 .method-arg-clear {
   border: 1px solid var(--border);
   background: var(--panel);
@@ -314,6 +330,32 @@ body {
   margin-top: 6px;
   font-size: 10px;
   color: #8c8884;
+}
+
+.proof-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.proof-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #5a5a5a;
+  flex-shrink: 0;
+}
+
+.proof-step-dot.pending {
+  background: #5a5a5a;
+}
+
+.proof-step-dot.running {
+  background: #c89010;
+}
+
+.proof-step-dot.done {
+  background: #4a9e30;
 }
 
 .proof-error {

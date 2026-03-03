@@ -61,6 +61,8 @@ export function ContextPanel({
     return expected === actual;
   };
 
+  const isManualArg = (arg: string) => arg.trim().startsWith("0x");
+
   const handleDropArg = (
     event: DragEvent<HTMLDivElement>,
     methodName: string,
@@ -137,26 +139,62 @@ export function ContextPanel({
                     onDrop={(event) => handleDropArg(event, config.methodName, arg, index)}
                   >
                     <span className="method-arg-label">{arg}</span>
-                    <div
-                      className={`method-arg-placeholder ${bound ? "filled" : "missing"} ${err ? "error" : ""}`}
-                      title={bound ? "Bound from inventory" : "Drop from inventory"}
-                    >
-                      {bound ?? (isDropActive ? "release to drop" : "drag .dobj file here")}
-                    </div>
-                    {bound && (
-                      <button
-                        type="button"
-                        className="method-arg-clear"
-                        onClick={() =>
-                          setArgBindings((prev) => {
-                            const next = { ...prev };
-                            delete next[key];
-                            return next;
-                          })
-                        }
-                      >
-                        clear
-                      </button>
+                    {isManualArg(arg) ? (
+                      <>
+                        <input
+                          className={`method-arg-input ${err ? "error" : ""}`}
+                          placeholder={arg}
+                          value={bound ?? ""}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setArgBindings((prev) => ({ ...prev, [key]: value }));
+                            setArgErrors((prev) => {
+                              const next = { ...prev };
+                              delete next[key];
+                              return next;
+                            });
+                          }}
+                        />
+                        {bound && (
+                          <button
+                            type="button"
+                            className="method-arg-clear"
+                            onClick={() =>
+                              setArgBindings((prev) => {
+                                const next = { ...prev };
+                                delete next[key];
+                                return next;
+                              })
+                            }
+                          >
+                            clear
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <div
+                          className={`method-arg-placeholder ${bound ? "filled" : "missing"} ${err ? "error" : ""}`}
+                          title={bound ? "Bound from inventory" : "Drop from inventory"}
+                        >
+                          {bound ?? (isDropActive ? "release to drop" : "drag .dobj file here")}
+                        </div>
+                        {bound && (
+                          <button
+                            type="button"
+                            className="method-arg-clear"
+                            onClick={() =>
+                              setArgBindings((prev) => {
+                                const next = { ...prev };
+                                delete next[key];
+                                return next;
+                              })
+                            }
+                          >
+                            clear
+                          </button>
+                        )}
+                      </>
                     )}
                     {err && <div className="method-arg-error">{err}</div>}
                   </div>
