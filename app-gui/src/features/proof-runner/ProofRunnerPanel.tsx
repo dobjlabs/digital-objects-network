@@ -20,6 +20,16 @@ export function ProofRunnerPanel() {
     return `0x${first}...${last}`;
   };
 
+  const formatCpuDuration = (totalSecs: number) => {
+    const secs = Math.max(0, Math.floor(totalSecs));
+    const hours = Math.floor(secs / 3600);
+    const minutes = Math.floor((secs % 3600) / 60);
+    const seconds = secs % 60;
+    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+    if (minutes > 0) return `${minutes}m ${seconds}s`;
+    return `${seconds}s`;
+  };
+
   if (proof.status === "idle") {
     const maxCpu = Math.max(...proof.stats.cpuHistory, 1);
     return (
@@ -39,7 +49,9 @@ export function ProofRunnerPanel() {
           </div>
           <div className="proof-line">
             Total:{" "}
-            <span className="proof-muted">{proof.stats.totalCpuSecs}s</span>
+            <span className="proof-muted">
+              {formatCpuDuration(proof.stats.totalCpuSecs)}
+            </span>
           </div>
         </div>
         <div className="idle-section idle-roots">

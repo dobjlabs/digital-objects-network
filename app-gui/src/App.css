@@ -141,9 +141,44 @@ body {
 }
 
 .inventory-emoji {
+  position: relative;
+  z-index: 1;
   flex-shrink: 0;
   line-height: 1;
-  margin-top: 1px;
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.inventory-file-icon {
+  width: 22px;
+  height: 26px;
+  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.inventory-file-icon::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  clip-path: polygon(0 0, 70% 0, 100% 30%, 100% 100%, 0 100%);
+}
+
+.inventory-file-icon::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 30%;
+  height: 30%;
+  background: var(--border);
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  clip-path: polygon(0 0, 100% 100%, 100% 0);
 }
 
 .inventory-main {
@@ -217,7 +252,22 @@ body {
 
 .nullified-toggle {
   width: 100%;
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.nullified-label {
+  color: inherit;
+}
+
+.nullified-count {
+  color: inherit;
 }
 
 .main-column {
@@ -232,6 +282,16 @@ body {
   padding: 14px;
   background: var(--panel);
   overflow: auto;
+}
+
+.context-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: center;
+  line-height: 2;
 }
 
 .context-panel h2 {
@@ -637,10 +697,6 @@ body {
 }
 
 .idle-cpu {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
 }
@@ -680,16 +736,15 @@ body {
 }
 
 .dash-cpu-bars {
-  height: 120px;
-  min-height: 120px;
-  flex: 1;
+  height: 92px;
+  min-height: 92px;
   width: 100%;
   display: flex;
   align-items: flex-end;
-  gap: 3px;
-  border: 1px solid var(--border);
-  padding: 6px;
-  background: var(--bg);
+  gap: 2px;
+  border: none;
+  padding: 0;
+  background: transparent;
 }
 
 .dash-cpu-bar {
@@ -762,10 +817,36 @@ body {
 
 .root-dot.live {
   background: var(--good);
+  animation: blink-green 1.8s ease-in-out infinite;
 }
 
 .root-dot.nullified {
   background: var(--danger);
+  animation: blink-red 1.8s ease-in-out infinite;
+}
+
+@keyframes blink-green {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 3px var(--good);
+  }
+  50% {
+    opacity: 0.3;
+    box-shadow: none;
+  }
+}
+
+@keyframes blink-red {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 3px var(--danger);
+  }
+  50% {
+    opacity: 0.3;
+    box-shadow: none;
+  }
 }
 
 .right-column {

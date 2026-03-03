@@ -489,7 +489,13 @@ export function ContextPanel({
 
   if (selection.kind === "none") {
     return (
-      <section className="context-panel">Select an item or recipe.</section>
+      <section className="context-panel context-empty">
+        <span>
+          select a thing
+          <br />
+          or recipe
+        </span>
+      </section>
     );
   }
 

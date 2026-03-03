@@ -62,7 +62,9 @@ export function InventoryPanel({
         onDragStart={(event) => handleDragStart(event, item)}
         onDragEnd={handleDragEnd}
       >
-        <span className="inventory-emoji">{item.emoji}</span>
+        <span className="inventory-file-icon">
+          <span className="inventory-emoji">{item.emoji}</span>
+        </span>
         <span className="inventory-main">
           <span className="inventory-name">{item.name}</span>
           <span className="inventory-hash">{hashLine}</span>
@@ -95,8 +97,10 @@ export function InventoryPanel({
               className="nullified-toggle"
               onClick={onToggleNullified}
             >
-              {showNullifiedItems ? "▴" : "▾"} Nullified (
-              {nullifiedItems.length})
+              <span className="nullified-label">nullified</span>
+              <span className="nullified-count">
+                {showNullifiedItems ? "▴" : "▾"} {nullifiedItems.length}
+              </span>
             </button>
             {showNullifiedItems && nullifiedItems.map(renderInventoryItem)}
           </div>
