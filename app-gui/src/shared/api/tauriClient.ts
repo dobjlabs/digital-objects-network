@@ -87,7 +87,9 @@ export function createPost(input: CreatePostInput): Promise<PostDto> {
   return invoke<PostDto>("create_post", { input });
 }
 
-export function respondPost(input: RespondPostInput): Promise<GenericActionResult> {
+export function respondPost(
+  input: RespondPostInput,
+): Promise<GenericActionResult> {
   return invoke<GenericActionResult>("respond_post", { input });
 }
 

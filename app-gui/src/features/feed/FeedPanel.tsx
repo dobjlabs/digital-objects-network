@@ -1,5 +1,10 @@
 import { useMemo, useState } from "react";
-import { attachClaim, createPost, respondPost, verifyPostProofs } from "../../shared/api/tauriClient";
+import {
+  attachClaim,
+  createPost,
+  respondPost,
+  verifyPostProofs,
+} from "../../shared/api/tauriClient";
 import type { FeedPost } from "../../shared/types/domain";
 
 interface FeedPanelProps {
@@ -13,7 +18,9 @@ export function FeedPanel({ posts }: FeedPanelProps) {
   const [filterOpen, setFilterOpen] = useState(false);
   const [activeTypes, setActiveTypes] = useState<string[]>([]);
   const [activePostId, setActivePostId] = useState<string | null>(null);
-  const [composeMode, setComposeMode] = useState<"closed" | "new" | "reply">("closed");
+  const [composeMode, setComposeMode] = useState<"closed" | "new" | "reply">(
+    "closed",
+  );
   const [replyToPostId, setReplyToPostId] = useState<string | null>(null);
   const [composeTitle, setComposeTitle] = useState("");
   const [composeDesc, setComposeDesc] = useState("");
@@ -27,11 +34,12 @@ export function FeedPanel({ posts }: FeedPanelProps) {
     error: string | null;
   }>({ status: "idle", checkedBlock: null, error: null });
   const [verifyingProofKeys, setVerifyingProofKeys] = useState<string[]>([]);
-  const [verifiedProofMap, setVerifiedProofMap] = useState<Record<string, "live" | "nullified">>(
-    {},
-  );
+  const [verifiedProofMap, setVerifiedProofMap] = useState<
+    Record<string, "live" | "nullified">
+  >({});
 
-  const toValidity = (value: string) => (value === "nullified" ? "nullified" : "live");
+  const toValidity = (value: string) =>
+    value === "nullified" ? "nullified" : "live";
   const nowLabel = () => new Date().toLocaleString();
   const countProofs = (proofs: Array<{ validity: "live" | "nullified" }>) => ({
     live: proofs.filter((proof) => proof.validity === "live").length,
@@ -50,15 +58,25 @@ export function FeedPanel({ posts }: FeedPanelProps) {
     return counts;
   }, [localPosts]);
 
-  const allProofTypes = useMemo(() => Array.from(proofTypeCounts.keys()).sort(), [proofTypeCounts]);
+  const allProofTypes = useMemo(
+    () => Array.from(proofTypeCounts.keys()).sort(),
+    [proofTypeCounts],
+  );
 
   const filteredPosts = useMemo(() => {
     const q = search.trim().toLowerCase();
     return localPosts.filter((post) => {
-      if (q && !post.title.toLowerCase().includes(q) && !post.desc.toLowerCase().includes(q)) {
+      if (
+        q &&
+        !post.title.toLowerCase().includes(q) &&
+        !post.desc.toLowerCase().includes(q)
+      ) {
         return false;
       }
-      if (liveOnly && !post.proofs.every((proof) => proof.validity === "live")) {
+      if (
+        liveOnly &&
+        !post.proofs.every((proof) => proof.validity === "live")
+      ) {
         return false;
       }
       if (
@@ -72,7 +90,7 @@ export function FeedPanel({ posts }: FeedPanelProps) {
   }, [localPosts, search, liveOnly, activeTypes]);
 
   const activePost = activePostId
-    ? localPosts.find((post) => post.id === activePostId) ?? null
+    ? (localPosts.find((post) => post.id === activePostId) ?? null)
     : null;
 
   const resetCompose = () => {
@@ -110,14 +128,20 @@ export function FeedPanel({ posts }: FeedPanelProps) {
       for (const entry of proofEntries) {
         setVerifyingProofKeys((prev) => [...prev, entry.key]);
         await new Promise((resolve) => setTimeout(resolve, 220));
-        setVerifyingProofKeys((prev) => prev.filter((key) => key !== entry.key));
+        setVerifyingProofKeys((prev) =>
+          prev.filter((key) => key !== entry.key),
+        );
         setVerifiedProofMap((prev) => ({
           ...prev,
           [entry.key]: entry.validity,
         }));
       }
       const result = await verifyPostProofs(postId);
-      setVerifyState({ status: "done", checkedBlock: result.checkedBlock, error: null });
+      setVerifyState({
+        status: "done",
+        checkedBlock: result.checkedBlock,
+        error: null,
+      });
     } catch (error) {
       setVerifyState({
         status: "error",
@@ -128,19 +152,30 @@ export function FeedPanel({ posts }: FeedPanelProps) {
   };
 
   const toggleType = (type: string) => {
-    setActiveTypes((prev) => (prev.includes(type) ? prev.filter((value) => value !== type) : [...prev, type]));
+    setActiveTypes((prev) =>
+      prev.includes(type)
+        ? prev.filter((value) => value !== type)
+        : [...prev, type],
+    );
   };
 
   const handleAttachClaim = async () => {
     const value = claimName.trim();
     if (!value) return;
     try {
-      const claim = await attachClaim(value.endsWith(".dobj") ? value : `${value}.dobj`);
-      setComposeProofs((prev) => [...prev, { ...claim, validity: toValidity(claim.validity) }]);
+      const claim = await attachClaim(
+        value.endsWith(".dobj") ? value : `${value}.dobj`,
+      );
+      setComposeProofs((prev) => [
+        ...prev,
+        { ...claim, validity: toValidity(claim.validity) },
+      ]);
       setClaimName("");
       setComposeError(null);
     } catch (error) {
-      setComposeError(error instanceof Error ? error.message : "Failed to attach claim");
+      setComposeError(
+        error instanceof Error ? error.message : "Failed to attach claim",
+      );
     }
   };
 
@@ -210,7 +245,9 @@ export function FeedPanel({ posts }: FeedPanelProps) {
         resetCompose();
       }
     } catch (error) {
-      setComposeError(error instanceof Error ? error.message : "Failed to submit");
+      setComposeError(
+        error instanceof Error ? error.message : "Failed to submit",
+      );
     } finally {
       setComposeSubmitting(false);
     }
@@ -218,14 +255,18 @@ export function FeedPanel({ posts }: FeedPanelProps) {
 
   if (composeMode !== "closed") {
     const replyTo = replyToPostId
-      ? localPosts.find((post) => post.id === replyToPostId) ?? null
+      ? (localPosts.find((post) => post.id === replyToPostId) ?? null)
       : null;
     const isReply = composeMode === "reply";
 
     return (
       <section className="feed-panel">
         <div className="feed-detail-header">
-          <button type="button" className="feed-back-btn" onClick={resetCompose}>
+          <button
+            type="button"
+            className="feed-back-btn"
+            onClick={resetCompose}
+          >
             ← back
           </button>
           <div className="feed-title">{isReply ? "Respond" : "New Post"}</div>
@@ -260,20 +301,29 @@ export function FeedPanel({ posts }: FeedPanelProps) {
             value={claimName}
             onChange={(event) => setClaimName(event.target.value)}
           />
-          <button type="button" className="feed-back-btn" onClick={handleAttachClaim}>
+          <button
+            type="button"
+            className="feed-back-btn"
+            onClick={handleAttachClaim}
+          >
             Attach Claim
           </button>
         </div>
 
         <div className="feed-proof-row">
           {composeProofs.map((proof, index) => (
-            <span key={`${proof.hash}-${index}`} className={`proof-pill ${proof.validity}`}>
+            <span
+              key={`${proof.hash}-${index}`}
+              className={`proof-pill ${proof.validity}`}
+            >
               {proof.validity === "live" ? "✓" : "✗"} {proof.name}
             </span>
           ))}
         </div>
 
-        {composeError && <div className="feed-verify-error">{composeError}</div>}
+        {composeError && (
+          <div className="feed-verify-error">{composeError}</div>
+        )}
 
         <div className="feed-verify-bar">
           <button
@@ -290,20 +340,31 @@ export function FeedPanel({ posts }: FeedPanelProps) {
   }
 
   if (activePost) {
-    const allProofs = [...activePost.proofs, ...activePost.responses.flatMap((response) => response.proofs)];
+    const allProofs = [
+      ...activePost.proofs,
+      ...activePost.responses.flatMap((response) => response.proofs),
+    ];
     const proofCounts = countProofs(allProofs);
     return (
       <section className="feed-panel">
         <div className="feed-detail-header">
-          <button type="button" className="feed-back-btn" onClick={() => setActivePostId(null)}>
+          <button
+            type="button"
+            className="feed-back-btn"
+            onClick={() => setActivePostId(null)}
+          >
             ← back
           </button>
           <div className="feed-title">{activePost.title}</div>
         </div>
         <div className="feed-verify-summary">
-          <span className="feed-verify-stat live">✓ {proofCounts.live} live</span>
+          <span className="feed-verify-stat live">
+            ✓ {proofCounts.live} live
+          </span>
           {proofCounts.nullified > 0 && (
-            <span className="feed-verify-stat nullified">✗ {proofCounts.nullified} nullified</span>
+            <span className="feed-verify-stat nullified">
+              ✗ {proofCounts.nullified} nullified
+            </span>
           )}
           <span className="feed-verify-block">
             {verifyState.status === "done"
@@ -329,29 +390,38 @@ export function FeedPanel({ posts }: FeedPanelProps) {
             <span
               key={`${proof.hash}-${index}`}
               className={`proof-pill ${proof.validity} ${
-                verifyingProofKeys.includes(`post:${activePost.id}:${proof.hash}:${index}`)
+                verifyingProofKeys.includes(
+                  `post:${activePost.id}:${proof.hash}:${index}`,
+                )
                   ? "verifying"
                   : ""
               } ${
-                verifiedProofMap[`post:${activePost.id}:${proof.hash}:${index}`] === "live"
+                verifiedProofMap[
+                  `post:${activePost.id}:${proof.hash}:${index}`
+                ] === "live"
                   ? "verified-live"
                   : ""
               } ${
-                verifiedProofMap[`post:${activePost.id}:${proof.hash}:${index}`] === "nullified"
+                verifiedProofMap[
+                  `post:${activePost.id}:${proof.hash}:${index}`
+                ] === "nullified"
                   ? "verified-null"
                   : ""
               }`}
               title={`${proof.hash} · ${proof.validity}`}
             >
               {proof.validity === "live" ? "✓" : "✗"} {proof.name}
-              {proof.validity === "nullified" && <span className="proof-note"> · spent after post</span>}
+              {proof.validity === "nullified" && (
+                <span className="proof-note"> · spent after post</span>
+              )}
             </span>
           ))}
         </div>
         <p className="feed-desc">{activePost.desc}</p>
         <div className="feed-responses">
           <div className="feed-response-count">
-            {activePost.responses.length} response{activePost.responses.length === 1 ? "" : "s"}
+            {activePost.responses.length} response
+            {activePost.responses.length === 1 ? "" : "s"}
           </div>
           {activePost.responses.length === 0 && (
             <div className="feed-empty">No responses yet.</div>
@@ -366,15 +436,21 @@ export function FeedPanel({ posts }: FeedPanelProps) {
                   <span
                     key={`${response.id}-${proof.hash}-${index}`}
                     className={`proof-pill ${proof.validity} ${
-                      verifyingProofKeys.includes(`resp:${response.id}:${proof.hash}:${index}`)
+                      verifyingProofKeys.includes(
+                        `resp:${response.id}:${proof.hash}:${index}`,
+                      )
                         ? "verifying"
                         : ""
                     } ${
-                      verifiedProofMap[`resp:${response.id}:${proof.hash}:${index}`] === "live"
+                      verifiedProofMap[
+                        `resp:${response.id}:${proof.hash}:${index}`
+                      ] === "live"
                         ? "verified-live"
                         : ""
                     } ${
-                      verifiedProofMap[`resp:${response.id}:${proof.hash}:${index}`] === "nullified"
+                      verifiedProofMap[
+                        `resp:${response.id}:${proof.hash}:${index}`
+                      ] === "nullified"
                         ? "verified-null"
                         : ""
                     }`}
@@ -457,20 +533,29 @@ export function FeedPanel({ posts }: FeedPanelProps) {
               className={`feed-chip ${activeTypes.includes(type) ? "active" : ""}`}
               onClick={() => toggleType(type)}
             >
-              {type} <span className="feed-chip-count">{proofTypeCounts.get(type) ?? 0}</span>
+              {type}{" "}
+              <span className="feed-chip-count">
+                {proofTypeCounts.get(type) ?? 0}
+              </span>
             </button>
           ))}
         </div>
       )}
       <div className="feed-list">
-        {filteredPosts.length === 0 && <div className="feed-empty">No posts match.</div>}
+        {filteredPosts.length === 0 && (
+          <div className="feed-empty">No posts match.</div>
+        )}
         {filteredPosts.map((post) => (
           <button
             key={post.id}
             type="button"
             className="feed-item"
             onClick={() => {
-              setVerifyState({ status: "idle", checkedBlock: null, error: null });
+              setVerifyState({
+                status: "idle",
+                checkedBlock: null,
+                error: null,
+              });
               setActivePostId(post.id);
             }}
           >
@@ -478,7 +563,8 @@ export function FeedPanel({ posts }: FeedPanelProps) {
               {post.title}
               {post.responses.length > 0 && (
                 <span className="feed-item-replies">
-                  {post.responses.length} repl{post.responses.length === 1 ? "y" : "ies"}
+                  {post.responses.length} repl
+                  {post.responses.length === 1 ? "y" : "ies"}
                 </span>
               )}
             </div>

@@ -20,7 +20,9 @@ function App() {
   const toggleNullified = useUiStore((state) => state.toggleNullified);
   const runProof = useUiStore((state) => state.runProof);
   const proofRunning = useUiStore(
-    (state) => state.proof.status === "generating" || state.proof.status === "committing",
+    (state) =>
+      state.proof.status === "generating" ||
+      state.proof.status === "committing",
   );
 
   useEffect(() => {
@@ -30,7 +32,8 @@ function App() {
         if (!cancelled) setThingsDirPath(path);
       })
       .catch(() => {
-        if (!cancelled) setThingsDirPath("(failed to resolve things directory)");
+        if (!cancelled)
+          setThingsDirPath("(failed to resolve things directory)");
       });
     return () => {
       cancelled = true;

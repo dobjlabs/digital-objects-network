@@ -23,7 +23,10 @@ export function InventoryPanel({
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
 
-  const handleDragStart = (event: DragEvent<HTMLButtonElement>, item: InventoryItem) => {
+  const handleDragStart = (
+    event: DragEvent<HTMLButtonElement>,
+    item: InventoryItem,
+  ) => {
     const payload = JSON.stringify({ itemId: item.id, name: item.name });
     event.dataTransfer.setData("application/x-zkcraft-item", payload);
     event.dataTransfer.setData("text/plain", item.name);
@@ -44,6 +47,33 @@ export function InventoryPanel({
   const liveItems = items.filter((item) => item.validity === "live");
   const nullifiedItems = items.filter((item) => item.validity === "nullified");
 
+  const renderInventoryItem = (item: InventoryItem) => {
+    const hashLine =
+      item.validity === "live"
+        ? item.stateRoot
+        : (item.nullifier ?? "nullified");
+    return (
+      <button
+        key={item.id}
+        type="button"
+        className={`inventory-item ${activeItemId === item.id ? "active" : ""}`}
+        onClick={() => handleClickItem(item.id)}
+        draggable
+        onDragStart={(event) => handleDragStart(event, item)}
+        onDragEnd={handleDragEnd}
+      >
+        <span className="inventory-emoji">{item.emoji}</span>
+        <span className="inventory-main">
+          <span className="inventory-name">{item.name}</span>
+          <span className="inventory-hash">{hashLine}</span>
+        </span>
+        <span
+          className={`inventory-dot ${item.validity === "live" ? "live" : "nullified"}`}
+        />
+      </button>
+    );
+  };
+
   return (
     <section className="inventory-panel">
       <button
@@ -56,41 +86,19 @@ export function InventoryPanel({
       </button>
 
       <div className="inventory-list">
-        {liveItems.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`inventory-item ${activeItemId === item.id ? "active" : ""}`}
-            onClick={() => handleClickItem(item.id)}
-            draggable
-            onDragStart={(event) => handleDragStart(event, item)}
-            onDragEnd={handleDragEnd}
-          >
-            <span>{item.emoji}</span>
-            <span>{item.name}</span>
-          </button>
-        ))}
+        {liveItems.map(renderInventoryItem)}
 
         {nullifiedItems.length > 0 && (
           <div className="nullified-section">
-            <button type="button" className="nullified-toggle" onClick={onToggleNullified}>
-              {showNullifiedItems ? "▴" : "▾"} Nullified ({nullifiedItems.length})
+            <button
+              type="button"
+              className="nullified-toggle"
+              onClick={onToggleNullified}
+            >
+              {showNullifiedItems ? "▴" : "▾"} Nullified (
+              {nullifiedItems.length})
             </button>
-            {showNullifiedItems &&
-              nullifiedItems.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`inventory-item ${activeItemId === item.id ? "active" : ""}`}
-                  onClick={() => handleClickItem(item.id)}
-                  draggable
-                  onDragStart={(event) => handleDragStart(event, item)}
-                  onDragEnd={handleDragEnd}
-                >
-                  <span>{item.emoji}</span>
-                  <span>{item.name}</span>
-                </button>
-              ))}
+            {showNullifiedItems && nullifiedItems.map(renderInventoryItem)}
           </div>
         )}
       </div>

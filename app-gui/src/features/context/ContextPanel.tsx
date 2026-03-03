@@ -1,13 +1,21 @@
 import { useEffect, useState } from "react";
 import type { DragEvent } from "react";
-import type { ContextSelection, InventoryItem, Recipe } from "../../shared/types/domain";
+import type {
+  ContextSelection,
+  InventoryItem,
+  Recipe,
+} from "../../shared/types/domain";
 
 interface ContextPanelProps {
   selection: ContextSelection;
   items: InventoryItem[];
   recipes: Recipe[];
   thingsDirPath: string;
-  onRunProof: (input: { methodName: string; args: string[]; cpuCost: string }) => void;
+  onRunProof: (input: {
+    methodName: string;
+    args: string[];
+    cpuCost: string;
+  }) => void;
   proofRunning: boolean;
 }
 
@@ -43,7 +51,9 @@ export function ContextPanel({
       .trim()
       .toLowerCase();
 
-  const parseDropPayload = (raw: string): { itemId?: string; name?: string } => {
+  const parseDropPayload = (
+    raw: string,
+  ): { itemId?: string; name?: string } => {
     try {
       const parsed = JSON.parse(raw) as { itemId?: string; name?: string };
       return parsed;
@@ -105,13 +115,16 @@ export function ContextPanel({
     readsBlock: boolean;
     args: string[];
     onRun: (boundArgs: string[]) => void;
-  }) => (
+  }) =>
     (() => {
       const boundArgs = config.args.map(
         (arg, index) => argBindings[argKey(config.methodId, arg, index)] ?? "",
       );
-      const filledCount = boundArgs.filter((value) => value.trim().length > 0).length;
-      const allArgsBound = config.args.length === 0 || filledCount === config.args.length;
+      const filledCount = boundArgs.filter(
+        (value) => value.trim().length > 0,
+      ).length;
+      const allArgsBound =
+        config.args.length === 0 || filledCount === config.args.length;
 
       return (
         <div className="method-card">
@@ -130,14 +143,18 @@ export function ContextPanel({
                       event.preventDefault();
                       setHoverArgKey(key);
                     }}
-                    onDragLeave={() => setHoverArgKey((prev) => (prev === key ? null : prev))}
+                    onDragLeave={() =>
+                      setHoverArgKey((prev) => (prev === key ? null : prev))
+                    }
                     onDragOver={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
                       event.dataTransfer.dropEffect = "copy";
                       if (hoverArgKey !== key) setHoverArgKey(key);
                     }}
-                    onDrop={(event) => handleDropArg(event, config.methodId, arg, index)}
+                    onDrop={(event) =>
+                      handleDropArg(event, config.methodId, arg, index)
+                    }
                   >
                     <span className="method-arg-label">{arg}</span>
                     {isManualArg(arg) ? (
@@ -148,7 +165,10 @@ export function ContextPanel({
                           value={bound ?? ""}
                           onChange={(event) => {
                             const value = event.target.value;
-                            setArgBindings((prev) => ({ ...prev, [key]: value }));
+                            setArgBindings((prev) => ({
+                              ...prev,
+                              [key]: value,
+                            }));
                             setArgErrors((prev) => {
                               const next = { ...prev };
                               delete next[key];
@@ -176,9 +196,16 @@ export function ContextPanel({
                       <>
                         <div
                           className={`method-arg-placeholder ${bound ? "filled" : "missing"} ${err ? "error" : ""}`}
-                          title={bound ? "Bound from inventory" : "Drop from inventory"}
+                          title={
+                            bound
+                              ? "Bound from inventory"
+                              : "Drop from inventory"
+                          }
                         >
-                          {bound ?? (isDropActive ? "release to drop" : "drag .dobj file here")}
+                          {bound ??
+                            (isDropActive
+                              ? "release to drop"
+                              : "drag .dobj file here")}
                         </div>
                         {bound && (
                           <button
@@ -217,39 +244,84 @@ export function ContextPanel({
               onClick={() => config.onRun(boundArgs)}
               disabled={proofRunning || !allArgsBound}
             >
-              {proofRunning ? "Running..." : allArgsBound ? config.methodName : "Bind all inputs"}
+              {proofRunning
+                ? "Running..."
+                : allArgsBound
+                  ? config.methodName
+                  : "Bind all inputs"}
             </button>
           </div>
         </div>
       );
-    })()
-  );
+    })();
 
   const itemMethod = (item: InventoryItem) => {
     if (item.validity !== "live") return null;
     switch (item.type) {
       case "source":
         return [
-          { methodName: "extract", cpuCost: "5-15m", readsBlock: true, args: ["Pickaxe"] },
+          {
+            methodName: "extract",
+            cpuCost: "5-15m",
+            readsBlock: true,
+            args: ["Pickaxe"],
+          },
           { methodName: "survey", cpuCost: "2-5m", readsBlock: true, args: [] },
         ];
       case "tool":
         return [
-          { methodName: "repair", cpuCost: "1-3m", readsBlock: false, args: ["CopperIngot"] },
-          { methodName: "use", cpuCost: "30s-2m", readsBlock: false, args: ["Asteroid"] },
+          {
+            methodName: "repair",
+            cpuCost: "1-3m",
+            readsBlock: false,
+            args: ["CopperIngot"],
+          },
+          {
+            methodName: "use",
+            cpuCost: "30s-2m",
+            readsBlock: false,
+            args: ["Asteroid"],
+          },
         ];
       case "creature":
         return [
-          { methodName: "feed", cpuCost: "20-40s", readsBlock: true, args: ["Bread"] },
-          { methodName: "inspect", cpuCost: "10-20s", readsBlock: false, args: [] },
+          {
+            methodName: "feed",
+            cpuCost: "20-40s",
+            readsBlock: true,
+            args: ["Bread"],
+          },
+          {
+            methodName: "inspect",
+            cpuCost: "10-20s",
+            readsBlock: false,
+            args: [],
+          },
         ];
       case "coin":
         return [
-          { methodName: "send", cpuCost: "10s", readsBlock: false, args: ["0x...recipient"] },
-          { methodName: "bundle", cpuCost: "10-20s", readsBlock: false, args: ["Coin"] },
+          {
+            methodName: "send",
+            cpuCost: "10s",
+            readsBlock: false,
+            args: ["0x...recipient"],
+          },
+          {
+            methodName: "bundle",
+            cpuCost: "10-20s",
+            readsBlock: false,
+            args: ["Coin"],
+          },
         ];
       default:
-        return [{ methodName: "inspect", cpuCost: "30s", readsBlock: false, args: [item.name] }];
+        return [
+          {
+            methodName: "inspect",
+            cpuCost: "30s",
+            readsBlock: false,
+            args: [item.name],
+          },
+        ];
     }
   };
 
@@ -273,7 +345,10 @@ export function ContextPanel({
             <span className="stat-val good">{item.charge}%</span>
           </div>
           <div className="stat-progress">
-            <div className="stat-progress-fill good" style={{ width: `${item.charge}%` }} />
+            <div
+              className="stat-progress-fill good"
+              style={{ width: `${item.charge}%` }}
+            />
           </div>
           <div className="stat-row">
             <span className="stat-key">recharge rate</span>
@@ -283,7 +358,11 @@ export function ContextPanel({
       );
     }
 
-    if (item.type === "tool" && item.durability !== undefined && item.maxDurability) {
+    if (
+      item.type === "tool" &&
+      item.durability !== undefined &&
+      item.maxDurability
+    ) {
       const pct = Math.round((item.durability / item.maxDurability) * 100);
       const cls = progressClass(pct, true);
       return (
@@ -299,7 +378,10 @@ export function ContextPanel({
             </span>
           </div>
           <div className="stat-progress">
-            <div className={`stat-progress-fill ${cls}`} style={{ width: `${pct}%` }} />
+            <div
+              className={`stat-progress-fill ${cls}`}
+              style={{ width: `${pct}%` }}
+            />
           </div>
           <div className="stat-row">
             <span className="stat-key">skill</span>
@@ -309,7 +391,11 @@ export function ContextPanel({
       );
     }
 
-    if (item.type === "creature" && item.hunger !== undefined && item.health !== undefined) {
+    if (
+      item.type === "creature" &&
+      item.hunger !== undefined &&
+      item.health !== undefined
+    ) {
       const hungerCls = progressClass(item.hunger);
       const healthCls = progressClass(100 - item.health);
       return (
@@ -319,7 +405,10 @@ export function ContextPanel({
             <span className={`stat-val ${hungerCls}`}>{item.hunger}%</span>
           </div>
           <div className="stat-progress">
-            <div className={`stat-progress-fill ${hungerCls}`} style={{ width: `${item.hunger}%` }} />
+            <div
+              className={`stat-progress-fill ${hungerCls}`}
+              style={{ width: `${item.hunger}%` }}
+            />
           </div>
           <div className="stat-row">
             <span className="stat-key">health</span>
@@ -333,7 +422,11 @@ export function ContextPanel({
       );
     }
 
-    if (item.type === "vehicle" && item.fuel !== undefined && item.condition !== undefined) {
+    if (
+      item.type === "vehicle" &&
+      item.fuel !== undefined &&
+      item.condition !== undefined
+    ) {
       const fuelCls = progressClass(item.fuel, true);
       return (
         <div className="item-stats">
@@ -342,7 +435,10 @@ export function ContextPanel({
             <span className={`stat-val ${fuelCls}`}>{item.fuel}%</span>
           </div>
           <div className="stat-progress">
-            <div className={`stat-progress-fill ${fuelCls}`} style={{ width: `${item.fuel}%` }} />
+            <div
+              className={`stat-progress-fill ${fuelCls}`}
+              style={{ width: `${item.fuel}%` }}
+            />
           </div>
           <div className="stat-row">
             <span className="stat-key">condition</span>
@@ -382,12 +478,15 @@ export function ContextPanel({
   };
 
   if (selection.kind === "none") {
-    return <section className="context-panel">Select an item or recipe.</section>;
+    return (
+      <section className="context-panel">Select an item or recipe.</section>
+    );
   }
 
   if (selection.kind === "item") {
     const item = items.find((candidate) => candidate.id === selection.itemId);
-    if (!item) return <section className="context-panel">Item not found.</section>;
+    if (!item)
+      return <section className="context-panel">Item not found.</section>;
     return (
       <section className="context-panel">
         <h2>
@@ -425,8 +524,11 @@ export function ContextPanel({
     );
   }
 
-  const recipe = recipes.find((candidate) => candidate.id === selection.recipeId);
-  if (!recipe) return <section className="context-panel">Recipe not found.</section>;
+  const recipe = recipes.find(
+    (candidate) => candidate.id === selection.recipeId,
+  );
+  if (!recipe)
+    return <section className="context-panel">Recipe not found.</section>;
 
   return (
     <section className="context-panel">
@@ -439,7 +541,10 @@ export function ContextPanel({
         methodName: recipe.verb,
         cpuCost: recipe.cpu,
         readsBlock: recipe.readsBlock,
-        args: [...recipe.consumes.map((c) => c.label), ...recipe.requires.map((r) => r.label)],
+        args: [
+          ...recipe.consumes.map((c) => c.label),
+          ...recipe.requires.map((r) => r.label),
+        ],
         onRun: (boundArgs) =>
           onRunProof({
             methodName: recipe.verb,

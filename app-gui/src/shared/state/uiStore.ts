@@ -42,7 +42,11 @@ interface UiStoreState extends AppUiState {
   selectItem: (itemId: string) => void;
   selectRecipe: (recipeId: string) => void;
   toggleNullified: () => void;
-  runProof: (input: { methodName: string; args: string[]; cpuCost: string }) => Promise<void>;
+  runProof: (input: {
+    methodName: string;
+    args: string[];
+    cpuCost: string;
+  }) => Promise<void>;
 }
 
 function estimateCpuSecs(cpuCost: string): number {
@@ -118,7 +122,11 @@ export const useUiStore = create<UiStoreState>((set) => ({
     })),
   runProof: async ({ methodName, args, cpuCost }) => {
     set((prev) => {
-      if (prev.proof.status === "generating" || prev.proof.status === "committing") return prev;
+      if (
+        prev.proof.status === "generating" ||
+        prev.proof.status === "committing"
+      )
+        return prev;
       return {
         ...prev,
         proof: {
@@ -128,15 +136,30 @@ export const useUiStore = create<UiStoreState>((set) => ({
           args,
           messages: ["Generating recursive proof..."],
           steps: [
-            { id: "hash", label: "Hashing", detail: cpuCost, status: "running" },
+            {
+              id: "hash",
+              label: "Hashing",
+              detail: cpuCost,
+              status: "running",
+            },
             ...args.map((arg, i) => ({
               id: `verify-${i}`,
               label: "Verifying Input",
               detail: arg,
               status: "pending" as StepStatus,
             })),
-            { id: "nullify", label: "Nullifying Root", detail: "pending", status: "pending" },
-            { id: "commit", label: "Committing New Root", detail: "pending", status: "pending" },
+            {
+              id: "nullify",
+              label: "Nullifying Root",
+              detail: "pending",
+              status: "pending",
+            },
+            {
+              id: "commit",
+              label: "Committing New Root",
+              detail: "pending",
+              status: "pending",
+            },
           ],
           oldRoot: null,
           newRoot: null,
@@ -178,8 +201,10 @@ export const useUiStore = create<UiStoreState>((set) => ({
           ],
           steps: prev.proof.steps.map((step) => {
             if (step.id === "hash") return { ...step, status: "done" };
-            if (step.id === "nullify") return { ...step, detail: result.oldRoot, status: "running" };
-            if (step.id === "commit") return { ...step, detail: result.newRoot, status: "pending" };
+            if (step.id === "nullify")
+              return { ...step, detail: result.oldRoot, status: "running" };
+            if (step.id === "commit")
+              return { ...step, detail: result.newRoot, status: "pending" };
             return step;
           }),
           oldRoot: result.oldRoot,
@@ -214,7 +239,10 @@ export const useUiStore = create<UiStoreState>((set) => ({
       await new Promise((resolve) => setTimeout(resolve, 250));
 
       set((prev) => {
-        const nextCpu = Math.max(2, Math.min(100, Math.round(Math.random() * 40 + 30)));
+        const nextCpu = Math.max(
+          2,
+          Math.min(100, Math.round(Math.random() * 40 + 30)),
+        );
         return {
           ...prev,
           proof: {
@@ -222,7 +250,8 @@ export const useUiStore = create<UiStoreState>((set) => ({
             status: "done",
             stats: {
               cpuHistory: [...prev.proof.stats.cpuHistory, nextCpu].slice(-24),
-              totalCpuSecs: prev.proof.stats.totalCpuSecs + estimateCpuSecs(cpuCost),
+              totalCpuSecs:
+                prev.proof.stats.totalCpuSecs + estimateCpuSecs(cpuCost),
               roots: [
                 { hash: result.newRoot, state: "live" },
                 { hash: result.oldRoot, state: "nullified" },
@@ -232,6 +261,23 @@ export const useUiStore = create<UiStoreState>((set) => ({
           },
         };
       });
+
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      set((prev) => ({
+        ...prev,
+        proof: {
+          ...prev.proof,
+          status: "idle",
+          methodName: null,
+          cpuCost: null,
+          args: [],
+          messages: [],
+          steps: [],
+          oldRoot: null,
+          newRoot: null,
+          error: null,
+        },
+      }));
     } catch (error) {
       set((prev) => ({
         ...prev,
