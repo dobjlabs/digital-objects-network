@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { runMethod } from "../api/tauriClient";
+import { createDobj } from "../api/tauriClient";
 import { initialUiState } from "./initialState";
 import type { AppUiState } from "../types/domain";
 
@@ -223,21 +223,19 @@ export const useUiStore = create<UiStoreState>((set) => ({
         }));
       }
 
-      const result = await runMethod({
-        id,
-        methodName,
+      const result = await createDobj({
+        dobjId: id,
         inputFiles,
-        cpuCost,
       });
       set((prev) => ({
         ...prev,
         proof: {
           status: "committing",
-          methodName: result.methodName,
+          methodName,
           cpuCost,
           args: inputFiles,
           messages: [
-            ...result.stageMessages,
+            `Creating ${result.outputFile}`,
             `Nullifying old root ${result.oldRoot}`,
             `Committing new root ${result.newRoot}`,
           ],

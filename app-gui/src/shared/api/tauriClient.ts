@@ -5,19 +5,16 @@ export interface MockState {
   supportedMethods: string[];
 }
 
-export interface RunMethodInput {
-  id: string;
-  methodName: string;
+export interface CreateDobjInput {
+  dobjId: string;
   inputFiles: string[];
-  cpuCost: string;
 }
 
-export interface ProofRunResult {
-  success: boolean;
-  methodName: string;
+export interface CreateDobjResult {
+  ok: boolean;
   oldRoot: string;
   newRoot: string;
-  stageMessages: string[];
+  outputFile: string;
 }
 
 export interface VerifyResult {
@@ -81,8 +78,8 @@ export function getMockState(): Promise<MockState> {
   return invoke<MockState>("get_mock_state");
 }
 
-export function runMethod(input: RunMethodInput): Promise<ProofRunResult> {
-  return invoke<ProofRunResult>("run_method", { input });
+export function createDobj(input: CreateDobjInput): Promise<CreateDobjResult> {
+  return invoke<CreateDobjResult>("create_dobj", { input });
 }
 
 export function verifyPostProofs(postId: string): Promise<VerifyResult> {
