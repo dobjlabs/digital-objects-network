@@ -186,15 +186,6 @@ export const useUiStore = create<UiStoreState>((set) => ({
 
       try {
       await new Promise((resolve) => setTimeout(resolve, hashStepDelayMs));
-      set((prev) => ({
-        ...prev,
-        proof: {
-          ...prev.proof,
-          steps: prev.proof.steps.map((step) =>
-            step.id === "hash" ? { ...step, status: "done" } : step,
-          ),
-        },
-      }));
 
       for (const [index, arg] of inputFiles.entries()) {
         set((prev) => ({
@@ -223,6 +214,17 @@ export const useUiStore = create<UiStoreState>((set) => ({
         }));
       }
 
+      // Keep a running spinner visible while backend mining/creation is in flight.
+      set((prev) => ({
+        ...prev,
+        proof: {
+          ...prev.proof,
+          steps: prev.proof.steps.map((step) =>
+            step.id === "hash" ? { ...step, status: "running" } : step,
+          ),
+        },
+      }));
+
       const result = await createDobj({
         dobjId: id,
         inputFiles,
@@ -240,6 +242,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
             `Committing new root ${result.newRoot}`,
           ],
           steps: prev.proof.steps.map((step) => {
+            if (step.id === "hash") return { ...step, status: "done" };
             if (step.id === "nullify")
               return { ...step, detail: result.oldRoot, status: "running" };
             if (step.id === "commit")
