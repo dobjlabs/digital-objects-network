@@ -17,19 +17,15 @@ interface ProofState {
 }
 
 interface UiStoreState extends AppUiState {
-  dragItemName: string | null;
   proof: ProofState;
   selectItem: (itemId: string) => void;
   selectRecipe: (recipeId: string) => void;
   toggleNullified: () => void;
-  beginDragItem: (itemName: string) => void;
-  endDragItem: () => void;
   runProof: (input: { methodName: string; args: string[]; cpuCost: string }) => Promise<void>;
 }
 
 export const useUiStore = create<UiStoreState>((set) => ({
   ...initialUiState,
-  dragItemName: null,
   proof: {
     status: "idle",
     methodName: null,
@@ -41,33 +37,43 @@ export const useUiStore = create<UiStoreState>((set) => ({
     error: null,
   },
   selectItem: (itemId) =>
-    set((prev) => ({
-      ...prev,
-      activeItemId: itemId,
-      activeRecipeId: null,
-      contextSelection: { kind: "item", itemId },
-    })),
+    set((prev) => {
+      if (
+        prev.activeItemId === itemId &&
+        prev.activeRecipeId === null &&
+        prev.contextSelection.kind === "item" &&
+        prev.contextSelection.itemId === itemId
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        activeItemId: itemId,
+        activeRecipeId: null,
+        contextSelection: { kind: "item", itemId },
+      };
+    }),
   selectRecipe: (recipeId) =>
-    set((prev) => ({
-      ...prev,
-      activeItemId: null,
-      activeRecipeId: recipeId,
-      contextSelection: { kind: "recipe", recipeId },
-    })),
+    set((prev) => {
+      if (
+        prev.activeRecipeId === recipeId &&
+        prev.activeItemId === null &&
+        prev.contextSelection.kind === "recipe" &&
+        prev.contextSelection.recipeId === recipeId
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        activeItemId: null,
+        activeRecipeId: recipeId,
+        contextSelection: { kind: "recipe", recipeId },
+      };
+    }),
   toggleNullified: () =>
     set((prev) => ({
       ...prev,
       showNullifiedItems: !prev.showNullifiedItems,
-    })),
-  beginDragItem: (itemName) =>
-    set((prev) => ({
-      ...prev,
-      dragItemName: itemName,
-    })),
-  endDragItem: () =>
-    set((prev) => ({
-      ...prev,
-      dragItemName: null,
     })),
   runProof: async ({ methodName, args, cpuCost }) => {
     set((prev) => {

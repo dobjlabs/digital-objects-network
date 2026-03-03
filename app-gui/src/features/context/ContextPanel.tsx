@@ -7,8 +7,6 @@ interface ContextPanelProps {
   items: InventoryItem[];
   recipes: Recipe[];
   thingsDirPath: string;
-  dragItemName: string | null;
-  onConsumeDragItem: () => void;
   onRunProof: (input: { methodName: string; args: string[]; cpuCost: string }) => void;
   proofRunning: boolean;
 }
@@ -18,16 +16,21 @@ export function ContextPanel({
   items,
   recipes,
   thingsDirPath,
-  dragItemName,
-  onConsumeDragItem,
   onRunProof,
   proofRunning,
 }: ContextPanelProps) {
   const [argBindings, setArgBindings] = useState<Record<string, string>>({});
+  const [hoverArgKey, setHoverArgKey] = useState<string | null>(null);
+  const selectionKey =
+    selection.kind === "item"
+      ? `item:${selection.itemId}`
+      : selection.kind === "recipe"
+        ? `recipe:${selection.recipeId}`
+        : "none";
 
   useEffect(() => {
     setArgBindings({});
-  }, [selection]);
+  }, [selectionKey]);
 
   const argKey = (methodName: string, arg: string, index: number) =>
     `${selection.kind}:${methodName}:${arg}:${index}`;
@@ -39,13 +42,14 @@ export function ContextPanel({
     index: number,
   ) => {
     event.preventDefault();
+    event.stopPropagation();
     const raw =
       event.dataTransfer.getData("application/x-zkcraft-item") ||
       event.dataTransfer.getData("text/plain") ||
       event.dataTransfer.getData("text");
-    if (!raw && !dragItemName) return;
+    if (!raw) return;
 
-    let name = raw || dragItemName || "";
+    let name = raw;
     try {
       const parsed = JSON.parse(raw) as { name?: string };
       if (parsed.name) name = parsed.name;
@@ -54,8 +58,8 @@ export function ContextPanel({
     }
 
     const key = argKey(methodName, arg, index);
-    setArgBindings((prev) => ({ ...prev, [key]: name || dragItemName || arg }));
-    onConsumeDragItem();
+    setArgBindings((prev) => ({ ...prev, [key]: name || arg }));
+    setHoverArgKey(null);
   };
 
   const renderMethodCard = (config: {
@@ -79,17 +83,30 @@ export function ContextPanel({
               {config.args.map((arg, index) => {
                 const key = argKey(config.methodName, arg, index);
                 const bound = argBindings[key];
+                const isDropActive = hoverArgKey === key;
                 return (
-                  <div key={`${arg}-${index}`} className="method-arg-line">
+                  <div
+                    key={`${arg}-${index}`}
+                    className={`method-arg-line ${isDropActive ? "drop-active" : ""}`}
+                    onDragEnter={(event) => {
+                      event.preventDefault();
+                      setHoverArgKey(key);
+                    }}
+                    onDragLeave={() => setHoverArgKey((prev) => (prev === key ? null : prev))}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      event.dataTransfer.dropEffect = "copy";
+                      if (hoverArgKey !== key) setHoverArgKey(key);
+                    }}
+                    onDrop={(event) => handleDropArg(event, config.methodName, arg, index)}
+                  >
                     <span className="method-arg-label">{arg}</span>
                     <div
                       className={`method-arg-placeholder ${bound ? "filled" : "missing"}`}
-                      onDrop={(event) => handleDropArg(event, config.methodName, arg, index)}
-                      onDragEnter={(event) => event.preventDefault()}
-                      onDragOver={(event) => event.preventDefault()}
                       title={bound ? "Bound from inventory" : "Drop from inventory"}
                     >
-                      {bound ?? "drag .dobj file here"}
+                      {bound ?? (isDropActive ? "release to drop" : "drag .dobj file here")}
                     </div>
                     {bound && (
                       <button

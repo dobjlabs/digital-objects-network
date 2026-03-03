@@ -193,6 +193,13 @@ body {
   grid-template-columns: auto 1fr auto;
   gap: 6px;
   align-items: center;
+  border: 1px solid transparent;
+  padding: 2px;
+}
+
+.method-arg-line.drop-active {
+  border-color: var(--accent);
+  background: #1f312d;
 }
 
 .method-arg-label {

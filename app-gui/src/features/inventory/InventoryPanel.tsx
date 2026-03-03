@@ -10,7 +10,6 @@ interface InventoryPanelProps {
   onSelectItem: (itemId: string) => void;
   onToggleNullified: () => void;
   onOpenThingsDir: () => void;
-  onDragItemStart: (itemName: string) => void;
 }
 
 export function InventoryPanel({
@@ -21,7 +20,6 @@ export function InventoryPanel({
   onSelectItem,
   onToggleNullified,
   onOpenThingsDir,
-  onDragItemStart,
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
 
@@ -32,7 +30,6 @@ export function InventoryPanel({
     event.dataTransfer.setData("text", item.name);
     event.dataTransfer.effectAllowed = "copy";
     isDraggingRef.current = true;
-    onDragItemStart(item.name);
   };
 
   const handleDragEnd = () => {
