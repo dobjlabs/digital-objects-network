@@ -26,6 +26,10 @@ export function FeedPanel({ posts }: FeedPanelProps) {
     checkedBlock: string | null;
     error: string | null;
   }>({ status: "idle", checkedBlock: null, error: null });
+  const [verifyingProofKeys, setVerifyingProofKeys] = useState<string[]>([]);
+  const [verifiedProofMap, setVerifiedProofMap] = useState<Record<string, "live" | "nullified">>(
+    {},
+  );
 
   const toValidity = (value: string) => (value === "nullified" ? "nullified" : "live");
   const nowLabel = () => new Date().toLocaleString();
@@ -78,8 +82,35 @@ export function FeedPanel({ posts }: FeedPanelProps) {
   };
 
   const handleVerify = async (postId: string) => {
+    const target = localPosts.find((post) => post.id === postId);
+    if (!target) return;
+
+    const proofEntries = [
+      ...target.proofs.map((proof, index) => ({
+        key: `post:${postId}:${proof.hash}:${index}`,
+        validity: proof.validity,
+      })),
+      ...target.responses.flatMap((response) =>
+        response.proofs.map((proof, index) => ({
+          key: `resp:${response.id}:${proof.hash}:${index}`,
+          validity: proof.validity,
+        })),
+      ),
+    ];
+
     setVerifyState({ status: "running", checkedBlock: null, error: null });
+    setVerifiedProofMap({});
+    setVerifyingProofKeys([]);
     try {
+      for (const entry of proofEntries) {
+        setVerifyingProofKeys((prev) => [...prev, entry.key]);
+        await new Promise((resolve) => setTimeout(resolve, 220));
+        setVerifyingProofKeys((prev) => prev.filter((key) => key !== entry.key));
+        setVerifiedProofMap((prev) => ({
+          ...prev,
+          [entry.key]: entry.validity,
+        }));
+      }
       const result = await verifyPostProofs(postId);
       setVerifyState({ status: "done", checkedBlock: result.checkedBlock, error: null });
     } catch (error) {
@@ -267,7 +298,22 @@ export function FeedPanel({ posts }: FeedPanelProps) {
         </div>
         <div className="feed-proof-row">
           {activePost.proofs.map((proof, index) => (
-            <span key={`${proof.hash}-${index}`} className={`proof-pill ${proof.validity}`}>
+            <span
+              key={`${proof.hash}-${index}`}
+              className={`proof-pill ${proof.validity} ${
+                verifyingProofKeys.includes(`post:${activePost.id}:${proof.hash}:${index}`)
+                  ? "verifying"
+                  : ""
+              } ${
+                verifiedProofMap[`post:${activePost.id}:${proof.hash}:${index}`] === "live"
+                  ? "verified-live"
+                  : ""
+              } ${
+                verifiedProofMap[`post:${activePost.id}:${proof.hash}:${index}`] === "nullified"
+                  ? "verified-null"
+                  : ""
+              }`}
+            >
               {proof.validity === "live" ? "✓" : "✗"} {proof.name}
             </span>
           ))}
@@ -287,7 +333,22 @@ export function FeedPanel({ posts }: FeedPanelProps) {
               </div>
               <div className="feed-proof-row">
                 {response.proofs.map((proof, index) => (
-                  <span key={`${response.id}-${proof.hash}-${index}`} className={`proof-pill ${proof.validity}`}>
+                  <span
+                    key={`${response.id}-${proof.hash}-${index}`}
+                    className={`proof-pill ${proof.validity} ${
+                      verifyingProofKeys.includes(`resp:${response.id}:${proof.hash}:${index}`)
+                        ? "verifying"
+                        : ""
+                    } ${
+                      verifiedProofMap[`resp:${response.id}:${proof.hash}:${index}`] === "live"
+                        ? "verified-live"
+                        : ""
+                    } ${
+                      verifiedProofMap[`resp:${response.id}:${proof.hash}:${index}`] === "nullified"
+                        ? "verified-null"
+                        : ""
+                    }`}
+                  >
                     {proof.validity === "live" ? "✓" : "✗"} {proof.name}
                   </span>
                 ))}

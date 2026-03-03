@@ -610,6 +610,32 @@ body {
   color: #d59292;
 }
 
+.proof-pill.verifying {
+  animation: proof-pulse 0.35s ease-in-out;
+}
+
+.proof-pill.verified-live {
+  border-color: #4a9e30;
+  background: #1b2d22;
+}
+
+.proof-pill.verified-null {
+  border-color: #c84030;
+  background: #301616;
+}
+
+@keyframes proof-pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
 .feed-desc {
   margin: 0;
   color: var(--text);
