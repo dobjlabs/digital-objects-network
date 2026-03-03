@@ -4,7 +4,12 @@ import { FeedPanel } from "./features/feed/FeedPanel";
 import { InventoryPanel } from "./features/inventory/InventoryPanel";
 import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { RecipeGrid } from "./features/recipes/RecipeGrid";
-import { getThingsDir, openThingsDir, sampleAppCpu } from "./shared/api/tauriClient";
+import {
+  getThingsDir,
+  listenCreateDobjProgress,
+  openThingsDir,
+  sampleAppCpu,
+} from "./shared/api/tauriClient";
 import { mockFeed, mockItems, mockRecipes } from "./shared/data/mockData";
 import { useUiStore } from "./shared/state/uiStore";
 import "./styles/tokens.css";
@@ -27,6 +32,9 @@ function App() {
   const selectRecipe = useUiStore((state) => state.selectRecipe);
   const toggleNullified = useUiStore((state) => state.toggleNullified);
   const recordCpuSample = useUiStore((state) => state.recordCpuSample);
+  const applyCreateDobjProgress = useUiStore(
+    (state) => state.applyCreateDobjProgress,
+  );
   const runProof = useUiStore((state) => state.runProof);
   const proofRunning = useUiStore(
     (state) =>
@@ -48,6 +56,31 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    listenCreateDobjProgress((event) => {
+      if (!cancelled) {
+        applyCreateDobjProgress(event);
+      }
+    })
+      .then((dispose) => {
+        if (cancelled) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+      })
+      .catch((error) => {
+        console.error("Failed to subscribe to create_dobj progress:", error);
+      });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [applyCreateDobjProgress]);
 
   useEffect(() => {
     let cancelled = false;

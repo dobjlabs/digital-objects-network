@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { createDobj } from "../api/tauriClient";
+import { createDobj, type CreateDobjProgress } from "../api/tauriClient";
 import { initialUiState } from "./initialState";
 import type { AppUiState } from "../types/domain";
 
@@ -25,6 +25,7 @@ interface ProofStats {
 }
 
 interface ProofState {
+  runDobjId: string | null;
   status: ProofStatus;
   methodName: string | null;
   cpuCost: string | null;
@@ -43,6 +44,7 @@ interface UiStoreState extends AppUiState {
   selectRecipe: (recipeId: string) => void;
   toggleNullified: () => void;
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
+  applyCreateDobjProgress: (event: CreateDobjProgress) => void;
   runProof: (input: {
     id: string;
     methodName: string;
@@ -54,6 +56,7 @@ interface UiStoreState extends AppUiState {
 export const useUiStore = create<UiStoreState>((set) => ({
   ...initialUiState,
   proof: {
+    runDobjId: null,
     status: "idle",
     methodName: null,
     cpuCost: null,
@@ -130,11 +133,82 @@ export const useUiStore = create<UiStoreState>((set) => ({
         },
       };
     }),
+  applyCreateDobjProgress: (event) =>
+    set((prev) => {
+      if (prev.proof.runDobjId !== event.dobjId) return prev;
+
+      const nextSteps = prev.proof.steps.map((step) => ({ ...step }));
+      const updateStep = (stepId: string, patch: Partial<ProofStep>) => {
+        const index = nextSteps.findIndex((step) => step.id === stepId);
+        if (index === -1) return;
+        nextSteps[index] = { ...nextSteps[index], ...patch };
+      };
+
+      let nextStatus = prev.proof.status;
+      let nextOldRoot = prev.proof.oldRoot;
+      let nextNewRoot = prev.proof.newRoot;
+
+      if (event.phase === "hash") {
+        nextStatus = "generating";
+        updateStep("hash", {
+          status: event.status,
+          detail: event.detail ?? prev.proof.cpuCost ?? "pending",
+        });
+      } else if (event.phase === "verify") {
+        nextStatus = "generating";
+        const index = event.verifyIndex ?? 0;
+        updateStep(`verify-${index}`, {
+          status: event.status,
+          detail: event.detail ?? "input",
+        });
+      } else if (event.phase === "nullify") {
+        nextStatus = "committing";
+        nextOldRoot = event.oldRoot ?? event.detail ?? nextOldRoot;
+        updateStep("nullify", {
+          status: event.status,
+          detail: event.detail ?? nextOldRoot ?? "pending",
+        });
+      } else if (event.phase === "commit") {
+        nextStatus = event.status === "done" ? "done" : "committing";
+        nextNewRoot = event.newRoot ?? event.detail ?? nextNewRoot;
+        updateStep("commit", {
+          status: event.status,
+          detail: event.detail ?? nextNewRoot ?? "pending",
+        });
+      }
+
+      const shouldUpdateRoots =
+        event.phase === "commit" &&
+        event.status === "done" &&
+        !!(nextOldRoot && nextNewRoot);
+      const liveRoot = nextNewRoot ?? "";
+      const nullifiedRoot = nextOldRoot ?? "";
+
+      return {
+        ...prev,
+        proof: {
+          ...prev.proof,
+          status: nextStatus,
+          messages: [...prev.proof.messages, event.message].slice(-8),
+          steps: nextSteps,
+          oldRoot: nextOldRoot,
+          newRoot: nextNewRoot,
+          stats: shouldUpdateRoots
+            ? {
+                ...prev.proof.stats,
+                roots: [
+                  { hash: liveRoot, state: "live" },
+                  { hash: nullifiedRoot, state: "nullified" },
+                  ...prev.proof.stats.roots.slice(0, 6),
+                ],
+              }
+            : prev.proof.stats,
+        },
+      };
+    }),
   runProof: async ({ id, methodName, inputFiles, cpuCost }) => {
-    const hashStepDelayMs = 650;
-    const verifyStepDelayMs = 650;
-    const commitTransitionDelayMs = 900;
     const postDoneHoldMs = 1200;
+    const verifyTargets = inputFiles.length > 0 ? inputFiles : ["(no inputs)"];
 
     set((prev) => {
       if (
@@ -145,21 +219,22 @@ export const useUiStore = create<UiStoreState>((set) => ({
       return {
         ...prev,
         proof: {
+          runDobjId: id,
           status: "generating",
           methodName,
           cpuCost,
           args: inputFiles,
-          messages: ["Generating recursive proof..."],
+          messages: ["Creating digital object..."],
           steps: [
             {
               id: "hash",
               label: "Hashing",
               detail: cpuCost,
-              status: "running",
+              status: "pending",
             },
-            ...inputFiles.map((arg, i) => ({
+            ...verifyTargets.map((arg, i) => ({
               id: `verify-${i}`,
-              label: "Verifying Input",
+              label: "Verifying",
               detail: arg,
               status: "pending" as StepStatus,
             })),
@@ -184,122 +259,20 @@ export const useUiStore = create<UiStoreState>((set) => ({
       };
     });
 
-      try {
-      await new Promise((resolve) => setTimeout(resolve, hashStepDelayMs));
-
-      for (const [index, arg] of inputFiles.entries()) {
-        set((prev) => ({
-          ...prev,
-          proof: {
-            ...prev.proof,
-            steps: prev.proof.steps.map((step) =>
-              step.id === `verify-${index}`
-                ? { ...step, detail: arg, status: "running" }
-                : step,
-            ),
-          },
-        }));
-        await new Promise((resolve) => setTimeout(resolve, verifyStepDelayMs));
-        set((prev) => ({
-          ...prev,
-          proof: {
-            ...prev.proof,
-            steps: prev.proof.steps.map((step) => {
-              if (step.id === `verify-${index}`) {
-                return { ...step, detail: arg, status: "done" };
-              }
-              return step;
-            }),
-          },
-        }));
-      }
-
-      // Keep a running spinner visible while backend mining/creation is in flight.
-      set((prev) => ({
-        ...prev,
-        proof: {
-          ...prev.proof,
-          steps: prev.proof.steps.map((step) =>
-            step.id === "hash" ? { ...step, status: "running" } : step,
-          ),
-        },
-      }));
-
+    try {
       const result = await createDobj({
         dobjId: id,
         inputFiles,
       });
-      set((prev) => ({
-        ...prev,
-        proof: {
-          status: "committing",
-          methodName,
-          cpuCost,
-          args: inputFiles,
-          messages: [
-            `Creating ${result.outputFile}`,
-            `Nullifying old root ${result.oldRoot}`,
-            `Committing new root ${result.newRoot}`,
-          ],
-          steps: prev.proof.steps.map((step) => {
-            if (step.id === "hash") return { ...step, status: "done" };
-            if (step.id === "nullify")
-              return { ...step, detail: result.oldRoot, status: "running" };
-            if (step.id === "commit")
-              return { ...step, detail: result.newRoot, status: "pending" };
-            return step;
-          }),
-          oldRoot: result.oldRoot,
-          newRoot: result.newRoot,
-          error: null,
-          stats: prev.proof.stats,
-        },
-      }));
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, commitTransitionDelayMs),
-      );
-      set((prev) => ({
-        ...prev,
-        proof: {
-          ...prev.proof,
-          steps: prev.proof.steps.map((step) => {
-            if (step.id === "nullify") return { ...step, status: "done" };
-            if (step.id === "commit") return { ...step, status: "running" };
-            return step;
-          }),
-        },
-      }));
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, commitTransitionDelayMs),
-      );
-      set((prev) => ({
-        ...prev,
-        proof: {
-          ...prev.proof,
-          steps: prev.proof.steps.map((step) =>
-            step.id === "commit" ? { ...step, status: "done" } : step,
-          ),
-        },
-      }));
-
-      await new Promise((resolve) => setTimeout(resolve, 600));
-
       set((prev) => {
+        if (prev.proof.runDobjId !== id) return prev;
         return {
           ...prev,
           proof: {
             ...prev.proof,
             status: "done",
-            stats: {
-              ...prev.proof.stats,
-              roots: [
-                { hash: result.newRoot, state: "live" },
-                { hash: result.oldRoot, state: "nullified" },
-                ...prev.proof.stats.roots.slice(0, 6),
-              ],
-            },
+            oldRoot: result.oldRoot,
+            newRoot: result.newRoot,
           },
         };
       });
@@ -309,6 +282,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
         ...prev,
         proof: {
           ...prev.proof,
+          runDobjId: null,
           status: "idle",
           methodName: null,
           cpuCost: null,
@@ -324,6 +298,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
       set((prev) => ({
         ...prev,
         proof: {
+          runDobjId: null,
           status: "error",
           methodName,
           cpuCost,

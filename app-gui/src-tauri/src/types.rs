@@ -25,3 +25,17 @@ pub(crate) struct CreateDobjResult {
     pub(crate) new_root: String,
     pub(crate) output_file: String,
 }
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CreateDobjProgress {
+    pub(crate) dobj_id: String,
+    pub(crate) phase: String,
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) verify_index: Option<usize>,
+    pub(crate) detail: Option<String>,
+    pub(crate) old_root: Option<String>,
+    pub(crate) new_root: Option<String>,
+    pub(crate) output_file: Option<String>,
+}

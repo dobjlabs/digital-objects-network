@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface MockState {
   postCount: number;
@@ -15,6 +16,18 @@ export interface CreateDobjResult {
   oldRoot: string;
   newRoot: string;
   outputFile: string;
+}
+
+export interface CreateDobjProgress {
+  dobjId: string;
+  phase: "hash" | "verify" | "nullify" | "commit";
+  status: "running" | "done";
+  message: string;
+  verifyIndex: number | null;
+  detail: string | null;
+  oldRoot: string | null;
+  newRoot: string | null;
+  outputFile: string | null;
 }
 
 export interface VerifyResult {
@@ -80,6 +93,14 @@ export function getMockState(): Promise<MockState> {
 
 export function createDobj(input: CreateDobjInput): Promise<CreateDobjResult> {
   return invoke<CreateDobjResult>("create_dobj", { input });
+}
+
+export function listenCreateDobjProgress(
+  handler: (event: CreateDobjProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<CreateDobjProgress>("create-dobj-progress", (event) => {
+    handler(event.payload);
+  });
 }
 
 export function verifyPostProofs(postId: string): Promise<VerifyResult> {
