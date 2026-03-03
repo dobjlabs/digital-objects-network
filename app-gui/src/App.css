@@ -593,6 +593,29 @@ body {
   color: var(--text-dim);
 }
 
+.stage-detail-value.running {
+  color: var(--text);
+}
+
+.stage-detail-value.running::after {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 6px;
+  border: 1.5px solid var(--border);
+  border-top-color: var(--text-dim);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .proof-complete-bar {
   margin-top: auto;
   color: #52a744;

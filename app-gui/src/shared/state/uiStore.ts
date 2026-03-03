@@ -121,6 +121,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
       showNullifiedItems: !prev.showNullifiedItems,
     })),
   runProof: async ({ methodName, args, cpuCost }) => {
+    const hashStepDelayMs = 650;
     const verifyStepDelayMs = 650;
     const commitTransitionDelayMs = 900;
     const postDoneHoldMs = 2600;
@@ -174,7 +175,29 @@ export const useUiStore = create<UiStoreState>((set) => ({
     });
 
       try {
-        for (const [index, arg] of args.entries()) {
+      await new Promise((resolve) => setTimeout(resolve, hashStepDelayMs));
+      set((prev) => ({
+        ...prev,
+        proof: {
+          ...prev.proof,
+          steps: prev.proof.steps.map((step) =>
+            step.id === "hash" ? { ...step, status: "done" } : step,
+          ),
+        },
+      }));
+
+      for (const [index, arg] of args.entries()) {
+        set((prev) => ({
+          ...prev,
+          proof: {
+            ...prev.proof,
+            steps: prev.proof.steps.map((step) =>
+              step.id === `verify-${index}`
+                ? { ...step, detail: arg, status: "running" }
+                : step,
+            ),
+          },
+        }));
         await new Promise((resolve) => setTimeout(resolve, verifyStepDelayMs));
         set((prev) => ({
           ...prev,
@@ -204,7 +227,6 @@ export const useUiStore = create<UiStoreState>((set) => ({
             `Committing new root ${result.newRoot}`,
           ],
           steps: prev.proof.steps.map((step) => {
-            if (step.id === "hash") return { ...step, status: "done" };
             if (step.id === "nullify")
               return { ...step, detail: result.oldRoot, status: "running" };
             if (step.id === "commit")
@@ -225,9 +247,11 @@ export const useUiStore = create<UiStoreState>((set) => ({
         ...prev,
         proof: {
           ...prev.proof,
-          steps: prev.proof.steps.map((step) =>
-            step.id === "nullify" ? { ...step, status: "done" } : step,
-          ),
+          steps: prev.proof.steps.map((step) => {
+            if (step.id === "nullify") return { ...step, status: "done" };
+            if (step.id === "commit") return { ...step, status: "running" };
+            return step;
+          }),
         },
       }));
 

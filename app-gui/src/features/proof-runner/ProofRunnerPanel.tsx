@@ -79,7 +79,14 @@ export function ProofRunnerPanel() {
     const stage1Done = proof.status === "committing" || proof.status === "done";
     const stage2Done = proof.status === "done";
     const stage2Active = proof.status === "committing";
+    const hashStep = proof.steps.find((step) => step.id === "hash");
     const verifySteps = proof.steps.filter((step) => step.id.startsWith("verify-"));
+    const nullifyStep = proof.steps.find((step) => step.id === "nullify");
+    const commitStep = proof.steps.find((step) => step.id === "commit");
+
+    const statusClass = (status: "pending" | "running" | "done") =>
+      status === "done" ? "done" : status === "running" ? "running" : "pending";
+
     return (
       <section className="cpu-panel proof-panel proof-run-card">
         <div className="stage-header">
@@ -91,16 +98,16 @@ export function ProofRunnerPanel() {
           <div className="stage-details">
             <div className="stage-detail-line">
               <span className="stage-detail-label">Hashing</span>
-              <span className="stage-detail-value done">{proof.cpuCost ?? "..."}</span>
+              <span
+                className={`stage-detail-value ${statusClass(hashStep?.status ?? "running")}`}
+              >
+                {hashStep?.detail ?? proof.cpuCost ?? "..."}
+              </span>
             </div>
             {verifySteps.map((step) => (
               <div key={step.id} className="stage-detail-line">
                 <span className="stage-detail-label">Verifying</span>
-                <span
-                  className={`stage-detail-value ${
-                    step.status === "done" ? "done" : "pending"
-                  }`}
-                >
+                <span className={`stage-detail-value ${statusClass(step.status)}`}>
                   {step.detail}
                 </span>
               </div>
@@ -121,14 +128,32 @@ export function ProofRunnerPanel() {
           <div className="stage-details">
             <div className="stage-detail-line">
               <span className="stage-detail-label">Nullifying</span>
-              <span className="stage-detail-value danger">
-                {proof.oldRoot ?? "pending"}
+              <span
+                className={`stage-detail-value danger ${
+                  nullifyStep?.status === "running"
+                    ? "running"
+                    : nullifyStep?.status === "pending"
+                      ? "pending"
+                      : ""
+                }`}
+              >
+                {nullifyStep?.detail ?? proof.oldRoot ?? "pending"}
               </span>
             </div>
             <div className="stage-detail-line">
               <span className="stage-detail-label">New State Root</span>
-              <span className="stage-detail-value done">
-                {proof.newRoot ?? "pending"}
+              <span
+                className={`stage-detail-value ${
+                  commitStep?.status === "done"
+                    ? "done"
+                    : commitStep?.status === "running"
+                      ? "running"
+                      : "pending"
+                }`}
+              >
+                {commitStep?.status === "pending"
+                  ? "—"
+                  : (commitStep?.detail ?? proof.newRoot ?? "pending")}
               </span>
             </div>
           </div>
