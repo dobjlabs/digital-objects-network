@@ -26,9 +26,7 @@ use sync_loop::run_sync_loop;
 #[tokio::main]
 async fn main() -> Result<()> {
     // In order to view logs, run `RUST_LOG=info cargo run`
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::filter::EnvFilter::from_default_env())
-        .init();
+    common::log_init();
 
     let cfg = load_config()?;
     debug!(?cfg, "Loaded synchronizer config");
