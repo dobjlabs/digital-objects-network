@@ -1,5 +1,5 @@
 use crate::state::CpuMonitor;
-use crate::types::CpuSampleDto;
+use crate::types::CpuSample;
 use std::fs;
 use std::time::Instant;
 use sysinfo::ProcessesToUpdate;
@@ -40,14 +40,11 @@ fn save_total_cpu_secs(app: &tauri::AppHandle, total: f64) -> Result<(), String>
 }
 
 #[tauri::command]
-pub fn sample_app_cpu(
-    app: tauri::AppHandle,
-    monitor: tauri::State<'_, CpuMonitor>,
-) -> CpuSampleDto {
+pub fn sample_app_cpu(app: tauri::AppHandle, monitor: tauri::State<'_, CpuMonitor>) -> CpuSample {
     let mut system = match monitor.system.lock() {
         Ok(system) => system,
         Err(_) => {
-            return CpuSampleDto {
+            return CpuSample {
                 usage_pct: 0.0,
                 total_cpu_secs: 0.0,
             }
@@ -57,7 +54,7 @@ pub fn sample_app_cpu(
     let mut loaded = match monitor.total_loaded.lock() {
         Ok(loaded) => loaded,
         Err(_) => {
-            return CpuSampleDto {
+            return CpuSample {
                 usage_pct: 0.0,
                 total_cpu_secs: 0.0,
             }
@@ -66,7 +63,7 @@ pub fn sample_app_cpu(
     let mut total_cpu_secs = match monitor.total_cpu_secs.lock() {
         Ok(total) => total,
         Err(_) => {
-            return CpuSampleDto {
+            return CpuSample {
                 usage_pct: 0.0,
                 total_cpu_secs: 0.0,
             }
@@ -75,7 +72,7 @@ pub fn sample_app_cpu(
     let mut last_sample_at = match monitor.last_sample_at.lock() {
         Ok(last) => last,
         Err(_) => {
-            return CpuSampleDto {
+            return CpuSample {
                 usage_pct: 0.0,
                 total_cpu_secs: *total_cpu_secs,
             }
@@ -89,6 +86,8 @@ pub fn sample_app_cpu(
         *loaded = true;
     }
 
+    // Refresh this process snapshot so `cpu_usage()` reflects current values
+    // instead of stale data from the previous sample.
     let _ = system.refresh_processes(ProcessesToUpdate::Some(&[monitor.pid]), true);
 
     let raw_cpu = system
@@ -111,7 +110,7 @@ pub fn sample_app_cpu(
     let clamped_total = *total_cpu_secs;
     let _ = save_total_cpu_secs(&app, clamped_total);
 
-    CpuSampleDto {
+    CpuSample {
         usage_pct,
         total_cpu_secs: clamped_total,
     }

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export interface MockStateDto {
+export interface MockState {
   postCount: number;
   supportedMethods: string[];
 }
@@ -32,19 +32,19 @@ export interface CreatePostInput {
   proofNames: string[];
 }
 
-export interface ProofClaimDto {
+export interface ProofClaim {
   name: string;
   validity: string;
   hash: string;
 }
 
-export interface PostDto {
+export interface Post {
   id: string;
   title: string;
   peer: string;
   time: string;
   desc: string;
-  proofs: ProofClaimDto[];
+  proofs: ProofClaim[];
 }
 
 export interface RespondPostInput {
@@ -64,7 +64,7 @@ export interface AttachClaimResult {
   hash: string;
 }
 
-export interface CpuSampleDto {
+export interface CpuSample {
   usagePct: number;
   totalCpuSecs: number;
 }
@@ -77,8 +77,8 @@ export function openThingsDir(): Promise<string> {
   return invoke<string>("open_things_dir");
 }
 
-export function getMockState(): Promise<MockStateDto> {
-  return invoke<MockStateDto>("get_mock_state");
+export function getMockState(): Promise<MockState> {
+  return invoke<MockState>("get_mock_state");
 }
 
 export function runMethod(input: RunMethodInput): Promise<ProofRunResult> {
@@ -89,8 +89,8 @@ export function verifyPostProofs(postId: string): Promise<VerifyResult> {
   return invoke<VerifyResult>("verify_post_proofs", { input: { postId } });
 }
 
-export function createPost(input: CreatePostInput): Promise<PostDto> {
-  return invoke<PostDto>("create_post", { input });
+export function createPost(input: CreatePostInput): Promise<Post> {
+  return invoke<Post>("create_post", { input });
 }
 
 export function respondPost(
@@ -103,6 +103,6 @@ export function attachClaim(fileName: string): Promise<AttachClaimResult> {
   return invoke<AttachClaimResult>("attach_claim", { input: { fileName } });
 }
 
-export function sampleAppCpu(): Promise<CpuSampleDto> {
-  return invoke<CpuSampleDto>("sample_app_cpu");
+export function sampleAppCpu(): Promise<CpuSample> {
+  return invoke<CpuSample>("sample_app_cpu");
 }

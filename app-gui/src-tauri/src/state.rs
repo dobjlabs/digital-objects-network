@@ -1,20 +1,21 @@
-use crate::types::PostDto;
-use std::sync::atomic::AtomicU64;
 use std::sync::Mutex;
 use std::time::Instant;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 
-#[derive(Default)]
-pub(crate) struct AppState {
-    pub(crate) posts: Mutex<Vec<PostDto>>,
-    pub(crate) next_id: AtomicU64,
-}
-
+/// Shared runtime state used by the CPU sampling command.
+///
+/// This tracks the current process in `sysinfo`, plus rolling CPU totals so
+/// the frontend can render both instantaneous usage and accumulated CPU time.
 pub(crate) struct CpuMonitor {
+    /// PID for this Tauri process.
     pub(crate) pid: Pid,
+    /// `sysinfo` system handle used to refresh process CPU stats.
     pub(crate) system: Mutex<System>,
+    /// Accumulated CPU time in core-seconds.
     pub(crate) total_cpu_secs: Mutex<f64>,
+    /// Wall-clock time of the previous sample.
     pub(crate) last_sample_at: Mutex<Option<Instant>>,
+    /// Ensures persisted CPU totals are loaded from disk only once.
     pub(crate) total_loaded: Mutex<bool>,
 }
 
