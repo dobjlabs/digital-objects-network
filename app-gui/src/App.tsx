@@ -4,7 +4,7 @@ import { FeedPanel } from "./features/feed/FeedPanel";
 import { InventoryPanel } from "./features/inventory/InventoryPanel";
 import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { RecipeGrid } from "./features/recipes/RecipeGrid";
-import { getThingsDir, openThingsDir } from "./shared/api/tauriClient";
+import { getThingsDir, openThingsDir, sampleAppCpu } from "./shared/api/tauriClient";
 import { mockFeed, mockItems, mockRecipes } from "./shared/data/mockData";
 import { useUiStore } from "./shared/state/uiStore";
 import "./styles/tokens.css";
@@ -26,6 +26,7 @@ function App() {
   const selectItem = useUiStore((state) => state.selectItem);
   const selectRecipe = useUiStore((state) => state.selectRecipe);
   const toggleNullified = useUiStore((state) => state.toggleNullified);
+  const recordCpuSample = useUiStore((state) => state.recordCpuSample);
   const runProof = useUiStore((state) => state.runProof);
   const proofRunning = useUiStore(
     (state) =>
@@ -47,6 +48,32 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const sample = await sampleAppCpu();
+        if (!cancelled) {
+          recordCpuSample(sample.usagePct, sample.totalCpuSecs);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to sample CPU usage:", error);
+        }
+      }
+    };
+
+    void poll();
+    const interval = window.setInterval(() => {
+      void poll();
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [recordCpuSample]);
 
   const handleOpenThingsDir = async () => {
     if (!thingsDirPath || thingsDirPath.startsWith("(")) return;

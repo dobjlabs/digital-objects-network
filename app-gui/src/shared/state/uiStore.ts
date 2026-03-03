@@ -42,19 +42,12 @@ interface UiStoreState extends AppUiState {
   selectItem: (itemId: string) => void;
   selectRecipe: (recipeId: string) => void;
   toggleNullified: () => void;
+  recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   runProof: (input: {
     methodName: string;
     args: string[];
     cpuCost: string;
   }) => Promise<void>;
-}
-
-function estimateCpuSecs(cpuCost: string): number {
-  const match = cpuCost.match(/\d+/);
-  const n = match ? Number(match[0]) : 1;
-  if (cpuCost.includes("h")) return n * 3600;
-  if (cpuCost.includes("m")) return n * 60;
-  return n;
 }
 
 export const useUiStore = create<UiStoreState>((set) => ({
@@ -120,6 +113,22 @@ export const useUiStore = create<UiStoreState>((set) => ({
       ...prev,
       showNullifiedItems: !prev.showNullifiedItems,
     })),
+  recordCpuSample: (usagePct, totalCpuSecs) =>
+    set((prev) => {
+      const nextUsage = Math.max(0, Math.min(100, Math.round(usagePct)));
+      const nextTotal = Math.max(0, Math.floor(totalCpuSecs));
+      return {
+        ...prev,
+        proof: {
+          ...prev.proof,
+          stats: {
+            ...prev.proof.stats,
+            cpuHistory: [...prev.proof.stats.cpuHistory, nextUsage].slice(-24),
+            totalCpuSecs: nextTotal,
+          },
+        },
+      };
+    }),
   runProof: async ({ methodName, args, cpuCost }) => {
     const hashStepDelayMs = 650;
     const verifyStepDelayMs = 650;
@@ -271,19 +280,13 @@ export const useUiStore = create<UiStoreState>((set) => ({
       await new Promise((resolve) => setTimeout(resolve, 600));
 
       set((prev) => {
-        const nextCpu = Math.max(
-          2,
-          Math.min(100, Math.round(Math.random() * 40 + 30)),
-        );
         return {
           ...prev,
           proof: {
             ...prev.proof,
             status: "done",
             stats: {
-              cpuHistory: [...prev.proof.stats.cpuHistory, nextCpu].slice(-24),
-              totalCpuSecs:
-                prev.proof.stats.totalCpuSecs + estimateCpuSecs(cpuCost),
+              ...prev.proof.stats,
               roots: [
                 { hash: result.newRoot, state: "live" },
                 { hash: result.oldRoot, state: "nullified" },

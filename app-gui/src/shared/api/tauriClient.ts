@@ -63,6 +63,11 @@ export interface AttachClaimResult {
   hash: string;
 }
 
+export interface CpuSampleDto {
+  usagePct: number;
+  totalCpuSecs: number;
+}
+
 export function getThingsDir(): Promise<string> {
   return invoke<string>("get_things_dir");
 }
@@ -95,4 +100,8 @@ export function respondPost(
 
 export function attachClaim(fileName: string): Promise<AttachClaimResult> {
   return invoke<AttachClaimResult>("attach_claim", { input: { fileName } });
+}
+
+export function sampleAppCpu(): Promise<CpuSampleDto> {
+  return invoke<CpuSampleDto>("sample_app_cpu");
 }
