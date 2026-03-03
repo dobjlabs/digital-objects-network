@@ -46,6 +46,48 @@ export function FeedPanel({ posts }: FeedPanelProps) {
     nullified: proofs.filter((proof) => proof.validity === "nullified").length,
     total: proofs.length,
   });
+  const proofKeyForPost = (
+    postId: string,
+    proof: { hash: string },
+    index: number,
+  ) => `post:${postId}:${proof.hash}:${index}`;
+  const proofKeyForResponse = (
+    responseId: string,
+    proof: { hash: string },
+    index: number,
+  ) => `resp:${responseId}:${proof.hash}:${index}`;
+
+  const renderProofTag = (config: {
+    proof: FeedPost["proofs"][number];
+    key: string;
+    proofKey?: string;
+    inPost?: boolean;
+  }) => {
+    const { proof, key, proofKey, inPost = false } = config;
+    const verifiedState = proofKey ? verifiedProofMap[proofKey] : undefined;
+    const isVerifying = proofKey ? verifyingProofKeys.includes(proofKey) : false;
+    return (
+      <span
+        key={key}
+        className={`proof-pill ${proof.validity} ${
+          proof.validity === "nullified" ? "nullified-tag" : ""
+        } ${isVerifying ? "verifying" : ""} ${
+          verifiedState === "live" ? "verified-live" : ""
+        } ${verifiedState === "nullified" ? "verified-null" : ""}`}
+      >
+        <span className={`check ${proof.validity}`}>
+          {proof.validity === "live" ? "✓" : "✗"}
+        </span>
+        <span>{proof.name}</span>
+        <span className="proof-tooltip">
+          {proof.hash} · {proof.validity}
+        </span>
+        {inPost && proof.validity === "nullified" && (
+          <span className="proof-note">· spent after post</span>
+        )}
+      </span>
+    );
+  };
 
   const proofTypeCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -280,7 +322,7 @@ export function FeedPanel({ posts }: FeedPanelProps) {
 
         {!isReply && (
           <input
-            className="feed-search"
+            className="feed-search feed-compose-input"
             placeholder="Title"
             value={composeTitle}
             onChange={(event) => setComposeTitle(event.target.value)}
@@ -303,7 +345,7 @@ export function FeedPanel({ posts }: FeedPanelProps) {
           />
           <button
             type="button"
-            className="feed-back-btn"
+            className="feed-attach-btn"
             onClick={handleAttachClaim}
           >
             Attach Claim
@@ -312,12 +354,10 @@ export function FeedPanel({ posts }: FeedPanelProps) {
 
         <div className="feed-proof-row">
           {composeProofs.map((proof, index) => (
-            <span
-              key={`${proof.hash}-${index}`}
-              className={`proof-pill ${proof.validity}`}
-            >
-              {proof.validity === "live" ? "✓" : "✗"} {proof.name}
-            </span>
+            renderProofTag({
+              proof,
+              key: `compose:${proof.hash}:${index}`,
+            })
           ))}
         </div>
 
@@ -328,7 +368,7 @@ export function FeedPanel({ posts }: FeedPanelProps) {
         <div className="feed-verify-bar">
           <button
             type="button"
-            className="feed-verify-btn"
+            className="feed-compose-submit"
             onClick={handleSubmitCompose}
             disabled={composeSubmitting}
           >
@@ -387,34 +427,12 @@ export function FeedPanel({ posts }: FeedPanelProps) {
         </div>
         <div className="feed-proof-row">
           {activePost.proofs.map((proof, index) => (
-            <span
-              key={`${proof.hash}-${index}`}
-              className={`proof-pill ${proof.validity} ${
-                verifyingProofKeys.includes(
-                  `post:${activePost.id}:${proof.hash}:${index}`,
-                )
-                  ? "verifying"
-                  : ""
-              } ${
-                verifiedProofMap[
-                  `post:${activePost.id}:${proof.hash}:${index}`
-                ] === "live"
-                  ? "verified-live"
-                  : ""
-              } ${
-                verifiedProofMap[
-                  `post:${activePost.id}:${proof.hash}:${index}`
-                ] === "nullified"
-                  ? "verified-null"
-                  : ""
-              }`}
-              title={`${proof.hash} · ${proof.validity}`}
-            >
-              {proof.validity === "live" ? "✓" : "✗"} {proof.name}
-              {proof.validity === "nullified" && (
-                <span className="proof-note"> · spent after post</span>
-              )}
-            </span>
+            renderProofTag({
+              proof,
+              key: `postproof:${proof.hash}:${index}`,
+              proofKey: proofKeyForPost(activePost.id, proof, index),
+              inPost: true,
+            })
           ))}
         </div>
         <p className="feed-desc">{activePost.desc}</p>
@@ -433,31 +451,12 @@ export function FeedPanel({ posts }: FeedPanelProps) {
               </div>
               <div className="feed-proof-row">
                 {response.proofs.map((proof, index) => (
-                  <span
-                    key={`${response.id}-${proof.hash}-${index}`}
-                    className={`proof-pill ${proof.validity} ${
-                      verifyingProofKeys.includes(
-                        `resp:${response.id}:${proof.hash}:${index}`,
-                      )
-                        ? "verifying"
-                        : ""
-                    } ${
-                      verifiedProofMap[
-                        `resp:${response.id}:${proof.hash}:${index}`
-                      ] === "live"
-                        ? "verified-live"
-                        : ""
-                    } ${
-                      verifiedProofMap[
-                        `resp:${response.id}:${proof.hash}:${index}`
-                      ] === "nullified"
-                        ? "verified-null"
-                        : ""
-                    }`}
-                    title={`${proof.hash} · ${proof.validity}`}
-                  >
-                    {proof.validity === "live" ? "✓" : "✗"} {proof.name}
-                  </span>
+                  renderProofTag({
+                    proof,
+                    key: `resp:${response.id}:${proof.hash}:${index}`,
+                    proofKey: proofKeyForResponse(response.id, proof, index),
+                    inPost: true,
+                  })
                 ))}
               </div>
               <div className="feed-response-desc">{response.desc}</div>
@@ -467,7 +466,7 @@ export function FeedPanel({ posts }: FeedPanelProps) {
         <div className="feed-verify-bar">
           <button
             type="button"
-            className="feed-back-btn"
+            className="feed-respond-btn"
             onClick={() => {
               setComposeMode("reply");
               setReplyToPostId(activePost.id);
@@ -476,7 +475,7 @@ export function FeedPanel({ posts }: FeedPanelProps) {
               setComposeError(null);
             }}
           >
-            respond
+            ↩ Respond
           </button>
           {verifyState.status === "error" && (
             <span className="feed-verify-error">{verifyState.error}</span>
@@ -512,7 +511,7 @@ export function FeedPanel({ posts }: FeedPanelProps) {
         </button>
         <button
           type="button"
-          className="feed-verify-btn"
+          className="feed-post-btn"
           onClick={() => {
             setComposeMode("new");
             setComposeTitle("");
@@ -559,17 +558,27 @@ export function FeedPanel({ posts }: FeedPanelProps) {
               setActivePostId(post.id);
             }}
           >
-            <div className="feed-item-title">
-              {post.title}
-              {post.responses.length > 0 && (
-                <span className="feed-item-replies">
-                  {post.responses.length} repl
-                  {post.responses.length === 1 ? "y" : "ies"}
-                </span>
-              )}
+            <div className="feed-item-row1">
+              <div className="feed-item-title">
+                {post.title}
+                {post.responses.length > 0 && (
+                  <span className="feed-item-replies">
+                    {post.responses.length} repl
+                    {post.responses.length === 1 ? "y" : "ies"}
+                  </span>
+                )}
+              </div>
+              <div className="feed-item-time">
+                {post.time} · {post.peer}
+              </div>
             </div>
-            <div className="feed-item-meta">
-              {post.time} · {post.peer}
+            <div className="feed-proof-row feed-proof-row-list">
+              {post.proofs.map((proof, index) =>
+                renderProofTag({
+                  proof,
+                  key: `list:${post.id}:${proof.hash}:${index}`,
+                }),
+              )}
             </div>
           </button>
         ))}

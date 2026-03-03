@@ -79,6 +79,7 @@ export function ProofRunnerPanel() {
     const stage1Done = proof.status === "committing" || proof.status === "done";
     const stage2Done = proof.status === "done";
     const stage2Active = proof.status === "committing";
+    const verifySteps = proof.steps.filter((step) => step.id.startsWith("verify-"));
     return (
       <section className="cpu-panel proof-panel proof-run-card">
         <div className="stage-header">
@@ -86,7 +87,28 @@ export function ProofRunnerPanel() {
           <span className="stage-title">Generating Recursive Proof</span>
         </div>
 
-        <div className="stage-header">
+        {proof.status === "generating" && (
+          <div className="stage-details">
+            <div className="stage-detail-line">
+              <span className="stage-detail-label">Hashing</span>
+              <span className="stage-detail-value done">{proof.cpuCost ?? "..."}</span>
+            </div>
+            {verifySteps.map((step) => (
+              <div key={step.id} className="stage-detail-line">
+                <span className="stage-detail-label">Verifying</span>
+                <span
+                  className={`stage-detail-value ${
+                    step.status === "done" ? "done" : "pending"
+                  }`}
+                >
+                  {step.detail}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className={`stage-header ${stage2Active || stage2Done ? "" : "pending"}`}>
           <span
             className={`stage-num ${stage2Done ? "done" : stage2Active ? "active" : "pending"}`}
           >
@@ -96,14 +118,18 @@ export function ProofRunnerPanel() {
         </div>
 
         {(proof.status === "committing" || proof.status === "done") && (
-          <div className="stage-lines">
-            <div className="proof-line">
-              Nullifying{" "}
-              <span className="proof-inline danger">{proof.oldRoot ?? "pending"}</span>
+          <div className="stage-details">
+            <div className="stage-detail-line">
+              <span className="stage-detail-label">Nullifying</span>
+              <span className="stage-detail-value danger">
+                {proof.oldRoot ?? "pending"}
+              </span>
             </div>
-            <div className="proof-line">
-              New State Root{" "}
-              <span className="proof-inline good">{proof.newRoot ?? "pending"}</span>
+            <div className="stage-detail-line">
+              <span className="stage-detail-label">New State Root</span>
+              <span className="stage-detail-value done">
+                {proof.newRoot ?? "pending"}
+              </span>
             </div>
           </div>
         )}

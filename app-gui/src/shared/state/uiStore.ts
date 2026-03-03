@@ -121,6 +121,10 @@ export const useUiStore = create<UiStoreState>((set) => ({
       showNullifiedItems: !prev.showNullifiedItems,
     })),
   runProof: async ({ methodName, args, cpuCost }) => {
+    const verifyStepDelayMs = 650;
+    const commitTransitionDelayMs = 900;
+    const postDoneHoldMs = 2600;
+
     set((prev) => {
       if (
         prev.proof.status === "generating" ||
@@ -169,9 +173,9 @@ export const useUiStore = create<UiStoreState>((set) => ({
       };
     });
 
-    try {
-      for (const [index, arg] of args.entries()) {
-        await new Promise((resolve) => setTimeout(resolve, 180));
+      try {
+        for (const [index, arg] of args.entries()) {
+        await new Promise((resolve) => setTimeout(resolve, verifyStepDelayMs));
         set((prev) => ({
           ...prev,
           proof: {
@@ -214,7 +218,9 @@ export const useUiStore = create<UiStoreState>((set) => ({
         },
       }));
 
-      await new Promise((resolve) => setTimeout(resolve, 350));
+      await new Promise((resolve) =>
+        setTimeout(resolve, commitTransitionDelayMs),
+      );
       set((prev) => ({
         ...prev,
         proof: {
@@ -225,7 +231,9 @@ export const useUiStore = create<UiStoreState>((set) => ({
         },
       }));
 
-      await new Promise((resolve) => setTimeout(resolve, 350));
+      await new Promise((resolve) =>
+        setTimeout(resolve, commitTransitionDelayMs),
+      );
       set((prev) => ({
         ...prev,
         proof: {
@@ -236,7 +244,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
         },
       }));
 
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, 600));
 
       set((prev) => {
         const nextCpu = Math.max(
@@ -262,7 +270,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
         };
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1800));
+      await new Promise((resolve) => setTimeout(resolve, postDoneHoldMs));
       set((prev) => ({
         ...prev,
         proof: {

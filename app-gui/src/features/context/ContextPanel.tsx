@@ -336,6 +336,16 @@ export function ContextPanel({
     return "good";
   };
 
+  const displayThingPath = (filename: string) => {
+    const normalized = thingsDirPath.trim();
+    if (!normalized) return filename;
+    const thingsIndex = normalized.lastIndexOf("/.things");
+    if (thingsIndex >= 0) {
+      return `~${normalized.slice(thingsIndex)}/${filename}`;
+    }
+    return `${normalized}/${filename}`;
+  };
+
   const renderItemStats = (item: InventoryItem) => {
     if (item.type === "source" && item.charge !== undefined) {
       return (
@@ -489,14 +499,19 @@ export function ContextPanel({
       return <section className="context-panel">Item not found.</section>;
     return (
       <section className="context-panel">
-        <h2>
-          {item.emoji} {item.name}
-        </h2>
-        <p>Type: {item.type}</p>
-        <p>
-          Validity: <strong>{item.validity}</strong>
-        </p>
-        <p>{item.validity === "live" ? item.stateRoot : item.nullifier}</p>
+        <div className="context-title-row">
+          <h2>
+            {item.emoji} {item.name}
+          </h2>
+        </div>
+        <div
+          className={`context-hash-line ${item.validity === "live" ? "live" : "nullified"}`}
+        >
+          {item.validity === "live"
+            ? `${item.stateRoot} · ✓ live`
+            : `${item.nullifier ?? "nullified"} · ✗ nullified`}
+        </div>
+        <div className="context-path-line">{displayThingPath(item.name)}</div>
         {renderItemStats(item)}
         {(() => {
           const methods = itemMethod(item);
@@ -517,9 +532,6 @@ export function ContextPanel({
             </div>
           );
         })()}
-        <p className="path-line">
-          {thingsDirPath}/{item.name}
-        </p>
       </section>
     );
   }
@@ -532,10 +544,12 @@ export function ContextPanel({
 
   return (
     <section className="context-panel">
-      <h2>
-        {recipe.emoji} {recipe.name}
-      </h2>
-      <p>{recipe.desc}</p>
+      <div className="context-title-row">
+        <h2>
+          {recipe.emoji} {recipe.name}
+        </h2>
+      </div>
+      <div className="context-desc">{recipe.desc}</div>
       {renderMethodCard({
         methodId: `${recipe.id}:${recipe.verb}`,
         methodName: recipe.verb,
