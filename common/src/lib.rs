@@ -13,7 +13,8 @@ pub mod groth;
 pub mod payload;
 ///   B) "shrink":
 ///     first shrinks the given MainPod's proof, and then compresses it,
-///     returning the compressed proof (without public inputs)
+///     returning the compressed proof (without public inputs). this is a plonky2 specific optimization,
+///     see the plonky2 documentation for details: https://github.com/0xPARC/plonky2/blob/109d517d09c210ae4c2cee381d3e3fbc04aa3812/plonky2/src/plonk/proof.rs#L58
 pub mod shrink;
 
 #[cfg(not(feature = "groth16"))]
