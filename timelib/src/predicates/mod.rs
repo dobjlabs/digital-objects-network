@@ -18,21 +18,27 @@ mod tests {
     use pod2::{
         backends::plonky2::mock::mainpod::MockProver,
         frontend::MultiPodBuilder,
-        middleware::{Params, Statement, VDSet, Value, containers::Array},
+        middleware::{Params, Statement, VDSet, Value, containers::Array, hash_values},
     };
     use pod2utils::{macros::BuildContext, op, set, st_custom};
 
     use super::*;
-    use crate::test_utils::MockStateRoot;
 
-    /// Proves StateRoot for a mock GSR. Returns StateRoot statement.
-    fn prove_state_root(ctx: &mut BuildContext, gsr: &MockStateRoot) -> Statement {
+    /// Proves StateRoot for a GSR. Returns StateRoot statement.
+    fn prove_state_root(ctx: &mut BuildContext, sr: &txlib::StateRoot) -> Statement {
+        let tx_nullifiers_hash = hash_values(&[
+            Value::from(sr.transactions.clone()),
+            Value::from(sr.nullifiers.clone()),
+        ]);
+        let block_number_gsrs_hash =
+            hash_values(&[Value::from(sr.block_number), Value::from(sr.gsrs.clone())]);
+        let hash = sr.hash();
         st_custom!(
             ctx,
             StateRoot() = (
-                HashOf(gsr.tx_nullifiers_hash, gsr.txs, gsr.nullifiers),
-                HashOf(gsr.block_number_gsrs_hash, gsr.block_number, gsr.gsrs),
-                HashOf(gsr.hash, gsr.tx_nullifiers_hash, gsr.block_number_gsrs_hash)
+                HashOf(tx_nullifiers_hash, sr.transactions, sr.nullifiers),
+                HashOf(block_number_gsrs_hash, sr.block_number, sr.gsrs),
+                HashOf(hash, tx_nullifiers_hash, block_number_gsrs_hash)
             )
         )
         .unwrap()
@@ -154,27 +160,16 @@ mod tests {
             block_number: gsr2_block,
             transactions: gsr2_txs.clone(),
             nullifiers: gsr2_nullifiers.clone(),
-            gsrs: gsr2_gsrs.clone(),
+            gsrs: Array::new(vec![Value::from(gsr1_sr.hash())]),
         });
-        let gsr2_mock = MockStateRoot::new(
-            gsr2_block,
-            gsr2_txs.clone(),
-            gsr2_nullifiers.clone(),
-            gsr2_gsrs,
-        );
 
         // GSR₃: block 16, same transactions/nullifiers, gsrs array extended with GSR₂.
-        let gsr3_gsrs = Array::new(vec![
-            Value::from(gsr1_sr.hash()),
-            Value::from(gsr2_sr.hash()),
-        ]);
         let gsr3_sr = Arc::new(TxStateRoot {
             block_number: gsr3_block,
-            transactions: gsr2_txs.clone(),
-            nullifiers: gsr2_nullifiers.clone(),
-            gsrs: gsr3_gsrs.clone(),
+            transactions: gsr2_txs,
+            nullifiers: gsr2_nullifiers,
+            gsrs: Array::new(vec![Value::from(gsr1_sr.hash()), Value::from(gsr2_sr.hash())]),
         });
-        let gsr3_mock = MockStateRoot::new(gsr3_block, gsr2_txs, gsr2_nullifiers, gsr3_gsrs);
 
         // === POD 2: Unlock transaction, grounded in GSR₃ ===
         let unlock_pod = {
@@ -193,13 +188,13 @@ mod tests {
                     tx_builder.mutate(&mut ctx, unlocked_obj.clone(), locked_obj.clone());
 
                 // Prove state roots for GSR₂ and GSR₃.
-                let st_gsr2_root = prove_state_root(&mut ctx, &gsr2_mock);
-                let st_gsr3_root = prove_state_root(&mut ctx, &gsr3_mock);
+                let st_gsr2_root = prove_state_root(&mut ctx, &gsr2_sr);
+                let st_gsr3_root = prove_state_root(&mut ctx, &gsr3_sr);
 
                 // Prove tx_lock was recorded in GSR₂ (UnlockObject clause 2).
                 let st_gsr2_has_tx = ctx
                     .builder
-                    .priv_op(op!(SetContains(gsr2_mock.txs, tx_lock.dict())))
+                    .priv_op(op!(SetContains(gsr2_sr.transactions, tx_lock.dict())))
                     .unwrap();
                 let st_tx_in_gsr2 = st_custom!(
                     ctx,
@@ -214,7 +209,7 @@ mod tests {
                     // DistanceBetweenStateRoots: GSR₃ contains GSR₂ in its gsrs array at index 1.
                     let st_gsr3_has_gsr2 = time_ctx
                         .builder
-                        .priv_op(op!(ArrayContains(gsr3_mock.gsrs, 1_i64, gsr2_mock.hash)))
+                        .priv_op(op!(ArrayContains(gsr3_sr.gsrs, 1_i64, gsr2_sr.hash())))
                         .unwrap();
                     let st_prior_gsr = st_custom!(
                         time_ctx,
@@ -359,7 +354,6 @@ mod tests {
             nullifiers: set!(),
             gsrs: Array::new(vec![]),
         });
-        let gsr_mock = MockStateRoot::new(gsr_block, set!(), set!(), Array::new(vec![]));
 
         let execute_pod = {
             let mut builder = MultiPodBuilder::new(&params, &vd_set);
@@ -381,7 +375,7 @@ mod tests {
                     tx_builder.mutate(&mut ctx, executed_obj.clone(), option_obj.clone());
 
                 // Prove the grounding GSR's block number.
-                let st_gsr_root = prove_state_root(&mut ctx, &gsr_mock);
+                let st_gsr_root = prove_state_root(&mut ctx, &gsr_sr);
 
                 {
                     let time_mods = [Arc::clone(&time_module)];
