@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useUiStore } from "../../shared/state/uiStore";
 
 export function ProofRunnerPanel() {
@@ -6,7 +6,7 @@ export function ProofRunnerPanel() {
   const prevStatusRef = useRef(proof.status);
   const [idleFadeIn, setIdleFadeIn] = useState(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const prev = prevStatusRef.current;
     if (proof.status === "idle" && prev === "done") {
       setIdleFadeIn(true);
@@ -53,7 +53,7 @@ export function ProofRunnerPanel() {
         className={`cpu-panel proof-panel proof-panel-idle ${idleFadeIn ? "idle-fade-in" : ""}`}
       >
         <div className="idle-section idle-cpu">
-          <div className="proof-title cpu-title">CPU Usage</div>
+          <div className="proof-title cpu-title">CPU USAGE</div>
           <div className="dash-cpu-bars">
             {proof.stats.cpuHistory.map((value, index) => (
               <div
@@ -110,7 +110,9 @@ export function ProofRunnerPanel() {
     const stage2Done = proof.status === "done";
     const stage2Active = proof.status === "committing";
     const hashStep = proof.steps.find((step) => step.id === "hash");
-    const verifySteps = proof.steps.filter((step) => step.id.startsWith("verify-"));
+    const verifySteps = proof.steps.filter((step) =>
+      step.id.startsWith("verify-"),
+    );
     const nullifyStep = proof.steps.find((step) => step.id === "nullify");
     const commitStep = proof.steps.find((step) => step.id === "commit");
 
@@ -120,7 +122,9 @@ export function ProofRunnerPanel() {
     return (
       <section className="cpu-panel proof-panel proof-run-card">
         <div className="stage-header">
-          <span className={`stage-num ${stage1Done ? "done" : "active"}`}>1</span>
+          <span className={`stage-num ${stage1Done ? "done" : "active"}`}>
+            1
+          </span>
           <span className="stage-title">Generating Recursive Proof</span>
         </div>
 
@@ -137,7 +141,9 @@ export function ProofRunnerPanel() {
             {verifySteps.map((step) => (
               <div key={step.id} className="stage-detail-line">
                 <span className="stage-detail-label">Verifying</span>
-                <span className={`stage-detail-value ${statusClass(step.status)}`}>
+                <span
+                  className={`stage-detail-value ${statusClass(step.status)}`}
+                >
                   {step.detail}
                 </span>
               </div>
@@ -145,7 +151,9 @@ export function ProofRunnerPanel() {
           </div>
         )}
 
-        <div className={`stage-header ${stage2Active || stage2Done ? "" : "pending"}`}>
+        <div
+          className={`stage-header ${stage2Active || stage2Done ? "" : "pending"}`}
+        >
           <span
             className={`stage-num ${stage2Done ? "done" : stage2Active ? "active" : "pending"}`}
           >

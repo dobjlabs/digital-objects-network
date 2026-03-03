@@ -7,7 +7,15 @@ import { RecipeGrid } from "./features/recipes/RecipeGrid";
 import { getThingsDir, openThingsDir } from "./shared/api/tauriClient";
 import { mockFeed, mockItems, mockRecipes } from "./shared/data/mockData";
 import { useUiStore } from "./shared/state/uiStore";
-import "./App.css";
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./styles/layout.css";
+import "./styles/shared.css";
+import "./features/inventory/InventoryPanel.css";
+import "./features/context/ContextPanel.css";
+import "./features/proof-runner/ProofRunnerPanel.css";
+import "./features/recipes/RecipeGrid.css";
+import "./features/feed/FeedPanel.css";
 
 function App() {
   const [thingsDirPath, setThingsDirPath] = useState("loading...");

@@ -1,0 +1,34 @@
+.recipes-panel {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.recipe-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: 6px;
+  padding: 10px;
+  overflow: auto;
+  background: var(--bg);
+  align-content: start;
+  min-height: 0;
+}
+
+.recipe-cell {
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  color: var(--text-bright);
+  aspect-ratio: 1;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.recipe-cell.active {
+  border-color: var(--good);
+  background: #162210;
+}
