@@ -47,7 +47,6 @@ export function ProofRunnerPanel() {
   };
 
   if (proof.status === "idle") {
-    const maxCpu = Math.max(...proof.stats.cpuHistory, 1);
     return (
       <section
         className={`cpu-panel proof-panel proof-panel-idle ${idleFadeIn ? "idle-fade-in" : ""}`}
@@ -60,7 +59,7 @@ export function ProofRunnerPanel() {
                 key={`${index}-${value}`}
                 className="dash-cpu-bar"
                 style={{
-                  height: `${Math.max(4, Math.round((value / maxCpu) * 100))}%`,
+                  height: `${Math.max(4, Math.min(100, Math.round(value)))}%`,
                 }}
               />
             ))}

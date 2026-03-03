@@ -63,8 +63,8 @@ export const useUiStore = create<UiStoreState>((set) => ({
     newRoot: null,
     error: null,
     stats: {
-      cpuHistory: [4, 8, 12, 8, 22, 18, 38, 42, 60, 55, 48, 52, 65, 58, 70, 62],
-      totalCpuSecs: 47 * 60 + 38,
+      cpuHistory: Array.from({ length: 24 }, () => 0),
+      totalCpuSecs: 0,
       roots: [
         { hash: "0x1b89...cc41", state: "live" },
         { hash: "0x7c44...a203", state: "live" },
