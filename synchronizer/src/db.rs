@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use alloy::primitives::B256;
 use anyhow::{Context, Result};
@@ -19,6 +22,7 @@ pub struct DerivedState {
     pub transactions: HashSet<Hash>,
     pub nullifiers: HashSet<Hash>,
     pub global_state_roots: Vec<Hash>,
+    pub gsr_block_numbers: HashMap<Hash, i64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -74,12 +78,14 @@ impl Db {
 
         // Sort GSR entries by block number to get ordered history
         gsr_entries.sort_by_key(|(block, _)| *block);
+        let gsr_block_numbers = gsr_entries.iter().map(|&(b, h)| (h, b as i64)).collect();
         let global_state_roots = gsr_entries.into_iter().map(|(_, h)| h).collect();
 
         Ok(DerivedState {
             transactions,
             nullifiers,
             global_state_roots,
+            gsr_block_numbers,
         })
     }
 

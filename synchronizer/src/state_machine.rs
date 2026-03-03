@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
 };
 
@@ -7,6 +7,10 @@ use alloy::primitives::B256;
 use anyhow::{anyhow, Result};
 use pod2::middleware::Hash;
 use tracing::{info, warn};
+
+/// The maximum age of a GSR used as grounding for a transaction.
+/// At one block per 12 seconds, this is one hour.
+const MAX_GSR_AGE_BLOCKS: i64 = 300;
 
 use txlib::StateRoot;
 
@@ -22,6 +26,9 @@ struct InnerState {
     /// Ordered history of Global State Roots, one per processed block.
     /// Blobs may reference any GSR in this history, not just the latest.
     global_state_roots: Vec<Hash>,
+    /// Maps each known GSR hash to the EL block number at which it was produced.
+    /// Used to enforce the maximum GSR age limit on incoming blobs.
+    gsr_block_numbers: HashMap<Hash, i64>,
 }
 
 /// Domain logic for the synchronizer: proof verification, state validation, and persistence.
@@ -54,12 +61,14 @@ impl StateMachine {
             transactions,
             nullifiers,
             global_state_roots,
+            gsr_block_numbers,
         } = db.load_state()?;
         Ok(Self {
             state: RwLock::new(InnerState {
                 transactions,
                 nullifiers,
                 global_state_roots,
+                gsr_block_numbers,
             }),
             db,
             proof_parser,
@@ -84,18 +93,30 @@ impl StateMachine {
             return Ok(());
         };
 
-        // A payload is only valid if it references a GSR we have previously computed.
-        // We accept any historical GSR, not just the latest, to tolerate blobs that were
-        // proven against a state root that has since been superseded.
+        // A payload is only valid if it references a GSR we have previously computed,
+        // and that GSR must be no more than MAX_GSR_AGE_BLOCKS old.
         {
             let state = self.read_state()?;
-            if !state.global_state_roots.contains(&payload.state_root_hash) {
+            let Some(&gsr_block) = state.gsr_block_numbers.get(&payload.state_root_hash) else {
                 warn!(
                     slot,
                     block_number,
                     "Blob proof state_root_hash not found in known GSR history; rejecting"
                 );
                 return Ok(());
+            };
+            if let Some(current_block) = block_number {
+                let age = current_block as i64 - gsr_block;
+                if age > MAX_GSR_AGE_BLOCKS {
+                    warn!(
+                        slot,
+                        block_number,
+                        gsr_block,
+                        age,
+                        "Blob proof state_root_hash is too old; rejecting"
+                    );
+                    return Ok(());
+                }
             }
         }
 
@@ -406,6 +427,44 @@ mod tests {
 
         let (txns, _, _) = sm.state_snapshot().unwrap();
         assert!(txns.is_empty());
+    }
+
+    #[test]
+    fn test_stale_gsr_rejected() {
+        let (sm, _dir) = make_sm();
+        sm.advance_block(0).unwrap();
+        let gsr0 = sm.state_snapshot().unwrap().2[0];
+
+        // Advance 301 more blocks so gsr0 is 301 blocks old when the blob arrives.
+        for i in 1..=301 {
+            sm.advance_block(i).unwrap();
+        }
+
+        let tx = unique_hash(1);
+        sm.process_blob(&mock_txn_bytes(tx, &[], gsr0), 0, Some(301))
+            .unwrap();
+
+        let (txns, _, _) = sm.state_snapshot().unwrap();
+        assert!(txns.is_empty());
+    }
+
+    #[test]
+    fn test_gsr_at_limit_accepted() {
+        let (sm, _dir) = make_sm();
+        sm.advance_block(0).unwrap();
+        let gsr0 = sm.state_snapshot().unwrap().2[0];
+
+        // Advance 300 more blocks so gsr0 is exactly 300 blocks old — at the limit.
+        for i in 1..=300 {
+            sm.advance_block(i).unwrap();
+        }
+
+        let tx = unique_hash(1);
+        sm.process_blob(&mock_txn_bytes(tx, &[], gsr0), 0, Some(300))
+            .unwrap();
+
+        let (txns, _, _) = sm.state_snapshot().unwrap();
+        assert!(txns.contains(&tx));
     }
 
     #[test]

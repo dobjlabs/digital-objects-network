@@ -1,0 +1,67 @@
+use module 0xTXLIB_MODULE_HASH as txlib
+
+// Ensures that an object is locked for a minimum of `duration` blocks
+LockObject(new_state, old_state, tx_after, tx_before, duration) = AND(
+  DictInsert(new_state, old_state, "locked", duration)
+  txlib::TxMutated(tx_after, tx_before, new_state, old_state)
+)
+
+BlockNumberForStateRoot(state_root, block_number,
+    private: txns_root, nullifiers_root, gsrs_root) = AND(
+  txlib::StateRoot(state_root, block_number, txns_root, nullifiers_root, gsrs_root)
+)
+
+PriorStateRootInStateRoot(state_root, prior_state_root,
+    private: block_number, txns_root, nullifiers_root, gsrs_root, prior_idx) = AND(
+  txlib::StateRoot(state_root, block_number, txns_root, nullifiers_root, gsrs_root)
+  ArrayContains(gsrs_root, prior_idx, prior_state_root)
+)
+
+DistanceBetweenStateRoots(state_root, prior_state_root, distance,
+    private: block_number, prior_block_number) = AND(
+  PriorStateRootInStateRoot(state_root, prior_state_root)
+  BlockNumberForStateRoot(state_root, block_number)
+  BlockNumberForStateRoot(prior_state_root, prior_block_number)
+  SumOf(block_number, prior_block_number, distance)
+)
+
+// Holds iff `state` is a valid expiring option with a timeout_block deadline.
+// timeout_block is a public arg so the caller can use it in further constraints
+// without private-arg unification issues across sub-predicate boundaries.
+// Note: timeout_block has ~300-block fuzz due to the synchronizer's max-age window.
+ExpiringOption(state, timeout_block, private: key, value) = AND(
+  DictContains(state, "key", key)
+  DictContains(state, "value", value)
+  DictContains(state, "timeout_block", timeout_block)
+)
+
+// Exercises an expiring option in a single transaction. The grounding GSR's block
+// number must be <= timeout_block. The synchronizer enforces the grounding GSR is
+// at most one window (~300 blocks) old, so this is best understood as "times out
+// at block N" with ~300-block fuzz rather than a precise wall-clock deadline.
+ExecuteOption(new_state, old_state, tx_after, tx_before,
+    private: block_number, timeout_block, state_root) = AND(
+  ExpiringOption(old_state, timeout_block)
+  DictContains(tx_before, "state_root_hash", state_root)
+  BlockNumberForStateRoot(state_root, block_number)
+  GtEq(timeout_block, block_number)
+  DictDelete(new_state, old_state, "timeout_block")
+  txlib::TxMutated(tx_after, tx_before, new_state, old_state)
+)
+
+UnlockObject(new_state, old_state, tx_after, tx_before,
+    private: state_root, prior_state_root, distance, old_tx) = AND(
+  DictContains(tx_before, "state_root_hash", state_root)
+  // Was the old transaction present in the prior state root?
+  txlib::TxInStateRoot(prior_state_root, old_tx)
+  // Was the old object state established in the old transaction?
+  SetContains(old_tx.live, old_state)
+  // How long ago was the old state root, relative to our grounding
+  // state root?
+  DistanceBetweenStateRoots(state_root, prior_state_root, distance)
+  // Is this long enough for the object to be unlocked?
+  GtEq(distance, old_state.locked)
+  // Unlock:
+  DictDelete(new_state, old_state, "locked")
+  txlib::TxMutated(tx_after, tx_before, new_state, old_state)
+)
