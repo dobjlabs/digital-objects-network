@@ -21,6 +21,7 @@ export function ContextPanel({
 }: ContextPanelProps) {
   const [argBindings, setArgBindings] = useState<Record<string, string>>({});
   const [hoverArgKey, setHoverArgKey] = useState<string | null>(null);
+  const [argErrors, setArgErrors] = useState<Record<string, string>>({});
   const selectionKey =
     selection.kind === "item"
       ? `item:${selection.itemId}`
@@ -30,10 +31,35 @@ export function ContextPanel({
 
   useEffect(() => {
     setArgBindings({});
+    setArgErrors({});
   }, [selectionKey]);
 
   const argKey = (methodName: string, arg: string, index: number) =>
     `${selection.kind}:${methodName}:${arg}:${index}`;
+
+  const normalizeThingName = (value: string) =>
+    value
+      .replace(/\.dobj$/i, "")
+      .trim()
+      .toLowerCase();
+
+  const parseDropPayload = (raw: string): { itemId?: string; name?: string } => {
+    try {
+      const parsed = JSON.parse(raw) as { itemId?: string; name?: string };
+      return parsed;
+    } catch {
+      return { name: raw };
+    }
+  };
+
+  const isArgCompatible = (arg: string, droppedName: string) => {
+    const expected = normalizeThingName(arg);
+    const actual = normalizeThingName(droppedName);
+
+    if (!expected || !actual) return false;
+    if (expected.startsWith("0x")) return false;
+    return expected === actual;
+  };
 
   const handleDropArg = (
     event: DragEvent<HTMLDivElement>,
@@ -49,16 +75,24 @@ export function ContextPanel({
       event.dataTransfer.getData("text");
     if (!raw) return;
 
-    let name = raw;
-    try {
-      const parsed = JSON.parse(raw) as { name?: string };
-      if (parsed.name) name = parsed.name;
-    } catch {
-      // plain text payload fallback
-    }
+    const parsed = parseDropPayload(raw);
+    const name = parsed.name ?? raw;
 
     const key = argKey(methodName, arg, index);
+    if (!isArgCompatible(arg, name)) {
+      setArgErrors((prev) => ({
+        ...prev,
+        [key]: `Expected ${arg} but got ${name}`,
+      }));
+      return;
+    }
+
     setArgBindings((prev) => ({ ...prev, [key]: name || arg }));
+    setArgErrors((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
     setHoverArgKey(null);
   };
 
@@ -84,6 +118,7 @@ export function ContextPanel({
                 const key = argKey(config.methodName, arg, index);
                 const bound = argBindings[key];
                 const isDropActive = hoverArgKey === key;
+                const err = argErrors[key];
                 return (
                   <div
                     key={`${arg}-${index}`}
@@ -103,7 +138,7 @@ export function ContextPanel({
                   >
                     <span className="method-arg-label">{arg}</span>
                     <div
-                      className={`method-arg-placeholder ${bound ? "filled" : "missing"}`}
+                      className={`method-arg-placeholder ${bound ? "filled" : "missing"} ${err ? "error" : ""}`}
                       title={bound ? "Bound from inventory" : "Drop from inventory"}
                     >
                       {bound ?? (isDropActive ? "release to drop" : "drag .dobj file here")}
@@ -123,6 +158,7 @@ export function ContextPanel({
                         clear
                       </button>
                     )}
+                    {err && <div className="method-arg-error">{err}</div>}
                   </div>
                 );
               })}
