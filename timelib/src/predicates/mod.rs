@@ -18,31 +18,12 @@ mod tests {
     use pod2::{
         backends::plonky2::mock::mainpod::MockProver,
         frontend::MultiPodBuilder,
-        middleware::{Params, Statement, VDSet, Value, containers::Array, hash_values},
+        middleware::{Params, VDSet, Value, containers::Array},
     };
-    use pod2utils::{macros::BuildContext, op, set, st_custom};
+    use pod2utils::{macros::BuildContext, set};
 
     use super::*;
-
-    /// Proves StateRoot for a GSR. Returns StateRoot statement.
-    fn prove_state_root(ctx: &mut BuildContext, sr: &txlib::StateRoot) -> Statement {
-        let tx_nullifiers_hash = hash_values(&[
-            Value::from(sr.transactions.clone()),
-            Value::from(sr.nullifiers.clone()),
-        ]);
-        let block_number_gsrs_hash =
-            hash_values(&[Value::from(sr.block_number), Value::from(sr.gsrs.clone())]);
-        let hash = sr.hash();
-        st_custom!(
-            ctx,
-            StateRoot() = (
-                HashOf(tx_nullifiers_hash, sr.transactions, sr.nullifiers),
-                HashOf(block_number_gsrs_hash, sr.block_number, sr.gsrs),
-                HashOf(hash, tx_nullifiers_hash, block_number_gsrs_hash)
-            )
-        )
-        .unwrap()
-    }
+    use crate::tx_utils;
 
     #[test]
     fn test_time_example_predicates_exist() {
@@ -90,17 +71,11 @@ mod tests {
         let duration = 10_i64;
         let gsr2_block = 5_i64;
         let gsr3_block = gsr2_block + duration + 1; // 16; distance from gsr2 is 11
-        let distance = gsr3_block - gsr2_block;
 
         let params = Params::default();
         let vd_set = VDSet::new(&[]);
 
-        // Object states: unlocked_obj gains a "locked" field to become locked_obj.
         let unlocked_obj = Object::new(HashMap::new());
-        let mut locked_obj = unlocked_obj.clone();
-        locked_obj
-            .app_layer
-            .insert("locked".to_string(), Value::from(duration));
 
         // GSR₁: block 0, empty state.
         let gsr1_sr = Arc::new(TxStateRoot {
@@ -111,35 +86,22 @@ mod tests {
         });
 
         // === POD 1: Lock transaction, grounded in GSR₁ ===
-        let (lock_pod, tx_lock) = {
+        let (lock_pod, tx_lock, locked_obj) = {
             let mut builder = MultiPodBuilder::new(&params, &vd_set);
-            let tx_lock = {
-                let txlib_mods = [Arc::clone(&txlib_module)];
-                let mut ctx = BuildContext::new(&mut builder, &txlib_mods);
-
+            let (tx_lock, locked_obj) = {
+                let mods = [Arc::clone(&txlib_module), Arc::clone(&time_module)];
+                let mut ctx = BuildContext::new(&mut builder, &mods);
                 let mut tx_builder = TxBuilder::new(&mut ctx, &[], gsr1_sr.clone());
-                // Insert unlocked_obj then immediately mutate it to locked_obj.
                 tx_builder.insert(&mut ctx, unlocked_obj.clone());
-                let st_tx_mutated =
-                    tx_builder.mutate(&mut ctx, locked_obj.clone(), unlocked_obj.clone());
-
-                // Prove LockObject using the time module.
-                {
-                    let time_mods = [Arc::clone(&time_module)];
-                    let time_ctx = BuildContext::new(&mut *ctx.builder, &time_mods);
-                    st_custom!(
-                        time_ctx,
-                        LockObject() = (
-                            DictInsert(locked_obj.dict(), unlocked_obj.dict(), "locked", duration),
-                            st_tx_mutated.clone()
-                        )
-                    )
-                    .unwrap();
-                }
-
+                let locked_obj = tx_utils::lock_object(
+                    &mut ctx,
+                    &mut tx_builder,
+                    unlocked_obj.clone(),
+                    duration,
+                );
                 let (st_finalized, tx_lock) = tx_builder.finalize(&mut ctx);
                 ctx.builder.reveal(&st_finalized).unwrap();
-                tx_lock
+                (tx_lock, locked_obj)
             };
             let pod = builder
                 .solve()
@@ -148,14 +110,13 @@ mod tests {
                 .unwrap()
                 .output_pod()
                 .clone();
-            (pod, tx_lock)
+            (pod, tx_lock, locked_obj)
         };
 
         // GSR₂: block 5, contains the lock transaction.
         let mut gsr2_txs = set!();
         gsr2_txs.insert(&Value::from(tx_lock.dict())).unwrap();
         let gsr2_nullifiers = tx_lock.nullifiers.clone();
-        let gsr2_gsrs = Array::new(vec![Value::from(gsr1_sr.hash())]);
         let gsr2_sr = Arc::new(TxStateRoot {
             block_number: gsr2_block,
             transactions: gsr2_txs.clone(),
@@ -168,136 +129,28 @@ mod tests {
             block_number: gsr3_block,
             transactions: gsr2_txs,
             nullifiers: gsr2_nullifiers,
-            gsrs: Array::new(vec![Value::from(gsr1_sr.hash()), Value::from(gsr2_sr.hash())]),
+            gsrs: Array::new(vec![
+                Value::from(gsr1_sr.hash()),
+                Value::from(gsr2_sr.hash()),
+            ]),
         });
 
         // === POD 2: Unlock transaction, grounded in GSR₃ ===
         let unlock_pod = {
             let mut builder = MultiPodBuilder::new(&params, &vd_set);
             {
-                let txlib_mods = [Arc::clone(&txlib_module)];
-                let mut ctx = BuildContext::new(&mut builder, &txlib_mods);
-
-                // locked_obj arrived via tx_lock; TxBuilder proves it is grounded in GSR₃.
+                let mods = [Arc::clone(&txlib_module), Arc::clone(&time_module)];
+                let mut ctx = BuildContext::new(&mut builder, &mods);
                 let inputs = [(locked_obj.clone(), tx_lock.clone())];
                 let mut tx_builder = TxBuilder::new(&mut ctx, &inputs, gsr3_sr.clone());
-
-                // Capture tx_before before the mutation (needed for UnlockObject).
-                let tx_before = tx_builder.tx.dict();
-                let st_tx_mutated =
-                    tx_builder.mutate(&mut ctx, unlocked_obj.clone(), locked_obj.clone());
-
-                // Prove state roots for GSR₂ and GSR₃.
-                let st_gsr2_root = prove_state_root(&mut ctx, &gsr2_sr);
-                let st_gsr3_root = prove_state_root(&mut ctx, &gsr3_sr);
-
-                // Prove tx_lock was recorded in GSR₂ (UnlockObject clause 2).
-                let st_gsr2_has_tx = ctx
-                    .builder
-                    .priv_op(op!(SetContains(gsr2_sr.transactions, tx_lock.dict())))
-                    .unwrap();
-                let st_tx_in_gsr2 = st_custom!(
-                    ctx,
-                    TxInStateRoot() = (st_gsr2_root.clone(), st_gsr2_has_tx)
-                )
-                .unwrap();
-
-                {
-                    let time_mods = [Arc::clone(&time_module)];
-                    let time_ctx = BuildContext::new(&mut *ctx.builder, &time_mods);
-
-                    // DistanceBetweenStateRoots: GSR₃ contains GSR₂ in its gsrs array at index 1.
-                    let st_gsr3_has_gsr2 = time_ctx
-                        .builder
-                        .priv_op(op!(ArrayContains(gsr3_sr.gsrs, 1_i64, gsr2_sr.hash())))
-                        .unwrap();
-                    let st_prior_gsr = st_custom!(
-                        time_ctx,
-                        PriorStateRootInStateRoot() = (st_gsr3_root.clone(), st_gsr3_has_gsr2)
-                    )
-                    .unwrap();
-                    let st_gsr3_block_num = st_custom!(
-                        time_ctx,
-                        BlockNumberForStateRoot(block_number = gsr3_block) = (st_gsr3_root)
-                    )
-                    .unwrap();
-                    let st_gsr2_block_num = st_custom!(
-                        time_ctx,
-                        BlockNumberForStateRoot(block_number = gsr2_block) = (st_gsr2_root)
-                    )
-                    .unwrap();
-                    let st_distance = st_custom!(
-                        time_ctx,
-                        DistanceBetweenStateRoots(distance = distance) = (
-                            st_prior_gsr,
-                            st_gsr3_block_num,
-                            st_gsr2_block_num,
-                            SumOf(gsr3_block, gsr2_block, distance)
-                        )
-                    )
-                    .unwrap();
-
-                    // Remaining UnlockObject clause statements.
-                    let st_tx_before_root = time_ctx
-                        .builder
-                        .priv_op(op!(DictContains(
-                            tx_before,
-                            "state_root_hash",
-                            gsr3_sr.hash()
-                        )))
-                        .unwrap();
-                    let st_locked_in_tx = time_ctx
-                        .builder
-                        .priv_op(op!(SetContains(
-                            (&tx_lock.dict(), "live"),
-                            locked_obj.dict()
-                        )))
-                        .unwrap();
-                    let st_gt_eq = time_ctx
-                        .builder
-                        .priv_op(op!(GtEq(distance, (&locked_obj.dict(), "locked"))))
-                        .unwrap();
-                    let st_dict_delete = time_ctx
-                        .builder
-                        .priv_op(op!(DictDelete(
-                            unlocked_obj.dict(),
-                            locked_obj.dict(),
-                            "locked"
-                        )))
-                        .unwrap();
-
-                    // UnlockObject has 7 AND-clauses; use apply_predicate_with.
-                    struct ApplyErr(pod2::frontend::MultiPodError);
-                    impl From<pod2::lang::MultiOperationError> for ApplyErr {
-                        fn from(e: pod2::lang::MultiOperationError) -> Self {
-                            ApplyErr(pod2::frontend::MultiPodError::Custom(e.to_string()))
-                        }
-                    }
-                    time_module
-                        .apply_predicate_with(
-                            "UnlockObject",
-                            vec![
-                                st_tx_before_root,
-                                st_tx_in_gsr2,
-                                st_locked_in_tx,
-                                st_distance,
-                                st_gt_eq,
-                                st_dict_delete,
-                                st_tx_mutated.clone(),
-                            ],
-                            false,
-                            |is_public, op| -> Result<Statement, ApplyErr> {
-                                if is_public {
-                                    time_ctx.builder.pub_op(op).map_err(ApplyErr)
-                                } else {
-                                    time_ctx.builder.priv_op(op).map_err(ApplyErr)
-                                }
-                            },
-                        )
-                        .map_err(|ApplyErr(e)| e)
-                        .unwrap();
-                }
-
+                tx_utils::unlock_object(
+                    &mut ctx,
+                    &time_module,
+                    &mut tx_builder,
+                    locked_obj.clone(),
+                    &tx_lock,
+                    &gsr2_sr,
+                );
                 let (st_finalized, _) = tx_builder.finalize(&mut ctx);
                 ctx.builder.reveal(&st_finalized).unwrap();
             }
@@ -343,9 +196,6 @@ mod tests {
             ("value".to_string(), Value::from(obj_value)),
             ("timeout_block".to_string(), Value::from(timeout_block)),
         ]));
-        // executed_obj: timeout_block removed
-        let mut executed_obj = option_obj.clone();
-        executed_obj.app_layer.remove("timeout_block");
 
         // Grounding GSR: block 400, empty (no prior transactions).
         let gsr_sr = Arc::new(TxStateRoot {
@@ -358,98 +208,16 @@ mod tests {
         let execute_pod = {
             let mut builder = MultiPodBuilder::new(&params, &vd_set);
             {
-                let txlib_mods = [Arc::clone(&txlib_module)];
-                let mut ctx = BuildContext::new(&mut builder, &txlib_mods);
-
+                let mods = [Arc::clone(&txlib_module), Arc::clone(&time_module)];
+                let mut ctx = BuildContext::new(&mut builder, &mods);
                 let mut tx_builder = TxBuilder::new(&mut ctx, &[], gsr_sr.clone());
-                // Insert option_obj then mutate to executed_obj (removes timeout_block).
-                // Materialise DictContains(option_obj, "key", ...) before mutate so that
-                // the HashOf inside TxObjectStateNullified doesn't forward-reference it.
-                let _ = ctx
-                    .builder
-                    .priv_op(op!(DictContains(option_obj.dict(), "key", option_obj.key)))
-                    .unwrap();
                 tx_builder.insert(&mut ctx, option_obj.clone());
-                let tx_before = tx_builder.tx.dict();
-                let st_tx_mutated =
-                    tx_builder.mutate(&mut ctx, executed_obj.clone(), option_obj.clone());
-
-                // Prove the grounding GSR's block number.
-                let st_gsr_root = prove_state_root(&mut ctx, &gsr_sr);
-
-                {
-                    let time_mods = [Arc::clone(&time_module)];
-                    let time_ctx = BuildContext::new(&mut *ctx.builder, &time_mods);
-
-                    // Prove ExpiringOption structure.
-                    let st_expiring = st_custom!(
-                        time_ctx,
-                        ExpiringOption(timeout_block = timeout_block) = (
-                            DictContains(option_obj.dict(), "key", option_obj.key),
-                            DictContains(option_obj.dict(), "value", obj_value),
-                            DictContains(option_obj.dict(), "timeout_block", timeout_block)
-                        )
-                    )
-                    .unwrap();
-
-                    // Prove grounding GSR block number and the timeout constraint.
-                    let st_state_root_hash = time_ctx
-                        .builder
-                        .priv_op(op!(DictContains(
-                            tx_before,
-                            "state_root_hash",
-                            gsr_sr.hash()
-                        )))
-                        .unwrap();
-                    let st_block_num = st_custom!(
-                        time_ctx,
-                        BlockNumberForStateRoot(block_number = gsr_block) = (st_gsr_root)
-                    )
-                    .unwrap();
-                    let st_gt_eq = time_ctx
-                        .builder
-                        .priv_op(op!(GtEq(timeout_block, gsr_block)))
-                        .unwrap();
-                    let st_dict_delete = time_ctx
-                        .builder
-                        .priv_op(op!(DictDelete(
-                            executed_obj.dict(),
-                            option_obj.dict(),
-                            "timeout_block"
-                        )))
-                        .unwrap();
-
-                    // ExecuteOption has 6 AND-clauses; use apply_predicate_with.
-                    struct ApplyErr(pod2::frontend::MultiPodError);
-                    impl From<pod2::lang::MultiOperationError> for ApplyErr {
-                        fn from(e: pod2::lang::MultiOperationError) -> Self {
-                            ApplyErr(pod2::frontend::MultiPodError::Custom(e.to_string()))
-                        }
-                    }
-                    time_module
-                        .apply_predicate_with(
-                            "ExecuteOption",
-                            vec![
-                                st_expiring,
-                                st_state_root_hash,
-                                st_block_num,
-                                st_gt_eq,
-                                st_dict_delete,
-                                st_tx_mutated.clone(),
-                            ],
-                            false,
-                            |is_public, op| -> Result<Statement, ApplyErr> {
-                                if is_public {
-                                    time_ctx.builder.pub_op(op).map_err(ApplyErr)
-                                } else {
-                                    time_ctx.builder.priv_op(op).map_err(ApplyErr)
-                                }
-                            },
-                        )
-                        .map_err(|ApplyErr(e)| e)
-                        .unwrap();
-                }
-
+                tx_utils::execute_option(
+                    &mut ctx,
+                    &time_module,
+                    &mut tx_builder,
+                    option_obj.clone(),
+                );
                 let (st_finalized, _) = tx_builder.finalize(&mut ctx);
                 ctx.builder.reveal(&st_finalized).unwrap();
             }
