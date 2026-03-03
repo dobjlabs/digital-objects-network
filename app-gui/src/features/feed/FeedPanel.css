@@ -280,9 +280,13 @@
 }
 
 .proof-pill.nullified-tag {
-  opacity: 0.6;
   text-decoration: line-through;
   text-decoration-color: var(--danger);
+}
+
+.proof-pill.nullified-tag > .check,
+.proof-pill.nullified-tag > span:not(.proof-tooltip) {
+  opacity: 0.6;
 }
 
 .proof-note {
@@ -325,8 +329,12 @@
   font-size: 9px;
   padding: 3px 7px;
   white-space: nowrap;
-  z-index: 10;
+  z-index: 100;
   pointer-events: none;
+  opacity: 1;
+  text-decoration: none;
+  text-decoration-color: transparent;
+  filter: none;
 }
 
 @keyframes proof-pulse {
@@ -560,4 +568,3 @@
 .feed-compose-panel .feed-proof-row {
   margin: 0;
 }
-
