@@ -1,0 +1,46 @@
+use module 0xTXLIB_MODULE_HASH as txlib
+use module 0xTIMELIB_MODULE_HASH as time
+
+// A creature that must be fed within MAX_HUNGER_BLOCKS (300) of its last feeding.
+//
+// State fields: {key, work, blueprint: "creature", timeout_block: N}
+//   timeout_block = block_number_of_last_feed + MAX_HUNGER_BLOCKS
+//
+// Death is implicit: once timeout_block has passed, no valid transition can be
+// constructed. The creature is Schrödinger's cat: privately known to be dead by
+// its owner, but not provably dead to anyone else.
+
+// Extracts the grounding GSR's block number from a transaction.
+CurrentBlockNumber(block_number, tx_before,
+    private: state_root) = AND(
+  DictContains(tx_before, "state_root_hash", state_root)
+  time::BlockNumberForStateRoot(state_root, block_number)
+)
+
+// Creates a new creature. `state0` is a template dict the prover supplies with
+// {blueprint: "creature"}; timeout_block is verified as current_block + 300.
+NewCreature(state, tx, tx0,
+    private: state0, block_number, timeout_block) = AND(
+  DictContains(state0, "blueprint", "creature")
+  CurrentBlockNumber(block_number, tx0)
+  SumOf(timeout_block, block_number, 300)
+  DictInsert(state, state0, "timeout_block", timeout_block)
+  txlib::TxInserted(tx, tx0, state)
+)
+
+// Feeds the creature, renewing its timeout_block. Proves the creature is valid
+// (IsCreature) and not yet expired. Verifies new_timeout = current_block + 300.
+Feed(state, state0, tx, tx0,
+    private: block_number, new_timeout) = AND(
+  IsCreature(state0)
+  time::NotExpired(state0, block_number, tx0)
+  SumOf(new_timeout, block_number, 300)
+  DictUpdate(state, state0, "timeout_block", new_timeout)
+  txlib::TxMutated(tx, tx0, state, state0)
+)
+
+// Top-level: a creature is any state produced by a valid transition.
+IsCreature(state, private: tx, tx0, state0, block_number, timeout_block, new_timeout) = OR(
+  NewCreature(state, tx, tx0)
+  Feed(state, state0, tx, tx0)
+)

@@ -1,9 +1,9 @@
 //! High-level utilities for building timelib-aware transactions.
 //!
 //! These functions wrap the low-level POD2 statement plumbing for timelib
-//! predicates (LockObject, UnlockObject, ExecuteOption). Callers should
-//! construct a [`BuildContext`] with **both** the txlib and timelib modules
-//! loaded, then pass it to every function here — no context switching needed.
+//! predicates (LockObject, UnlockObject, NotExpired, ExecuteOption). Callers
+//! should construct a [`BuildContext`] with **both** the txlib and timelib
+//! modules loaded, then pass it to every function here.
 //!
 //! ```ignore
 //! let mods = [Arc::clone(&txlib_module), Arc::clone(&time_module)];
@@ -13,10 +13,12 @@
 //! let (st, tx) = tx_builder.finalize(&mut ctx);
 //! ```
 
+use std::sync::Arc;
+
 use pod2::{
     frontend::MultiPodError,
     lang::{Module, MultiOperationError},
-    middleware::{Statement, Value, hash_values},
+    middleware::{Statement, Value, containers::Dictionary, hash_values},
 };
 use pod2utils::{macros::BuildContext, op, st_custom};
 use txlib::{Object, StateRoot, Tx, TxBuilder};
@@ -38,6 +40,55 @@ pub fn prove_state_root(ctx: &mut BuildContext, sr: &StateRoot) -> Statement {
             HashOf(block_number_gsrs_hash, sr.block_number, sr.gsrs),
             HashOf(hash, tx_nullifiers_hash, block_number_gsrs_hash)
         )
+    )
+    .unwrap()
+}
+
+/// Proves `NotExpired(state, grounding_gsr.block_number, tx_before)`:
+/// the grounding GSR's block number is ≤ `state`'s `timeout_block` field.
+///
+/// `state` must have a `"timeout_block"` entry in `app_layer`. Returns the
+/// `NotExpired` statement.
+pub fn not_expired(
+    ctx: &mut BuildContext,
+    grounding_gsr: &StateRoot,
+    tx_before: Dictionary,
+    state: &Object,
+) -> Statement {
+    let timeout_val = state
+        .app_layer
+        .get("timeout_block")
+        .cloned()
+        .expect("state missing timeout_block field");
+    let gsr_hash = grounding_gsr.hash();
+    let gsr_block = grounding_gsr.block_number;
+
+    let st_timeout_block = ctx
+        .builder
+        .priv_op(op!(DictContains(
+            state.dict(),
+            "timeout_block",
+            timeout_val.clone()
+        )))
+        .unwrap();
+    let st_gsr = prove_state_root(ctx, grounding_gsr);
+    let st_block_num = st_custom!(
+        ctx,
+        BlockNumberForStateRoot(block_number = gsr_block) = (st_gsr)
+    )
+    .unwrap();
+    let st_state_root_hash = ctx
+        .builder
+        .priv_op(op!(DictContains(tx_before, "state_root_hash", gsr_hash)))
+        .unwrap();
+    let st_gt_eq = ctx
+        .builder
+        .priv_op(op!(GtEq(timeout_val, gsr_block)))
+        .unwrap();
+
+    st_custom!(
+        ctx,
+        NotExpired() = (st_timeout_block, st_state_root_hash, st_block_num, st_gt_eq)
     )
     .unwrap()
 }
@@ -78,7 +129,7 @@ pub fn unlock_object(
     tx_when_locked: &Tx,
     gsr_when_locked: &StateRoot,
 ) -> Object {
-    let gsr_current = std::sync::Arc::clone(&tx_builder.tx.state_root);
+    let gsr_current = Arc::clone(&tx_builder.tx.state_root);
 
     // Find where gsr_when_locked sits in the current state root's gsrs array.
     let target = Value::from(gsr_when_locked.hash());
@@ -197,93 +248,6 @@ pub fn unlock_object(
     );
 
     unlocked
-}
-
-/// Exercises an expiring option, proving the grounding GSR's block number is
-/// <= `option_obj`'s `timeout_block`. Returns the object with `timeout_block`
-/// removed. The `"value"` and `"timeout_block"` fields must be present in
-/// `option_obj.app_layer`.
-pub fn execute_option(
-    ctx: &mut BuildContext,
-    time_module: &Module,
-    tx_builder: &mut TxBuilder,
-    option_obj: Object,
-) -> Object {
-    let timeout_val = option_obj
-        .app_layer
-        .get("timeout_block")
-        .cloned()
-        .expect("option_obj missing timeout_block field");
-    let obj_value = option_obj
-        .app_layer
-        .get("value")
-        .cloned()
-        .expect("option_obj missing value field");
-
-    let mut executed = option_obj.clone();
-    executed.app_layer.remove("timeout_block");
-
-    // Pre-materialise DictContains(key) before mutate to avoid a forward
-    // reference inside TxObjectStateNullified's HashOf.
-    let _ = ctx
-        .builder
-        .priv_op(op!(DictContains(option_obj.dict(), "key", option_obj.key)))
-        .unwrap();
-
-    let tx_before = tx_builder.tx.dict();
-    let st_tx_mutated = tx_builder.mutate(ctx, executed.clone(), option_obj.clone());
-
-    let gsr_block = tx_builder.tx.state_root.block_number;
-    let gsr_hash = tx_builder.tx.state_root.hash();
-    let st_gsr_root = prove_state_root(ctx, &tx_builder.tx.state_root);
-
-    let st_expiring = st_custom!(
-        ctx,
-        ExpiringOption(timeout_block = timeout_val) = (
-            DictContains(option_obj.dict(), "key", option_obj.key),
-            DictContains(option_obj.dict(), "value", obj_value),
-            DictContains(option_obj.dict(), "timeout_block", timeout_val)
-        )
-    )
-    .unwrap();
-
-    let st_state_root_hash = ctx
-        .builder
-        .priv_op(op!(DictContains(tx_before, "state_root_hash", gsr_hash)))
-        .unwrap();
-    let st_block_num = st_custom!(
-        ctx,
-        BlockNumberForStateRoot(block_number = gsr_block) = (st_gsr_root)
-    )
-    .unwrap();
-    let st_gt_eq = ctx
-        .builder
-        .priv_op(op!(GtEq(timeout_val, gsr_block)))
-        .unwrap();
-    let st_dict_delete = ctx
-        .builder
-        .priv_op(op!(DictDelete(
-            executed.dict(),
-            option_obj.dict(),
-            "timeout_block"
-        )))
-        .unwrap();
-
-    apply_predicate(
-        ctx,
-        time_module,
-        "ExecuteOption",
-        vec![
-            st_expiring,
-            st_state_root_hash,
-            st_block_num,
-            st_gt_eq,
-            st_dict_delete,
-            st_tx_mutated,
-        ],
-    );
-
-    executed
 }
 
 /// Applies a timelib predicate with more than 5 clauses via `apply_predicate_with`.

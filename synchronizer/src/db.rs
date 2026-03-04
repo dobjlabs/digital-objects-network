@@ -34,7 +34,7 @@ pub struct SyncProgress {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SeenAt {
     slot: u32,
-    block_number: Option<u32>,
+    block_number: u32,
 }
 
 pub struct Db {
@@ -125,24 +125,14 @@ impl Db {
         Ok(())
     }
 
-    pub fn persist_transaction(
-        &self,
-        hash: Hash,
-        slot: u32,
-        block_number: Option<u32>,
-    ) -> Result<()> {
+    pub fn persist_transaction(&self, hash: Hash, slot: u32, block_number: u32) -> Result<()> {
         let key = tx_key(hash);
         let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
         self.db.put(key, value)?;
         Ok(())
     }
 
-    pub fn persist_nullifier(
-        &self,
-        hash: Hash,
-        slot: u32,
-        block_number: Option<u32>,
-    ) -> Result<()> {
+    pub fn persist_nullifier(&self, hash: Hash, slot: u32, block_number: u32) -> Result<()> {
         let key = nullifier_key(hash);
         let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
         self.db.put(key, value)?;
@@ -321,7 +311,7 @@ mod tests {
     fn test_persist_and_load_transaction() {
         let (db, _dir) = open_test_db();
         let hash = EMPTY_HASH;
-        db.persist_transaction(hash, 1, Some(100)).unwrap();
+        db.persist_transaction(hash, 1, 100).unwrap();
 
         let state = db.load_state().unwrap();
         assert!(state.transactions.contains(&hash));
@@ -331,7 +321,7 @@ mod tests {
     fn test_persist_and_load_nullifier() {
         let (db, _dir) = open_test_db();
         let hash = EMPTY_HASH;
-        db.persist_nullifier(hash, 1, Some(100)).unwrap();
+        db.persist_nullifier(hash, 1, 100).unwrap();
 
         let state = db.load_state().unwrap();
         assert!(state.nullifiers.contains(&hash));

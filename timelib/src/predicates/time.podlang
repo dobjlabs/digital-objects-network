@@ -25,29 +25,18 @@ DistanceBetweenStateRoots(state_root, prior_state_root, distance,
   SumOf(block_number, prior_block_number, distance)
 )
 
-// Holds iff `state` is a valid expiring option with a timeout_block deadline.
-// timeout_block is a public arg so the caller can use it in further constraints
-// without private-arg unification issues across sub-predicate boundaries.
+// Proves the grounding GSR's block number is <= state.timeout_block. Assumes the
+// state dict contains a "timeout_block" field (the expirable-object mixin).
+// block_number is a public arg so callers can reuse it (e.g. SumOf for renewal).
 // Note: timeout_block has ~300-block fuzz due to the synchronizer's max-age window.
-ExpiringOption(state, timeout_block, private: key, value) = AND(
-  DictContains(state, "key", key)
-  DictContains(state, "value", value)
+NotExpired(state, block_number, tx_before,
+    private: state_root, timeout_block) = AND(
   DictContains(state, "timeout_block", timeout_block)
-)
-
-// Exercises an expiring option in a single transaction. The grounding GSR's block
-// number must be <= timeout_block. The synchronizer enforces the grounding GSR is
-// at most one window (~300 blocks) old, so this is best understood as "times out
-// at block N" with ~300-block fuzz rather than a precise wall-clock deadline.
-ExecuteOption(new_state, old_state, tx_after, tx_before,
-    private: block_number, timeout_block, state_root) = AND(
-  ExpiringOption(old_state, timeout_block)
   DictContains(tx_before, "state_root_hash", state_root)
   BlockNumberForStateRoot(state_root, block_number)
   GtEq(timeout_block, block_number)
-  DictDelete(new_state, old_state, "timeout_block")
-  txlib::TxMutated(tx_after, tx_before, new_state, old_state)
 )
+
 
 UnlockObject(new_state, old_state, tx_after, tx_before,
     private: state_root, prior_state_root, distance, old_tx) = AND(

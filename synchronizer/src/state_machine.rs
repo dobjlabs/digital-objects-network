@@ -84,7 +84,7 @@ impl StateMachine {
     ///    This ensures every transaction is grounded in a state root we have computed ourselves.
     /// 3. Check for duplicate `tx_final` and spent nullifiers before writing anything,
     ///    so the update is all-or-nothing: either all nullifiers are accepted or none are.
-    pub fn process_blob(&self, bytes: &[u8], slot: u32, block_number: Option<u32>) -> Result<()> {
+    pub fn process_blob(&self, bytes: &[u8], slot: u32, block_number: u32) -> Result<()> {
         let Some(payload) = self.proof_parser.parse_blob(bytes)? else {
             info!(
                 slot,
@@ -105,18 +105,17 @@ impl StateMachine {
                 );
                 return Ok(());
             };
-            if let Some(current_block) = block_number {
-                let age = current_block as i64 - gsr_block;
-                if age > MAX_GSR_AGE_BLOCKS {
-                    warn!(
-                        slot,
-                        block_number,
-                        gsr_block,
-                        age,
-                        "Blob proof state_root_hash is too old; rejecting"
-                    );
-                    return Ok(());
-                }
+            let current_block: i64 = block_number.into();
+            let age = current_block - gsr_block;
+            if age > MAX_GSR_AGE_BLOCKS {
+                warn!(
+                    slot,
+                    block_number,
+                    gsr_block,
+                    age,
+                    "Blob proof state_root_hash is too old; rejecting"
+                );
+                return Ok(());
             }
         }
 
@@ -290,7 +289,7 @@ mod tests {
 
         let tx_hash = unique_hash(1);
         let nullifier = unique_hash(2);
-        sm.process_blob(&mock_txn_bytes(tx_hash, &[nullifier], gsr0), 1, Some(1))
+        sm.process_blob(&mock_txn_bytes(tx_hash, &[nullifier], gsr0), 1, 1)
             .unwrap();
 
         let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
@@ -306,7 +305,7 @@ mod tests {
 
         let tx1 = unique_hash(1);
         let null1 = unique_hash(2);
-        sm.process_blob(&mock_txn_bytes(tx1, &[null1], gsr0), 1, Some(1))
+        sm.process_blob(&mock_txn_bytes(tx1, &[null1], gsr0), 1, 1)
             .unwrap();
         sm.advance_block(1, 1).unwrap();
 
@@ -315,7 +314,7 @@ mod tests {
 
         let tx2 = unique_hash(3);
         let null2 = unique_hash(4);
-        sm.process_blob(&mock_txn_bytes(tx2, &[null2], gsr1), 2, Some(2))
+        sm.process_blob(&mock_txn_bytes(tx2, &[null2], gsr1), 2, 2)
             .unwrap();
         sm.advance_block(2, 2).unwrap();
 
@@ -334,13 +333,13 @@ mod tests {
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
         let tx1 = unique_hash(1);
-        sm.process_blob(&mock_txn_bytes(tx1, &[], gsr0), 1, Some(1))
+        sm.process_blob(&mock_txn_bytes(tx1, &[], gsr0), 1, 1)
             .unwrap();
         sm.advance_block(1, 1).unwrap();
 
         // tx2 is grounded against gsr0, not the newer gsr1 — still valid
         let tx2 = unique_hash(2);
-        sm.process_blob(&mock_txn_bytes(tx2, &[], gsr0), 1, Some(1))
+        sm.process_blob(&mock_txn_bytes(tx2, &[], gsr0), 1, 1)
             .unwrap();
 
         let (txns, _, _) = sm.state_snapshot().unwrap();
@@ -357,8 +356,8 @@ mod tests {
         let tx_final = unique_hash(1);
         let bytes = mock_txn_bytes(tx_final, &[], gsr0);
 
-        sm.process_blob(&bytes, 1, Some(1)).unwrap();
-        sm.process_blob(&bytes, 1, Some(1)).unwrap(); // duplicate; silently rejected
+        sm.process_blob(&bytes, 1, 1).unwrap();
+        sm.process_blob(&bytes, 1, 1).unwrap(); // duplicate; silently rejected
 
         let (txns, _, _) = sm.state_snapshot().unwrap();
         assert_eq!(txns.len(), 1);
@@ -373,11 +372,11 @@ mod tests {
         let null = unique_hash(10);
 
         let tx1 = unique_hash(1);
-        sm.process_blob(&mock_txn_bytes(tx1, &[null], gsr0), 1, Some(1))
+        sm.process_blob(&mock_txn_bytes(tx1, &[null], gsr0), 1, 1)
             .unwrap();
 
         let tx2 = unique_hash(2);
-        sm.process_blob(&mock_txn_bytes(tx2, &[null], gsr0), 1, Some(1))
+        sm.process_blob(&mock_txn_bytes(tx2, &[null], gsr0), 1, 1)
             .unwrap(); // rejected: null already spent
 
         let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
@@ -397,17 +396,13 @@ mod tests {
         let fresh_b = unique_hash(12);
 
         let tx1 = unique_hash(1);
-        sm.process_blob(&mock_txn_bytes(tx1, &[spent], gsr0), 1, Some(1))
+        sm.process_blob(&mock_txn_bytes(tx1, &[spent], gsr0), 1, 1)
             .unwrap();
 
         // tx2 has [fresh_a, spent, fresh_b] — 'spent' is a duplicate
         let tx2 = unique_hash(2);
-        sm.process_blob(
-            &mock_txn_bytes(tx2, &[fresh_a, spent, fresh_b], gsr0),
-            1,
-            Some(1),
-        )
-        .unwrap(); // rejected in full
+        sm.process_blob(&mock_txn_bytes(tx2, &[fresh_a, spent, fresh_b], gsr0), 1, 1)
+            .unwrap(); // rejected in full
 
         let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
         assert!(!txns.contains(&tx2));
@@ -422,7 +417,7 @@ mod tests {
 
         let bogus_gsr = unique_hash(999);
         let tx_final = unique_hash(1);
-        sm.process_blob(&mock_txn_bytes(tx_final, &[], bogus_gsr), 1, Some(1))
+        sm.process_blob(&mock_txn_bytes(tx_final, &[], bogus_gsr), 1, 1)
             .unwrap();
 
         let (txns, _, _) = sm.state_snapshot().unwrap();
@@ -441,7 +436,7 @@ mod tests {
         }
 
         let tx = unique_hash(1);
-        sm.process_blob(&mock_txn_bytes(tx, &[], gsr0), 0, Some(301))
+        sm.process_blob(&mock_txn_bytes(tx, &[], gsr0), 0, 301)
             .unwrap();
 
         let (txns, _, _) = sm.state_snapshot().unwrap();
@@ -460,7 +455,7 @@ mod tests {
         }
 
         let tx = unique_hash(1);
-        sm.process_blob(&mock_txn_bytes(tx, &[], gsr0), 0, Some(300))
+        sm.process_blob(&mock_txn_bytes(tx, &[], gsr0), 0, 300)
             .unwrap();
 
         let (txns, _, _) = sm.state_snapshot().unwrap();
@@ -472,7 +467,7 @@ mod tests {
         let (sm, _dir) = make_sm();
         sm.advance_block(0, 0).unwrap();
 
-        sm.process_blob(b"not json", 1, Some(1)).unwrap();
+        sm.process_blob(b"not json", 1, 1).unwrap();
 
         let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
         assert!(txns.is_empty());
@@ -600,7 +595,7 @@ mod tests {
             state_root_hash: gsr0,
             nullifiers: nullifiers.clone(),
         };
-        sm.process_blob(&payload.to_bytes(), 1, Some(1)).unwrap();
+        sm.process_blob(&payload.to_bytes(), 1, 1).unwrap();
 
         let (txns, spent_nullifiers, _) = sm.state_snapshot().unwrap();
         assert!(txns.contains(&tx_final));

@@ -40,8 +40,7 @@ mod tests {
         module
             .predicate_ref_by_name("DistanceBetweenStateRoots")
             .unwrap();
-        module.predicate_ref_by_name("ExpiringOption").unwrap();
-        module.predicate_ref_by_name("ExecuteOption").unwrap();
+        module.predicate_ref_by_name("NotExpired").unwrap();
     }
 
     /// Demonstrates time-locked objects across two independently-generated proofs.
@@ -167,69 +166,4 @@ mod tests {
         unlock_pod.pod.verify().unwrap();
     }
 
-    /// Demonstrates expiry: an option with a `timeout_block` is exercised in a single
-    /// transaction whose grounding GSR has block number ≤ `timeout_block`.
-    ///
-    /// The synchronizer enforces that the grounding GSR is at most one window (~300 blocks)
-    /// old, so `timeout_block` is a "times out at block N" deadline with ~300-block fuzz
-    /// rather than a precise wall-clock expiry.
-    ///
-    /// Scenario: option `{key, work, value: 42, timeout_block: 500}` is exercised in a
-    /// transaction grounded at block 400, producing `{key, work, value: 42}`.
-    #[test]
-    fn prove_expiry_example() {
-        use std::collections::HashMap;
-        use txlib::{Object, StateRoot as TxStateRoot, TxBuilder};
-
-        let txlib_module = Arc::new(txlib::predicates::module());
-        let time_module = Arc::new(module().unwrap());
-
-        let gsr_block = 400_i64;
-        let timeout_block = 500_i64;
-        let obj_value = 42_i64;
-
-        let params = Params::default();
-        let vd_set = VDSet::new(&[]);
-
-        // option_obj: {key, work, value: 42, timeout_block: 500}
-        let option_obj = Object::new(HashMap::from([
-            ("value".to_string(), Value::from(obj_value)),
-            ("timeout_block".to_string(), Value::from(timeout_block)),
-        ]));
-
-        // Grounding GSR: block 400, empty (no prior transactions).
-        let gsr_sr = Arc::new(TxStateRoot {
-            block_number: gsr_block,
-            transactions: set!(),
-            nullifiers: set!(),
-            gsrs: Array::new(vec![]),
-        });
-
-        let execute_pod = {
-            let mut builder = MultiPodBuilder::new(&params, &vd_set);
-            {
-                let mods = [Arc::clone(&txlib_module), Arc::clone(&time_module)];
-                let mut ctx = BuildContext::new(&mut builder, &mods);
-                let mut tx_builder = TxBuilder::new(&mut ctx, &[], gsr_sr.clone());
-                tx_builder.insert(&mut ctx, option_obj.clone());
-                tx_utils::execute_option(
-                    &mut ctx,
-                    &time_module,
-                    &mut tx_builder,
-                    option_obj.clone(),
-                );
-                let (st_finalized, _) = tx_builder.finalize(&mut ctx);
-                ctx.builder.reveal(&st_finalized).unwrap();
-            }
-            builder
-                .solve()
-                .unwrap()
-                .prove(&MockProver {})
-                .unwrap()
-                .output_pod()
-                .clone()
-        };
-
-        execute_pod.pod.verify().unwrap();
-    }
 }
