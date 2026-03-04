@@ -30,44 +30,6 @@ export interface CreateDobjProgress {
   outputFile: string | null;
 }
 
-export interface VerifyResult {
-  postId: string;
-  status: string;
-  checkedBlock: string;
-}
-
-export interface CreatePostInput {
-  title: string;
-  desc: string;
-  proofNames: string[];
-}
-
-export interface ProofClaim {
-  name: string;
-  validity: string;
-  hash: string;
-}
-
-export interface Post {
-  id: string;
-  title: string;
-  peer: string;
-  time: string;
-  desc: string;
-  proofs: ProofClaim[];
-}
-
-export interface RespondPostInput {
-  postId: string;
-  desc: string;
-  proofNames: string[];
-}
-
-export interface GenericActionResult {
-  ok: boolean;
-  message: string;
-}
-
 export interface AttachClaimResult {
   name: string;
   validity: string;
@@ -101,20 +63,6 @@ export function listenCreateDobjProgress(
   return listen<CreateDobjProgress>("create-dobj-progress", (event) => {
     handler(event.payload);
   });
-}
-
-export function verifyPostProofs(postId: string): Promise<VerifyResult> {
-  return invoke<VerifyResult>("verify_post_proofs", { input: { postId } });
-}
-
-export function createPost(input: CreatePostInput): Promise<Post> {
-  return invoke<Post>("create_post", { input });
-}
-
-export function respondPost(
-  input: RespondPostInput,
-): Promise<GenericActionResult> {
-  return invoke<GenericActionResult>("respond_post", { input });
 }
 
 export function attachClaim(fileName: string): Promise<AttachClaimResult> {
