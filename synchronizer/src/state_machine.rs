@@ -154,7 +154,16 @@ impl StateMachine {
             return Ok(());
         }
 
+        let mut payload_nullifiers = HashSet::with_capacity(payload.nullifiers.len());
         for nullifier in &payload.nullifiers {
+            if !payload_nullifiers.insert(*nullifier) {
+                warn!(
+                    slot,
+                    block_number, "Duplicate nullifier within payload; rejecting"
+                );
+                state.transactions.remove(&payload.tx_final);
+                return Ok(());
+            }
             if state.nullifiers.contains(nullifier) {
                 warn!(slot, block_number, "Duplicate nullifier; rejecting");
                 // Roll back the optimistic tx_final insertion.
@@ -435,6 +444,25 @@ mod tests {
         assert!(txns.contains(&tx1));
         assert!(!txns.contains(&tx2));
         assert_eq!(nullifiers.len(), 1);
+    }
+
+    #[test]
+    fn test_duplicate_nullifier_within_payload_rejected() {
+        let (sm, _dir) = make_sm();
+        let gsr0 = seed_gsr0(&sm);
+
+        let tx = unique_hash(1);
+        let nullifier = unique_hash(10);
+        process_and_commit_blob(
+            &sm,
+            &mock_txn_bytes(tx, &[nullifier, nullifier], gsr0),
+            1,
+            1,
+        );
+
+        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
+        assert!(!txns.contains(&tx));
+        assert!(!nullifiers.contains(&nullifier));
     }
 
     #[test]
