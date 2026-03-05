@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use alloy::primitives::B256;
 use anyhow::{anyhow, Result};
 use pod2::middleware::Hash;
 use tracing::{info, warn};
@@ -198,6 +199,28 @@ impl StateMachine {
 
     pub fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
         self.db.mark_slot_processed(slot, block_number)
+    }
+
+    pub fn set_slot_root(&self, slot: u32, root: Option<B256>) -> Result<()> {
+        self.db.set_slot_root(slot, root)
+    }
+
+    pub fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
+        self.db.slot_root(slot)
+    }
+
+    pub fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
+        self.db.rollback_to_slot(keep_slot)?;
+        let DerivedState {
+            transactions,
+            nullifiers,
+            global_state_roots,
+        } = self.db.load_state()?;
+        let mut state = self.write_state()?;
+        state.transactions = transactions;
+        state.nullifiers = nullifiers;
+        state.global_state_roots = global_state_roots;
+        Ok(())
     }
 }
 

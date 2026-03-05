@@ -1,5 +1,6 @@
 use std::{collections::HashSet, sync::Arc};
 
+use alloy::primitives::B256;
 use anyhow::{Context, Result};
 use hex::{FromHex, ToHex};
 use pod2::middleware::Hash;
@@ -11,6 +12,7 @@ const SYNC_BLOCK_KEY: &[u8] = b"sync:last_processed_block_number";
 const TX_PREFIX: &[u8] = b"tx:";
 const NULLIFIER_PREFIX: &[u8] = b"nullifier:";
 const GSR_PREFIX: &[u8] = b"global_state_root:";
+const SLOT_ROOT_PREFIX: &[u8] = b"slot_root:";
 
 #[derive(Debug)]
 pub struct DerivedState {
@@ -149,6 +151,70 @@ impl Db {
         self.db.put(key, value)?;
         Ok(())
     }
+
+    pub fn set_slot_root(&self, slot: u32, root: Option<B256>) -> Result<()> {
+        let key = slot_root_key(slot);
+        match root {
+            Some(root) => self.db.put(key, root.as_slice())?,
+            None => self.db.delete(key)?,
+        }
+        Ok(())
+    }
+
+    pub fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
+        let Some(bytes) = self.db.get(slot_root_key(slot))? else {
+            return Ok(None);
+        };
+        let raw: &[u8] = bytes.as_ref();
+        let arr: [u8; 32] = raw
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid stored slot root bytes"))?;
+        Ok(Some(B256::from(arr)))
+    }
+
+    pub fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
+        let mut batch = WriteBatch::default();
+
+        // Remove any derived records written after the retained canonical slot.
+        for entry in self.db.iterator(IteratorMode::Start) {
+            let (key, value) = entry?;
+            if key.starts_with(TX_PREFIX) || key.starts_with(NULLIFIER_PREFIX) {
+                let should_delete = match keep_slot {
+                    Some(keep) => match serde_json::from_slice::<SeenAt>(&value) {
+                        Ok(seen_at) => seen_at.slot > keep,
+                        Err(_) => true,
+                    },
+                    None => true,
+                };
+                if should_delete {
+                    batch.delete(key);
+                }
+            } else if key.starts_with(SLOT_ROOT_PREFIX) {
+                let should_delete = match keep_slot {
+                    Some(keep) => slot_root_key_slot(&key).is_none_or(|slot| slot > keep),
+                    None => true,
+                };
+                if should_delete {
+                    batch.delete(key);
+                }
+            }
+        }
+
+        // Move sync cursor back to the retained slot (or reset completely).
+        match keep_slot {
+            Some(keep) => {
+                batch.put(SYNC_SLOT_KEY, keep.to_be_bytes());
+                batch.delete(SYNC_BLOCK_KEY);
+            }
+            None => {
+                batch.delete(SYNC_SLOT_KEY);
+                batch.delete(SYNC_BLOCK_KEY);
+            }
+        }
+
+        self.db.write(batch)?;
+        Ok(())
+    }
 }
 
 fn tx_key(hash: Hash) -> Vec<u8> {
@@ -163,6 +229,16 @@ fn gsr_key(block_number: i64) -> Vec<u8> {
     // Use block_number as u64 big-endian for lexicographic ordering
     let block_u64 = block_number as u64;
     [GSR_PREFIX, &block_u64.to_be_bytes()].concat()
+}
+
+fn slot_root_key(slot: u32) -> Vec<u8> {
+    [SLOT_ROOT_PREFIX, &slot.to_be_bytes()].concat()
+}
+
+fn slot_root_key_slot(key: &[u8]) -> Option<u32> {
+    let raw = key.strip_prefix(SLOT_ROOT_PREFIX)?;
+    let arr: [u8; 4] = raw.try_into().ok()?;
+    Some(u32::from_be_bytes(arr))
 }
 
 /// Serialize a Hash to 32 raw bytes for RocksDB storage.
