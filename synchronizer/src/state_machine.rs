@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use pod2::middleware::Hash;
 use tracing::{info, warn};
 
@@ -183,13 +183,19 @@ impl StateMachine {
         &self,
         slot: u32,
         block_number: u32,
-        blob_payloads: &[Vec<u8>],
+        blob_payloads: &[(u32, Vec<u8>)],
     ) -> Result<SlotDelta> {
         let mut working = self.snapshot_working_state()?;
         let mut delta = SlotDelta::default();
 
-        for bytes in blob_payloads {
-            self.process_blob(&mut working, bytes, slot, Some(block_number), &mut delta)?;
+        for (blob_index, bytes) in blob_payloads {
+            self.process_blob(&mut working, bytes, slot, Some(block_number), &mut delta)
+                .with_context(|| {
+                    format!(
+                        "Failed to process blob at slot {}, blob_index {}",
+                        slot, blob_index
+                    )
+                })?;
         }
 
         let new_gsr = StateRoot::new(
@@ -328,7 +334,7 @@ mod tests {
         block_number: u32,
     ) -> SlotDelta {
         let d = sm
-            .derive_slot_delta(slot, block_number, &[blob.to_vec()])
+            .derive_slot_delta(slot, block_number, &[(0, blob.to_vec())])
             .unwrap();
         sm.apply_delta_to_db(&d).unwrap();
         sm.apply_delta_to_memory(&d).unwrap();

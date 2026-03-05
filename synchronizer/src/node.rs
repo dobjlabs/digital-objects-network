@@ -334,7 +334,7 @@ impl Node {
                         slot_ctx.slot, blob.index
                     )
                 })?;
-                blob_payloads.push(bytes);
+                blob_payloads.push((blob.index, bytes));
                 info!(
                     slot = slot_ctx.slot,
                     blob_index = blob.index,
