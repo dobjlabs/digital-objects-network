@@ -232,83 +232,96 @@ impl Node {
         self.state_machine.log_current_state()?;
 
         let block_number = slot_ctx.execution_block_number;
+
+        if !slot_ctx.has_blob_commitments {
+            debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
+            let delta = self
+                .state_machine
+                .derive_slot_delta(slot_ctx.slot, block_number, &[])?;
+            return Ok(ProcessedSlot {
+                slot: slot_ctx.slot,
+                block_root: slot_ctx.beacon_block_root,
+                parent_root: slot_ctx.parent_root,
+                block_number: Some(block_number),
+                is_empty: false,
+                delta,
+            });
+        }
+
         let mut blob_payloads = Vec::new();
 
-        if slot_ctx.has_blob_commitments {
-            let execution_block_id =
-                alloy_eips::eip1898::BlockId::Hash(slot_ctx.execution_block_hash.into());
-            let execution_block = self
-                .rpc_cli
-                .get_block(execution_block_id)
-                .full()
-                .await?
-                .with_context(|| {
-                    format!(
-                        "Execution block {} not found",
-                        slot_ctx.execution_block_hash
-                    )
-                })?;
+        let execution_block_id =
+            alloy_eips::eip1898::BlockId::Hash(slot_ctx.execution_block_hash.into());
+        let execution_block = self
+            .rpc_cli
+            .get_block(execution_block_id)
+            .full()
+            .await?
+            .with_context(|| {
+                format!(
+                    "Execution block {} not found",
+                    slot_ctx.execution_block_hash
+                )
+            })?;
 
-            let indexed_do_blob_txs: Vec<_> = match execution_block.transactions.as_transactions() {
-                Some(txs) => txs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_index, tx)| {
-                        tx.inner.blob_versioned_hashes().is_some()
-                            && tx.as_recovered().to() == Some(self.config.to_address)
-                    })
-                    .collect(),
-                None => {
-                    return Err(anyhow!(
-                        "Consensus block {} has blobs but the execution block doesn't have txs",
-                        slot_ctx.beacon_block_root
-                    ));
-                }
-            };
+        let indexed_do_blob_txs: Vec<_> = match execution_block.transactions.as_transactions() {
+            Some(txs) => txs
+                .iter()
+                .enumerate()
+                .filter(|(_index, tx)| {
+                    tx.inner.blob_versioned_hashes().is_some()
+                        && tx.as_recovered().to() == Some(self.config.to_address)
+                })
+                .collect(),
+            None => {
+                return Err(anyhow!(
+                    "Consensus block {} has blobs but the execution block doesn't have txs",
+                    slot_ctx.beacon_block_root
+                ));
+            }
+        };
 
-            if !indexed_do_blob_txs.is_empty() {
-                let blob_versioned_hashes: Vec<B256> = indexed_do_blob_txs
-                    .iter()
-                    .flat_map(|(_, tx)| {
-                        tx.as_recovered()
-                            .blob_versioned_hashes()
-                            .expect("tx has blobs")
-                    })
-                    .cloned()
-                    .collect();
-                let blobs = self
-                    .get_blobs(slot_ctx.slot, &blob_versioned_hashes)
-                    .await?;
-
-                for (_tx_index, tx) in indexed_do_blob_txs {
-                    let tx = tx.as_recovered();
-                    let hash = tx.hash();
-                    let from = tx.signer();
-                    let to = tx.to();
-                    let tx_blobs: Vec<_> = tx
+        if !indexed_do_blob_txs.is_empty() {
+            let blob_versioned_hashes: Vec<B256> = indexed_do_blob_txs
+                .iter()
+                .flat_map(|(_, tx)| {
+                    tx.as_recovered()
                         .blob_versioned_hashes()
                         .expect("tx has blobs")
-                        .iter()
-                        .map(|vh| &blobs[vh])
-                        .collect();
-                    trace!(?hash, ?from, ?to);
+                })
+                .cloned()
+                .collect();
+            let blobs = self
+                .get_blobs(slot_ctx.slot, &blob_versioned_hashes)
+                .await?;
 
-                    for blob in tx_blobs.iter() {
-                        let bytes =
-                            bytes_from_simple_blob(blob.blob.inner()).with_context(|| {
-                                format!(
-                                    "Invalid byte encoding in blob at slot {}, blob_index {}",
-                                    slot_ctx.slot, blob.index
-                                )
-                            })?;
-                        blob_payloads.push(bytes);
-                        info!(
-                            slot = slot_ctx.slot,
-                            blob_index = blob.index,
-                            tx_hash = ?hash,
-                            "Decoded target blob"
-                        );
-                    }
+            for (_tx_index, tx) in indexed_do_blob_txs {
+                let tx = tx.as_recovered();
+                let hash = tx.hash();
+                let from = tx.signer();
+                let to = tx.to();
+                let tx_blobs: Vec<_> = tx
+                    .blob_versioned_hashes()
+                    .expect("tx has blobs")
+                    .iter()
+                    .map(|vh| &blobs[vh])
+                    .collect();
+                trace!(?hash, ?from, ?to);
+
+                for blob in tx_blobs.iter() {
+                    let bytes = bytes_from_simple_blob(blob.blob.inner()).with_context(|| {
+                        format!(
+                            "Invalid byte encoding in blob at slot {}, blob_index {}",
+                            slot_ctx.slot, blob.index
+                        )
+                    })?;
+                    blob_payloads.push(bytes);
+                    info!(
+                        slot = slot_ctx.slot,
+                        blob_index = blob.index,
+                        tx_hash = ?hash,
+                        "Decoded target blob"
+                    );
                 }
             }
         }
