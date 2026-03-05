@@ -76,6 +76,18 @@ impl StateMachine {
         Ok(())
     }
 
+    /// Process raw blob content (post-blob-encoding extraction).
+    ///
+    /// Steps:
+    /// 1. Attempt to parse and cryptographically verify the blob as a `TxnFinalized` payload.
+    ///    Blobs that don't match our format are silently skipped (they may belong to other apps).
+    /// 2. Reject payloads whose `state_root_hash` is not in our GSR history.
+    ///    This ensures every transaction is grounded in a state root we have computed ourselves.
+    /// 3. Check for duplicate `tx_final` and spent nullifiers before recording the delta.
+    ///    Updates are all-or-nothing per payload: either all nullifiers are accepted or none are.
+    ///
+    /// Note: this method mutates only in-memory state plus the provided `SlotDelta`.
+    /// Durable KV writes happen later through `apply_slot_delta`, after sync metadata is staged.
     pub fn process_blob(
         &self,
         bytes: &[u8],
@@ -91,6 +103,9 @@ impl StateMachine {
             return Ok(());
         };
 
+        // A payload is only valid if it references a GSR we have previously computed.
+        // We accept any historical GSR, not just the latest, to tolerate blobs that were
+        // proven against a state root that has since been superseded.
         {
             let state = self.read_state()?;
             if !state.global_state_roots.contains(&payload.state_root_hash) {
@@ -103,6 +118,12 @@ impl StateMachine {
             }
         }
 
+        // All uniqueness checks and DB writes happen under the write lock so that
+        // concurrent calls cannot interleave partial state.
+        //
+        // Strategy: insert tx_final optimistically, then scan all nullifiers.
+        // On any collision, roll back the tx_final insertion and bail without touching the DB.
+        // Only after all checks pass do we write nullifiers to the DB.
         {
             let mut state = self.write_state()?;
 
@@ -114,6 +135,7 @@ impl StateMachine {
             for nullifier in &payload.nullifiers {
                 if state.nullifiers.contains(nullifier) {
                     warn!(slot, block_number, "Duplicate nullifier; rejecting");
+                    // Roll back the optimistic tx_final insertion.
                     state.transactions.remove(&payload.tx_final);
                     return Ok(());
                 }
@@ -137,6 +159,11 @@ impl StateMachine {
         Ok(())
     }
 
+    /// Compute and persist a new GSR for the given block, appending it to the history.
+    ///
+    /// Must be called exactly once per block, **after** all blobs for that block have been
+    /// processed. The new GSR commits to the accumulated set of transaction commitments and
+    /// nullifiers so far, so subsequent provers can reference it as their `state_root_hash`.
     pub fn advance_block(&self, slot: u32, block_number: u32, delta: &mut SlotDelta) -> Result<()> {
         let mut state = self.write_state()?;
 
@@ -203,6 +230,8 @@ impl StateMachine {
         self.reload_from_db()
     }
 
+    /// Returns `(transactions, nullifiers, global_state_roots)` as owned vecs.
+    /// Primarily used in tests; callers that need only one field should add a dedicated accessor.
     pub fn state_snapshot(&self) -> Result<(Vec<Hash>, Vec<Hash>, Vec<Hash>)> {
         let state = self.read_state()?;
         Ok((

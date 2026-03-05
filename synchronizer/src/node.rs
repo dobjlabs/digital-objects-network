@@ -84,10 +84,6 @@ impl Node {
         self.sync_db.last_processed_slot().await
     }
 
-    pub async fn last_progress(&self) -> Result<Option<SyncProgress>> {
-        self.sync_db.last_progress().await
-    }
-
     pub async fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
         self.sync_db.slot_root(slot).await
     }
