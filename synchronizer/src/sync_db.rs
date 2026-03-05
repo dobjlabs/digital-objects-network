@@ -104,10 +104,6 @@ impl SyncDb {
             )
             "#,
             r#"
-            ALTER TABLE slot_apply_journal
-            ADD COLUMN IF NOT EXISTS op TEXT NOT NULL DEFAULT 'apply'
-            "#,
-            r#"
             CREATE INDEX IF NOT EXISTS canonical_slots_status_slot_idx
                 ON canonical_slots(status, slot)
             "#,
@@ -124,7 +120,7 @@ impl SyncDb {
         Ok(())
     }
 
-    pub async fn initialize_cursor_if_missing(
+    pub async fn ensure_cursor_and_get_start_slot(
         &self,
         head_slot: u32,
         initial_start: Option<u32>,
