@@ -479,3 +479,217 @@ async fn ensure_database_exists(database_url: &str) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_db::AppDb;
+    use crate::proof::MockBlobParser;
+    use crate::state_machine::StateMachine;
+    use pod2::middleware::{hash_values, Value};
+    use sqlx::Executor;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tempfile::TempDir;
+
+    fn unique_hash(n: i64) -> Hash {
+        hash_values(&[Value::from(n)])
+    }
+
+    fn test_urls() -> (String, String, String) {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let admin_url = std::env::var("TEST_SYNC_METADATA_DB_ADMIN")
+            .unwrap_or_else(|_| "postgres://postgres@localhost:5432/postgres".to_string());
+        let mut url = Url::parse(&admin_url).expect("valid admin url");
+        let db_name = format!(
+            "sync_test_{}_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        url.set_path(&format!("/{}", db_name));
+        (admin_url, url.to_string(), db_name)
+    }
+
+    fn test_db_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    async fn drop_db(admin_url: &str, db_name: &str) -> Result<()> {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(admin_url)
+            .await?;
+        sqlx::query(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+        )
+        .bind(db_name)
+        .execute(&pool)
+        .await?;
+        let escaped = db_name.replace('"', "\"\"");
+        let stmt = format!("DROP DATABASE IF EXISTS \"{escaped}\"");
+        pool.execute(stmt.as_str()).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn test_recover_pending_replays_journal_and_finalizes() -> Result<()> {
+        let _guard = test_db_lock().lock().expect("lock");
+        let (admin_url, db_url, db_name) = test_urls();
+        drop_db(&admin_url, &db_name).await?;
+        let sync_db = SyncDb::connect(&db_url).await?;
+
+        let dir = TempDir::new().unwrap();
+        let app_db = AppDb::connect(dir.path().to_str().unwrap())?;
+        let state_machine = StateMachine::new(app_db, Arc::new(MockBlobParser))?;
+
+        let slot = 100;
+        let block_number = 4242;
+        let tx_hash = unique_hash(1);
+        let nullifier = unique_hash(2);
+        let gsr_hash = unique_hash(3);
+        let journal = SlotJournal {
+            slot,
+            tx_hashes: vec![tx_hash],
+            nullifiers: vec![nullifier],
+            gsr_block_numbers: vec![block_number],
+            gsr_hashes: vec![gsr_hash],
+        };
+        let root = B256::from([7u8; 32]);
+        let parent = B256::from([6u8; 32]);
+        sync_db
+            .save_pending_slot(
+                slot,
+                Some(root),
+                Some(parent),
+                Some(block_number),
+                false,
+                &journal,
+            )
+            .await?;
+
+        let pending = sync_db.pending_recoveries().await?;
+        assert_eq!(pending.len(), 1);
+        let recovery = &pending[0];
+        state_machine.apply_journal(&recovery.journal, recovery.block_number)?;
+        sync_db
+            .finalize_slot_applied(recovery.slot, recovery.block_number)
+            .await?;
+        state_machine.reload_from_db()?;
+
+        assert!(sync_db.pending_recoveries().await?.is_empty());
+        let progress = sync_db.last_progress().await?.expect("progress");
+        assert_eq!(progress.last_processed_slot, slot);
+        assert_eq!(progress.last_processed_block_number, Some(block_number));
+
+        let (txs, nullifiers, gsrs) = state_machine.state_snapshot()?;
+        assert!(txs.contains(&tx_hash));
+        assert!(nullifiers.contains(&nullifier));
+        assert!(gsrs.contains(&gsr_hash));
+
+        drop(sync_db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn test_rollback_to_slot_rewinds_pg_and_kv() -> Result<()> {
+        let _guard = test_db_lock().lock().expect("lock");
+        let (admin_url, db_url, db_name) = test_urls();
+        drop_db(&admin_url, &db_name).await?;
+        let sync_db = SyncDb::connect(&db_url).await?;
+
+        let dir = TempDir::new().unwrap();
+        let app_db = AppDb::connect(dir.path().to_str().unwrap())?;
+        let state_machine = StateMachine::new(app_db, Arc::new(MockBlobParser))?;
+
+        let root1 = B256::from([1u8; 32]);
+        let root2 = B256::from([2u8; 32]);
+        let parent = B256::from([9u8; 32]);
+        let j1 = SlotJournal {
+            slot: 10,
+            tx_hashes: vec![unique_hash(10)],
+            nullifiers: vec![unique_hash(11)],
+            gsr_block_numbers: vec![1000],
+            gsr_hashes: vec![unique_hash(12)],
+        };
+        sync_db
+            .save_pending_slot(10, Some(root1), Some(parent), Some(1000), false, &j1)
+            .await?;
+        state_machine.apply_journal(&j1, Some(1000))?;
+        sync_db.finalize_slot_applied(10, Some(1000)).await?;
+
+        let j2 = SlotJournal {
+            slot: 11,
+            tx_hashes: vec![unique_hash(20)],
+            nullifiers: vec![unique_hash(21)],
+            gsr_block_numbers: vec![1001],
+            gsr_hashes: vec![unique_hash(22)],
+        };
+        sync_db
+            .save_pending_slot(11, Some(root2), Some(root1), Some(1001), false, &j2)
+            .await?;
+        state_machine.apply_journal(&j2, Some(1001))?;
+        sync_db.finalize_slot_applied(11, Some(1001)).await?;
+        state_machine.reload_from_db()?;
+
+        let journals = sync_db.rollback_to_slot(Some(10)).await?;
+        state_machine.rollback_journals(&journals)?;
+
+        let progress = sync_db.last_progress().await?.expect("progress");
+        assert_eq!(progress.last_processed_slot, 10);
+        assert_eq!(progress.last_processed_block_number, Some(1000));
+        assert_eq!(sync_db.slot_root(10).await?, Some(root1));
+        assert_eq!(sync_db.slot_root(11).await?, None);
+
+        let (txs, nullifiers, gsrs) = state_machine.state_snapshot()?;
+        assert!(txs.contains(&j1.tx_hashes[0]));
+        assert!(!txs.contains(&j2.tx_hashes[0]));
+        assert!(nullifiers.contains(&j1.nullifiers[0]));
+        assert!(!nullifiers.contains(&j2.nullifiers[0]));
+        assert!(gsrs.contains(&j1.gsr_hashes[0]));
+        assert!(!gsrs.contains(&j2.gsr_hashes[0]));
+
+        drop(sync_db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn test_empty_slot_finalize_sets_none_root_and_advances_cursor() -> Result<()> {
+        let _guard = test_db_lock().lock().expect("lock");
+        let (admin_url, db_url, db_name) = test_urls();
+        drop_db(&admin_url, &db_name).await?;
+        let sync_db = SyncDb::connect(&db_url).await?;
+
+        let slot = 55;
+        let journal = SlotJournal {
+            slot,
+            tx_hashes: vec![],
+            nullifiers: vec![],
+            gsr_block_numbers: vec![],
+            gsr_hashes: vec![],
+        };
+        sync_db
+            .save_pending_slot(slot, None, None, None, true, &journal)
+            .await?;
+        sync_db.finalize_slot_applied(slot, None).await?;
+
+        assert_eq!(sync_db.slot_root(slot).await?, None);
+        let progress = sync_db.last_progress().await?.expect("progress");
+        assert_eq!(progress.last_processed_slot, slot);
+        assert_eq!(progress.last_processed_block_number, None);
+
+        drop(sync_db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
+}
