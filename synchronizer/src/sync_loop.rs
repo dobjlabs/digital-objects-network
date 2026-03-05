@@ -85,6 +85,7 @@ pub async fn run_sync_loop(
                     delta: Default::default(),
                 };
 
+                info!(slot = next_slot, "No block produced for slot");
                 node.save_pending_slot(&processed).await?;
                 node.finalize_slot_applied(next_slot, None).await?;
                 next_slot += 1;

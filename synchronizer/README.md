@@ -25,10 +25,10 @@ Service that tracks Digital Object blob transactions on Ethereum and exposes cur
 - `RPC_URL`
 - `BEACON_URL`
 - `TO_ADDRESS`
-- `APP_STATE_DB`
 
 ## Optional env vars
 
+- `APP_STATE_DB` (default: `data/synchronizer-db`)
 - `SYNC_METADATA_DB` (default: `postgres://postgres@localhost:5432/synchronizer`)
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
 - `SYNC_DELAY_MS` (default: `333`)
