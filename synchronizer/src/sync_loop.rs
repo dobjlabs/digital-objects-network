@@ -96,6 +96,7 @@ pub async fn run_sync_loop(
         if last_processed_slot.is_some_and(|last_slot| last_slot >= next_slot)
             && stored_root_for_slot.is_none()
         {
+            // A previously empty canonical slot becoming non-empty implies canonical history changed.
             warn!(
                 slot = next_slot,
                 "Detected reorg: slot was previously empty but now has a block; rewinding"
@@ -105,6 +106,7 @@ pub async fn run_sync_loop(
         }
 
         if let Some(stored_root) = stored_root_for_slot {
+            // Same slot number with a different block root is a canonical reorg.
             if stored_root != beacon_block_header.root {
                 warn!(
                     slot = next_slot,
@@ -118,6 +120,7 @@ pub async fn run_sync_loop(
         }
         if let Some(prev_slot) = next_slot.checked_sub(1) {
             if let Some(prev_root) = node.slot_root(prev_slot).await? {
+                // Parent mismatch means our local chain view diverged from current canonical chain.
                 if beacon_block_header.parent_root != prev_root {
                     warn!(
                         slot = next_slot,
@@ -154,6 +157,7 @@ pub async fn run_sync_loop(
 }
 
 async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
+    // Rewind to the first slot after the last matching ancestor, then replay forward.
     let rewind_start = find_divergence_slot(node, current_slot).await?;
     let keep_slot = rewind_start.checked_sub(1);
     node.rollback_to_slot(keep_slot).await?;
@@ -243,6 +247,7 @@ impl HeadTracker {
                 info!(target_slot = slot, "Subscribed to beacon head events");
                 self.events = Some(stream);
 
+                // Re-check immediately after subscribe to close subscribe-vs-head race windows.
                 match Self::decide_after_head_check(self.resolve_slot_from_head(node, slot).await?)
                 {
                     AdvanceDecision::ContinueWaiting => {}
@@ -259,6 +264,7 @@ impl HeadTracker {
                     continue;
                 }
                 _ = tokio::time::sleep(HEAD_CHECK_INTERVAL) => {
+                    // Polling fallback keeps liveness if the SSE stream is stale but not closed.
                     match Self::decide_after_head_check(self.resolve_slot_from_head(node, slot).await?) {
                         AdvanceDecision::ContinueWaiting => continue,
                         AdvanceDecision::Return(state) => return Ok(state),
@@ -280,6 +286,7 @@ impl HeadTracker {
                         continue;
                     }
 
+                    // Events are hints; re-read canonical head/slot before deciding.
                     match Self::decide_after_head_check(
                         self.resolve_slot_from_head(node, slot).await?,
                     ) {
@@ -326,6 +333,7 @@ impl HeadTracker {
             return Ok(HeadCheckResult::Present(self.head.clone()));
         }
 
+        // Head passed target: explicit target lookup distinguishes produced vs skipped slot.
         debug!(
             head_slot = self.head.slot,
             target_slot = slot,

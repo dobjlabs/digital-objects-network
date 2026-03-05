@@ -24,7 +24,7 @@ use tracing::{debug, info, trace};
 use crate::blob::bytes_from_simple_blob;
 use crate::config::AppConfig;
 use crate::state_machine::{SlotDelta, StateMachine};
-use crate::sync_db::{SlotJournal, SyncDb, SyncProgress};
+use crate::sync_db::{SlotJournal, SyncDb};
 
 pub struct Node {
     pub beacon_cli: BeaconClient,

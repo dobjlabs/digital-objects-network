@@ -256,6 +256,7 @@ impl StateMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_db::AppDb;
     use crate::proof::MockBlobParser;
     use hex::ToHex;
     use pod2::middleware::{hash_values, Value};
@@ -287,31 +288,312 @@ mod tests {
         .into_bytes()
     }
 
+    fn seed_gsr0(sm: &StateMachine) -> Hash {
+        let mut d = SlotDelta::default();
+        sm.advance_block(0, 0, &mut d).unwrap();
+        sm.apply_slot_delta(0, Some(0), &d).unwrap();
+        sm.state_snapshot().unwrap().2[0]
+    }
+
+    fn process_and_commit_blob(
+        sm: &StateMachine,
+        blob: &[u8],
+        slot: u32,
+        block_number: Option<u32>,
+    ) -> SlotDelta {
+        let mut d = SlotDelta::default();
+        sm.process_blob(blob, slot, block_number, &mut d).unwrap();
+        sm.apply_slot_delta(slot, block_number, &d).unwrap();
+        d
+    }
+
+    fn advance_and_commit(sm: &StateMachine, slot: u32, block_number: u32) -> SlotDelta {
+        let mut d = SlotDelta::default();
+        sm.advance_block(slot, block_number, &mut d).unwrap();
+        sm.apply_slot_delta(slot, Some(block_number), &d).unwrap();
+        d
+    }
+
     #[test]
     fn test_happy_path_single_tx() {
         let (sm, _dir) = make_sm();
+        let gsr0 = seed_gsr0(&sm);
 
-        let mut seed = SlotDelta::default();
-        sm.advance_block(0, 0, &mut seed).unwrap();
-        sm.apply_slot_delta(0, Some(0), &seed).unwrap();
-
-        let gsr0 = sm.state_snapshot().unwrap().2[0];
-
-        let mut d1 = SlotDelta::default();
         let tx_hash = unique_hash(1);
         let nullifier = unique_hash(2);
-        sm.process_blob(
+        process_and_commit_blob(
+            &sm,
             &mock_txn_bytes(tx_hash, &[nullifier], gsr0),
             1,
             Some(1),
-            &mut d1,
-        )
-        .unwrap();
-        sm.advance_block(1, 1, &mut d1).unwrap();
-        sm.apply_slot_delta(1, Some(1), &d1).unwrap();
+        );
 
         let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
         assert!(txns.contains(&tx_hash));
         assert!(nullifiers.contains(&nullifier));
+    }
+
+    #[test]
+    fn test_sequence_across_blocks() {
+        let (sm, _dir) = make_sm();
+        let gsr0 = seed_gsr0(&sm);
+
+        let tx1 = unique_hash(1);
+        let null1 = unique_hash(2);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[null1], gsr0), 1, Some(1));
+        advance_and_commit(&sm, 1, 1);
+
+        let gsr1 = sm.state_snapshot().unwrap().2[1];
+        assert_ne!(gsr0, gsr1);
+
+        let tx2 = unique_hash(3);
+        let null2 = unique_hash(4);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[null2], gsr1), 2, Some(2));
+        advance_and_commit(&sm, 2, 2);
+
+        let (txns, nullifiers, gsrs) = sm.state_snapshot().unwrap();
+        assert!(txns.contains(&tx1));
+        assert!(txns.contains(&tx2));
+        assert!(nullifiers.contains(&null1));
+        assert!(nullifiers.contains(&null2));
+        assert_eq!(gsrs.len(), 3);
+    }
+
+    #[test]
+    fn test_old_gsr_still_valid() {
+        let (sm, _dir) = make_sm();
+        let gsr0 = seed_gsr0(&sm);
+
+        let tx1 = unique_hash(1);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[], gsr0), 1, Some(1));
+        advance_and_commit(&sm, 1, 1);
+
+        // tx2 is grounded against gsr0, not the newer gsr1 — still valid
+        let tx2 = unique_hash(2);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[], gsr0), 1, Some(1));
+
+        let (txns, _, _) = sm.state_snapshot().unwrap();
+        assert!(txns.contains(&tx1));
+        assert!(txns.contains(&tx2));
+    }
+
+    #[test]
+    fn test_duplicate_tx_rejected() {
+        let (sm, _dir) = make_sm();
+        let gsr0 = seed_gsr0(&sm);
+
+        let tx_final = unique_hash(1);
+        let bytes = mock_txn_bytes(tx_final, &[], gsr0);
+
+        process_and_commit_blob(&sm, &bytes, 1, Some(1));
+        process_and_commit_blob(&sm, &bytes, 1, Some(1)); // duplicate; silently rejected
+
+        let (txns, _, _) = sm.state_snapshot().unwrap();
+        assert_eq!(txns.len(), 1);
+    }
+
+    #[test]
+    fn test_duplicate_nullifier_rejected() {
+        let (sm, _dir) = make_sm();
+        let gsr0 = seed_gsr0(&sm);
+
+        let null = unique_hash(10);
+
+        let tx1 = unique_hash(1);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[null], gsr0), 1, Some(1));
+
+        let tx2 = unique_hash(2);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[null], gsr0), 1, Some(1)); // rejected
+
+        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
+        assert!(txns.contains(&tx1));
+        assert!(!txns.contains(&tx2));
+        assert_eq!(nullifiers.len(), 1);
+    }
+
+    #[test]
+    fn test_nullifier_collision_is_atomic() {
+        let (sm, _dir) = make_sm();
+        let gsr0 = seed_gsr0(&sm);
+
+        let spent = unique_hash(10);
+        let fresh_a = unique_hash(11);
+        let fresh_b = unique_hash(12);
+
+        let tx1 = unique_hash(1);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[spent], gsr0), 1, Some(1));
+
+        // tx2 has [fresh_a, spent, fresh_b] — 'spent' is a duplicate
+        let tx2 = unique_hash(2);
+        process_and_commit_blob(
+            &sm,
+            &mock_txn_bytes(tx2, &[fresh_a, spent, fresh_b], gsr0),
+            1,
+            Some(1),
+        );
+
+        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
+        assert!(!txns.contains(&tx2));
+        assert!(!nullifiers.contains(&fresh_a));
+        assert!(!nullifiers.contains(&fresh_b));
+    }
+
+    #[test]
+    fn test_unknown_gsr_rejected() {
+        let (sm, _dir) = make_sm();
+        seed_gsr0(&sm);
+
+        let bogus_gsr = unique_hash(999);
+        let tx_final = unique_hash(1);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx_final, &[], bogus_gsr), 1, Some(1));
+
+        let (txns, _, _) = sm.state_snapshot().unwrap();
+        assert!(txns.is_empty());
+    }
+
+    #[test]
+    fn test_invalid_blob_skipped() {
+        let (sm, _dir) = make_sm();
+        seed_gsr0(&sm);
+
+        process_and_commit_blob(&sm, b"not json", 1, Some(1));
+
+        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
+        assert!(txns.is_empty());
+        assert!(nullifiers.is_empty());
+    }
+
+    #[test]
+    fn test_rollback_reloads_gsrs_from_retained_slot() {
+        let (sm, _dir) = make_sm();
+        seed_gsr0(&sm);
+        let _g1 = advance_and_commit(&sm, 1, 1);
+        let g2 = advance_and_commit(&sm, 2, 2);
+        assert_eq!(sm.state_snapshot().unwrap().2.len(), 3);
+
+        let journals = vec![SlotJournal {
+            slot: 2,
+            tx_hashes: vec![],
+            nullifiers: vec![],
+            gsr_block_numbers: g2.gsr_block_numbers,
+            gsr_hashes: g2.gsr_hashes,
+        }];
+        sm.rollback_journals(&journals).unwrap();
+
+        let (_, _, gsrs) = sm.state_snapshot().unwrap();
+        assert_eq!(gsrs.len(), 2);
+    }
+
+    #[test]
+    fn test_reorg_rollback_restores_in_memory_sets() {
+        let (sm, _dir) = make_sm();
+        let gsr0 = seed_gsr0(&sm);
+
+        let tx1 = unique_hash(101);
+        let n1 = unique_hash(201);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[n1], gsr0), 1, Some(1));
+        advance_and_commit(&sm, 1, 1);
+        let gsr1 = sm.state_snapshot().unwrap().2[1];
+
+        let tx2 = unique_hash(102);
+        let n2 = unique_hash(202);
+        let d2 = process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[n2], gsr1), 2, Some(2));
+        let g2 = advance_and_commit(&sm, 2, 2);
+
+        let journals = vec![SlotJournal {
+            slot: 2,
+            tx_hashes: d2.tx_hashes,
+            nullifiers: d2.nullifiers,
+            gsr_block_numbers: g2.gsr_block_numbers,
+            gsr_hashes: g2.gsr_hashes,
+        }];
+        sm.rollback_journals(&journals).unwrap();
+
+        let (txns, nullifiers, gsrs) = sm.state_snapshot().unwrap();
+        assert!(txns.contains(&tx1));
+        assert!(!txns.contains(&tx2));
+        assert!(nullifiers.contains(&n1));
+        assert!(!nullifiers.contains(&n2));
+        assert_eq!(gsrs.len(), 2);
+    }
+
+    #[test]
+    #[ignore = "slow: requires Plonky2 proving (builds circuit on first run, cached thereafter)"]
+    fn test_e2e_real_proof() {
+        use common::{
+            payload::{Payload, PayloadProof},
+            shrink::{shrink_compress_pod, ShrunkMainPodSetup},
+        };
+        use pod2::{
+            backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover},
+            frontend::MultiPodBuilder,
+            middleware::Params,
+        };
+        use pod2utils::macros::BuildContext;
+        use std::collections::HashSet;
+        use txlib::{Object, TxBuilder};
+
+        let params = Params::default();
+        let vd_set = &*DEFAULT_VD_SET;
+        let shrunk_main_pod_build = ShrunkMainPodSetup::new(&params).build().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let app_db = AppDb::connect(dir.path().to_str().unwrap()).unwrap();
+        let sm =
+            StateMachine::new(app_db, Arc::new(crate::proof::ProofParser::new().unwrap())).unwrap();
+
+        let gsr0 = seed_gsr0(&sm);
+
+        let state_root = Arc::new(StateRoot {
+            block_number: 0,
+            transactions: pod2::middleware::containers::Set::new(HashSet::new()),
+            nullifiers: pod2::middleware::containers::Set::new(HashSet::new()),
+            gsrs: pod2::middleware::containers::Array::new(vec![]),
+        });
+        assert_eq!(
+            state_root.hash(),
+            gsr0,
+            "txlib StateRoot must match computed GSR0"
+        );
+
+        let txlib_modules = vec![Arc::new(txlib::predicates::module())];
+        let mut builder = MultiPodBuilder::new(&params, vd_set);
+        let mut ctx = BuildContext {
+            builder: &mut builder,
+            modules: &txlib_modules,
+        };
+
+        let obj = Object::new(std::collections::HashMap::new());
+        let mut tx_builder = TxBuilder::new(&mut ctx, &[], state_root);
+        tx_builder.insert(&mut ctx, obj);
+        let (st_finalized, tx) = tx_builder.finalize(&mut ctx);
+        ctx.builder.reveal(&st_finalized).unwrap();
+
+        let solution = builder.solve().unwrap();
+        let pod = solution.prove(&Prover {}).unwrap().pods.pop().unwrap();
+        pod.pod.verify().unwrap();
+
+        let compressed_proof = shrink_compress_pod(&shrunk_main_pod_build, pod).unwrap();
+        let tx_final = tx.dict().commitment();
+        let nullifiers: Vec<Hash> = tx
+            .nullifiers
+            .set()
+            .iter()
+            .map(|v| Hash(v.raw().0))
+            .collect();
+
+        let payload = Payload {
+            proof: PayloadProof::Plonky2(Box::new(compressed_proof)),
+            tx_final,
+            state_root_hash: gsr0,
+            nullifiers: nullifiers.clone(),
+        };
+        process_and_commit_blob(&sm, &payload.to_bytes(), 1, Some(1));
+
+        let (txns, spent_nullifiers, _) = sm.state_snapshot().unwrap();
+        assert!(txns.contains(&tx_final));
+        for n in &nullifiers {
+            assert!(spent_nullifiers.contains(n));
+        }
     }
 }
