@@ -43,6 +43,7 @@ enum MissingSlotAction {
     Applied,
 }
 
+/// Process beacon slots in order until shutdown, rewinding when canonical history diverges.
 pub async fn run_sync_loop(
     node: Arc<Node>,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -61,6 +62,10 @@ pub async fn run_sync_loop(
         }
 
         debug!(slot = next_slot, "Checking slot");
+        // Resolve the target slot against beacon head; may return:
+        // - Missing: canonical empty slot
+        // - Present: canonical block header for this slot
+        // - Shutdown: graceful stop
         let beacon_block_header = match head_tracker
             .next_slot_header(&node, next_slot, &mut shutdown_rx)
             .await?
@@ -83,6 +88,8 @@ pub async fn run_sync_loop(
             SlotHeaderState::Present(header) => header,
         };
 
+        // For present slots, centralize all "did canonical history diverge?" checks
+        // before any write side effects.
         if let Some(rewind_slot) =
             handle_reorgs_for_present_slot(&node, next_slot, &beacon_block_header).await?
         {
@@ -102,6 +109,9 @@ pub async fn run_sync_loop(
     }
 }
 
+/// Handle a slot that currently has no canonical block header.
+///
+/// Returns whether the loop should continue from a rewind slot or from the next slot.
 async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction> {
     // A previously canonical slot becoming empty implies canonical history changed.
     if node.slot_root(slot).await?.is_some() {
@@ -114,7 +124,7 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
         ));
     }
 
-    // Empty slots are valid on beacon; persist progress so sync stays in-order.
+    // Empty slots are valid on beacon; commit an empty processed slot so cursor stays contiguous.
     let processed = ProcessedSlot {
         slot,
         block_root: Default::default(),
@@ -129,6 +139,9 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
     Ok(MissingSlotAction::Applied)
 }
 
+/// Run all present-slot reorg checks.
+///
+/// Returns `Some(rewind_slot)` when canonical-consistency checks fail, else `None`.
 async fn handle_reorgs_for_present_slot(
     node: &Node,
     slot: u32,
@@ -178,26 +191,33 @@ async fn handle_reorgs_for_present_slot(
     Ok(None)
 }
 
+/// Persist and apply one processed slot.
+///
+/// Write/apply ordering:
+/// 1. Stage metadata+journal in Postgres as `pending`.
+/// 2. Apply app delta in RocksDB.
+/// 3. Finalize cursor+status in Postgres as `applied`.
+/// 4. Apply the same delta to in-memory state (only after finalize).
 async fn persist_processed_slot(node: &Node, processed: &ProcessedSlot) -> Result<()> {
     node.save_pending_slot(processed).await?;
 
-    if let Err(err) = node.apply_slot_delta(&processed.delta) {
-        node.reload_state_from_kv()?;
+    if let Err(err) = node.apply_delta_to_db(&processed.delta) {
+        node.reload_from_db()?;
         return Err(err);
     }
 
     node.finalize_slot_applied(processed.slot, processed.block_number)
         .await?;
-    if let Err(err) = node.apply_slot_delta_to_memory(&processed.delta) {
-        node.reload_state_from_kv()?;
+    if let Err(err) = node.apply_delta_to_memory(&processed.delta) {
+        node.reload_from_db()?;
         return Err(err);
     }
 
     Ok(())
 }
 
+/// Rewind to the first slot after the last common ancestor and resume from there.
 async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
-    // Rewind to the first slot after the last matching ancestor, then replay forward.
     let rewind_start = find_divergence_slot(node, current_slot).await?;
     let keep_slot = rewind_start.checked_sub(1);
     node.rollback_to_slot(keep_slot).await?;

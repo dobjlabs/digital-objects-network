@@ -87,7 +87,7 @@ impl AppDb {
         Ok(())
     }
 
-    pub fn apply_slot_delta(
+    pub fn apply_delta(
         &self,
         tx_hashes: &[Hash],
         nullifiers: &[Hash],
@@ -171,7 +171,7 @@ mod tests {
     fn test_persist_and_load_transaction() {
         let (app_db, _dir) = open_test_db();
         let hash = EMPTY_HASH;
-        app_db.apply_slot_delta(&[hash], &[], &[], &[]).unwrap();
+        app_db.apply_delta(&[hash], &[], &[], &[]).unwrap();
 
         let state = app_db.load_state().unwrap();
         assert!(state.transactions.contains(&hash));
@@ -181,7 +181,7 @@ mod tests {
     fn test_persist_and_load_nullifier() {
         let (app_db, _dir) = open_test_db();
         let hash = EMPTY_HASH;
-        app_db.apply_slot_delta(&[], &[hash], &[], &[]).unwrap();
+        app_db.apply_delta(&[], &[hash], &[], &[]).unwrap();
 
         let state = app_db.load_state().unwrap();
         assert!(state.nullifiers.contains(&hash));
@@ -195,9 +195,9 @@ mod tests {
         let h1 = hash_values(&[Value::from(1)]);
         let h2 = hash_values(&[Value::from(2)]);
 
-        app_db.apply_slot_delta(&[], &[], &[10], &[h0]).unwrap();
-        app_db.apply_slot_delta(&[], &[], &[5], &[h1]).unwrap();
-        app_db.apply_slot_delta(&[], &[], &[20], &[h2]).unwrap();
+        app_db.apply_delta(&[], &[], &[10], &[h0]).unwrap();
+        app_db.apply_delta(&[], &[], &[5], &[h1]).unwrap();
+        app_db.apply_delta(&[], &[], &[20], &[h2]).unwrap();
 
         let state = app_db.load_state().unwrap();
         assert_eq!(state.global_state_roots, vec![h1, h0, h2]);
@@ -211,7 +211,7 @@ mod tests {
         let gsr = hash_values(&[Value::from(12)]);
 
         app_db
-            .apply_slot_delta(&[tx], &[nullifier], &[700], &[gsr])
+            .apply_delta(&[tx], &[nullifier], &[700], &[gsr])
             .unwrap();
         let before = app_db.load_state().unwrap();
         assert!(before.transactions.contains(&tx));

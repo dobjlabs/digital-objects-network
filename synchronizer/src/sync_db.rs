@@ -6,12 +6,17 @@ use url::Url;
 
 use crate::app_db::{db_bytes_to_hash, hash_to_db_bytes};
 
+/// Sync cursor exposed to API callers.
+///
+/// `last_processed_slot` is the canonical consensus progress marker.
+/// `last_processed_block_number` is auxiliary execution-layer progress metadata.
 #[derive(Debug, Clone, Copy)]
 pub struct SyncProgress {
     pub last_processed_slot: u32,
     pub last_processed_block_number: Option<u32>,
 }
 
+/// Per-slot app-state delta persisted in Postgres so apply/rollback can be replayed idempotently.
 #[derive(Debug, Clone)]
 pub struct SlotJournal {
     pub slot: u32,
@@ -21,6 +26,7 @@ pub struct SlotJournal {
     pub gsr_hashes: Vec<Hash>,
 }
 
+/// Startup recovery task derived from rows that are pending or not fully applied.
 #[derive(Debug, Clone)]
 pub struct PendingRecovery {
     pub slot: u32,
@@ -29,6 +35,7 @@ pub struct PendingRecovery {
     pub journal: SlotJournal,
 }
 
+/// Journal operation type for recovery and rollback staging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JournalOp {
     Apply,
@@ -51,6 +58,7 @@ pub struct SyncDb {
 }
 
 impl SyncDb {
+    /// Connect to Postgres, ensure database exists, and bootstrap schema/indexes.
     pub async fn connect(database_url: &str) -> Result<Self> {
         ensure_database_exists(database_url).await?;
         let pool = PgPoolOptions::new()
@@ -63,6 +71,13 @@ impl SyncDb {
         Ok(store)
     }
 
+    /// Create schema objects used by the sync control plane.
+    ///
+    /// Creates:
+    /// 1. `sync_cursor` for single-row progress tracking
+    /// 2. `canonical_slots` for canonical slot metadata + status
+    /// 3. `slot_apply_journal` for per-slot apply/rollback replay
+    /// 4. supporting indexes for recovery and lookup paths
     async fn bootstrap(&self) -> Result<()> {
         let statements = [
             r#"
@@ -120,6 +135,9 @@ impl SyncDb {
         Ok(())
     }
 
+    /// Ensure cursor row exists and return the next slot to process.
+    ///
+    /// On first run, starts from `initial_start` when provided, otherwise current head.
     pub async fn ensure_cursor_and_get_start_slot(
         &self,
         head_slot: u32,
@@ -202,6 +220,9 @@ impl SyncDb {
         }
     }
 
+    /// Stage canonical slot metadata and journal atomically as `pending`.
+    ///
+    /// RocksDB writes occur in a later step.
     pub async fn save_pending_slot(
         &self,
         slot: u32,
@@ -280,6 +301,7 @@ impl SyncDb {
         Ok(())
     }
 
+    /// Mark slot journal/metadata as applied and advance the single-row cursor atomically.
     pub async fn finalize_slot_applied(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -313,6 +335,9 @@ impl SyncDb {
         Ok(())
     }
 
+    /// Return all slots that need startup recovery.
+    ///
+    /// A slot is recoverable when metadata is still `pending` or journal has `kv_applied=false`.
     pub async fn pending_recoveries(&self) -> Result<Vec<PendingRecovery>> {
         let rows = sqlx::query(
             r#"
@@ -367,6 +392,12 @@ impl SyncDb {
         Ok(recoveries)
     }
 
+    /// Stage rollback in Postgres and return affected journals for RocksDB delete replay.
+    ///
+    /// Two-phase rollback:
+    /// 1. Mark affected slots/journals as rollback-pending and rewind cursor in Postgres.
+    /// 2. Caller replays journal deletes in RocksDB.
+    /// 3. Caller invokes `complete_rollback` to finalize and delete pending rows.
     pub async fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<Vec<SlotJournal>> {
         let rows = if let Some(keep_slot) = keep_slot {
             sqlx::query(
@@ -478,6 +509,11 @@ impl SyncDb {
         Ok(journals)
     }
 
+    /// Finalize rollback by deleting pending canonical rows for the provided slots.
+    ///
+    /// Steps:
+    /// 1. Delete rollback-pending rows from `canonical_slots` for provided slots.
+    /// 2. Let FK cascade delete matching `slot_apply_journal` rows.
     pub async fn complete_rollback(&self, slots: &[u32]) -> Result<()> {
         if slots.is_empty() {
             return Ok(());
@@ -506,6 +542,7 @@ impl SyncDb {
     }
 }
 
+/// Ensure target Postgres database exists (local/dev convenience).
 async fn ensure_database_exists(database_url: &str) -> Result<()> {
     let parsed = Url::parse(database_url).with_context(|| "Invalid SYNC_METADATA_DB URL")?;
     let db_name = parsed

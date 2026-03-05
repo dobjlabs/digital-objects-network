@@ -26,6 +26,8 @@ use crate::config::AppConfig;
 use crate::state_machine::{SlotDelta, StateMachine};
 use crate::sync_db::{JournalOp, SlotJournal, SyncDb};
 
+/// Runtime integration layer that connects network inputs (beacon/execution),
+/// pure state derivation (`StateMachine`), and sync metadata (`SyncDb`).
 pub struct Node {
     pub beacon_cli: BeaconClient,
     pub rpc_cli: RootProvider,
@@ -44,6 +46,7 @@ struct SlotContext {
     has_blob_commitments: bool,
 }
 
+/// Fully-derived result for one slot, ready to be journaled/applied/finalized.
 pub struct ProcessedSlot {
     pub slot: u32,
     pub block_root: B256,
@@ -54,6 +57,7 @@ pub struct ProcessedSlot {
 }
 
 impl Node {
+    /// Construct network clients and bind shared state/sync stores.
     pub async fn new(
         cfg: AppConfig,
         state_machine: Arc<StateMachine>,
@@ -88,6 +92,8 @@ impl Node {
         self.sync_db.slot_root(slot).await
     }
 
+    /// Rewind to `keep_slot` by staging rollback in Postgres, deleting affected keys in RocksDB,
+    /// and finalizing rollback metadata.
     pub async fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
         let journals = self.sync_db.rollback_to_slot(keep_slot).await?;
         self.state_machine.rollback_journals(&journals)?;
@@ -96,6 +102,9 @@ impl Node {
         Ok(())
     }
 
+    /// Recover incomplete apply/rollback operations after crash or shutdown.
+    ///
+    /// Recovery source of truth is Postgres journal state (`pending_recoveries`).
     pub async fn recover_pending(&self) -> Result<()> {
         let recoveries = self.sync_db.pending_recoveries().await?;
         if recoveries.is_empty() {
@@ -121,6 +130,7 @@ impl Node {
         Ok(())
     }
 
+    /// Fetch beacon blob sidecars for a slot and retain only requested versioned hashes.
     async fn get_blobs(&self, slot: u32, versioned_hashes: &[B256]) -> Result<HashMap<B256, Blob>> {
         let blobs = self.beacon_cli.get_blobs(slot.into()).await?;
         debug!(slot, blob_count = blobs.len(), "Fetched blobs from beacon");
@@ -145,15 +155,9 @@ impl Node {
         Ok(blobs)
     }
 
-    fn log_slot_start(ctx: &SlotContext) {
-        info!(
-            "processing slot {} from {}",
-            ctx.slot,
-            DateTime::<Utc>::from_timestamp_secs(ctx.execution_timestamp as i64)
-                .unwrap_or_default(),
-        );
-    }
-
+    /// Resolve consensus+execution context required to derive this slot.
+    ///
+    /// Returns `None` for slots without an execution payload.
     async fn build_slot_context(
         &self,
         beacon_block_header: &BlockHeader,
@@ -197,6 +201,7 @@ impl Node {
         }))
     }
 
+    /// Derive the full per-slot update from beacon/execution data without mutating live memory.
     pub async fn derive_slot_update(
         &self,
         beacon_block_header: &BlockHeader,
@@ -218,7 +223,12 @@ impl Node {
             execution_block_number = slot_ctx.execution_block_number,
             "Resolved execution payload for slot"
         );
-        Self::log_slot_start(&slot_ctx);
+        info!(
+            "Processing slot {} from {}",
+            slot_ctx.slot,
+            DateTime::<Utc>::from_timestamp_secs(slot_ctx.execution_timestamp as i64)
+                .unwrap_or_default(),
+        );
         self.state_machine.log_current_state()?;
 
         let block_number = slot_ctx.execution_block_number;
@@ -303,11 +313,9 @@ impl Node {
             }
         }
 
-        let delta = self.state_machine.derive_slot_delta_pure(
-            slot_ctx.slot,
-            block_number,
-            &blob_payloads,
-        )?;
+        let delta =
+            self.state_machine
+                .derive_slot_delta(slot_ctx.slot, block_number, &blob_payloads)?;
 
         Ok(ProcessedSlot {
             slot: slot_ctx.slot,
@@ -319,14 +327,19 @@ impl Node {
         })
     }
 
-    pub fn apply_slot_delta(&self, delta: &SlotDelta) -> Result<()> {
-        self.state_machine.apply_slot_delta(delta)
+    /// Apply a derived slot delta to RocksDB.
+    pub fn apply_delta_to_db(&self, delta: &SlotDelta) -> Result<()> {
+        self.state_machine.apply_delta_to_db(delta)
     }
 
-    pub fn apply_slot_delta_to_memory(&self, delta: &SlotDelta) -> Result<()> {
+    /// Apply a derived slot delta to in-memory state.
+    ///
+    /// Called only after finalize in the sync loop.
+    pub fn apply_delta_to_memory(&self, delta: &SlotDelta) -> Result<()> {
         self.state_machine.apply_delta_to_memory(delta)
     }
 
+    /// Stage canonical slot metadata and slot journal in Postgres as `pending`.
     pub async fn save_pending_slot(&self, processed: &ProcessedSlot) -> Result<()> {
         let journal = SlotJournal {
             slot: processed.slot,
@@ -356,11 +369,13 @@ impl Node {
             .await
     }
 
+    /// Mark a pending slot applied and advance the sync cursor in Postgres.
     pub async fn finalize_slot_applied(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
         self.sync_db.finalize_slot_applied(slot, block_number).await
     }
 
-    pub fn reload_state_from_kv(&self) -> Result<()> {
+    /// Reload in-memory state from the persisted app database.
+    pub fn reload_from_db(&self) -> Result<()> {
         self.state_machine.reload_from_db()
     }
 }

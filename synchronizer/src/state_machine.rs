@@ -113,8 +113,8 @@ impl StateMachine {
     ///    Updates are all-or-nothing per payload: either all nullifiers are accepted or none are.
     ///
     /// Note: this method mutates only the provided `WorkingState` plus the provided `SlotDelta`.
-    /// Durable writes happen later through `apply_slot_delta`, and in-memory state is applied
-    /// only after durable finalize via `apply_delta_to_memory`.
+    /// Writes happen later through `apply_delta_to_db`, and in-memory state is applied
+    /// only after finalize via `apply_delta_to_memory`.
     fn process_blob(
         &self,
         state: &mut WorkingState,
@@ -179,7 +179,7 @@ impl StateMachine {
         Ok(())
     }
 
-    pub fn derive_slot_delta_pure(
+    pub fn derive_slot_delta(
         &self,
         slot: u32,
         block_number: u32,
@@ -207,7 +207,7 @@ impl StateMachine {
             slot,
             block_number,
             gsr_count = working.global_state_roots.len(),
-            "Derived slot delta without mutating in-memory state"
+            "Slot data"
         );
 
         Ok(delta)
@@ -227,8 +227,8 @@ impl StateMachine {
         Ok(())
     }
 
-    pub fn apply_slot_delta(&self, delta: &SlotDelta) -> Result<()> {
-        self.app_db.apply_slot_delta(
+    pub fn apply_delta_to_db(&self, delta: &SlotDelta) -> Result<()> {
+        self.app_db.apply_delta(
             &delta.tx_hashes,
             &delta.nullifiers,
             &delta.gsr_block_numbers,
@@ -237,7 +237,7 @@ impl StateMachine {
     }
 
     pub fn apply_journal(&self, journal: &SlotJournal) -> Result<()> {
-        self.app_db.apply_slot_delta(
+        self.app_db.apply_delta(
             &journal.tx_hashes,
             &journal.nullifiers,
             &journal.gsr_block_numbers,
@@ -273,7 +273,7 @@ impl StateMachine {
             transaction_count = state.transactions.len(),
             nullifier_count = state.nullifiers.len(),
             gsr_count = state.global_state_roots.len(),
-            "Current in-memory state snapshot"
+            "Current state"
         );
         Ok(())
     }
@@ -315,8 +315,8 @@ mod tests {
     }
 
     fn seed_gsr0(sm: &StateMachine) -> Hash {
-        let d = sm.derive_slot_delta_pure(0, 0, &[]).unwrap();
-        sm.apply_slot_delta(&d).unwrap();
+        let d = sm.derive_slot_delta(0, 0, &[]).unwrap();
+        sm.apply_delta_to_db(&d).unwrap();
         sm.apply_delta_to_memory(&d).unwrap();
         sm.state_snapshot().unwrap().2[0]
     }
@@ -328,16 +328,16 @@ mod tests {
         block_number: u32,
     ) -> SlotDelta {
         let d = sm
-            .derive_slot_delta_pure(slot, block_number, &[blob.to_vec()])
+            .derive_slot_delta(slot, block_number, &[blob.to_vec()])
             .unwrap();
-        sm.apply_slot_delta(&d).unwrap();
+        sm.apply_delta_to_db(&d).unwrap();
         sm.apply_delta_to_memory(&d).unwrap();
         d
     }
 
     fn advance_and_commit(sm: &StateMachine, slot: u32, block_number: u32) -> SlotDelta {
-        let d = sm.derive_slot_delta_pure(slot, block_number, &[]).unwrap();
-        sm.apply_slot_delta(&d).unwrap();
+        let d = sm.derive_slot_delta(slot, block_number, &[]).unwrap();
+        sm.apply_delta_to_db(&d).unwrap();
         sm.apply_delta_to_memory(&d).unwrap();
         d
     }
