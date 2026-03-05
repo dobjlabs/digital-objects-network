@@ -123,12 +123,24 @@ impl StateMachine {
         block_number: Option<u32>,
         delta: &mut SlotDelta,
     ) -> Result<()> {
-        let Some(payload) = self.proof_parser.parse_blob(bytes)? else {
-            info!(
-                slot,
-                block_number, "Blob did not contain a valid TxFinalized proof; skipping"
-            );
-            return Ok(());
+        let payload = match self.proof_parser.parse_blob(bytes) {
+            Ok(Some(payload)) => payload,
+            Ok(None) => {
+                info!(
+                    slot,
+                    block_number, "Blob did not contain a valid TxFinalized proof; skipping"
+                );
+                return Ok(());
+            }
+            Err(err) => {
+                warn!(
+                    slot,
+                    block_number,
+                    ?err,
+                    "Failed to parse/verify TxFinalized payload; skipping blob"
+                );
+                return Ok(());
+            }
         };
 
         // A payload is only valid if it references a GSR we have previously computed.
@@ -511,6 +523,24 @@ mod tests {
         seed_gsr0(&sm);
 
         process_and_commit_blob(&sm, b"not json", 1, 1);
+
+        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
+        assert!(txns.is_empty());
+        assert!(nullifiers.is_empty());
+    }
+
+    #[test]
+    fn test_proof_parse_error_skipped() {
+        let (sm, _dir) = make_sm();
+        seed_gsr0(&sm);
+
+        // JSON shape matches mock parser, but hash decoding fails, causing parser error.
+        process_and_commit_blob(
+            &sm,
+            br#"{"tx_final":"zz","nullifiers":[],"state_root_hash":"zz"}"#,
+            1,
+            1,
+        );
 
         let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
         assert!(txns.is_empty());

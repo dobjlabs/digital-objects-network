@@ -21,6 +21,17 @@ pub fn bytes_from_simple_blob(blob_bytes: &[u8]) -> Result<Vec<u8>> {
     }
 
     let data_len = u64::from_be_bytes(std::array::from_fn(|i| blob_bytes[1 + i])) as usize;
+    if blob_bytes[0] != 0x00 {
+        return Err(anyhow!("Invalid blob: first field-element marker must be 0x00"));
+    }
+    if blob_bytes[9..FIELD_ELEMENT_BYTES_USIZE]
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        return Err(anyhow!(
+            "Invalid blob: length field padding bytes must be zero"
+        ));
+    }
 
     let field_elements = blob_bytes.len() / FIELD_ELEMENT_BYTES_USIZE;
     if field_elements < 1 {
@@ -35,12 +46,18 @@ pub fn bytes_from_simple_blob(blob_bytes: &[u8]) -> Result<Vec<u8>> {
         ));
     }
 
-    Ok(blob_bytes
-        .chunks(FIELD_ELEMENT_BYTES_USIZE)
-        .skip(1)
-        .flat_map(|chunk| chunk[1..].to_vec())
-        .take(data_len)
-        .collect())
+    let mut out = Vec::with_capacity(data_len);
+    for (field_idx, chunk) in blob_bytes.chunks(FIELD_ELEMENT_BYTES_USIZE).enumerate().skip(1) {
+        if chunk[0] != 0x00 {
+            return Err(anyhow!(
+                "Invalid blob: field element {} marker must be 0x00",
+                field_idx
+            ));
+        }
+        out.extend_from_slice(&chunk[1..]);
+    }
+    out.truncate(data_len);
+    Ok(out)
 }
 
 /// Encodes bytes into the "simple" blob encoding, producing a full 4096-field-element blob.
@@ -83,5 +100,26 @@ mod tests {
         let blob = bytes_to_simple_blob(b"");
         let decoded = bytes_from_simple_blob(&blob).unwrap();
         assert_eq!(decoded, b"");
+    }
+
+    #[test]
+    fn test_rejects_nonzero_first_marker() {
+        let mut blob = bytes_to_simple_blob(b"abc");
+        blob[0] = 1;
+        assert!(bytes_from_simple_blob(&blob).is_err());
+    }
+
+    #[test]
+    fn test_rejects_nonzero_length_padding() {
+        let mut blob = bytes_to_simple_blob(b"abc");
+        blob[10] = 1;
+        assert!(bytes_from_simple_blob(&blob).is_err());
+    }
+
+    #[test]
+    fn test_rejects_nonzero_data_field_marker() {
+        let mut blob = bytes_to_simple_blob(b"abc");
+        blob[FIELD_ELEMENT_BYTES_USIZE] = 1;
+        assert!(bytes_from_simple_blob(&blob).is_err());
     }
 }
