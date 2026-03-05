@@ -1,5 +1,6 @@
 use std::{collections::HashSet, sync::Arc};
 
+use alloy::primitives::B256;
 use anyhow::{Context, Result};
 use hex::{FromHex, ToHex};
 use pod2::middleware::Hash;
@@ -11,6 +12,7 @@ const SYNC_BLOCK_KEY: &[u8] = b"sync:last_processed_block_number";
 const TX_PREFIX: &[u8] = b"tx:";
 const NULLIFIER_PREFIX: &[u8] = b"nullifier:";
 const GSR_PREFIX: &[u8] = b"global_state_root:";
+const SLOT_ROOT_PREFIX: &[u8] = b"slot_root:";
 
 #[derive(Debug)]
 pub struct DerivedState {
@@ -47,7 +49,7 @@ impl Db {
     pub fn load_state(&self) -> Result<DerivedState> {
         let mut transactions = HashSet::new();
         let mut nullifiers = HashSet::new();
-        let mut gsr_entries: Vec<(u64, Hash)> = Vec::new();
+        let mut gsr_entries: Vec<(u32, Hash)> = Vec::new();
 
         for entry in self.db.iterator(IteratorMode::Start) {
             let (key, value) = entry?;
@@ -62,12 +64,10 @@ impl Db {
                     nullifiers.insert(hash);
                 }
             } else if key.starts_with(GSR_PREFIX) {
-                let block_bytes = &key[GSR_PREFIX.len()..];
-                if block_bytes.len() == 8 {
-                    let block_number = u64::from_be_bytes(block_bytes.try_into().expect("8 bytes"));
-                    if let Ok(hash) = db_bytes_to_hash(&value) {
-                        gsr_entries.push((block_number, hash));
-                    }
+                if let (Some(block_number), Some((_slot, hash))) =
+                    (gsr_key_block(&key), decode_gsr_value(&value))
+                {
+                    gsr_entries.push((block_number, hash));
                 }
             }
         }
@@ -143,10 +143,90 @@ impl Db {
         Ok(())
     }
 
-    pub fn persist_global_state_root(&self, block_number: i64, hash: Hash) -> Result<()> {
+    pub fn persist_global_state_root(
+        &self,
+        slot: u32,
+        block_number: u32,
+        hash: Hash,
+    ) -> Result<()> {
         let key = gsr_key(block_number);
-        let value = hash_to_db_bytes(hash);
+        let value = encode_gsr_value(slot, hash);
         self.db.put(key, value)?;
+        Ok(())
+    }
+
+    pub fn set_slot_root(&self, slot: u32, root: Option<B256>) -> Result<()> {
+        let key = slot_root_key(slot);
+        match root {
+            Some(root) => self.db.put(key, root.as_slice())?,
+            None => self.db.delete(key)?,
+        }
+        Ok(())
+    }
+
+    pub fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
+        let Some(bytes) = self.db.get(slot_root_key(slot))? else {
+            return Ok(None);
+        };
+        let raw: &[u8] = bytes.as_ref();
+        let arr: [u8; 32] = raw
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid stored slot root bytes"))?;
+        Ok(Some(B256::from(arr)))
+    }
+
+    pub fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
+        let mut batch = WriteBatch::default();
+
+        // Remove any derived records written after the retained canonical slot.
+        for entry in self.db.iterator(IteratorMode::Start) {
+            let (key, value) = entry?;
+            if key.starts_with(TX_PREFIX) || key.starts_with(NULLIFIER_PREFIX) {
+                let should_delete = match keep_slot {
+                    Some(keep) => match serde_json::from_slice::<SeenAt>(&value) {
+                        Ok(seen_at) => seen_at.slot > keep,
+                        Err(_) => true,
+                    },
+                    None => true,
+                };
+                if should_delete {
+                    batch.delete(key);
+                }
+            } else if key.starts_with(GSR_PREFIX) {
+                let should_delete = match keep_slot {
+                    Some(keep) => match decode_gsr_value(&value) {
+                        Some((slot, _hash)) => slot > keep,
+                        None => true,
+                    },
+                    None => true,
+                };
+                if should_delete {
+                    batch.delete(key);
+                }
+            } else if key.starts_with(SLOT_ROOT_PREFIX) {
+                let should_delete = match keep_slot {
+                    Some(keep) => slot_root_key_slot(&key).is_none_or(|slot| slot > keep),
+                    None => true,
+                };
+                if should_delete {
+                    batch.delete(key);
+                }
+            }
+        }
+
+        // Move sync cursor back to the retained slot (or reset completely).
+        match keep_slot {
+            Some(keep) => {
+                batch.put(SYNC_SLOT_KEY, keep.to_be_bytes());
+                batch.delete(SYNC_BLOCK_KEY);
+            }
+            None => {
+                batch.delete(SYNC_SLOT_KEY);
+                batch.delete(SYNC_BLOCK_KEY);
+            }
+        }
+
+        self.db.write(batch)?;
         Ok(())
     }
 }
@@ -159,10 +239,40 @@ fn nullifier_key(hash: Hash) -> Vec<u8> {
     [NULLIFIER_PREFIX, &hash_to_db_bytes(hash)].concat()
 }
 
-fn gsr_key(block_number: i64) -> Vec<u8> {
-    // Use block_number as u64 big-endian for lexicographic ordering
-    let block_u64 = block_number as u64;
-    [GSR_PREFIX, &block_u64.to_be_bytes()].concat()
+fn gsr_key(block_number: u32) -> Vec<u8> {
+    [GSR_PREFIX, &block_number.to_be_bytes()].concat()
+}
+
+fn gsr_key_block(key: &[u8]) -> Option<u32> {
+    let raw = key.strip_prefix(GSR_PREFIX)?;
+    let arr: [u8; 4] = raw.try_into().ok()?;
+    Some(u32::from_be_bytes(arr))
+}
+
+fn slot_root_key(slot: u32) -> Vec<u8> {
+    [SLOT_ROOT_PREFIX, &slot.to_be_bytes()].concat()
+}
+
+fn slot_root_key_slot(key: &[u8]) -> Option<u32> {
+    let raw = key.strip_prefix(SLOT_ROOT_PREFIX)?;
+    let arr: [u8; 4] = raw.try_into().ok()?;
+    Some(u32::from_be_bytes(arr))
+}
+
+fn encode_gsr_value(slot: u32, hash: Hash) -> Vec<u8> {
+    let mut out = Vec::with_capacity(36);
+    out.extend_from_slice(&slot.to_be_bytes());
+    out.extend_from_slice(&hash_to_db_bytes(hash));
+    out
+}
+
+fn decode_gsr_value(bytes: &[u8]) -> Option<(u32, Hash)> {
+    if bytes.len() != 36 {
+        return None;
+    }
+    let slot = u32::from_be_bytes(bytes[0..4].try_into().ok()?);
+    let hash = db_bytes_to_hash(&bytes[4..36]).ok()?;
+    Some((slot, hash))
 }
 
 /// Serialize a Hash to 32 raw bytes for RocksDB storage.
@@ -191,7 +301,8 @@ fn decode_u32(bytes: &[u8]) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pod2::middleware::EMPTY_HASH;
+    use alloy::primitives::B256;
+    use pod2::middleware::{hash_values, Value, EMPTY_HASH};
     use tempfile::TempDir;
 
     fn open_test_db() -> (Db, TempDir) {
@@ -225,12 +336,91 @@ mod tests {
         let (db, _dir) = open_test_db();
 
         // Persist out of order to verify ordering
-        let h0 = EMPTY_HASH;
-        db.persist_global_state_root(10, h0).unwrap();
-        db.persist_global_state_root(5, h0).unwrap();
-        db.persist_global_state_root(20, h0).unwrap();
+        let h0 = hash_values(&[Value::from(0)]);
+        let h1 = hash_values(&[Value::from(1)]);
+        let h2 = hash_values(&[Value::from(2)]);
+        db.persist_global_state_root(10, 10, h0).unwrap();
+        db.persist_global_state_root(5, 5, h1).unwrap();
+        db.persist_global_state_root(20, 20, h2).unwrap();
 
         let state = db.load_state().unwrap();
-        assert_eq!(state.global_state_roots.len(), 3);
+        assert_eq!(state.global_state_roots, vec![h1, h0, h2]);
+    }
+
+    #[test]
+    fn test_rollback_removes_gsrs_after_keep_slot() {
+        let (db, _dir) = open_test_db();
+        let h1 = hash_values(&[Value::from(1)]);
+        let h2 = hash_values(&[Value::from(2)]);
+        let h3 = hash_values(&[Value::from(3)]);
+        db.persist_global_state_root(1, 1, h1).unwrap();
+        db.persist_global_state_root(2, 2, h2).unwrap();
+        db.persist_global_state_root(3, 3, h3).unwrap();
+
+        db.rollback_to_slot(Some(1)).unwrap();
+
+        let state = db.load_state().unwrap();
+        assert_eq!(state.global_state_roots, vec![h1]);
+    }
+
+    #[test]
+    fn test_rollback_to_slot_prunes_all_reorg_sensitive_state() {
+        let (db, _dir) = open_test_db();
+        let tx1 = hash_values(&[Value::from(11)]);
+        let tx2 = hash_values(&[Value::from(12)]);
+        let n1 = hash_values(&[Value::from(21)]);
+        let n2 = hash_values(&[Value::from(22)]);
+        let g1 = hash_values(&[Value::from(31)]);
+        let g2 = hash_values(&[Value::from(32)]);
+        let root1 = B256::from([1u8; 32]);
+        let root2 = B256::from([2u8; 32]);
+
+        db.persist_transaction(tx1, 1, Some(101)).unwrap();
+        db.persist_transaction(tx2, 2, Some(102)).unwrap();
+        db.persist_nullifier(n1, 1, Some(101)).unwrap();
+        db.persist_nullifier(n2, 2, Some(102)).unwrap();
+        db.persist_global_state_root(1, 101, g1).unwrap();
+        db.persist_global_state_root(2, 102, g2).unwrap();
+        db.set_slot_root(1, Some(root1)).unwrap();
+        db.set_slot_root(2, Some(root2)).unwrap();
+        db.mark_slot_processed(2, Some(102)).unwrap();
+
+        db.rollback_to_slot(Some(1)).unwrap();
+
+        let state = db.load_state().unwrap();
+        assert!(state.transactions.contains(&tx1));
+        assert!(!state.transactions.contains(&tx2));
+        assert!(state.nullifiers.contains(&n1));
+        assert!(!state.nullifiers.contains(&n2));
+        assert_eq!(state.global_state_roots, vec![g1]);
+        assert_eq!(db.slot_root(1).unwrap(), Some(root1));
+        assert_eq!(db.slot_root(2).unwrap(), None);
+
+        let progress = db.last_progress().unwrap().expect("progress exists");
+        assert_eq!(progress.last_processed_slot, 1);
+        assert_eq!(progress.last_processed_block_number, None);
+    }
+
+    #[test]
+    fn test_rollback_to_none_resets_all_state() {
+        let (db, _dir) = open_test_db();
+        let tx = hash_values(&[Value::from(11)]);
+        let n = hash_values(&[Value::from(21)]);
+        let g = hash_values(&[Value::from(31)]);
+
+        db.persist_transaction(tx, 1, Some(101)).unwrap();
+        db.persist_nullifier(n, 1, Some(101)).unwrap();
+        db.persist_global_state_root(1, 101, g).unwrap();
+        db.set_slot_root(1, Some(B256::from([1u8; 32]))).unwrap();
+        db.mark_slot_processed(1, Some(101)).unwrap();
+
+        db.rollback_to_slot(None).unwrap();
+
+        let state = db.load_state().unwrap();
+        assert!(state.transactions.is_empty());
+        assert!(state.nullifiers.is_empty());
+        assert!(state.global_state_roots.is_empty());
+        assert_eq!(db.slot_root(1).unwrap(), None);
+        assert!(db.last_progress().unwrap().is_none());
     }
 }
