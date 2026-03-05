@@ -70,7 +70,6 @@ impl SyncDb {
                 id SMALLINT PRIMARY KEY CHECK (id = 1),
                 last_processed_slot INTEGER NULL,
                 last_processed_block_number INTEGER NULL,
-                next_slot INTEGER NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
             "#,
@@ -130,23 +129,24 @@ impl SyncDb {
         head_slot: u32,
         initial_start: Option<u32>,
     ) -> Result<u32> {
-        let start_slot = initial_start.unwrap_or(head_slot);
+        let bootstrap_start_slot = initial_start.unwrap_or(head_slot);
         sqlx::query(
             r#"
-            INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number, next_slot)
-            VALUES (1, NULL, NULL, $1)
+            INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number)
+            VALUES (1, NULL, NULL)
             ON CONFLICT (id) DO NOTHING
             "#,
         )
-        .bind(start_slot as i32)
         .execute(&self.pool)
         .await?;
 
-        let row = sqlx::query("SELECT next_slot FROM sync_cursor WHERE id = 1")
+        let row = sqlx::query("SELECT last_processed_slot FROM sync_cursor WHERE id = 1")
             .fetch_one(&self.pool)
             .await?;
-        let next_slot: i32 = row.get("next_slot");
-        Ok(next_slot as u32)
+        let stored_last: Option<i32> = row.get("last_processed_slot");
+        Ok(stored_last
+            .map(|slot| slot as u32 + 1)
+            .unwrap_or(bootstrap_start_slot))
     }
 
     pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
@@ -300,18 +300,16 @@ impl SyncDb {
 
         sqlx::query(
             r#"
-            INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number, next_slot)
-            VALUES (1, $1, $2, $3)
+            INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number)
+            VALUES (1, $1, $2)
             ON CONFLICT (id) DO UPDATE
             SET last_processed_slot = EXCLUDED.last_processed_slot,
                 last_processed_block_number = EXCLUDED.last_processed_block_number,
-                next_slot = EXCLUDED.next_slot,
                 updated_at = now()
             "#,
         )
         .bind(slot as i32)
         .bind(block_number.map(|v| v as i32))
-        .bind((slot + 1) as i32)
         .execute(&mut *tx)
         .await?;
 
@@ -440,22 +438,19 @@ impl SyncDb {
 
             sqlx::query(
                 r#"
-                INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number, next_slot)
+                INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number)
                 VALUES (
                     1,
                     $1,
-                    (SELECT execution_block_number FROM canonical_slots WHERE slot = $1),
-                    $2
+                    (SELECT execution_block_number FROM canonical_slots WHERE slot = $1)
                 )
                 ON CONFLICT (id) DO UPDATE
                 SET last_processed_slot = EXCLUDED.last_processed_slot,
                     last_processed_block_number = EXCLUDED.last_processed_block_number,
-                    next_slot = EXCLUDED.next_slot,
                     updated_at = now()
                 "#,
             )
             .bind(keep_slot as i32)
-            .bind((keep_slot + 1) as i32)
             .execute(&mut *tx)
             .await?;
         } else {
@@ -471,12 +466,11 @@ impl SyncDb {
 
             sqlx::query(
                 r#"
-                INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number, next_slot)
-                VALUES (1, NULL, NULL, 0)
+                INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number)
+                VALUES (1, NULL, NULL)
                 ON CONFLICT (id) DO UPDATE
                 SET last_processed_slot = NULL,
                     last_processed_block_number = NULL,
-                    next_slot = 0,
                     updated_at = now()
                 "#,
             )

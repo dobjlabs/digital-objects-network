@@ -15,6 +15,31 @@ Service that tracks Digital Object blob transactions on Ethereum and exposes cur
    - decodes payload bytes and derives new state
 4. Persists app state in RocksDB and sync metadata in Postgres, and serves state at `/state`.
 
+## Storage model
+
+### Postgres (`SYNC_METADATA_DB`) — sync control plane
+
+Postgres stores synchronizer metadata and slot-level apply/rollback journaling:
+
+- `sync_cursor`
+  - single-row progress cursor (`last_processed_slot`, `last_processed_block_number`)
+- `canonical_slots`
+  - canonical beacon/execution metadata per slot (`slot`, `block_root`, `parent_root`, `execution_block_number`, `is_empty`, `status`)
+- `slot_apply_journal`
+  - per-slot KV delta and lifecycle (`tx_hashes`, `nullifiers`, `gsr_block_numbers`, `gsr_hashes`, `op`, `kv_applied`)
+
+This is used for deterministic reorg handling and crash-safe recovery.
+
+### RocksDB (`APP_STATE_DB`) — app-derived state store
+
+RocksDB stores only app-derived state:
+
+- accepted transaction hashes
+- spent nullifiers
+- global state roots (GSRs)
+
+RocksDB is updated from Postgres journaled slot deltas and rolled back using the same journal data.
+
 ## API
 
 - `GET /state`
