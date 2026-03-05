@@ -33,13 +33,6 @@ struct SeenAt {
     block_number: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct GsrSeenAt {
-    slot: u32,
-    block_number: u32,
-    hash: Hash,
-}
-
 pub struct Db {
     db: Arc<DB>,
 }
@@ -71,10 +64,10 @@ impl Db {
                     nullifiers.insert(hash);
                 }
             } else if key.starts_with(GSR_PREFIX) {
-                if let (Some(block_number), Some(record)) =
+                if let (Some(block_number), Some((_slot, hash))) =
                     (gsr_key_block(&key), decode_gsr_value(&value))
                 {
-                    gsr_entries.push((block_number, record.hash));
+                    gsr_entries.push((block_number, hash));
                 }
             }
         }
@@ -157,11 +150,7 @@ impl Db {
         hash: Hash,
     ) -> Result<()> {
         let key = gsr_key(block_number);
-        let value = encode_gsr_value(GsrSeenAt {
-            slot,
-            block_number,
-            hash,
-        });
+        let value = encode_gsr_value(slot, hash);
         self.db.put(key, value)?;
         Ok(())
     }
@@ -206,7 +195,7 @@ impl Db {
             } else if key.starts_with(GSR_PREFIX) {
                 let should_delete = match keep_slot {
                     Some(keep) => match decode_gsr_value(&value) {
-                        Some(record) => record.slot > keep,
+                        Some((slot, _hash)) => slot > keep,
                         None => true,
                     },
                     None => true,
@@ -270,26 +259,20 @@ fn slot_root_key_slot(key: &[u8]) -> Option<u32> {
     Some(u32::from_be_bytes(arr))
 }
 
-fn encode_gsr_value(record: GsrSeenAt) -> Vec<u8> {
-    let mut out = Vec::with_capacity(40);
-    out.extend_from_slice(&record.slot.to_be_bytes());
-    out.extend_from_slice(&record.block_number.to_be_bytes());
-    out.extend_from_slice(&hash_to_db_bytes(record.hash));
+fn encode_gsr_value(slot: u32, hash: Hash) -> Vec<u8> {
+    let mut out = Vec::with_capacity(36);
+    out.extend_from_slice(&slot.to_be_bytes());
+    out.extend_from_slice(&hash_to_db_bytes(hash));
     out
 }
 
-fn decode_gsr_value(bytes: &[u8]) -> Option<GsrSeenAt> {
-    if bytes.len() != 40 {
+fn decode_gsr_value(bytes: &[u8]) -> Option<(u32, Hash)> {
+    if bytes.len() != 36 {
         return None;
     }
     let slot = u32::from_be_bytes(bytes[0..4].try_into().ok()?);
-    let block_number = u32::from_be_bytes(bytes[4..8].try_into().ok()?);
-    let hash = db_bytes_to_hash(&bytes[8..40]).ok()?;
-    Some(GsrSeenAt {
-        slot,
-        block_number,
-        hash,
-    })
+    let hash = db_bytes_to_hash(&bytes[4..36]).ok()?;
+    Some((slot, hash))
 }
 
 /// Serialize a Hash to 32 raw bytes for RocksDB storage.
