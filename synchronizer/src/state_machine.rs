@@ -21,12 +21,22 @@ pub struct SlotDelta {
     pub gsr_hashes: Vec<Hash>,
 }
 
+/// In-memory view of the consensus state, kept in sync with the database.
 struct InnerState {
+    /// Set of accepted transaction hashes; used for duplicate detection.
     transactions: HashSet<Hash>,
+    /// Set of spent nullifiers; a nullifier appearing twice indicates a double-spend.
     nullifiers: HashSet<Hash>,
+    /// Ordered history of Global State Roots, one per processed block.
+    /// Blobs may reference any GSR in this history, not just the latest.
     global_state_roots: Vec<Hash>,
 }
 
+/// Domain logic for the synchronizer: proof verification, state validation, and persistence.
+///
+/// `StateMachine` is intentionally decoupled from networking — it operates entirely on
+/// raw byte slices and block numbers, making it straightforward to unit-test without a
+/// live beacon node.
 pub struct StateMachine {
     app_db: AppDb,
     state: RwLock<InnerState>,

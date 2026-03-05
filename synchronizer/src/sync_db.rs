@@ -465,7 +465,7 @@ async fn ensure_database_exists(database_url: &str) -> Result<()> {
         .await
         .with_context(|| "Failed to connect to postgres admin database")?;
 
-    let exists = sqlx::query_scalar::<_, i64>("SELECT 1 FROM pg_database WHERE datname = $1")
+    let exists = sqlx::query_scalar::<_, i32>("SELECT 1 FROM pg_database WHERE datname = $1")
         .bind(db_name)
         .fetch_optional(&admin_pool)
         .await?

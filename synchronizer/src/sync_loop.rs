@@ -65,6 +65,7 @@ pub async fn run_sync_loop(
                 return Ok(());
             }
             SlotHeaderState::Missing => {
+                // A previously canonical slot becoming empty implies canonical history changed.
                 if node.slot_root(next_slot).await?.is_some() {
                     warn!(
                         slot = next_slot,
@@ -74,6 +75,7 @@ pub async fn run_sync_loop(
                     continue;
                 }
 
+                // Empty slots are valid on beacon; persist progress so sync stays in-order.
                 let processed = ProcessedSlot {
                     slot: next_slot,
                     block_root: Default::default(),
@@ -171,6 +173,7 @@ async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
 async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
     let mut slot = current_slot;
     while let Some(prev_slot) = slot.checked_sub(1) {
+        // Walk backward until stored and live roots match (last common ancestor).
         let stored_root = node.slot_root(prev_slot).await?;
         let live_root = node
             .beacon_cli
