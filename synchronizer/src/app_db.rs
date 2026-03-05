@@ -24,18 +24,16 @@ struct SeenAt {
 }
 
 pub struct AppDb {
-    rocks_db: Arc<DB>,
+    db: Arc<DB>,
 }
 
 impl AppDb {
     pub fn connect(db_path: &str) -> Result<Self> {
         let mut opts = Options::default();
         opts.create_if_missing(true);
-        let rocks_db = DB::open(&opts, db_path)
+        let db = DB::open(&opts, db_path)
             .with_context(|| format!("Failed to open RocksDB at path {db_path}"))?;
-        Ok(Self {
-            rocks_db: Arc::new(rocks_db),
-        })
+        Ok(Self { db: Arc::new(db) })
     }
 
     pub fn load_state(&self) -> Result<DerivedState> {
@@ -43,7 +41,7 @@ impl AppDb {
         let mut nullifiers = HashSet::new();
         let mut gsr_entries: Vec<(u32, Hash)> = Vec::new();
 
-        for entry in self.rocks_db.iterator(IteratorMode::Start) {
+        for entry in self.db.iterator(IteratorMode::Start) {
             let (key, value) = entry?;
             if key.starts_with(TX_PREFIX) {
                 let hash_bytes = &key[TX_PREFIX.len()..];
@@ -74,54 +72,18 @@ impl AppDb {
         })
     }
 
-    pub fn persist_transaction(
-        &self,
-        hash: Hash,
-        slot: u32,
-        block_number: Option<u32>,
-    ) -> Result<()> {
-        let key = tx_key(hash);
-        let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
-        self.rocks_db.put(key, value)?;
-        Ok(())
-    }
-
-    pub fn persist_nullifier(
-        &self,
-        hash: Hash,
-        slot: u32,
-        block_number: Option<u32>,
-    ) -> Result<()> {
-        let key = nullifier_key(hash);
-        let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
-        self.rocks_db.put(key, value)?;
-        Ok(())
-    }
-
-    pub fn persist_global_state_root(
-        &self,
-        slot: u32,
-        block_number: u32,
-        hash: Hash,
-    ) -> Result<()> {
-        let key = gsr_key(block_number);
-        let value = encode_gsr_value(slot, hash);
-        self.rocks_db.put(key, value)?;
-        Ok(())
-    }
-
     pub fn delete_transaction(&self, hash: Hash) -> Result<()> {
-        self.rocks_db.delete(tx_key(hash))?;
+        self.db.delete(tx_key(hash))?;
         Ok(())
     }
 
     pub fn delete_nullifier(&self, hash: Hash) -> Result<()> {
-        self.rocks_db.delete(nullifier_key(hash))?;
+        self.db.delete(nullifier_key(hash))?;
         Ok(())
     }
 
     pub fn delete_global_state_root(&self, block_number: u32) -> Result<()> {
-        self.rocks_db.delete(gsr_key(block_number))?;
+        self.db.delete(gsr_key(block_number))?;
         Ok(())
     }
 
@@ -152,7 +114,7 @@ impl AppDb {
             batch.put(gsr_key(*block_number), encode_gsr_value(slot, *gsr));
         }
 
-        self.rocks_db.write(batch)?;
+        self.db.write(batch)?;
         Ok(())
     }
 }
@@ -220,7 +182,9 @@ mod tests {
     fn test_persist_and_load_transaction() {
         let (app_db, _dir) = open_test_db();
         let hash = EMPTY_HASH;
-        app_db.persist_transaction(hash, 1, Some(100)).unwrap();
+        app_db
+            .apply_slot_delta(1, Some(100), &[hash], &[], &[], &[])
+            .unwrap();
 
         let state = app_db.load_state().unwrap();
         assert!(state.transactions.contains(&hash));
@@ -230,7 +194,9 @@ mod tests {
     fn test_persist_and_load_nullifier() {
         let (app_db, _dir) = open_test_db();
         let hash = EMPTY_HASH;
-        app_db.persist_nullifier(hash, 1, Some(100)).unwrap();
+        app_db
+            .apply_slot_delta(1, Some(100), &[], &[hash], &[], &[])
+            .unwrap();
 
         let state = app_db.load_state().unwrap();
         assert!(state.nullifiers.contains(&hash));
@@ -244,9 +210,15 @@ mod tests {
         let h1 = hash_values(&[Value::from(1)]);
         let h2 = hash_values(&[Value::from(2)]);
 
-        app_db.persist_global_state_root(10, 10, h0).unwrap();
-        app_db.persist_global_state_root(5, 5, h1).unwrap();
-        app_db.persist_global_state_root(20, 20, h2).unwrap();
+        app_db
+            .apply_slot_delta(10, Some(10), &[], &[], &[10], &[h0])
+            .unwrap();
+        app_db
+            .apply_slot_delta(5, Some(5), &[], &[], &[5], &[h1])
+            .unwrap();
+        app_db
+            .apply_slot_delta(20, Some(20), &[], &[], &[20], &[h2])
+            .unwrap();
 
         let state = app_db.load_state().unwrap();
         assert_eq!(state.global_state_roots, vec![h1, h0, h2]);
