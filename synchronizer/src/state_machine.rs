@@ -435,6 +435,35 @@ mod tests {
     }
 
     #[test]
+    fn test_reorg_rollback_restores_in_memory_sets() {
+        let (sm, _dir) = make_sm();
+        sm.advance_block(0, 0).unwrap();
+        let gsr0 = sm.state_snapshot().unwrap().2[0];
+
+        let tx1 = unique_hash(101);
+        let n1 = unique_hash(201);
+        sm.process_blob(&mock_txn_bytes(tx1, &[n1], gsr0), 1, Some(1))
+            .unwrap();
+        sm.advance_block(1, 1).unwrap();
+        let gsr1 = sm.state_snapshot().unwrap().2[1];
+
+        let tx2 = unique_hash(102);
+        let n2 = unique_hash(202);
+        sm.process_blob(&mock_txn_bytes(tx2, &[n2], gsr1), 2, Some(2))
+            .unwrap();
+        sm.advance_block(2, 2).unwrap();
+
+        sm.rollback_to_slot(Some(1)).unwrap();
+
+        let (txns, nullifiers, gsrs) = sm.state_snapshot().unwrap();
+        assert!(txns.contains(&tx1));
+        assert!(!txns.contains(&tx2));
+        assert!(nullifiers.contains(&n1));
+        assert!(!nullifiers.contains(&n2));
+        assert_eq!(gsrs.len(), 2);
+    }
+
+    #[test]
     #[ignore = "slow: requires Plonky2 proving (builds circuit on first run, cached thereafter)"]
     fn test_e2e_real_proof() {
         use common::{

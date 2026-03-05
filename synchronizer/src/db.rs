@@ -301,6 +301,7 @@ fn decode_u32(bytes: &[u8]) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::primitives::B256;
     use pod2::middleware::{hash_values, Value, EMPTY_HASH};
     use tempfile::TempDir;
 
@@ -360,5 +361,66 @@ mod tests {
 
         let state = db.load_state().unwrap();
         assert_eq!(state.global_state_roots, vec![h1]);
+    }
+
+    #[test]
+    fn test_rollback_to_slot_prunes_all_reorg_sensitive_state() {
+        let (db, _dir) = open_test_db();
+        let tx1 = hash_values(&[Value::from(11)]);
+        let tx2 = hash_values(&[Value::from(12)]);
+        let n1 = hash_values(&[Value::from(21)]);
+        let n2 = hash_values(&[Value::from(22)]);
+        let g1 = hash_values(&[Value::from(31)]);
+        let g2 = hash_values(&[Value::from(32)]);
+        let root1 = B256::from([1u8; 32]);
+        let root2 = B256::from([2u8; 32]);
+
+        db.persist_transaction(tx1, 1, Some(101)).unwrap();
+        db.persist_transaction(tx2, 2, Some(102)).unwrap();
+        db.persist_nullifier(n1, 1, Some(101)).unwrap();
+        db.persist_nullifier(n2, 2, Some(102)).unwrap();
+        db.persist_global_state_root(1, 101, g1).unwrap();
+        db.persist_global_state_root(2, 102, g2).unwrap();
+        db.set_slot_root(1, Some(root1)).unwrap();
+        db.set_slot_root(2, Some(root2)).unwrap();
+        db.mark_slot_processed(2, Some(102)).unwrap();
+
+        db.rollback_to_slot(Some(1)).unwrap();
+
+        let state = db.load_state().unwrap();
+        assert!(state.transactions.contains(&tx1));
+        assert!(!state.transactions.contains(&tx2));
+        assert!(state.nullifiers.contains(&n1));
+        assert!(!state.nullifiers.contains(&n2));
+        assert_eq!(state.global_state_roots, vec![g1]);
+        assert_eq!(db.slot_root(1).unwrap(), Some(root1));
+        assert_eq!(db.slot_root(2).unwrap(), None);
+
+        let progress = db.last_progress().unwrap().expect("progress exists");
+        assert_eq!(progress.last_processed_slot, 1);
+        assert_eq!(progress.last_processed_block_number, None);
+    }
+
+    #[test]
+    fn test_rollback_to_none_resets_all_state() {
+        let (db, _dir) = open_test_db();
+        let tx = hash_values(&[Value::from(11)]);
+        let n = hash_values(&[Value::from(21)]);
+        let g = hash_values(&[Value::from(31)]);
+
+        db.persist_transaction(tx, 1, Some(101)).unwrap();
+        db.persist_nullifier(n, 1, Some(101)).unwrap();
+        db.persist_global_state_root(1, 101, g).unwrap();
+        db.set_slot_root(1, Some(B256::from([1u8; 32]))).unwrap();
+        db.mark_slot_processed(1, Some(101)).unwrap();
+
+        db.rollback_to_slot(None).unwrap();
+
+        let state = db.load_state().unwrap();
+        assert!(state.transactions.is_empty());
+        assert!(state.nullifiers.is_empty());
+        assert!(state.global_state_roots.is_empty());
+        assert_eq!(db.slot_root(1).unwrap(), None);
+        assert!(db.last_progress().unwrap().is_none());
     }
 }
