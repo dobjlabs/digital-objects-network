@@ -639,7 +639,7 @@ mod tests {
         let pending = sync_db.pending_recoveries().await?;
         assert_eq!(pending.len(), 1);
         let recovery = &pending[0];
-        state_machine.apply_journal(&recovery.journal, recovery.block_number)?;
+        state_machine.apply_journal(&recovery.journal)?;
         sync_db
             .finalize_slot_applied(recovery.slot, recovery.block_number)
             .await?;
@@ -685,7 +685,7 @@ mod tests {
         sync_db
             .save_pending_slot(10, Some(root1), Some(parent), Some(1000), false, &j1)
             .await?;
-        state_machine.apply_journal(&j1, Some(1000))?;
+        state_machine.apply_journal(&j1)?;
         sync_db.finalize_slot_applied(10, Some(1000)).await?;
 
         let j2 = SlotJournal {
@@ -698,7 +698,7 @@ mod tests {
         sync_db
             .save_pending_slot(11, Some(root2), Some(root1), Some(1001), false, &j2)
             .await?;
-        state_machine.apply_journal(&j2, Some(1001))?;
+        state_machine.apply_journal(&j2)?;
         sync_db.finalize_slot_applied(11, Some(1001)).await?;
         state_machine.reload_from_db()?;
 
@@ -749,7 +749,7 @@ mod tests {
         sync_db
             .save_pending_slot(30, Some(root1), Some(parent), Some(3000), false, &j1)
             .await?;
-        state_machine.apply_journal(&j1, Some(3000))?;
+        state_machine.apply_journal(&j1)?;
         sync_db.finalize_slot_applied(30, Some(3000)).await?;
 
         let j2 = SlotJournal {
@@ -762,7 +762,7 @@ mod tests {
         sync_db
             .save_pending_slot(31, Some(root2), Some(root1), Some(3001), false, &j2)
             .await?;
-        state_machine.apply_journal(&j2, Some(3001))?;
+        state_machine.apply_journal(&j2)?;
         sync_db.finalize_slot_applied(31, Some(3001)).await?;
         state_machine.reload_from_db()?;
 

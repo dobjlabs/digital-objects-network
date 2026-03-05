@@ -227,15 +227,8 @@ impl StateMachine {
         Ok(())
     }
 
-    pub fn apply_slot_delta(
-        &self,
-        slot: u32,
-        block_number: Option<u32>,
-        delta: &SlotDelta,
-    ) -> Result<()> {
+    pub fn apply_slot_delta(&self, delta: &SlotDelta) -> Result<()> {
         self.app_db.apply_slot_delta(
-            slot,
-            block_number,
             &delta.tx_hashes,
             &delta.nullifiers,
             &delta.gsr_block_numbers,
@@ -243,10 +236,8 @@ impl StateMachine {
         )
     }
 
-    pub fn apply_journal(&self, journal: &SlotJournal, block_number: Option<u32>) -> Result<()> {
+    pub fn apply_journal(&self, journal: &SlotJournal) -> Result<()> {
         self.app_db.apply_slot_delta(
-            journal.slot,
-            block_number,
             &journal.tx_hashes,
             &journal.nullifiers,
             &journal.gsr_block_numbers,
@@ -325,7 +316,7 @@ mod tests {
 
     fn seed_gsr0(sm: &StateMachine) -> Hash {
         let d = sm.derive_slot_delta_pure(0, 0, &[]).unwrap();
-        sm.apply_slot_delta(0, Some(0), &d).unwrap();
+        sm.apply_slot_delta(&d).unwrap();
         sm.apply_delta_to_memory(&d).unwrap();
         sm.state_snapshot().unwrap().2[0]
     }
@@ -339,14 +330,14 @@ mod tests {
         let d = sm
             .derive_slot_delta_pure(slot, block_number, &[blob.to_vec()])
             .unwrap();
-        sm.apply_slot_delta(slot, Some(block_number), &d).unwrap();
+        sm.apply_slot_delta(&d).unwrap();
         sm.apply_delta_to_memory(&d).unwrap();
         d
     }
 
     fn advance_and_commit(sm: &StateMachine, slot: u32, block_number: u32) -> SlotDelta {
         let d = sm.derive_slot_delta_pure(slot, block_number, &[]).unwrap();
-        sm.apply_slot_delta(slot, Some(block_number), &d).unwrap();
+        sm.apply_slot_delta(&d).unwrap();
         sm.apply_delta_to_memory(&d).unwrap();
         d
     }

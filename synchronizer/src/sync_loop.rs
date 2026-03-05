@@ -140,9 +140,7 @@ pub async fn run_sync_loop(
         let processed = node.derive_slot_update(&beacon_block_header).await?;
         node.save_pending_slot(&processed).await?;
 
-        if let Err(err) =
-            node.apply_slot_delta(processed.slot, processed.block_number, &processed.delta)
-        {
+        if let Err(err) = node.apply_slot_delta(&processed.delta) {
             node.reload_state_from_kv()?;
             return Err(err);
         }

@@ -105,8 +105,7 @@ impl Node {
         for recovery in recoveries {
             match recovery.op {
                 JournalOp::Apply => {
-                    self.state_machine
-                        .apply_journal(&recovery.journal, recovery.block_number)?;
+                    self.state_machine.apply_journal(&recovery.journal)?;
                     self.sync_db
                         .finalize_slot_applied(recovery.slot, recovery.block_number)
                         .await?;
@@ -320,14 +319,8 @@ impl Node {
         })
     }
 
-    pub fn apply_slot_delta(
-        &self,
-        slot: u32,
-        block_number: Option<u32>,
-        delta: &SlotDelta,
-    ) -> Result<()> {
-        self.state_machine
-            .apply_slot_delta(slot, block_number, delta)
+    pub fn apply_slot_delta(&self, delta: &SlotDelta) -> Result<()> {
+        self.state_machine.apply_slot_delta(delta)
     }
 
     pub fn apply_slot_delta_to_memory(&self, delta: &SlotDelta) -> Result<()> {

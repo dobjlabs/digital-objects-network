@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use hex::{FromHex, ToHex};
 use pod2::middleware::Hash;
 use rocksdb::{IteratorMode, Options, WriteBatch, DB};
-use serde::{Deserialize, Serialize};
 
 const TX_PREFIX: &[u8] = b"tx:";
 const NULLIFIER_PREFIX: &[u8] = b"nullifier:";
@@ -17,11 +16,7 @@ pub struct DerivedState {
     pub global_state_roots: Vec<Hash>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct SeenAt {
-    slot: u32,
-    block_number: Option<u32>,
-}
+const PRESENT_VALUE: &[u8] = &[1];
 
 pub struct AppDb {
     db: Arc<DB>,
@@ -54,7 +49,7 @@ impl AppDb {
                     nullifiers.insert(hash);
                 }
             } else if key.starts_with(GSR_PREFIX) {
-                if let (Some(block_number), Some((_slot, hash))) =
+                if let (Some(block_number), Some(hash)) =
                     (gsr_key_block(&key), decode_gsr_value(&value))
                 {
                     gsr_entries.push((block_number, hash));
@@ -94,8 +89,6 @@ impl AppDb {
 
     pub fn apply_slot_delta(
         &self,
-        slot: u32,
-        block_number: Option<u32>,
         tx_hashes: &[Hash],
         nullifiers: &[Hash],
         gsr_block_numbers: &[u32],
@@ -104,19 +97,15 @@ impl AppDb {
         let mut batch = WriteBatch::default();
 
         for tx in tx_hashes {
-            let key = tx_key(*tx);
-            let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
-            batch.put(key, value);
+            batch.put(tx_key(*tx), PRESENT_VALUE);
         }
 
         for nullifier in nullifiers {
-            let key = nullifier_key(*nullifier);
-            let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
-            batch.put(key, value);
+            batch.put(nullifier_key(*nullifier), PRESENT_VALUE);
         }
 
         for (block_number, gsr) in gsr_block_numbers.iter().zip(gsr_hashes.iter()) {
-            batch.put(gsr_key(*block_number), encode_gsr_value(slot, *gsr));
+            batch.put(gsr_key(*block_number), encode_gsr_value(*gsr));
         }
 
         self.db.write(batch)?;
@@ -142,20 +131,15 @@ fn gsr_key_block(key: &[u8]) -> Option<u32> {
     Some(u32::from_be_bytes(arr))
 }
 
-fn encode_gsr_value(slot: u32, hash: Hash) -> Vec<u8> {
-    let mut out = Vec::with_capacity(36);
-    out.extend_from_slice(&slot.to_be_bytes());
-    out.extend_from_slice(&hash_to_db_bytes(hash));
-    out
+fn encode_gsr_value(hash: Hash) -> Vec<u8> {
+    hash_to_db_bytes(hash)
 }
 
-fn decode_gsr_value(bytes: &[u8]) -> Option<(u32, Hash)> {
-    if bytes.len() != 36 {
+fn decode_gsr_value(bytes: &[u8]) -> Option<Hash> {
+    if bytes.len() != 32 {
         return None;
     }
-    let slot = u32::from_be_bytes(bytes[0..4].try_into().ok()?);
-    let hash = db_bytes_to_hash(&bytes[4..36]).ok()?;
-    Some((slot, hash))
+    db_bytes_to_hash(bytes).ok()
 }
 
 pub fn hash_to_db_bytes(hash: Hash) -> Vec<u8> {
@@ -187,9 +171,7 @@ mod tests {
     fn test_persist_and_load_transaction() {
         let (app_db, _dir) = open_test_db();
         let hash = EMPTY_HASH;
-        app_db
-            .apply_slot_delta(1, Some(100), &[hash], &[], &[], &[])
-            .unwrap();
+        app_db.apply_slot_delta(&[hash], &[], &[], &[]).unwrap();
 
         let state = app_db.load_state().unwrap();
         assert!(state.transactions.contains(&hash));
@@ -199,9 +181,7 @@ mod tests {
     fn test_persist_and_load_nullifier() {
         let (app_db, _dir) = open_test_db();
         let hash = EMPTY_HASH;
-        app_db
-            .apply_slot_delta(1, Some(100), &[], &[hash], &[], &[])
-            .unwrap();
+        app_db.apply_slot_delta(&[], &[hash], &[], &[]).unwrap();
 
         let state = app_db.load_state().unwrap();
         assert!(state.nullifiers.contains(&hash));
@@ -215,15 +195,9 @@ mod tests {
         let h1 = hash_values(&[Value::from(1)]);
         let h2 = hash_values(&[Value::from(2)]);
 
-        app_db
-            .apply_slot_delta(10, Some(10), &[], &[], &[10], &[h0])
-            .unwrap();
-        app_db
-            .apply_slot_delta(5, Some(5), &[], &[], &[5], &[h1])
-            .unwrap();
-        app_db
-            .apply_slot_delta(20, Some(20), &[], &[], &[20], &[h2])
-            .unwrap();
+        app_db.apply_slot_delta(&[], &[], &[10], &[h0]).unwrap();
+        app_db.apply_slot_delta(&[], &[], &[5], &[h1]).unwrap();
+        app_db.apply_slot_delta(&[], &[], &[20], &[h2]).unwrap();
 
         let state = app_db.load_state().unwrap();
         assert_eq!(state.global_state_roots, vec![h1, h0, h2]);
@@ -237,7 +211,7 @@ mod tests {
         let gsr = hash_values(&[Value::from(12)]);
 
         app_db
-            .apply_slot_delta(7, Some(700), &[tx], &[nullifier], &[700], &[gsr])
+            .apply_slot_delta(&[tx], &[nullifier], &[700], &[gsr])
             .unwrap();
         let before = app_db.load_state().unwrap();
         assert!(before.transactions.contains(&tx));
