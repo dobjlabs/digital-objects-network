@@ -85,7 +85,21 @@ pub async fn run_sync_loop(
             SlotHeaderState::Present(header) => header,
         };
 
-        if let Some(stored_root) = node.slot_root(next_slot)? {
+        let last_processed_slot = node.last_processed_slot()?;
+        let stored_root_for_slot = node.slot_root(next_slot)?;
+        if last_processed_slot.is_some_and(|last_slot| last_slot >= next_slot)
+            && stored_root_for_slot.is_none()
+        {
+            // A previously empty canonical slot becoming non-empty implies canonical history changed.
+            warn!(
+                slot = next_slot,
+                "Detected reorg: slot was previously empty but now has a block; rewinding"
+            );
+            next_slot = rewind_for_reorg(&node, next_slot).await?;
+            continue;
+        }
+
+        if let Some(stored_root) = stored_root_for_slot {
             // Same slot number with a different block root is a canonical reorg.
             if stored_root != beacon_block_header.root {
                 warn!(

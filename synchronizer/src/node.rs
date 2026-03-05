@@ -185,7 +185,8 @@ impl Node {
 
         if !slot_ctx.has_blob_commitments {
             debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
-            self.state_machine.advance_block(block_number as i64)?;
+            self.state_machine
+                .advance_block(slot_ctx.slot, block_number)?;
             return Ok(Some(block_number));
         }
 
@@ -227,7 +228,8 @@ impl Node {
                 to_address = ?self.config.to_address,
                 "No matching target blob transactions in execution block"
             );
-            self.state_machine.advance_block(block_number as i64)?;
+            self.state_machine
+                .advance_block(slot_ctx.slot, block_number)?;
             return Ok(Some(block_number));
         }
 
@@ -281,7 +283,8 @@ impl Node {
             }
         }
 
-        self.state_machine.advance_block(block_number as i64)?;
+        self.state_machine
+            .advance_block(slot_ctx.slot, block_number)?;
         Ok(Some(block_number))
     }
 }

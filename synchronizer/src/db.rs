@@ -33,6 +33,13 @@ struct SeenAt {
     block_number: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct GsrSeenAt {
+    slot: u32,
+    block_number: u32,
+    hash: Hash,
+}
+
 pub struct Db {
     db: Arc<DB>,
 }
@@ -49,7 +56,7 @@ impl Db {
     pub fn load_state(&self) -> Result<DerivedState> {
         let mut transactions = HashSet::new();
         let mut nullifiers = HashSet::new();
-        let mut gsr_entries: Vec<(u64, Hash)> = Vec::new();
+        let mut gsr_entries: Vec<(u32, Hash)> = Vec::new();
 
         for entry in self.db.iterator(IteratorMode::Start) {
             let (key, value) = entry?;
@@ -64,12 +71,10 @@ impl Db {
                     nullifiers.insert(hash);
                 }
             } else if key.starts_with(GSR_PREFIX) {
-                let block_bytes = &key[GSR_PREFIX.len()..];
-                if block_bytes.len() == 8 {
-                    let block_number = u64::from_be_bytes(block_bytes.try_into().expect("8 bytes"));
-                    if let Ok(hash) = db_bytes_to_hash(&value) {
-                        gsr_entries.push((block_number, hash));
-                    }
+                if let (Some(block_number), Some(record)) =
+                    (gsr_key_block(&key), decode_gsr_value(&value))
+                {
+                    gsr_entries.push((block_number, record.hash));
                 }
             }
         }
@@ -145,9 +150,18 @@ impl Db {
         Ok(())
     }
 
-    pub fn persist_global_state_root(&self, block_number: i64, hash: Hash) -> Result<()> {
+    pub fn persist_global_state_root(
+        &self,
+        slot: u32,
+        block_number: u32,
+        hash: Hash,
+    ) -> Result<()> {
         let key = gsr_key(block_number);
-        let value = hash_to_db_bytes(hash);
+        let value = encode_gsr_value(GsrSeenAt {
+            slot,
+            block_number,
+            hash,
+        });
         self.db.put(key, value)?;
         Ok(())
     }
@@ -183,6 +197,17 @@ impl Db {
                     Some(keep) => match serde_json::from_slice::<SeenAt>(&value) {
                         Ok(seen_at) => seen_at.slot > keep,
                         Err(_) => true,
+                    },
+                    None => true,
+                };
+                if should_delete {
+                    batch.delete(key);
+                }
+            } else if key.starts_with(GSR_PREFIX) {
+                let should_delete = match keep_slot {
+                    Some(keep) => match decode_gsr_value(&value) {
+                        Some(record) => record.slot > keep,
+                        None => true,
                     },
                     None => true,
                 };
@@ -225,10 +250,14 @@ fn nullifier_key(hash: Hash) -> Vec<u8> {
     [NULLIFIER_PREFIX, &hash_to_db_bytes(hash)].concat()
 }
 
-fn gsr_key(block_number: i64) -> Vec<u8> {
-    // Use block_number as u64 big-endian for lexicographic ordering
-    let block_u64 = block_number as u64;
-    [GSR_PREFIX, &block_u64.to_be_bytes()].concat()
+fn gsr_key(block_number: u32) -> Vec<u8> {
+    [GSR_PREFIX, &block_number.to_be_bytes()].concat()
+}
+
+fn gsr_key_block(key: &[u8]) -> Option<u32> {
+    let raw = key.strip_prefix(GSR_PREFIX)?;
+    let arr: [u8; 4] = raw.try_into().ok()?;
+    Some(u32::from_be_bytes(arr))
 }
 
 fn slot_root_key(slot: u32) -> Vec<u8> {
@@ -239,6 +268,28 @@ fn slot_root_key_slot(key: &[u8]) -> Option<u32> {
     let raw = key.strip_prefix(SLOT_ROOT_PREFIX)?;
     let arr: [u8; 4] = raw.try_into().ok()?;
     Some(u32::from_be_bytes(arr))
+}
+
+fn encode_gsr_value(record: GsrSeenAt) -> Vec<u8> {
+    let mut out = Vec::with_capacity(40);
+    out.extend_from_slice(&record.slot.to_be_bytes());
+    out.extend_from_slice(&record.block_number.to_be_bytes());
+    out.extend_from_slice(&hash_to_db_bytes(record.hash));
+    out
+}
+
+fn decode_gsr_value(bytes: &[u8]) -> Option<GsrSeenAt> {
+    if bytes.len() != 40 {
+        return None;
+    }
+    let slot = u32::from_be_bytes(bytes[0..4].try_into().ok()?);
+    let block_number = u32::from_be_bytes(bytes[4..8].try_into().ok()?);
+    let hash = db_bytes_to_hash(&bytes[8..40]).ok()?;
+    Some(GsrSeenAt {
+        slot,
+        block_number,
+        hash,
+    })
 }
 
 /// Serialize a Hash to 32 raw bytes for RocksDB storage.
@@ -267,7 +318,7 @@ fn decode_u32(bytes: &[u8]) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pod2::middleware::EMPTY_HASH;
+    use pod2::middleware::{hash_values, Value, EMPTY_HASH};
     use tempfile::TempDir;
 
     fn open_test_db() -> (Db, TempDir) {
@@ -301,12 +352,30 @@ mod tests {
         let (db, _dir) = open_test_db();
 
         // Persist out of order to verify ordering
-        let h0 = EMPTY_HASH;
-        db.persist_global_state_root(10, h0).unwrap();
-        db.persist_global_state_root(5, h0).unwrap();
-        db.persist_global_state_root(20, h0).unwrap();
+        let h0 = hash_values(&[Value::from(0)]);
+        let h1 = hash_values(&[Value::from(1)]);
+        let h2 = hash_values(&[Value::from(2)]);
+        db.persist_global_state_root(10, 10, h0).unwrap();
+        db.persist_global_state_root(5, 5, h1).unwrap();
+        db.persist_global_state_root(20, 20, h2).unwrap();
 
         let state = db.load_state().unwrap();
-        assert_eq!(state.global_state_roots.len(), 3);
+        assert_eq!(state.global_state_roots, vec![h1, h0, h2]);
+    }
+
+    #[test]
+    fn test_rollback_removes_gsrs_after_keep_slot() {
+        let (db, _dir) = open_test_db();
+        let h1 = hash_values(&[Value::from(1)]);
+        let h2 = hash_values(&[Value::from(2)]);
+        let h3 = hash_values(&[Value::from(3)]);
+        db.persist_global_state_root(1, 1, h1).unwrap();
+        db.persist_global_state_root(2, 2, h2).unwrap();
+        db.persist_global_state_root(3, 3, h3).unwrap();
+
+        db.rollback_to_slot(Some(1)).unwrap();
+
+        let state = db.load_state().unwrap();
+        assert_eq!(state.global_state_roots, vec![h1]);
     }
 }
