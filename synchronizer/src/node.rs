@@ -223,7 +223,7 @@ impl Node {
         self.state_machine.log_current_state()?;
 
         let block_number = slot_ctx.execution_block_number;
-        let mut delta = SlotDelta::default();
+        let mut blob_payloads = Vec::new();
 
         if slot_ctx.has_blob_commitments {
             let execution_block_id =
@@ -292,27 +292,23 @@ impl Node {
                                     slot_ctx.slot, blob.index
                                 )
                             })?;
-                        self.state_machine
-                            .process_blob(&bytes, slot_ctx.slot, Some(block_number), &mut delta)
-                            .with_context(|| {
-                                format!(
-                                    "Failed to process blob at slot {}, blob_index {}",
-                                    slot_ctx.slot, blob.index
-                                )
-                            })?;
+                        blob_payloads.push(bytes);
                         info!(
                             slot = slot_ctx.slot,
                             blob_index = blob.index,
                             tx_hash = ?hash,
-                            "Processed target blob"
+                            "Decoded target blob"
                         );
                     }
                 }
             }
         }
 
-        self.state_machine
-            .advance_block(slot_ctx.slot, block_number, &mut delta)?;
+        let delta = self.state_machine.derive_slot_delta_pure(
+            slot_ctx.slot,
+            block_number,
+            &blob_payloads,
+        )?;
 
         Ok(ProcessedSlot {
             slot: slot_ctx.slot,
@@ -332,6 +328,10 @@ impl Node {
     ) -> Result<()> {
         self.state_machine
             .apply_slot_delta(slot, block_number, delta)
+    }
+
+    pub fn apply_slot_delta_to_memory(&self, delta: &SlotDelta) -> Result<()> {
+        self.state_machine.apply_delta_to_memory(delta)
     }
 
     pub async fn save_pending_slot(&self, processed: &ProcessedSlot) -> Result<()> {

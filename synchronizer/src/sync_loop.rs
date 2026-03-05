@@ -149,6 +149,10 @@ pub async fn run_sync_loop(
 
         node.finalize_slot_applied(processed.slot, processed.block_number)
             .await?;
+        if let Err(err) = node.apply_slot_delta_to_memory(&processed.delta) {
+            node.reload_state_from_kv()?;
+            return Err(err);
+        }
 
         if wait_or_shutdown(sync_delay, &mut shutdown_rx).await {
             info!("Sync loop shutting down");

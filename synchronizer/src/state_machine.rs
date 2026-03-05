@@ -32,6 +32,13 @@ struct InnerState {
     global_state_roots: Vec<Hash>,
 }
 
+#[derive(Clone)]
+struct WorkingState {
+    transactions: HashSet<Hash>,
+    nullifiers: HashSet<Hash>,
+    global_state_roots: Vec<Hash>,
+}
+
 /// Domain logic for the synchronizer: proof verification, state validation, and persistence.
 ///
 /// `StateMachine` is intentionally decoupled from networking — it operates entirely on
@@ -86,6 +93,15 @@ impl StateMachine {
         Ok(())
     }
 
+    fn snapshot_working_state(&self) -> Result<WorkingState> {
+        let state = self.read_state()?;
+        Ok(WorkingState {
+            transactions: state.transactions.clone(),
+            nullifiers: state.nullifiers.clone(),
+            global_state_roots: state.global_state_roots.clone(),
+        })
+    }
+
     /// Process raw blob content (post-blob-encoding extraction).
     ///
     /// Steps:
@@ -96,10 +112,12 @@ impl StateMachine {
     /// 3. Check for duplicate `tx_final` and spent nullifiers before recording the delta.
     ///    Updates are all-or-nothing per payload: either all nullifiers are accepted or none are.
     ///
-    /// Note: this method mutates only in-memory state plus the provided `SlotDelta`.
-    /// Durable KV writes happen later through `apply_slot_delta`, after sync metadata is staged.
-    pub fn process_blob(
+    /// Note: this method mutates only the provided `WorkingState` plus the provided `SlotDelta`.
+    /// Durable writes happen later through `apply_slot_delta`, and in-memory state is applied
+    /// only after durable finalize via `apply_delta_to_memory`.
+    fn process_blob(
         &self,
+        state: &mut WorkingState,
         bytes: &[u8],
         slot: u32,
         block_number: Option<u32>,
@@ -116,16 +134,13 @@ impl StateMachine {
         // A payload is only valid if it references a GSR we have previously computed.
         // We accept any historical GSR, not just the latest, to tolerate blobs that were
         // proven against a state root that has since been superseded.
-        {
-            let state = self.read_state()?;
-            if !state.global_state_roots.contains(&payload.state_root_hash) {
-                warn!(
-                    slot,
-                    block_number,
-                    "Blob proof state_root_hash not found in known GSR history; rejecting"
-                );
-                return Ok(());
-            }
+        if !state.global_state_roots.contains(&payload.state_root_hash) {
+            warn!(
+                slot,
+                block_number,
+                "Blob proof state_root_hash not found in known GSR history; rejecting"
+            );
+            return Ok(());
         }
 
         // All uniqueness checks and DB writes happen under the write lock so that
@@ -134,67 +149,81 @@ impl StateMachine {
         // Strategy: insert tx_final optimistically, then scan all nullifiers.
         // On any collision, roll back the tx_final insertion and bail without touching the DB.
         // Only after all checks pass do we write nullifiers to the DB.
-        {
-            let mut state = self.write_state()?;
-
-            if !state.transactions.insert(payload.tx_final) {
-                warn!(slot, block_number, "Duplicate tx_final; rejecting");
-                return Ok(());
-            }
-
-            for nullifier in &payload.nullifiers {
-                if state.nullifiers.contains(nullifier) {
-                    warn!(slot, block_number, "Duplicate nullifier; rejecting");
-                    // Roll back the optimistic tx_final insertion.
-                    state.transactions.remove(&payload.tx_final);
-                    return Ok(());
-                }
-            }
-
-            delta.tx_hashes.push(payload.tx_final);
-            for nullifier in &payload.nullifiers {
-                state.nullifiers.insert(*nullifier);
-                delta.nullifiers.push(*nullifier);
-            }
-
-            info!(
-                slot,
-                block_number,
-                transaction_count = state.transactions.len(),
-                nullifier_count = state.nullifiers.len(),
-                "Applied blob state update in-memory"
-            );
+        if !state.transactions.insert(payload.tx_final) {
+            warn!(slot, block_number, "Duplicate tx_final; rejecting");
+            return Ok(());
         }
 
+        for nullifier in &payload.nullifiers {
+            if state.nullifiers.contains(nullifier) {
+                warn!(slot, block_number, "Duplicate nullifier; rejecting");
+                // Roll back the optimistic tx_final insertion.
+                state.transactions.remove(&payload.tx_final);
+                return Ok(());
+            }
+        }
+
+        delta.tx_hashes.push(payload.tx_final);
+        for nullifier in &payload.nullifiers {
+            state.nullifiers.insert(*nullifier);
+            delta.nullifiers.push(*nullifier);
+        }
+
+        info!(
+            slot,
+            block_number,
+            transaction_count = state.transactions.len(),
+            nullifier_count = state.nullifiers.len(),
+            "Validated blob state update in slot derivation"
+        );
         Ok(())
     }
 
-    /// Compute and persist a new GSR for the given block, appending it to the history.
-    ///
-    /// Must be called exactly once per block, **after** all blobs for that block have been
-    /// processed. The new GSR commits to the accumulated set of transaction commitments and
-    /// nullifiers so far, so subsequent provers can reference it as their `state_root_hash`.
-    pub fn advance_block(&self, slot: u32, block_number: u32, delta: &mut SlotDelta) -> Result<()> {
-        let mut state = self.write_state()?;
+    pub fn derive_slot_delta_pure(
+        &self,
+        slot: u32,
+        block_number: u32,
+        blob_payloads: &[Vec<u8>],
+    ) -> Result<SlotDelta> {
+        let mut working = self.snapshot_working_state()?;
+        let mut delta = SlotDelta::default();
+
+        for bytes in blob_payloads {
+            self.process_blob(&mut working, bytes, slot, Some(block_number), &mut delta)?;
+        }
 
         let new_gsr = StateRoot::new(
             block_number as i64,
-            &state.transactions,
-            &state.nullifiers,
-            &state.global_state_roots,
+            &working.transactions,
+            &working.nullifiers,
+            &working.global_state_roots,
         )
         .hash();
-
-        state.global_state_roots.push(new_gsr);
+        working.global_state_roots.push(new_gsr);
         delta.gsr_block_numbers.push(block_number);
         delta.gsr_hashes.push(new_gsr);
 
         info!(
             slot,
             block_number,
-            gsr_count = state.global_state_roots.len(),
-            "Computed new GSR in-memory"
+            gsr_count = working.global_state_roots.len(),
+            "Derived slot delta without mutating in-memory state"
         );
+
+        Ok(delta)
+    }
+
+    pub fn apply_delta_to_memory(&self, delta: &SlotDelta) -> Result<()> {
+        let mut state = self.write_state()?;
+        for tx_hash in &delta.tx_hashes {
+            state.transactions.insert(*tx_hash);
+        }
+        for nullifier in &delta.nullifiers {
+            state.nullifiers.insert(*nullifier);
+        }
+        for gsr in &delta.gsr_hashes {
+            state.global_state_roots.push(*gsr);
+        }
         Ok(())
     }
 
@@ -295,9 +324,9 @@ mod tests {
     }
 
     fn seed_gsr0(sm: &StateMachine) -> Hash {
-        let mut d = SlotDelta::default();
-        sm.advance_block(0, 0, &mut d).unwrap();
+        let d = sm.derive_slot_delta_pure(0, 0, &[]).unwrap();
         sm.apply_slot_delta(0, Some(0), &d).unwrap();
+        sm.apply_delta_to_memory(&d).unwrap();
         sm.state_snapshot().unwrap().2[0]
     }
 
@@ -305,18 +334,20 @@ mod tests {
         sm: &StateMachine,
         blob: &[u8],
         slot: u32,
-        block_number: Option<u32>,
+        block_number: u32,
     ) -> SlotDelta {
-        let mut d = SlotDelta::default();
-        sm.process_blob(blob, slot, block_number, &mut d).unwrap();
-        sm.apply_slot_delta(slot, block_number, &d).unwrap();
+        let d = sm
+            .derive_slot_delta_pure(slot, block_number, &[blob.to_vec()])
+            .unwrap();
+        sm.apply_slot_delta(slot, Some(block_number), &d).unwrap();
+        sm.apply_delta_to_memory(&d).unwrap();
         d
     }
 
     fn advance_and_commit(sm: &StateMachine, slot: u32, block_number: u32) -> SlotDelta {
-        let mut d = SlotDelta::default();
-        sm.advance_block(slot, block_number, &mut d).unwrap();
+        let d = sm.derive_slot_delta_pure(slot, block_number, &[]).unwrap();
         sm.apply_slot_delta(slot, Some(block_number), &d).unwrap();
+        sm.apply_delta_to_memory(&d).unwrap();
         d
     }
 
@@ -327,12 +358,7 @@ mod tests {
 
         let tx_hash = unique_hash(1);
         let nullifier = unique_hash(2);
-        process_and_commit_blob(
-            &sm,
-            &mock_txn_bytes(tx_hash, &[nullifier], gsr0),
-            1,
-            Some(1),
-        );
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx_hash, &[nullifier], gsr0), 1, 1);
 
         let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
         assert!(txns.contains(&tx_hash));
@@ -346,16 +372,14 @@ mod tests {
 
         let tx1 = unique_hash(1);
         let null1 = unique_hash(2);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[null1], gsr0), 1, Some(1));
-        advance_and_commit(&sm, 1, 1);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[null1], gsr0), 1, 1);
 
         let gsr1 = sm.state_snapshot().unwrap().2[1];
         assert_ne!(gsr0, gsr1);
 
         let tx2 = unique_hash(3);
         let null2 = unique_hash(4);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[null2], gsr1), 2, Some(2));
-        advance_and_commit(&sm, 2, 2);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[null2], gsr1), 2, 2);
 
         let (txns, nullifiers, gsrs) = sm.state_snapshot().unwrap();
         assert!(txns.contains(&tx1));
@@ -371,12 +395,11 @@ mod tests {
         let gsr0 = seed_gsr0(&sm);
 
         let tx1 = unique_hash(1);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[], gsr0), 1, Some(1));
-        advance_and_commit(&sm, 1, 1);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[], gsr0), 1, 1);
 
         // tx2 is grounded against gsr0, not the newer gsr1 — still valid
         let tx2 = unique_hash(2);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[], gsr0), 1, Some(1));
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[], gsr0), 1, 1);
 
         let (txns, _, _) = sm.state_snapshot().unwrap();
         assert!(txns.contains(&tx1));
@@ -391,8 +414,8 @@ mod tests {
         let tx_final = unique_hash(1);
         let bytes = mock_txn_bytes(tx_final, &[], gsr0);
 
-        process_and_commit_blob(&sm, &bytes, 1, Some(1));
-        process_and_commit_blob(&sm, &bytes, 1, Some(1)); // duplicate; silently rejected
+        process_and_commit_blob(&sm, &bytes, 1, 1);
+        process_and_commit_blob(&sm, &bytes, 1, 1); // duplicate; silently rejected
 
         let (txns, _, _) = sm.state_snapshot().unwrap();
         assert_eq!(txns.len(), 1);
@@ -406,10 +429,10 @@ mod tests {
         let null = unique_hash(10);
 
         let tx1 = unique_hash(1);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[null], gsr0), 1, Some(1));
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[null], gsr0), 1, 1);
 
         let tx2 = unique_hash(2);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[null], gsr0), 1, Some(1)); // rejected
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[null], gsr0), 1, 1); // rejected
 
         let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
         assert!(txns.contains(&tx1));
@@ -427,7 +450,7 @@ mod tests {
         let fresh_b = unique_hash(12);
 
         let tx1 = unique_hash(1);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[spent], gsr0), 1, Some(1));
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[spent], gsr0), 1, 1);
 
         // tx2 has [fresh_a, spent, fresh_b] — 'spent' is a duplicate
         let tx2 = unique_hash(2);
@@ -435,7 +458,7 @@ mod tests {
             &sm,
             &mock_txn_bytes(tx2, &[fresh_a, spent, fresh_b], gsr0),
             1,
-            Some(1),
+            1,
         );
 
         let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
@@ -451,7 +474,7 @@ mod tests {
 
         let bogus_gsr = unique_hash(999);
         let tx_final = unique_hash(1);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx_final, &[], bogus_gsr), 1, Some(1));
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx_final, &[], bogus_gsr), 1, 1);
 
         let (txns, _, _) = sm.state_snapshot().unwrap();
         assert!(txns.is_empty());
@@ -462,7 +485,7 @@ mod tests {
         let (sm, _dir) = make_sm();
         seed_gsr0(&sm);
 
-        process_and_commit_blob(&sm, b"not json", 1, Some(1));
+        process_and_commit_blob(&sm, b"not json", 1, 1);
 
         let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
         assert!(txns.is_empty());
@@ -497,21 +520,21 @@ mod tests {
 
         let tx1 = unique_hash(101);
         let n1 = unique_hash(201);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[n1], gsr0), 1, Some(1));
-        advance_and_commit(&sm, 1, 1);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[n1], gsr0), 1, 1);
         let gsr1 = sm.state_snapshot().unwrap().2[1];
 
         let tx2 = unique_hash(102);
         let n2 = unique_hash(202);
-        let d2 = process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[n2], gsr1), 2, Some(2));
-        let g2 = advance_and_commit(&sm, 2, 2);
+        let d2 = process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[n2], gsr1), 2, 2);
+        let g2_gsr_block_numbers = d2.gsr_block_numbers.clone();
+        let g2_gsr_hashes = d2.gsr_hashes.clone();
 
         let journals = vec![SlotJournal {
             slot: 2,
             tx_hashes: d2.tx_hashes,
             nullifiers: d2.nullifiers,
-            gsr_block_numbers: g2.gsr_block_numbers,
-            gsr_hashes: g2.gsr_hashes,
+            gsr_block_numbers: g2_gsr_block_numbers,
+            gsr_hashes: g2_gsr_hashes,
         }];
         sm.rollback_journals(&journals).unwrap();
 
@@ -594,7 +617,7 @@ mod tests {
             state_root_hash: gsr0,
             nullifiers: nullifiers.clone(),
         };
-        process_and_commit_blob(&sm, &payload.to_bytes(), 1, Some(1));
+        process_and_commit_blob(&sm, &payload.to_bytes(), 1, 1);
 
         let (txns, spent_nullifiers, _) = sm.state_snapshot().unwrap();
         assert!(txns.contains(&tx_final));
