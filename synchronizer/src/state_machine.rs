@@ -227,15 +227,11 @@ impl StateMachine {
 
     pub fn rollback_journals(&self, journals: &[SlotJournal]) -> Result<()> {
         for journal in journals {
-            for tx in &journal.tx_hashes {
-                self.app_db.delete_transaction(*tx)?;
-            }
-            for nullifier in &journal.nullifiers {
-                self.app_db.delete_nullifier(*nullifier)?;
-            }
-            for block_number in &journal.gsr_block_numbers {
-                self.app_db.delete_global_state_root(*block_number)?;
-            }
+            self.app_db.delete_slot_delta(
+                &journal.tx_hashes,
+                &journal.nullifiers,
+                &journal.gsr_block_numbers,
+            )?;
         }
         self.reload_from_db()
     }

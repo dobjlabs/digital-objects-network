@@ -25,7 +25,24 @@ pub struct SlotJournal {
 pub struct PendingRecovery {
     pub slot: u32,
     pub block_number: Option<u32>,
+    pub op: JournalOp,
     pub journal: SlotJournal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JournalOp {
+    Apply,
+    Rollback,
+}
+
+impl JournalOp {
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "apply" => Ok(JournalOp::Apply),
+            "rollback" => Ok(JournalOp::Rollback),
+            _ => Err(anyhow!("invalid journal op: {s}")),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -81,10 +98,15 @@ impl SyncDb {
                 nullifiers BYTEA[] NOT NULL DEFAULT '{}'::bytea[],
                 gsr_block_numbers INTEGER[] NOT NULL DEFAULT '{}'::integer[],
                 gsr_hashes BYTEA[] NOT NULL DEFAULT '{}'::bytea[],
+                op TEXT NOT NULL DEFAULT 'apply',
                 kv_applied BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 kv_applied_at TIMESTAMPTZ NULL
             )
+            "#,
+            r#"
+            ALTER TABLE slot_apply_journal
+            ADD COLUMN IF NOT EXISTS op TEXT NOT NULL DEFAULT 'apply'
             "#,
             r#"
             CREATE INDEX IF NOT EXISTS canonical_slots_status_slot_idx
@@ -218,14 +240,15 @@ impl SyncDb {
 
         sqlx::query(
             r#"
-            INSERT INTO slot_apply_journal(slot, block_root, tx_hashes, nullifiers, gsr_block_numbers, gsr_hashes, kv_applied)
-            VALUES ($1, $2, $3, $4, $5, $6, false)
+            INSERT INTO slot_apply_journal(slot, block_root, tx_hashes, nullifiers, gsr_block_numbers, gsr_hashes, op, kv_applied)
+            VALUES ($1, $2, $3, $4, $5, $6, 'apply', false)
             ON CONFLICT (slot) DO UPDATE
             SET block_root = EXCLUDED.block_root,
                 tx_hashes = EXCLUDED.tx_hashes,
                 nullifiers = EXCLUDED.nullifiers,
                 gsr_block_numbers = EXCLUDED.gsr_block_numbers,
                 gsr_hashes = EXCLUDED.gsr_hashes,
+                op = 'apply',
                 kv_applied = false,
                 kv_applied_at = NULL
             "#,
@@ -301,6 +324,7 @@ impl SyncDb {
             r#"
             SELECT c.slot,
                    c.execution_block_number,
+                   j.op,
                    j.tx_hashes,
                    j.nullifiers,
                    j.gsr_block_numbers,
@@ -320,11 +344,13 @@ impl SyncDb {
             let nullifier_bytes: Vec<Vec<u8>> = row.get("nullifiers");
             let gsr_hash_bytes: Vec<Vec<u8>> = row.get("gsr_hashes");
             let gsr_block_numbers: Vec<i32> = row.get("gsr_block_numbers");
+            let op = JournalOp::from_str(row.get::<&str, _>("op"))?;
             recoveries.push(PendingRecovery {
                 slot: row.get::<i32, _>("slot") as u32,
                 block_number: row
                     .get::<Option<i32>, _>("execution_block_number")
                     .map(|v| v as u32),
+                op,
                 journal: SlotJournal {
                     slot: row.get::<i32, _>("slot") as u32,
                     tx_hashes: tx_hash_bytes
@@ -398,10 +424,19 @@ impl SyncDb {
 
         let mut tx = self.pool.begin().await?;
         if let Some(keep_slot) = keep_slot {
-            sqlx::query("DELETE FROM canonical_slots WHERE slot > $1")
-                .bind(keep_slot as i32)
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query(
+                "UPDATE slot_apply_journal SET op = 'rollback', kv_applied = false, kv_applied_at = NULL WHERE slot > $1",
+            )
+            .bind(keep_slot as i32)
+            .execute(&mut *tx)
+            .await?;
+
+            sqlx::query(
+                "UPDATE canonical_slots SET status = 'pending', updated_at = now() WHERE slot > $1",
+            )
+            .bind(keep_slot as i32)
+            .execute(&mut *tx)
+            .await?;
 
             sqlx::query(
                 r#"
@@ -424,7 +459,13 @@ impl SyncDb {
             .execute(&mut *tx)
             .await?;
         } else {
-            sqlx::query("DELETE FROM canonical_slots")
+            sqlx::query(
+                "UPDATE slot_apply_journal SET op = 'rollback', kv_applied = false, kv_applied_at = NULL",
+            )
+            .execute(&mut *tx)
+            .await?;
+
+            sqlx::query("UPDATE canonical_slots SET status = 'pending', updated_at = now()")
                 .execute(&mut *tx)
                 .await?;
 
@@ -445,6 +486,33 @@ impl SyncDb {
 
         tx.commit().await?;
         Ok(journals)
+    }
+
+    pub async fn complete_rollback(&self, slots: &[u32]) -> Result<()> {
+        if slots.is_empty() {
+            return Ok(());
+        }
+
+        let slot_i32s: Vec<i32> = slots.iter().map(|s| *s as i32).collect();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            r#"
+            DELETE FROM canonical_slots c
+            WHERE c.slot = ANY($1)
+              AND c.status = 'pending'
+              AND EXISTS (
+                SELECT 1
+                FROM slot_apply_journal j
+                WHERE j.slot = c.slot
+                  AND j.op = 'rollback'
+              )
+            "#,
+        )
+        .bind(slot_i32s)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
     }
 }
 
@@ -648,6 +716,86 @@ mod tests {
         assert_eq!(progress.last_processed_block_number, Some(1000));
         assert_eq!(sync_db.slot_root(10).await?, Some(root1));
         assert_eq!(sync_db.slot_root(11).await?, None);
+
+        let (txs, nullifiers, gsrs) = state_machine.state_snapshot()?;
+        assert!(txs.contains(&j1.tx_hashes[0]));
+        assert!(!txs.contains(&j2.tx_hashes[0]));
+        assert!(nullifiers.contains(&j1.nullifiers[0]));
+        assert!(!nullifiers.contains(&j2.nullifiers[0]));
+        assert!(gsrs.contains(&j1.gsr_hashes[0]));
+        assert!(!gsrs.contains(&j2.gsr_hashes[0]));
+
+        drop(sync_db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn test_rollback_staging_survives_crash_and_recovers() -> Result<()> {
+        let _guard = test_db_lock().lock().expect("lock");
+        let (admin_url, db_url, db_name) = test_urls();
+        drop_db(&admin_url, &db_name).await?;
+        let sync_db = SyncDb::connect(&db_url).await?;
+
+        let dir = TempDir::new().unwrap();
+        let app_db = AppDb::connect(dir.path().to_str().unwrap())?;
+        let state_machine = StateMachine::new(app_db, Arc::new(MockBlobParser))?;
+
+        let root1 = B256::from([1u8; 32]);
+        let root2 = B256::from([2u8; 32]);
+        let parent = B256::from([9u8; 32]);
+        let j1 = SlotJournal {
+            slot: 30,
+            tx_hashes: vec![unique_hash(30)],
+            nullifiers: vec![unique_hash(31)],
+            gsr_block_numbers: vec![3000],
+            gsr_hashes: vec![unique_hash(32)],
+        };
+        sync_db
+            .save_pending_slot(30, Some(root1), Some(parent), Some(3000), false, &j1)
+            .await?;
+        state_machine.apply_journal(&j1, Some(3000))?;
+        sync_db.finalize_slot_applied(30, Some(3000)).await?;
+
+        let j2 = SlotJournal {
+            slot: 31,
+            tx_hashes: vec![unique_hash(40)],
+            nullifiers: vec![unique_hash(41)],
+            gsr_block_numbers: vec![3001],
+            gsr_hashes: vec![unique_hash(42)],
+        };
+        sync_db
+            .save_pending_slot(31, Some(root2), Some(root1), Some(3001), false, &j2)
+            .await?;
+        state_machine.apply_journal(&j2, Some(3001))?;
+        sync_db.finalize_slot_applied(31, Some(3001)).await?;
+        state_machine.reload_from_db()?;
+
+        // Stage rollback only; simulate crash before KV rollback/complete step.
+        let staged = sync_db.rollback_to_slot(Some(30)).await?;
+        assert_eq!(staged.len(), 1);
+
+        // "Restart" recovery path should still see rollback work pending.
+        let pending = sync_db.pending_recoveries().await?;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].slot, 31);
+        assert_eq!(pending[0].op, JournalOp::Rollback);
+
+        // Replay what Node::recover_pending does for rollback entries.
+        for recovery in pending {
+            if recovery.op == JournalOp::Rollback {
+                state_machine.rollback_journals(std::slice::from_ref(&recovery.journal))?;
+                sync_db.complete_rollback(&[recovery.slot]).await?;
+            }
+        }
+
+        assert!(sync_db.pending_recoveries().await?.is_empty());
+        let progress = sync_db.last_progress().await?.expect("progress");
+        assert_eq!(progress.last_processed_slot, 30);
+        assert_eq!(progress.last_processed_block_number, Some(3000));
+        assert_eq!(sync_db.slot_root(30).await?, Some(root1));
+        assert_eq!(sync_db.slot_root(31).await?, None);
 
         let (txs, nullifiers, gsrs) = state_machine.state_snapshot()?;
         assert!(txs.contains(&j1.tx_hashes[0]));

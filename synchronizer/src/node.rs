@@ -24,7 +24,7 @@ use tracing::{debug, info, trace};
 use crate::blob::bytes_from_simple_blob;
 use crate::config::AppConfig;
 use crate::state_machine::{SlotDelta, StateMachine};
-use crate::sync_db::{SlotJournal, SyncDb};
+use crate::sync_db::{JournalOp, SlotJournal, SyncDb};
 
 pub struct Node {
     pub beacon_cli: BeaconClient,
@@ -91,6 +91,8 @@ impl Node {
     pub async fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
         let journals = self.sync_db.rollback_to_slot(keep_slot).await?;
         self.state_machine.rollback_journals(&journals)?;
+        let rollback_slots: Vec<u32> = journals.iter().map(|j| j.slot).collect();
+        self.sync_db.complete_rollback(&rollback_slots).await?;
         Ok(())
     }
 
@@ -101,11 +103,20 @@ impl Node {
         }
 
         for recovery in recoveries {
-            self.state_machine
-                .apply_journal(&recovery.journal, recovery.block_number)?;
-            self.sync_db
-                .finalize_slot_applied(recovery.slot, recovery.block_number)
-                .await?;
+            match recovery.op {
+                JournalOp::Apply => {
+                    self.state_machine
+                        .apply_journal(&recovery.journal, recovery.block_number)?;
+                    self.sync_db
+                        .finalize_slot_applied(recovery.slot, recovery.block_number)
+                        .await?;
+                }
+                JournalOp::Rollback => {
+                    self.state_machine
+                        .rollback_journals(std::slice::from_ref(&recovery.journal))?;
+                    self.sync_db.complete_rollback(&[recovery.slot]).await?;
+                }
+            }
         }
         self.state_machine.reload_from_db()?;
         Ok(())

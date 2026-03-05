@@ -72,18 +72,23 @@ impl AppDb {
         })
     }
 
-    pub fn delete_transaction(&self, hash: Hash) -> Result<()> {
-        self.db.delete(tx_key(hash))?;
-        Ok(())
-    }
-
-    pub fn delete_nullifier(&self, hash: Hash) -> Result<()> {
-        self.db.delete(nullifier_key(hash))?;
-        Ok(())
-    }
-
-    pub fn delete_global_state_root(&self, block_number: u32) -> Result<()> {
-        self.db.delete(gsr_key(block_number))?;
+    pub fn delete_slot_delta(
+        &self,
+        tx_hashes: &[Hash],
+        nullifiers: &[Hash],
+        gsr_block_numbers: &[u32],
+    ) -> Result<()> {
+        let mut batch = WriteBatch::default();
+        for tx in tx_hashes {
+            batch.delete(tx_key(*tx));
+        }
+        for nullifier in nullifiers {
+            batch.delete(nullifier_key(*nullifier));
+        }
+        for block_number in gsr_block_numbers {
+            batch.delete(gsr_key(*block_number));
+        }
+        self.db.write(batch)?;
         Ok(())
     }
 
@@ -222,5 +227,29 @@ mod tests {
 
         let state = app_db.load_state().unwrap();
         assert_eq!(state.global_state_roots, vec![h1, h0, h2]);
+    }
+
+    #[test]
+    fn test_delete_slot_delta_removes_all_slot_keys() {
+        let (app_db, _dir) = open_test_db();
+        let tx = hash_values(&[Value::from(10)]);
+        let nullifier = hash_values(&[Value::from(11)]);
+        let gsr = hash_values(&[Value::from(12)]);
+
+        app_db
+            .apply_slot_delta(7, Some(700), &[tx], &[nullifier], &[700], &[gsr])
+            .unwrap();
+        let before = app_db.load_state().unwrap();
+        assert!(before.transactions.contains(&tx));
+        assert!(before.nullifiers.contains(&nullifier));
+        assert!(before.global_state_roots.contains(&gsr));
+
+        app_db
+            .delete_slot_delta(&[tx], &[nullifier], &[700])
+            .unwrap();
+        let after = app_db.load_state().unwrap();
+        assert!(!after.transactions.contains(&tx));
+        assert!(!after.nullifiers.contains(&nullifier));
+        assert!(!after.global_state_roots.contains(&gsr));
     }
 }
