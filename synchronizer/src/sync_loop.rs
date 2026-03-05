@@ -7,7 +7,7 @@ use reqwest_eventsource::{Event, EventSource};
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
-use crate::node::Node;
+use crate::node::{Node, ProcessedSlot};
 
 const HEAD_CHECK_INTERVAL: Duration = Duration::from_secs(12);
 
@@ -65,8 +65,7 @@ pub async fn run_sync_loop(
                 return Ok(());
             }
             SlotHeaderState::Missing => {
-                // A previously canonical slot becoming empty implies canonical history changed.
-                if node.slot_root(next_slot)?.is_some() {
+                if node.slot_root(next_slot).await?.is_some() {
                     warn!(
                         slot = next_slot,
                         "Detected reorg: slot was previously canonical but is now missing; rewinding"
@@ -75,22 +74,28 @@ pub async fn run_sync_loop(
                     continue;
                 }
 
-                // Empty slots are valid on beacon; persist progress so sync stays in-order.
-                info!(slot = next_slot, "No block produced for slot");
-                node.set_slot_root(next_slot, None)?;
-                node.mark_slot_processed(next_slot, None)?;
+                let processed = ProcessedSlot {
+                    slot: next_slot,
+                    block_root: Default::default(),
+                    parent_root: Default::default(),
+                    block_number: None,
+                    is_empty: true,
+                    delta: Default::default(),
+                };
+
+                node.save_pending_slot(&processed).await?;
+                node.finalize_slot_applied(next_slot, None).await?;
                 next_slot += 1;
                 continue;
             }
             SlotHeaderState::Present(header) => header,
         };
 
-        let last_processed_slot = node.last_processed_slot()?;
-        let stored_root_for_slot = node.slot_root(next_slot)?;
+        let last_processed_slot = node.last_processed_slot().await?;
+        let stored_root_for_slot = node.slot_root(next_slot).await?;
         if last_processed_slot.is_some_and(|last_slot| last_slot >= next_slot)
             && stored_root_for_slot.is_none()
         {
-            // A previously empty canonical slot becoming non-empty implies canonical history changed.
             warn!(
                 slot = next_slot,
                 "Detected reorg: slot was previously empty but now has a block; rewinding"
@@ -100,7 +105,6 @@ pub async fn run_sync_loop(
         }
 
         if let Some(stored_root) = stored_root_for_slot {
-            // Same slot number with a different block root is a canonical reorg.
             if stored_root != beacon_block_header.root {
                 warn!(
                     slot = next_slot,
@@ -113,8 +117,7 @@ pub async fn run_sync_loop(
             }
         }
         if let Some(prev_slot) = next_slot.checked_sub(1) {
-            if let Some(prev_root) = node.slot_root(prev_slot)? {
-                // Parent mismatch means our local chain view diverged from current canonical chain.
+            if let Some(prev_root) = node.slot_root(prev_slot).await? {
                 if beacon_block_header.parent_root != prev_root {
                     warn!(
                         slot = next_slot,
@@ -128,11 +131,18 @@ pub async fn run_sync_loop(
             }
         }
 
-        let block_number = node
-            .process_beacon_block_header(&beacon_block_header)
+        let processed = node.derive_slot_update(&beacon_block_header).await?;
+        node.save_pending_slot(&processed).await?;
+
+        if let Err(err) =
+            node.apply_slot_delta(processed.slot, processed.block_number, &processed.delta)
+        {
+            node.reload_state_from_kv()?;
+            return Err(err);
+        }
+
+        node.finalize_slot_applied(processed.slot, processed.block_number)
             .await?;
-        node.set_slot_root(next_slot, Some(beacon_block_header.root))?;
-        node.mark_slot_processed(next_slot, block_number)?;
 
         if wait_or_shutdown(sync_delay, &mut shutdown_rx).await {
             info!("Sync loop shutting down");
@@ -144,10 +154,9 @@ pub async fn run_sync_loop(
 }
 
 async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
-    // Rewind to the first slot after the last matching ancestor, then replay forward.
     let rewind_start = find_divergence_slot(node, current_slot).await?;
     let keep_slot = rewind_start.checked_sub(1);
-    node.rollback_to_slot(keep_slot)?;
+    node.rollback_to_slot(keep_slot).await?;
     info!(
         current_slot,
         rewind_start, keep_slot, "Rewound state to divergence boundary"
@@ -158,8 +167,7 @@ async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
 async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
     let mut slot = current_slot;
     while let Some(prev_slot) = slot.checked_sub(1) {
-        // Walk backward until stored and live roots match (last common ancestor).
-        let stored_root = node.slot_root(prev_slot)?;
+        let stored_root = node.slot_root(prev_slot).await?;
         let live_root = node
             .beacon_cli
             .get_block_header(BlockId::Slot(prev_slot))
@@ -184,10 +192,11 @@ async fn initialize_sync(node: &Node, initial_start_slot: Option<u32>) -> Result
         .expect("head is not None");
     info!(head_slot = head.slot, head_root = ?head.root, "Fetched initial beacon head");
 
-    let start_slot = match node.last_processed_slot()? {
-        Some(last_slot) => last_slot + 1,
-        None => initial_start_slot.unwrap_or(head.slot),
-    };
+    let start_slot = node
+        .sync_db
+        .initialize_cursor_if_missing(head.slot, initial_start_slot)
+        .await?;
+
     info!(start_slot, head_slot = head.slot, "Initialized sync cursor");
 
     Ok(SyncStart {
@@ -234,7 +243,6 @@ impl HeadTracker {
                 info!(target_slot = slot, "Subscribed to beacon head events");
                 self.events = Some(stream);
 
-                // Re-check immediately after subscribe to close subscribe-vs-head race windows.
                 match Self::decide_after_head_check(self.resolve_slot_from_head(node, slot).await?)
                 {
                     AdvanceDecision::ContinueWaiting => {}
@@ -251,7 +259,6 @@ impl HeadTracker {
                     continue;
                 }
                 _ = tokio::time::sleep(HEAD_CHECK_INTERVAL) => {
-                    // Polling fallback keeps liveness if the SSE stream is stale but not closed.
                     match Self::decide_after_head_check(self.resolve_slot_from_head(node, slot).await?) {
                         AdvanceDecision::ContinueWaiting => continue,
                         AdvanceDecision::Return(state) => return Ok(state),
@@ -273,7 +280,6 @@ impl HeadTracker {
                         continue;
                     }
 
-                    // Events are hints; re-read canonical head/slot before deciding.
                     match Self::decide_after_head_check(
                         self.resolve_slot_from_head(node, slot).await?,
                     ) {
@@ -320,7 +326,6 @@ impl HeadTracker {
             return Ok(HeadCheckResult::Present(self.head.clone()));
         }
 
-        // Head passed target: explicit target lookup distinguishes produced vs skipped slot.
         debug!(
             head_slot = self.head.slot,
             target_slot = slot,

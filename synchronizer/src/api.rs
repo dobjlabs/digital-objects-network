@@ -6,12 +6,14 @@ use serde::Serialize;
 use tokio::sync::watch;
 use tracing::info;
 
-use crate::db::hash_to_hex;
+use crate::app_db::hash_to_hex;
 use crate::state_machine::StateMachine;
+use crate::sync_db::SyncDb;
 
 #[derive(Clone)]
 struct AppState {
     state_machine: Arc<StateMachine>,
+    sync_db: Arc<SyncDb>,
 }
 
 #[derive(Serialize)]
@@ -25,12 +27,16 @@ struct StateResponse {
 
 pub async fn run_api_server(
     state_machine: Arc<StateMachine>,
+    sync_db: Arc<SyncDb>,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     let app = Router::new()
         .route("/state", get(get_state))
-        .with_state(AppState { state_machine });
+        .with_state(AppState {
+            state_machine,
+            sync_db,
+        });
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     info!(%bind_addr, "API server listening");
@@ -58,8 +64,9 @@ async fn get_state(
     let current_gsr = global_state_roots.last().map(hash_to_hex);
 
     let progress = app_state
-        .state_machine
+        .sync_db
         .last_progress()
+        .await
         .map_err(internal_error)?;
     let (last_processed_slot, last_processed_block_number) = match progress {
         Some(progress) => (

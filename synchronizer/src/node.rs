@@ -23,27 +23,42 @@ use tracing::{debug, info, trace};
 
 use crate::blob::bytes_from_simple_blob;
 use crate::config::AppConfig;
-use crate::db::SyncProgress;
-use crate::state_machine::StateMachine;
+use crate::state_machine::{SlotDelta, StateMachine};
+use crate::sync_db::{SlotJournal, SyncDb, SyncProgress};
 
 pub struct Node {
     pub beacon_cli: BeaconClient,
     pub rpc_cli: RootProvider,
     pub config: AppConfig,
     pub state_machine: Arc<StateMachine>,
+    pub sync_db: Arc<SyncDb>,
 }
 
 struct SlotContext {
     slot: u32,
     beacon_block_root: B256,
+    parent_root: B256,
     execution_block_hash: B256,
     execution_block_number: u32,
     execution_timestamp: u64,
     has_blob_commitments: bool,
 }
 
+pub struct ProcessedSlot {
+    pub slot: u32,
+    pub block_root: B256,
+    pub parent_root: B256,
+    pub block_number: Option<u32>,
+    pub is_empty: bool,
+    pub delta: SlotDelta,
+}
+
 impl Node {
-    pub async fn new(cfg: AppConfig, state_machine: Arc<StateMachine>) -> Result<Self> {
+    pub async fn new(
+        cfg: AppConfig,
+        state_machine: Arc<StateMachine>,
+        sync_db: Arc<SyncDb>,
+    ) -> Result<Self> {
         let http_cli = reqwest::Client::builder()
             .timeout(Duration::from_secs(8))
             .build()?;
@@ -61,32 +76,43 @@ impl Node {
             rpc_cli,
             config: cfg,
             state_machine,
+            sync_db,
         })
     }
 
-    pub fn last_processed_slot(&self) -> Result<Option<u32>> {
-        self.state_machine.last_processed_slot()
+    pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
+        self.sync_db.last_processed_slot().await
     }
 
-    #[allow(dead_code)]
-    pub fn last_progress(&self) -> Result<Option<SyncProgress>> {
-        self.state_machine.last_progress()
+    pub async fn last_progress(&self) -> Result<Option<SyncProgress>> {
+        self.sync_db.last_progress().await
     }
 
-    pub fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
-        self.state_machine.mark_slot_processed(slot, block_number)
+    pub async fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
+        self.sync_db.slot_root(slot).await
     }
 
-    pub fn set_slot_root(&self, slot: u32, root: Option<B256>) -> Result<()> {
-        self.state_machine.set_slot_root(slot, root)
+    pub async fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
+        let journals = self.sync_db.rollback_to_slot(keep_slot).await?;
+        self.state_machine.rollback_journals(&journals)?;
+        Ok(())
     }
 
-    pub fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
-        self.state_machine.slot_root(slot)
-    }
+    pub async fn recover_pending(&self) -> Result<()> {
+        let recoveries = self.sync_db.pending_recoveries().await?;
+        if recoveries.is_empty() {
+            return Ok(());
+        }
 
-    pub fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
-        self.state_machine.rollback_to_slot(keep_slot)
+        for recovery in recoveries {
+            self.state_machine
+                .apply_journal(&recovery.journal, recovery.block_number)?;
+            self.sync_db
+                .finalize_slot_applied(recovery.slot, recovery.block_number)
+                .await?;
+        }
+        self.state_machine.reload_from_db()?;
+        Ok(())
     }
 
     async fn get_blobs(&self, slot: u32, versioned_hashes: &[B256]) -> Result<HashMap<B256, Blob>> {
@@ -157,6 +183,7 @@ impl Node {
         Ok(Some(SlotContext {
             slot,
             beacon_block_root,
+            parent_root: beacon_block.parent_root,
             execution_block_hash: execution_payload.block_hash,
             execution_block_number: execution_payload.block_number,
             execution_timestamp: execution_payload.timestamp,
@@ -164,12 +191,19 @@ impl Node {
         }))
     }
 
-    pub async fn process_beacon_block_header(
+    pub async fn derive_slot_update(
         &self,
         beacon_block_header: &BlockHeader,
-    ) -> Result<Option<u32>> {
+    ) -> Result<ProcessedSlot> {
         let Some(slot_ctx) = self.build_slot_context(beacon_block_header).await? else {
-            return Ok(None);
+            return Ok(ProcessedSlot {
+                slot: beacon_block_header.slot,
+                block_root: beacon_block_header.root,
+                parent_root: beacon_block_header.parent_root,
+                block_number: None,
+                is_empty: true,
+                delta: SlotDelta::default(),
+            });
         };
 
         debug!(
@@ -182,109 +216,151 @@ impl Node {
         self.state_machine.log_current_state()?;
 
         let block_number = slot_ctx.execution_block_number;
+        let mut delta = SlotDelta::default();
 
-        if !slot_ctx.has_blob_commitments {
-            debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
-            self.state_machine
-                .advance_block(slot_ctx.slot, block_number)?;
-            return Ok(Some(block_number));
-        }
-
-        let execution_block_id =
-            alloy_eips::eip1898::BlockId::Hash(slot_ctx.execution_block_hash.into());
-        let execution_block = self
-            .rpc_cli
-            .get_block(execution_block_id)
-            .full()
-            .await?
-            .with_context(|| {
-                format!(
-                    "Execution block {} not found",
-                    slot_ctx.execution_block_hash
-                )
-            })?;
-
-        let indexed_do_blob_txs: Vec<_> = match execution_block.transactions.as_transactions() {
-            Some(txs) => txs
-                .iter()
-                .enumerate()
-                .filter(|(_index, tx)| {
-                    tx.inner.blob_versioned_hashes().is_some()
-                        && tx.as_recovered().to() == Some(self.config.to_address)
-                })
-                .collect(),
-            None => {
-                return Err(anyhow!(
-                    "Consensus block {} has blobs but the execution block doesn't have txs",
-                    slot_ctx.beacon_block_root
-                ));
-            }
-        };
-
-        if indexed_do_blob_txs.is_empty() {
-            debug!(
-                slot = slot_ctx.slot,
-                execution_block_number = block_number,
-                to_address = ?self.config.to_address,
-                "No matching target blob transactions in execution block"
-            );
-            self.state_machine
-                .advance_block(slot_ctx.slot, block_number)?;
-            return Ok(Some(block_number));
-        }
-
-        let blob_versioned_hashes: Vec<B256> = indexed_do_blob_txs
-            .iter()
-            .flat_map(|(_, tx)| {
-                tx.as_recovered()
-                    .blob_versioned_hashes()
-                    .expect("tx has blobs")
-            })
-            .cloned()
-            .collect();
-        let blobs = self
-            .get_blobs(slot_ctx.slot, &blob_versioned_hashes)
-            .await?;
-
-        for (_tx_index, tx) in indexed_do_blob_txs {
-            let tx = tx.as_recovered();
-            let hash = tx.hash();
-            let from = tx.signer();
-            let to = tx.to();
-            let tx_blobs: Vec<_> = tx
-                .blob_versioned_hashes()
-                .expect("tx has blobs")
-                .iter()
-                .map(|vh| &blobs[vh])
-                .collect();
-            trace!(?hash, ?from, ?to);
-
-            for blob in tx_blobs.iter() {
-                let bytes = bytes_from_simple_blob(blob.blob.inner()).with_context(|| {
+        if slot_ctx.has_blob_commitments {
+            let execution_block_id =
+                alloy_eips::eip1898::BlockId::Hash(slot_ctx.execution_block_hash.into());
+            let execution_block = self
+                .rpc_cli
+                .get_block(execution_block_id)
+                .full()
+                .await?
+                .with_context(|| {
                     format!(
-                        "Invalid byte encoding in blob at slot {}, blob_index {}",
-                        slot_ctx.slot, blob.index
+                        "Execution block {} not found",
+                        slot_ctx.execution_block_hash
                     )
                 })?;
-                self.state_machine
-                    .process_blob(&bytes, slot_ctx.slot, Some(block_number))
-                    .with_context(|| {
-                        format!(
-                            "Failed to process blob at slot {}, blob_index {}",
-                            slot_ctx.slot, blob.index
-                        )
-                    })?;
-                info!(
-                    slot = slot_ctx.slot,
-                    blob_index = blob.index,
-                    tx_hash = ?hash,
-                    "Processed target blob"
-                );
+
+            let indexed_do_blob_txs: Vec<_> = match execution_block.transactions.as_transactions() {
+                Some(txs) => txs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_index, tx)| {
+                        tx.inner.blob_versioned_hashes().is_some()
+                            && tx.as_recovered().to() == Some(self.config.to_address)
+                    })
+                    .collect(),
+                None => {
+                    return Err(anyhow!(
+                        "Consensus block {} has blobs but the execution block doesn't have txs",
+                        slot_ctx.beacon_block_root
+                    ));
+                }
+            };
+
+            if !indexed_do_blob_txs.is_empty() {
+                let blob_versioned_hashes: Vec<B256> = indexed_do_blob_txs
+                    .iter()
+                    .flat_map(|(_, tx)| {
+                        tx.as_recovered()
+                            .blob_versioned_hashes()
+                            .expect("tx has blobs")
+                    })
+                    .cloned()
+                    .collect();
+                let blobs = self
+                    .get_blobs(slot_ctx.slot, &blob_versioned_hashes)
+                    .await?;
+
+                for (_tx_index, tx) in indexed_do_blob_txs {
+                    let tx = tx.as_recovered();
+                    let hash = tx.hash();
+                    let from = tx.signer();
+                    let to = tx.to();
+                    let tx_blobs: Vec<_> = tx
+                        .blob_versioned_hashes()
+                        .expect("tx has blobs")
+                        .iter()
+                        .map(|vh| &blobs[vh])
+                        .collect();
+                    trace!(?hash, ?from, ?to);
+
+                    for blob in tx_blobs.iter() {
+                        let bytes =
+                            bytes_from_simple_blob(blob.blob.inner()).with_context(|| {
+                                format!(
+                                    "Invalid byte encoding in blob at slot {}, blob_index {}",
+                                    slot_ctx.slot, blob.index
+                                )
+                            })?;
+                        self.state_machine
+                            .process_blob(&bytes, slot_ctx.slot, Some(block_number), &mut delta)
+                            .with_context(|| {
+                                format!(
+                                    "Failed to process blob at slot {}, blob_index {}",
+                                    slot_ctx.slot, blob.index
+                                )
+                            })?;
+                        info!(
+                            slot = slot_ctx.slot,
+                            blob_index = blob.index,
+                            tx_hash = ?hash,
+                            "Processed target blob"
+                        );
+                    }
+                }
             }
         }
 
         self.state_machine
-            .advance_block(slot_ctx.slot, block_number)?;
-        Ok(Some(block_number))
+            .advance_block(slot_ctx.slot, block_number, &mut delta)?;
+
+        Ok(ProcessedSlot {
+            slot: slot_ctx.slot,
+            block_root: slot_ctx.beacon_block_root,
+            parent_root: slot_ctx.parent_root,
+            block_number: Some(block_number),
+            is_empty: false,
+            delta,
+        })
+    }
+
+    pub fn apply_slot_delta(
+        &self,
+        slot: u32,
+        block_number: Option<u32>,
+        delta: &SlotDelta,
+    ) -> Result<()> {
+        self.state_machine
+            .apply_slot_delta(slot, block_number, delta)
+    }
+
+    pub async fn save_pending_slot(&self, processed: &ProcessedSlot) -> Result<()> {
+        let journal = SlotJournal {
+            slot: processed.slot,
+            tx_hashes: processed.delta.tx_hashes.clone(),
+            nullifiers: processed.delta.nullifiers.clone(),
+            gsr_block_numbers: processed.delta.gsr_block_numbers.clone(),
+            gsr_hashes: processed.delta.gsr_hashes.clone(),
+        };
+
+        self.sync_db
+            .save_pending_slot(
+                processed.slot,
+                if processed.is_empty {
+                    None
+                } else {
+                    Some(processed.block_root)
+                },
+                if processed.is_empty {
+                    None
+                } else {
+                    Some(processed.parent_root)
+                },
+                processed.block_number,
+                processed.is_empty,
+                &journal,
+            )
+            .await
+    }
+
+    pub async fn finalize_slot_applied(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
+        self.sync_db.finalize_slot_applied(slot, block_number).await
+    }
+
+    pub fn reload_state_from_kv(&self) -> Result<()> {
+        self.state_machine.reload_from_db()
     }
 }
