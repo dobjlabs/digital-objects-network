@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::clients::beacon::types::{BlockHeader, BlockId, HeadEventData, Topic};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
 use tokio::sync::watch;
@@ -219,7 +219,7 @@ async fn persist_processed_slot(node: &Node, processed: &ProcessedSlot) -> Resul
 /// Rewind to the first slot after the last common ancestor and resume from there.
 async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
     let rewind_start = find_divergence_slot(node, current_slot).await?;
-    let keep_slot = rewind_start.checked_sub(1);
+    let keep_slot = rewind_start - 1;
     node.rollback_to_slot(keep_slot).await?;
     info!(
         current_slot,
@@ -243,7 +243,9 @@ async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
         }
         slot = prev_slot;
     }
-    Ok(0)
+    Err(anyhow!(
+        "No common ancestor found while handling reorg at slot {current_slot};"
+    ))
 }
 
 async fn initialize_sync(node: &Node, initial_start_slot: Option<u32>) -> Result<SyncStart> {

@@ -22,7 +22,9 @@ pub fn bytes_from_simple_blob(blob_bytes: &[u8]) -> Result<Vec<u8>> {
 
     let data_len = u64::from_be_bytes(std::array::from_fn(|i| blob_bytes[1 + i])) as usize;
     if blob_bytes[0] != 0x00 {
-        return Err(anyhow!("Invalid blob: first field-element marker must be 0x00"));
+        return Err(anyhow!(
+            "Invalid blob: first field-element marker must be 0x00"
+        ));
     }
     if blob_bytes[9..FIELD_ELEMENT_BYTES_USIZE]
         .iter()
@@ -47,7 +49,11 @@ pub fn bytes_from_simple_blob(blob_bytes: &[u8]) -> Result<Vec<u8>> {
     }
 
     let mut out = Vec::with_capacity(data_len);
-    for (field_idx, chunk) in blob_bytes.chunks(FIELD_ELEMENT_BYTES_USIZE).enumerate().skip(1) {
+    for (field_idx, chunk) in blob_bytes
+        .chunks(FIELD_ELEMENT_BYTES_USIZE)
+        .enumerate()
+        .skip(1)
+    {
         if chunk[0] != 0x00 {
             return Err(anyhow!(
                 "Invalid blob: field element {} marker must be 0x00",

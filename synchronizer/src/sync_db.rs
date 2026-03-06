@@ -398,30 +398,18 @@ impl SyncDb {
     /// 1. Mark affected slots/journals as rollback-pending and rewind cursor in Postgres.
     /// 2. Caller replays journal deletes in RocksDB.
     /// 3. Caller invokes `complete_rollback` to finalize and delete pending rows.
-    pub async fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<Vec<SlotJournal>> {
-        let rows = if let Some(keep_slot) = keep_slot {
-            sqlx::query(
-                r#"
-                SELECT j.slot, j.tx_hashes, j.nullifiers, j.gsr_block_numbers, j.gsr_hashes
-                FROM slot_apply_journal j
-                WHERE j.slot > $1
-                ORDER BY j.slot DESC
-                "#,
-            )
-            .bind(keep_slot as i32)
-            .fetch_all(&self.pool)
-            .await?
-        } else {
-            sqlx::query(
-                r#"
-                SELECT j.slot, j.tx_hashes, j.nullifiers, j.gsr_block_numbers, j.gsr_hashes
-                FROM slot_apply_journal j
-                ORDER BY j.slot DESC
-                "#,
-            )
-            .fetch_all(&self.pool)
-            .await?
-        };
+    pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<Vec<SlotJournal>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT j.slot, j.tx_hashes, j.nullifiers, j.gsr_block_numbers, j.gsr_hashes
+            FROM slot_apply_journal j
+            WHERE j.slot > $1
+            ORDER BY j.slot DESC
+            "#,
+        )
+        .bind(keep_slot as i32)
+        .fetch_all(&self.pool)
+        .await?;
 
         let mut journals = Vec::with_capacity(rows.len());
         for row in rows {
@@ -448,62 +436,37 @@ impl SyncDb {
         }
 
         let mut tx = self.pool.begin().await?;
-        if let Some(keep_slot) = keep_slot {
-            sqlx::query(
-                "UPDATE slot_apply_journal SET op = 'rollback', kv_applied = false, kv_applied_at = NULL WHERE slot > $1",
-            )
-            .bind(keep_slot as i32)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE slot_apply_journal SET op = 'rollback', kv_applied = false, kv_applied_at = NULL WHERE slot > $1",
+        )
+        .bind(keep_slot as i32)
+        .execute(&mut *tx)
+        .await?;
 
-            sqlx::query(
-                "UPDATE canonical_slots SET status = 'pending', updated_at = now() WHERE slot > $1",
-            )
-            .bind(keep_slot as i32)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE canonical_slots SET status = 'pending', updated_at = now() WHERE slot > $1",
+        )
+        .bind(keep_slot as i32)
+        .execute(&mut *tx)
+        .await?;
 
-            sqlx::query(
-                r#"
-                INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number)
-                VALUES (
-                    1,
-                    $1,
-                    (SELECT execution_block_number FROM canonical_slots WHERE slot = $1)
-                )
-                ON CONFLICT (id) DO UPDATE
-                SET last_processed_slot = EXCLUDED.last_processed_slot,
-                    last_processed_block_number = EXCLUDED.last_processed_block_number,
-                    updated_at = now()
-                "#,
+        sqlx::query(
+            r#"
+            INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number)
+            VALUES (
+                1,
+                $1,
+                (SELECT execution_block_number FROM canonical_slots WHERE slot = $1)
             )
-            .bind(keep_slot as i32)
-            .execute(&mut *tx)
-            .await?;
-        } else {
-            sqlx::query(
-                "UPDATE slot_apply_journal SET op = 'rollback', kv_applied = false, kv_applied_at = NULL",
-            )
-            .execute(&mut *tx)
-            .await?;
-
-            sqlx::query("UPDATE canonical_slots SET status = 'pending', updated_at = now()")
-                .execute(&mut *tx)
-                .await?;
-
-            sqlx::query(
-                r#"
-                INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number)
-                VALUES (1, NULL, NULL)
-                ON CONFLICT (id) DO UPDATE
-                SET last_processed_slot = NULL,
-                    last_processed_block_number = NULL,
-                    updated_at = now()
-                "#,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
+            ON CONFLICT (id) DO UPDATE
+            SET last_processed_slot = EXCLUDED.last_processed_slot,
+                last_processed_block_number = EXCLUDED.last_processed_block_number,
+                updated_at = now()
+            "#,
+        )
+        .bind(keep_slot as i32)
+        .execute(&mut *tx)
+        .await?;
 
         tx.commit().await?;
         Ok(journals)
@@ -735,7 +698,7 @@ mod tests {
         sync_db.finalize_slot_applied(11, Some(1001)).await?;
         state_machine.reload_from_db()?;
 
-        let journals = sync_db.rollback_to_slot(Some(10)).await?;
+        let journals = sync_db.rollback_to_slot(10).await?;
         state_machine.rollback_journals(&journals)?;
 
         let progress = sync_db.last_progress().await?.expect("progress");
@@ -800,7 +763,7 @@ mod tests {
         state_machine.reload_from_db()?;
 
         // Stage rollback only; simulate crash before KV rollback/complete step.
-        let staged = sync_db.rollback_to_slot(Some(30)).await?;
+        let staged = sync_db.rollback_to_slot(30).await?;
         assert_eq!(staged.len(), 1);
 
         // "Restart" recovery path should still see rollback work pending.

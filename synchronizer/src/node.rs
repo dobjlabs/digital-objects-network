@@ -94,7 +94,7 @@ impl Node {
 
     /// Rewind to `keep_slot` by staging rollback in Postgres, deleting affected keys in RocksDB,
     /// and finalizing rollback metadata.
-    pub async fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
+    pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
         let journals = self.sync_db.rollback_to_slot(keep_slot).await?;
         self.state_machine.rollback_journals(&journals)?;
         let rollback_slots: Vec<u32> = journals.iter().map(|j| j.slot).collect();
