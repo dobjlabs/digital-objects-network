@@ -19,6 +19,8 @@ pub struct AppConfig {
 }
 
 pub fn load_config() -> Result<AppConfig> {
+    let _ = dotenvy::from_filename("synchronizer/.env");
+
     let db_path = dotenvy::var("DB_PATH").unwrap_or_else(|_| DEFAULT_DB_PATH.to_string());
     let http_bind = dotenvy::var("HTTP_BIND").unwrap_or_else(|_| DEFAULT_HTTP_BIND.to_string());
     let http_bind: SocketAddr = http_bind.parse()?;

@@ -65,8 +65,19 @@ pub async fn run_sync_loop(
                 return Ok(());
             }
             SlotHeaderState::Missing => {
+                // A previously canonical slot becoming empty implies canonical history changed.
+                if node.slot_root(next_slot)?.is_some() {
+                    warn!(
+                        slot = next_slot,
+                        "Detected reorg: slot was previously canonical but is now missing; rewinding"
+                    );
+                    next_slot = rewind_for_reorg(&node, next_slot).await?;
+                    continue;
+                }
+
                 // Empty slots are valid on beacon; persist progress so sync stays in-order.
                 info!(slot = next_slot, "No block produced for slot");
+                node.set_slot_root(next_slot, None)?;
                 node.mark_slot_processed(next_slot, None)?;
                 next_slot += 1;
                 continue;
@@ -74,10 +85,53 @@ pub async fn run_sync_loop(
             SlotHeaderState::Present(header) => header,
         };
 
+        let last_processed_slot = node.last_processed_slot()?;
+        let stored_root_for_slot = node.slot_root(next_slot)?;
+        if last_processed_slot.is_some_and(|last_slot| last_slot >= next_slot)
+            && stored_root_for_slot.is_none()
+        {
+            // A previously empty canonical slot becoming non-empty implies canonical history changed.
+            warn!(
+                slot = next_slot,
+                "Detected reorg: slot was previously empty but now has a block; rewinding"
+            );
+            next_slot = rewind_for_reorg(&node, next_slot).await?;
+            continue;
+        }
+
+        if let Some(stored_root) = stored_root_for_slot {
+            // Same slot number with a different block root is a canonical reorg.
+            if stored_root != beacon_block_header.root {
+                warn!(
+                    slot = next_slot,
+                    stored_root = ?stored_root,
+                    fetched_root = ?beacon_block_header.root,
+                    "Detected reorg: canonical root changed for slot; rewinding"
+                );
+                next_slot = rewind_for_reorg(&node, next_slot).await?;
+                continue;
+            }
+        }
+        if let Some(prev_slot) = next_slot.checked_sub(1) {
+            if let Some(prev_root) = node.slot_root(prev_slot)? {
+                // Parent mismatch means our local chain view diverged from current canonical chain.
+                if beacon_block_header.parent_root != prev_root {
+                    warn!(
+                        slot = next_slot,
+                        expected_parent = ?prev_root,
+                        actual_parent = ?beacon_block_header.parent_root,
+                        "Detected reorg: parent linkage mismatch; rewinding"
+                    );
+                    next_slot = rewind_for_reorg(&node, next_slot).await?;
+                    continue;
+                }
+            }
+        }
+
         let block_number = node
             .process_beacon_block_header(&beacon_block_header)
             .await?;
-
+        node.set_slot_root(next_slot, Some(beacon_block_header.root))?;
         node.mark_slot_processed(next_slot, block_number)?;
 
         if wait_or_shutdown(sync_delay, &mut shutdown_rx).await {
@@ -87,6 +141,36 @@ pub async fn run_sync_loop(
 
         next_slot += 1;
     }
+}
+
+async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
+    // Rewind to the first slot after the last matching ancestor, then replay forward.
+    let rewind_start = find_divergence_slot(node, current_slot).await?;
+    let keep_slot = rewind_start.checked_sub(1);
+    node.rollback_to_slot(keep_slot)?;
+    info!(
+        current_slot,
+        rewind_start, keep_slot, "Rewound state to divergence boundary"
+    );
+    Ok(rewind_start)
+}
+
+async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
+    let mut slot = current_slot;
+    while let Some(prev_slot) = slot.checked_sub(1) {
+        // Walk backward until stored and live roots match (last common ancestor).
+        let stored_root = node.slot_root(prev_slot)?;
+        let live_root = node
+            .beacon_cli
+            .get_block_header(BlockId::Slot(prev_slot))
+            .await?
+            .map(|header| header.root);
+        if stored_root == live_root {
+            return Ok(prev_slot + 1);
+        }
+        slot = prev_slot;
+    }
+    Ok(0)
 }
 
 async fn initialize_sync(node: &Node, initial_start_slot: Option<u32>) -> Result<SyncStart> {

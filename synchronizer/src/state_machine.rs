@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use alloy::primitives::B256;
 use anyhow::{anyhow, Result};
 use pod2::middleware::Hash;
 use tracing::{info, warn};
@@ -145,20 +146,22 @@ impl StateMachine {
     /// Must be called exactly once per block, **after** all blobs for that block have been
     /// processed. The new GSR commits to the accumulated set of transaction commitments and
     /// nullifiers so far, so subsequent provers can reference it as their `state_root_hash`.
-    pub fn advance_block(&self, block_number: i64) -> Result<()> {
+    pub fn advance_block(&self, slot: u32, block_number: u32) -> Result<()> {
         let mut state = self.write_state()?;
 
         let new_gsr = StateRoot::new(
-            block_number,
+            block_number as i64,
             &state.transactions,
             &state.nullifiers,
             &state.global_state_roots,
         )
         .hash();
         state.global_state_roots.push(new_gsr);
-        self.db.persist_global_state_root(block_number, new_gsr)?;
+        self.db
+            .persist_global_state_root(slot, block_number, new_gsr)?;
 
         info!(
+            slot,
             block_number,
             gsr_count = state.global_state_roots.len(),
             "Computed and persisted new GSR"
@@ -198,6 +201,28 @@ impl StateMachine {
 
     pub fn mark_slot_processed(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
         self.db.mark_slot_processed(slot, block_number)
+    }
+
+    pub fn set_slot_root(&self, slot: u32, root: Option<B256>) -> Result<()> {
+        self.db.set_slot_root(slot, root)
+    }
+
+    pub fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
+        self.db.slot_root(slot)
+    }
+
+    pub fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
+        self.db.rollback_to_slot(keep_slot)?;
+        let DerivedState {
+            transactions,
+            nullifiers,
+            global_state_roots,
+        } = self.db.load_state()?;
+        let mut state = self.write_state()?;
+        state.transactions = transactions;
+        state.nullifiers = nullifiers;
+        state.global_state_roots = global_state_roots;
+        Ok(())
     }
 }
 
@@ -239,7 +264,7 @@ mod tests {
     #[test]
     fn test_happy_path_single_tx() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0).unwrap();
+        sm.advance_block(0, 0).unwrap();
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
         let tx_hash = unique_hash(1);
@@ -255,14 +280,14 @@ mod tests {
     #[test]
     fn test_sequence_across_blocks() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0).unwrap();
+        sm.advance_block(0, 0).unwrap();
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
         let tx1 = unique_hash(1);
         let null1 = unique_hash(2);
         sm.process_blob(&mock_txn_bytes(tx1, &[null1], gsr0), 1, Some(1))
             .unwrap();
-        sm.advance_block(1).unwrap();
+        sm.advance_block(1, 1).unwrap();
 
         let gsr1 = sm.state_snapshot().unwrap().2[1];
         assert_ne!(gsr0, gsr1);
@@ -271,7 +296,7 @@ mod tests {
         let null2 = unique_hash(4);
         sm.process_blob(&mock_txn_bytes(tx2, &[null2], gsr1), 2, Some(2))
             .unwrap();
-        sm.advance_block(2).unwrap();
+        sm.advance_block(2, 2).unwrap();
 
         let (txns, nullifiers, gsrs) = sm.state_snapshot().unwrap();
         assert!(txns.contains(&tx1));
@@ -284,13 +309,13 @@ mod tests {
     #[test]
     fn test_old_gsr_still_valid() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0).unwrap();
+        sm.advance_block(0, 0).unwrap();
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
         let tx1 = unique_hash(1);
         sm.process_blob(&mock_txn_bytes(tx1, &[], gsr0), 1, Some(1))
             .unwrap();
-        sm.advance_block(1).unwrap();
+        sm.advance_block(1, 1).unwrap();
 
         // tx2 is grounded against gsr0, not the newer gsr1 — still valid
         let tx2 = unique_hash(2);
@@ -305,7 +330,7 @@ mod tests {
     #[test]
     fn test_duplicate_tx_rejected() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0).unwrap();
+        sm.advance_block(0, 0).unwrap();
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
         let tx_final = unique_hash(1);
@@ -321,7 +346,7 @@ mod tests {
     #[test]
     fn test_duplicate_nullifier_rejected() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0).unwrap();
+        sm.advance_block(0, 0).unwrap();
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
         let null = unique_hash(10);
@@ -343,7 +368,7 @@ mod tests {
     #[test]
     fn test_nullifier_collision_is_atomic() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0).unwrap();
+        sm.advance_block(0, 0).unwrap();
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
         let spent = unique_hash(10);
@@ -372,7 +397,7 @@ mod tests {
     #[test]
     fn test_unknown_gsr_rejected() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0).unwrap();
+        sm.advance_block(0, 0).unwrap();
 
         let bogus_gsr = unique_hash(999);
         let tx_final = unique_hash(1);
@@ -386,13 +411,56 @@ mod tests {
     #[test]
     fn test_invalid_blob_skipped() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0).unwrap();
+        sm.advance_block(0, 0).unwrap();
 
         sm.process_blob(b"not json", 1, Some(1)).unwrap();
 
         let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
         assert!(txns.is_empty());
         assert!(nullifiers.is_empty());
+    }
+
+    #[test]
+    fn test_rollback_reloads_gsrs_from_retained_slot() {
+        let (sm, _dir) = make_sm();
+        sm.advance_block(0, 0).unwrap();
+        sm.advance_block(1, 1).unwrap();
+        sm.advance_block(2, 2).unwrap();
+        assert_eq!(sm.state_snapshot().unwrap().2.len(), 3);
+
+        sm.rollback_to_slot(Some(1)).unwrap();
+
+        let (_, _, gsrs) = sm.state_snapshot().unwrap();
+        assert_eq!(gsrs.len(), 2);
+    }
+
+    #[test]
+    fn test_reorg_rollback_restores_in_memory_sets() {
+        let (sm, _dir) = make_sm();
+        sm.advance_block(0, 0).unwrap();
+        let gsr0 = sm.state_snapshot().unwrap().2[0];
+
+        let tx1 = unique_hash(101);
+        let n1 = unique_hash(201);
+        sm.process_blob(&mock_txn_bytes(tx1, &[n1], gsr0), 1, Some(1))
+            .unwrap();
+        sm.advance_block(1, 1).unwrap();
+        let gsr1 = sm.state_snapshot().unwrap().2[1];
+
+        let tx2 = unique_hash(102);
+        let n2 = unique_hash(202);
+        sm.process_blob(&mock_txn_bytes(tx2, &[n2], gsr1), 2, Some(2))
+            .unwrap();
+        sm.advance_block(2, 2).unwrap();
+
+        sm.rollback_to_slot(Some(1)).unwrap();
+
+        let (txns, nullifiers, gsrs) = sm.state_snapshot().unwrap();
+        assert!(txns.contains(&tx1));
+        assert!(!txns.contains(&tx2));
+        assert!(nullifiers.contains(&n1));
+        assert!(!nullifiers.contains(&n2));
+        assert_eq!(gsrs.len(), 2);
     }
 
     #[test]
@@ -422,7 +490,7 @@ mod tests {
             StateMachine::new(db, Arc::new(crate::proof::ProofParser::new().unwrap())).unwrap();
 
         // Seed GSR0 (empty state).
-        sm.advance_block(0).unwrap();
+        sm.advance_block(0, 0).unwrap();
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
         // Build a txlib StateRoot matching the empty GSR0 and verify it agrees.

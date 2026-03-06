@@ -77,6 +77,18 @@ impl Node {
         self.state_machine.mark_slot_processed(slot, block_number)
     }
 
+    pub fn set_slot_root(&self, slot: u32, root: Option<B256>) -> Result<()> {
+        self.state_machine.set_slot_root(slot, root)
+    }
+
+    pub fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
+        self.state_machine.slot_root(slot)
+    }
+
+    pub fn rollback_to_slot(&self, keep_slot: Option<u32>) -> Result<()> {
+        self.state_machine.rollback_to_slot(keep_slot)
+    }
+
     async fn get_blobs(&self, slot: u32, versioned_hashes: &[B256]) -> Result<HashMap<B256, Blob>> {
         let blobs = self.beacon_cli.get_blobs(slot.into()).await?;
         debug!(slot, blob_count = blobs.len(), "Fetched blobs from beacon");
@@ -173,7 +185,8 @@ impl Node {
 
         if !slot_ctx.has_blob_commitments {
             debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
-            self.state_machine.advance_block(block_number as i64)?;
+            self.state_machine
+                .advance_block(slot_ctx.slot, block_number)?;
             return Ok(Some(block_number));
         }
 
@@ -215,7 +228,8 @@ impl Node {
                 to_address = ?self.config.to_address,
                 "No matching target blob transactions in execution block"
             );
-            self.state_machine.advance_block(block_number as i64)?;
+            self.state_machine
+                .advance_block(slot_ctx.slot, block_number)?;
             return Ok(Some(block_number));
         }
 
@@ -269,7 +283,8 @@ impl Node {
             }
         }
 
-        self.state_machine.advance_block(block_number as i64)?;
+        self.state_machine
+            .advance_block(slot_ctx.slot, block_number)?;
         Ok(Some(block_number))
     }
 }
