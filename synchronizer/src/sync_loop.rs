@@ -292,6 +292,12 @@ impl HeadTracker {
         shutdown_rx: &mut watch::Receiver<bool>,
     ) -> Result<SlotHeaderState> {
         if slot <= self.head.slot {
+            info!(
+                next_slot = slot,
+                head_slot = self.head.slot,
+                slots_behind = self.head.slot - slot,
+                "Catching up to beacon head"
+            );
             return Ok(
                 match node
                     .beacon_cli
