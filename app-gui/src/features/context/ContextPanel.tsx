@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { DragEvent } from "react";
 import type {
   ContextSelection,
+  FieldValue,
   InventoryItem,
   Recipe,
 } from "../../shared/types/domain";
@@ -52,24 +53,35 @@ export function ContextPanel({
       .trim()
       .toLowerCase();
 
-  const parseDropPayload = (
-    raw: string,
-  ): { itemId?: string; name?: string } => {
+  const parseDropPayload = (raw: string): {
+    itemId?: string;
+    name?: string;
+    className?: string;
+  } => {
     try {
-      const parsed = JSON.parse(raw) as { itemId?: string; name?: string };
+      const parsed = JSON.parse(raw) as {
+        itemId?: string;
+        name?: string;
+        className?: string;
+      };
       return parsed;
     } catch {
       return { name: raw };
     }
   };
 
-  const isArgCompatible = (arg: string, droppedName: string) => {
+  const isArgCompatible = (
+    arg: string,
+    droppedName: string,
+    droppedClassName?: string,
+  ) => {
     const expected = normalizeThingName(arg);
-    const actual = normalizeThingName(droppedName);
+    const actualName = normalizeThingName(droppedName);
+    const actualClass = normalizeThingName(droppedClassName ?? "");
 
-    if (!expected || !actual) return false;
+    if (!expected || (!actualName && !actualClass)) return false;
     if (expected.startsWith("0x")) return false;
-    return expected === actual;
+    return expected === actualClass || expected === actualName;
   };
 
   const isManualArg = (arg: string) => arg.trim().startsWith("0x");
@@ -92,10 +104,10 @@ export function ContextPanel({
     const name = parsed.name ?? raw;
 
     const key = argKey(methodName, arg, index);
-    if (!isArgCompatible(arg, name)) {
+    if (!isArgCompatible(arg, name, parsed.className)) {
       setArgErrors((prev) => ({
         ...prev,
-        [key]: `Expected ${arg} but got ${name}`,
+        [key]: `Expected ${arg} but got ${parsed.className ?? name}`,
       }));
       return;
     }
@@ -256,87 +268,6 @@ export function ContextPanel({
       );
     })();
 
-  const itemMethod = (item: InventoryItem) => {
-    if (item.validity !== "live") return null;
-    switch (item.type) {
-      case "source":
-        return [
-          {
-            methodName: "extract",
-            cpuCost: "5-15m",
-            readsBlock: true,
-            args: ["Pickaxe"],
-          },
-          { methodName: "survey", cpuCost: "2-5m", readsBlock: true, args: [] },
-        ];
-      case "tool":
-        return [
-          {
-            methodName: "repair",
-            cpuCost: "1-3m",
-            readsBlock: false,
-            args: ["CopperIngot"],
-          },
-          {
-            methodName: "use",
-            cpuCost: "30s-2m",
-            readsBlock: false,
-            args: ["Asteroid"],
-          },
-        ];
-      case "creature":
-        return [
-          {
-            methodName: "feed",
-            cpuCost: "20-40s",
-            readsBlock: true,
-            args: ["Bread"],
-          },
-          {
-            methodName: "inspect",
-            cpuCost: "10-20s",
-            readsBlock: false,
-            args: [],
-          },
-        ];
-      case "coin":
-        return [
-          {
-            methodName: "send",
-            cpuCost: "10s",
-            readsBlock: false,
-            args: ["0x...recipient"],
-          },
-          {
-            methodName: "bundle",
-            cpuCost: "10-20s",
-            readsBlock: false,
-            args: ["Coin"],
-          },
-        ];
-      default:
-        return [
-          {
-            methodName: "inspect",
-            cpuCost: "30s",
-            readsBlock: false,
-            args: [item.name],
-          },
-        ];
-    }
-  };
-
-  const progressClass = (value: number, lowDanger = false) => {
-    if (lowDanger) {
-      if (value < 25) return "danger";
-      if (value < 50) return "warn";
-      return "good";
-    }
-    if (value > 80) return "danger";
-    if (value > 50) return "warn";
-    return "good";
-  };
-
   const displayThingPath = (filename: string) => {
     const normalized = thingsDirPath.trim();
     if (!normalized) return filename;
@@ -347,145 +278,26 @@ export function ContextPanel({
     return `${normalized}/${filename}`;
   };
 
-  const renderItemStats = (item: InventoryItem) => {
-    if (item.type === "source" && item.charge !== undefined) {
-      return (
-        <div className="item-stats">
-          <div className="stat-row">
-            <span className="stat-key">charge</span>
-            <span className="stat-val good">{item.charge}%</span>
-          </div>
-          <div className="stat-progress">
-            <div
-              className="stat-progress-fill good"
-              style={{ width: `${item.charge}%` }}
-            />
-          </div>
-          <div className="stat-row">
-            <span className="stat-key">recharge rate</span>
-            <span className="stat-val good">{item.rechargeRate}</span>
-          </div>
-        </div>
-      );
-    }
+  const stringifyField = (value: FieldValue) => {
+    if (value === null) return "null";
+    if (typeof value === "boolean") return value ? "true" : "false";
+    return `${value}`;
+  };
 
-    if (
-      item.type === "tool" &&
-      item.durability !== undefined &&
-      item.maxDurability
-    ) {
-      const pct = Math.round((item.durability / item.maxDurability) * 100);
-      const cls = progressClass(pct, true);
-      return (
-        <div className="item-stats">
-          <div className="stat-row">
-            <span className="stat-key">tier</span>
-            <span className="stat-val good">{item.tier ?? 1}</span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-key">durability</span>
-            <span className={`stat-val ${cls}`}>
-              {item.durability}/{item.maxDurability}
-            </span>
-          </div>
-          <div className="stat-progress">
-            <div
-              className={`stat-progress-fill ${cls}`}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-          <div className="stat-row">
-            <span className="stat-key">skill</span>
-            <span className="stat-val good">{item.skill ?? 0}</span>
-          </div>
-        </div>
-      );
-    }
+  const renderItemFields = (item: InventoryItem) => {
+    const entries = Object.entries(item.fields);
+    if (entries.length === 0) return null;
 
-    if (
-      item.type === "creature" &&
-      item.hunger !== undefined &&
-      item.health !== undefined
-    ) {
-      const hungerCls = progressClass(item.hunger);
-      const healthCls = progressClass(100 - item.health);
-      return (
-        <div className="item-stats">
-          <div className="stat-row">
-            <span className="stat-key">hunger</span>
-            <span className={`stat-val ${hungerCls}`}>{item.hunger}%</span>
+    return (
+      <div className="item-stats">
+        {entries.map(([key, value]) => (
+          <div key={key} className="stat-row">
+            <span className="stat-key">{key}</span>
+            <span className="stat-val">{stringifyField(value)}</span>
           </div>
-          <div className="stat-progress">
-            <div
-              className={`stat-progress-fill ${hungerCls}`}
-              style={{ width: `${item.hunger}%` }}
-            />
-          </div>
-          <div className="stat-row">
-            <span className="stat-key">health</span>
-            <span className={`stat-val ${healthCls}`}>{item.health}%</span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-key">last fed</span>
-            <span className="stat-val warn">{item.lastFed}</span>
-          </div>
-        </div>
-      );
-    }
-
-    if (
-      item.type === "vehicle" &&
-      item.fuel !== undefined &&
-      item.condition !== undefined
-    ) {
-      const fuelCls = progressClass(item.fuel, true);
-      return (
-        <div className="item-stats">
-          <div className="stat-row">
-            <span className="stat-key">fuel</span>
-            <span className={`stat-val ${fuelCls}`}>{item.fuel}%</span>
-          </div>
-          <div className="stat-progress">
-            <div
-              className={`stat-progress-fill ${fuelCls}`}
-              style={{ width: `${item.fuel}%` }}
-            />
-          </div>
-          <div className="stat-row">
-            <span className="stat-key">condition</span>
-            <span className="stat-val good">{item.condition}%</span>
-          </div>
-        </div>
-      );
-    }
-
-    if (item.type === "raw" && item.qty !== undefined) {
-      return (
-        <div className="item-stats">
-          <div className="stat-row">
-            <span className="stat-key">quantity</span>
-            <span className="stat-val good">{item.qty}</span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-key">decay</span>
-            <span className="stat-val danger">{item.decay}</span>
-          </div>
-        </div>
-      );
-    }
-
-    if (item.type === "coin" && item.value !== undefined) {
-      return (
-        <div className="item-stats">
-          <div className="stat-row">
-            <span className="stat-key">value</span>
-            <span className="stat-val good">{item.value}¢</span>
-          </div>
-        </div>
-      );
-    }
-
-    return null;
+        ))}
+      </div>
+    );
   };
 
   if (selection.kind === "none") {
@@ -504,11 +316,14 @@ export function ContextPanel({
     const item = items.find((candidate) => candidate.id === selection.itemId);
     if (!item)
       return <section className="context-panel">Item not found.</section>;
+
+    const methods = item.validity === "live" ? item.methods : [];
+
     return (
       <section className="context-panel">
         <div className="context-title-row">
           <h2>
-            {item.emoji} {item.name}
+            {item.emoji} {item.className}
           </h2>
         </div>
         <div
@@ -519,27 +334,23 @@ export function ContextPanel({
             : `${item.nullifier ?? "nullified"} · ✗ nullified`}
         </div>
         <div className="context-path-line">{displayThingPath(item.name)}</div>
-        {renderItemStats(item)}
-        {(() => {
-          const methods = itemMethod(item);
-          if (!methods) return null;
-          return (
-            <div className="method-list">
-              {methods.map((method, index) =>
-                renderMethodCard({
-                  ...method,
-                  methodId: `${item.id}:${method.methodName}:${index}`,
-                  onRun: (boundArgs) =>
-                    onRunProof({
-                      id: item.id,
-                      ...method,
-                      inputFiles: boundArgs,
-                    }),
-                }),
-              )}
-            </div>
-          );
-        })()}
+        {renderItemFields(item)}
+        {methods.length > 0 && (
+          <div className="method-list">
+            {methods.map((method, index) =>
+              renderMethodCard({
+                ...method,
+                methodId: `${item.id}:${method.methodName}:${index}`,
+                onRun: (boundArgs) =>
+                  onRunProof({
+                    id: item.id,
+                    ...method,
+                    inputFiles: boundArgs,
+                  }),
+              }),
+            )}
+          </div>
+        )}
       </section>
     );
   }
@@ -554,7 +365,7 @@ export function ContextPanel({
     <section className="context-panel">
       <div className="context-title-row">
         <h2>
-          {recipe.emoji} {recipe.name}
+          {recipe.emoji} {recipe.className}
         </h2>
       </div>
       <div className="context-desc">{recipe.desc}</div>

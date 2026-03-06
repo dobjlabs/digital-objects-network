@@ -27,7 +27,11 @@ export function InventoryPanel({
     event: DragEvent<HTMLButtonElement>,
     item: InventoryItem,
   ) => {
-    const payload = JSON.stringify({ itemId: item.id, name: item.name });
+    const payload = JSON.stringify({
+      itemId: item.id,
+      name: item.name,
+      className: item.className,
+    });
     event.dataTransfer.setData("application/x-zkcraft-item", payload);
     event.dataTransfer.setData("text/plain", item.name);
     event.dataTransfer.setData("text", item.name);

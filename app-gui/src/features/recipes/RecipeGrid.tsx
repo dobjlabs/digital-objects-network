@@ -23,9 +23,10 @@ export function RecipeGrid({
               type="button"
               className={`recipe-cell ${activeRecipeId === recipe.id ? "active" : ""}`}
               onClick={() => onSelectRecipe(recipe.id)}
-              title={recipe.name}
+              title={`${recipe.className} (${recipe.verb})`}
             >
-              {recipe.emoji}
+              <span className="recipe-cell-emoji">{recipe.emoji}</span>
+              <span className="recipe-cell-class">{recipe.className}</span>
             </button>
           ))}
       </div>

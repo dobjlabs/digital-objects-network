@@ -26,6 +26,26 @@
   aspect-ratio: 1;
   cursor: pointer;
   font-size: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 4px;
+}
+
+.recipe-cell-emoji {
+  line-height: 1;
+}
+
+.recipe-cell-class {
+  font-size: 9px;
+  line-height: 1.1;
+  max-width: 100%;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .recipe-cell.active {

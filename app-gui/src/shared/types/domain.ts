@@ -1,41 +1,24 @@
 export type Validity = "live" | "nullified";
 
-export type ItemType =
-  | "source"
-  | "raw"
-  | "material"
-  | "tool"
-  | "station"
-  | "worker"
-  | "creature"
-  | "vehicle"
-  | "coin"
-  | "bond"
-  | "document"
-  | "rare";
+export type FieldValue = string | number | boolean | null;
+
+export interface ObjectMethod {
+  methodName: string;
+  cpuCost: string;
+  readsBlock: boolean;
+  args: string[];
+}
 
 export interface InventoryItem {
   id: string;
   name: string;
   emoji: string;
-  type: ItemType;
+  className: string;
   validity: Validity;
   stateRoot: string;
   nullifier?: string;
-  charge?: number;
-  rechargeRate?: string;
-  qty?: number;
-  decay?: string;
-  durability?: number;
-  maxDurability?: number;
-  tier?: number;
-  skill?: number;
-  hunger?: number;
-  health?: number;
-  lastFed?: string;
-  fuel?: number;
-  condition?: number;
-  value?: number;
+  methods: ObjectMethod[];
+  fields: Record<string, FieldValue>;
 }
 
 export interface RecipeRequirement {
@@ -46,6 +29,7 @@ export interface Recipe {
   id: string;
   name: string;
   emoji: string;
+  className: string;
   verb: string;
   desc: string;
   cpu: string;
