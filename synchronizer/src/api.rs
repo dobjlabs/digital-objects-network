@@ -6,37 +6,27 @@ use serde::Serialize;
 use tokio::sync::watch;
 use tracing::info;
 
-use crate::app_db::hash_to_hex;
-use crate::state_machine::StateMachine;
 use crate::sync_db::SyncDb;
 
 #[derive(Clone)]
 struct AppState {
-    state_machine: Arc<StateMachine>,
     sync_db: Arc<SyncDb>,
 }
 
 #[derive(Serialize)]
-struct StateResponse {
-    transactions: Vec<String>,
-    nullifiers: Vec<String>,
-    current_gsr: Option<String>,
+struct SyncProgressResponse {
     last_processed_slot: Option<u32>,
     last_processed_block_number: Option<u32>,
 }
 
 pub async fn run_api_server(
-    state_machine: Arc<StateMachine>,
     sync_db: Arc<SyncDb>,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     let app = Router::new()
-        .route("/state", get(get_state))
-        .with_state(AppState {
-            state_machine,
-            sync_db,
-        });
+        .route("/sync-progress", get(get_sync_progress))
+        .with_state(AppState { sync_db });
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     info!(%bind_addr, "API server listening");
@@ -48,21 +38,9 @@ pub async fn run_api_server(
     Ok(())
 }
 
-async fn get_state(
+async fn get_sync_progress(
     State(app_state): State<AppState>,
-) -> Result<Json<StateResponse>, (StatusCode, String)> {
-    let (transactions, nullifiers, global_state_roots) = app_state
-        .state_machine
-        .state_snapshot()
-        .map_err(internal_error)?;
-
-    let mut transactions: Vec<String> = transactions.iter().map(hash_to_hex).collect();
-    let mut nullifiers: Vec<String> = nullifiers.iter().map(hash_to_hex).collect();
-    transactions.sort_unstable();
-    nullifiers.sort_unstable();
-
-    let current_gsr = global_state_roots.last().map(hash_to_hex);
-
+) -> Result<Json<SyncProgressResponse>, (StatusCode, String)> {
     let progress = app_state
         .sync_db
         .last_progress()
@@ -76,10 +54,7 @@ async fn get_state(
         None => (None, None),
     };
 
-    Ok(Json(StateResponse {
-        transactions,
-        nullifiers,
-        current_gsr,
+    Ok(Json(SyncProgressResponse {
         last_processed_slot,
         last_processed_block_number,
     }))

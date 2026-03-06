@@ -13,7 +13,7 @@ Service that tracks Digital Object blob transactions on Ethereum and exposes cur
    - finds blob txs sent to `TO_ADDRESS`
    - fetches matching blob sidecars
    - decodes payload bytes and derives new state
-4. Persists app state in RocksDB and sync metadata in Postgres, and serves state at `/state`.
+4. Persists app state in RocksDB and sync metadata in Postgres, and serves sync progress at `/sync-progress`.
 
 ## Storage model
 
@@ -42,8 +42,8 @@ RocksDB is updated from Postgres journaled slot deltas and rolled back using the
 
 ## API
 
-- `GET /state`
-  - returns `transactions`, `nullifiers`, `last_processed_slot`, `last_processed_block_number`
+- `GET /sync-progress`
+  - returns `last_processed_slot`, `last_processed_block_number`
 
 ## Required env vars
 

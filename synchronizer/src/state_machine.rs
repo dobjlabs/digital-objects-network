@@ -285,6 +285,7 @@ impl StateMachine {
 
     /// Returns `(transactions, nullifiers, global_state_roots)` as owned vecs.
     /// Primarily used in tests; callers that need only one field should add a dedicated accessor.
+    #[allow(dead_code)]
     pub fn state_snapshot(&self) -> Result<(Vec<Hash>, Vec<Hash>, Vec<Hash>)> {
         let state = self.read_state()?;
         Ok((

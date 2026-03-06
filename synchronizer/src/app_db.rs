@@ -151,10 +151,6 @@ pub fn db_bytes_to_hash(bytes: &[u8]) -> Result<Hash> {
     Hash::from_hex(hex::encode(bytes)).context("Failed to deserialize Hash from db bytes")
 }
 
-pub fn hash_to_hex(hash: &Hash) -> String {
-    hash.encode_hex()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
