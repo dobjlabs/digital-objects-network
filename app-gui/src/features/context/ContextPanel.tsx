@@ -14,12 +14,18 @@ interface ContextPanelProps {
   recipes: Recipe[];
   onClearSelection: () => void;
   onRunProof: (input: {
-    id: string;
+    actionId: string;
     methodName: string;
-    inputFiles: string[];
+    inputObjectIds: string[];
+    inputLabels: string[];
     cpuCost: string;
   }) => void;
   proofRunning: boolean;
+}
+
+interface BoundArg {
+  objectId: string;
+  label: string;
 }
 
 export function ContextPanel({
@@ -30,7 +36,7 @@ export function ContextPanel({
   onRunProof,
   proofRunning,
 }: ContextPanelProps) {
-  const [argBindings, setArgBindings] = useState<Record<string, string>>({});
+  const [argBindings, setArgBindings] = useState<Record<string, BoundArg>>({});
   const [hoverArgKey, setHoverArgKey] = useState<string | null>(null);
   const [argErrors, setArgErrors] = useState<Record<string, string>>({});
   const selectionKey =
@@ -95,6 +101,7 @@ export function ContextPanel({
     const parsed = parseDropPayload(raw);
     const key = argKey(methodId, index);
     const droppedName = parsed.name ?? raw;
+    const droppedId = parsed.itemId;
 
     if (!isArgCompatible(arg, parsed.classHash, parsed.className)) {
       const got = parsed.className ?? droppedName;
@@ -105,7 +112,18 @@ export function ContextPanel({
       return;
     }
 
-    setArgBindings((prev) => ({ ...prev, [key]: droppedName }));
+    if (!droppedId) {
+      setArgErrors((prev) => ({
+        ...prev,
+        [key]: "Dropped object missing ID",
+      }));
+      return;
+    }
+
+    setArgBindings((prev) => ({
+      ...prev,
+      [key]: { objectId: droppedId, label: droppedName },
+    }));
     setArgErrors((prev) => {
       const next = { ...prev };
       delete next[key];
@@ -134,14 +152,14 @@ export function ContextPanel({
     cpuCost: string;
     readsBlock: boolean;
     args: MethodArg[];
-    onRun: (boundArgs: string[]) => void;
+    onRun: (boundArgs: BoundArg[]) => void;
   }) =>
     (() => {
       const boundArgs = config.args.map(
-        (_, index) => argBindings[argKey(config.methodId, index)] ?? "",
+        (_, index) => argBindings[argKey(config.methodId, index)] ?? null,
       );
       const filledCount = boundArgs.filter(
-        (value) => value.trim().length > 0,
+        (value) => value?.objectId?.trim().length,
       ).length;
       const allArgsBound =
         config.args.length === 0 || filledCount === config.args.length;
@@ -181,13 +199,14 @@ export function ContextPanel({
                           handleDropArg(event, config.methodId, arg, index)
                         }
                       >
-                        {bound ?? (isDropActive ? "release to drop" : "drag .dobj here")}
+                        {bound?.label ??
+                          (isDropActive ? "release to drop" : "drag .dobj here")}
                       </div>
                       <button
                         type="button"
                         className="method-arg-browse"
                         onClick={() => {
-                          if (!bound) return;
+                          if (!bound?.objectId) return;
                           setArgBindings((prev) => {
                             const next = { ...prev };
                             delete next[key];
@@ -195,7 +214,7 @@ export function ContextPanel({
                           });
                         }}
                       >
-                        {bound ? "Clear" : "Browse..."}
+                        {bound?.objectId ? "Clear" : "Browse..."}
                       </button>
                     </div>
                     {err && <div className="method-arg-error">{err}</div>}
@@ -216,7 +235,7 @@ export function ContextPanel({
             <button
               type="button"
               className="method-execute"
-              onClick={() => config.onRun(boundArgs)}
+              onClick={() => config.onRun(boundArgs.filter(Boolean) as BoundArg[])}
               disabled={proofRunning || !allArgsBound}
             >
               {proofRunning
@@ -352,9 +371,10 @@ export function ContextPanel({
         args: recipe.args,
         onRun: (boundArgs) =>
           onRunProof({
-            id: recipe.id,
+            actionId: recipe.id,
             methodName: recipe.verb,
-            inputFiles: boundArgs,
+            inputObjectIds: boundArgs.map((arg) => arg.objectId),
+            inputLabels: boundArgs.map((arg) => arg.label),
             cpuCost: recipe.cpu,
           }),
       })}

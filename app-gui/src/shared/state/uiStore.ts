@@ -1,7 +1,18 @@
 import { create } from "zustand";
-import { createDobj, type CreateDobjProgress } from "../api/tauriClient";
+import {
+  loadGuiBootstrap,
+  runSdkAction,
+  type CreateDobjProgress,
+  type InventoryItemPayload,
+  type RecipePayload,
+} from "../api/tauriClient";
 import { initialUiState } from "./initialState";
-import type { AppUiState } from "../types/domain";
+import type {
+  AppUiState,
+  InventoryItem,
+  Recipe,
+  StatTone,
+} from "../types/domain";
 
 type ProofStatus = "idle" | "generating" | "committing" | "summary" | "error";
 type StepStatus = "pending" | "running" | "done";
@@ -45,7 +56,10 @@ interface ProofState {
 }
 
 interface UiStoreState extends AppUiState {
+  items: InventoryItem[];
+  recipes: Recipe[];
   proof: ProofState;
+  hydrateData: () => Promise<void>;
   selectItem: (itemId: string) => void;
   selectRecipe: (recipeId: string) => void;
   clearSelection: () => void;
@@ -53,15 +67,72 @@ interface UiStoreState extends AppUiState {
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   applyCreateDobjProgress: (event: CreateDobjProgress) => void;
   runProof: (input: {
-    id: string;
+    actionId: string;
     methodName: string;
-    inputFiles: string[];
+    inputObjectIds: string[];
+    inputLabels: string[];
     cpuCost: string;
   }) => Promise<void>;
 }
 
+const normalizeTone = (value: string | undefined): StatTone | undefined => {
+  if (!value) return undefined;
+  if (value === "neutral") return "neutral";
+  if (value === "good") return "good";
+  if (value === "warn") return "warn";
+  if (value === "danger") return "danger";
+  return undefined;
+};
+
+const mapItem = (item: InventoryItemPayload): InventoryItem => ({
+  id: item.id,
+  fileName: item.fileName,
+  emoji: item.emoji,
+  validity: item.validity,
+  stateRoot: item.stateRoot,
+  nullifier: item.nullifier,
+  classMeta: item.classMeta,
+  sourceAction: item.sourceAction,
+  description: item.description,
+  methods: item.methods.map((method) => ({
+    methodName: method.methodName,
+    cpuCost: method.cpuCost,
+    readsBlock: method.readsBlock,
+    args: method.args.map((arg) => ({
+      kind: "class",
+      label: arg.label,
+      classHash: arg.classHash,
+    })),
+  })),
+  stats: item.stats.map((stat) => ({
+    key: stat.key,
+    value: stat.value,
+    tone: normalizeTone(stat.tone),
+  })),
+});
+
+const mapRecipe = (recipe: RecipePayload): Recipe => ({
+  id: recipe.id,
+  group: recipe.group,
+  name: recipe.name,
+  emoji: recipe.emoji,
+  hash: recipe.hash,
+  verb: recipe.verb,
+  desc: recipe.desc,
+  cpu: recipe.cpu,
+  readsBlock: recipe.readsBlock,
+  args: recipe.args.map((arg) => ({
+    kind: "class",
+    label: arg.label,
+    classHash: arg.classHash,
+  })),
+  unlocked: recipe.unlocked,
+});
+
 export const useUiStore = create<UiStoreState>((set) => ({
   ...initialUiState,
+  items: [],
+  recipes: [],
   proof: {
     runDobjId: null,
     status: "idle",
@@ -78,13 +149,18 @@ export const useUiStore = create<UiStoreState>((set) => ({
       cpuHistory: Array.from({ length: 24 }, () => 0),
       totalCpuSecs: 0,
       roots: [
-        { hash: "0x1b89...cc41", state: "live" },
-        { hash: "0x7c44...a203", state: "live" },
-        { hash: "0x9cd4...e223", state: "live" },
-        { hash: "0x9d01...f334", state: "nullified" },
-        { hash: "0x2e55...7710", state: "nullified" },
+        { hash: "0x0000...0000", state: "live" },
+        { hash: "0x0000...0000", state: "nullified" },
       ],
     },
+  },
+  hydrateData: async () => {
+    const data = await loadGuiBootstrap();
+    set((prev) => ({
+      ...prev,
+      items: data.objects.map(mapItem),
+      recipes: data.actions.map(mapRecipe),
+    }));
   },
   selectItem: (itemId) =>
     set((prev) => {
@@ -229,11 +305,16 @@ export const useUiStore = create<UiStoreState>((set) => ({
         },
       };
     }),
-  runProof: async ({ id, methodName, inputFiles, cpuCost }) => {
+  runProof: async ({
+    actionId,
+    methodName,
+    inputObjectIds,
+    inputLabels,
+    cpuCost,
+  }) => {
     const postDoneHoldMs = 2800;
-    const verifyTargets = inputFiles.length > 0 ? inputFiles : ["(no inputs)"];
-    const normalizeOutputLabel = (value: string) =>
-      value.endsWith(".dobj") ? value : `${value}.dobj`;
+    const verifyTargets =
+      inputLabels.length > 0 ? inputLabels : ["(no inputs)"];
 
     set((prev) => {
       if (
@@ -245,12 +326,12 @@ export const useUiStore = create<UiStoreState>((set) => ({
       return {
         ...prev,
         proof: {
-          runDobjId: id,
+          runDobjId: actionId,
           status: "generating",
           methodName,
           cpuCost,
-          args: inputFiles,
-          messages: ["Creating digital object..."],
+          args: inputLabels,
+          messages: ["Running SDK action..."],
           steps: [
             {
               id: "hash",
@@ -287,24 +368,24 @@ export const useUiStore = create<UiStoreState>((set) => ({
     });
 
     try {
-      const result = await createDobj({
-        dobjId: id,
-        inputFiles,
+      const result = await runSdkAction({
+        actionId,
+        inputObjectIds,
       });
+
       set((prev) => {
-        if (prev.proof.runDobjId !== id) return prev;
-        const consumed = inputFiles.map(normalizeOutputLabel);
-        const produced = [`${methodName}_output.dobj`];
+        if (prev.proof.runDobjId !== actionId) return prev;
         return {
           ...prev,
+          items: result.objects.map(mapItem),
           proof: {
             ...prev.proof,
             status: "summary",
             oldRoot: result.oldRoot,
             newRoot: result.newRoot,
             summary: {
-              nullified: consumed,
-              live: produced,
+              nullified: result.nullifiedFiles,
+              live: result.outputFiles,
             },
           },
         };
@@ -336,13 +417,13 @@ export const useUiStore = create<UiStoreState>((set) => ({
           status: "error",
           methodName,
           cpuCost,
-          args: inputFiles,
+          args: inputLabels,
           messages: [],
           steps: [],
           oldRoot: null,
           newRoot: null,
           summary: null,
-          error: error instanceof Error ? error.message : "Failed to run proof",
+          error: error instanceof Error ? error.message : "Failed to run action",
           stats: prev.proof.stats,
         },
       }));

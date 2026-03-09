@@ -9,7 +9,6 @@ import {
   openThingsDir,
   sampleAppCpu,
 } from "./shared/api/tauriClient";
-import { mockItems, mockRecipes } from "./shared/data/mockData";
 import { useUiStore } from "./shared/state/uiStore";
 import "./styles/tokens.css";
 import "./styles/base.css";
@@ -22,10 +21,13 @@ import "./features/recipes/RecipeGrid.css";
 
 function App() {
   const [thingsDirPath, setThingsDirPath] = useState("~/.objects");
+  const items = useUiStore((state) => state.items);
+  const recipes = useUiStore((state) => state.recipes);
   const activeItemId = useUiStore((state) => state.activeItemId);
   const activeRecipeId = useUiStore((state) => state.activeRecipeId);
   const contextSelection = useUiStore((state) => state.contextSelection);
   const showNullifiedItems = useUiStore((state) => state.showNullifiedItems);
+  const hydrateData = useUiStore((state) => state.hydrateData);
   const selectItem = useUiStore((state) => state.selectItem);
   const selectRecipe = useUiStore((state) => state.selectRecipe);
   const clearSelection = useUiStore((state) => state.clearSelection);
@@ -42,7 +44,13 @@ function App() {
       state.proof.status === "summary",
   );
   const selectedItem =
-    mockItems.find((item) => item.id === activeItemId) ?? null;
+    items.find((item) => item.id === activeItemId) ?? null;
+
+  useEffect(() => {
+    hydrateData().catch((error) => {
+      console.error("Failed to load GUI bootstrap:", error);
+    });
+  }, [hydrateData]);
 
   useEffect(() => {
     let cancelled = false;
@@ -131,7 +139,7 @@ function App() {
   return (
     <main className="app-shell">
       <InventoryPanel
-        items={mockItems}
+        items={items}
         thingsDirPath={thingsDirPath}
         activeItemId={activeItemId}
         showNullifiedItems={showNullifiedItems}
@@ -143,8 +151,8 @@ function App() {
       <div className="main-column">
         <ContextPanel
           selection={contextSelection}
-          items={mockItems}
-          recipes={mockRecipes}
+          items={items}
+          recipes={recipes}
           onRunProof={runProof}
           proofRunning={proofRunning}
           onClearSelection={clearSelection}
@@ -154,7 +162,7 @@ function App() {
 
       <div className="right-column">
         <RecipeGrid
-          recipes={mockRecipes}
+          recipes={recipes}
           activeRecipeId={activeRecipeId}
           selectedItem={selectedItem}
           onSelectRecipe={selectRecipe}

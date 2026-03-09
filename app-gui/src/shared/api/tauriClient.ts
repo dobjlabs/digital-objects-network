@@ -1,21 +1,74 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export interface MockState {
-  postCount: number;
-  supportedMethods: string[];
+export interface MethodArgPayload {
+  kind: string;
+  label: string;
+  classHash: string;
 }
 
-export interface CreateDobjInput {
-  dobjId: string;
-  inputFiles: string[];
+export interface ObjectMethodPayload {
+  methodName: string;
+  cpuCost: string;
+  readsBlock: boolean;
+  args: MethodArgPayload[];
 }
 
-export interface CreateDobjResult {
+export interface InventoryItemPayload {
+  id: string;
+  fileName: string;
+  emoji: string;
+  validity: "live" | "nullified";
+  stateRoot: string;
+  nullifier?: string;
+  classMeta: {
+    name: string;
+    hash: string;
+  };
+  sourceAction?: {
+    name: string;
+    hash: string;
+  };
+  description?: string;
+  methods: ObjectMethodPayload[];
+  stats: Array<{
+    key: string;
+    value: string;
+    tone?: string;
+  }>;
+}
+
+export interface RecipePayload {
+  id: string;
+  group: string;
+  name: string;
+  emoji: string;
+  hash: string;
+  verb: string;
+  desc: string;
+  cpu: string;
+  readsBlock: boolean;
+  args: MethodArgPayload[];
+  unlocked: boolean;
+}
+
+export interface LoadGuiBootstrapResult {
+  objects: InventoryItemPayload[];
+  actions: RecipePayload[];
+}
+
+export interface RunSdkActionInput {
+  actionId: string;
+  inputObjectIds: string[];
+}
+
+export interface RunSdkActionResult {
   ok: boolean;
   oldRoot: string;
   newRoot: string;
-  outputFile: string;
+  outputFiles: string[];
+  nullifiedFiles: string[];
+  objects: InventoryItemPayload[];
 }
 
 export interface CreateDobjProgress {
@@ -28,12 +81,6 @@ export interface CreateDobjProgress {
   oldRoot: string | null;
   newRoot: string | null;
   outputFile: string | null;
-}
-
-export interface AttachClaimResult {
-  name: string;
-  validity: string;
-  hash: string;
 }
 
 export interface CpuSample {
@@ -49,12 +96,14 @@ export function openThingsDir(): Promise<string> {
   return invoke<string>("open_things_dir");
 }
 
-export function getMockState(): Promise<MockState> {
-  return invoke<MockState>("get_mock_state");
+export function loadGuiBootstrap(): Promise<LoadGuiBootstrapResult> {
+  return invoke<LoadGuiBootstrapResult>("load_gui_bootstrap");
 }
 
-export function createDobj(input: CreateDobjInput): Promise<CreateDobjResult> {
-  return invoke<CreateDobjResult>("create_dobj", { input });
+export function runSdkAction(
+  input: RunSdkActionInput,
+): Promise<RunSdkActionResult> {
+  return invoke<RunSdkActionResult>("run_sdk_action", { input });
 }
 
 export function listenCreateDobjProgress(
@@ -63,10 +112,6 @@ export function listenCreateDobjProgress(
   return listen<CreateDobjProgress>("create-dobj-progress", (event) => {
     handler(event.payload);
   });
-}
-
-export function attachClaim(fileName: string): Promise<AttachClaimResult> {
-  return invoke<AttachClaimResult>("attach_claim", { input: { fileName } });
 }
 
 export function sampleAppCpu(): Promise<CpuSample> {

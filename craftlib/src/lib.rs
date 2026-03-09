@@ -1,5 +1,6 @@
 // pub mod examples;
 pub mod predicates;
+pub mod scenario;
 pub mod sdk;
 use std::sync::Arc;
 
