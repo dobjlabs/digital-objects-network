@@ -39,30 +39,6 @@ export interface Recipe {
   unlocked: boolean;
 }
 
-export interface ProofClaim {
-  name: string;
-  validity: Validity;
-  hash: string;
-}
-
-export interface FeedResponse {
-  id: string;
-  peer: string;
-  time: string;
-  desc: string;
-  proofs: ProofClaim[];
-}
-
-export interface FeedPost {
-  id: string;
-  title: string;
-  peer: string;
-  time: string;
-  desc: string;
-  proofs: ProofClaim[];
-  responses: FeedResponse[];
-}
-
 export type ContextSelection =
   | { kind: "none" }
   | { kind: "item"; itemId: string }

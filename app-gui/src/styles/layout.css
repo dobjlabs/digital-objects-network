@@ -13,7 +13,7 @@
 
 .right-column {
   display: grid;
-  grid-template-rows: 1fr 1fr;
+  grid-template-rows: 1fr;
   min-width: 0;
   border-left: 2px solid var(--col-border);
 }

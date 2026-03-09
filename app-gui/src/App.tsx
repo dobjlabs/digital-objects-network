@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { ContextPanel } from "./features/context/ContextPanel";
-import { FeedPanel } from "./features/feed/FeedPanel";
 import { InventoryPanel } from "./features/inventory/InventoryPanel";
 import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { RecipeGrid } from "./features/recipes/RecipeGrid";
@@ -10,7 +9,7 @@ import {
   openThingsDir,
   sampleAppCpu,
 } from "./shared/api/tauriClient";
-import { mockFeed, mockItems, mockRecipes } from "./shared/data/mockData";
+import { mockItems, mockRecipes } from "./shared/data/mockData";
 import { useUiStore } from "./shared/state/uiStore";
 import "./styles/tokens.css";
 import "./styles/base.css";
@@ -20,7 +19,6 @@ import "./features/inventory/InventoryPanel.css";
 import "./features/context/ContextPanel.css";
 import "./features/proof-runner/ProofRunnerPanel.css";
 import "./features/recipes/RecipeGrid.css";
-import "./features/feed/FeedPanel.css";
 
 function App() {
   const [thingsDirPath, setThingsDirPath] = useState("loading...");
@@ -148,7 +146,6 @@ function App() {
           activeRecipeId={activeRecipeId}
           onSelectRecipe={selectRecipe}
         />
-        <FeedPanel posts={mockFeed} />
       </div>
     </main>
   );

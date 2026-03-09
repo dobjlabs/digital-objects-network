@@ -44,19 +44,17 @@
 
 .inventory-list::-webkit-scrollbar,
 .context-panel::-webkit-scrollbar,
-.proof-panel::-webkit-scrollbar,
-.feed-list::-webkit-scrollbar {
+.proof-panel::-webkit-scrollbar {
   width: 3px;
 }
 
 .inventory-list::-webkit-scrollbar-thumb,
 .context-panel::-webkit-scrollbar-thumb,
-.proof-panel::-webkit-scrollbar-thumb,
-.feed-list::-webkit-scrollbar-thumb {
+.proof-panel::-webkit-scrollbar-thumb {
   background: var(--border);
 }
 
-button:hover:not(.feed-item) {
+button:hover {
   border-color: var(--accent-hover);
   filter: brightness(1.03);
 }
