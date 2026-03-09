@@ -66,6 +66,15 @@
   flex-shrink: 0;
 }
 
+.action-filter-label {
+  width: 100%;
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .action-search {
   width: 100%;
   background: var(--bg);
@@ -101,6 +110,14 @@
   text-align: left;
   font-family: inherit;
   outline: none;
+}
+
+.action-group-label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 12px 12px 4px;
 }
 
 .action-row:hover {

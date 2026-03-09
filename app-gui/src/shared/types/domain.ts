@@ -1,41 +1,65 @@
 export type Validity = "live" | "nullified";
 
 export type FieldValue = string | number | boolean | null;
+export type StatTone = "neutral" | "good" | "warn" | "danger";
+export type MethodArgKind = "class";
+
+export interface ClassMeta {
+  name: string;
+  hash: string;
+}
+
+export interface SourceActionMeta {
+  name: string;
+  hash: string;
+}
+
+export interface MethodArg {
+  kind: MethodArgKind;
+  label: string;
+  classHash: string;
+}
+
+export interface ItemStat {
+  key: string;
+  value: FieldValue;
+  tone?: StatTone;
+  progressPercent?: number;
+  progressTone?: Exclude<StatTone, "neutral">;
+}
 
 export interface ObjectMethod {
   methodName: string;
   cpuCost: string;
   readsBlock: boolean;
-  args: string[];
+  args: MethodArg[];
 }
 
 export interface InventoryItem {
   id: string;
-  name: string;
+  fileName: string;
   emoji: string;
-  className: string;
   validity: Validity;
   stateRoot: string;
   nullifier?: string;
+  classMeta: ClassMeta;
+  sourceAction?: SourceActionMeta;
+  description?: string;
   methods: ObjectMethod[];
-  fields: Record<string, FieldValue>;
-}
-
-export interface RecipeRequirement {
-  label: string;
+  stats: ItemStat[];
 }
 
 export interface Recipe {
   id: string;
+  group: string;
   name: string;
   emoji: string;
-  className: string;
+  hash: string;
   verb: string;
   desc: string;
   cpu: string;
   readsBlock: boolean;
-  consumes: RecipeRequirement[];
-  requires: RecipeRequirement[];
+  args: MethodArg[];
   unlocked: boolean;
 }
 

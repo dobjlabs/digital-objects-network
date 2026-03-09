@@ -8,7 +8,7 @@ export function ProofRunnerPanel() {
 
   useLayoutEffect(() => {
     const prev = prevStatusRef.current;
-    if (proof.status === "idle" && prev === "done") {
+    if (proof.status === "idle" && prev === "summary") {
       setIdleFadeIn(true);
       const timer = window.setTimeout(() => setIdleFadeIn(false), 420);
       prevStatusRef.current = proof.status;
@@ -52,7 +52,7 @@ export function ProofRunnerPanel() {
         className={`cpu-panel proof-panel proof-panel-idle ${idleFadeIn ? "idle-fade-in" : ""}`}
       >
         <div className="idle-section idle-cpu">
-          <div className="proof-title cpu-title">CPU USAGE</div>
+          <div className="proof-title cpu-title">CPU Usage</div>
           <div className="dash-cpu-bars">
             {proof.stats.cpuHistory.map((value, index) => (
               <div
@@ -100,13 +100,8 @@ export function ProofRunnerPanel() {
     );
   }
 
-  if (
-    proof.status === "generating" ||
-    proof.status === "committing" ||
-    proof.status === "done"
-  ) {
-    const stage1Done = proof.status === "committing" || proof.status === "done";
-    const stage2Done = proof.status === "done";
+  if (proof.status === "generating" || proof.status === "committing") {
+    const stage1Done = proof.status === "committing";
     const stage2Active = proof.status === "committing";
     const hashStep = proof.steps.find((step) => step.id === "hash");
     const verifySteps = proof.steps.filter((step) =>
@@ -150,18 +145,14 @@ export function ProofRunnerPanel() {
           </div>
         )}
 
-        <div
-          className={`stage-header ${stage2Active || stage2Done ? "" : "pending"}`}
-        >
-          <span
-            className={`stage-num ${stage2Done ? "done" : stage2Active ? "active" : "pending"}`}
-          >
+        <div className={`stage-header ${stage2Active ? "" : "pending"}`}>
+          <span className={`stage-num ${stage2Active ? "active" : "pending"}`}>
             2
           </span>
           <span className="stage-title">Committing New State Root</span>
         </div>
 
-        {(proof.status === "committing" || proof.status === "done") && (
+        {proof.status === "committing" && (
           <div className="stage-details">
             <div className="stage-detail-line">
               <span className="stage-detail-label">Nullifying</span>
@@ -195,10 +186,42 @@ export function ProofRunnerPanel() {
             </div>
           </div>
         )}
+      </section>
+    );
+  }
 
-        {proof.status === "done" && (
-          <div className="proof-complete-bar">✓ complete</div>
-        )}
+  if (proof.status === "summary") {
+    const nullified = proof.summary?.nullified ?? [];
+    const live = proof.summary?.live ?? [];
+
+    return (
+      <section className="cpu-panel proof-panel proof-summary-card">
+        <div className="summary-stage">
+          <div className="summary-title">
+            <span className="stage-num summary-danger">✗</span>
+            Nullified
+          </div>
+          {nullified.length === 0 ? (
+            <div className="summary-line summary-muted">none</div>
+          ) : (
+            nullified.map((entry, idx) => (
+              <div key={`${entry}-${idx}`} className="summary-line summary-null">
+                {entry}
+              </div>
+            ))
+          )}
+        </div>
+        <div className="summary-stage">
+          <div className="summary-title">
+            <span className="stage-num done">✓</span>
+            Live
+          </div>
+          {live.map((entry, idx) => (
+            <div key={`${entry}-${idx}`} className="summary-line summary-live">
+              {entry}
+            </div>
+          ))}
+        </div>
       </section>
     );
   }

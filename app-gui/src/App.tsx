@@ -21,7 +21,7 @@ import "./features/proof-runner/ProofRunnerPanel.css";
 import "./features/recipes/RecipeGrid.css";
 
 function App() {
-  const [thingsDirPath, setThingsDirPath] = useState("loading...");
+  const [thingsDirPath, setThingsDirPath] = useState("~/.objects");
   const activeItemId = useUiStore((state) => state.activeItemId);
   const activeRecipeId = useUiStore((state) => state.activeRecipeId);
   const contextSelection = useUiStore((state) => state.contextSelection);
@@ -37,8 +37,11 @@ function App() {
   const proofRunning = useUiStore(
     (state) =>
       state.proof.status === "generating" ||
-      state.proof.status === "committing",
+      state.proof.status === "committing" ||
+      state.proof.status === "summary",
   );
+  const selectedItem =
+    mockItems.find((item) => item.id === activeItemId) ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -47,8 +50,7 @@ function App() {
         if (!cancelled) setThingsDirPath(path);
       })
       .catch(() => {
-        if (!cancelled)
-          setThingsDirPath("(failed to resolve things directory)");
+        if (!cancelled) setThingsDirPath("~/.objects");
       });
     return () => {
       cancelled = true;
@@ -107,7 +109,6 @@ function App() {
   }, [recordCpuSample]);
 
   const handleOpenThingsDir = async () => {
-    if (!thingsDirPath || thingsDirPath.startsWith("(")) return;
     try {
       const dir = await openThingsDir();
       setThingsDirPath(dir);
@@ -133,7 +134,6 @@ function App() {
           selection={contextSelection}
           items={mockItems}
           recipes={mockRecipes}
-          thingsDirPath={thingsDirPath}
           onRunProof={runProof}
           proofRunning={proofRunning}
         />
@@ -144,6 +144,7 @@ function App() {
         <RecipeGrid
           recipes={mockRecipes}
           activeRecipeId={activeRecipeId}
+          selectedItem={selectedItem}
           onSelectRecipe={selectRecipe}
         />
       </div>

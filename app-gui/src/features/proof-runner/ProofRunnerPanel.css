@@ -56,6 +56,11 @@
   background: var(--good);
 }
 
+.stage-num.summary-danger {
+  background: var(--danger);
+  color: #f7eaea;
+}
+
 .stage-num.pending {
   background: #323438;
   color: #e1e1e1;
@@ -128,18 +133,6 @@
   to {
     transform: rotate(360deg);
   }
-}
-
-.proof-complete-bar {
-  margin-top: auto;
-  color: var(--good);
-  font-size: 10px;
-  font-weight: 400;
-  border-top: 1px solid var(--border);
-  padding: 10px 0 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
 }
 
 .proof-panel-idle {
@@ -290,6 +283,47 @@
 .proof-error {
   color: #d16a6a;
   font-size: 10px;
+}
+
+.proof-summary-card {
+  gap: 12px;
+}
+
+.summary-stage {
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 10px;
+}
+
+.summary-stage:last-child {
+  border-bottom: none;
+}
+
+.summary-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-bright);
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.summary-line {
+  font-size: 10px;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 4px 0;
+}
+
+.summary-line.summary-null {
+  color: var(--danger);
+}
+
+.summary-line.summary-live {
+  color: var(--good);
+}
+
+.summary-line.summary-muted {
+  color: var(--text-dim);
 }
 
 .root-dot {

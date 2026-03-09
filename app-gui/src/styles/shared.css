@@ -23,7 +23,7 @@
 }
 
 .panel-header-button::after {
-  content: "open folder";
+  content: "open ~/.objects/";
   position: absolute;
   left: 12px;
   bottom: calc(100% + 4px);
@@ -52,9 +52,4 @@
 .context-panel::-webkit-scrollbar-thumb,
 .proof-panel::-webkit-scrollbar-thumb {
   background: var(--border);
-}
-
-button:hover {
-  border-color: var(--accent-hover);
-  filter: brightness(1.03);
 }

@@ -3,7 +3,7 @@ import { createDobj, type CreateDobjProgress } from "../api/tauriClient";
 import { initialUiState } from "./initialState";
 import type { AppUiState } from "../types/domain";
 
-type ProofStatus = "idle" | "generating" | "committing" | "done" | "error";
+type ProofStatus = "idle" | "generating" | "committing" | "summary" | "error";
 type StepStatus = "pending" | "running" | "done";
 
 interface ProofStep {
@@ -24,6 +24,11 @@ interface ProofStats {
   roots: RootSnapshot[];
 }
 
+interface ProofSummary {
+  nullified: string[];
+  live: string[];
+}
+
 interface ProofState {
   runDobjId: string | null;
   status: ProofStatus;
@@ -34,6 +39,7 @@ interface ProofState {
   steps: ProofStep[];
   oldRoot: string | null;
   newRoot: string | null;
+  summary: ProofSummary | null;
   error: string | null;
   stats: ProofStats;
 }
@@ -65,6 +71,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
     steps: [],
     oldRoot: null,
     newRoot: null,
+    summary: null,
     error: null,
     stats: {
       cpuHistory: Array.from({ length: 24 }, () => 0),
@@ -86,7 +93,11 @@ export const useUiStore = create<UiStoreState>((set) => ({
         prev.contextSelection.kind === "item" &&
         prev.contextSelection.itemId === itemId
       ) {
-        return prev;
+        return {
+          ...prev,
+          activeItemId: null,
+          contextSelection: { kind: "none" },
+        };
       }
       return {
         ...prev,
@@ -103,7 +114,11 @@ export const useUiStore = create<UiStoreState>((set) => ({
         prev.contextSelection.kind === "recipe" &&
         prev.contextSelection.recipeId === recipeId
       ) {
-        return prev;
+        return {
+          ...prev,
+          activeRecipeId: null,
+          contextSelection: { kind: "none" },
+        };
       }
       return {
         ...prev,
@@ -169,7 +184,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           detail: event.detail ?? nextOldRoot ?? "pending",
         });
       } else if (event.phase === "commit") {
-        nextStatus = event.status === "done" ? "done" : "committing";
+        nextStatus = "committing";
         nextNewRoot = event.newRoot ?? event.detail ?? nextNewRoot;
         updateStep("commit", {
           status: event.status,
@@ -207,13 +222,16 @@ export const useUiStore = create<UiStoreState>((set) => ({
       };
     }),
   runProof: async ({ id, methodName, inputFiles, cpuCost }) => {
-    const postDoneHoldMs = 1200;
+    const postDoneHoldMs = 2800;
     const verifyTargets = inputFiles.length > 0 ? inputFiles : ["(no inputs)"];
+    const normalizeOutputLabel = (value: string) =>
+      value.endsWith(".dobj") ? value : `${value}.dobj`;
 
     set((prev) => {
       if (
         prev.proof.status === "generating" ||
-        prev.proof.status === "committing"
+        prev.proof.status === "committing" ||
+        prev.proof.status === "summary"
       )
         return prev;
       return {
@@ -253,6 +271,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           ],
           oldRoot: null,
           newRoot: null,
+          summary: null,
           error: null,
           stats: prev.proof.stats,
         },
@@ -266,13 +285,19 @@ export const useUiStore = create<UiStoreState>((set) => ({
       });
       set((prev) => {
         if (prev.proof.runDobjId !== id) return prev;
+        const consumed = inputFiles.map(normalizeOutputLabel);
+        const produced = [`${methodName}_output.dobj`];
         return {
           ...prev,
           proof: {
             ...prev.proof,
-            status: "done",
+            status: "summary",
             oldRoot: result.oldRoot,
             newRoot: result.newRoot,
+            summary: {
+              nullified: consumed,
+              live: produced,
+            },
           },
         };
       });
@@ -291,6 +316,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           steps: [],
           oldRoot: null,
           newRoot: null,
+          summary: null,
           error: null,
         },
       }));
@@ -307,6 +333,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           steps: [],
           oldRoot: null,
           newRoot: null,
+          summary: null,
           error: error instanceof Error ? error.message : "Failed to run proof",
           stats: prev.proof.stats,
         },

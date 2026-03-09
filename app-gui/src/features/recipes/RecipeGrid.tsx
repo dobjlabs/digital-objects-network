@@ -1,39 +1,64 @@
 import { useMemo, useState } from "react";
-import type { Recipe } from "../../shared/types/domain";
+import type { InventoryItem, Recipe } from "../../shared/types/domain";
 
 interface RecipeGridProps {
   recipes: Recipe[];
   activeRecipeId: string | null;
+  selectedItem: InventoryItem | null;
   onSelectRecipe: (recipeId: string) => void;
-}
-
-function actionHash(seed: string) {
-  const bytes = new Uint8Array(8);
-  for (let i = 0; i < seed.length; i += 1) {
-    bytes[i % bytes.length] = (bytes[i % bytes.length] + seed.charCodeAt(i)) & 0xff;
-  }
-  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
-  return `0x${hex.slice(0, 4)}...${hex.slice(-4)}`;
 }
 
 export function RecipeGrid({
   recipes,
   activeRecipeId,
+  selectedItem,
   onSelectRecipe,
 }: RecipeGridProps) {
   const [search, setSearch] = useState("");
-  const unlocked = recipes.filter((recipe) => recipe.unlocked);
-  const filtered = useMemo(() => {
+
+  const unlocked = useMemo(
+    () => recipes.filter((recipe) => recipe.unlocked),
+    [recipes],
+  );
+
+  const compatibilityFiltered = useMemo(() => {
+    if (!selectedItem) return unlocked;
+    return unlocked.filter((recipe) =>
+      recipe.args.some((arg) => arg.classHash === selectedItem.classMeta.hash),
+    );
+  }, [selectedItem, unlocked]);
+
+  const visibleActions = useMemo(() => {
+    if (selectedItem) return compatibilityFiltered;
     const q = search.trim().toLowerCase();
-    if (!q) return unlocked;
-    return unlocked.filter((recipe) => {
+    if (!q) return compatibilityFiltered;
+    return compatibilityFiltered.filter((recipe) => {
       return (
         recipe.name.toLowerCase().includes(q) ||
-        recipe.className.toLowerCase().includes(q) ||
+        recipe.group.toLowerCase().includes(q) ||
         recipe.verb.toLowerCase().includes(q)
       );
     });
-  }, [search, unlocked]);
+  }, [compatibilityFiltered, search, selectedItem]);
+
+  const grouped = useMemo(() => {
+    const buckets = new Map<string, Recipe[]>();
+    visibleActions.forEach((recipe) => {
+      const list = buckets.get(recipe.group);
+      if (list) {
+        list.push(recipe);
+      } else {
+        buckets.set(recipe.group, [recipe]);
+      }
+    });
+    return Array.from(buckets.entries());
+  }, [visibleActions]);
+
+  const filterLabel = selectedItem
+    ? visibleActions.length > 0
+      ? `accepts # ${selectedItem.classMeta.name}`
+      : "no matching actions"
+    : "";
 
   return (
     <section className="recipes-panel">
@@ -43,28 +68,37 @@ export function RecipeGrid({
         </button>
       </div>
       <div className="action-toolbar">
-        <input
-          className="action-search"
-          placeholder="search actions..."
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
+        {!selectedItem ? (
+          <input
+            className="action-search"
+            placeholder="search actions..."
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        ) : (
+          <div className="action-filter-label">{filterLabel}</div>
+        )}
       </div>
       <div className="action-list">
-        {filtered.map((recipe) => (
-          <button
-            key={recipe.id}
-            type="button"
-            className={`action-row ${activeRecipeId === recipe.id ? "active" : ""}`}
-            onClick={() => onSelectRecipe(recipe.id)}
-            title={`${recipe.name} (${recipe.verb})`}
-          >
-            <span className="action-row-emoji">{recipe.emoji}</span>
-            <span className="action-row-name">{recipe.className}</span>
-            <span className="action-row-hash">{actionHash(recipe.id)}</span>
-          </button>
+        {grouped.map(([group, entries]) => (
+          <div key={group}>
+            <div className="action-group-label">{group}</div>
+            {entries.map((recipe) => (
+              <button
+                key={recipe.id}
+                type="button"
+                className={`action-row ${activeRecipeId === recipe.id ? "active" : ""}`}
+                onClick={() => onSelectRecipe(recipe.id)}
+                title={`${recipe.name} (${recipe.verb})`}
+              >
+                <span className="action-row-emoji">{recipe.emoji}</span>
+                <span className="action-row-name">{recipe.name}</span>
+                <span className="action-row-hash">{recipe.hash}</span>
+              </button>
+            ))}
+          </div>
         ))}
-        {filtered.length === 0 && (
+        {visibleActions.length === 0 && (
           <div className="action-empty">No actions match.</div>
         )}
       </div>

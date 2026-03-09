@@ -29,12 +29,13 @@ export function InventoryPanel({
   ) => {
     const payload = JSON.stringify({
       itemId: item.id,
-      name: item.name,
-      className: item.className,
+      name: item.fileName,
+      className: item.classMeta.name,
+      classHash: item.classMeta.hash,
     });
     event.dataTransfer.setData("application/x-zkcraft-item", payload);
-    event.dataTransfer.setData("text/plain", item.name);
-    event.dataTransfer.setData("text", item.name);
+    event.dataTransfer.setData("text/plain", item.fileName);
+    event.dataTransfer.setData("text", item.fileName);
     event.dataTransfer.effectAllowed = "copy";
     isDraggingRef.current = true;
   };
@@ -70,7 +71,7 @@ export function InventoryPanel({
           <span className="inventory-emoji">{item.emoji}</span>
         </span>
         <span className="inventory-main">
-          <span className="inventory-name">{item.name}</span>
+          <span className="inventory-name">{item.fileName}</span>
           <span className="inventory-hash">{hashLine}</span>
         </span>
         <span
@@ -88,7 +89,7 @@ export function InventoryPanel({
         onClick={onOpenThingsDir}
         title={thingsDirPath}
       >
-        Your Things
+        Your Objects
       </button>
 
       <div className="inventory-list">
