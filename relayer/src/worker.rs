@@ -1,0 +1,402 @@
+use std::{sync::Arc, time::Duration};
+
+use anyhow::{anyhow, Result};
+use tokio::sync::watch;
+use tracing::{debug, info, warn};
+
+use crate::{
+    db::Db,
+    eth::{EthGateway, ReceiptOutcome},
+    model::{JobStatus, RelayJob},
+};
+
+#[derive(Clone)]
+pub struct WorkerConfig {
+    pub max_attempts: u32,
+    pub retry_initial_secs: u64,
+    pub retry_max_secs: u64,
+    pub receipt_poll_secs: u64,
+    pub receipt_timeout_secs: Option<u64>,
+    pub idle_sleep_ms: u64,
+}
+
+pub async fn run_worker(
+    db: Arc<Db>,
+    eth_client: Arc<dyn EthGateway>,
+    cfg: WorkerConfig,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> Result<()> {
+    let recovered = db.recover_inflight_jobs(now_ts())?;
+    if recovered > 0 {
+        info!(recovered, "Recovered in-flight relay jobs");
+    }
+
+    loop {
+        if *shutdown_rx.borrow() {
+            info!("Relayer worker shutting down");
+            return Ok(());
+        }
+
+        let now = now_ts();
+        let Some(job) = db.next_due_job(now)? else {
+            if wait_or_shutdown(Duration::from_millis(cfg.idle_sleep_ms), &mut shutdown_rx).await {
+                info!("Relayer worker shutting down");
+                return Ok(());
+            }
+            continue;
+        };
+
+        debug!(job_id = %job.job_id, status = job.status.as_str(), "Processing due relay job");
+        if let Err(err) = process_due_job(&db, &*eth_client, &cfg, job).await {
+            warn!(?err, "Processing relay job failed unexpectedly");
+        }
+    }
+}
+
+async fn wait_or_shutdown(duration: Duration, shutdown_rx: &mut watch::Receiver<bool>) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(duration) => false,
+        changed = shutdown_rx.changed() => {
+            if changed.is_err() {
+                return true;
+            }
+            *shutdown_rx.borrow()
+        }
+    }
+}
+
+async fn process_due_job(
+    db: &Db,
+    eth_client: &dyn EthGateway,
+    cfg: &WorkerConfig,
+    job: RelayJob,
+) -> Result<()> {
+    if job.status.is_terminal() {
+        return Ok(());
+    }
+
+    if job.tx_hash.is_some() {
+        poll_submitted_job(db, eth_client, cfg, job).await
+    } else {
+        send_queued_job(db, eth_client, cfg, job).await
+    }
+}
+
+async fn send_queued_job(
+    db: &Db,
+    eth_client: &dyn EthGateway,
+    cfg: &WorkerConfig,
+    mut job: RelayJob,
+) -> Result<()> {
+    let now = now_ts();
+    job.status = JobStatus::Sending;
+    job.updated_at = now;
+    db.put_job(&job)?;
+
+    job.attempt_count = job.attempt_count.saturating_add(1);
+    job.updated_at = now;
+    db.put_job(&job)?;
+
+    match eth_client.submit_payload(&job.payload_bytes).await {
+        Ok(tx_hash) => {
+            job.status = JobStatus::Submitted;
+            job.tx_hash = Some(tx_hash);
+            job.submitted_at = Some(now);
+            job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
+            job.last_error = None;
+            job.updated_at = now;
+            db.put_job(&job)?;
+            info!(job_id = %job.job_id, tx_hash = ?job.tx_hash, "Submitted blob transaction");
+            Ok(())
+        }
+        Err(err) => {
+            schedule_retry_or_fail(db, cfg, job, now, err)?;
+            Ok(())
+        }
+    }
+}
+
+async fn poll_submitted_job(
+    db: &Db,
+    eth_client: &dyn EthGateway,
+    cfg: &WorkerConfig,
+    mut job: RelayJob,
+) -> Result<()> {
+    let now = now_ts();
+    let tx_hash_str = job
+        .tx_hash
+        .clone()
+        .ok_or_else(|| anyhow!("submitted job missing tx_hash"))?;
+
+    if let (Some(timeout_secs), Some(submitted_at)) = (cfg.receipt_timeout_secs, job.submitted_at) {
+        if now.saturating_sub(submitted_at) >= timeout_secs as i64 {
+            fail_job(
+                db,
+                &mut job,
+                now,
+                format!("receipt timeout after {}s", timeout_secs),
+            )?;
+            return Ok(());
+        }
+    }
+
+    job.attempt_count = job.attempt_count.saturating_add(1);
+    job.updated_at = now;
+    db.put_job(&job)?;
+
+    match eth_client.poll_receipt(&tx_hash_str).await {
+        Ok(Some(ReceiptOutcome {
+            success: true,
+            block_number,
+        })) => {
+            job.status = JobStatus::Confirmed;
+            job.block_number = block_number;
+            job.next_attempt_at = None;
+            job.last_error = None;
+            job.updated_at = now;
+            db.put_job(&job)?;
+            info!(job_id = %job.job_id, block_number = ?job.block_number, "Relay job confirmed");
+            Ok(())
+        }
+        Ok(Some(ReceiptOutcome {
+            success: false,
+            block_number,
+        })) => {
+            fail_job_with_block(
+                db,
+                &mut job,
+                now,
+                block_number,
+                "transaction reverted on-chain".to_string(),
+            )?;
+            warn!(job_id = %job.job_id, "Relay job failed due to reverted receipt");
+            Ok(())
+        }
+        Ok(None) => {
+            job.status = JobStatus::Submitted;
+            job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
+            job.updated_at = now;
+            db.put_job(&job)?;
+            debug!(job_id = %job.job_id, "Receipt not ready yet");
+            Ok(())
+        }
+        Err(err) => {
+            if is_permanent_error(&err) {
+                fail_job(db, &mut job, now, err.to_string())?;
+                return Ok(());
+            }
+            schedule_retry_or_fail(db, cfg, job, now, err)?;
+            Ok(())
+        }
+    }
+}
+
+fn fail_job(db: &Db, job: &mut RelayJob, now: i64, reason: String) -> Result<()> {
+    fail_job_with_block(db, job, now, job.block_number, reason)
+}
+
+fn fail_job_with_block(
+    db: &Db,
+    job: &mut RelayJob,
+    now: i64,
+    block_number: Option<u64>,
+    reason: String,
+) -> Result<()> {
+    job.status = JobStatus::Failed;
+    job.block_number = block_number;
+    job.next_attempt_at = None;
+    job.last_error = Some(reason);
+    job.updated_at = now;
+    db.put_job(job)
+}
+
+fn schedule_retry_or_fail(
+    db: &Db,
+    cfg: &WorkerConfig,
+    mut job: RelayJob,
+    now: i64,
+    err: anyhow::Error,
+) -> Result<()> {
+    let msg = err.to_string();
+    if job.attempt_count >= cfg.max_attempts {
+        job.status = JobStatus::Failed;
+        job.next_attempt_at = None;
+        job.last_error = Some(msg);
+        job.updated_at = now;
+        db.put_job(&job)?;
+        warn!(job_id = %job.job_id, attempts = job.attempt_count, "Relay job marked failed");
+        return Ok(());
+    }
+
+    let backoff = backoff_secs(
+        job.attempt_count,
+        cfg.retry_initial_secs,
+        cfg.retry_max_secs,
+    );
+    job.status = JobStatus::Queued;
+    job.next_attempt_at = Some(now + backoff as i64);
+    job.last_error = Some(msg);
+    job.updated_at = now;
+    db.put_job(&job)?;
+
+    warn!(
+        job_id = %job.job_id,
+        attempts = job.attempt_count,
+        retry_in_secs = backoff,
+        "Relay job scheduled for retry"
+    );
+    Ok(())
+}
+
+fn is_permanent_error(err: &anyhow::Error) -> bool {
+    err.to_string().contains("invalid tx hash")
+}
+
+fn backoff_secs(attempt_count: u32, initial: u64, max: u64) -> u64 {
+    let shift = attempt_count.saturating_sub(1).min(20);
+    let exp = 1u64 << shift;
+    initial.saturating_mul(exp).min(max)
+}
+
+fn now_ts() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::VecDeque, sync::Mutex};
+
+    use async_trait::async_trait;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct MockEthGateway {
+        submit_results: Mutex<VecDeque<Result<String>>>,
+        poll_results: Mutex<VecDeque<Result<Option<ReceiptOutcome>>>>,
+    }
+
+    #[async_trait]
+    impl EthGateway for MockEthGateway {
+        async fn submit_payload(&self, _payload_bytes: &[u8]) -> Result<String> {
+            self.submit_results
+                .lock()
+                .expect("poisoned")
+                .pop_front()
+                .unwrap_or_else(|| Err(anyhow!("unexpected submit call")))
+        }
+
+        async fn poll_receipt(&self, _tx_hash: &str) -> Result<Option<ReceiptOutcome>> {
+            self.poll_results
+                .lock()
+                .expect("poisoned")
+                .pop_front()
+                .unwrap_or_else(|| Err(anyhow!("unexpected poll call")))
+        }
+    }
+
+    fn mk_job(status: JobStatus) -> RelayJob {
+        RelayJob {
+            job_id: "job-1".to_string(),
+            status,
+            payload_bytes: vec![1, 2, 3],
+            tx_final: "0xaa".to_string(),
+            state_root_hash: "0xbb".to_string(),
+            client_ref: None,
+            attempt_count: 0,
+            tx_hash: None,
+            submitted_at: None,
+            block_number: None,
+            last_error: None,
+            next_attempt_at: Some(now_ts()),
+            created_at: now_ts(),
+            updated_at: now_ts(),
+        }
+    }
+
+    fn cfg() -> WorkerConfig {
+        WorkerConfig {
+            max_attempts: 8,
+            retry_initial_secs: 1,
+            retry_max_secs: 5,
+            receipt_poll_secs: 1,
+            receipt_timeout_secs: Some(3),
+            idle_sleep_ms: 20,
+        }
+    }
+
+    #[tokio::test]
+    async fn retryable_submit_error_then_confirmed() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::connect(dir.path().to_str().unwrap()).unwrap();
+        let gateway = MockEthGateway::default();
+        gateway
+            .submit_results
+            .lock()
+            .unwrap()
+            .push_back(Err(anyhow!("rpc unavailable")));
+        gateway.submit_results.lock().unwrap().push_back(Ok(
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        ));
+        gateway
+            .poll_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(Some(ReceiptOutcome {
+                success: true,
+                block_number: Some(42),
+            })));
+
+        let job = mk_job(JobStatus::Queued);
+        db.insert_job_idempotent(&job).unwrap();
+        let cfg = cfg();
+
+        let job = db.get_job("job-1").unwrap().unwrap();
+        send_queued_job(&db, &gateway, &cfg, job).await.unwrap();
+        let first = db.get_job("job-1").unwrap().unwrap();
+        assert_eq!(first.status, JobStatus::Queued);
+        assert_eq!(first.attempt_count, 1);
+        assert!(first.last_error.is_some());
+
+        let job = db.get_job("job-1").unwrap().unwrap();
+        send_queued_job(&db, &gateway, &cfg, job).await.unwrap();
+        let second = db.get_job("job-1").unwrap().unwrap();
+        assert_eq!(second.status, JobStatus::Submitted);
+        assert!(second.tx_hash.is_some());
+        assert!(second.submitted_at.is_some());
+
+        let job = db.get_job("job-1").unwrap().unwrap();
+        poll_submitted_job(&db, &gateway, &cfg, job).await.unwrap();
+        let final_job = db.get_job("job-1").unwrap().unwrap();
+        assert_eq!(final_job.status, JobStatus::Confirmed);
+        assert_eq!(final_job.block_number, Some(42));
+    }
+
+    #[tokio::test]
+    async fn submitted_job_times_out() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::connect(dir.path().to_str().unwrap()).unwrap();
+        let gateway = MockEthGateway::default();
+        let mut job = mk_job(JobStatus::Submitted);
+        job.tx_hash =
+            Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+        job.submitted_at = Some(now_ts() - 100);
+        db.insert_job_idempotent(&job).unwrap();
+
+        let cfg = cfg();
+        let job = db.get_job("job-1").unwrap().unwrap();
+        poll_submitted_job(&db, &gateway, &cfg, job).await.unwrap();
+        let timed_out = db.get_job("job-1").unwrap().unwrap();
+        assert_eq!(timed_out.status, JobStatus::Failed);
+        assert!(timed_out
+            .last_error
+            .unwrap()
+            .contains("receipt timeout after"));
+    }
+}

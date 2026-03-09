@@ -1,5 +1,5 @@
 [workspace]
-members = ["app-gui/src-tauri", "common", "pod2utils", "synchronizer", "txlib",  "vdfpod", "lt_eq_u256_pod", "craftlib"]
+members = ["app-gui/src-tauri", "common", "pod2utils", "relayer", "synchronizer", "txlib",  "vdfpod", "lt_eq_u256_pod", "craftlib"]
 resolver = "2"
 
 [workspace.dependencies]

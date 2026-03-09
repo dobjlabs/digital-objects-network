@@ -3,11 +3,14 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
+use base64::{engine::general_purpose::STANDARD, Engine};
 use common::{
+    blob_codec::MAX_SIMPLE_BLOB_PAYLOAD_BYTES,
     payload::{Payload, PayloadProof},
-    shrink::{ShrunkMainPodSetup, shrink_compress_pod},
+    shrink::{shrink_compress_pod, ShrunkMainPodSetup},
 };
 use craftlib::{
     scenario::test_sdk,
@@ -22,8 +25,8 @@ use txlib::StateRoot;
 use crate::{
     state::{CraftRuntime, CraftRuntimeInner, RuntimeObjectRecord, RuntimeValidity},
     types::{
-        ClassMetaDto, RunSdkActionProgress, InventoryItemDto, ItemStatDto, LoadGuiBootstrapResult,
-        MethodArgDto, ObjectMethodDto, RecipeDto, RunSdkActionInput, RunSdkActionResult,
+        ClassMetaDto, InventoryItemDto, ItemStatDto, LoadGuiBootstrapResult, MethodArgDto,
+        ObjectMethodDto, RecipeDto, RunSdkActionInput, RunSdkActionProgress, RunSdkActionResult,
         SourceActionMetaDto,
     },
 };
@@ -72,21 +75,49 @@ struct SynchronizerState {
     current_gsr: Hash,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RelayerJobStatus {
+    Queued,
+    Sending,
+    Submitted,
+    Confirmed,
+    Failed,
+}
+
+impl RelayerJobStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            RelayerJobStatus::Queued => "queued",
+            RelayerJobStatus::Sending => "sending",
+            RelayerJobStatus::Submitted => "submitted",
+            RelayerJobStatus::Confirmed => "confirmed",
+            RelayerJobStatus::Failed => "failed",
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DaPostRequest {
-    action_id: String,
-    payload_hex: String,
-    tx_final: String,
-    state_root_hash: String,
-    nullifiers: Vec<String>,
+struct RelayerSubmitRequest {
+    payload_base64: String,
+    client_ref: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DaPostResponse {
-    #[serde(alias = "txHash", alias = "tx_hash", alias = "id")]
+struct RelayerSubmitResponse {
+    job_id: String,
+    status: RelayerJobStatus,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RelayerJobStatusResponse {
+    job_id: String,
+    status: RelayerJobStatus,
     tx_hash: Option<String>,
+    last_error: Option<String>,
 }
 
 fn short_hash(seed: &str) -> String {
@@ -113,13 +144,169 @@ fn synchronizer_api_url() -> String {
         .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string())
 }
 
-fn da_post_url() -> Result<String, String> {
-    let url = std::env::var("ZKCRAFT_DA_POST_URL")
-        .map_err(|_| "ZKCRAFT_DA_POST_URL is required to commit actions to DA".to_string())?;
-    if url.trim().is_empty() {
-        return Err("ZKCRAFT_DA_POST_URL is empty".to_string());
+fn relayer_api_url() -> String {
+    std::env::var("ZKCRAFT_RELAYER_API_URL").unwrap_or_else(|_| "http://127.0.0.1:3200".to_string())
+}
+
+fn relayer_api_key() -> Result<String, String> {
+    let key = std::env::var("ZKCRAFT_RELAYER_API_KEY")
+        .map_err(|_| "ZKCRAFT_RELAYER_API_KEY is required to relay proofs".to_string())?;
+    if key.trim().is_empty() {
+        return Err("ZKCRAFT_RELAYER_API_KEY is empty".to_string());
     }
-    Ok(url)
+    Ok(key)
+}
+
+fn relayer_poll_timeout_secs() -> u64 {
+    std::env::var("ZKCRAFT_RELAYER_POLL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(180)
+}
+
+fn relayer_poll_interval_millis() -> u64 {
+    std::env::var("ZKCRAFT_RELAYER_POLL_INTERVAL_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|value| *value >= 250)
+        .unwrap_or(1500)
+}
+
+fn ensure_non_empty_url(name: &str, value: String) -> Result<String, String> {
+    let trimmed = value.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(format!("{name} is empty"));
+    }
+    Ok(trimmed)
+}
+
+fn normalize_sync_url() -> Result<String, String> {
+    ensure_non_empty_url("ZKCRAFT_SYNCHRONIZER_API_URL", synchronizer_api_url())
+}
+
+fn normalize_relayer_url() -> Result<String, String> {
+    ensure_non_empty_url("ZKCRAFT_RELAYER_API_URL", relayer_api_url())
+}
+
+fn relayer_proofs_endpoint(relayer_api_url: &str) -> String {
+    format!("{}/api/v1/proofs", relayer_api_url.trim_end_matches('/'))
+}
+
+fn relayer_proof_status_endpoint(relayer_api_url: &str, job_id: &str) -> String {
+    format!(
+        "{}/api/v1/proofs/{job_id}",
+        relayer_api_url.trim_end_matches('/')
+    )
+}
+
+fn submit_proof_to_relayer(
+    relayer_api_url: &str,
+    relayer_api_key: &str,
+    payload_bytes: &[u8],
+    client_ref: Option<String>,
+) -> Result<RelayerSubmitResponse, String> {
+    if payload_bytes.len() > MAX_SIMPLE_BLOB_PAYLOAD_BYTES {
+        return Err(format!(
+            "payload exceeds single-blob limit: {} > {}",
+            payload_bytes.len(),
+            MAX_SIMPLE_BLOB_PAYLOAD_BYTES
+        ));
+    }
+
+    let endpoint = relayer_proofs_endpoint(relayer_api_url);
+    let request = RelayerSubmitRequest {
+        payload_base64: STANDARD.encode(payload_bytes),
+        client_ref,
+    };
+
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post(&endpoint)
+        .bearer_auth(relayer_api_key)
+        .json(&request)
+        .send()
+        .map_err(|err| format!("failed to submit proof to relayer at {endpoint}: {err}"))?;
+
+    let status = response.status();
+    let body = response.text().unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!(
+            "relayer submit failed with {} {}: {}",
+            status.as_u16(),
+            status,
+            body
+        ));
+    }
+
+    serde_json::from_str::<RelayerSubmitResponse>(&body)
+        .map_err(|err| format!("failed to decode relayer submit response: {err}; body={body}"))
+}
+
+fn fetch_relayer_job_status(
+    relayer_api_url: &str,
+    relayer_api_key: &str,
+    job_id: &str,
+) -> Result<RelayerJobStatusResponse, String> {
+    let endpoint = relayer_proof_status_endpoint(relayer_api_url, job_id);
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .get(&endpoint)
+        .bearer_auth(relayer_api_key)
+        .send()
+        .map_err(|err| format!("failed to query relayer job at {endpoint}: {err}"))?;
+
+    let status = response.status();
+    let body = response.text().unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!(
+            "relayer status failed with {} {}: {}",
+            status.as_u16(),
+            status,
+            body
+        ));
+    }
+
+    serde_json::from_str::<RelayerJobStatusResponse>(&body)
+        .map_err(|err| format!("failed to decode relayer status response: {err}; body={body}"))
+}
+
+fn wait_for_relayer_confirmation(
+    relayer_api_url: &str,
+    relayer_api_key: &str,
+    job_id: &str,
+    timeout_secs: u64,
+    poll_interval_ms: u64,
+) -> Result<RelayerJobStatusResponse, String> {
+    let timeout = Duration::from_secs(timeout_secs);
+    let poll_interval = Duration::from_millis(poll_interval_ms);
+    let start = Instant::now();
+
+    loop {
+        let status = fetch_relayer_job_status(relayer_api_url, relayer_api_key, job_id)?;
+        match status.status {
+            RelayerJobStatus::Confirmed => return Ok(status),
+            RelayerJobStatus::Failed => {
+                return Err(format!(
+                    "relayer job {} failed: {}",
+                    status.job_id,
+                    status
+                        .last_error
+                        .clone()
+                        .unwrap_or_else(|| "unknown error".to_string())
+                ));
+            }
+            RelayerJobStatus::Queued | RelayerJobStatus::Sending | RelayerJobStatus::Submitted => {}
+        }
+
+        if start.elapsed() >= timeout {
+            return Err(format!(
+                "timed out waiting for relayer job {} after {}s",
+                job_id, timeout_secs
+            ));
+        }
+        std::thread::sleep(poll_interval);
+    }
 }
 
 fn parse_hash_hex(value: &str) -> Result<Hash, String> {
@@ -282,10 +469,13 @@ fn to_inventory_item(record: &RuntimeObjectRecord) -> InventoryItemDto {
             name: record.class_name.clone(),
             hash: short_hash(&record.class_name),
         },
-        source_action: record.source_action.as_ref().map(|name| SourceActionMetaDto {
-            name: name.clone(),
-            hash: short_hash(name),
-        }),
+        source_action: record
+            .source_action
+            .as_ref()
+            .map(|name| SourceActionMetaDto {
+                name: name.clone(),
+                hash: short_hash(name),
+            }),
         description: Some(class_ui.description.to_string()),
         methods: Vec::<ObjectMethodDto>::new(),
         stats: record
@@ -394,7 +584,11 @@ fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObject
         state_hash: record.state_hash.clone(),
         nullifier: record.nullifier.clone(),
         stats: record.stats.clone(),
-        spendable: record.spendable.as_ref().map(persist_spendable).transpose()?,
+        spendable: record
+            .spendable
+            .as_ref()
+            .map(persist_spendable)
+            .transpose()?,
     })
 }
 
@@ -404,8 +598,12 @@ fn sync_object_files(inner: &CraftRuntimeInner, objects_dir: &Path) -> Result<()
 
     for record in &inner.objects {
         let persisted = persist_object_record(record)?;
-        let serialized = serde_json::to_string_pretty(&persisted)
-            .map_err(|err| format!("failed to serialize object file {}: {err}", record.file_name))?;
+        let serialized = serde_json::to_string_pretty(&persisted).map_err(|err| {
+            format!(
+                "failed to serialize object file {}: {err}",
+                record.file_name
+            )
+        })?;
         fs::write(objects_dir.join(&record.file_name), serialized)
             .map_err(|err| format!("failed to write object file {}: {err}", record.file_name))?;
     }
@@ -415,8 +613,8 @@ fn sync_object_files(inner: &CraftRuntimeInner, objects_dir: &Path) -> Result<()
 
 fn load_object_files(objects_dir: &Path) -> Result<Vec<RuntimeObjectRecord>, String> {
     let mut objects = Vec::new();
-    for entry in
-        fs::read_dir(objects_dir).map_err(|err| format!("failed to read objects directory: {err}"))?
+    for entry in fs::read_dir(objects_dir)
+        .map_err(|err| format!("failed to read objects directory: {err}"))?
     {
         let entry = entry.map_err(|err| format!("failed to read objects entry: {err}"))?;
         let path = entry.path();
@@ -537,10 +735,10 @@ fn execute_action(
     Ok(builder.action(&action_id, inputs))
 }
 
-fn build_da_payload(
+fn build_relayer_payload(
     old_state_root_hash: &Hash,
     action_output: &SpendableObjects,
-) -> Result<(Vec<u8>, Hash, Vec<Hash>), String> {
+) -> Result<Vec<u8>, String> {
     let params = Params::default();
     let shrunk_main_pod = ShrunkMainPodSetup::new(&params)
         .build()
@@ -560,50 +758,11 @@ fn build_da_payload(
         proof: PayloadProof::Plonky2(Box::new(compressed)),
         tx_final,
         state_root_hash: *old_state_root_hash,
-        nullifiers: nullifiers.clone(),
+        nullifiers,
     };
 
     let payload_bytes = payload.to_bytes();
-    Ok((payload_bytes, tx_final, nullifiers))
-}
-
-fn post_da_payload(
-    da_url: &str,
-    action_id: &str,
-    payload_bytes: &[u8],
-    tx_final: &Hash,
-    state_root_hash: &Hash,
-    nullifiers: &[Hash],
-) -> Result<String, String> {
-    let request = DaPostRequest {
-        action_id: action_id.to_string(),
-        payload_hex: format!("0x{}", hex::encode(payload_bytes)),
-        tx_final: encode_hash_hex(tx_final),
-        state_root_hash: encode_hash_hex(state_root_hash),
-        nullifiers: nullifiers.iter().map(encode_hash_hex).collect(),
-    };
-
-    let client = reqwest::blocking::Client::new();
-    let response = client
-        .post(da_url)
-        .json(&request)
-        .send()
-        .map_err(|err| format!("failed to post payload to DA at {da_url}: {err}"))?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        return Err(format!(
-            "DA post failed with {} {}: {}",
-            status.as_u16(),
-            status,
-            body
-        ));
-    }
-    let parsed: Result<DaPostResponse, _> = response.json();
-    match parsed {
-        Ok(value) => Ok(value.tx_hash.unwrap_or_else(|| "posted".to_string())),
-        Err(_) => Ok("posted".to_string()),
-    }
+    Ok(payload_bytes)
 }
 
 #[tauri::command]
@@ -618,7 +777,10 @@ pub async fn run_sdk_action(
         .get(&input.action_id)
         .ok_or_else(|| format!("unknown action: {}", input.action_id))?;
     if descriptor.hidden {
-        return Err(format!("action is internal and cannot be run directly: {}", input.action_id));
+        return Err(format!(
+            "action is internal and cannot be run directly: {}",
+            input.action_id
+        ));
     }
 
     if input.input_object_ids.len() != descriptor.input_classes.len() {
@@ -637,12 +799,15 @@ pub async fn run_sdk_action(
         }
     }
 
-    let sync_api_url = synchronizer_api_url();
+    let sync_api_url = normalize_sync_url()?;
     let sync_state = fetch_synchronizer_state(&sync_api_url)?;
     let state_root_for_run = sync_state.state_root.clone();
     let old_root_hash = sync_state.current_gsr;
     let old_root = short_hash(&format!("{:#}", old_root_hash));
-    let da_url = da_post_url()?;
+    let relayer_url = normalize_relayer_url()?;
+    let relayer_key = relayer_api_key()?;
+    let relayer_timeout_secs = relayer_poll_timeout_secs();
+    let relayer_poll_interval_ms = relayer_poll_interval_millis();
 
     let (input_spendables, verify_targets);
     {
@@ -855,14 +1020,13 @@ pub async fn run_sdk_action(
         },
     )?;
 
-    let (payload_bytes, tx_final, payload_nullifiers) =
-        match build_da_payload(&old_root_hash, &spendable_outputs) {
-            Ok(payload) => payload,
-            Err(err) => {
-                clear_run_in_progress(&runtime);
-                return Err(err);
-            }
-        };
+    let payload_bytes = match build_relayer_payload(&old_root_hash, &spendable_outputs) {
+        Ok(payload) => payload,
+        Err(err) => {
+            clear_run_in_progress(&runtime);
+            return Err(err);
+        }
+    };
 
     emit_progress(
         &app,
@@ -870,45 +1034,99 @@ pub async fn run_sdk_action(
             run_id: run_id.clone(),
             phase: "commit".to_string(),
             status: "running".to_string(),
-            message: "Posting payload to Ethereum DA".to_string(),
+            message: "Submitting proof to relayer".to_string(),
             verify_index: None,
-            detail: Some("posting payload".to_string()),
+            detail: Some("submit".to_string()),
             old_root: Some(old_root.clone()),
             new_root: None,
             output_file: None,
         },
     )?;
 
-    let da_url_for_post = da_url.clone();
-    let action_id_for_post = input.action_id.clone();
-    let da_post = tauri::async_runtime::spawn_blocking(move || {
-        post_da_payload(
-            &da_url_for_post,
-            &action_id_for_post,
+    let relayer_url_for_submit = relayer_url.clone();
+    let relayer_key_for_submit = relayer_key.clone();
+    let action_ref = input.action_id.clone();
+    let submit_job = tauri::async_runtime::spawn_blocking(move || {
+        submit_proof_to_relayer(
+            &relayer_url_for_submit,
+            &relayer_key_for_submit,
             &payload_bytes,
-            &tx_final,
-            &old_root_hash,
-            &payload_nullifiers,
+            Some(format!("app-gui:{action_ref}")),
         )
     })
     .await;
-    let da_receipt = match da_post {
-        Ok(Ok(receipt)) => receipt,
+    let submit_response = match submit_job {
+        Ok(Ok(response)) => response,
         Ok(Err(err)) => {
             clear_run_in_progress(&runtime);
             return Err(err);
         }
         Err(err) => {
             clear_run_in_progress(&runtime);
-            return Err(format!("failed while posting payload to DA: {err}"));
+            return Err(format!("failed while submitting proof to relayer: {err}"));
         }
     };
+    let submitted_job_id = submit_response.job_id.clone();
+    let submitted_status = submit_response.status;
+    if submitted_status == RelayerJobStatus::Failed {
+        clear_run_in_progress(&runtime);
+        return Err(format!(
+            "relayer rejected job {} immediately",
+            submitted_job_id
+        ));
+    }
+
+    emit_progress(
+        &app,
+        &RunSdkActionProgress {
+            run_id: run_id.clone(),
+            phase: "commit".to_string(),
+            status: "running".to_string(),
+            message: format!("Waiting for relayer job {submitted_job_id}"),
+            verify_index: None,
+            detail: Some(format!("status: {}", submitted_status.as_str())),
+            old_root: Some(old_root.clone()),
+            new_root: None,
+            output_file: None,
+        },
+    )?;
+
+    let relayer_url_for_wait = relayer_url.clone();
+    let relayer_key_for_wait = relayer_key.clone();
+    let job_id_for_wait = submitted_job_id.clone();
+    let wait_job = tauri::async_runtime::spawn_blocking(move || {
+        wait_for_relayer_confirmation(
+            &relayer_url_for_wait,
+            &relayer_key_for_wait,
+            &job_id_for_wait,
+            relayer_timeout_secs,
+            relayer_poll_interval_ms,
+        )
+    })
+    .await;
+    let relay_status = match wait_job {
+        Ok(Ok(status)) => status,
+        Ok(Err(err)) => {
+            clear_run_in_progress(&runtime);
+            return Err(err);
+        }
+        Err(err) => {
+            clear_run_in_progress(&runtime);
+            return Err(format!("failed while polling relayer job status: {err}"));
+        }
+    };
+    let da_receipt = relay_status
+        .tx_hash
+        .clone()
+        .unwrap_or_else(|| format!("job {}", relay_status.job_id));
 
     let sync_state_after = match fetch_synchronizer_state(&sync_api_url) {
         Ok(state) => state,
         Err(err) => {
             clear_run_in_progress(&runtime);
-            return Err(format!("failed to refresh state root from synchronizer after DA post: {err}"));
+            return Err(format!(
+                "failed to refresh state root from synchronizer after relay confirmation: {err}"
+            ));
         }
     };
     let new_root = short_hash(&format!("{:#}", sync_state_after.current_gsr));

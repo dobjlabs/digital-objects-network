@@ -1,5 +1,6 @@
 //! `common` contains shared logic across the various crates of the project.
 
+pub mod blob_codec;
 /// POD proving:
 /// 2 options to prepare the POD proofs:
 ///   A) "groth":
@@ -11,6 +12,7 @@
 #[cfg(feature = "groth16")]
 pub mod groth;
 pub mod payload;
+pub mod proof;
 ///   B) "shrink":
 ///     first shrinks the given MainPod's proof, and then compresses it,
 ///     returning the compressed proof (without public inputs). this is a plonky2 specific optimization,

@@ -5,6 +5,10 @@
 sync:
     RUST_LOG=info cargo run -p synchronizer --release
 
+# Run the relayer (loads env from relayer/.env if present)
+relayer:
+    RUST_LOG=info cargo run -p relayer --release
+
 # Run the gui
 gui:
     cd app-gui && pnpm tauri dev --release

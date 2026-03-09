@@ -28,4 +28,5 @@ txlib = { path = "../../txlib" }
 common = { path = "../../common" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 hex = "0.4"
+base64 = "0.22"
 pod2 = { workspace = true }

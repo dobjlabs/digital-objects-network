@@ -945,6 +945,7 @@ checksum = "170433209e817da6aae2c51aa0dd443009a613425dd041ebfb2492d1c4c11a25"
 name = "app-gui"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "common",
  "craftlib",
  "hex",
@@ -1955,6 +1956,7 @@ dependencies = [
  "time 0.3.47",
  "tracing",
  "tracing-subscriber",
+ "txlib",
 ]
 
 [[package]]
@@ -6195,6 +6197,30 @@ name = "regex-syntax"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
+
+[[package]]
+name = "relayer"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "common",
+ "dotenvy",
+ "hex",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
 
 [[package]]
 name = "reqwest"
