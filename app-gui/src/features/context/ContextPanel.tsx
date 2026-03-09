@@ -6,7 +6,6 @@ import type {
   InventoryItem,
   MethodArg,
   Recipe,
-  StatTone,
 } from "../../shared/types/domain";
 
 interface ContextPanelProps {
@@ -111,11 +110,6 @@ export function ContextPanel({
       return next;
     });
     setHoverArgKey(null);
-  };
-
-  const toneClassName = (tone?: StatTone) => {
-    if (!tone || tone === "neutral") return "";
-    return tone;
   };
 
   const renderHashChip = (label: string, hash: string) => (
@@ -246,32 +240,14 @@ export function ContextPanel({
     if (item.stats.length === 0) return null;
     return (
       <div className="item-stats">
-        {item.stats.map((stat) => {
-          const valueTone = toneClassName(stat.tone);
-          const progressTone = toneClassName(stat.progressTone);
-          const progressPercent = Math.max(
-            0,
-            Math.min(100, stat.progressPercent ?? 0),
-          );
-          return (
-            <div key={stat.key}>
-              <div className="stat-row">
-                <span className="stat-key">{stat.key}</span>
-                <span className={`stat-val ${valueTone}`.trim()}>
-                  {stringifyField(stat.value)}
-                </span>
-              </div>
-              {typeof stat.progressPercent === "number" && (
-                <div className="progress-bar">
-                  <div
-                    className={`progress-fill ${progressTone}`.trim()}
-                    style={{ width: `${progressPercent}%` }}
-                  />
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {item.stats.map((stat) => (
+          <div key={stat.key} className="stat-row">
+            <span className="stat-key">{stat.key}</span>
+            <span className={`stat-val ${stat.tone ?? "good"}`.trim()}>
+              {stringifyField(stat.value)}
+            </span>
+          </div>
+        ))}
       </div>
     );
   };
@@ -293,7 +269,6 @@ export function ContextPanel({
     if (!item)
       return <section className="context-panel">Object not found.</section>;
 
-    const methods = item.validity === "live" ? item.methods : [];
     const titleName = item.fileName.replace(/\.dobj$/i, "");
 
     return (
@@ -301,47 +276,30 @@ export function ContextPanel({
         <div className="context-title">
           {item.emoji} {titleName}
         </div>
-        <div
-          className={`context-hash-line ${item.validity === "live" ? "live" : "nullified"}`}
-        >
-          {item.validity === "live"
-            ? `${item.stateRoot} · ✓ live`
-            : `${item.nullifier ?? "nullified"} · ✗ nullified`}
-        </div>
-        <div className="context-path-line">{displayThingPath(item.fileName)}</div>
 
-        <div className="context-meta-block">
+        <div className="context-meta-block compact">
+          {renderMetaRow(
+            "Live",
+            <span
+              className={`context-inline-hash ${item.validity === "live" ? "live" : "nullified"}`}
+            >
+              {item.validity === "live"
+                ? item.stateRoot
+                : (item.nullifier ?? "nullified")}
+            </span>,
+          )}
           {renderMetaRow(
             "Type",
             renderHashChip(`# ${item.classMeta.name}`, item.classMeta.hash),
           )}
-          {item.sourceAction &&
-            renderMetaRow(
-              "From Action",
-              renderHashChip(`# ${item.sourceAction.name}`, item.sourceAction.hash),
-            )}
+          {renderMetaRow(
+            "Path",
+            <span className="context-inline-path">{displayThingPath(item.fileName)}</span>,
+          )}
         </div>
 
         {item.description && <div className="context-desc">{item.description}</div>}
         {renderItemStats(item)}
-
-        {methods.length > 0 && (
-          <div className="method-list">
-            {methods.map((method, index) =>
-              renderMethodCard({
-                ...method,
-                methodId: `${item.id}:${method.methodName}:${index}`,
-                onRun: (boundArgs) =>
-                  onRunProof({
-                    id: item.id,
-                    methodName: method.methodName,
-                    inputFiles: boundArgs,
-                    cpuCost: method.cpuCost,
-                  }),
-              }),
-            )}
-          </div>
-        )}
       </section>
     );
   }

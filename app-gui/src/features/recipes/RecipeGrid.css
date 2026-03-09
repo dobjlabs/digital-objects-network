@@ -112,14 +112,6 @@
   outline: none;
 }
 
-.action-group-label {
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  padding: 12px 12px 4px;
-}
-
 .action-row:hover {
   background: var(--panel-alt);
   filter: none;
