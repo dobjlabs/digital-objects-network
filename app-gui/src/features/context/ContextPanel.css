@@ -216,9 +216,9 @@
   top: calc(100% + 4px);
   z-index: 20;
   padding: 3px 7px;
-  border: 1px solid var(--border);
-  background: var(--panel);
-  color: var(--text-dim);
+  border: none;
+  background: var(--accent);
+  color: #0e1e1a;
   font-size: 9px;
   white-space: nowrap;
 }

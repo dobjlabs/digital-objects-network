@@ -1,11 +1,5 @@
 [workspace]
-members = [
-    "app-gui/src-tauri",
-    "common",
-    "pod2utils",
-    "synchronizer",
-    "txlib",
-]
+members = ["app-gui/src-tauri", "common", "pod2utils", "synchronizer", "txlib"]
 resolver = "2"
 
 [workspace.dependencies]

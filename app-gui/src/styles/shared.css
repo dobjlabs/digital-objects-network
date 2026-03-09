@@ -8,6 +8,9 @@
   color: var(--text-bright);
   font-size: 11px;
   letter-spacing: 0.02em;
+  position: relative;
+  z-index: 2;
+  overflow: visible;
 }
 
 .panel-header-button {
@@ -26,7 +29,7 @@
   content: "open ~/.objects/";
   position: absolute;
   left: 12px;
-  bottom: calc(100% + 4px);
+  top: calc(100% + 4px);
   padding: 3px 7px;
   font-size: 9px;
   color: #0e1e1a;
