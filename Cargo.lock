@@ -945,7 +945,11 @@ checksum = "170433209e817da6aae2c51aa0dd443009a613425dd041ebfb2492d1c4c11a25"
 name = "app-gui"
 version = "0.1.0"
 dependencies = [
+ "common",
  "craftlib",
+ "hex",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sysinfo",
@@ -6201,6 +6205,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",

@@ -129,6 +129,33 @@ const mapRecipe = (recipe: RecipePayload): Recipe => ({
   unlocked: recipe.unlocked,
 });
 
+const formatRunError = (error: unknown): string => {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    for (const key of ["message", "error", "cause"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value;
+      }
+    }
+    try {
+      const serialized = JSON.stringify(error);
+      if (serialized && serialized !== "{}") {
+        return serialized;
+      }
+    } catch {
+      // fall through to generic text
+    }
+  }
+  return "Failed to run action";
+};
+
 export const useUiStore = create<UiStoreState>((set) => ({
   ...initialUiState,
   items: [],
@@ -410,6 +437,8 @@ export const useUiStore = create<UiStoreState>((set) => ({
         },
       }));
     } catch (error) {
+      const errorMessage = formatRunError(error);
+      console.error("Failed to run SDK action:", error);
       set((prev) => ({
         ...prev,
         proof: {
@@ -423,7 +452,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           oldRoot: null,
           newRoot: null,
           summary: null,
-          error: error instanceof Error ? error.message : "Failed to run action",
+          error: errorMessage,
           stats: prev.proof.stats,
         },
       }));

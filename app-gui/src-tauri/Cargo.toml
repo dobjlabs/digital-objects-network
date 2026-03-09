@@ -25,3 +25,7 @@ serde_json = "1"
 sysinfo = "0.37"
 craftlib = { path = "../../craftlib" }
 txlib = { path = "../../txlib" }
+common = { path = "../../common" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+hex = "0.4"
+pod2 = { workspace = true }

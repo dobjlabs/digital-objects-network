@@ -5,13 +5,19 @@ use std::{
     sync::Arc,
 };
 
+use common::{
+    payload::{Payload, PayloadProof},
+    shrink::{ShrunkMainPodSetup, shrink_compress_pod},
+};
 use craftlib::{
     scenario::test_sdk,
     sdk::{Helper, SpendableObject, SpendableObjects},
 };
+use hex::{FromHex, ToHex};
+use pod2::middleware::{Hash, Params};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
-use txlib::{StateRoot, Tx};
+use txlib::StateRoot;
 
 use crate::{
     state::{CraftRuntime, CraftRuntimeInner, RuntimeObjectRecord, RuntimeValidity},
@@ -53,12 +59,34 @@ struct PersistedObjectRecord {
     spendable: Option<PersistedSpendableObject>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PersistedRuntimeSnapshot {
-    next_object_index: u64,
-    state_root: PersistedStateRoot,
-    objects: Vec<PersistedObjectRecord>,
+struct SynchronizerStateResponse {
+    transactions: Vec<String>,
+    nullifiers: Vec<String>,
+    current_gsr: Option<String>,
+}
+
+struct SynchronizerState {
+    state_root: StateRoot,
+    current_gsr: Hash,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DaPostRequest {
+    action_id: String,
+    payload_hex: String,
+    tx_final: String,
+    state_root_hash: String,
+    nullifiers: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaPostResponse {
+    #[serde(alias = "txHash", alias = "tx_hash", alias = "id")]
+    tx_hash: Option<String>,
 }
 
 fn short_hash(seed: &str) -> String {
@@ -80,26 +108,80 @@ fn resolve_objects_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(home.join(".objects"))
 }
 
-fn runtime_dir(objects_dir: &Path) -> PathBuf {
-    objects_dir.join(".zkcraft")
+fn synchronizer_api_url() -> String {
+    std::env::var("ZKCRAFT_SYNCHRONIZER_API_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string())
 }
 
-fn runtime_snapshot_path(objects_dir: &Path) -> PathBuf {
-    runtime_dir(objects_dir).join("runtime.json")
+fn da_post_url() -> Result<String, String> {
+    let url = std::env::var("ZKCRAFT_DA_POST_URL")
+        .map_err(|_| "ZKCRAFT_DA_POST_URL is required to commit actions to DA".to_string())?;
+    if url.trim().is_empty() {
+        return Err("ZKCRAFT_DA_POST_URL is empty".to_string());
+    }
+    Ok(url)
+}
+
+fn parse_hash_hex(value: &str) -> Result<Hash, String> {
+    let trimmed = value.trim().strip_prefix("0x").unwrap_or(value.trim());
+    Hash::from_hex(trimmed).map_err(|err| format!("invalid hash {value}: {err}"))
+}
+
+fn encode_hash_hex(hash: &Hash) -> String {
+    format!("0x{}", hash.encode_hex::<String>())
+}
+
+fn fetch_synchronizer_state(sync_api_url: &str) -> Result<SynchronizerState, String> {
+    let endpoint = format!("{}/state", sync_api_url.trim_end_matches('/'));
+    let response = reqwest::blocking::get(&endpoint)
+        .map_err(|err| format!("failed to query synchronizer at {endpoint}: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "synchronizer request failed: {} {}",
+            response.status().as_u16(),
+            response.status()
+        ));
+    }
+    let payload: SynchronizerStateResponse = response
+        .json()
+        .map_err(|err| format!("failed to decode synchronizer response: {err}"))?;
+
+    let transactions = payload
+        .transactions
+        .iter()
+        .map(|entry| parse_hash_hex(entry))
+        .collect::<Result<HashSet<_>, String>>()?;
+    let nullifiers = payload
+        .nullifiers
+        .iter()
+        .map(|entry| parse_hash_hex(entry))
+        .collect::<Result<HashSet<_>, String>>()?;
+
+    let state_root = StateRoot::new(0, &transactions, &nullifiers, &[]);
+    let derived_gsr = state_root.hash();
+    let current_gsr = if let Some(gsr) = payload.current_gsr.as_deref() {
+        let remote_gsr = parse_hash_hex(gsr)?;
+        if remote_gsr != derived_gsr {
+            eprintln!(
+                "zk-craft: synchronizer current_gsr mismatch (derived={}, remote={})",
+                encode_hash_hex(&derived_gsr),
+                encode_hash_hex(&remote_gsr)
+            );
+        }
+        remote_gsr
+    } else {
+        derived_gsr
+    };
+
+    Ok(SynchronizerState {
+        state_root,
+        current_gsr,
+    })
 }
 
 fn empty_state_root() -> StateRoot {
     let empty = HashSet::new();
     StateRoot::new(0, &empty, &empty, &[])
-}
-
-fn update_state_root(state_root: &mut StateRoot, tx: &Tx) {
-    let tx_dict = tx.dict();
-    let tx_value = tx_dict.into();
-    state_root.transactions.insert(&tx_value).unwrap();
-    for nullifier in tx.nullifiers.set() {
-        state_root.transactions.insert(nullifier).unwrap();
-    }
 }
 
 fn clone_spendable(spendable: &SpendableObject) -> SpendableObject {
@@ -268,39 +350,52 @@ fn restore_spendable(data: PersistedSpendableObject) -> Result<SpendableObject, 
     })
 }
 
-fn persist_snapshot(inner: &CraftRuntimeInner, objects_dir: &Path) -> Result<(), String> {
-    fs::create_dir_all(runtime_dir(objects_dir))
-        .map_err(|err| format!("failed to create runtime directory: {err}"))?;
+fn validity_from_str(raw: &str, context: &str) -> Result<RuntimeValidity, String> {
+    match raw {
+        "live" => Ok(RuntimeValidity::Live),
+        "nullified" => Ok(RuntimeValidity::Nullified),
+        other => Err(format!("invalid object validity in {context}: {other}")),
+    }
+}
 
-    let snapshot = PersistedRuntimeSnapshot {
-        next_object_index: inner.next_object_index,
-        state_root: persist_state_root(&inner.state_root)?,
-        objects: inner
-            .objects
-            .iter()
-            .map(|record| {
-                Ok(PersistedObjectRecord {
-                    id: record.id.clone(),
-                    file_name: record.file_name.clone(),
-                    class_name: record.class_name.clone(),
-                    source_action: record.source_action.clone(),
-                    validity: match record.validity {
-                        RuntimeValidity::Live => "live".to_string(),
-                        RuntimeValidity::Nullified => "nullified".to_string(),
-                    },
-                    state_hash: record.state_hash.clone(),
-                    nullifier: record.nullifier.clone(),
-                    stats: record.stats.clone(),
-                    spendable: record.spendable.as_ref().map(persist_spendable).transpose()?,
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?,
-    };
+fn restore_object_record(
+    record: PersistedObjectRecord,
+    file_name_override: Option<&str>,
+) -> Result<RuntimeObjectRecord, String> {
+    Ok(RuntimeObjectRecord {
+        id: record.id,
+        file_name: file_name_override.unwrap_or(&record.file_name).to_string(),
+        class_name: record.class_name,
+        source_action: record.source_action,
+        validity: validity_from_str(&record.validity, "object file")?,
+        state_hash: record.state_hash,
+        nullifier: record.nullifier,
+        stats: record.stats,
+        spendable: record.spendable.map(restore_spendable).transpose()?,
+    })
+}
 
-    let serialized = serde_json::to_string_pretty(&snapshot)
-        .map_err(|err| format!("failed to serialize runtime snapshot: {err}"))?;
-    fs::write(runtime_snapshot_path(objects_dir), serialized)
-        .map_err(|err| format!("failed to write runtime snapshot: {err}"))
+fn parse_object_file(contents: &str, file_name: &str) -> Result<RuntimeObjectRecord, String> {
+    let record = serde_json::from_str::<PersistedObjectRecord>(contents)
+        .map_err(|err| format!("failed to parse {file_name} as object file: {err}"))?;
+    restore_object_record(record, Some(file_name))
+}
+
+fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObjectRecord, String> {
+    Ok(PersistedObjectRecord {
+        id: record.id.clone(),
+        file_name: record.file_name.clone(),
+        class_name: record.class_name.clone(),
+        source_action: record.source_action.clone(),
+        validity: match record.validity {
+            RuntimeValidity::Live => "live".to_string(),
+            RuntimeValidity::Nullified => "nullified".to_string(),
+        },
+        state_hash: record.state_hash.clone(),
+        nullifier: record.nullifier.clone(),
+        stats: record.stats.clone(),
+        spendable: record.spendable.as_ref().map(persist_spendable).transpose()?,
+    })
 }
 
 fn sync_object_files(inner: &CraftRuntimeInner, objects_dir: &Path) -> Result<(), String> {
@@ -308,72 +403,64 @@ fn sync_object_files(inner: &CraftRuntimeInner, objects_dir: &Path) -> Result<()
         .map_err(|err| format!("failed to create objects directory: {err}"))?;
 
     for record in &inner.objects {
-        let mut data = serde_json::Map::new();
-        for (key, value) in &record.stats {
-            data.insert(key.clone(), serde_json::Value::String(value.clone()));
-        }
-
-        let content = serde_json::json!({
-            "id": record.id,
-            "class": record.class_name,
-            "validity": match record.validity {
-                RuntimeValidity::Live => "live",
-                RuntimeValidity::Nullified => "nullified",
-            },
-            "stateRoot": record.state_hash,
-            "nullifier": record.nullifier,
-            "sourceAction": record.source_action,
-            "data": data,
-        });
-
-        let path = objects_dir.join(&record.file_name);
-        let serialized = serde_json::to_string_pretty(&content)
+        let persisted = persist_object_record(record)?;
+        let serialized = serde_json::to_string_pretty(&persisted)
             .map_err(|err| format!("failed to serialize object file {}: {err}", record.file_name))?;
-        fs::write(path, serialized)
+        fs::write(objects_dir.join(&record.file_name), serialized)
             .map_err(|err| format!("failed to write object file {}: {err}", record.file_name))?;
     }
 
     Ok(())
 }
 
-fn load_snapshot_if_present(inner: &mut CraftRuntimeInner, objects_dir: &Path) -> Result<(), String> {
-    let path = runtime_snapshot_path(objects_dir);
-    if !path.exists() {
-        return Ok(());
+fn load_object_files(objects_dir: &Path) -> Result<Vec<RuntimeObjectRecord>, String> {
+    let mut objects = Vec::new();
+    for entry in
+        fs::read_dir(objects_dir).map_err(|err| format!("failed to read objects directory: {err}"))?
+    {
+        let entry = entry.map_err(|err| format!("failed to read objects entry: {err}"))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let is_dobj = path.extension().and_then(|ext| ext.to_str()) == Some("dobj");
+        if !is_dobj {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(err) => {
+                eprintln!("zk-craft: failed to read {file_name}, skipping: {err}");
+                continue;
+            }
+        };
+
+        match parse_object_file(&contents, file_name) {
+            Ok(record) => objects.push(record),
+            Err(err) => eprintln!("zk-craft: failed to parse {file_name}, skipping: {err}"),
+        }
     }
 
-    let contents = fs::read_to_string(&path)
-        .map_err(|err| format!("failed to read runtime snapshot: {err}"))?;
-    let snapshot: PersistedRuntimeSnapshot = serde_json::from_str(&contents)
-        .map_err(|err| format!("failed to parse runtime snapshot: {err}"))?;
+    objects.sort_by(|a, b| a.file_name.cmp(&b.file_name));
+    Ok(objects)
+}
 
-    inner.next_object_index = snapshot.next_object_index;
-    inner.state_root = restore_state_root(snapshot.state_root)?;
-    inner.objects = snapshot
-        .objects
-        .into_iter()
-        .map(|record| {
-            Ok(RuntimeObjectRecord {
-                id: record.id,
-                file_name: record.file_name,
-                class_name: record.class_name,
-                source_action: record.source_action,
-                validity: match record.validity.as_str() {
-                    "live" => RuntimeValidity::Live,
-                    "nullified" => RuntimeValidity::Nullified,
-                    other => {
-                        return Err(format!("invalid object validity in snapshot: {other}"));
-                    }
-                },
-                state_hash: record.state_hash,
-                nullifier: record.nullifier,
-                stats: record.stats,
-                spendable: record.spendable.map(restore_spendable).transpose()?,
-            })
+fn next_object_index_from_records(objects: &[RuntimeObjectRecord]) -> u64 {
+    let max_index = objects
+        .iter()
+        .filter_map(|record| {
+            record
+                .id
+                .strip_prefix("obj-")
+                .and_then(|suffix| suffix.parse::<u64>().ok())
         })
-        .collect::<Result<Vec<_>, String>>()?;
-
-    Ok(())
+        .max()
+        .unwrap_or(0);
+    max_index + 1
 }
 
 fn ensure_runtime_loaded(inner: &mut CraftRuntimeInner, objects_dir: &Path) -> Result<(), String> {
@@ -382,13 +469,9 @@ fn ensure_runtime_loaded(inner: &mut CraftRuntimeInner, objects_dir: &Path) -> R
     }
     fs::create_dir_all(objects_dir)
         .map_err(|err| format!("failed to create objects directory: {err}"))?;
-    if let Err(err) = load_snapshot_if_present(inner, objects_dir) {
-        eprintln!("zk-craft: failed to load runtime snapshot, resetting state: {err}");
-        inner.next_object_index = 1;
-        inner.state_root = empty_state_root();
-        inner.objects.clear();
-        let _ = persist_snapshot(inner, objects_dir);
-    }
+    inner.objects = load_object_files(objects_dir)?;
+    inner.next_object_index = next_object_index_from_records(&inner.objects);
+    inner.state_root = empty_state_root();
     inner.loaded = true;
     Ok(())
 }
@@ -423,6 +506,7 @@ pub async fn load_gui_bootstrap(
 ) -> Result<LoadGuiBootstrapResult, String> {
     let objects_dir = resolve_objects_dir(&app)?;
     let actions = build_action_catalog();
+    let sync_state = fetch_synchronizer_state(&synchronizer_api_url());
     let mut inner = lock_runtime(&runtime);
     if let Err(err) = ensure_runtime_loaded(&mut inner, &objects_dir) {
         eprintln!("zk-craft: bootstrap runtime failed, resetting state: {err}");
@@ -430,7 +514,11 @@ pub async fn load_gui_bootstrap(
         inner.state_root = empty_state_root();
         inner.objects.clear();
         inner.loaded = true;
-        let _ = persist_snapshot(&inner, &objects_dir);
+        let _ = sync_object_files(&inner, &objects_dir);
+    }
+    match sync_state {
+        Ok(state) => inner.state_root = state.state_root,
+        Err(err) => eprintln!("zk-craft: synchronizer unavailable during bootstrap: {err}"),
     }
 
     Ok(LoadGuiBootstrapResult {
@@ -447,6 +535,75 @@ fn execute_action(
     let helper = Helper::new(test_sdk::dependencies(), test_sdk::actions());
     let builder = helper.builder(true, Arc::new(state_root));
     Ok(builder.action(&action_id, inputs))
+}
+
+fn build_da_payload(
+    old_state_root_hash: &Hash,
+    action_output: &SpendableObjects,
+) -> Result<(Vec<u8>, Hash, Vec<Hash>), String> {
+    let params = Params::default();
+    let shrunk_main_pod = ShrunkMainPodSetup::new(&params)
+        .build()
+        .map_err(|err| format!("failed to build shrunk proof circuit: {err}"))?;
+    let compressed = shrink_compress_pod(&shrunk_main_pod, action_output.tx_pod.clone())
+        .map_err(|err| format!("failed to shrink/compress tx proof: {err}"))?;
+
+    let tx_final = action_output.tx.dict().commitment();
+    let nullifiers = action_output
+        .tx
+        .nullifiers
+        .set()
+        .iter()
+        .map(|entry| Hash(entry.raw().0))
+        .collect::<Vec<_>>();
+    let payload = Payload {
+        proof: PayloadProof::Plonky2(Box::new(compressed)),
+        tx_final,
+        state_root_hash: *old_state_root_hash,
+        nullifiers: nullifiers.clone(),
+    };
+
+    let payload_bytes = payload.to_bytes();
+    Ok((payload_bytes, tx_final, nullifiers))
+}
+
+fn post_da_payload(
+    da_url: &str,
+    action_id: &str,
+    payload_bytes: &[u8],
+    tx_final: &Hash,
+    state_root_hash: &Hash,
+    nullifiers: &[Hash],
+) -> Result<String, String> {
+    let request = DaPostRequest {
+        action_id: action_id.to_string(),
+        payload_hex: format!("0x{}", hex::encode(payload_bytes)),
+        tx_final: encode_hash_hex(tx_final),
+        state_root_hash: encode_hash_hex(state_root_hash),
+        nullifiers: nullifiers.iter().map(encode_hash_hex).collect(),
+    };
+
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post(da_url)
+        .json(&request)
+        .send()
+        .map_err(|err| format!("failed to post payload to DA at {da_url}: {err}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!(
+            "DA post failed with {} {}: {}",
+            status.as_u16(),
+            status,
+            body
+        ));
+    }
+    let parsed: Result<DaPostResponse, _> = response.json();
+    match parsed {
+        Ok(value) => Ok(value.tx_hash.unwrap_or_else(|| "posted".to_string())),
+        Err(_) => Ok("posted".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -480,7 +637,14 @@ pub async fn run_sdk_action(
         }
     }
 
-    let (state_root_for_run, input_spendables, verify_targets, old_root);
+    let sync_api_url = synchronizer_api_url();
+    let sync_state = fetch_synchronizer_state(&sync_api_url)?;
+    let state_root_for_run = sync_state.state_root.clone();
+    let old_root_hash = sync_state.current_gsr;
+    let old_root = short_hash(&format!("{:#}", old_root_hash));
+    let da_url = da_post_url()?;
+
+    let (input_spendables, verify_targets);
     {
         let mut inner = lock_runtime(&runtime);
         ensure_runtime_loaded(&mut inner, &objects_dir)?;
@@ -488,6 +652,7 @@ pub async fn run_sdk_action(
         if inner.run_in_progress {
             return Err("another action run is already in progress".to_string());
         }
+        inner.state_root = state_root_for_run.clone();
 
         let mut collected_spendables = Vec::new();
         let mut collected_targets = Vec::new();
@@ -519,8 +684,6 @@ pub async fn run_sdk_action(
         }
 
         inner.run_in_progress = true;
-        old_root = short_hash(&format!("{:#}", inner.state_root.hash()));
-        state_root_for_run = inner.state_root.clone();
         input_spendables = collected_spendables;
         verify_targets = collected_targets;
     }
@@ -677,8 +840,80 @@ pub async fn run_sdk_action(
         return Err(err);
     }
 
-    let mut inner = lock_runtime(&runtime);
+    emit_progress(
+        &app,
+        &RunSdkActionProgress {
+            run_id: run_id.clone(),
+            phase: "nullify".to_string(),
+            status: "done".to_string(),
+            message: "Nullify complete".to_string(),
+            verify_index: None,
+            detail: Some(old_root.clone()),
+            old_root: Some(old_root.clone()),
+            new_root: None,
+            output_file: None,
+        },
+    )?;
 
+    let (payload_bytes, tx_final, payload_nullifiers) =
+        match build_da_payload(&old_root_hash, &spendable_outputs) {
+            Ok(payload) => payload,
+            Err(err) => {
+                clear_run_in_progress(&runtime);
+                return Err(err);
+            }
+        };
+
+    emit_progress(
+        &app,
+        &RunSdkActionProgress {
+            run_id: run_id.clone(),
+            phase: "commit".to_string(),
+            status: "running".to_string(),
+            message: "Posting payload to Ethereum DA".to_string(),
+            verify_index: None,
+            detail: Some("posting payload".to_string()),
+            old_root: Some(old_root.clone()),
+            new_root: None,
+            output_file: None,
+        },
+    )?;
+
+    let da_url_for_post = da_url.clone();
+    let action_id_for_post = input.action_id.clone();
+    let da_post = tauri::async_runtime::spawn_blocking(move || {
+        post_da_payload(
+            &da_url_for_post,
+            &action_id_for_post,
+            &payload_bytes,
+            &tx_final,
+            &old_root_hash,
+            &payload_nullifiers,
+        )
+    })
+    .await;
+    let da_receipt = match da_post {
+        Ok(Ok(receipt)) => receipt,
+        Ok(Err(err)) => {
+            clear_run_in_progress(&runtime);
+            return Err(err);
+        }
+        Err(err) => {
+            clear_run_in_progress(&runtime);
+            return Err(format!("failed while posting payload to DA: {err}"));
+        }
+    };
+
+    let sync_state_after = match fetch_synchronizer_state(&sync_api_url) {
+        Ok(state) => state,
+        Err(err) => {
+            clear_run_in_progress(&runtime);
+            return Err(format!("failed to refresh state root from synchronizer after DA post: {err}"));
+        }
+    };
+    let new_root = short_hash(&format!("{:#}", sync_state_after.current_gsr));
+
+    let mut inner = lock_runtime(&runtime);
     let apply_result = (|| {
         ensure_runtime_loaded(&mut inner, &objects_dir)?;
 
@@ -694,7 +929,6 @@ pub async fn run_sdk_action(
             }
             record.validity = RuntimeValidity::Nullified;
             record.nullifier = Some(short_hash(&format!("{}:{}:null", object_id, old_root)));
-            record.spendable = None;
             nullified_files.push(record.file_name.clone());
         }
 
@@ -728,55 +962,20 @@ pub async fn run_sdk_action(
             });
         }
 
-        update_state_root(&mut inner.state_root, &spendable_outputs.tx);
-        let new_root = short_hash(&format!("{:#}", inner.state_root.hash()));
-
-        persist_snapshot(&inner, &objects_dir)?;
+        inner.state_root = sync_state_after.state_root;
         sync_object_files(&inner, &objects_dir)?;
 
         Ok(RunSdkActionResult {
             ok: true,
             old_root: old_root.clone(),
-            new_root,
+            new_root: new_root.clone(),
             output_files,
             nullified_files,
             objects: inner.objects.iter().map(to_inventory_item).collect(),
         })
     })();
-
     inner.run_in_progress = false;
-
     let result = apply_result?;
-
-    emit_progress(
-        &app,
-        &RunSdkActionProgress {
-            run_id: run_id.clone(),
-            phase: "nullify".to_string(),
-            status: "done".to_string(),
-            message: "Nullify complete".to_string(),
-            verify_index: None,
-            detail: Some(result.old_root.clone()),
-            old_root: Some(result.old_root.clone()),
-            new_root: None,
-            output_file: None,
-        },
-    )?;
-
-    emit_progress(
-        &app,
-        &RunSdkActionProgress {
-            run_id: run_id.clone(),
-            phase: "commit".to_string(),
-            status: "running".to_string(),
-            message: format!("Committing {}", result.new_root),
-            verify_index: None,
-            detail: Some(result.new_root.clone()),
-            old_root: Some(result.old_root.clone()),
-            new_root: Some(result.new_root.clone()),
-            output_file: result.output_files.first().cloned(),
-        },
-    )?;
 
     emit_progress(
         &app,
@@ -784,7 +983,7 @@ pub async fn run_sdk_action(
             run_id: run_id,
             phase: "commit".to_string(),
             status: "done".to_string(),
-            message: "Commit complete".to_string(),
+            message: format!("Commit complete ({da_receipt})"),
             verify_index: None,
             detail: Some(result.new_root.clone()),
             old_root: Some(result.old_root.clone()),
