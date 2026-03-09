@@ -1,54 +1,114 @@
 .recipes-panel {
   display: flex;
   flex-direction: column;
-  border-bottom: 1px solid var(--border);
   background: var(--panel);
   overflow: hidden;
   min-height: 0;
+  height: 100%;
 }
 
-.recipe-grid {
+.action-tab-row {
+  display: flex;
+  height: 35px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-alt);
+  flex-shrink: 0;
+}
+
+.action-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 14px;
+  font-size: 11px;
+  font-weight: 500;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--panel-alt);
+  color: var(--text-dim);
+  cursor: default;
+  white-space: nowrap;
+}
+
+.action-tab-btn.active {
+  background: var(--panel);
+  color: var(--text-bright);
+}
+
+.action-tab-btn:hover {
+  filter: none;
+  border-color: var(--border);
+}
+
+.action-list {
   flex: 1;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
-  gap: 6px;
-  padding: 10px;
   overflow: auto;
   background: var(--bg);
-  align-content: start;
+  padding: 6px 0 12px;
   min-height: 0;
 }
 
-.recipe-cell {
-  border: 1px solid var(--border);
-  background: var(--panel-alt);
-  color: var(--text-bright);
-  aspect-ratio: 1;
-  cursor: pointer;
-  font-size: 18px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  padding: 4px;
+.action-list::-webkit-scrollbar {
+  width: 3px;
 }
 
-.recipe-cell-emoji {
+.action-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+}
+
+.action-group-label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 10px 12px 4px;
+}
+
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+  text-align: left;
+  font-family: inherit;
+}
+
+.action-row:hover {
+  background: var(--panel-alt);
+  filter: none;
+  border-color: transparent;
+}
+
+.action-row.active {
+  border-left-color: var(--accent);
+  background: var(--panel-alt);
+}
+
+.action-row-emoji {
+  width: 18px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 13px;
   line-height: 1;
 }
 
-.recipe-cell-class {
-  font-size: 9px;
-  line-height: 1.1;
-  max-width: 100%;
-  text-align: center;
+.action-row-name {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-bright);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.recipe-cell.active {
-  border-color: var(--good);
-  background: #162210;
+.action-row-hash {
+  font-size: 9px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
