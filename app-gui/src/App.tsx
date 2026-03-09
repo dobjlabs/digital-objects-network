@@ -5,7 +5,7 @@ import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { RecipeGrid } from "./features/recipes/RecipeGrid";
 import {
   getThingsDir,
-  listenCreateDobjProgress,
+  listenRunSdkActionProgress,
   openThingsDir,
   sampleAppCpu,
 } from "./shared/api/tauriClient";
@@ -33,8 +33,8 @@ function App() {
   const clearSelection = useUiStore((state) => state.clearSelection);
   const toggleNullified = useUiStore((state) => state.toggleNullified);
   const recordCpuSample = useUiStore((state) => state.recordCpuSample);
-  const applyCreateDobjProgress = useUiStore(
-    (state) => state.applyCreateDobjProgress,
+  const applyRunSdkActionProgress = useUiStore(
+    (state) => state.applyRunSdkActionProgress,
   );
   const runProof = useUiStore((state) => state.runProof);
   const proofRunning = useUiStore(
@@ -69,9 +69,9 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    listenCreateDobjProgress((event) => {
+    listenRunSdkActionProgress((event) => {
       if (!cancelled) {
-        applyCreateDobjProgress(event);
+        applyRunSdkActionProgress(event);
       }
     })
       .then((dispose) => {
@@ -82,14 +82,14 @@ function App() {
         unlisten = dispose;
       })
       .catch((error) => {
-        console.error("Failed to subscribe to create_dobj progress:", error);
+        console.error("Failed to subscribe to run-sdk-action progress:", error);
       });
 
     return () => {
       cancelled = true;
       if (unlisten) unlisten();
     };
-  }, [applyCreateDobjProgress]);
+  }, [applyRunSdkActionProgress]);
 
   useEffect(() => {
     let cancelled = false;

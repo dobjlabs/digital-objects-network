@@ -94,14 +94,24 @@ pub fn sample_app_cpu(app: tauri::AppHandle, monitor: tauri::State<'_, CpuMonito
         .process(monitor.pid)
         .map(|process| process.cpu_usage())
         .unwrap_or(0.0);
-    // `sysinfo` reports per-process CPU with 100 ~= one full core.
-    // Keep this scale so single-thread bursts are visible in the chart.
-    let usage_pct = raw_cpu.clamp(0.0, 100.0);
+    // `sysinfo` reports per-process CPU where 100 ~= one saturated core.
+    // Convert to a host-normalized percentage for the dashboard line chart.
+    let core_usage_pct = raw_cpu.clamp(0.0, 100.0);
+    let cpu_count = system.cpus().len().max(1) as f32;
+    let usage_pct = (core_usage_pct / cpu_count).clamp(0.0, 100.0);
 
     let now = Instant::now();
     if let Some(prev) = *last_sample_at {
         let dt_secs = (now - prev).as_secs_f64();
-        *total_cpu_secs += (usage_pct as f64 / 100.0) * dt_secs;
+        *total_cpu_secs += (core_usage_pct as f64 / 100.0) * dt_secs;
+    } else {
+        *last_sample_at = Some(now);
+        let clamped_total = (*total_cpu_secs).max(0.0);
+        let _ = save_total_cpu_secs(&app, clamped_total);
+        return CpuSample {
+            usage_pct: 0.0,
+            total_cpu_secs: clamped_total,
+        };
     }
     *last_sample_at = Some(now);
 

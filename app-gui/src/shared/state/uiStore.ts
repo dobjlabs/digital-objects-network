@@ -2,7 +2,7 @@ import { create } from "zustand";
 import {
   loadGuiBootstrap,
   runSdkAction,
-  type CreateDobjProgress,
+  type RunSdkActionProgress,
   type InventoryItemPayload,
   type RecipePayload,
 } from "../api/tauriClient";
@@ -41,7 +41,7 @@ interface ProofSummary {
 }
 
 interface ProofState {
-  runDobjId: string | null;
+  runActionId: string | null;
   status: ProofStatus;
   methodName: string | null;
   cpuCost: string | null;
@@ -65,7 +65,7 @@ interface UiStoreState extends AppUiState {
   clearSelection: () => void;
   toggleNullified: () => void;
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
-  applyCreateDobjProgress: (event: CreateDobjProgress) => void;
+  applyRunSdkActionProgress: (event: RunSdkActionProgress) => void;
   runProof: (input: {
     actionId: string;
     methodName: string;
@@ -134,7 +134,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
   items: [],
   recipes: [],
   proof: {
-    runDobjId: null,
+    runActionId: null,
     status: "idle",
     methodName: null,
     cpuCost: null,
@@ -232,9 +232,9 @@ export const useUiStore = create<UiStoreState>((set) => ({
         },
       };
     }),
-  applyCreateDobjProgress: (event) =>
+  applyRunSdkActionProgress: (event) =>
     set((prev) => {
-      if (prev.proof.runDobjId !== event.dobjId) return prev;
+      if (prev.proof.runActionId !== event.runId) return prev;
 
       const nextSteps = prev.proof.steps.map((step) => ({ ...step }));
       const updateStep = (stepId: string, patch: Partial<ProofStep>) => {
@@ -326,7 +326,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
       return {
         ...prev,
         proof: {
-          runDobjId: actionId,
+          runActionId: actionId,
           status: "generating",
           methodName,
           cpuCost,
@@ -374,7 +374,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
       });
 
       set((prev) => {
-        if (prev.proof.runDobjId !== actionId) return prev;
+        if (prev.proof.runActionId !== actionId) return prev;
         return {
           ...prev,
           items: result.objects.map(mapItem),
@@ -396,7 +396,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
         ...prev,
         proof: {
           ...prev.proof,
-          runDobjId: null,
+          runActionId: null,
           status: "idle",
           methodName: null,
           cpuCost: null,
@@ -413,7 +413,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
       set((prev) => ({
         ...prev,
         proof: {
-          runDobjId: null,
+          runActionId: null,
           status: "error",
           methodName,
           cpuCost,

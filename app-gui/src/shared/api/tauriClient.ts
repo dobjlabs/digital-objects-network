@@ -71,8 +71,8 @@ export interface RunSdkActionResult {
   objects: InventoryItemPayload[];
 }
 
-export interface CreateDobjProgress {
-  dobjId: string;
+export interface RunSdkActionProgress {
+  runId: string;
   phase: "hash" | "verify" | "nullify" | "commit";
   status: "running" | "done";
   message: string;
@@ -106,10 +106,10 @@ export function runSdkAction(
   return invoke<RunSdkActionResult>("run_sdk_action", { input });
 }
 
-export function listenCreateDobjProgress(
-  handler: (event: CreateDobjProgress) => void,
+export function listenRunSdkActionProgress(
+  handler: (event: RunSdkActionProgress) => void,
 ): Promise<UnlistenFn> {
-  return listen<CreateDobjProgress>("create-dobj-progress", (event) => {
+  return listen<RunSdkActionProgress>("run-sdk-action-progress", (event) => {
     handler(event.payload);
   });
 }

@@ -12,8 +12,8 @@ pub(crate) struct CpuSample {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CreateDobjProgress {
-    pub(crate) dobj_id: String,
+pub(crate) struct RunSdkActionProgress {
+    pub(crate) run_id: String,
     pub(crate) phase: String,
     pub(crate) status: String,
     pub(crate) message: String,

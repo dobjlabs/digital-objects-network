@@ -16,7 +16,7 @@ use txlib::{StateRoot, Tx};
 use crate::{
     state::{CraftRuntime, CraftRuntimeInner, RuntimeObjectRecord, RuntimeValidity},
     types::{
-        ClassMetaDto, CreateDobjProgress, InventoryItemDto, ItemStatDto, LoadGuiBootstrapResult,
+        ClassMetaDto, RunSdkActionProgress, InventoryItemDto, ItemStatDto, LoadGuiBootstrapResult,
         MethodArgDto, ObjectMethodDto, RecipeDto, RunSdkActionInput, RunSdkActionResult,
         SourceActionMetaDto,
     },
@@ -86,6 +86,11 @@ fn runtime_dir(objects_dir: &Path) -> PathBuf {
 
 fn runtime_snapshot_path(objects_dir: &Path) -> PathBuf {
     runtime_dir(objects_dir).join("runtime.json")
+}
+
+fn empty_state_root() -> StateRoot {
+    let empty = HashSet::new();
+    StateRoot::new(0, &empty, &empty, &[])
 }
 
 fn update_state_root(state_root: &mut StateRoot, tx: &Tx) {
@@ -377,13 +382,19 @@ fn ensure_runtime_loaded(inner: &mut CraftRuntimeInner, objects_dir: &Path) -> R
     }
     fs::create_dir_all(objects_dir)
         .map_err(|err| format!("failed to create objects directory: {err}"))?;
-    load_snapshot_if_present(inner, objects_dir)?;
+    if let Err(err) = load_snapshot_if_present(inner, objects_dir) {
+        eprintln!("zk-craft: failed to load runtime snapshot, resetting state: {err}");
+        inner.next_object_index = 1;
+        inner.state_root = empty_state_root();
+        inner.objects.clear();
+        let _ = persist_snapshot(inner, objects_dir);
+    }
     inner.loaded = true;
     Ok(())
 }
 
-fn emit_progress(app: &tauri::AppHandle, payload: &CreateDobjProgress) -> Result<(), String> {
-    app.emit("create-dobj-progress", payload)
+fn emit_progress(app: &tauri::AppHandle, payload: &RunSdkActionProgress) -> Result<(), String> {
+    app.emit("run-sdk-action-progress", payload)
         .map_err(|err| format!("failed to emit run progress: {err}"))
 }
 
@@ -393,21 +404,38 @@ fn clear_run_in_progress(runtime: &tauri::State<'_, CraftRuntime>) {
     }
 }
 
+fn lock_runtime<'a>(
+    runtime: &'a tauri::State<'_, CraftRuntime>,
+) -> std::sync::MutexGuard<'a, CraftRuntimeInner> {
+    match runtime.inner.lock() {
+        Ok(inner) => inner,
+        Err(poisoned) => {
+            eprintln!("zk-craft: runtime lock poisoned, recovering state");
+            poisoned.into_inner()
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn load_gui_bootstrap(
     app: tauri::AppHandle,
     runtime: tauri::State<'_, CraftRuntime>,
 ) -> Result<LoadGuiBootstrapResult, String> {
     let objects_dir = resolve_objects_dir(&app)?;
-    let mut inner = runtime
-        .inner
-        .lock()
-        .map_err(|err| format!("runtime lock poisoned: {err}"))?;
-    ensure_runtime_loaded(&mut inner, &objects_dir)?;
+    let actions = build_action_catalog();
+    let mut inner = lock_runtime(&runtime);
+    if let Err(err) = ensure_runtime_loaded(&mut inner, &objects_dir) {
+        eprintln!("zk-craft: bootstrap runtime failed, resetting state: {err}");
+        inner.next_object_index = 1;
+        inner.state_root = empty_state_root();
+        inner.objects.clear();
+        inner.loaded = true;
+        let _ = persist_snapshot(&inner, &objects_dir);
+    }
 
     Ok(LoadGuiBootstrapResult {
         objects: inner.objects.iter().map(to_inventory_item).collect(),
-        actions: build_action_catalog(),
+        actions,
     })
 }
 
@@ -454,10 +482,7 @@ pub async fn run_sdk_action(
 
     let (state_root_for_run, input_spendables, verify_targets, old_root);
     {
-        let mut inner = runtime
-            .inner
-            .lock()
-            .map_err(|err| format!("runtime lock poisoned: {err}"))?;
+        let mut inner = lock_runtime(&runtime);
         ensure_runtime_loaded(&mut inner, &objects_dir)?;
 
         if inner.run_in_progress {
@@ -503,8 +528,8 @@ pub async fn run_sdk_action(
     let run_id = input.action_id.clone();
     if let Err(err) = emit_progress(
         &app,
-        &CreateDobjProgress {
-            dobj_id: run_id.clone(),
+        &RunSdkActionProgress {
+            run_id: run_id.clone(),
             phase: "hash".to_string(),
             status: "running".to_string(),
             message: format!("Running {}", input.action_id),
@@ -535,10 +560,7 @@ pub async fn run_sdk_action(
     let spendable_outputs = match execution {
         Ok(output) => output,
         Err(err) => {
-            let mut inner = runtime
-                .inner
-                .lock()
-                .map_err(|poison| format!("runtime lock poisoned: {poison}"))?;
+            let mut inner = lock_runtime(&runtime);
             inner.run_in_progress = false;
             return Err(err);
         }
@@ -546,8 +568,8 @@ pub async fn run_sdk_action(
 
     if let Err(err) = emit_progress(
         &app,
-        &CreateDobjProgress {
-            dobj_id: run_id.clone(),
+        &RunSdkActionProgress {
+            run_id: run_id.clone(),
             phase: "hash".to_string(),
             status: "done".to_string(),
             message: "Proof generation complete".to_string(),
@@ -566,8 +588,8 @@ pub async fn run_sdk_action(
         let placeholder = "(no inputs)".to_string();
         if let Err(err) = emit_progress(
             &app,
-            &CreateDobjProgress {
-                dobj_id: run_id.clone(),
+            &RunSdkActionProgress {
+                run_id: run_id.clone(),
                 phase: "verify".to_string(),
                 status: "running".to_string(),
                 message: format!("Verifying {placeholder}"),
@@ -583,8 +605,8 @@ pub async fn run_sdk_action(
         }
         if let Err(err) = emit_progress(
             &app,
-            &CreateDobjProgress {
-                dobj_id: run_id.clone(),
+            &RunSdkActionProgress {
+                run_id: run_id.clone(),
                 phase: "verify".to_string(),
                 status: "done".to_string(),
                 message: format!("Verified {placeholder}"),
@@ -602,8 +624,8 @@ pub async fn run_sdk_action(
         for (index, target) in verify_targets.iter().enumerate() {
             if let Err(err) = emit_progress(
                 &app,
-                &CreateDobjProgress {
-                    dobj_id: run_id.clone(),
+                &RunSdkActionProgress {
+                    run_id: run_id.clone(),
                     phase: "verify".to_string(),
                     status: "running".to_string(),
                     message: format!("Verifying {target}"),
@@ -619,8 +641,8 @@ pub async fn run_sdk_action(
             }
             if let Err(err) = emit_progress(
                 &app,
-                &CreateDobjProgress {
-                    dobj_id: run_id.clone(),
+                &RunSdkActionProgress {
+                    run_id: run_id.clone(),
                     phase: "verify".to_string(),
                     status: "done".to_string(),
                     message: format!("Verified {target}"),
@@ -639,8 +661,8 @@ pub async fn run_sdk_action(
 
     if let Err(err) = emit_progress(
         &app,
-        &CreateDobjProgress {
-            dobj_id: run_id.clone(),
+        &RunSdkActionProgress {
+            run_id: run_id.clone(),
             phase: "nullify".to_string(),
             status: "running".to_string(),
             message: format!("Nullifying {old_root}"),
@@ -655,10 +677,7 @@ pub async fn run_sdk_action(
         return Err(err);
     }
 
-    let mut inner = runtime
-        .inner
-        .lock()
-        .map_err(|err| format!("runtime lock poisoned: {err}"))?;
+    let mut inner = lock_runtime(&runtime);
 
     let apply_result = (|| {
         ensure_runtime_loaded(&mut inner, &objects_dir)?;
@@ -731,8 +750,8 @@ pub async fn run_sdk_action(
 
     emit_progress(
         &app,
-        &CreateDobjProgress {
-            dobj_id: run_id.clone(),
+        &RunSdkActionProgress {
+            run_id: run_id.clone(),
             phase: "nullify".to_string(),
             status: "done".to_string(),
             message: "Nullify complete".to_string(),
@@ -746,8 +765,8 @@ pub async fn run_sdk_action(
 
     emit_progress(
         &app,
-        &CreateDobjProgress {
-            dobj_id: run_id.clone(),
+        &RunSdkActionProgress {
+            run_id: run_id.clone(),
             phase: "commit".to_string(),
             status: "running".to_string(),
             message: format!("Committing {}", result.new_root),
@@ -761,8 +780,8 @@ pub async fn run_sdk_action(
 
     emit_progress(
         &app,
-        &CreateDobjProgress {
-            dobj_id: run_id,
+        &RunSdkActionProgress {
+            run_id: run_id,
             phase: "commit".to_string(),
             status: "done".to_string(),
             message: "Commit complete".to_string(),
