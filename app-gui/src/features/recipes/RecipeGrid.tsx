@@ -6,6 +6,7 @@ interface RecipeGridProps {
   activeRecipeId: string | null;
   selectedItem: InventoryItem | null;
   onSelectRecipe: (recipeId: string) => void;
+  onClearSelection: () => void;
 }
 
 export function RecipeGrid({
@@ -13,6 +14,7 @@ export function RecipeGrid({
   activeRecipeId,
   selectedItem,
   onSelectRecipe,
+  onClearSelection,
 }: RecipeGridProps) {
   const [search, setSearch] = useState("");
 
@@ -46,12 +48,15 @@ export function RecipeGrid({
       ? `accepts # ${selectedItem.classMeta.name}`
       : "no matching actions"
     : "";
+  const tabLabel = selectedItem
+    ? `Actions (${visibleActions.length}/${unlocked.length})`
+    : "Actions";
 
   return (
     <section className="recipes-panel">
       <div className="action-tab-row">
         <button type="button" className="action-tab-btn active">
-          Actions
+          {tabLabel}
         </button>
       </div>
       <div className="action-toolbar">
@@ -63,7 +68,20 @@ export function RecipeGrid({
             onChange={(event) => setSearch(event.target.value)}
           />
         ) : (
-          <div className="action-filter-label">{filterLabel}</div>
+          <div className="action-filter-state">
+            <span className="action-filter-pill">
+              <span className="action-filter-icon">filter</span>
+              <span className="action-filter-label">{filterLabel}</span>
+            </span>
+            <button
+              type="button"
+              className="action-clear-btn"
+              onClick={onClearSelection}
+              title="Clear selection"
+            >
+              x
+            </button>
+          </div>
         )}
       </div>
       <div className="action-list">

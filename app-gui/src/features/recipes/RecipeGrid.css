@@ -71,8 +71,60 @@
   color: var(--text-dim);
   font-size: 9px;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.action-filter-state {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.action-filter-pill {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #4c3a35;
+  background: #2a211f;
+  color: var(--text);
+  padding: 4px 8px;
+}
+
+.action-filter-icon {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.action-filter-pill .action-filter-label {
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.action-clear-btn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.action-clear-btn:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
 }
 
 .action-search {

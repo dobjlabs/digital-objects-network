@@ -28,6 +28,7 @@ function App() {
   const showNullifiedItems = useUiStore((state) => state.showNullifiedItems);
   const selectItem = useUiStore((state) => state.selectItem);
   const selectRecipe = useUiStore((state) => state.selectRecipe);
+  const clearSelection = useUiStore((state) => state.clearSelection);
   const toggleNullified = useUiStore((state) => state.toggleNullified);
   const recordCpuSample = useUiStore((state) => state.recordCpuSample);
   const applyCreateDobjProgress = useUiStore(
@@ -108,6 +109,16 @@ function App() {
     };
   }, [recordCpuSample]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        clearSelection();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [clearSelection]);
+
   const handleOpenThingsDir = async () => {
     try {
       const dir = await openThingsDir();
@@ -136,6 +147,7 @@ function App() {
           recipes={mockRecipes}
           onRunProof={runProof}
           proofRunning={proofRunning}
+          onClearSelection={clearSelection}
         />
         <ProofRunnerPanel />
       </div>
@@ -146,6 +158,7 @@ function App() {
           activeRecipeId={activeRecipeId}
           selectedItem={selectedItem}
           onSelectRecipe={selectRecipe}
+          onClearSelection={clearSelection}
         />
       </div>
     </main>

@@ -12,6 +12,7 @@ interface ContextPanelProps {
   selection: ContextSelection;
   items: InventoryItem[];
   recipes: Recipe[];
+  onClearSelection: () => void;
   onRunProof: (input: {
     id: string;
     methodName: string;
@@ -25,6 +26,7 @@ export function ContextPanel({
   selection,
   items,
   recipes,
+  onClearSelection,
   onRunProof,
   proofRunning,
 }: ContextPanelProps) {
@@ -273,8 +275,18 @@ export function ContextPanel({
 
     return (
       <section className="context-panel">
-        <div className="context-title">
-          {item.emoji} {titleName}
+        <div className="context-title-row">
+          <div className="context-title">
+            {item.emoji} {titleName}
+          </div>
+          <button
+            type="button"
+            className="context-clear-btn"
+            onClick={onClearSelection}
+            title="Clear selection"
+          >
+            x
+          </button>
         </div>
 
         <div className="context-meta-block compact">
@@ -312,8 +324,18 @@ export function ContextPanel({
 
   return (
     <section className="context-panel">
-      <div className="context-title">
-        {recipe.emoji} {recipe.name}
+      <div className="context-title-row">
+        <div className="context-title">
+          {recipe.emoji} {recipe.name}
+        </div>
+        <button
+          type="button"
+          className="context-clear-btn"
+          onClick={onClearSelection}
+          title="Clear selection"
+        >
+          x
+        </button>
       </div>
 
       <div className="context-meta-block">

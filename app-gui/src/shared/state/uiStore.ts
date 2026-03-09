@@ -48,6 +48,7 @@ interface UiStoreState extends AppUiState {
   proof: ProofState;
   selectItem: (itemId: string) => void;
   selectRecipe: (recipeId: string) => void;
+  clearSelection: () => void;
   toggleNullified: () => void;
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   applyCreateDobjProgress: (event: CreateDobjProgress) => void;
@@ -127,6 +128,13 @@ export const useUiStore = create<UiStoreState>((set) => ({
         contextSelection: { kind: "recipe", recipeId },
       };
     }),
+  clearSelection: () =>
+    set((prev) => ({
+      ...prev,
+      activeItemId: null,
+      activeRecipeId: null,
+      contextSelection: { kind: "none" },
+    })),
   toggleNullified: () =>
     set((prev) => ({
       ...prev,

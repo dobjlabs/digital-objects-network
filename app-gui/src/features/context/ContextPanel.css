@@ -23,6 +23,36 @@
   margin-bottom: 10px;
 }
 
+.context-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.context-title-row .context-title {
+  margin-bottom: 0;
+}
+
+.context-clear-btn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.context-clear-btn:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+
 .context-meta-block {
   margin: 6px 0 12px;
 }
