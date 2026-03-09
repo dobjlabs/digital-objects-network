@@ -5,10 +5,6 @@
 sync:
     RUST_LOG=info cargo run -p synchronizer --release
 
-# Run the message-board server
-message-board:
-    RUST_LOG=info cargo run -p message-board --release
-
 # Run the gui
 gui:
     cd app-gui && pnpm tauri dev --release

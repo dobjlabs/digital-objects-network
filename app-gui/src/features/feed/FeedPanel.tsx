@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { DragEvent } from "react";
-import { createPost, createResponse, listPosts } from "../../shared/api/messageBoardClient";
 import { attachClaim } from "../../shared/api/tauriClient";
 import type { FeedPost } from "../../shared/types/domain";
 
@@ -10,7 +9,6 @@ interface FeedPanelProps {
 
 export function FeedPanel({ posts }: FeedPanelProps) {
   const [localPosts, setLocalPosts] = useState<FeedPost[]>(posts);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [liveOnly, setLiveOnly] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -38,6 +36,7 @@ export function FeedPanel({ posts }: FeedPanelProps) {
 
   const toValidity = (value: string) =>
     value === "nullified" ? "nullified" : "live";
+  const nowLabel = () => new Date().toLocaleString();
   const countProofs = (proofs: Array<{ validity: "live" | "nullified" }>) => ({
     live: proofs.filter((proof) => proof.validity === "live").length,
     nullified: proofs.filter((proof) => proof.validity === "nullified").length,
@@ -131,52 +130,6 @@ export function FeedPanel({ posts }: FeedPanelProps) {
   const activePost = activePostId
     ? (localPosts.find((post) => post.id === activePostId) ?? null)
     : null;
-
-  const fromServerPost = (
-    post: Awaited<ReturnType<typeof listPosts>>["items"][number],
-  ): FeedPost => ({
-    id: post.id,
-    title: post.title,
-    peer: post.peer,
-    time: new Date(post.time).toLocaleString(),
-    desc: post.description,
-    proofs: post.proofs.map((proof) => ({
-      ...proof,
-      validity: toValidity(proof.validity),
-    })),
-    responses: post.responses.map((response) => ({
-      id: response.id,
-      peer: response.peer,
-      time: new Date(response.time).toLocaleString(),
-      desc: response.desc,
-      proofs: response.proofs.map((proof) => ({
-        ...proof,
-        validity: toValidity(proof.validity),
-      })),
-    })),
-  });
-
-  const refreshPosts = async () => {
-    try {
-      const result = await listPosts({ limit: 100 });
-      setLocalPosts(result.items.map(fromServerPost));
-      setLoadError(null);
-    } catch (error) {
-      setLoadError(
-        error instanceof Error ? error.message : "Failed to load posts",
-      );
-    }
-  };
-
-  useEffect(() => {
-    void refreshPosts();
-    const interval = window.setInterval(() => {
-      void refreshPosts();
-    }, 5000);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, []);
 
   const resetCompose = () => {
     setComposeMode("closed");
@@ -301,22 +254,41 @@ export function FeedPanel({ posts }: FeedPanelProps) {
           setComposeSubmitting(false);
           return;
         }
-        await createPost({
-          title,
-          description: desc,
-          claims: composeProofs,
-        });
-        await refreshPosts();
+        setLocalPosts((prev) => [
+          {
+            id: `post-${Date.now()}`,
+            title,
+            peer: "127.0.0.1",
+            time: nowLabel(),
+            desc,
+            proofs: [...composeProofs],
+            responses: [],
+          },
+          ...prev,
+        ]);
         resetCompose();
         return;
       }
 
       if (composeMode === "reply" && replyToPostId) {
-        await createResponse(replyToPostId, {
-          description: desc,
-          claims: composeProofs,
-        });
-        await refreshPosts();
+        setLocalPosts((prev) =>
+          prev.map((post) => {
+            if (post.id !== replyToPostId) return post;
+            return {
+              ...post,
+              responses: [
+                ...post.responses,
+                {
+                  id: `resp-${Date.now()}`,
+                  peer: "127.0.0.1",
+                  time: nowLabel(),
+                  desc,
+                  proofs: [...composeProofs],
+                },
+              ],
+            };
+          }),
+        );
         resetCompose();
       }
     } catch (error) {
@@ -428,7 +400,6 @@ export function FeedPanel({ posts }: FeedPanelProps) {
         {composeError && (
           <div className="feed-verify-error">{composeError}</div>
         )}
-        {loadError && <div className="feed-verify-error">{loadError}</div>}
       </section>
     );
   }

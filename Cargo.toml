@@ -2,7 +2,6 @@
 members = [
     "app-gui/src-tauri",
     "common",
-    "message-board",
     "pod2utils",
     "synchronizer",
     "txlib",
