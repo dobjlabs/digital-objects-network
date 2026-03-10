@@ -18,7 +18,7 @@ mod tests {
     use pod2::{
         backends::plonky2::mock::mainpod::MockProver,
         frontend::MultiPodBuilder,
-        middleware::{containers::Array, Key, Params, VDSet, Value},
+        middleware::{Key, Params, VDSet, Value, containers::Array},
     };
     use pod2utils::{macros::BuildContext, op, set};
 
@@ -61,7 +61,7 @@ mod tests {
     /// GSR₂ (when the lock was established). The transaction is finalized.
     #[test]
     fn prove_lock_and_unlock() {
-        use txlib::{new_obj, StateRoot as TxStateRoot, TxBuilder};
+        use txlib::{StateRoot as TxStateRoot, TxBuilder, new_obj};
 
         let txlib_module = Arc::new(txlib::predicates::module());
         let time_module = Arc::new(module().unwrap());
@@ -179,7 +179,7 @@ mod tests {
     /// takes the expiry-bearing object as an input and proves `NotExpired`.
     #[test]
     fn prove_set_expiry_and_not_expired() {
-        use txlib::{new_obj, StateRoot as TxStateRoot, TxBuilder};
+        use txlib::{StateRoot as TxStateRoot, TxBuilder, new_obj};
 
         let txlib_module = Arc::new(txlib::predicates::module());
         let time_module = Arc::new(module().unwrap());
