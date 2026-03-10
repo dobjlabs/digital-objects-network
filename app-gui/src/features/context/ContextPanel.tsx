@@ -266,7 +266,13 @@ export function ContextPanel({
       );
     })();
 
-  const displayThingPath = (filename: string) => `~/.objects/${filename}`;
+  const displayThingPath = (
+    filename: string,
+    validity: InventoryItem["validity"],
+  ) =>
+    validity === "nullified"
+      ? `~/.objects/.nullified/${filename}`
+      : `~/.objects/${filename}`;
 
   const stringifyField = (value: FieldValue) => {
     if (value === null) return "null";
@@ -342,7 +348,9 @@ export function ContextPanel({
           )}
           {renderMetaRow(
             "Path",
-            <span className="context-inline-path">{displayThingPath(item.fileName)}</span>,
+            <span className="context-inline-path">
+              {displayThingPath(item.fileName, item.validity)}
+            </span>,
           )}
         </div>
 

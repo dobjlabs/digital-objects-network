@@ -435,6 +435,12 @@ fn format_output_file_name(class_name: &str, index: u64) -> String {
     format!("{}_{index}.dobj", normalize_component_name(class_name))
 }
 
+const NULLIFIED_DIR_NAME: &str = ".nullified";
+
+fn nullified_objects_dir(objects_dir: &Path) -> PathBuf {
+    objects_dir.join(NULLIFIED_DIR_NAME)
+}
+
 fn value_string(raw: String) -> String {
     let trimmed = raw.trim();
     if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
@@ -635,6 +641,9 @@ fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObject
 fn sync_object_files(inner: &CraftRuntimeInner, objects_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(objects_dir)
         .map_err(|err| format!("failed to create objects directory: {err}"))?;
+    let nullified_dir = nullified_objects_dir(objects_dir);
+    fs::create_dir_all(&nullified_dir)
+        .map_err(|err| format!("failed to create nullified directory: {err}"))?;
 
     for record in &inner.objects {
         let persisted = persist_object_record(record)?;
@@ -644,16 +653,43 @@ fn sync_object_files(inner: &CraftRuntimeInner, objects_dir: &Path) -> Result<()
                 record.file_name
             )
         })?;
-        fs::write(objects_dir.join(&record.file_name), serialized)
+        let target_path = match record.validity {
+            RuntimeValidity::Live => objects_dir.join(&record.file_name),
+            RuntimeValidity::Nullified => nullified_dir.join(&record.file_name),
+        };
+        fs::write(&target_path, serialized)
             .map_err(|err| format!("failed to write object file {}: {err}", record.file_name))?;
+
+        let stale_path = match record.validity {
+            RuntimeValidity::Live => nullified_dir.join(&record.file_name),
+            RuntimeValidity::Nullified => objects_dir.join(&record.file_name),
+        };
+        if stale_path != target_path {
+            match fs::remove_file(&stale_path) {
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    eprintln!(
+                        "zk-craft: failed to remove stale object file {}: {err}",
+                        stale_path.display()
+                    );
+                }
+            }
+        }
     }
 
     Ok(())
 }
 
-fn load_object_files(objects_dir: &Path) -> Result<Vec<RuntimeObjectRecord>, String> {
-    let mut objects = Vec::new();
-    for entry in fs::read_dir(objects_dir)
+fn load_object_files_from_dir(
+    objects: &mut HashMap<String, (RuntimeObjectRecord, u8)>,
+    source_dir: &Path,
+    in_nullified_dir: bool,
+) -> Result<(), String> {
+    if !source_dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(source_dir)
         .map_err(|err| format!("failed to read objects directory: {err}"))?
     {
         let entry = entry.map_err(|err| format!("failed to read objects entry: {err}"))?;
@@ -678,11 +714,43 @@ fn load_object_files(objects_dir: &Path) -> Result<Vec<RuntimeObjectRecord>, Str
         };
 
         match parse_object_file(&contents, file_name) {
-            Ok(record) => objects.push(record),
+            Ok(record) => {
+                let score = if (in_nullified_dir
+                    && matches!(record.validity, RuntimeValidity::Nullified))
+                    || (!in_nullified_dir && matches!(record.validity, RuntimeValidity::Live))
+                {
+                    2
+                } else {
+                    1
+                };
+                let replace = objects
+                    .get(&record.id)
+                    .map(|(_, existing_score)| score > *existing_score)
+                    .unwrap_or(true);
+                if replace {
+                    objects.insert(record.id.clone(), (record, score));
+                }
+            }
             Err(err) => eprintln!("zk-craft: failed to parse {file_name}, skipping: {err}"),
         }
     }
 
+    Ok(())
+}
+
+fn load_object_files(objects_dir: &Path) -> Result<Vec<RuntimeObjectRecord>, String> {
+    let mut records_by_id = HashMap::<String, (RuntimeObjectRecord, u8)>::new();
+    load_object_files_from_dir(&mut records_by_id, objects_dir, false)?;
+    load_object_files_from_dir(
+        &mut records_by_id,
+        &nullified_objects_dir(objects_dir),
+        true,
+    )?;
+
+    let mut objects = records_by_id
+        .into_values()
+        .map(|(record, _)| record)
+        .collect::<Vec<_>>();
     objects.sort_by(|a, b| a.file_name.cmp(&b.file_name));
     Ok(objects)
 }
@@ -716,6 +784,8 @@ fn ensure_runtime_loaded(inner: &mut CraftRuntimeInner, objects_dir: &Path) -> R
     }
     fs::create_dir_all(objects_dir)
         .map_err(|err| format!("failed to create objects directory: {err}"))?;
+    fs::create_dir_all(nullified_objects_dir(objects_dir))
+        .map_err(|err| format!("failed to create nullified directory: {err}"))?;
     refresh_runtime_objects(inner, objects_dir)?;
     inner.state_root = empty_state_root();
     inner.loaded = true;

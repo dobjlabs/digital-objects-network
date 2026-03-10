@@ -68,7 +68,7 @@ pub fn start_objects_watcher(app: AppHandle) -> Result<(), String> {
             }
         };
 
-        if let Err(err) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
+        if let Err(err) = watcher.watch(&watch_dir, RecursiveMode::Recursive) {
             eprintln!(
                 "zk-craft: failed to watch objects directory {}: {err}",
                 watch_dir.display()
