@@ -6,9 +6,8 @@ use std::{
 };
 
 use pod2::middleware::{
-    EMPTY_VALUE, Hash, Key, RawValue, Statement, Value,
     containers::{Array, Dictionary, Set},
-    hash_values,
+    hash_values, Hash, Key, Statement, Value, EMPTY_VALUE,
 };
 use pod2utils::{dict, dict_define, macros::BuildContext, rand_raw_value, set, st_custom};
 
@@ -70,13 +69,6 @@ impl Tx {
             "nullifiers" => self.nullifiers.clone()
         })
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct Object {
-    pub key: RawValue,
-    pub work: RawValue,
-    pub app_layer: HashMap<String, Value>,
 }
 
 pub fn rekey(obj: &mut Dictionary) {

@@ -187,6 +187,12 @@ macro_rules! op {
     (SetDelete($set:expr, $old_set:expr, $value:expr)) => {
         pod2::frontend::Operation::set_delete($set.clone(), $old_set.clone(), $value.clone())
     };
+    (GtEq($a:expr, $b:expr)) => {
+        pod2::frontend::Operation::gt_eq($a.clone(), $b.clone())
+    };
+    (ArrayContains($array:expr, $idx:expr, $value:expr)) => {
+        pod2::frontend::Operation::array_contains($array.clone(), $idx.clone(), $value.clone())
+    };
 }
 
 /// Argument types:
