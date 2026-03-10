@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use alloy::primitives::B256;
 use anyhow::{Context, Result};
@@ -19,6 +22,7 @@ pub struct DerivedState {
     pub transactions: HashSet<Hash>,
     pub nullifiers: HashSet<Hash>,
     pub global_state_roots: Vec<Hash>,
+    pub gsr_block_numbers: HashMap<Hash, i64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -30,7 +34,7 @@ pub struct SyncProgress {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SeenAt {
     slot: u32,
-    block_number: Option<u32>,
+    block_number: u32,
 }
 
 pub struct Db {
@@ -74,12 +78,14 @@ impl Db {
 
         // Sort GSR entries by block number to get ordered history
         gsr_entries.sort_by_key(|(block, _)| *block);
+        let gsr_block_numbers = gsr_entries.iter().map(|&(b, h)| (h, b as i64)).collect();
         let global_state_roots = gsr_entries.into_iter().map(|(_, h)| h).collect();
 
         Ok(DerivedState {
             transactions,
             nullifiers,
             global_state_roots,
+            gsr_block_numbers,
         })
     }
 
@@ -119,24 +125,14 @@ impl Db {
         Ok(())
     }
 
-    pub fn persist_transaction(
-        &self,
-        hash: Hash,
-        slot: u32,
-        block_number: Option<u32>,
-    ) -> Result<()> {
+    pub fn persist_transaction(&self, hash: Hash, slot: u32, block_number: u32) -> Result<()> {
         let key = tx_key(hash);
         let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
         self.db.put(key, value)?;
         Ok(())
     }
 
-    pub fn persist_nullifier(
-        &self,
-        hash: Hash,
-        slot: u32,
-        block_number: Option<u32>,
-    ) -> Result<()> {
+    pub fn persist_nullifier(&self, hash: Hash, slot: u32, block_number: u32) -> Result<()> {
         let key = nullifier_key(hash);
         let value = serde_json::to_vec(&SeenAt { slot, block_number })?;
         self.db.put(key, value)?;
@@ -315,7 +311,7 @@ mod tests {
     fn test_persist_and_load_transaction() {
         let (db, _dir) = open_test_db();
         let hash = EMPTY_HASH;
-        db.persist_transaction(hash, 1, Some(100)).unwrap();
+        db.persist_transaction(hash, 1, 100).unwrap();
 
         let state = db.load_state().unwrap();
         assert!(state.transactions.contains(&hash));
@@ -325,7 +321,7 @@ mod tests {
     fn test_persist_and_load_nullifier() {
         let (db, _dir) = open_test_db();
         let hash = EMPTY_HASH;
-        db.persist_nullifier(hash, 1, Some(100)).unwrap();
+        db.persist_nullifier(hash, 1, 100).unwrap();
 
         let state = db.load_state().unwrap();
         assert!(state.nullifiers.contains(&hash));
@@ -375,10 +371,10 @@ mod tests {
         let root1 = B256::from([1u8; 32]);
         let root2 = B256::from([2u8; 32]);
 
-        db.persist_transaction(tx1, 1, Some(101)).unwrap();
-        db.persist_transaction(tx2, 2, Some(102)).unwrap();
-        db.persist_nullifier(n1, 1, Some(101)).unwrap();
-        db.persist_nullifier(n2, 2, Some(102)).unwrap();
+        db.persist_transaction(tx1, 1, 101).unwrap();
+        db.persist_transaction(tx2, 2, 102).unwrap();
+        db.persist_nullifier(n1, 1, 101).unwrap();
+        db.persist_nullifier(n2, 2, 102).unwrap();
         db.persist_global_state_root(1, 101, g1).unwrap();
         db.persist_global_state_root(2, 102, g2).unwrap();
         db.set_slot_root(1, Some(root1)).unwrap();
@@ -408,8 +404,8 @@ mod tests {
         let n = hash_values(&[Value::from(21)]);
         let g = hash_values(&[Value::from(31)]);
 
-        db.persist_transaction(tx, 1, Some(101)).unwrap();
-        db.persist_nullifier(n, 1, Some(101)).unwrap();
+        db.persist_transaction(tx, 1, 101).unwrap();
+        db.persist_nullifier(n, 1, 101).unwrap();
         db.persist_global_state_root(1, 101, g).unwrap();
         db.set_slot_root(1, Some(B256::from([1u8; 32]))).unwrap();
         db.mark_slot_processed(1, Some(101)).unwrap();

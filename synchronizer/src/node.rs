@@ -267,7 +267,7 @@ impl Node {
                     )
                 })?;
                 self.state_machine
-                    .process_blob(&bytes, slot_ctx.slot, Some(block_number))
+                    .process_blob(&bytes, slot_ctx.slot, block_number)
                     .with_context(|| {
                         format!(
                             "Failed to process blob at slot {}, blob_index {}",
