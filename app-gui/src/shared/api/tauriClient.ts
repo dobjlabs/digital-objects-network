@@ -114,6 +114,12 @@ export function listenRunSdkActionProgress(
   });
 }
 
+export function listenObjectsChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen("objects-changed", () => {
+    handler();
+  });
+}
+
 export function sampleAppCpu(): Promise<CpuSample> {
   return invoke<CpuSample>("sample_app_cpu");
 }

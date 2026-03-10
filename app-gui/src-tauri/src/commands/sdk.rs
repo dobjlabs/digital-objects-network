@@ -701,14 +701,22 @@ fn next_object_index_from_records(objects: &[RuntimeObjectRecord]) -> u64 {
     max_index + 1
 }
 
+fn refresh_runtime_objects(
+    inner: &mut CraftRuntimeInner,
+    objects_dir: &Path,
+) -> Result<(), String> {
+    inner.objects = load_object_files(objects_dir)?;
+    inner.next_object_index = next_object_index_from_records(&inner.objects);
+    Ok(())
+}
+
 fn ensure_runtime_loaded(inner: &mut CraftRuntimeInner, objects_dir: &Path) -> Result<(), String> {
     if inner.loaded {
         return Ok(());
     }
     fs::create_dir_all(objects_dir)
         .map_err(|err| format!("failed to create objects directory: {err}"))?;
-    inner.objects = load_object_files(objects_dir)?;
-    inner.next_object_index = next_object_index_from_records(&inner.objects);
+    refresh_runtime_objects(inner, objects_dir)?;
     inner.state_root = empty_state_root();
     inner.loaded = true;
     Ok(())
@@ -753,6 +761,11 @@ pub async fn load_gui_bootstrap(
         inner.objects.clear();
         inner.loaded = true;
         let _ = sync_object_files(&inner, &objects_dir);
+    }
+    if !inner.run_in_progress {
+        if let Err(err) = refresh_runtime_objects(&mut inner, &objects_dir) {
+            eprintln!("zk-craft: failed to refresh objects from disk: {err}");
+        }
     }
     match sync_state {
         Ok(state) => inner.state_root = state.state_root,

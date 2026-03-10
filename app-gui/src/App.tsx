@@ -5,6 +5,7 @@ import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { RecipeGrid } from "./features/recipes/RecipeGrid";
 import {
   getThingsDir,
+  listenObjectsChanged,
   listenRunSdkActionProgress,
   openThingsDir,
   sampleAppCpu,
@@ -90,6 +91,50 @@ function App() {
       if (unlisten) unlisten();
     };
   }, [applyRunSdkActionProgress]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    let refreshTimer: number | null = null;
+
+    const scheduleRefresh = () => {
+      if (cancelled) return;
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        if (cancelled) return;
+        hydrateData().catch((error) => {
+          if (!cancelled) {
+            console.error("Failed to refresh GUI after objects change:", error);
+          }
+        });
+      }, 120);
+    };
+
+    listenObjectsChanged(() => {
+      scheduleRefresh();
+    })
+      .then((dispose) => {
+        if (cancelled) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+      })
+      .catch((error) => {
+        console.error("Failed to subscribe to objects-changed:", error);
+      });
+
+    return () => {
+      cancelled = true;
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      if (unlisten) unlisten();
+    };
+  }, [hydrateData]);
 
   useEffect(() => {
     let cancelled = false;
