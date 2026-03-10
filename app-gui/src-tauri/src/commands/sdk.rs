@@ -731,7 +731,8 @@ fn execute_action(
     inputs: Vec<SpendableObject>,
 ) -> Result<SpendableObjects, String> {
     let helper = Helper::new(test_sdk::dependencies(), test_sdk::actions());
-    let builder = helper.builder(true, Arc::new(state_root));
+    // Relayed payloads are recursively verified/compressed, which is incompatible with MockMainPod.
+    let builder = helper.builder(false, Arc::new(state_root));
     Ok(builder.action(&action_id, inputs))
 }
 
