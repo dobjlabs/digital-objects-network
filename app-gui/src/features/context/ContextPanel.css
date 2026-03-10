@@ -274,6 +274,11 @@
   color: var(--text);
 }
 
+.method-arg-browse:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .method-arg-error {
   color: var(--danger);
   font-size: 9px;

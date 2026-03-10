@@ -25,6 +25,33 @@
   gap: 12px;
 }
 
+.proof-jump-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.proof-jump-btn {
+  border: 1px solid var(--border);
+  background: #252629;
+  color: var(--text-dim);
+  font-size: 9px;
+  line-height: 1;
+  padding: 4px 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.proof-jump-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.proof-jump-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .stage-header {
   display: flex;
   align-items: center;

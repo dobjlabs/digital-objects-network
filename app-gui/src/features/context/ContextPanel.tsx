@@ -47,9 +47,25 @@ export function ContextPanel({
         : "none";
 
   useEffect(() => {
-    setArgBindings({});
     setArgErrors({});
+    setHoverArgKey(null);
   }, [selectionKey]);
+
+  useEffect(() => {
+    setArgBindings((prev) => {
+      const next: Record<string, BoundArg> = {};
+      let changed = false;
+      for (const [key, bound] of Object.entries(prev)) {
+        const item = items.find((candidate) => candidate.id === bound.objectId);
+        if (item && item.validity === "live") {
+          next[key] = bound;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [items]);
 
   const argKey = (methodId: string, index: number) =>
     `${selection.kind}:${methodId}:${index}`;
@@ -90,6 +106,7 @@ export function ContextPanel({
     arg: MethodArg,
     index: number,
   ) => {
+    if (proofRunning) return;
     event.preventDefault();
     event.stopPropagation();
     const raw =
@@ -200,6 +217,7 @@ export function ContextPanel({
                       <div
                         className={`method-arg-drop ${bound ? "filled" : ""} ${isDropActive ? "drop-active" : ""} ${err ? "error" : ""}`}
                         onDragEnter={(event) => {
+                          if (proofRunning) return;
                           event.preventDefault();
                           setHoverArgKey(key);
                         }}
@@ -207,6 +225,7 @@ export function ContextPanel({
                           setHoverArgKey((prev) => (prev === key ? null : prev))
                         }
                         onDragOver={(event) => {
+                          if (proofRunning) return;
                           event.preventDefault();
                           event.stopPropagation();
                           event.dataTransfer.dropEffect = "copy";
@@ -222,7 +241,9 @@ export function ContextPanel({
                       <button
                         type="button"
                         className="method-arg-browse"
+                        disabled={proofRunning}
                         onClick={() => {
+                          if (proofRunning) return;
                           if (!bound?.objectId) return;
                           setArgBindings((prev) => {
                             const next = { ...prev };

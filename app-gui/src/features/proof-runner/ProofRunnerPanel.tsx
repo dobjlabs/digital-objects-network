@@ -3,6 +3,8 @@ import { useUiStore } from "../../shared/state/uiStore";
 
 export function ProofRunnerPanel() {
   const proof = useUiStore((state) => state.proof);
+  const contextSelection = useUiStore((state) => state.contextSelection);
+  const selectRecipe = useUiStore((state) => state.selectRecipe);
   const prevStatusRef = useRef(proof.status);
   const [idleFadeIn, setIdleFadeIn] = useState(false);
 
@@ -44,6 +46,21 @@ export function ProofRunnerPanel() {
     if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
     if (minutes > 0) return `${minutes}m ${seconds}s`;
     return `${seconds}s`;
+  };
+
+  const canReturnToAction =
+    !!proof.runActionId &&
+    (proof.status === "generating" ||
+      proof.status === "committing" ||
+      proof.status === "summary");
+  const alreadyViewingRunningAction =
+    proof.runActionId !== null &&
+    contextSelection.kind === "recipe" &&
+    contextSelection.recipeId === proof.runActionId;
+
+  const returnToRunningAction = () => {
+    if (!proof.runActionId) return;
+    selectRecipe(proof.runActionId);
   };
 
   if (proof.status === "idle") {
@@ -115,6 +132,25 @@ export function ProofRunnerPanel() {
 
     return (
       <section className="cpu-panel proof-panel proof-run-card">
+        {canReturnToAction && (
+          <div className="proof-jump-row">
+            <button
+              type="button"
+              className="proof-jump-btn"
+              onClick={returnToRunningAction}
+              disabled={alreadyViewingRunningAction}
+              title={
+                proof.methodName
+                  ? `Open ${proof.methodName}`
+                  : "Open running action"
+              }
+            >
+              {alreadyViewingRunningAction
+                ? "Viewing Action"
+                : "Return to Action"}
+            </button>
+          </div>
+        )}
         <div className="stage-header">
           <span className={`stage-num ${stage1Done ? "done" : "active"}`}>
             1
@@ -196,6 +232,25 @@ export function ProofRunnerPanel() {
 
     return (
       <section className="cpu-panel proof-panel proof-summary-card">
+        {canReturnToAction && (
+          <div className="proof-jump-row">
+            <button
+              type="button"
+              className="proof-jump-btn"
+              onClick={returnToRunningAction}
+              disabled={alreadyViewingRunningAction}
+              title={
+                proof.methodName
+                  ? `Open ${proof.methodName}`
+                  : "Open running action"
+              }
+            >
+              {alreadyViewingRunningAction
+                ? "Viewing Action"
+                : "Return to Action"}
+            </button>
+          </div>
+        )}
         <div className="summary-stage">
           <div className="summary-title">
             <span className="stage-num summary-danger">✗</span>
