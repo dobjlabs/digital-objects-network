@@ -25,6 +25,15 @@ pub struct SlotDelta {
     pub gsr_hashes: Vec<Hash>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ApiStateSnapshot {
+    pub transactions: Vec<Hash>,
+    pub nullifiers: Vec<Hash>,
+    pub global_state_roots: Vec<Hash>,
+    pub current_gsr: Option<Hash>,
+    pub current_block_number: Option<i64>,
+}
+
 /// In-memory view of the consensus state, kept in sync with the database.
 struct InnerState {
     /// Set of accepted transaction hashes; used for duplicate detection.
@@ -113,6 +122,33 @@ impl StateMachine {
             global_state_roots: state.global_state_roots.clone(),
             gsr_block_numbers: state.gsr_block_numbers.clone(),
         })
+    }
+
+    pub fn api_state_snapshot(&self) -> Result<ApiStateSnapshot> {
+        let state = self.read_state()?;
+        let current_gsr = state.global_state_roots.last().copied();
+        let current_block_number =
+            current_gsr.and_then(|hash| state.gsr_block_numbers.get(&hash).copied());
+        Ok(ApiStateSnapshot {
+            transactions: state.transactions.iter().copied().collect(),
+            nullifiers: state.nullifiers.iter().copied().collect(),
+            global_state_roots: state.global_state_roots.clone(),
+            current_gsr,
+            current_block_number,
+        })
+    }
+
+    pub fn tx_exists(&self, tx_hash: &Hash) -> Result<bool> {
+        let state = self.read_state()?;
+        Ok(state.transactions.contains(tx_hash))
+    }
+
+    pub fn tx_exists_batch(&self, tx_hashes: &[Hash]) -> Result<Vec<bool>> {
+        let state = self.read_state()?;
+        Ok(tx_hashes
+            .iter()
+            .map(|hash| state.transactions.contains(hash))
+            .collect())
     }
 
     /// Process raw blob content (post-blob-encoding extraction).

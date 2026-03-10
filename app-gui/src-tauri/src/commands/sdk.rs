@@ -64,17 +64,43 @@ struct PersistedObjectRecord {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SynchronizerStateResponse {
+struct SynchronizerStateFullResponse {
+    block_number: i64,
     transactions: Vec<String>,
     nullifiers: Vec<String>,
+    gsrs: Vec<String>,
     current_gsr: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SynchronizerStateHeadResponse {
+    current_gsr: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SynchronizerTxContainsRequest {
+    tx_hashes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SynchronizerTxContainsResponse {
+    results: Vec<SynchronizerTxContainsEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SynchronizerTxContainsEntry {
+    tx_hash: String,
+    present: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SynchronizerTxStatusResponse {
+    present: bool,
 }
 
 struct SynchronizerState {
     state_root: StateRoot,
     current_gsr: Hash,
-    transactions: HashSet<Hash>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -316,8 +342,28 @@ fn encode_hash_hex(hash: &Hash) -> String {
     format!("0x{}", hash.encode_hex::<String>())
 }
 
-fn fetch_synchronizer_state(sync_api_url: &str) -> Result<SynchronizerState, String> {
-    let endpoint = format!("{}/state", sync_api_url.trim_end_matches('/'));
+fn synchronizer_state_head_endpoint(sync_api_url: &str) -> String {
+    format!("{}/v1/state/head", sync_api_url.trim_end_matches('/'))
+}
+
+fn synchronizer_state_full_endpoint(sync_api_url: &str) -> String {
+    format!("{}/v1/state/full", sync_api_url.trim_end_matches('/'))
+}
+
+fn synchronizer_state_tx_contains_endpoint(sync_api_url: &str) -> String {
+    format!("{}/v1/state/tx/contains", sync_api_url.trim_end_matches('/'))
+}
+
+fn synchronizer_state_tx_endpoint(sync_api_url: &str, tx_hash: &Hash) -> String {
+    format!(
+        "{}/v1/state/tx/{}",
+        sync_api_url.trim_end_matches('/'),
+        encode_hash_hex(tx_hash)
+    )
+}
+
+fn fetch_synchronizer_head(sync_api_url: &str) -> Result<Option<Hash>, String> {
+    let endpoint = synchronizer_state_head_endpoint(sync_api_url);
     let response = reqwest::blocking::get(&endpoint)
         .map_err(|err| format!("failed to query synchronizer at {endpoint}: {err}"))?;
     if !response.status().is_success() {
@@ -327,9 +373,27 @@ fn fetch_synchronizer_state(sync_api_url: &str) -> Result<SynchronizerState, Str
             response.status()
         ));
     }
-    let payload: SynchronizerStateResponse = response
+
+    let payload: SynchronizerStateHeadResponse = response
         .json()
-        .map_err(|err| format!("failed to decode synchronizer response: {err}"))?;
+        .map_err(|err| format!("failed to decode synchronizer head response: {err}"))?;
+    payload.current_gsr.as_deref().map(parse_hash_hex).transpose()
+}
+
+fn fetch_synchronizer_state(sync_api_url: &str) -> Result<SynchronizerState, String> {
+    let endpoint = synchronizer_state_full_endpoint(sync_api_url);
+    let response = reqwest::blocking::get(&endpoint)
+        .map_err(|err| format!("failed to query synchronizer at {endpoint}: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "synchronizer request failed: {} {}",
+            response.status().as_u16(),
+            response.status()
+        ));
+    }
+    let payload: SynchronizerStateFullResponse = response
+        .json()
+        .map_err(|err| format!("failed to decode synchronizer full state response: {err}"))?;
 
     let transactions = payload
         .transactions
@@ -341,8 +405,13 @@ fn fetch_synchronizer_state(sync_api_url: &str) -> Result<SynchronizerState, Str
         .iter()
         .map(|entry| parse_hash_hex(entry))
         .collect::<Result<HashSet<_>, String>>()?;
+    let gsrs = payload
+        .gsrs
+        .iter()
+        .map(|entry| parse_hash_hex(entry))
+        .collect::<Result<Vec<_>, String>>()?;
 
-    let state_root = StateRoot::new(0, &transactions, &nullifiers, &[]);
+    let state_root = StateRoot::new(payload.block_number, &transactions, &nullifiers, &gsrs);
     let derived_gsr = state_root.hash();
     let current_gsr = if let Some(gsr) = payload.current_gsr.as_deref() {
         let remote_gsr = parse_hash_hex(gsr)?;
@@ -361,8 +430,65 @@ fn fetch_synchronizer_state(sync_api_url: &str) -> Result<SynchronizerState, Str
     Ok(SynchronizerState {
         state_root,
         current_gsr,
-        transactions,
     })
+}
+
+fn fetch_synchronizer_tx_contains(
+    sync_api_url: &str,
+    tx_hashes: &[Hash],
+) -> Result<HashSet<Hash>, String> {
+    if tx_hashes.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let endpoint = synchronizer_state_tx_contains_endpoint(sync_api_url);
+    let request = SynchronizerTxContainsRequest {
+        tx_hashes: tx_hashes.iter().map(encode_hash_hex).collect(),
+    };
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post(&endpoint)
+        .json(&request)
+        .send()
+        .map_err(|err| format!("failed to query synchronizer at {endpoint}: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "synchronizer request failed: {} {}",
+            response.status().as_u16(),
+            response.status()
+        ));
+    }
+
+    let payload: SynchronizerTxContainsResponse = response
+        .json()
+        .map_err(|err| format!("failed to decode synchronizer tx/contains response: {err}"))?;
+    let mut present = HashSet::new();
+    for entry in payload.results {
+        if entry.present {
+            present.insert(parse_hash_hex(&entry.tx_hash)?);
+        }
+    }
+    Ok(present)
+}
+
+fn fetch_synchronizer_tx_status(
+    sync_api_url: &str,
+    tx_hash: &Hash,
+) -> Result<SynchronizerTxStatusResponse, String> {
+    let endpoint = synchronizer_state_tx_endpoint(sync_api_url, tx_hash);
+    let response = reqwest::blocking::get(&endpoint)
+        .map_err(|err| format!("failed to query synchronizer at {endpoint}: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "synchronizer request failed: {} {}",
+            response.status().as_u16(),
+            response.status()
+        ));
+    }
+
+    response
+        .json::<SynchronizerTxStatusResponse>()
+        .map_err(|err| format!("failed to decode synchronizer tx status response: {err}"))
 }
 
 fn wait_for_synchronizer_tx(
@@ -375,9 +501,9 @@ fn wait_for_synchronizer_tx(
     let poll_interval = Duration::from_millis(poll_interval_ms);
     let start = Instant::now();
     loop {
-        let state = fetch_synchronizer_state(sync_api_url)?;
-        if state.transactions.contains(&tx_final) {
-            return Ok(state);
+        let status = fetch_synchronizer_tx_status(sync_api_url, &tx_final)?;
+        if status.present {
+            return fetch_synchronizer_state(sync_api_url);
         }
         if start.elapsed() >= timeout {
             return Err(format!(
@@ -821,7 +947,7 @@ pub async fn load_gui_bootstrap(
     let objects_dir = resolve_objects_dir(&app)?;
     let actions = build_action_catalog();
     let effective_urls = load_effective_endpoint_urls(&app)?;
-    let sync_state = fetch_synchronizer_state(&effective_urls.synchronizer_api_url);
+    let sync_head = fetch_synchronizer_head(&effective_urls.synchronizer_api_url);
     let mut inner = lock_runtime(&runtime);
     if let Err(err) = ensure_runtime_loaded(&mut inner, &objects_dir) {
         eprintln!("zk-craft: bootstrap runtime failed, resetting state: {err}");
@@ -836,9 +962,8 @@ pub async fn load_gui_bootstrap(
             eprintln!("zk-craft: failed to refresh objects from disk: {err}");
         }
     }
-    match sync_state {
-        Ok(state) => inner.state_root = state.state_root,
-        Err(err) => eprintln!("zk-craft: synchronizer unavailable during bootstrap: {err}"),
+    if let Err(err) = sync_head {
+        eprintln!("zk-craft: synchronizer unavailable during bootstrap: {err}");
     }
 
     Ok(LoadGuiBootstrapResult {
@@ -951,7 +1076,7 @@ pub async fn run_sdk_action(
         stats: Vec<(String, String)>,
     }
 
-    let (input_spendables, verify_targets, resolved_inputs);
+    let (input_spendables, verify_targets, resolved_inputs, source_tx_hashes);
     {
         let mut inner = lock_runtime(&runtime);
         ensure_runtime_loaded(&mut inner, &objects_dir)?;
@@ -1006,32 +1131,41 @@ pub async fn run_sdk_action(
             });
         }
 
-        let mut missing_grounding = Vec::new();
-        for (index, spendable) in collected_spendables.iter().enumerate() {
-            let source_tx_hash = spendable.tx.dict().commitment();
-            if !sync_state.transactions.contains(&source_tx_hash) {
-                let label = collected_targets
-                    .get(index)
-                    .cloned()
-                    .unwrap_or_else(|| format!("input-{index}"));
-                missing_grounding.push(format!(
-                    "{} -> {}",
-                    label,
-                    encode_hash_hex(&source_tx_hash)
-                ));
-            }
-        }
-        if !missing_grounding.is_empty() {
-            return Err(format!(
-                "inputs not yet synchronized; wait and retry: {}",
-                missing_grounding.join(", ")
-            ));
-        }
+        let collected_source_tx_hashes = collected_spendables
+            .iter()
+            .map(|spendable| spendable.tx.dict().commitment())
+            .collect::<Vec<_>>();
 
-        inner.run_in_progress = true;
         input_spendables = collected_spendables;
         verify_targets = collected_targets;
         resolved_inputs = collected_resolved;
+        source_tx_hashes = collected_source_tx_hashes;
+    }
+
+    let grounded_txs = fetch_synchronizer_tx_contains(&sync_api_url, &source_tx_hashes)?;
+    let mut missing_grounding = Vec::new();
+    for (index, tx_hash) in source_tx_hashes.iter().enumerate() {
+        if !grounded_txs.contains(tx_hash) {
+            let label = verify_targets
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| format!("input-{index}"));
+            missing_grounding.push(format!("{} -> {}", label, encode_hash_hex(tx_hash)));
+        }
+    }
+    if !missing_grounding.is_empty() {
+        return Err(format!(
+            "inputs not yet synchronized; wait and retry: {}",
+            missing_grounding.join(", ")
+        ));
+    }
+
+    {
+        let mut inner = lock_runtime(&runtime);
+        if inner.run_in_progress {
+            return Err("another action run is already in progress".to_string());
+        }
+        inner.run_in_progress = true;
     }
 
     let run_id = input.action_id.clone();

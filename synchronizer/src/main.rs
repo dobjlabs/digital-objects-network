@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
 
     let server_task = tokio::spawn(run_api_server(
         Arc::clone(&sync_db),
+        Arc::clone(&state_machine),
         node.config.http_bind,
         shutdown_rx.clone(),
     ));
