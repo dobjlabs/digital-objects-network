@@ -1,0 +1,98 @@
+.settings-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.settings-modal {
+  width: min(620px, calc(100vw - 40px));
+  border: 1px solid var(--col-border);
+  background: var(--panel);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.5);
+}
+
+.settings-modal-header {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+}
+
+.settings-modal-header h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.settings-modal-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.settings-field {
+  display: grid;
+  gap: 5px;
+}
+
+.settings-field span {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.settings-field input {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: #1f1f1f;
+  color: var(--text-bright);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.settings-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-error {
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.settings-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+}
+
+.settings-btn {
+  border: 1px solid var(--border);
+  background: #2a2a2a;
+  color: var(--text);
+  padding: 6px 11px;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.settings-btn.primary {
+  border-color: var(--accent);
+  color: var(--text-bright);
+}
+
+.settings-btn:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  color: var(--text-bright);
+}
+
+.settings-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

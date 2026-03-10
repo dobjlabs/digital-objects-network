@@ -97,6 +97,11 @@ export interface CpuSample {
   totalCpuSecs: number;
 }
 
+export interface AppSettingsPayload {
+  synchronizerApiUrl: string;
+  relayerApiUrl: string;
+}
+
 export function getThingsDir(): Promise<string> {
   return invoke<string>("get_things_dir");
 }
@@ -137,6 +142,22 @@ export function listenObjectsChanged(handler: () => void): Promise<UnlistenFn> {
   });
 }
 
+export function listenOpenSettings(handler: () => void): Promise<UnlistenFn> {
+  return listen("open-settings", () => {
+    handler();
+  });
+}
+
 export function sampleAppCpu(): Promise<CpuSample> {
   return invoke<CpuSample>("sample_app_cpu");
+}
+
+export function getAppSettings(): Promise<AppSettingsPayload> {
+  return invoke<AppSettingsPayload>("get_app_settings");
+}
+
+export function saveAppSettings(
+  input: AppSettingsPayload,
+): Promise<AppSettingsPayload> {
+  return invoke<AppSettingsPayload>("save_app_settings", { input });
 }

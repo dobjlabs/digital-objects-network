@@ -3,8 +3,10 @@ import { ContextPanel } from "./features/context/ContextPanel";
 import { InventoryPanel } from "./features/inventory/InventoryPanel";
 import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { RecipeGrid } from "./features/recipes/RecipeGrid";
+import { SettingsModal } from "./features/settings/SettingsModal";
 import {
   getThingsDir,
+  listenOpenSettings,
   listenObjectsChanged,
   listenRunSdkActionProgress,
   openThingsDir,
@@ -19,9 +21,11 @@ import "./features/inventory/InventoryPanel.css";
 import "./features/context/ContextPanel.css";
 import "./features/proof-runner/ProofRunnerPanel.css";
 import "./features/recipes/RecipeGrid.css";
+import "./features/settings/SettingsModal.css";
 
 function App() {
   const [thingsDirPath, setThingsDirPath] = useState("~/.objects");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const items = useUiStore((state) => state.items);
   const recipes = useUiStore((state) => state.recipes);
   const activeItemId = useUiStore((state) => state.activeItemId);
@@ -165,13 +169,39 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (settingsOpen) return;
       if (event.key === "Escape") {
         clearSelection();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clearSelection]);
+  }, [clearSelection, settingsOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    listenOpenSettings(() => {
+      if (!cancelled) {
+        setSettingsOpen(true);
+      }
+    })
+      .then((dispose) => {
+        if (cancelled) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+      })
+      .catch((error) => {
+        console.error("Failed to subscribe to open-settings:", error);
+      });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   const handleOpenThingsDir = async () => {
     try {
@@ -183,40 +213,47 @@ function App() {
   };
 
   return (
-    <main className="app-shell">
-      <InventoryPanel
-        items={items}
-        thingsDirPath={thingsDirPath}
-        activeItemId={activeItemId}
-        showNullifiedItems={showNullifiedItems}
-        onSelectItem={selectItem}
-        onToggleNullified={toggleNullified}
-        onOpenThingsDir={handleOpenThingsDir}
-      />
-
-      <div className="main-column">
-        <ContextPanel
-          selection={contextSelection}
+    <>
+      <main className="app-shell">
+        <InventoryPanel
           items={items}
-          recipes={recipes}
-          onRunProof={runProof}
-          proofRunning={proofRunning}
-          proofStatus={proofStatus}
-          onClearSelection={clearSelection}
+          thingsDirPath={thingsDirPath}
+          activeItemId={activeItemId}
+          showNullifiedItems={showNullifiedItems}
+          onSelectItem={selectItem}
+          onToggleNullified={toggleNullified}
+          onOpenThingsDir={handleOpenThingsDir}
         />
-        <ProofRunnerPanel />
-      </div>
 
-      <div className="right-column">
-        <RecipeGrid
-          recipes={recipes}
-          activeRecipeId={activeRecipeId}
-          selectedItem={selectedItem}
-          onSelectRecipe={selectRecipe}
-          onClearSelection={clearSelection}
-        />
-      </div>
-    </main>
+        <div className="main-column">
+          <ContextPanel
+            selection={contextSelection}
+            items={items}
+            recipes={recipes}
+            onRunProof={runProof}
+            proofRunning={proofRunning}
+            proofStatus={proofStatus}
+            onClearSelection={clearSelection}
+          />
+          <ProofRunnerPanel />
+        </div>
+
+        <div className="right-column">
+          <RecipeGrid
+            recipes={recipes}
+            activeRecipeId={activeRecipeId}
+            selectedItem={selectedItem}
+            onSelectRecipe={selectRecipe}
+            onClearSelection={clearSelection}
+          />
+        </div>
+      </main>
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
+    </>
   );
 }
 

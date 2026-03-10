@@ -30,6 +30,7 @@ use crate::{
         SourceActionMetaDto,
     },
 };
+use super::settings::load_effective_endpoint_urls;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -137,15 +138,6 @@ fn resolve_objects_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(home.join(".objects"))
 }
 
-fn synchronizer_api_url() -> String {
-    std::env::var("SYNCHRONIZER_API_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string())
-}
-
-fn relayer_api_url() -> String {
-    std::env::var("RELAYER_API_URL").unwrap_or_else(|_| "http://127.0.0.1:3200".to_string())
-}
-
 fn relayer_api_key() -> Result<String, String> {
     let key = std::env::var("RELAYER_API_KEY")
         .map_err(|_| "RELAYER_API_KEY is required to relay proofs".to_string())?;
@@ -193,14 +185,6 @@ fn ensure_non_empty_url(name: &str, value: String) -> Result<String, String> {
         return Err(format!("{name} is empty"));
     }
     Ok(trimmed)
-}
-
-fn normalize_sync_url() -> Result<String, String> {
-    ensure_non_empty_url("SYNCHRONIZER_API_URL", synchronizer_api_url())
-}
-
-fn normalize_relayer_url() -> Result<String, String> {
-    ensure_non_empty_url("RELAYER_API_URL", relayer_api_url())
 }
 
 fn relayer_proofs_endpoint(relayer_api_url: &str) -> String {
@@ -835,7 +819,8 @@ pub async fn load_gui_bootstrap(
 ) -> Result<LoadGuiBootstrapResult, String> {
     let objects_dir = resolve_objects_dir(&app)?;
     let actions = build_action_catalog();
-    let sync_state = fetch_synchronizer_state(&synchronizer_api_url());
+    let effective_urls = load_effective_endpoint_urls(&app)?;
+    let sync_state = fetch_synchronizer_state(&effective_urls.synchronizer_api_url);
     let mut inner = lock_runtime(&runtime);
     if let Err(err) = ensure_runtime_loaded(&mut inner, &objects_dir) {
         eprintln!("zk-craft: bootstrap runtime failed, resetting state: {err}");
@@ -942,12 +927,17 @@ pub async fn run_sdk_action(
         }
     }
 
-    let sync_api_url = normalize_sync_url()?;
+    let effective_urls = load_effective_endpoint_urls(&app)?;
+    let sync_api_url = ensure_non_empty_url(
+        "SYNCHRONIZER_API_URL",
+        effective_urls.synchronizer_api_url,
+    )?;
     let sync_state = fetch_synchronizer_state(&sync_api_url)?;
     let state_root_for_run = sync_state.state_root.clone();
     let old_root_hash = sync_state.current_gsr;
     let old_root = short_hash(&format!("{:#}", old_root_hash));
-    let relayer_url = normalize_relayer_url()?;
+    let relayer_url =
+        ensure_non_empty_url("RELAYER_API_URL", effective_urls.relayer_api_url)?;
     let relayer_key = relayer_api_key()?;
     let relayer_timeout_secs = relayer_poll_timeout_secs();
     let relayer_poll_interval_ms = relayer_poll_interval_millis();
