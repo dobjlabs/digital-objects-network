@@ -12,10 +12,10 @@ use pod2::{
         containers::Dictionary,
     },
 };
-use pod2utils::{dict, macros::BuildContext};
+use pod2utils::{dict, macros::BuildContext, rand_raw_value};
 use serde::Serialize;
 use tinytemplate::TinyTemplate;
-use txlib::{StateRoot, Tx, TxBuilder, rand_raw_value};
+use txlib::{StateRoot, Tx, TxBuilder};
 
 pub mod api {
     use std::fmt;
@@ -27,7 +27,16 @@ pub mod api {
         /// A literal Value embedded in the statement template
         Literal(Value),
         /// Pick up the value from a variable in the predicate context (a wildcard)
-        Var(&'static str),
+        Var(String),
+    }
+
+    impl Arg {
+        pub fn literal(v: impl Into<Value>) -> Self {
+            Self::Literal(v.into())
+        }
+        pub fn var(name: impl Into<String>) -> Self {
+            Self::Var(name.into())
+        }
     }
 
     impl fmt::Display for Arg {
@@ -42,61 +51,131 @@ pub mod api {
     /// Details about the object
     pub enum Detail {
         /// Introduce a variable in the context
-        Var(
-            // name
-            &'static str,
-            // function
-            Box<dyn Fn(&mut super::Context) -> Value>,
-        ),
+        Var {
+            name: String,
+            f: Box<dyn Fn(&mut super::Context) -> Value>,
+        },
         /// Define a condition that the object must fulfill via a predicate and the function that
         /// generates such predicate.
-        Condition(
-            // predicate
-            &'static str,
-            // function
-            Box<dyn Fn(&mut super::Context) -> Statement>,
-        ),
+        Condition {
+            pred: String,
+            f: Box<dyn Fn(&mut super::Context) -> Statement>,
+        },
         /// Update a key of the object
-        Update(
-            // key
-            &'static str,
-            // value
-            Arg,
-        ),
+        Update { key: String, value: Arg },
         /// Set a key of the object (doesn't modify the object)
-        Set(
-            // key
-            &'static str,
-            // value
-            Arg,
-        ),
+        Set { key: String, value: Arg },
     }
 
-    /// Each step involves a different object
-    pub enum Step {
+    #[derive(Default)]
+    pub enum StepKind {
+        #[default]
+        Depends,
+        Input,
+        Mutate,
+        Output,
+    }
+
+    #[derive(Default)]
+    pub struct Step {
+        pub(crate) kind: StepKind,
+        pub(crate) name: String,
+        pub(crate) class: String,
+        pub(crate) action: String,
+        pub(crate) details: Vec<Detail>,
+    }
+
+    impl Step {
         /// The action consumes an object as input
-        Input {
-            name: &'static str,
-            class: &'static str,
-            details: Vec<Detail>,
-        },
+        pub fn input(name: impl Into<String>, class: impl Into<String>) -> Self {
+            Self {
+                kind: StepKind::Input,
+                name: name.into(),
+                class: class.into(),
+                ..Default::default()
+            }
+        }
         /// The action produces an object as output
-        Output {
-            name: &'static str,
-            class: &'static str,
-            details: Vec<Detail>,
-        },
+        pub fn output(name: impl Into<String>, class: impl Into<String>) -> Self {
+            Self {
+                kind: StepKind::Output,
+                name: name.into(),
+                class: class.into(),
+                ..Default::default()
+            }
+        }
         /// The action mutates an object, which is considered both input and output
-        Mutate {
-            name: &'static str,
-            class: &'static str,
-            details: Vec<Detail>,
-        },
+        pub fn mutate(name: impl Into<String>, class: impl Into<String>) -> Self {
+            Self {
+                kind: StepKind::Mutate,
+                name: name.into(),
+                class: class.into(),
+                ..Default::default()
+            }
+        }
         /// The action depends on another action that affects an object
-        Depend {
-            name: &'static str,
-            action: &'static str,
-        },
+        pub fn depends(name: impl Into<String>, action: impl Into<String>) -> Self {
+            Self {
+                kind: StepKind::Depends,
+                name: name.into(),
+                action: action.into(),
+                ..Default::default()
+            }
+        }
+        /// Introduce a variable in the context
+        pub fn var(
+            mut self,
+            name: impl Into<String>,
+            f: Box<dyn Fn(&mut super::Context) -> Value>,
+        ) -> Self {
+            self.details.push(Detail::Var {
+                name: name.into(),
+                f,
+            });
+            self
+        }
+        /// Define a condition that the object must fulfill via a predicate and the function that
+        /// generates such predicate.
+        pub fn condition(
+            mut self,
+            pred: impl Into<String>,
+            f: Box<dyn Fn(&mut super::Context) -> Statement>,
+        ) -> Self {
+            self.details.push(Detail::Condition {
+                pred: pred.into(),
+                f,
+            });
+            self
+        }
+        /// Update a key of the object
+        pub fn update(mut self, key: impl Into<String>, arg: Arg) -> Self {
+            if matches!(self.kind, StepKind::Depends) {
+                panic!("kind doesn't allow \"update\"");
+            }
+            self.details.push(Detail::Update {
+                key: key.into(),
+                value: arg,
+            });
+            self
+        }
+        /// Set a key of the object (doesn't modify the object)
+        pub fn set(mut self, key: impl Into<String>, arg: Arg) -> Self {
+            if matches!(
+                self.kind,
+                StepKind::Input | StepKind::Mutate | StepKind::Depends
+            ) {
+                panic!("kind doesn't allow \"set\"");
+            }
+            self.details.push(Detail::Set {
+                key: key.into(),
+                value: arg,
+            });
+            self
+        }
+        /// Apply a snippet function to the Step
+        pub fn snippet(self, f: impl Fn(Step) -> Self) -> Self {
+            f(self)
+        }
     }
 
     /// An action consumes objects and produces objects via a list of steps
@@ -328,7 +407,7 @@ impl<'a> ObjectBuilder<'a> {
                     input_index += 1;
                 }
                 StepKind::Depends => {
-                    let (_name, action) = (step.name.as_str(), step.class.as_str());
+                    let (_name, action) = (step.name.as_str(), step.action.as_str());
                     let action = self.data.action_by_name(action);
                     let current_vars = mem::take(&mut ctx.vars);
 
@@ -360,32 +439,37 @@ impl<'a> ObjectBuilder<'a> {
             let mut details_set_done = details_set_len == 0;
             for detail in &step.details {
                 match detail {
-                    api::Detail::Set(key, value) => {
+                    api::Detail::Set { key, value } => {
                         let value = ctx.vars.value(value);
                         let obj = ctx.vars.get_dict_mut(&step.name).unwrap();
-                        obj.insert(&Key::from(*key), &value).unwrap();
-                        details_set_kv.push((*key, value));
+                        obj.insert(&Key::from(key.clone()), &value).unwrap();
+                        details_set_kv.push((key.clone(), value));
                     }
-                    api::Detail::Update(key, value) => {
+                    api::Detail::Update { key, value } => {
                         if !details_set_done {
                             panic!("Update before last Set in the Step");
                         }
                         let value = ctx.vars.value(value);
                         let obj = ctx.vars.get_dict_mut(&step.name).unwrap();
                         let obj0 = obj.clone();
-                        obj.update(&Key::from(*key), &value).unwrap();
+                        obj.update(&Key::from(key.clone()), &value).unwrap();
                         sts.push(
                             ctx.bld
                                 .builder
-                                .priv_op(Operation::dict_update(obj.clone(), obj0, *key, value))
+                                .priv_op(Operation::dict_update(
+                                    obj.clone(),
+                                    obj0,
+                                    key.clone(),
+                                    value,
+                                ))
                                 .unwrap(),
                         );
                     }
-                    api::Detail::Var(name, f) => {
+                    api::Detail::Var { name, f } => {
                         let value = f(ctx);
                         ctx.vars.insert(name, value.take_typed());
                     }
-                    api::Detail::Condition(_pred, f) => {
+                    api::Detail::Condition { pred: _, f } => {
                         if !details_set_done {
                             panic!("Condition before last Set in the Step");
                         }
@@ -489,7 +573,7 @@ impl<'a> ObjectBuilder<'a> {
             self._action(&mut ctx, &mut tx_builder, action, &inputs);
 
         // Prove a pod with the class statements and the last tx statement
-        ctx.bld.builder.reveal(&tx_builder.st_tx).unwrap();
+        ctx.bld.builder.reveal(tx_builder.st_tx()).unwrap();
         let pod = prove(ctx.bld.builder, &*self.prover);
         pod.pod.verify().unwrap();
 
@@ -559,7 +643,7 @@ impl<'a> Vars<'a> {
     pub fn value(&self, arg: &api::Arg) -> Value {
         match arg {
             api::Arg::Literal(v) => v.clone(),
-            api::Arg::Var(name) => Value::new(self.vars[*name].clone()),
+            api::Arg::Var(name) => Value::new(self.vars[name.as_str()].clone()),
         }
     }
 }
@@ -630,7 +714,7 @@ impl Action {
             }
             // Details variables
             for detail in &step.details {
-                if let api::Detail::Var(name, ..) = detail {
+                if let api::Detail::Var { name, .. } = detail {
                     vars.push(name.to_string());
                 }
             }
@@ -639,25 +723,13 @@ impl Action {
     }
 }
 
-enum StepKind {
-    Depends,
-    Input,
-    Mutate,
-    Output,
-}
-
-struct Step {
-    kind: StepKind,
-    name: String,
-    class: String,
-    details: Vec<api::Detail>,
-}
+use api::{Step, StepKind};
 
 impl Step {
     fn details_update_len(&self) -> usize {
         self.details
             .iter()
-            .filter(|d| matches!(*d, api::Detail::Update(..)))
+            .filter(|d| matches!(*d, api::Detail::Update { .. }))
             .count()
     }
 }
@@ -707,7 +779,7 @@ struct Data {
 fn details_set_len(details: &[api::Detail]) -> usize {
     details
         .iter()
-        .filter(|d| matches!(d, api::Detail::Set(..)))
+        .filter(|d| matches!(d, api::Detail::Set { .. }))
         .count()
 }
 
@@ -718,50 +790,12 @@ impl Data {
         let mut mutates = Vec::new();
         let mut outputs = Vec::new();
         for api_step in api_action.steps {
-            use api::Step::*;
-            match api_step {
-                Depend { name, action } => depends.push(Step {
-                    kind: StepKind::Depends,
-                    name: name.to_string(),
-                    class: action.to_string(),
-                    details: vec![],
-                }),
-                Input {
-                    name,
-                    class,
-                    details,
-                } => {
-                    assert_eq!(0, details_set_len(&details));
-                    inputs.push(Step {
-                        kind: StepKind::Input,
-                        name: name.to_string(),
-                        class: class.to_string(),
-                        details,
-                    })
-                }
-                Mutate {
-                    name,
-                    class,
-                    details,
-                } => {
-                    assert_eq!(0, details_set_len(&details));
-                    mutates.push(Step {
-                        kind: StepKind::Mutate,
-                        name: name.to_string(),
-                        class: class.to_string(),
-                        details,
-                    })
-                }
-                Output {
-                    name,
-                    class,
-                    details,
-                } => outputs.push(Step {
-                    kind: StepKind::Output,
-                    name: name.to_string(),
-                    class: class.to_string(),
-                    details,
-                }),
+            use api::StepKind::*;
+            match api_step.kind {
+                Depends => depends.push(api_step),
+                Input => inputs.push(api_step),
+                Mutate => mutates.push(api_step),
+                Output => outputs.push(api_step),
             }
         }
 
@@ -902,7 +936,7 @@ impl Data {
             }
             for detail in &step.details {
                 match detail {
-                    api::Detail::Condition(pred, ..) => {
+                    api::Detail::Condition { pred, .. } => {
                         let mut tt = TinyTemplate::new();
                         tt.add_template("pred", pred)?;
                         let ctx = TmplContext {
@@ -910,7 +944,7 @@ impl Data {
                         };
                         writeln!(w, "  {}", tt.render("pred", &ctx)?)?;
                     }
-                    api::Detail::Update(key, value) => {
+                    api::Detail::Update { key, value } => {
                         writeln!(
                             w,
                             r#"  DictUpdate({state_next}, {state}, "{key}", {value})"#,
@@ -918,17 +952,17 @@ impl Data {
                         )?;
                         state.inc();
                     }
-                    api::Detail::Set(key, value) => {
+                    api::Detail::Set { key, value } => {
                         writeln!(w, r#"  DictContains({state}, "{key}", {value})"#,)?;
                     }
-                    api::Detail::Var(..) => {}
+                    api::Detail::Var { .. } => {}
                 }
             }
             match step.kind {
                 StepKind::Depends => writeln!(
                     w,
                     "  {action}({state}, {tx_next}, {tx})",
-                    action = step.class
+                    action = step.action
                 )?,
                 StepKind::Input => writeln!(w, "  tx::TxDeleted({tx_next}, {tx}, {state})")?,
                 StepKind::Mutate => {
@@ -991,32 +1025,299 @@ mod tests {
 
     use std::sync::Arc;
 
-    use pod2::middleware::Value;
-    use pod2utils::set;
+    use hex::FromHex;
+    use lt_eq_u256_pod::LtEqU256Pod;
+    use pod2::{
+        frontend::{MainPod, Operation},
+        middleware::{F, Hash, Key, Pod, RawValue, Statement, Value, containers::Array},
+    };
+    use pod2utils::{rand_raw_value, set};
     use txlib::{StateRoot, Tx};
+    use vdfpod::VdfPod;
 
-    use super::Helper;
-    use crate::scenario::test_sdk;
+    use super::{Context, Helper, api::*};
+
+    const WOOD_POW_DIFFICULTY: u64 = 0x0020_0000_0000_0000;
 
     fn update_state_root(state_root: &mut StateRoot, tx: &Tx) {
         state_root
             .transactions
-            .insert(&Value::from(tx.dict().commitment()))
+            .insert(&Value::from(tx.dict()))
             .unwrap();
         for nullifier in tx.nullifiers.set() {
             state_root.nullifiers.insert(nullifier).unwrap();
         }
+        state_root.block_number += 1;
+    }
+
+    fn main_pod(ctx: &Context, pod: Box<dyn Pod>) -> MainPod {
+        let pub_statements = pod.pub_statements();
+        MainPod {
+            pod,
+            public_statements: pub_statements,
+            params: ctx.params.clone(),
+        }
+    }
+
+    // Returns VdfPod, Vdf statement, work
+    fn vdf(ctx: &mut Context, n_iters: usize, input: RawValue) -> (MainPod, Statement, Value) {
+        let vdf_pod = if ctx.mock {
+            VdfPod::new_boxed_mock(&ctx.params, ctx.vd_set.clone(), n_iters, input)
+        } else {
+            VdfPod::new_boxed(&ctx.params, ctx.vd_set.clone(), n_iters, input)
+        }
+        .unwrap();
+        let st_vdf = vdf_pod.pub_statements()[0].clone();
+        let work = st_vdf.args()[2].literal().unwrap();
+        (main_pod(ctx, vdf_pod), st_vdf, work)
+    }
+
+    // Returns LtEqU256Pod and LtEqU256 statement used to verify PoW.
+    fn lt_eq_u256(ctx: &mut Context, lhs: RawValue, rhs: RawValue) -> (MainPod, Statement) {
+        let lt_eq_u256_pod = if ctx.mock {
+            LtEqU256Pod::new_boxed_mock(&ctx.params, ctx.vd_set.clone(), lhs, rhs)
+        } else {
+            LtEqU256Pod::new_boxed(&ctx.params, ctx.vd_set.clone(), lhs, rhs)
+        }
+        .unwrap();
+        let st_lt_eq_u256 = lt_eq_u256_pod.pub_statements()[0].clone();
+        (main_pod(ctx, lt_eq_u256_pod), st_lt_eq_u256)
     }
 
     #[test]
     fn test_sdk() {
         let _ = env_logger::builder().try_init();
 
-        let helper = Helper::new(test_sdk::dependencies(), test_sdk::actions());
+        let find_log = Action {
+            name: "FindLog",
+            steps: vec![
+                Step::output("log", "Log")
+                    .set("blueprint", Arg::literal("Log"))
+                    .var(
+                        "work",
+                        Box::new(|ctx| {
+                            let log = ctx.vars.get("log");
+                            let log_raw = RawValue::from(log);
+                            let (vdf_pod, st_vdf, work) = vdf(ctx, 3, log_raw);
+                            ctx.store("vdf_pod", Box::new(vdf_pod));
+                            ctx.store("st_vdf", Box::new(st_vdf));
+                            work
+                        }),
+                    )
+                    .condition(
+                        "Vdf(3, {state}, work)",
+                        Box::new(|ctx| {
+                            let vdf_pod: Box<MainPod> = ctx.take("vdf_pod");
+                            let st_vdf: Box<Statement> = ctx.take("st_vdf");
+                            ctx.bld.builder.add_pod(*vdf_pod).unwrap();
+                            *st_vdf
+                        }),
+                    )
+                    .update("work", Arg::var("work")),
+            ],
+        };
+
+        let craft_wood = Action {
+            name: "CraftWood",
+            steps: vec![
+                Step::input("log", "Log"),
+                Step::output("wood", "Wood")
+                    .set("blueprint", Arg::literal("Wood"))
+                    .var(
+                        "key",
+                        Box::new(|ctx| {
+                            let mut wood = ctx.vars.get_dict("wood").unwrap().clone();
+                            let mut key = Value::from(rand_raw_value());
+                            if !ctx.mock {
+                                while RawValue::from(wood.commitment()).0[3].0
+                                    > WOOD_POW_DIFFICULTY
+                                {
+                                    key = Value::from(rand_raw_value());
+
+                                    wood.update(&Key::from("key"), &key).unwrap();
+                                }
+                            }
+                            key
+                        }),
+                    )
+                    .update("key", Arg::var("key"))
+                    .condition(
+                        "LtEqU256({state}, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))",
+                        Box::new(|ctx| {
+                            let wood = ctx.vars.get("wood");
+                            let wood_raw = RawValue::from(wood);
+                            let (lt_eq_u256_pod, st_lt_eq_u256) = lt_eq_u256(
+                                ctx,
+                                wood_raw,
+                                RawValue([F(0), F(0), F(0), F(WOOD_POW_DIFFICULTY)]),
+                            );
+                            ctx.bld.builder.add_pod(lt_eq_u256_pod).unwrap();
+                            st_lt_eq_u256
+                        }),
+                    )
+                ]
+        };
+
+        let craft_sticks = Action {
+            name: "CraftSticks",
+            steps: vec![
+                Step::input("wood", "Wood"),
+                Step::output("stick_a", "Stick").set("blueprint", Arg::literal("Stick")),
+                Step::output("stick_b", "Stick").set("blueprint", Arg::literal("Stick")),
+            ],
+        };
+
+        let craft_wood_pick = Action {
+            name: "CraftWoodPick",
+            steps: vec![
+                Step::input("wood", "Wood"),
+                Step::input("stick", "Stick"),
+                Step::output("wood_pick", "WoodPick")
+                    .set("blueprint", Arg::literal("WoodPick"))
+                    .set("durability", Arg::literal(100i64)),
+            ],
+        };
+
+        let craft_stone_pick = Action {
+            name: "CraftStonePick",
+            steps: vec![
+                Step::input("stone", "Stone"),
+                Step::input("stick", "Stick"),
+                Step::output("stone_pick", "StonePick")
+                    .set("blueprint", Arg::literal("StonePick"))
+                    .set("durability", Arg::literal(200i64)),
+            ],
+        };
+
+        fn use_pick_details(step: Step, name: &'static str, vdf_iters: usize) -> Step {
+            step.condition(
+                "Gt({state}.durability, 0)",
+                Box::new(|ctx| {
+                    let obj = ctx.vars.get_dict(name).unwrap();
+                    ctx.bld
+                        .builder
+                        .priv_op(Operation::gt((obj, "durability"), 0))
+                        .unwrap()
+                }),
+            )
+            .var(
+                "durability",
+                Box::new(|ctx| {
+                    let obj = ctx.vars.get_dict(name).unwrap();
+                    let mut durability =
+                        i64::try_from(obj.get(&Key::from("durability")).unwrap().typed()).unwrap();
+                    durability -= 1;
+                    ctx.store("durability", Box::new(durability));
+                    Value::from(durability)
+                }),
+            )
+            .condition(
+                "SumOf({state}.durability, durability, 1)",
+                Box::new(|ctx| {
+                    let durability: Box<i64> = ctx.take("durability");
+                    let obj = ctx.vars.get_dict(name).unwrap();
+                    ctx.bld
+                        .builder
+                        .priv_op(Operation::sum_of((obj, "durability"), *durability, 1))
+                        .unwrap()
+                }),
+            )
+            .update("durability", Arg::var("durability"))
+            .var("key", Box::new(|_ctx| Value::from(rand_raw_value())))
+            .update("key", Arg::var("key"))
+            .var(
+                "work",
+                Box::new(move |ctx| {
+                    let obj = ctx.vars.get(name);
+                    let obj_raw = RawValue::from(obj);
+                    let (vdf_pod, st_vdf, work) = vdf(ctx, vdf_iters, obj_raw);
+                    ctx.store("vdf_pod", Box::new(vdf_pod));
+                    ctx.store("st_vdf", Box::new(st_vdf));
+                    work
+                }),
+            )
+            .condition(
+                format!("Vdf({vdf_iters}, {{state}}, work)").leak(),
+                Box::new(|ctx| {
+                    let vdf_pod: Box<MainPod> = ctx.take("vdf_pod");
+                    let st_vdf: Box<Statement> = ctx.take("st_vdf");
+                    ctx.bld.builder.add_pod(*vdf_pod).unwrap();
+                    *st_vdf
+                }),
+            )
+            .update("work", Arg::var("work"))
+        }
+
+        let use_wood_pick = Action {
+            name: "UseWoodPick",
+            steps: vec![
+                Step::mutate("wood_pick", "WoodPick")
+                    .snippet(|step| use_pick_details(step, "wood_pick", 10)),
+            ],
+        };
+
+        let mine_stone_with_wood_pick = Action {
+            name: "MineStoneWithWoodPick",
+            steps: vec![
+                Step::depends("pick", "UseWoodPick"),
+                Step::output("stone", "Stone").set("blueprint", Arg::literal("Stone")),
+            ],
+        };
+
+        let use_stone_pick = Action {
+            name: "UseStonePick",
+            steps: vec![
+                Step::mutate("stone_pick", "StonePick")
+                    .snippet(|step| use_pick_details(step, "stone_pick", 5)),
+            ],
+        };
+
+        let mine_stone_with_stone_pick = Action {
+            name: "MineStoneWithStonePick",
+            steps: vec![
+                Step::depends("pick", "UseStonePick"),
+                Step::output("stone", "Stone").set("blueprint", Arg::literal("Stone")),
+            ],
+        };
+
+        let dependencies = vec![
+            Dependency::Intro {
+                pred: "Vdf(count, input, output)",
+                hash: Hash::from_hex(
+                    "b77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06",
+                )
+                .unwrap(),
+            },
+            Dependency::Intro {
+                pred: "LtEqU256(lhs, rhs)",
+                hash: Hash::from_hex(
+                    "2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529",
+                )
+                .unwrap(),
+            },
+        ];
+
+        let helper = Helper::new(
+            dependencies,
+            vec![
+                find_log,
+                craft_wood,
+                craft_sticks,
+                craft_wood_pick,
+                craft_stone_pick,
+                use_wood_pick,
+                mine_stone_with_wood_pick,
+                use_stone_pick,
+                mine_stone_with_stone_pick,
+            ],
+        );
+        println!("{}", helper.podlang_src);
 
         let mut state_root = StateRoot {
             transactions: set!(),
             nullifiers: set!(),
+            block_number: 0,
+            gsrs: Array::new(vec![]),
         };
 
         let mock = true;

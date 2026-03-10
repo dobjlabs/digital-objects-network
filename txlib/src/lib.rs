@@ -1,24 +1,23 @@
 // pub mod examples;
 pub mod predicates;
 use std::{
-    array,
     collections::{HashMap, HashSet},
     sync::Arc,
 };
 
-use plonky2::field::types::Field;
 use pod2::middleware::{
-    EMPTY_VALUE, F, Hash, Key, RawValue, Statement, Value,
-    containers::{Dictionary, Set},
+    EMPTY_VALUE, Hash, Key, Statement, Value,
+    containers::{Array, Dictionary, Set},
     hash_values,
 };
-use pod2utils::{dict, dict_define, macros::BuildContext, set, st_custom};
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use pod2utils::{dict, dict_define, macros::BuildContext, rand_raw_value, set, st_custom};
 
 #[derive(Clone, Debug)]
 pub struct StateRoot {
+    pub block_number: i64,
     pub transactions: Set,
     pub nullifiers: Set,
+    pub gsrs: Array,
 }
 
 impl StateRoot {
@@ -33,15 +32,25 @@ impl StateRoot {
         prior_gsrs: &[Hash],
     ) -> Self {
         Self {
+            block_number,
             transactions: Set::new(txns.iter().map(|h| Value::from(*h)).collect()),
             nullifiers: Set::new(nullifiers.iter().map(|h| Value::from(*h)).collect()),
+            gsrs: Array::new(prior_gsrs.iter().map(|h| Value::from(*h)).collect()),
         }
     }
 
     pub fn hash(&self) -> Hash {
+        let txn_nullifiers_hash = hash_values(&[
+            Value::from(self.transactions.clone()),
+            Value::from(self.nullifiers.clone()),
+        ]);
+        let block_number_gsrs_hash = hash_values(&[
+            Value::from(self.block_number),
+            Value::from(self.gsrs.clone()),
+        ]);
         hash_values(&[
-            Value::from(self.transactions.commitment()),
-            Value::from(self.nullifiers.commitment()),
+            Value::from(txn_nullifiers_hash),
+            Value::from(block_number_gsrs_hash),
         ])
     }
 }
@@ -63,57 +72,17 @@ impl Tx {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Object {
-    pub key: RawValue,
-    pub work: RawValue,
-    pub app_layer: HashMap<String, Value>,
-}
-
-pub fn rand_raw_value() -> RawValue {
-    let mut rng = StdRng::from_os_rng();
-    RawValue(array::from_fn(|_| F::from_noncanonical_u64(rng.next_u64())))
-}
-
-impl Object {
-    pub fn new(app_layer: HashMap<String, Value>) -> Self {
-        Self {
-            key: rand_raw_value(),
-            work: EMPTY_VALUE,
-            app_layer,
-        }
-    }
-    pub fn dict(&self) -> Dictionary {
-        let mut map = HashMap::new();
-        map.insert(Key::from("key"), Value::from(self.key));
-        map.insert(Key::from("work"), Value::from(self.work));
-        for (key, value) in &self.app_layer {
-            map.insert(Key::from(key), value.clone());
-        }
-        Dictionary::new(map)
-    }
-}
-
 pub fn rekey(obj: &mut Dictionary) {
     obj.update(&Key::from("key"), &Value::from(rand_raw_value()))
         .unwrap();
 }
 
 pub struct TxBuilder {
-    pub st_tx: Statement,
+    st_tx: Statement,
     pub tx: Tx,
 }
 
 impl TxBuilder {
-    pub fn new_from_tx(ctx: &BuildContext, tx: Tx) -> Self {
-        let tx_pred = ctx
-            .modules
-            .iter()
-            .find_map(|module| module.predicate_ref_by_name("Tx"))
-            .unwrap();
-        let st_tx = Statement::Custom(tx_pred, vec![Value::from(tx.dict())]);
-        Self { st_tx, tx }
-    }
     pub fn new(
         ctx: &mut BuildContext,
         inputs: &[(Dictionary, Tx)],
@@ -154,6 +123,20 @@ impl TxBuilder {
         Self { st_tx, tx }
     }
 
+    pub fn new_from_tx(ctx: &BuildContext, tx: Tx) -> Self {
+        let tx_pred = ctx
+            .modules
+            .iter()
+            .find_map(|module| module.predicate_ref_by_name("Tx"))
+            .unwrap();
+        let st_tx = Statement::Custom(tx_pred, vec![Value::from(tx.dict())]);
+        Self { st_tx, tx }
+    }
+
+    pub fn st_tx(&self) -> &Statement {
+        &self.st_tx
+    }
+
     fn st_inputs_grounded(
         ctx: &mut BuildContext,
         inputs: &[(Dictionary, Tx)],
@@ -162,6 +145,14 @@ impl TxBuilder {
         let state_root_hash = state_root.hash();
         let transactions = state_root.transactions.clone();
         let nullifiers = state_root.nullifiers.clone();
+        let gsrs = state_root.gsrs.clone();
+        let block_number = state_root.block_number;
+        let txn_nullifiers_hash = hash_values(&[
+            Value::from(transactions.clone()),
+            Value::from(nullifiers.clone()),
+        ]);
+        let block_number_gsrs_hash =
+            hash_values(&[Value::from(block_number), Value::from(gsrs.clone())]);
         let mut st = st_custom!(
             ctx,
             InputsGrounded(state_root_hash = state_root_hash) =
@@ -172,13 +163,25 @@ impl TxBuilder {
         for (obj, source_tx) in inputs {
             let mut inputs_set = prev_inputs_set.clone();
             inputs_set.insert(&Value::from(obj.clone())).unwrap();
-            let source_tx_dict = source_tx.dict();
+            let st_state_root = st_custom!(
+                ctx,
+                StateRoot() = (
+                    HashOf(txn_nullifiers_hash, transactions, nullifiers),
+                    HashOf(block_number_gsrs_hash, block_number, gsrs),
+                    HashOf(state_root_hash, txn_nullifiers_hash, block_number_gsrs_hash)
+                )
+            )
+            .unwrap();
+            let st_tx_in_state_root = st_custom!(
+                ctx,
+                TxInStateRoot() = (st_state_root, SetContains(transactions, source_tx.dict()))
+            )
+            .unwrap();
             let st_rec = st_custom!(
                 ctx,
                 InputsGroundedRecursive() = (
-                    HashOf(state_root_hash, transactions, nullifiers),
-                    SetContains(transactions, source_tx_dict),
-                    SetContains((&source_tx_dict, "live"), obj),
+                    st_tx_in_state_root,
+                    SetContains((&source_tx.dict(), "live"), obj),
                     SetInsert(inputs_set, prev_inputs_set, obj),
                     st
                 )
@@ -320,6 +323,13 @@ impl TxBuilder {
     }
 }
 
+pub fn new_obj() -> Dictionary {
+    let mut map = HashMap::new();
+    map.insert(Key::from("key"), Value::from(rand_raw_value()));
+    map.insert(Key::from("work"), Value::from(EMPTY_VALUE));
+    Dictionary::new(map)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -345,8 +355,10 @@ mod tests {
         let modules = vec![Arc::new(txlib_mod)];
 
         let mut state_root = StateRoot {
+            block_number: 0,
             transactions: set!(),
             nullifiers: set!(),
+            gsrs: Array::new(vec![]),
         };
 
         let mock = true;
@@ -369,7 +381,7 @@ mod tests {
         };
 
         let mut tx_builder = TxBuilder::new(&mut ctx, &[], Arc::new(state_root.clone()));
-        let obj0 = Object::new(HashMap::new()).dict();
+        let obj0 = new_obj();
         tx_builder.insert(&mut ctx, obj0.clone());
         let (st, tx0) = tx_builder.finalize(&mut ctx);
         ctx.builder.reveal(&st).unwrap();
@@ -379,10 +391,10 @@ mod tests {
 
         state_root
             .transactions
-            .insert(&Value::from(tx0.dict().commitment()))
+            .insert(&Value::from(tx0.dict()))
             .unwrap();
         for nullifier in tx0.nullifiers.set() {
-            state_root.nullifiers.insert(nullifier).unwrap();
+            state_root.transactions.insert(nullifier).unwrap();
         }
 
         // Mutate
@@ -405,15 +417,18 @@ mod tests {
 
         state_root
             .transactions
-            .insert(&Value::from(tx1.dict().commitment()))
+            .insert(&Value::from(tx1.dict()))
             .unwrap();
         for nullifier in tx1.nullifiers.set() {
-            state_root.nullifiers.insert(nullifier).unwrap();
+            state_root.transactions.insert(nullifier).unwrap();
         }
 
         // Delete
         let builder = MultiPodBuilder::new(&params, vd_set);
-        let mut ctx = BuildContext { builder, modules };
+        let mut ctx = BuildContext {
+            builder,
+            modules: modules.clone(),
+        };
 
         let inputs = vec![(obj1.clone(), tx1)];
         let mut tx_builder = TxBuilder::new(&mut ctx, &inputs, Arc::new(state_root.clone()));
@@ -426,10 +441,10 @@ mod tests {
 
         state_root
             .transactions
-            .insert(&Value::from(tx2.dict().commitment()))
+            .insert(&Value::from(tx2.dict()))
             .unwrap();
         for nullifier in tx2.nullifiers.set() {
-            state_root.nullifiers.insert(nullifier).unwrap();
+            state_root.transactions.insert(nullifier).unwrap();
         }
     }
 }

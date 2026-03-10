@@ -13,4 +13,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
 
-pod2utils = { path = "../pod2utils" }
+pod2utils = { path = "../../pod2utils" }

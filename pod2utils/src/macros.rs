@@ -187,6 +187,12 @@ macro_rules! op {
     (SetDelete($set:expr, $old_set:expr, $value:expr)) => {
         pod2::frontend::Operation::set_delete($set.clone(), $old_set.clone(), $value.clone())
     };
+    (GtEq($a:expr, $b:expr)) => {
+        pod2::frontend::Operation::gt_eq($a.clone(), $b.clone())
+    };
+    (ArrayContains($array:expr, $idx:expr, $value:expr)) => {
+        pod2::frontend::Operation::array_contains($array.clone(), $idx.clone(), $value.clone())
+    };
 }
 
 /// Argument types:
@@ -306,6 +312,12 @@ pub struct BuildContext {
 }
 
 impl BuildContext {
+    pub fn new(builder: MultiPodBuilder, modules: Vec<Arc<Module>>) -> Self {
+        Self { builder, modules }
+    }
+}
+
+impl BuildContext {
     pub fn apply_custom_pred(
         &mut self,
         public: bool,
@@ -331,19 +343,13 @@ impl BuildContext {
     }
 }
 
-impl BuildContext {
-    pub fn new(builder: MultiPodBuilder, modules: Vec<Arc<Module>>) -> Self {
-        Self { builder, modules }
-    }
-}
-
 /// Argument types:
 /// Same as `st_custom!`
 #[macro_export]
 #[rustfmt::skip]
 macro_rules! pub_st_custom {
     ($ctx:expr, $pred:ident($($wc_name:ident=$wc_value:expr),*) = ($($sts:tt)*)) => {{
-        $crate::_st_custom!($ctx.builder, $ctx.modules, true, $pred($($wc_name=$wc_value),*) = ($($sts)*))
+        $crate::_st_custom!(&mut $ctx.builder, &$ctx.modules, true, $pred($($wc_name=$wc_value),*) = ($($sts)*))
     }};
 }
 

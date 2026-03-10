@@ -6,21 +6,23 @@ use tokio::task::JoinError;
 use tracing::{debug, error, info};
 
 mod api;
+mod app_db;
 mod blob;
 mod clients;
 mod config;
-mod db;
 mod node;
 mod proof;
 mod state_machine;
+mod sync_db;
 mod sync_loop;
 
 use api::run_api_server;
+use app_db::AppDb;
 use config::load_config;
-use db::Db;
 use node::Node;
 use proof::ProofParser;
 use state_machine::StateMachine;
+use sync_db::SyncDb;
 use sync_loop::run_sync_loop;
 
 #[tokio::main]
@@ -31,13 +33,15 @@ async fn main() -> Result<()> {
     let cfg = load_config()?;
     debug!(?cfg, "Loaded synchronizer config");
 
-    let db = Db::connect(&cfg.db_path)?;
-    let state_machine = Arc::new(StateMachine::new(db, Arc::new(ProofParser::new()?))?);
-    let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine)).await?);
+    let app_db = AppDb::connect(&cfg.app_state_db)?;
+    let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db).await?);
+    let state_machine = Arc::new(StateMachine::new(app_db, Arc::new(ProofParser::new()?))?);
+    let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine), Arc::clone(&sync_db)).await?);
+    node.recover_pending().await?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let server_task = tokio::spawn(run_api_server(
-        Arc::clone(&state_machine),
+        Arc::clone(&sync_db),
         node.config.http_bind,
         shutdown_rx.clone(),
     ));
