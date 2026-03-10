@@ -1,0 +1,7 @@
+procs:
+  synchronizer:
+    shell: RUST_LOG=info cargo run -p synchronizer --release
+  relayer:
+    shell: RUST_LOG=info cargo run -p relayer --release
+  gui:
+    shell: "cd app-gui && pnpm tauri dev --release"

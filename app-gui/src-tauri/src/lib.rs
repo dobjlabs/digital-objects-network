@@ -7,6 +7,9 @@ use state::{CpuMonitor, CraftRuntime};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(err) = common::load_dotenv() {
+        eprintln!("zk-craft: failed to load app-gui env: {err}");
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(CpuMonitor::new())
