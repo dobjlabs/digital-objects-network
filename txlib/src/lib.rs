@@ -172,12 +172,13 @@ impl TxBuilder {
         for (obj, source_tx) in inputs {
             let mut inputs_set = prev_inputs_set.clone();
             inputs_set.insert(&Value::from(obj.clone())).unwrap();
+            let source_tx_dict = source_tx.dict();
             let st_rec = st_custom!(
                 ctx,
                 InputsGroundedRecursive() = (
                     HashOf(state_root_hash, transactions, nullifiers),
-                    SetContains(transactions, source_tx.dict()),
-                    SetContains((&source_tx.dict(), "live"), obj),
+                    SetContains(transactions, source_tx_dict),
+                    SetContains((&source_tx_dict, "live"), obj),
                     SetInsert(inputs_set, prev_inputs_set, obj),
                     st
                 )
@@ -378,10 +379,10 @@ mod tests {
 
         state_root
             .transactions
-            .insert(&Value::from(tx0.dict()))
+            .insert(&Value::from(tx0.dict().commitment()))
             .unwrap();
         for nullifier in tx0.nullifiers.set() {
-            state_root.transactions.insert(nullifier).unwrap();
+            state_root.nullifiers.insert(nullifier).unwrap();
         }
 
         // Mutate
@@ -404,10 +405,10 @@ mod tests {
 
         state_root
             .transactions
-            .insert(&Value::from(tx1.dict()))
+            .insert(&Value::from(tx1.dict().commitment()))
             .unwrap();
         for nullifier in tx1.nullifiers.set() {
-            state_root.transactions.insert(nullifier).unwrap();
+            state_root.nullifiers.insert(nullifier).unwrap();
         }
 
         // Delete
@@ -425,10 +426,10 @@ mod tests {
 
         state_root
             .transactions
-            .insert(&Value::from(tx2.dict()))
+            .insert(&Value::from(tx2.dict().commitment()))
             .unwrap();
         for nullifier in tx2.nullifiers.set() {
-            state_root.transactions.insert(nullifier).unwrap();
+            state_root.nullifiers.insert(nullifier).unwrap();
         }
     }
 }

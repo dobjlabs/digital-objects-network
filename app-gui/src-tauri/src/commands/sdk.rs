@@ -73,6 +73,7 @@ struct SynchronizerStateResponse {
 struct SynchronizerState {
     state_root: StateRoot,
     current_gsr: Hash,
+    transactions: HashSet<Hash>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -168,6 +169,22 @@ fn relayer_poll_interval_millis() -> u64 {
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|value| *value >= 250)
         .unwrap_or(1500)
+}
+
+fn synchronizer_poll_timeout_secs() -> u64 {
+    std::env::var("ZKCRAFT_SYNCHRONIZER_POLL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(120)
+}
+
+fn synchronizer_poll_interval_millis() -> u64 {
+    std::env::var("ZKCRAFT_SYNCHRONIZER_POLL_INTERVAL_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|value| *value >= 250)
+        .unwrap_or(1200)
 }
 
 fn ensure_non_empty_url(name: &str, value: String) -> Result<String, String> {
@@ -360,7 +377,33 @@ fn fetch_synchronizer_state(sync_api_url: &str) -> Result<SynchronizerState, Str
     Ok(SynchronizerState {
         state_root,
         current_gsr,
+        transactions,
     })
+}
+
+fn wait_for_synchronizer_tx(
+    sync_api_url: &str,
+    tx_final: Hash,
+    timeout_secs: u64,
+    poll_interval_ms: u64,
+) -> Result<SynchronizerState, String> {
+    let timeout = Duration::from_secs(timeout_secs);
+    let poll_interval = Duration::from_millis(poll_interval_ms);
+    let start = Instant::now();
+    loop {
+        let state = fetch_synchronizer_state(sync_api_url)?;
+        if state.transactions.contains(&tx_final) {
+            return Ok(state);
+        }
+        if start.elapsed() >= timeout {
+            return Err(format!(
+                "synchronizer did not index relayed tx {} within {}s",
+                encode_hash_hex(&tx_final),
+                timeout_secs
+            ));
+        }
+        std::thread::sleep(poll_interval);
+    }
 }
 
 fn empty_state_root() -> StateRoot {
@@ -806,6 +849,8 @@ pub async fn run_sdk_action(
     let relayer_key = relayer_api_key()?;
     let relayer_timeout_secs = relayer_poll_timeout_secs();
     let relayer_poll_interval_ms = relayer_poll_interval_millis();
+    let sync_wait_timeout_secs = synchronizer_poll_timeout_secs();
+    let sync_wait_interval_ms = synchronizer_poll_interval_millis();
 
     let (input_spendables, verify_targets);
     {
@@ -844,6 +889,28 @@ pub async fn run_sdk_action(
                 .ok_or_else(|| format!("input object missing spendable witness: {object_id}"))?;
             collected_spendables.push(clone_spendable(spendable));
             collected_targets.push(record.file_name.clone());
+        }
+
+        let mut missing_grounding = Vec::new();
+        for (index, spendable) in collected_spendables.iter().enumerate() {
+            let source_tx_hash = spendable.tx.dict().commitment();
+            if !sync_state.transactions.contains(&source_tx_hash) {
+                let label = collected_targets
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| format!("input-{index}"));
+                missing_grounding.push(format!(
+                    "{} -> {}",
+                    label,
+                    encode_hash_hex(&source_tx_hash)
+                ));
+            }
+        }
+        if !missing_grounding.is_empty() {
+            return Err(format!(
+                "inputs not yet synchronized; wait and retry: {}",
+                missing_grounding.join(", ")
+            ));
         }
 
         inner.run_in_progress = true;
@@ -1025,6 +1092,7 @@ pub async fn run_sdk_action(
             return Err(err);
         }
     };
+    let expected_tx_final = spendable_outputs.tx.dict().commitment();
 
     emit_progress(
         &app,
@@ -1118,12 +1186,17 @@ pub async fn run_sdk_action(
         .clone()
         .unwrap_or_else(|| format!("job {}", relay_status.job_id));
 
-    let sync_state_after = match fetch_synchronizer_state(&sync_api_url) {
+    let sync_state_after = match wait_for_synchronizer_tx(
+        &sync_api_url,
+        expected_tx_final,
+        sync_wait_timeout_secs,
+        sync_wait_interval_ms,
+    ) {
         Ok(state) => state,
         Err(err) => {
             clear_run_in_progress(&runtime);
             return Err(format!(
-                "failed to refresh state root from synchronizer after relay confirmation: {err}"
+                "failed to observe relayed tx in synchronizer after relay confirmation: {err}"
             ));
         }
     };

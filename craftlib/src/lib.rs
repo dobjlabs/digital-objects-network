@@ -532,10 +532,10 @@ mod tests {
     fn update_state_root(state_root: &mut StateRoot, tx: &Tx) {
         state_root
             .transactions
-            .insert(&Value::from(tx.dict()))
+            .insert(&Value::from(tx.dict().commitment()))
             .unwrap();
         for nullifier in tx.nullifiers.set() {
-            state_root.transactions.insert(nullifier).unwrap();
+            state_root.nullifiers.insert(nullifier).unwrap();
         }
     }
 
