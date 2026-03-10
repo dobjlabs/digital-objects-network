@@ -228,7 +228,7 @@ impl TxBuilder {
 
     fn st_tx_obj_nullified(&mut self, ctx: &mut BuildContext, obj: &Dictionary) -> Statement {
         let key = obj.get(&Key::from("key")).unwrap().clone();
-        let obj_key_hash = hash_values(&[Value::from(obj.commitment()), Value::from(key)]);
+        let obj_key_hash = hash_values(&[Value::from(obj.commitment()), key]);
         let obj_nullifier =
             hash_values(&[Value::from(obj_key_hash), Value::from("txlib-nullifier-v1")]);
         let tx_before = self.tx.dict();
@@ -337,7 +337,7 @@ mod tests {
             basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver,
         },
         frontend::{MainPod, MultiPodBuilder},
-        middleware::{MainPodProver, Params, VDSet},
+        middleware::{MainPodProver, Params, VDSet, EMPTY_VALUE},
     };
     use pod2utils::{macros::BuildContext, set};
 
@@ -380,10 +380,10 @@ mod tests {
         let params = Params::default();
 
         // Insert
-        let mut builder = MultiPodBuilder::new(&params, vd_set);
+        let builder = MultiPodBuilder::new(&params, vd_set);
         let mut ctx = BuildContext {
-            builder: &mut builder,
-            modules: &modules,
+            builder,
+            modules: modules.clone(),
         };
 
         let mut tx_builder = TxBuilder::new(&mut ctx, &[], Arc::new(state_root.clone()));
@@ -392,7 +392,7 @@ mod tests {
         let (st, tx0) = tx_builder.finalize(&mut ctx);
         ctx.builder.reveal(&st).unwrap();
 
-        let tx_pod = prove(builder, prover);
+        let tx_pod = prove(ctx.builder, prover);
         tx_pod.pod.verify().unwrap();
 
         state_root
@@ -404,10 +404,10 @@ mod tests {
         }
 
         // Mutate
-        let mut builder = MultiPodBuilder::new(&params, vd_set);
+        let builder = MultiPodBuilder::new(&params, vd_set);
         let mut ctx = BuildContext {
-            builder: &mut builder,
-            modules: &modules,
+            builder,
+            modules: modules.clone(),
         };
 
         let inputs = vec![(obj0.clone(), tx0)];
@@ -418,7 +418,7 @@ mod tests {
         let (st, tx1) = tx_builder.finalize(&mut ctx);
         ctx.builder.reveal(&st).unwrap();
 
-        let tx_pod = prove(builder, prover);
+        let tx_pod = prove(ctx.builder, prover);
         tx_pod.pod.verify().unwrap();
 
         state_root
@@ -430,10 +430,10 @@ mod tests {
         }
 
         // Delete
-        let mut builder = MultiPodBuilder::new(&params, vd_set);
+        let builder = MultiPodBuilder::new(&params, vd_set);
         let mut ctx = BuildContext {
-            builder: &mut builder,
-            modules: &modules,
+            builder,
+            modules: modules.clone(),
         };
 
         let inputs = vec![(obj1.clone(), tx1)];
@@ -442,7 +442,7 @@ mod tests {
         let (st, tx2) = tx_builder.finalize(&mut ctx);
         ctx.builder.reveal(&st).unwrap();
 
-        let tx_pod = prove(builder, prover);
+        let tx_pod = prove(ctx.builder, prover);
         tx_pod.pod.verify().unwrap();
 
         state_root
