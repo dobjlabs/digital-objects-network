@@ -7,6 +7,7 @@ export function ProofRunnerPanel() {
   const selectRecipe = useUiStore((state) => state.selectRecipe);
   const prevStatusRef = useRef(proof.status);
   const [idleFadeIn, setIdleFadeIn] = useState(false);
+  const [showCpuDuringRun, setShowCpuDuringRun] = useState(false);
 
   useLayoutEffect(() => {
     const prev = prevStatusRef.current;
@@ -19,6 +20,17 @@ export function ProofRunnerPanel() {
     prevStatusRef.current = proof.status;
     return undefined;
   }, [proof.status]);
+
+  const runActive =
+    proof.status === "generating" ||
+    proof.status === "committing" ||
+    proof.status === "summary";
+
+  useLayoutEffect(() => {
+    if (!runActive) {
+      setShowCpuDuringRun(false);
+    }
+  }, [runActive, proof.runActionId]);
 
   const liveRoots = proof.stats.roots.filter((root) => root.state === "live");
   const nullifiedRoots = proof.stats.roots.filter(
@@ -62,6 +74,36 @@ export function ProofRunnerPanel() {
     if (!proof.runActionId) return;
     selectRecipe(proof.runActionId);
   };
+
+  const toggleProofPanelView = () => {
+    setShowCpuDuringRun((current) => !current);
+  };
+
+  const controlsRow = (
+    <div className="proof-jump-row proof-controls-row">
+      <button
+        type="button"
+        className="proof-jump-btn"
+        onClick={toggleProofPanelView}
+        title={showCpuDuringRun ? "Show proof action details" : "Show CPU chart"}
+      >
+        {showCpuDuringRun ? "Show Proof Action" : "Show CPU Chart"}
+      </button>
+      {canReturnToAction && (
+        <button
+          type="button"
+          className="proof-jump-btn"
+          onClick={returnToRunningAction}
+          disabled={alreadyViewingRunningAction}
+          title={
+            proof.methodName ? `Open ${proof.methodName}` : "Open running action"
+          }
+        >
+          {alreadyViewingRunningAction ? "Viewing Action" : "Return to Action"}
+        </button>
+      )}
+    </div>
+  );
 
   if (proof.status === "idle") {
     return (
@@ -117,6 +159,50 @@ export function ProofRunnerPanel() {
     );
   }
 
+  if (runActive && showCpuDuringRun) {
+    return (
+      <section className="cpu-panel proof-panel proof-panel-idle">
+        {controlsRow}
+        <div className="idle-section idle-cpu">
+          <div className="proof-title cpu-title">CPU Usage</div>
+          <div className="dash-cpu-bars">
+            {proof.stats.cpuHistory.map((value, index) => (
+              <div
+                key={`${index}-${value}`}
+                className="dash-cpu-bar"
+                style={{
+                  height: `${Math.max(4, Math.min(100, Math.round(value)))}%`,
+                }}
+              />
+            ))}
+          </div>
+          <div className="proof-line cpu-total">
+            Total:{" "}
+            <span className="proof-muted">
+              {formatCpuDuration(proof.stats.totalCpuSecs)}
+            </span>
+          </div>
+        </div>
+        <div className="idle-section idle-roots">
+          <div className="root-row">
+            <span className="root-row-left">
+              <span className="root-dot live" />
+              <span className="root-label">Global Valid State Roots</span>
+            </span>
+            <span className="root-hash">{aggregateHash(liveRoots)}</span>
+          </div>
+          <div className="root-row">
+            <span className="root-row-left">
+              <span className="root-dot nullified" />
+              <span className="root-label">Global Nullified State Roots</span>
+            </span>
+            <span className="root-hash">{aggregateHash(nullifiedRoots)}</span>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   if (proof.status === "generating" || proof.status === "committing") {
     const stage1Done = proof.status === "committing";
     const stage2Active = proof.status === "committing";
@@ -132,25 +218,7 @@ export function ProofRunnerPanel() {
 
     return (
       <section className="cpu-panel proof-panel proof-run-card">
-        {canReturnToAction && (
-          <div className="proof-jump-row">
-            <button
-              type="button"
-              className="proof-jump-btn"
-              onClick={returnToRunningAction}
-              disabled={alreadyViewingRunningAction}
-              title={
-                proof.methodName
-                  ? `Open ${proof.methodName}`
-                  : "Open running action"
-              }
-            >
-              {alreadyViewingRunningAction
-                ? "Viewing Action"
-                : "Return to Action"}
-            </button>
-          </div>
-        )}
+        {controlsRow}
         <div className="stage-header">
           <span className={`stage-num ${stage1Done ? "done" : "active"}`}>
             1
@@ -232,25 +300,7 @@ export function ProofRunnerPanel() {
 
     return (
       <section className="cpu-panel proof-panel proof-summary-card">
-        {canReturnToAction && (
-          <div className="proof-jump-row">
-            <button
-              type="button"
-              className="proof-jump-btn"
-              onClick={returnToRunningAction}
-              disabled={alreadyViewingRunningAction}
-              title={
-                proof.methodName
-                  ? `Open ${proof.methodName}`
-                  : "Open running action"
-              }
-            >
-              {alreadyViewingRunningAction
-                ? "Viewing Action"
-                : "Return to Action"}
-            </button>
-          </div>
-        )}
+        {controlsRow}
         <div className="summary-stage">
           <div className="summary-title">
             <span className="stage-num summary-danger">✗</span>

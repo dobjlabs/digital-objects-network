@@ -30,6 +30,11 @@
   justify-content: flex-end;
 }
 
+.proof-controls-row {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .proof-jump-btn {
   border: 1px solid var(--border);
   background: #252629;
