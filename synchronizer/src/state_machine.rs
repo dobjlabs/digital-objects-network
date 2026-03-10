@@ -546,12 +546,11 @@ mod tests {
     #[test]
     fn test_stale_gsr_rejected() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0, 0).unwrap();
-        let gsr0 = sm.state_snapshot().unwrap().2[0];
+        let gsr0 = seed_gsr0(&sm);
 
         // Advance 301 more blocks so gsr0 is 301 blocks old when the blob arrives.
         for i in 1..=301 {
-            sm.advance_block(i, i).unwrap();
+            advance_and_commit(&sm, i, i);
         }
 
         let tx = unique_hash(1);
@@ -564,12 +563,11 @@ mod tests {
     #[test]
     fn test_gsr_at_limit_accepted() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0, 0).unwrap();
-        let gsr0 = sm.state_snapshot().unwrap().2[0];
+        let gsr0 = seed_gsr0(&sm);
 
         // Advance 300 more blocks so gsr0 is exactly 300 blocks old — at the limit.
         for i in 1..=300 {
-            sm.advance_block(i, i).unwrap();
+            advance_and_commit(&sm, i, i);
         }
 
         let tx = unique_hash(1);
@@ -690,6 +688,7 @@ mod tests {
 
         let gsr0 = seed_gsr0(&sm);
 
+        // Build a txlib StateRoot matching the empty GSR0 and verify it agrees.
         let state_root = Arc::new(StateRoot {
             block_number: 0,
             transactions: pod2::middleware::containers::Set::new(HashSet::new()),
@@ -702,6 +701,7 @@ mod tests {
             "txlib StateRoot must match computed GSR0"
         );
 
+        // Prove a transaction using txlib's TxBuilder.
         let txlib_modules = vec![Arc::new(txlib::predicates::module())];
         let builder = MultiPodBuilder::new(&params, vd_set);
         let mut ctx = BuildContext {
@@ -720,6 +720,7 @@ mod tests {
         pod.pod.verify().unwrap();
 
         let compressed_proof = shrink_compress_pod(&shrunk_main_pod_build, pod).unwrap();
+        // tx.dict().commitment() is the public tx_final value committed to in the proof.
         let tx_final = tx.dict().commitment();
         let nullifiers: Vec<Hash> = tx
             .nullifiers
