@@ -2,8 +2,8 @@ pub mod macros;
 pub mod mockintro;
 
 use plonky2::field::types::Field;
-use pod2::middleware::{RawValue, F};
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use pod2::middleware::{F, RawValue};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use std::array;
 
 pub fn rand_raw_value() -> RawValue {

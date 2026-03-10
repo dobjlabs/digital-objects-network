@@ -4,8 +4,8 @@ use pod2::{
     frontend::MultiPodBuilder,
     lang::Module,
     middleware::{
-        containers::{Dictionary, Set},
         CustomPredicateRef, Key, Statement, Value,
+        containers::{Dictionary, Set},
     },
 };
 

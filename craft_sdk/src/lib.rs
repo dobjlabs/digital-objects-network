@@ -6,10 +6,10 @@ use log::info;
 use pod2::{
     backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
     frontend::{MainPod, MultiPodBuilder, Operation},
-    lang::{load_module, Module},
+    lang::{Module, load_module},
     middleware::{
-        containers::Dictionary, Key, MainPodProver, Params, Statement, TypedValue, VDSet, Value,
-        EMPTY_VALUE,
+        EMPTY_VALUE, Key, MainPodProver, Params, Statement, TypedValue, VDSet, Value,
+        containers::Dictionary,
     },
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
@@ -1029,13 +1029,13 @@ mod tests {
     use lt_eq_u256_pod::LtEqU256Pod;
     use pod2::{
         frontend::{MainPod, Operation},
-        middleware::{containers::Array, Hash, Key, Pod, RawValue, Statement, Value, F},
+        middleware::{F, Hash, Key, Pod, RawValue, Statement, Value, containers::Array},
     };
     use pod2utils::{rand_raw_value, set};
     use txlib::{StateRoot, Tx};
     use vdfpod::VdfPod;
 
-    use super::{api::*, Context, Helper};
+    use super::{Context, Helper, api::*};
 
     const WOOD_POW_DIFFICULTY: u64 = 0x0020_0000_0000_0000;
 
@@ -1090,29 +1090,31 @@ mod tests {
 
         let find_log = Action {
             name: "FindLog",
-            steps: vec![Step::output("log", "Log")
-                .set("blueprint", Arg::literal("Log"))
-                .var(
-                    "work",
-                    Box::new(|ctx| {
-                        let log = ctx.vars.get("log");
-                        let log_raw = RawValue::from(log);
-                        let (vdf_pod, st_vdf, work) = vdf(ctx, 3, log_raw);
-                        ctx.store("vdf_pod", Box::new(vdf_pod));
-                        ctx.store("st_vdf", Box::new(st_vdf));
-                        work
-                    }),
-                )
-                .condition(
-                    "Vdf(3, {state}, work)",
-                    Box::new(|ctx| {
-                        let vdf_pod: Box<MainPod> = ctx.take("vdf_pod");
-                        let st_vdf: Box<Statement> = ctx.take("st_vdf");
-                        ctx.bld.builder.add_pod(*vdf_pod).unwrap();
-                        *st_vdf
-                    }),
-                )
-                .update("work", Arg::var("work"))],
+            steps: vec![
+                Step::output("log", "Log")
+                    .set("blueprint", Arg::literal("Log"))
+                    .var(
+                        "work",
+                        Box::new(|ctx| {
+                            let log = ctx.vars.get("log");
+                            let log_raw = RawValue::from(log);
+                            let (vdf_pod, st_vdf, work) = vdf(ctx, 3, log_raw);
+                            ctx.store("vdf_pod", Box::new(vdf_pod));
+                            ctx.store("st_vdf", Box::new(st_vdf));
+                            work
+                        }),
+                    )
+                    .condition(
+                        "Vdf(3, {state}, work)",
+                        Box::new(|ctx| {
+                            let vdf_pod: Box<MainPod> = ctx.take("vdf_pod");
+                            let st_vdf: Box<Statement> = ctx.take("st_vdf");
+                            ctx.bld.builder.add_pod(*vdf_pod).unwrap();
+                            *st_vdf
+                        }),
+                    )
+                    .update("work", Arg::var("work")),
+            ],
         };
 
         let craft_wood = Action {
@@ -1248,8 +1250,10 @@ mod tests {
 
         let use_wood_pick = Action {
             name: "UseWoodPick",
-            steps: vec![Step::mutate("wood_pick", "WoodPick")
-                .snippet(|step| use_pick_details(step, "wood_pick", 10))],
+            steps: vec![
+                Step::mutate("wood_pick", "WoodPick")
+                    .snippet(|step| use_pick_details(step, "wood_pick", 10)),
+            ],
         };
 
         let mine_stone_with_wood_pick = Action {
@@ -1262,8 +1266,10 @@ mod tests {
 
         let use_stone_pick = Action {
             name: "UseStonePick",
-            steps: vec![Step::mutate("stone_pick", "StonePick")
-                .snippet(|step| use_pick_details(step, "stone_pick", 5))],
+            steps: vec![
+                Step::mutate("stone_pick", "StonePick")
+                    .snippet(|step| use_pick_details(step, "stone_pick", 5)),
+            ],
         };
 
         let mine_stone_with_stone_pick = Action {
