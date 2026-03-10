@@ -95,10 +95,11 @@ pub fn sample_app_cpu(app: tauri::AppHandle, monitor: tauri::State<'_, CpuMonito
         .map(|process| process.cpu_usage())
         .unwrap_or(0.0);
     // `sysinfo` reports per-process CPU where 100 ~= one saturated core.
-    // Convert to a host-normalized percentage for the dashboard line chart.
-    let core_usage_pct = raw_cpu.clamp(0.0, 100.0);
+    // Keep multi-core values (e.g. 600) so usage can be normalized by host core count.
+    let core_usage_pct = raw_cpu.max(0.0);
     let cpu_count = system.cpus().len().max(1) as f32;
-    let usage_pct = (core_usage_pct / cpu_count).clamp(0.0, 100.0);
+    let max_host_pct = cpu_count * 100.0;
+    let usage_pct = (core_usage_pct.min(max_host_pct) / cpu_count).clamp(0.0, 100.0);
 
     let now = Instant::now();
     if let Some(prev) = *last_sample_at {
