@@ -4,8 +4,8 @@ use pod2::{
     frontend::MultiPodBuilder,
     lang::Module,
     middleware::{
-        CustomPredicateRef, Key, Statement, Value,
         containers::{Dictionary, Set},
+        CustomPredicateRef, Key, Statement, Value,
     },
 };
 
@@ -300,14 +300,40 @@ macro_rules! _st_custom {
     }};
 }
 
-pub struct BuildContext<'a> {
-    pub builder: &'a mut MultiPodBuilder,
-    pub modules: &'a [Arc<Module>],
+pub struct BuildContext {
+    pub builder: MultiPodBuilder,
+    pub modules: Vec<Arc<Module>>,
 }
 
-impl<'a> BuildContext<'a> {
-    pub fn new(builder: &'a mut MultiPodBuilder, modules: &'a [Arc<Module>]) -> Self {
+impl BuildContext {
+    pub fn new(builder: MultiPodBuilder, modules: Vec<Arc<Module>>) -> Self {
         Self { builder, modules }
+    }
+}
+
+impl BuildContext {
+    pub fn apply_custom_pred(
+        &mut self,
+        public: bool,
+        name: &str,
+        wildcard_map: HashMap<String, Value>,
+        statements: Vec<Statement>,
+    ) -> anyhow::Result<Statement> {
+        for module in &self.modules {
+            if let Some(cpr) = module.predicate_ref_by_name(name) {
+                return module.apply_predicate_with(name, statements, public, |is_public, op| {
+                    let mut wildcard_values: Vec<(usize, Value)> = Vec::new();
+                    for (i, name) in cpr.predicate().wildcard_names().iter().enumerate() {
+                        if let Some(value) = wildcard_map.get(name) {
+                            wildcard_values.push((i, value.clone()));
+                        }
+                    }
+                    let st = self.builder.op(is_public, wildcard_values, op).unwrap();
+                    Ok(st)
+                });
+            }
+        }
+        panic!("predicate not found");
     }
 }
 
@@ -317,7 +343,7 @@ impl<'a> BuildContext<'a> {
 #[rustfmt::skip]
 macro_rules! pub_st_custom {
     ($ctx:expr, $pred:ident($($wc_name:ident=$wc_value:expr),*) = ($($sts:tt)*)) => {{
-        $crate::_st_custom!($ctx.builder, $ctx.modules, true, $pred($($wc_name=$wc_value),*) = ($($sts)*))
+        $crate::_st_custom!(&mut $ctx.builder, &$ctx.modules, true, $pred($($wc_name=$wc_value),*) = ($($sts)*))
     }};
 }
 
@@ -331,6 +357,6 @@ macro_rules! pub_st_custom {
 #[rustfmt::skip]
 macro_rules! st_custom {
     ($ctx:expr, $pred:ident($($wc_name:ident=$wc_value:expr),*) = ($($sts:tt)*)) => {{
-        $crate::_st_custom!($ctx.builder, $ctx.modules, false, $pred($($wc_name=$wc_value),*) = ($($sts)*))
+        $crate::_st_custom!(&mut $ctx.builder, &$ctx.modules, false, $pred($($wc_name=$wc_value),*) = ($($sts)*))
     }};
 }

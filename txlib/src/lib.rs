@@ -1,18 +1,15 @@
 // pub mod examples;
 pub mod predicates;
 use std::{
-    array,
     collections::{HashMap, HashSet},
     sync::Arc,
 };
 
-use plonky2::field::types::Field;
 use pod2::middleware::{
     containers::{Array, Dictionary, Set},
-    hash_values, Hash, Key, RawValue, Statement, Value, EMPTY_VALUE, F,
+    hash_values, Hash, Key, RawValue, Statement, Value,
 };
-use pod2utils::{dict, dict_define, macros::BuildContext, set, st_custom};
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use pod2utils::{dict, dict_define, macros::BuildContext, rand_raw_value, set, st_custom};
 
 #[derive(Clone, Debug)]
 pub struct StateRoot {
@@ -81,11 +78,6 @@ pub struct Object {
     pub app_layer: HashMap<String, Value>,
 }
 
-fn rand_raw_value() -> RawValue {
-    let mut rng = StdRng::from_os_rng();
-    RawValue(array::from_fn(|_| F::from_noncanonical_u64(rng.next_u64())))
-}
-
 pub fn rekey(obj: &mut Dictionary) {
     obj.update(&Key::from("key"), &Value::from(rand_raw_value()))
         .unwrap();
@@ -135,6 +127,20 @@ impl TxBuilder {
         )
         .unwrap();
         Self { st_tx, tx }
+    }
+
+    pub fn new_from_tx(ctx: &BuildContext, tx: Tx) -> Self {
+        let tx_pred = ctx
+            .modules
+            .iter()
+            .find_map(|module| module.predicate_ref_by_name("Tx"))
+            .unwrap();
+        let st_tx = Statement::Custom(tx_pred, vec![Value::from(tx.dict())]);
+        Self { st_tx, tx }
+    }
+
+    pub fn st_tx(&self) -> &Statement {
+        &self.st_tx
     }
 
     fn st_inputs_grounded(
