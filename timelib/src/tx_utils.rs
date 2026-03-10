@@ -1,7 +1,7 @@
 //! High-level utilities for building timelib-aware transactions.
 //!
 //! These functions wrap the low-level POD2 statement plumbing for timelib
-//! predicates (LockObject, UnlockObject, NotExpired, ExecuteOption). Callers
+//! predicates (LockObject, UnlockObject, NotExpired, SetExpiry). Callers
 //! should construct a [`BuildContext`] with **both** the txlib and timelib
 //! modules loaded, then pass it to every function here.
 //!
@@ -9,19 +9,19 @@
 //! let mods = [Arc::clone(&txlib_module), Arc::clone(&time_module)];
 //! let mut ctx = BuildContext::new(&mut builder, &mods);
 //! let mut tx_builder = TxBuilder::new(&mut ctx, &[], gsr.clone());
-//! let locked = lock_object(&mut ctx, &mut tx_builder, obj, duration);
+//! let locked = lock_object(&mut ctx, obj, duration)?;
+//! tx_builder.mutate(&mut ctx, locked.clone(), obj);
 //! let (st, tx) = tx_builder.finalize(&mut ctx);
 //! ```
 
-use std::sync::Arc;
-
+use anyhow::{ensure};
 use pod2::{
     frontend::MultiPodError,
     lang::{Module, MultiOperationError},
     middleware::{Statement, Value, containers::Dictionary, hash_values},
 };
 use pod2utils::{macros::BuildContext, op, st_custom};
-use txlib::{Object, StateRoot, Tx, TxBuilder};
+use txlib::{Object, StateRoot, Tx};
 
 /// Proves a `StateRoot` predicate for the given state root. Useful when you
 /// need to supply a StateRoot statement as input to another predicate.
@@ -47,21 +47,30 @@ pub fn prove_state_root(ctx: &mut BuildContext, sr: &StateRoot) -> Statement {
 /// Proves `NotExpired(state, grounding_gsr.block_number, tx_before)`:
 /// the grounding GSR's block number is ≤ `state`'s `timeout_block` field.
 ///
-/// `state` must have a `"timeout_block"` entry in `app_layer`. Returns the
-/// `NotExpired` statement.
+/// Returns `Err` if `state` has no `"timeout_block"` field or if the object
+/// has already expired at the grounding GSR's block.
 pub fn not_expired(
     ctx: &mut BuildContext,
     grounding_gsr: &StateRoot,
     tx_before: Dictionary,
     state: &Object,
-) -> Statement {
+) -> anyhow::Result<Statement> {
     let timeout_val = state
         .app_layer
         .get("timeout_block")
         .cloned()
-        .expect("state missing timeout_block field");
-    let gsr_hash = grounding_gsr.hash();
+        .ok_or_else(|| anyhow::anyhow!("state missing timeout_block field"))?;
+    let timeout_block = i64::try_from(timeout_val.typed())
+        .map_err(|_| anyhow::anyhow!("timeout_block is not an integer"))?;
     let gsr_block = grounding_gsr.block_number;
+    ensure!(
+        gsr_block <= timeout_block,
+        "object expired: grounding block {} > timeout_block {}",
+        gsr_block,
+        timeout_block,
+    );
+
+    let gsr_hash = grounding_gsr.hash();
 
     let st_timeout_block = ctx
         .builder
@@ -86,71 +95,147 @@ pub fn not_expired(
         .priv_op(op!(GtEq(timeout_val, gsr_block)))
         .unwrap();
 
-    st_custom!(
+    Ok(st_custom!(
         ctx,
         NotExpired() = (st_timeout_block, st_state_root_hash, st_block_num, st_gt_eq)
     )
-    .unwrap()
+    .unwrap())
 }
 
-/// Locks `obj` by adding a `"locked"` field with value `duration`. Mutates
-/// the transaction and proves `LockObject`. Returns the locked object.
-pub fn lock_object(
+/// Proves `SetExpiry(new_obj, obj, tx_before, expiry_block)`: the grounding
+/// GSR's block number is strictly less than `expiry_block`, and `new_obj` is
+/// `obj` with `"timeout_block"` inserted.
+///
+/// Returns `Err` if `expiry_block` is not strictly greater than the grounding
+/// GSR's block number.
+///
+/// Capture `tx_before = tx_builder.tx.dict()` before calling this, then call
+/// `tx_builder.mutate(ctx, new_obj, obj)` afterwards to record the mutation.
+pub fn set_expiry(
     ctx: &mut BuildContext,
-    tx_builder: &mut TxBuilder,
+    grounding_gsr: &StateRoot,
+    tx_before: Dictionary,
     obj: Object,
-    duration: i64,
-) -> Object {
+    expiry_block: i64,
+) -> anyhow::Result<Object> {
+    ensure!(
+        expiry_block > grounding_gsr.block_number,
+        "expiry_block {} must be greater than grounding block {}",
+        expiry_block,
+        grounding_gsr.block_number,
+    );
+
+    let mut obj_with_expiry = obj.clone();
+    obj_with_expiry
+        .app_layer
+        .insert("timeout_block".to_string(), Value::from(expiry_block));
+
+    let st_sr_hash = ctx
+        .builder
+        .priv_op(op!(DictContains(
+            tx_before,
+            "state_root_hash",
+            grounding_gsr.hash()
+        )))
+        .unwrap();
+    let st_gsr = prove_state_root(ctx, grounding_gsr);
+    let st_block_num = st_custom!(
+        ctx,
+        BlockNumberForStateRoot(block_number = grounding_gsr.block_number) = (st_gsr)
+    )
+    .unwrap();
+    let st_gt = ctx
+        .builder
+        .priv_op(op!(Gt(expiry_block, grounding_gsr.block_number)))
+        .unwrap();
+    let st_dict_insert = ctx
+        .builder
+        .priv_op(op!(DictInsert(
+            obj_with_expiry.dict(),
+            obj.dict(),
+            "timeout_block",
+            expiry_block
+        )))
+        .unwrap();
+    st_custom!(
+        ctx,
+        SetExpiry() = (st_sr_hash, st_block_num, st_gt, st_dict_insert)
+    )
+    .unwrap();
+
+    Ok(obj_with_expiry)
+}
+
+/// Proves `LockObject(new_obj, obj, duration)`: `new_obj` is `obj` with a
+/// `"locked"` field added. Returns the locked object.
+///
+/// Returns `Err` if `duration` is not positive.
+///
+/// Call `tx_builder.mutate(ctx, locked, obj)` afterwards to record the mutation.
+pub fn lock_object(ctx: &mut BuildContext, obj: Object, duration: i64) -> anyhow::Result<Object> {
+    ensure!(duration > 0, "lock duration must be positive, got {}", duration);
     let mut locked = obj.clone();
     locked
         .app_layer
         .insert("locked".to_string(), Value::from(duration));
-    let st_mutated = tx_builder.mutate(ctx, locked.clone(), obj.clone());
     st_custom!(
         ctx,
-        LockObject() = (
-            DictInsert(locked.dict(), obj.dict(), "locked", duration),
-            st_mutated
-        )
+        LockObject() = (DictInsert(locked.dict(), obj.dict(), "locked", duration))
     )
     .unwrap();
-    locked
+    Ok(locked)
 }
 
-/// Unlocks `locked_obj` by proving that at least `locked_obj.locked` blocks
-/// have elapsed between `gsr_when_locked` and the transaction's grounding GSR.
-/// `gsr_when_locked` must appear in the current state root's `gsrs` array.
+/// Proves `UnlockObject(new_obj, locked_obj, tx_before, ...)`: at least
+/// `locked_obj.locked` blocks have elapsed between `gsr_when_locked` and
+/// `grounding_gsr`. `gsr_when_locked` must appear in `grounding_gsr.gsrs`.
 /// Returns the unlocked object (the `"locked"` field removed).
+///
+/// Returns `Err` if `locked_obj` has no `"locked"` field, if `gsr_when_locked`
+/// is not in `grounding_gsr.gsrs`, or if insufficient blocks have elapsed.
+///
+/// Capture `tx_before = tx_builder.tx.dict()` before calling this, then call
+/// `tx_builder.mutate(ctx, unlocked, locked_obj)` afterwards.
 pub fn unlock_object(
     ctx: &mut BuildContext,
     time_module: &Module,
-    tx_builder: &mut TxBuilder,
+    grounding_gsr: &StateRoot,
+    tx_before: Dictionary,
     locked_obj: Object,
     tx_when_locked: &Tx,
     gsr_when_locked: &StateRoot,
-) -> Object {
-    let gsr_current = Arc::clone(&tx_builder.tx.state_root);
+) -> anyhow::Result<Object> {
+    let lock_duration = locked_obj
+        .app_layer
+        .get("locked")
+        .ok_or_else(|| anyhow::anyhow!("locked_obj missing 'locked' field"))?;
+    let lock_duration = i64::try_from(lock_duration.typed())
+        .map_err(|_| anyhow::anyhow!("'locked' field is not an integer"))?;
 
     // Find where gsr_when_locked sits in the current state root's gsrs array.
     let target = Value::from(gsr_when_locked.hash());
-    let idx = gsr_current
+    let idx = grounding_gsr
         .gsrs
         .array()
         .iter()
         .position(|v| v == &target)
-        .expect("gsr_when_locked not found in current state root's gsrs array")
-        as i64;
+        .ok_or_else(|| {
+            anyhow::anyhow!("gsr_when_locked not found in grounding_gsr.gsrs")
+        })? as i64;
 
-    let distance = gsr_current.block_number - gsr_when_locked.block_number;
+    let distance = grounding_gsr.block_number - gsr_when_locked.block_number;
+    ensure!(
+        distance >= lock_duration,
+        "cannot unlock: only {} blocks elapsed, need {}",
+        distance,
+        lock_duration,
+    );
 
     let mut unlocked = locked_obj.clone();
     unlocked.app_layer.remove("locked");
 
-    let tx_before = tx_builder.tx.dict();
-    let st_tx_mutated = tx_builder.mutate(ctx, unlocked.clone(), locked_obj.clone());
-
     let st_gsr_when_locked_root = prove_state_root(ctx, gsr_when_locked);
-    let st_gsr_current_root = prove_state_root(ctx, &gsr_current);
+    let st_grounding_gsr_root = prove_state_root(ctx, grounding_gsr);
 
     let st_gsr_has_tx = ctx
         .builder
@@ -168,19 +253,19 @@ pub fn unlock_object(
     let st_gsr_has_prior = ctx
         .builder
         .priv_op(op!(ArrayContains(
-            gsr_current.gsrs,
+            grounding_gsr.gsrs,
             idx,
             gsr_when_locked.hash()
         )))
         .unwrap();
     let st_prior_gsr = st_custom!(
         ctx,
-        PriorStateRootInStateRoot() = (st_gsr_current_root.clone(), st_gsr_has_prior)
+        PriorStateRootInStateRoot() = (st_grounding_gsr_root.clone(), st_gsr_has_prior)
     )
     .unwrap();
     let st_current_block = st_custom!(
         ctx,
-        BlockNumberForStateRoot(block_number = gsr_current.block_number) = (st_gsr_current_root)
+        BlockNumberForStateRoot(block_number = grounding_gsr.block_number) = (st_grounding_gsr_root)
     )
     .unwrap();
     let st_when_locked_block = st_custom!(
@@ -196,7 +281,7 @@ pub fn unlock_object(
             st_current_block,
             st_when_locked_block,
             SumOf(
-                gsr_current.block_number,
+                grounding_gsr.block_number,
                 gsr_when_locked.block_number,
                 distance
             )
@@ -209,7 +294,7 @@ pub fn unlock_object(
         .priv_op(op!(DictContains(
             tx_before,
             "state_root_hash",
-            gsr_current.hash()
+            grounding_gsr.hash()
         )))
         .unwrap();
     let st_locked_in_tx = ctx
@@ -243,11 +328,10 @@ pub fn unlock_object(
             st_distance,
             st_gt_eq,
             st_dict_delete,
-            st_tx_mutated,
         ],
     );
 
-    unlocked
+    Ok(unlocked)
 }
 
 /// Applies a timelib predicate with more than 5 clauses via `apply_predicate_with`.

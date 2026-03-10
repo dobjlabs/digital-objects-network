@@ -1,9 +1,8 @@
 use module 0xTXLIB_MODULE_HASH as txlib
 
 // Ensures that an object is locked for a minimum of `duration` blocks
-LockObject(new_state, old_state, tx_after, tx_before, duration) = AND(
+LockObject(new_state, old_state, duration) = AND(
   DictInsert(new_state, old_state, "locked", duration)
-  txlib::TxMutated(tx_after, tx_before, new_state, old_state)
 )
 
 BlockNumberForStateRoot(state_root, block_number,
@@ -25,6 +24,13 @@ DistanceBetweenStateRoots(state_root, prior_state_root, distance,
   SumOf(block_number, prior_block_number, distance)
 )
 
+SetExpiry(new_state, old_state, tx_before, expiry_block, private: state_root, current_block) = AND(
+  DictContains(tx_before, "state_root_hash", state_root)
+  BlockNumberForStateRoot(state_root, current_block)
+  Gt(expiry_block, current_block)
+  DictInsert(new_state, old_state, "timeout_block", expiry_block)
+)
+
 // Proves the grounding GSR's block number is <= state.timeout_block. Assumes the
 // state dict contains a "timeout_block" field (the expirable-object mixin).
 // block_number is a public arg so callers can reuse it (e.g. SumOf for renewal).
@@ -38,7 +44,7 @@ NotExpired(state, block_number, tx_before,
 )
 
 
-UnlockObject(new_state, old_state, tx_after, tx_before,
+UnlockObject(new_state, old_state, tx_before,
     private: state_root, prior_state_root, distance, old_tx) = AND(
   DictContains(tx_before, "state_root_hash", state_root)
   // Was the old transaction present in the prior state root?
@@ -52,5 +58,4 @@ UnlockObject(new_state, old_state, tx_after, tx_before,
   GtEq(distance, old_state.locked)
   // Unlock:
   DictDelete(new_state, old_state, "locked")
-  txlib::TxMutated(tx_after, tx_before, new_state, old_state)
 )

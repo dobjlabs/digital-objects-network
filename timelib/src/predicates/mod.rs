@@ -20,7 +20,7 @@ mod tests {
         frontend::MultiPodBuilder,
         middleware::{Params, VDSet, Value, containers::Array},
     };
-    use pod2utils::{macros::BuildContext, set};
+    use pod2utils::{macros::BuildContext, op, set};
 
     use super::*;
     use crate::tx_utils;
@@ -92,12 +92,9 @@ mod tests {
                 let mut ctx = BuildContext::new(&mut builder, &mods);
                 let mut tx_builder = TxBuilder::new(&mut ctx, &[], gsr1_sr.clone());
                 tx_builder.insert(&mut ctx, unlocked_obj.clone());
-                let locked_obj = tx_utils::lock_object(
-                    &mut ctx,
-                    &mut tx_builder,
-                    unlocked_obj.clone(),
-                    duration,
-                );
+                let locked_obj =
+                    tx_utils::lock_object(&mut ctx, unlocked_obj.clone(), duration).unwrap();
+                tx_builder.mutate(&mut ctx, locked_obj.clone(), unlocked_obj.clone());
                 let (st_finalized, tx_lock) = tx_builder.finalize(&mut ctx);
                 ctx.builder.reveal(&st_finalized).unwrap();
                 (tx_lock, locked_obj)
@@ -142,14 +139,18 @@ mod tests {
                 let mut ctx = BuildContext::new(&mut builder, &mods);
                 let inputs = [(locked_obj.clone(), tx_lock.clone())];
                 let mut tx_builder = TxBuilder::new(&mut ctx, &inputs, gsr3_sr.clone());
-                tx_utils::unlock_object(
+                let tx_before_unlock = tx_builder.tx.dict();
+                let unlocked = tx_utils::unlock_object(
                     &mut ctx,
                     &time_module,
-                    &mut tx_builder,
+                    &gsr3_sr,
+                    tx_before_unlock,
                     locked_obj.clone(),
                     &tx_lock,
                     &gsr2_sr,
-                );
+                )
+                .unwrap();
+                tx_builder.mutate(&mut ctx, unlocked, locked_obj.clone());
                 let (st_finalized, _) = tx_builder.finalize(&mut ctx);
                 ctx.builder.reveal(&st_finalized).unwrap();
             }
@@ -164,6 +165,115 @@ mod tests {
 
         lock_pod.pod.verify().unwrap();
         unlock_pod.pod.verify().unwrap();
+    }
+
+    /// Demonstrates `SetExpiry` and `NotExpired` without any application-layer framing.
+    ///
+    /// The scenario:
+    /// - A plain object starts with no `timeout_block`.
+    ///
+    /// **POD 1 (set expiry):** A transaction inserts the object and then uses `SetExpiry`
+    /// to mutate it, adding `timeout_block = 400` (= block 100 + 300).
+    ///
+    /// **POD 2 (check not-expired):** A transaction grounded at block 200 (well before 400)
+    /// takes the expiry-bearing object as an input and proves `NotExpired`.
+    #[test]
+    fn prove_set_expiry_and_not_expired() {
+        use std::collections::HashMap;
+        use txlib::{Object, StateRoot as TxStateRoot, TxBuilder};
+
+        let txlib_module = Arc::new(txlib::predicates::module());
+        let time_module = Arc::new(module().unwrap());
+
+        let gsr1_block = 100_i64;
+        let gsr2_block = 200_i64;
+        let timeout_block = gsr1_block + 300; // 400, well after gsr2_block
+
+        let params = Params::default();
+        let vd_set = VDSet::new(&[]);
+
+        let obj = Object::new(HashMap::new());
+
+        // GSR₁: block 100, empty.
+        let gsr1_sr = Arc::new(TxStateRoot {
+            block_number: gsr1_block,
+            transactions: set!(),
+            nullifiers: set!(),
+            gsrs: Array::new(vec![]),
+        });
+
+        // === POD 1: Insert object and set its expiry ===
+        let (set_pod, tx_set, obj_with_expiry) = {
+            let mut builder = MultiPodBuilder::new(&params, &vd_set);
+            let (tx_set, obj_with_expiry) = {
+                let mods = [Arc::clone(&txlib_module), Arc::clone(&time_module)];
+                let mut ctx = BuildContext::new(&mut builder, &mods);
+                let mut tx_builder = TxBuilder::new(&mut ctx, &[], gsr1_sr.clone());
+                tx_builder.insert(&mut ctx, obj.clone());
+                let tx_before_set = tx_builder.tx.dict();
+                let obj_with_expiry = tx_utils::set_expiry(
+                    &mut ctx,
+                    &gsr1_sr,
+                    tx_before_set,
+                    obj.clone(),
+                    timeout_block,
+                )
+                .unwrap();
+                // Pre-materialise key for TxObjectStateNullified inside mutate.
+                let _ = ctx
+                    .builder
+                    .priv_op(op!(DictContains(obj.dict(), "key", obj.key)))
+                    .unwrap();
+                tx_builder.mutate(&mut ctx, obj_with_expiry.clone(), obj.clone());
+                let (st_finalized, tx_set) = tx_builder.finalize(&mut ctx);
+                ctx.builder.reveal(&st_finalized).unwrap();
+                (tx_set, obj_with_expiry)
+            };
+            let pod = builder
+                .solve()
+                .unwrap()
+                .prove(&MockProver {})
+                .unwrap()
+                .output_pod()
+                .clone();
+            (pod, tx_set, obj_with_expiry)
+        };
+
+        // GSR₂: block 200, carries tx_set.
+        let mut gsr2_txs = set!();
+        gsr2_txs.insert(&Value::from(tx_set.dict())).unwrap();
+        let gsr2_nullifiers = tx_set.nullifiers.clone();
+        let gsr2_sr = Arc::new(TxStateRoot {
+            block_number: gsr2_block,
+            transactions: gsr2_txs,
+            nullifiers: gsr2_nullifiers,
+            gsrs: Array::new(vec![Value::from(gsr1_sr.hash())]),
+        });
+
+        // === POD 2: Prove the object is not expired at block 200 ≤ 400 ===
+        let check_pod = {
+            let mut builder = MultiPodBuilder::new(&params, &vd_set);
+            {
+                let mods = [Arc::clone(&txlib_module), Arc::clone(&time_module)];
+                let mut ctx = BuildContext::new(&mut builder, &mods);
+                let inputs = [(obj_with_expiry.clone(), tx_set.clone())];
+                let tx_builder = TxBuilder::new(&mut ctx, &inputs, gsr2_sr.clone());
+                let tx_before = tx_builder.tx.dict();
+                let _ = tx_utils::not_expired(&mut ctx, &gsr2_sr, tx_before, &obj_with_expiry).unwrap();
+                let (st_finalized, _) = tx_builder.finalize(&mut ctx);
+                ctx.builder.reveal(&st_finalized).unwrap();
+            }
+            builder
+                .solve()
+                .unwrap()
+                .prove(&MockProver {})
+                .unwrap()
+                .output_pod()
+                .clone()
+        };
+
+        set_pod.pod.verify().unwrap();
+        check_pod.pod.verify().unwrap();
     }
 
 }
