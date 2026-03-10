@@ -9,9 +9,18 @@ sync:
 test:
     cargo test --workspace
 
+# Wipe local synchronizer state (RocksDB + local Postgres DB)
+reset-db:
+    rm -rf data/
+    psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
+
 # Run the slow end-to-end proof test 
 test-e2e:
     cargo test -p synchronizer test_e2e_real_proof -- --ignored --nocapture
+
+# Run ignored Postgres-backed sync_db tests
+test-sync-db:
+    cargo test -p synchronizer sync_db::tests:: -- --ignored --nocapture
 
 # Build all workspace crates
 build:
