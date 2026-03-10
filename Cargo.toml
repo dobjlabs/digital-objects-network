@@ -6,11 +6,15 @@ members = [
     "synchronizer",
     "timelib",
     "txlib",
+    "craft_sdk",
+    "intro_pods/vdfpod",
+    "intro_pods/lt_eq_u256_pod",
 ]
 resolver = "2"
 
 [workspace.dependencies]
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "a79f82eb9dafd096effa582d76b59a63f9a5961b", default-features = false, features = [
+# Branch `tmp/more-wildcards`
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "9993799c08e6e95b11eb016763fcc13f5030293e", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",

@@ -257,6 +257,7 @@ mod tests {
     use hex::ToHex;
     use pod2::middleware::{hash_values, Value};
     use tempfile::TempDir;
+    use txlib::new_obj;
 
     fn make_sm() -> (StateMachine, TempDir) {
         let dir = TempDir::new().unwrap();
@@ -534,7 +535,7 @@ mod tests {
         };
         use pod2utils::macros::BuildContext;
         use std::collections::HashSet;
-        use txlib::{Object, TxBuilder};
+        use txlib::TxBuilder;
 
         let params = Params::default();
         let vd_set = &*DEFAULT_VD_SET;
@@ -565,19 +566,19 @@ mod tests {
 
         // Prove a transaction using txlib's TxBuilder.
         let txlib_modules = vec![Arc::new(txlib::predicates::module())];
-        let mut builder = MultiPodBuilder::new(&params, vd_set);
+        let builder = MultiPodBuilder::new(&params, vd_set);
         let mut ctx = BuildContext {
-            builder: &mut builder,
-            modules: &txlib_modules,
+            builder,
+            modules: txlib_modules,
         };
 
-        let obj = Object::new(std::collections::HashMap::new());
+        let obj = new_obj();
         let mut tx_builder = TxBuilder::new(&mut ctx, &[], state_root);
         tx_builder.insert(&mut ctx, obj);
         let (st_finalized, tx) = tx_builder.finalize(&mut ctx);
         ctx.builder.reveal(&st_finalized).unwrap();
 
-        let solution = builder.solve().unwrap();
+        let solution = ctx.builder.solve().unwrap();
         let pod = solution.prove(&Prover {}).unwrap().pods.pop().unwrap();
         pod.pod.verify().unwrap();
 

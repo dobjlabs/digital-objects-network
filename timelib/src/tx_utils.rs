@@ -18,10 +18,10 @@ use anyhow::ensure;
 use pod2::{
     frontend::MultiPodError,
     lang::{Module, MultiOperationError},
-    middleware::{Statement, Value, containers::Dictionary, hash_values},
+    middleware::{Key, Statement, Value, containers::Dictionary, hash_values},
 };
 use pod2utils::{macros::BuildContext, op, st_custom};
-use txlib::{Object, StateRoot, Tx};
+use txlib::{StateRoot, Tx};
 
 /// Proves a `StateRoot` predicate for the given state root. Useful when you
 /// need to supply a StateRoot statement as input to another predicate.
@@ -53,13 +53,12 @@ pub fn not_expired(
     ctx: &mut BuildContext,
     grounding_gsr: &StateRoot,
     tx_before: Dictionary,
-    state: &Object,
+    state: Dictionary,
 ) -> anyhow::Result<Statement> {
     let timeout_val = state
-        .app_layer
-        .get("timeout_block")
+        .get(&Key::from("timeout_block"))
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("state missing timeout_block field"))?;
+        .map_err(|e| anyhow::anyhow!("{e}: state missing timeout_block field"))?;
     let timeout_block = i64::try_from(timeout_val.typed())
         .map_err(|_| anyhow::anyhow!("timeout_block is not an integer"))?;
     let gsr_block = grounding_gsr.block_number;
@@ -75,7 +74,7 @@ pub fn not_expired(
     let st_timeout_block = ctx
         .builder
         .priv_op(op!(DictContains(
-            state.dict(),
+            state,
             "timeout_block",
             timeout_val.clone()
         )))
@@ -115,9 +114,9 @@ pub fn set_expiry(
     ctx: &mut BuildContext,
     grounding_gsr: &StateRoot,
     tx_before: Dictionary,
-    obj: Object,
+    obj: Dictionary,
     expiry_block: i64,
-) -> anyhow::Result<Object> {
+) -> anyhow::Result<Dictionary> {
     ensure!(
         expiry_block > grounding_gsr.block_number,
         "expiry_block {} must be greater than grounding block {}",
@@ -126,9 +125,7 @@ pub fn set_expiry(
     );
 
     let mut obj_with_expiry = obj.clone();
-    obj_with_expiry
-        .app_layer
-        .insert("timeout_block".to_string(), Value::from(expiry_block));
+    obj_with_expiry.insert(&Key::from("timeout_block"), &Value::from(expiry_block))?;
 
     let st_sr_hash = ctx
         .builder
@@ -151,8 +148,8 @@ pub fn set_expiry(
     let st_dict_insert = ctx
         .builder
         .priv_op(op!(DictInsert(
-            obj_with_expiry.dict(),
-            obj.dict(),
+            obj_with_expiry,
+            obj,
             "timeout_block",
             expiry_block
         )))
@@ -172,19 +169,21 @@ pub fn set_expiry(
 /// Returns `Err` if `duration` is not positive.
 ///
 /// Call `tx_builder.mutate(ctx, locked, obj)` afterwards to record the mutation.
-pub fn lock_object(ctx: &mut BuildContext, obj: Object, duration: i64) -> anyhow::Result<Object> {
+pub fn lock_object(
+    ctx: &mut BuildContext,
+    obj: Dictionary,
+    duration: i64,
+) -> anyhow::Result<Dictionary> {
     ensure!(
         duration > 0,
         "lock duration must be positive, got {}",
         duration
     );
     let mut locked = obj.clone();
-    locked
-        .app_layer
-        .insert("locked".to_string(), Value::from(duration));
+    locked.insert(&Key::from("locked"), &Value::from(duration))?;
     st_custom!(
         ctx,
-        LockObject() = (DictInsert(locked.dict(), obj.dict(), "locked", duration))
+        LockObject() = (DictInsert(locked, obj, "locked", duration))
     )
     .unwrap();
     Ok(locked)
@@ -205,14 +204,14 @@ pub fn unlock_object(
     time_module: &Module,
     grounding_gsr: &StateRoot,
     tx_before: Dictionary,
-    locked_obj: Object,
+    locked_obj: Dictionary,
     tx_when_locked: &Tx,
     gsr_when_locked: &StateRoot,
-) -> anyhow::Result<Object> {
+) -> anyhow::Result<Dictionary> {
     let lock_duration = locked_obj
-        .app_layer
-        .get("locked")
-        .ok_or_else(|| anyhow::anyhow!("locked_obj missing 'locked' field"))?;
+        .get(&Key::from("locked"))
+        .cloned()
+        .map_err(|e| anyhow::anyhow!("{e}: locked_obj missing 'locked' field"))?;
     let lock_duration = i64::try_from(lock_duration.typed())
         .map_err(|_| anyhow::anyhow!("'locked' field is not an integer"))?;
 
@@ -235,7 +234,7 @@ pub fn unlock_object(
     );
 
     let mut unlocked = locked_obj.clone();
-    unlocked.app_layer.remove("locked");
+    unlocked.delete(&Key::from("locked"))?;
 
     let st_gsr_when_locked_root = prove_state_root(ctx, gsr_when_locked);
     let st_grounding_gsr_root = prove_state_root(ctx, grounding_gsr);
@@ -305,20 +304,16 @@ pub fn unlock_object(
         .builder
         .priv_op(op!(SetContains(
             (&tx_when_locked.dict(), "live"),
-            locked_obj.dict()
+            locked_obj
         )))
         .unwrap();
     let st_gt_eq = ctx
         .builder
-        .priv_op(op!(GtEq(distance, (&locked_obj.dict(), "locked"))))
+        .priv_op(op!(GtEq(distance, (&locked_obj, "locked"))))
         .unwrap();
     let st_dict_delete = ctx
         .builder
-        .priv_op(op!(DictDelete(
-            unlocked.dict(),
-            locked_obj.dict(),
-            "locked"
-        )))
+        .priv_op(op!(DictDelete(unlocked, locked_obj, "locked")))
         .unwrap();
 
     apply_predicate(
