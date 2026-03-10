@@ -720,6 +720,7 @@ mod tests {
         pod.pod.verify().unwrap();
 
         let compressed_proof = shrink_compress_pod(&shrunk_main_pod_build, pod).unwrap();
+
         // tx.dict().commitment() is the public tx_final value committed to in the proof.
         let tx_final = tx.dict().commitment();
         let nullifiers: Vec<Hash> = tx
