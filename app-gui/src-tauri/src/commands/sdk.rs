@@ -98,21 +98,18 @@ impl RelayerJobStatus {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct RelayerSubmitRequest {
     payload_base64: String,
     client_ref: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct RelayerSubmitResponse {
     job_id: String,
     status: RelayerJobStatus,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct RelayerJobStatusResponse {
     job_id: String,
     status: RelayerJobStatus,

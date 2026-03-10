@@ -20,7 +20,8 @@ pub fn get_things_dir(app: tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub fn open_things_dir(app: tauri::AppHandle) -> Result<String, String> {
     let path = resolve_objects_dir(&app)?;
-    fs::create_dir_all(&path).map_err(|err| format!("failed to create objects directory: {err}"))?;
+    fs::create_dir_all(&path)
+        .map_err(|err| format!("failed to create objects directory: {err}"))?;
     app.opener()
         .open_path(path.to_string_lossy().to_string(), None::<&str>)
         .map_err(|err| format!("failed to open objects directory: {err}"))?;

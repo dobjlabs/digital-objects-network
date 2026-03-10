@@ -12,7 +12,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use hex::ToHex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
-use tracing::info;
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use common::{blob_codec::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
@@ -163,6 +163,12 @@ async fn submit_proof(
         )));
     }
 
+    info!(
+        payload_bytes = payload_bytes.len(),
+        client_ref = ?req.client_ref,
+        "Received proof submission"
+    );
+
     let payload = app_state
         .parser
         .parse_blob(&payload_bytes)
@@ -179,6 +185,12 @@ async fn submit_proof(
         .get_job_by_tx_final(&tx_final)
         .map_err(ApiError::Internal)?
     {
+        info!(
+            job_id = %existing.job_id,
+            status = existing.status.as_str(),
+            tx_final = %existing.tx_final,
+            "Idempotent submission returned existing relay job"
+        );
         return Ok((StatusCode::OK, Json(to_submit_response(existing))));
     }
 
@@ -205,8 +217,24 @@ async fn submit_proof(
         .insert_job_idempotent(&job)
         .map_err(ApiError::Internal)?
     {
-        InsertJobResult::Inserted => (StatusCode::ACCEPTED, to_submit_response(job)),
-        InsertJobResult::Existing(existing) => (StatusCode::OK, to_submit_response(existing)),
+        InsertJobResult::Inserted => {
+            info!(
+                job_id = %job.job_id,
+                tx_final = %job.tx_final,
+                payload_bytes = job.payload_bytes.len(),
+                "Accepted new relay job"
+            );
+            (StatusCode::ACCEPTED, to_submit_response(job))
+        }
+        InsertJobResult::Existing(existing) => {
+            info!(
+                job_id = %existing.job_id,
+                status = existing.status.as_str(),
+                tx_final = %existing.tx_final,
+                "Concurrent idempotent insert returned existing relay job"
+            );
+            (StatusCode::OK, to_submit_response(existing))
+        }
     };
 
     Ok((status.0, Json(status.1)))
@@ -218,6 +246,7 @@ async fn get_proof(
     Path(job_id): Path<String>,
 ) -> Result<Json<JobStatusResponse>, ApiError> {
     ensure_auth(&headers, &app_state.api_key)?;
+    debug!(job_id = %job_id, "Handling relay job status request");
 
     let job = app_state
         .db
@@ -225,6 +254,13 @@ async fn get_proof(
         .map_err(ApiError::Internal)?
         .ok_or_else(|| ApiError::NotFound(format!("job not found: {job_id}")))?;
 
+    debug!(
+        job_id = %job.job_id,
+        status = job.status.as_str(),
+        tx_hash = ?job.tx_hash,
+        attempts = job.attempt_count,
+        "Returning relay job status"
+    );
     Ok(Json(to_status_response(job)))
 }
 
@@ -232,6 +268,7 @@ fn ensure_auth(headers: &HeaderMap, api_key: &str) -> Result<(), ApiError> {
     if is_authorized(headers, api_key) {
         Ok(())
     } else {
+        warn!("Unauthorized relayer API request");
         Err(ApiError::Unauthorized)
     }
 }

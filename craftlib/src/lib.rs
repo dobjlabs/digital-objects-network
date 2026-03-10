@@ -156,19 +156,17 @@ impl Helper {
         ctx.builder.add_pod(vdf_pod).unwrap();
         let st_tx_insert_log = tx_builder.insert(&mut ctx, log.clone());
 
-        let st_new_log = st_custom!(ctx,
+        let st_new_log = st_custom!(
+            ctx,
             NewLog() = (
                 DictContains(log0, "blueprint", "log"),
                 st_vdf,
                 DictUpdate(log, log0, "work", work),
                 st_tx_insert_log
-            ))
+            )
+        )
         .unwrap();
-        let st = st_custom!(ctx,
-            IsLog() = (
-                st_new_log
-            ))
-        .unwrap();
+        let st = st_custom!(ctx, IsLog() = (st_new_log)).unwrap();
         ctx.builder.reveal(&st).unwrap();
         let (st_tx_finalize, tx) = tx_builder.finalize(&mut ctx);
         ctx.builder.reveal(&st_tx_finalize).unwrap();
@@ -208,20 +206,18 @@ impl Helper {
         ctx.builder.add_pod(lt_eq_u256_pod).unwrap();
         let st_tx_insert_wood = tx_builder.insert(&mut ctx, wood.clone());
 
-        let st_new_wood = st_custom!(ctx,
+        let st_new_wood = st_custom!(
+            ctx,
             NewWood() = (
                 st_is_log,
                 st_tx_delete_log,
                 DictContains(wood, "blueprint", "wood"),
                 st_lt_eq_u256,
                 st_tx_insert_wood
-            ))
+            )
+        )
         .unwrap();
-        let st = st_custom!(ctx,
-            IsWood() = (
-                st_new_wood
-            ))
-        .unwrap();
+        let st = st_custom!(ctx, IsWood() = (st_new_wood)).unwrap();
         ctx.builder.reveal(&st).unwrap();
         let (st_tx_finalize, tx) = tx_builder.finalize(&mut ctx);
         ctx.builder.reveal(&st_tx_finalize).unwrap();
@@ -253,7 +249,8 @@ impl Helper {
         let stick_b = Object::new(map!({"blueprint" => "stick"})).dict();
         let st_tx_insert_stick_b = tx_builder.insert(&mut ctx, stick_b.clone());
 
-        let st_new_sticks = st_custom!(ctx,
+        let st_new_sticks = st_custom!(
+            ctx,
             NewSticks() = (
                 st_is_wood,
                 st_tx_delete_wood,
@@ -261,20 +258,11 @@ impl Helper {
                 st_tx_insert_stick_a,
                 DictContains(stick_b, "blueprint", "stick"),
                 st_tx_insert_stick_b
-            ))
+            )
+        )
         .unwrap();
-        let st_a = st_custom!(ctx,
-            IsStick() = (
-                st_new_sticks.clone(),
-                Statement::None
-            ))
-        .unwrap();
-        let st_b = st_custom!(ctx,
-            IsStick() = (
-                Statement::None,
-                st_new_sticks
-            ))
-        .unwrap();
+        let st_a = st_custom!(ctx, IsStick() = (st_new_sticks.clone(), Statement::None)).unwrap();
+        let st_b = st_custom!(ctx, IsStick() = (Statement::None, st_new_sticks)).unwrap();
         ctx.builder.reveal(&st_a).unwrap();
         ctx.builder.reveal(&st_b).unwrap();
         let (st_tx_finalize, tx) = tx_builder.finalize(&mut ctx);
@@ -313,7 +301,8 @@ impl Helper {
         let wood_pick = Object::new(map!({"blueprint" => "wood_pick", "durability" => 100})).dict();
         let st_tx_insert_wood_pick = tx_builder.insert(&mut ctx, wood_pick.clone());
 
-        let st_new_wood_pick = st_custom!(ctx,
+        let st_new_wood_pick = st_custom!(
+            ctx,
             NewWoodPick() = (
                 st_is_wood,
                 st_tx_delete_wood,
@@ -322,14 +311,10 @@ impl Helper {
                 DictContains(wood_pick, "blueprint", "wood_pick"),
                 DictContains(wood_pick, "durability", 100),
                 st_tx_insert_wood_pick
-            ))
+            )
+        )
         .unwrap();
-        let st = st_custom!(ctx,
-            IsWoodPick() = (
-                st_new_wood_pick,
-                Statement::None
-            ))
-        .unwrap();
+        let st = st_custom!(ctx, IsWoodPick() = (st_new_wood_pick, Statement::None)).unwrap();
         ctx.builder.reveal(&st).unwrap();
         let (st_tx_finalize, tx) = tx_builder.finalize(&mut ctx);
         ctx.builder.reveal(&st_tx_finalize).unwrap();
@@ -368,7 +353,8 @@ impl Helper {
             Object::new(map!({"blueprint" => "stone_pick", "durability" => 200})).dict();
         let st_tx_insert_stone_pick = tx_builder.insert(&mut ctx, stone_pick.clone());
 
-        let st_new_stone_pick = st_custom!(ctx,
+        let st_new_stone_pick = st_custom!(
+            ctx,
             NewStonePick() = (
                 st_is_stone,
                 st_tx_delete_stone,
@@ -377,14 +363,10 @@ impl Helper {
                 DictContains(stone_pick, "blueprint", "stone_pick"),
                 DictContains(stone_pick, "durability", 200),
                 st_tx_insert_stone_pick
-            ))
+            )
+        )
         .unwrap();
-        let st = st_custom!(ctx,
-            IsStonePick() = (
-                st_new_stone_pick,
-                Statement::None
-            ))
-        .unwrap();
+        let st = st_custom!(ctx, IsStonePick() = (st_new_stone_pick, Statement::None)).unwrap();
         ctx.builder.reveal(&st).unwrap();
         let (st_tx_finalize, tx) = tx_builder.finalize(&mut ctx);
         ctx.builder.reveal(&st_tx_finalize).unwrap();
@@ -444,92 +426,86 @@ impl Helper {
 
         let st_used_pick = match name {
             "wood_pick" => {
-                let st_used_pick_a = st_custom!(ctx,
+                let st_used_pick_a = st_custom!(
+                    ctx,
                     UsedWoodPick_a() = (
                         SumOf((&pick0_obj, "durability"), durability, 1),
                         DictUpdate(pick1_obj, pick0_obj, "durability", durability),
                         DictUpdate(pick2_obj, pick1_obj, "key", key),
                         st_vdf,
                         DictUpdate(pick_obj, pick2_obj, "work", work)
-                    ))
+                    )
+                )
                 .unwrap();
-                st_custom!(ctx,
+                st_custom!(
+                    ctx,
                     UsedWoodPick() = (
                         st_is_pick,
                         Gt((&pick0_obj, "durability"), 0),
                         st_used_pick_a,
                         st_tx_mutate_pick
-                    ))
+                    )
+                )
                 .unwrap()
             }
             "stone_pick" => {
-                let st_used_pick_a = st_custom!(ctx,
+                let st_used_pick_a = st_custom!(
+                    ctx,
                     UsedStonePick_a() = (
                         SumOf((&pick0_obj, "durability"), durability, 1),
                         DictUpdate(pick1_obj, pick0_obj, "durability", durability),
                         DictUpdate(pick2_obj, pick1_obj, "key", key),
                         st_vdf,
                         DictUpdate(pick_obj, pick2_obj, "work", work)
-                    ))
+                    )
+                )
                 .unwrap();
-                st_custom!(ctx,
+                st_custom!(
+                    ctx,
                     UsedStonePick() = (
                         st_is_pick,
                         Gt((&pick0_obj, "durability"), 0),
                         st_used_pick_a,
                         st_tx_mutate_pick
-                    ))
+                    )
+                )
                 .unwrap()
             }
             _ => unreachable!(),
         };
 
         let st_is_pick = match name {
-            "wood_pick" => st_custom!(ctx,
-                    IsWoodPick() = (
-                        Statement::None,
-                        st_used_pick.clone()
-                    ))
-            .unwrap(),
-            "stone_pick" => st_custom!(ctx,
-                    IsStonePick() = (
-                        Statement::None,
-                        st_used_pick.clone()
-                    ))
-            .unwrap(),
+            "wood_pick" => {
+                st_custom!(ctx, IsWoodPick() = (Statement::None, st_used_pick.clone())).unwrap()
+            }
+            "stone_pick" => {
+                st_custom!(ctx, IsStonePick() = (Statement::None, st_used_pick.clone())).unwrap()
+            }
             _ => unreachable!(),
         };
 
         let st_used_pick_for_stone = match name {
-            "wood_pick" => st_custom!(ctx,
-                    UsePickForStone() = (
-                        st_used_pick,
-                        Statement::None
-                    ))
-            .unwrap(),
-            "stone_pick" => st_custom!(ctx,
-                    UsePickForStone() = (
-                        Statement::None,
-                        st_used_pick
-                    ))
-            .unwrap(),
+            "wood_pick" => {
+                st_custom!(ctx, UsePickForStone() = (st_used_pick, Statement::None)).unwrap()
+            }
+            "stone_pick" => {
+                st_custom!(ctx, UsePickForStone() = (Statement::None, st_used_pick)).unwrap()
+            }
             _ => unreachable!(),
         };
 
         let stone = Object::new(map!({"blueprint" => "stone"})).dict();
         let st_tx_insert_stone = tx_builder.insert(&mut ctx, stone.clone());
-        let st_new_stone = st_custom!(ctx,
+        let st_new_stone = st_custom!(
+            ctx,
             NewStone() = (
                 st_used_pick_for_stone,
                 DictContains(stone, "blueprint", "stone"),
                 st_tx_insert_stone
-            ))
+            )
+        )
         .unwrap();
-        let st_is_stone = st_custom!(ctx,
-            IsStone() = (
-                st_new_stone.clone()
-            ))
-        .unwrap();
+        let st_is_stone = st_custom!(ctx, IsStone() = (st_new_stone.clone())).unwrap();
 
         ctx.builder.reveal(&st_is_pick).unwrap();
         ctx.builder.reveal(&st_is_stone).unwrap();

@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Result};
 use tokio::sync::watch;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::{
     db::Db,
@@ -26,6 +26,16 @@ pub async fn run_worker(
     cfg: WorkerConfig,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
+    info!(
+        max_attempts = cfg.max_attempts,
+        retry_initial_secs = cfg.retry_initial_secs,
+        retry_max_secs = cfg.retry_max_secs,
+        receipt_poll_secs = cfg.receipt_poll_secs,
+        receipt_timeout_secs = ?cfg.receipt_timeout_secs,
+        idle_sleep_ms = cfg.idle_sleep_ms,
+        "Relayer worker started"
+    );
+
     let recovered = db.recover_inflight_jobs(now_ts())?;
     if recovered > 0 {
         info!(recovered, "Recovered in-flight relay jobs");
@@ -46,7 +56,14 @@ pub async fn run_worker(
             continue;
         };
 
-        debug!(job_id = %job.job_id, status = job.status.as_str(), "Processing due relay job");
+        info!(
+            job_id = %job.job_id,
+            status = job.status.as_str(),
+            attempts = job.attempt_count,
+            next_attempt_at = ?job.next_attempt_at,
+            tx_hash = ?job.tx_hash,
+            "Picked due relay job"
+        );
         if let Err(err) = process_due_job(&db, &*eth_client, &cfg, job).await {
             warn!(?err, "Processing relay job failed unexpectedly");
         }
@@ -97,6 +114,15 @@ async fn send_queued_job(
     job.updated_at = now;
     db.put_job(&job)?;
 
+    info!(
+        job_id = %job.job_id,
+        attempt = job.attempt_count,
+        payload_bytes = job.payload_bytes.len(),
+        tx_final = %job.tx_final,
+        state_root_hash = %job.state_root_hash,
+        "Submitting relay payload to Ethereum"
+    );
+
     match eth_client.submit_payload(&job.payload_bytes).await {
         Ok(tx_hash) => {
             job.status = JobStatus::Submitted;
@@ -106,7 +132,12 @@ async fn send_queued_job(
             job.last_error = None;
             job.updated_at = now;
             db.put_job(&job)?;
-            info!(job_id = %job.job_id, tx_hash = ?job.tx_hash, "Submitted blob transaction");
+            info!(
+                job_id = %job.job_id,
+                tx_hash = ?job.tx_hash,
+                next_attempt_at = ?job.next_attempt_at,
+                "Submitted blob transaction"
+            );
             Ok(())
         }
         Err(err) => {
@@ -130,6 +161,13 @@ async fn poll_submitted_job(
 
     if let (Some(timeout_secs), Some(submitted_at)) = (cfg.receipt_timeout_secs, job.submitted_at) {
         if now.saturating_sub(submitted_at) >= timeout_secs as i64 {
+            warn!(
+                job_id = %job.job_id,
+                tx_hash = %tx_hash_str,
+                timeout_secs = timeout_secs,
+                elapsed_secs = now.saturating_sub(submitted_at),
+                "Receipt polling timeout reached"
+            );
             fail_job(
                 db,
                 &mut job,
@@ -144,6 +182,13 @@ async fn poll_submitted_job(
     job.updated_at = now;
     db.put_job(&job)?;
 
+    info!(
+        job_id = %job.job_id,
+        tx_hash = %tx_hash_str,
+        attempt = job.attempt_count,
+        "Polling transaction receipt"
+    );
+
     match eth_client.poll_receipt(&tx_hash_str).await {
         Ok(Some(ReceiptOutcome {
             success: true,
@@ -155,7 +200,13 @@ async fn poll_submitted_job(
             job.last_error = None;
             job.updated_at = now;
             db.put_job(&job)?;
-            info!(job_id = %job.job_id, block_number = ?job.block_number, "Relay job confirmed");
+            info!(
+                job_id = %job.job_id,
+                tx_hash = %tx_hash_str,
+                block_number = ?job.block_number,
+                attempts = job.attempt_count,
+                "Relay job confirmed"
+            );
             Ok(())
         }
         Ok(Some(ReceiptOutcome {
@@ -169,7 +220,12 @@ async fn poll_submitted_job(
                 block_number,
                 "transaction reverted on-chain".to_string(),
             )?;
-            warn!(job_id = %job.job_id, "Relay job failed due to reverted receipt");
+            warn!(
+                job_id = %job.job_id,
+                tx_hash = %tx_hash_str,
+                block_number = ?block_number,
+                "Relay job failed due to reverted receipt"
+            );
             Ok(())
         }
         Ok(None) => {
@@ -177,11 +233,22 @@ async fn poll_submitted_job(
             job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
             job.updated_at = now;
             db.put_job(&job)?;
-            debug!(job_id = %job.job_id, "Receipt not ready yet");
+            info!(
+                job_id = %job.job_id,
+                tx_hash = %tx_hash_str,
+                next_attempt_at = ?job.next_attempt_at,
+                "Receipt not ready yet; will poll again"
+            );
             Ok(())
         }
         Err(err) => {
             if is_permanent_error(&err) {
+                warn!(
+                    job_id = %job.job_id,
+                    tx_hash = %tx_hash_str,
+                    error = %err,
+                    "Permanent receipt polling error; marking failed"
+                );
                 fail_job(db, &mut job, now, err.to_string())?;
                 return Ok(());
             }
@@ -202,6 +269,12 @@ fn fail_job_with_block(
     block_number: Option<u64>,
     reason: String,
 ) -> Result<()> {
+    warn!(
+        job_id = %job.job_id,
+        block_number = ?block_number,
+        reason = %reason,
+        "Relay job marked failed"
+    );
     job.status = JobStatus::Failed;
     job.block_number = block_number;
     job.next_attempt_at = None;
@@ -224,7 +297,13 @@ fn schedule_retry_or_fail(
         job.last_error = Some(msg);
         job.updated_at = now;
         db.put_job(&job)?;
-        warn!(job_id = %job.job_id, attempts = job.attempt_count, "Relay job marked failed");
+        warn!(
+            job_id = %job.job_id,
+            attempts = job.attempt_count,
+            max_attempts = cfg.max_attempts,
+            error = ?job.last_error,
+            "Relay job marked failed after exhausting retries"
+        );
         return Ok(());
     }
 
@@ -243,6 +322,8 @@ fn schedule_retry_or_fail(
         job_id = %job.job_id,
         attempts = job.attempt_count,
         retry_in_secs = backoff,
+        next_attempt_at = ?job.next_attempt_at,
+        error = ?job.last_error,
         "Relay job scheduled for retry"
     );
     Ok(())

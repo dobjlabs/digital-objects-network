@@ -2,7 +2,9 @@ mod commands;
 mod state;
 mod types;
 
-use commands::{get_things_dir, load_gui_bootstrap, open_things_dir, run_sdk_action, sample_app_cpu};
+use commands::{
+    get_things_dir, load_gui_bootstrap, open_things_dir, run_sdk_action, sample_app_cpu,
+};
 use state::{CpuMonitor, CraftRuntime};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -10,6 +10,7 @@ use alloy::{
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use tracing::{debug, info};
 
 use crate::config::AppConfig;
 
@@ -45,15 +46,29 @@ impl EthClient {
             .connect_http(cfg.rpc_url.parse()?)
             .erased();
 
-        Ok(Self {
+        let client = Self {
             provider,
             from,
             to: cfg.to_address,
             max_fee_per_blob_gas: cfg.max_fee_per_blob_gas,
-        })
+        };
+
+        info!(
+            rpc_url = %cfg.rpc_url,
+            from = %client.from,
+            to = %client.to,
+            max_fee_per_blob_gas = ?client.max_fee_per_blob_gas,
+            "Initialized Ethereum gateway"
+        );
+
+        Ok(client)
     }
 
     async fn submit_payload_inner(&self, payload_bytes: &[u8]) -> Result<String> {
+        info!(
+            payload_bytes = payload_bytes.len(),
+            "Preparing EIP-4844 transaction from relay payload"
+        );
         let sidecar = SidecarBuilder::<SimpleCoder>::from_slice(payload_bytes)
             .build_4844()
             .map_err(|e| anyhow!("build blob sidecar: {e}"))?;
@@ -68,12 +83,21 @@ impl EthClient {
             tx = tx.max_fee_per_blob_gas(max_fee_per_blob_gas);
         }
 
+        debug!(
+            from = %self.from,
+            to = %self.to,
+            max_fee_per_blob_gas = ?self.max_fee_per_blob_gas,
+            "Sending Ethereum blob transaction"
+        );
         let pending = self.provider.send_transaction(tx).await?;
-        Ok(format!("{:#x}", pending.tx_hash()))
+        let tx_hash = format!("{:#x}", pending.tx_hash());
+        info!(tx_hash = %tx_hash, "Ethereum blob transaction submitted");
+        Ok(tx_hash)
     }
 
     async fn poll_receipt_inner(&self, tx_hash: &str) -> Result<Option<ReceiptOutcome>> {
         let tx_hash = parse_tx_hash(tx_hash)?;
+        debug!(tx_hash = %format!("{tx_hash:#x}"), "Querying Ethereum transaction receipt");
         let receipt = self.provider.get_transaction_receipt(tx_hash).await?;
         Ok(receipt.map(|r| ReceiptOutcome {
             success: r.status(),
