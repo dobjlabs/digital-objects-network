@@ -16,6 +16,10 @@ itertools = "0.14.0"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 time = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+alloy = { workspace = true  }
 txlib = { path = "../txlib" }
 
 [features]

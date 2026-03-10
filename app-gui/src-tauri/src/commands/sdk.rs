@@ -8,7 +8,7 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use common::{
-    blob_codec::MAX_SIMPLE_BLOB_PAYLOAD_BYTES,
+    blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES,
     payload::{Payload, PayloadProof},
     shrink::{shrink_compress_pod, ShrunkMainPodSetup},
 };

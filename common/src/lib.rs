@@ -1,6 +1,6 @@
 //! `common` contains shared logic across the various crates of the project.
 
-pub mod blob_codec;
+pub mod blob;
 /// POD proving:
 /// 2 options to prepare the POD proofs:
 ///   A) "groth":

@@ -2002,13 +2002,17 @@ dependencies = [
 name = "common"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "dotenvy",
+ "hex",
  "itertools 0.14.0",
  "log",
  "plonky2",
  "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
  "pod2_onchain",
+ "serde",
+ "serde_json",
  "time 0.3.47",
  "tracing",
  "tracing-subscriber",

@@ -15,7 +15,7 @@ use tokio::sync::watch;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use common::{blob_codec::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
+use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
 
 use crate::{
     auth::is_authorized,

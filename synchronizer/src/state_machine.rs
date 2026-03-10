@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
+use common::proof::BlobParser;
 use pod2::middleware::Hash;
 use tracing::{info, warn};
 
@@ -14,7 +15,6 @@ const MAX_GSR_AGE_BLOCKS: i64 = 300;
 use txlib::StateRoot;
 
 use crate::app_db::{AppDb, DerivedState};
-use crate::proof::BlobParser;
 use crate::sync_db::SlotJournal;
 
 #[derive(Debug, Clone, Default)]
@@ -335,7 +335,7 @@ impl StateMachine {
 mod tests {
     use super::*;
     use crate::app_db::AppDb;
-    use crate::proof::MockBlobParser;
+    use common::proof::MockBlobParser;
     use hex::ToHex;
     use pod2::middleware::{hash_values, Value};
     use tempfile::TempDir;
@@ -683,8 +683,8 @@ mod tests {
 
         let dir = TempDir::new().unwrap();
         let app_db = AppDb::connect(dir.path().to_str().unwrap()).unwrap();
-        let sm =
-            StateMachine::new(app_db, Arc::new(crate::proof::ProofParser::new().unwrap())).unwrap();
+        let sm = StateMachine::new(app_db, Arc::new(common::proof::ProofParser::new().unwrap()))
+            .unwrap();
 
         let gsr0 = seed_gsr0(&sm);
 

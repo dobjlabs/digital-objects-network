@@ -21,7 +21,6 @@ use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
 use tracing::{debug, info, trace};
 
-use crate::blob::bytes_from_simple_blob;
 use crate::config::AppConfig;
 use crate::state_machine::{SlotDelta, StateMachine};
 use crate::sync_db::{JournalOp, SlotJournal, SyncDb};
@@ -328,7 +327,7 @@ impl Node {
             trace!(?hash, ?from, ?to);
 
             for blob in tx_blobs.iter() {
-                let bytes = bytes_from_simple_blob(blob.blob.inner()).with_context(|| {
+                let bytes = common::blob::decode_simple_blob(blob.blob.inner()).with_context(|| {
                     format!(
                         "Invalid byte encoding in blob at slot {}, blob_index {}",
                         slot_ctx.slot, blob.index

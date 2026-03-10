@@ -7,20 +7,18 @@ use tracing::{debug, error, info};
 
 mod api;
 mod app_db;
-mod blob;
 mod clients;
 mod config;
 mod node;
-mod proof;
 mod state_machine;
 mod sync_db;
 mod sync_loop;
 
 use api::run_api_server;
 use app_db::AppDb;
+use common::proof::ProofParser;
 use config::load_config;
 use node::Node;
-use proof::ProofParser;
 use state_machine::StateMachine;
 use sync_db::SyncDb;
 use sync_loop::run_sync_loop;

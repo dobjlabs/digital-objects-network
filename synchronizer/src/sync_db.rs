@@ -542,8 +542,8 @@ async fn ensure_database_exists(database_url: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::app_db::AppDb;
-    use crate::proof::MockBlobParser;
     use crate::state_machine::StateMachine;
+    use common::proof::MockBlobParser;
     use pod2::middleware::{hash_values, Value};
     use sqlx::Executor;
     use std::sync::atomic::{AtomicU64, Ordering};
