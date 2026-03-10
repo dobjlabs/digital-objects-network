@@ -27,6 +27,10 @@ export function InventoryPanel({
     event: DragEvent<HTMLButtonElement>,
     item: InventoryItem,
   ) => {
+    if (item.validity !== "live") {
+      event.preventDefault();
+      return;
+    }
     const payload = JSON.stringify({
       itemId: item.id,
       name: item.fileName,
@@ -63,7 +67,7 @@ export function InventoryPanel({
         type="button"
         className={`inventory-item ${activeItemId === item.id ? "active" : ""}`}
         onClick={() => handleClickItem(item.id)}
-        draggable
+        draggable={item.validity === "live"}
         onDragStart={(event) => handleDragStart(event, item)}
         onDragEnd={handleDragEnd}
       >

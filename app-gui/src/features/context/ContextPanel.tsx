@@ -120,6 +120,23 @@ export function ContextPanel({
       return;
     }
 
+    const droppedItem = items.find((candidate) => candidate.id === droppedId);
+    if (!droppedItem) {
+      setArgErrors((prev) => ({
+        ...prev,
+        [key]: "Dropped object not found",
+      }));
+      return;
+    }
+
+    if (droppedItem.validity !== "live") {
+      setArgErrors((prev) => ({
+        ...prev,
+        [key]: "Only live objects can be bound",
+      }));
+      return;
+    }
+
     setArgBindings((prev) => ({
       ...prev,
       [key]: { objectId: droppedId, label: droppedName },
