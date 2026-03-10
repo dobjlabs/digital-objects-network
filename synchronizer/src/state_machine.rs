@@ -1,11 +1,15 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
 };
 
 use anyhow::{anyhow, Context, Result};
 use pod2::middleware::Hash;
 use tracing::{info, warn};
+
+/// The maximum age of a GSR used as grounding for a transaction.
+/// At one block per 12 seconds, this is one hour.
+const MAX_GSR_AGE_BLOCKS: i64 = 300;
 
 use txlib::StateRoot;
 
@@ -30,6 +34,9 @@ struct InnerState {
     /// Ordered history of Global State Roots, one per processed block.
     /// Blobs may reference any GSR in this history, not just the latest.
     global_state_roots: Vec<Hash>,
+    /// Maps each known GSR hash to the EL block number at which it was produced.
+    /// Used to enforce the maximum GSR age limit on incoming blobs.
+    gsr_block_numbers: HashMap<Hash, i64>,
 }
 
 #[derive(Clone)]
@@ -37,6 +44,7 @@ struct WorkingState {
     transactions: HashSet<Hash>,
     nullifiers: HashSet<Hash>,
     global_state_roots: Vec<Hash>,
+    gsr_block_numbers: HashMap<Hash, i64>,
 }
 
 /// Domain logic for the synchronizer: proof verification, state validation, and persistence.
@@ -68,12 +76,14 @@ impl StateMachine {
             transactions,
             nullifiers,
             global_state_roots,
+            gsr_block_numbers,
         } = app_db.load_state()?;
         Ok(Self {
             state: RwLock::new(InnerState {
                 transactions,
                 nullifiers,
                 global_state_roots,
+                gsr_block_numbers,
             }),
             app_db,
             proof_parser,
@@ -85,11 +95,13 @@ impl StateMachine {
             transactions,
             nullifiers,
             global_state_roots,
+            gsr_block_numbers,
         } = self.app_db.load_state()?;
         let mut state = self.write_state()?;
         state.transactions = transactions;
         state.nullifiers = nullifiers;
         state.global_state_roots = global_state_roots;
+        state.gsr_block_numbers = gsr_block_numbers;
         Ok(())
     }
 
@@ -99,6 +111,7 @@ impl StateMachine {
             transactions: state.transactions.clone(),
             nullifiers: state.nullifiers.clone(),
             global_state_roots: state.global_state_roots.clone(),
+            gsr_block_numbers: state.gsr_block_numbers.clone(),
         })
     }
 
@@ -120,7 +133,7 @@ impl StateMachine {
         state: &mut WorkingState,
         bytes: &[u8],
         slot: u32,
-        block_number: Option<u32>,
+        block_number: u32,
         delta: &mut SlotDelta,
     ) -> Result<()> {
         let payload = match self.proof_parser.parse_blob(bytes) {
@@ -143,14 +156,22 @@ impl StateMachine {
             }
         };
 
-        // A payload is only valid if it references a GSR we have previously computed.
-        // We accept any historical GSR, not just the latest, to tolerate blobs that were
-        // proven against a state root that has since been superseded.
-        if !state.global_state_roots.contains(&payload.state_root_hash) {
+        // A payload is only valid if it references a GSR we have previously computed,
+        // and that GSR must be no more than MAX_GSR_AGE_BLOCKS old.
+        let Some(&gsr_block) = state.gsr_block_numbers.get(&payload.state_root_hash) else {
             warn!(
                 slot,
                 block_number,
                 "Blob proof state_root_hash not found in known GSR history; rejecting"
+            );
+            return Ok(());
+        };
+        let current_block: i64 = block_number.into();
+        let age = current_block - gsr_block;
+        if age > MAX_GSR_AGE_BLOCKS {
+            warn!(
+                slot,
+                block_number, gsr_block, age, "Blob proof state_root_hash is too old; rejecting"
             );
             return Ok(());
         }
@@ -210,7 +231,7 @@ impl StateMachine {
         let mut delta = SlotDelta::default();
 
         for (blob_index, bytes) in blob_payloads {
-            self.process_blob(&mut working, bytes, slot, Some(block_number), &mut delta)
+            self.process_blob(&mut working, bytes, slot, block_number, &mut delta)
                 .with_context(|| {
                     format!(
                         "Failed to process blob at slot {}, blob_index {}",
@@ -250,6 +271,9 @@ impl StateMachine {
         }
         for gsr in &delta.gsr_hashes {
             state.global_state_roots.push(*gsr);
+        }
+        for (gsr, block_number) in delta.gsr_hashes.iter().zip(delta.gsr_block_numbers.iter()) {
+            state.gsr_block_numbers.insert(*gsr, *block_number as i64);
         }
         Ok(())
     }
@@ -315,6 +339,7 @@ mod tests {
     use hex::ToHex;
     use pod2::middleware::{hash_values, Value};
     use tempfile::TempDir;
+    use txlib::new_obj;
 
     fn make_sm() -> (StateMachine, TempDir) {
         let dir = TempDir::new().unwrap();
@@ -519,6 +544,42 @@ mod tests {
     }
 
     #[test]
+    fn test_stale_gsr_rejected() {
+        let (sm, _dir) = make_sm();
+        sm.advance_block(0, 0).unwrap();
+        let gsr0 = sm.state_snapshot().unwrap().2[0];
+
+        // Advance 301 more blocks so gsr0 is 301 blocks old when the blob arrives.
+        for i in 1..=301 {
+            sm.advance_block(i, i).unwrap();
+        }
+
+        let tx = unique_hash(1);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx, &[], gsr0), 0, 301);
+
+        let (txns, _, _) = sm.state_snapshot().unwrap();
+        assert!(txns.is_empty());
+    }
+
+    #[test]
+    fn test_gsr_at_limit_accepted() {
+        let (sm, _dir) = make_sm();
+        sm.advance_block(0, 0).unwrap();
+        let gsr0 = sm.state_snapshot().unwrap().2[0];
+
+        // Advance 300 more blocks so gsr0 is exactly 300 blocks old — at the limit.
+        for i in 1..=300 {
+            sm.advance_block(i, i).unwrap();
+        }
+
+        let tx = unique_hash(1);
+        process_and_commit_blob(&sm, &mock_txn_bytes(tx, &[], gsr0), 0, 300);
+
+        let (txns, _, _) = sm.state_snapshot().unwrap();
+        assert!(txns.contains(&tx));
+    }
+
+    #[test]
     fn test_invalid_blob_skipped() {
         let (sm, _dir) = make_sm();
         seed_gsr0(&sm);
@@ -616,7 +677,7 @@ mod tests {
         };
         use pod2utils::macros::BuildContext;
         use std::collections::HashSet;
-        use txlib::{Object, TxBuilder};
+        use txlib::TxBuilder;
 
         let params = Params::default();
         let vd_set = &*DEFAULT_VD_SET;
@@ -642,19 +703,19 @@ mod tests {
         );
 
         let txlib_modules = vec![Arc::new(txlib::predicates::module())];
-        let mut builder = MultiPodBuilder::new(&params, vd_set);
+        let builder = MultiPodBuilder::new(&params, vd_set);
         let mut ctx = BuildContext {
-            builder: &mut builder,
-            modules: &txlib_modules,
+            builder,
+            modules: txlib_modules,
         };
 
-        let obj = Object::new(std::collections::HashMap::new());
+        let obj = new_obj();
         let mut tx_builder = TxBuilder::new(&mut ctx, &[], state_root);
         tx_builder.insert(&mut ctx, obj);
         let (st_finalized, tx) = tx_builder.finalize(&mut ctx);
         ctx.builder.reveal(&st_finalized).unwrap();
 
-        let solution = builder.solve().unwrap();
+        let solution = ctx.builder.solve().unwrap();
         let pod = solution.prove(&Prover {}).unwrap().pods.pop().unwrap();
         pod.pod.verify().unwrap();
 

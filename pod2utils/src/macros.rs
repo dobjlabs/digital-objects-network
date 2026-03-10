@@ -187,6 +187,12 @@ macro_rules! op {
     (SetDelete($set:expr, $old_set:expr, $value:expr)) => {
         pod2::frontend::Operation::set_delete($set.clone(), $old_set.clone(), $value.clone())
     };
+    (GtEq($a:expr, $b:expr)) => {
+        pod2::frontend::Operation::gt_eq($a.clone(), $b.clone())
+    };
+    (ArrayContains($array:expr, $idx:expr, $value:expr)) => {
+        pod2::frontend::Operation::array_contains($array.clone(), $idx.clone(), $value.clone())
+    };
 }
 
 /// Argument types:
@@ -300,14 +306,40 @@ macro_rules! _st_custom {
     }};
 }
 
-pub struct BuildContext<'a> {
-    pub builder: &'a mut MultiPodBuilder,
-    pub modules: &'a [Arc<Module>],
+pub struct BuildContext {
+    pub builder: MultiPodBuilder,
+    pub modules: Vec<Arc<Module>>,
 }
 
-impl<'a> BuildContext<'a> {
-    pub fn new(builder: &'a mut MultiPodBuilder, modules: &'a [Arc<Module>]) -> Self {
+impl BuildContext {
+    pub fn new(builder: MultiPodBuilder, modules: Vec<Arc<Module>>) -> Self {
         Self { builder, modules }
+    }
+}
+
+impl BuildContext {
+    pub fn apply_custom_pred(
+        &mut self,
+        public: bool,
+        name: &str,
+        wildcard_map: HashMap<String, Value>,
+        statements: Vec<Statement>,
+    ) -> anyhow::Result<Statement> {
+        for module in &self.modules {
+            if let Some(cpr) = module.predicate_ref_by_name(name) {
+                return module.apply_predicate_with(name, statements, public, |is_public, op| {
+                    let mut wildcard_values: Vec<(usize, Value)> = Vec::new();
+                    for (i, name) in cpr.predicate().wildcard_names().iter().enumerate() {
+                        if let Some(value) = wildcard_map.get(name) {
+                            wildcard_values.push((i, value.clone()));
+                        }
+                    }
+                    let st = self.builder.op(is_public, wildcard_values, op).unwrap();
+                    Ok(st)
+                });
+            }
+        }
+        panic!("predicate not found");
     }
 }
 
@@ -317,7 +349,7 @@ impl<'a> BuildContext<'a> {
 #[rustfmt::skip]
 macro_rules! pub_st_custom {
     ($ctx:expr, $pred:ident($($wc_name:ident=$wc_value:expr),*) = ($($sts:tt)*)) => {{
-        $crate::_st_custom!($ctx.builder, $ctx.modules, true, $pred($($wc_name=$wc_value),*) = ($($sts)*))
+        $crate::_st_custom!(&mut $ctx.builder, &$ctx.modules, true, $pred($($wc_name=$wc_value),*) = ($($sts)*))
     }};
 }
 
@@ -331,6 +363,6 @@ macro_rules! pub_st_custom {
 #[rustfmt::skip]
 macro_rules! st_custom {
     ($ctx:expr, $pred:ident($($wc_name:ident=$wc_value:expr),*) = ($($sts:tt)*)) => {{
-        $crate::_st_custom!($ctx.builder, $ctx.modules, false, $pred($($wc_name=$wc_value),*) = ($($sts)*))
+        $crate::_st_custom!(&mut $ctx.builder, &$ctx.modules, false, $pred($($wc_name=$wc_value),*) = ($($sts)*))
     }};
 }
