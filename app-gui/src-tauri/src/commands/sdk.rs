@@ -138,25 +138,25 @@ fn resolve_objects_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 fn synchronizer_api_url() -> String {
-    std::env::var("ZKCRAFT_SYNCHRONIZER_API_URL")
+    std::env::var("SYNCHRONIZER_API_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string())
 }
 
 fn relayer_api_url() -> String {
-    std::env::var("ZKCRAFT_RELAYER_API_URL").unwrap_or_else(|_| "http://127.0.0.1:3200".to_string())
+    std::env::var("RELAYER_API_URL").unwrap_or_else(|_| "http://127.0.0.1:3200".to_string())
 }
 
 fn relayer_api_key() -> Result<String, String> {
-    let key = std::env::var("ZKCRAFT_RELAYER_API_KEY")
-        .map_err(|_| "ZKCRAFT_RELAYER_API_KEY is required to relay proofs".to_string())?;
+    let key = std::env::var("RELAYER_API_KEY")
+        .map_err(|_| "RELAYER_API_KEY is required to relay proofs".to_string())?;
     if key.trim().is_empty() {
-        return Err("ZKCRAFT_RELAYER_API_KEY is empty".to_string());
+        return Err("RELAYER_API_KEY is empty".to_string());
     }
     Ok(key)
 }
 
 fn relayer_poll_timeout_secs() -> u64 {
-    std::env::var("ZKCRAFT_RELAYER_POLL_TIMEOUT_SECS")
+    std::env::var("RELAYER_POLL_TIMEOUT_SECS")
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|value| *value > 0)
@@ -164,7 +164,7 @@ fn relayer_poll_timeout_secs() -> u64 {
 }
 
 fn relayer_poll_interval_millis() -> u64 {
-    std::env::var("ZKCRAFT_RELAYER_POLL_INTERVAL_MS")
+    std::env::var("RELAYER_POLL_INTERVAL_MS")
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|value| *value >= 250)
@@ -172,7 +172,7 @@ fn relayer_poll_interval_millis() -> u64 {
 }
 
 fn synchronizer_poll_timeout_secs() -> u64 {
-    std::env::var("ZKCRAFT_SYNCHRONIZER_POLL_TIMEOUT_SECS")
+    std::env::var("SYNCHRONIZER_POLL_TIMEOUT_SECS")
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|value| *value > 0)
@@ -180,7 +180,7 @@ fn synchronizer_poll_timeout_secs() -> u64 {
 }
 
 fn synchronizer_poll_interval_millis() -> u64 {
-    std::env::var("ZKCRAFT_SYNCHRONIZER_POLL_INTERVAL_MS")
+    std::env::var("SYNCHRONIZER_POLL_INTERVAL_MS")
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|value| *value >= 250)
@@ -196,11 +196,11 @@ fn ensure_non_empty_url(name: &str, value: String) -> Result<String, String> {
 }
 
 fn normalize_sync_url() -> Result<String, String> {
-    ensure_non_empty_url("ZKCRAFT_SYNCHRONIZER_API_URL", synchronizer_api_url())
+    ensure_non_empty_url("SYNCHRONIZER_API_URL", synchronizer_api_url())
 }
 
 fn normalize_relayer_url() -> Result<String, String> {
-    ensure_non_empty_url("ZKCRAFT_RELAYER_API_URL", relayer_api_url())
+    ensure_non_empty_url("RELAYER_API_URL", relayer_api_url())
 }
 
 fn relayer_proofs_endpoint(relayer_api_url: &str) -> String {
