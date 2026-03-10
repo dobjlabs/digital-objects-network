@@ -7,7 +7,7 @@ use std::{
 
 use pod2::middleware::{
     containers::{Array, Dictionary, Set},
-    hash_values, Hash, Key, RawValue, Statement, Value,
+    hash_values, Hash, Key, RawValue, Statement, Value, EMPTY_VALUE,
 };
 use pod2utils::{dict, dict_define, macros::BuildContext, rand_raw_value, set, st_custom};
 
@@ -329,6 +329,13 @@ impl TxBuilder {
     }
 }
 
+pub fn new_obj() -> Dictionary {
+    let mut map = HashMap::new();
+    map.insert(Key::from("key"), Value::from(rand_raw_value()));
+    map.insert(Key::from("work"), Value::from(EMPTY_VALUE));
+    Dictionary::new(map)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -337,7 +344,7 @@ mod tests {
             basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver,
         },
         frontend::{MainPod, MultiPodBuilder},
-        middleware::{MainPodProver, Params, VDSet, EMPTY_VALUE},
+        middleware::{MainPodProver, Params, VDSet},
     };
     use pod2utils::{macros::BuildContext, set};
 
@@ -346,13 +353,6 @@ mod tests {
     fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
         let solution = builder.solve().unwrap();
         solution.prove(prover).unwrap().pods.pop().unwrap()
-    }
-
-    fn new_obj() -> Dictionary {
-        let mut map = HashMap::new();
-        map.insert(Key::from("key"), Value::from(rand_raw_value()));
-        map.insert(Key::from("work"), Value::from(EMPTY_VALUE));
-        Dictionary::new(map)
     }
 
     #[test]
