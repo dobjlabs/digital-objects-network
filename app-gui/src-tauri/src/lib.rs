@@ -4,7 +4,8 @@ mod state;
 mod types;
 
 use commands::{
-    get_things_dir, load_gui_bootstrap, open_things_dir, run_sdk_action, sample_app_cpu,
+    get_things_dir, load_gui_bootstrap, open_things_dir, pick_dobj_file_path,
+    read_dobj_file_metadata, run_sdk_action, sample_app_cpu,
 };
 use objects_watcher::start_objects_watcher;
 use state::{CpuMonitor, CraftRuntime};
@@ -29,7 +30,9 @@ pub fn run() {
             load_gui_bootstrap,
             run_sdk_action,
             get_things_dir,
-            open_things_dir
+            open_things_dir,
+            pick_dobj_file_path,
+            read_dobj_file_metadata
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

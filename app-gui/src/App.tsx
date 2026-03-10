@@ -38,6 +38,7 @@ function App() {
     (state) => state.applyRunSdkActionProgress,
   );
   const runProof = useUiStore((state) => state.runProof);
+  const proofStatus = useUiStore((state) => state.proof.status);
   const proofRunning = useUiStore(
     (state) =>
       state.proof.status === "generating" ||
@@ -200,6 +201,7 @@ function App() {
           recipes={recipes}
           onRunProof={runProof}
           proofRunning={proofRunning}
+          proofStatus={proofStatus}
           onClearSelection={clearSelection}
         />
         <ProofRunnerPanel />

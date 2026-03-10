@@ -69,8 +69,10 @@ interface UiStoreState extends AppUiState {
   runProof: (input: {
     actionId: string;
     methodName: string;
-    inputObjectIds: string[];
-    inputLabels: string[];
+    inputBindings: Array<{
+      objectPath: string;
+      label: string;
+    }>;
     cpuCost: string;
   }) => Promise<void>;
 }
@@ -335,13 +337,14 @@ export const useUiStore = create<UiStoreState>((set) => ({
   runProof: async ({
     actionId,
     methodName,
-    inputObjectIds,
-    inputLabels,
+    inputBindings,
     cpuCost,
   }) => {
     const postDoneHoldMs = 2800;
     const verifyTargets =
-      inputLabels.length > 0 ? inputLabels : ["(no inputs)"];
+      inputBindings.length > 0
+        ? inputBindings.map((binding) => binding.label)
+        : ["(no inputs)"];
 
     set((prev) => {
       if (
@@ -357,7 +360,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           status: "generating",
           methodName,
           cpuCost,
-          args: inputLabels,
+          args: verifyTargets,
           messages: ["Running SDK action..."],
           steps: [
             {
@@ -397,7 +400,10 @@ export const useUiStore = create<UiStoreState>((set) => ({
     try {
       const result = await runSdkAction({
         actionId,
-        inputObjectIds,
+        inputs: inputBindings.map((binding) => ({
+          objectPath: binding.objectPath,
+          label: binding.label,
+        })),
       });
 
       set((prev) => {
@@ -446,7 +452,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
           status: "error",
           methodName,
           cpuCost,
-          args: inputLabels,
+          args: verifyTargets,
           messages: [],
           steps: [],
           oldRoot: null,

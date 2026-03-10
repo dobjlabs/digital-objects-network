@@ -104,9 +104,16 @@ pub(crate) struct LoadGuiBootstrapResult {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct RunSdkActionArgInput {
+    pub(crate) object_path: String,
+    pub(crate) label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct RunSdkActionInput {
     pub(crate) action_id: String,
-    pub(crate) input_object_ids: Vec<String>,
+    pub(crate) inputs: Vec<RunSdkActionArgInput>,
 }
 
 #[derive(Debug, Serialize)]

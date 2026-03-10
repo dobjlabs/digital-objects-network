@@ -59,7 +59,10 @@ export interface LoadGuiBootstrapResult {
 
 export interface RunSdkActionInput {
   actionId: string;
-  inputObjectIds: string[];
+  inputs: Array<{
+    objectPath: string;
+    label?: string;
+  }>;
 }
 
 export interface RunSdkActionResult {
@@ -69,6 +72,12 @@ export interface RunSdkActionResult {
   outputFiles: string[];
   nullifiedFiles: string[];
   objects: InventoryItemPayload[];
+}
+
+export interface DobjFileMetadata {
+  fileName: string;
+  className: string;
+  validity: string;
 }
 
 export interface RunSdkActionProgress {
@@ -104,6 +113,14 @@ export function runSdkAction(
   input: RunSdkActionInput,
 ): Promise<RunSdkActionResult> {
   return invoke<RunSdkActionResult>("run_sdk_action", { input });
+}
+
+export function pickDobjFilePath(): Promise<string> {
+  return invoke<string>("pick_dobj_file_path");
+}
+
+export function readDobjFileMetadata(path: string): Promise<DobjFileMetadata> {
+  return invoke<DobjFileMetadata>("read_dobj_file_metadata", { path });
 }
 
 export function listenRunSdkActionProgress(

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DragEvent } from "react";
 import type {
   ContextSelection,
@@ -7,6 +7,10 @@ import type {
   MethodArg,
   Recipe,
 } from "../../shared/types/domain";
+import {
+  pickDobjFilePath,
+  readDobjFileMetadata,
+} from "../../shared/api/tauriClient";
 
 interface ContextPanelProps {
   selection: ContextSelection;
@@ -16,15 +20,18 @@ interface ContextPanelProps {
   onRunProof: (input: {
     actionId: string;
     methodName: string;
-    inputObjectIds: string[];
-    inputLabels: string[];
+    inputBindings: Array<{
+      objectPath: string;
+      label: string;
+    }>;
     cpuCost: string;
   }) => void;
   proofRunning: boolean;
+  proofStatus: "idle" | "generating" | "committing" | "summary" | "error";
 }
 
 interface BoundArg {
-  objectId: string;
+  objectPath: string;
   label: string;
 }
 
@@ -35,10 +42,12 @@ export function ContextPanel({
   onClearSelection,
   onRunProof,
   proofRunning,
+  proofStatus,
 }: ContextPanelProps) {
   const [argBindings, setArgBindings] = useState<Record<string, BoundArg>>({});
   const [hoverArgKey, setHoverArgKey] = useState<string | null>(null);
   const [argErrors, setArgErrors] = useState<Record<string, string>>({});
+  const previousProofStatusRef = useRef(proofStatus);
   const selectionKey =
     selection.kind === "item"
       ? `item:${selection.itemId}`
@@ -52,33 +61,27 @@ export function ContextPanel({
   }, [selectionKey]);
 
   useEffect(() => {
-    setArgBindings((prev) => {
-      const next: Record<string, BoundArg> = {};
-      let changed = false;
-      for (const [key, bound] of Object.entries(prev)) {
-        const item = items.find((candidate) => candidate.id === bound.objectId);
-        if (item && item.validity === "live") {
-          next[key] = bound;
-        } else {
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [items]);
+    const previous = previousProofStatusRef.current;
+    if (previous === "summary" && proofStatus === "idle") {
+      setArgBindings({});
+      setArgErrors({});
+      setHoverArgKey(null);
+    }
+    previousProofStatusRef.current = proofStatus;
+  }, [proofStatus]);
 
   const argKey = (methodId: string, index: number) =>
     `${selection.kind}:${methodId}:${index}`;
 
   const parseDropPayload = (raw: string): {
-    itemId?: string;
+    objectPath?: string;
     name?: string;
     className?: string;
     classHash?: string;
   } => {
     try {
       return JSON.parse(raw) as {
-        itemId?: string;
+        objectPath?: string;
         name?: string;
         className?: string;
         classHash?: string;
@@ -118,7 +121,7 @@ export function ContextPanel({
     const parsed = parseDropPayload(raw);
     const key = argKey(methodId, index);
     const droppedName = parsed.name ?? raw;
-    const droppedId = parsed.itemId;
+    const droppedPath = parsed.objectPath?.trim() ?? "";
 
     if (!isArgCompatible(arg, parsed.classHash, parsed.className)) {
       const got = parsed.className ?? droppedName;
@@ -129,24 +132,17 @@ export function ContextPanel({
       return;
     }
 
-    if (!droppedId) {
+    if (!droppedPath) {
       setArgErrors((prev) => ({
         ...prev,
-        [key]: "Dropped object missing ID",
+        [key]: "Dropped object missing path",
       }));
       return;
     }
-
-    const droppedItem = items.find((candidate) => candidate.id === droppedId);
-    if (!droppedItem) {
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: "Dropped object not found",
-      }));
-      return;
-    }
-
-    if (droppedItem.validity !== "live") {
+    if (
+      droppedPath.includes("/.nullified/") ||
+      droppedPath.includes("\\.nullified\\")
+    ) {
       setArgErrors((prev) => ({
         ...prev,
         [key]: "Only live objects can be bound",
@@ -156,7 +152,10 @@ export function ContextPanel({
 
     setArgBindings((prev) => ({
       ...prev,
-      [key]: { objectId: droppedId, label: droppedName },
+      [key]: {
+        objectPath: droppedPath,
+        label: droppedName,
+      },
     }));
     setArgErrors((prev) => {
       const next = { ...prev };
@@ -164,6 +163,101 @@ export function ContextPanel({
       return next;
     });
     setHoverArgKey(null);
+  };
+
+  const fileNameFromPath = (path: string) => {
+    const normalized = path.replace(/\\/g, "/");
+    const index = normalized.lastIndexOf("/");
+    if (index === -1) return normalized;
+    return normalized.slice(index + 1);
+  };
+
+  const handleBrowseArgFile = async (
+    methodId: string,
+    arg: MethodArg,
+    index: number,
+  ) => {
+    const key = argKey(methodId, index);
+    let selectedPath = "";
+    try {
+      selectedPath = (await pickDobjFilePath()).trim();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : typeof error === "string" ? error : "";
+      if (message.includes("No file selected")) {
+        return;
+      }
+      setArgErrors((prev) => ({
+        ...prev,
+        [key]: "Failed to open file picker",
+      }));
+      return;
+    }
+    if (!selectedPath) return;
+
+    const selectedName = fileNameFromPath(selectedPath);
+    if (!selectedName.toLowerCase().endsWith(".dobj")) {
+      setArgErrors((prev) => ({
+        ...prev,
+        [key]: "Only .dobj files are supported",
+      }));
+      return;
+    }
+
+    let parsed: {
+      fileName: string;
+      className: string;
+      validity: string;
+    };
+    try {
+      parsed = await readDobjFileMetadata(selectedPath);
+    } catch {
+      setArgErrors((prev) => ({
+        ...prev,
+        [key]: `Invalid .dobj file: ${selectedName}`,
+      }));
+      return;
+    }
+
+    const className = parsed.className.trim();
+    const validity = parsed.validity.trim().toLowerCase();
+    const fileLabel = parsed.fileName.trim().length > 0 ? parsed.fileName.trim() : selectedName;
+
+    if (!className || !validity) {
+      setArgErrors((prev) => ({
+        ...prev,
+        [key]: `Missing required fields in .dobj: ${selectedName}`,
+      }));
+      return;
+    }
+
+    if (
+      !isArgCompatible(arg, undefined, className)
+    ) {
+      setArgErrors((prev) => ({
+        ...prev,
+        [key]: `Expected ${arg.label} but got ${className}`,
+      }));
+      return;
+    }
+
+    if (validity !== "live") {
+      setArgErrors((prev) => ({
+        ...prev,
+        [key]: "Only live objects can be bound",
+      }));
+      return;
+    }
+
+    setArgBindings((prev) => ({
+      ...prev,
+      [key]: { objectPath: selectedPath, label: fileLabel },
+    }));
+    setArgErrors((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
 
   const renderHashChip = (label: string, hash: string) => (
@@ -193,7 +287,7 @@ export function ContextPanel({
         (_, index) => argBindings[argKey(config.methodId, index)] ?? null,
       );
       const filledCount = boundArgs.filter(
-        (value) => value?.objectId?.trim().length,
+        (value) => value?.objectPath?.trim().length,
       ).length;
       const allArgsBound =
         config.args.length === 0 || filledCount === config.args.length;
@@ -244,15 +338,18 @@ export function ContextPanel({
                         disabled={proofRunning}
                         onClick={() => {
                           if (proofRunning) return;
-                          if (!bound?.objectId) return;
-                          setArgBindings((prev) => {
-                            const next = { ...prev };
-                            delete next[key];
-                            return next;
-                          });
+                          if (bound?.objectPath) {
+                            setArgBindings((prev) => {
+                              const next = { ...prev };
+                              delete next[key];
+                              return next;
+                            });
+                            return;
+                          }
+                          void handleBrowseArgFile(config.methodId, arg, index);
                         }}
                       >
-                        {bound?.objectId ? "Clear" : "Browse..."}
+                        {bound?.objectPath ? "Clear" : "Browse..."}
                       </button>
                     </div>
                     {err && <div className="method-arg-error">{err}</div>}
@@ -419,8 +516,10 @@ export function ContextPanel({
           onRunProof({
             actionId: recipe.id,
             methodName: recipe.verb,
-            inputObjectIds: boundArgs.map((arg) => arg.objectId),
-            inputLabels: boundArgs.map((arg) => arg.label),
+            inputBindings: boundArgs.map((arg) => ({
+              objectPath: arg.objectPath,
+              label: arg.label,
+            })),
             cpuCost: recipe.cpu,
           }),
       })}

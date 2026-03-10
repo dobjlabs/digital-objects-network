@@ -797,6 +797,16 @@ fn emit_progress(app: &tauri::AppHandle, payload: &RunSdkActionProgress) -> Resu
         .map_err(|err| format!("failed to emit run progress: {err}"))
 }
 
+fn parse_object_file_from_path(path: &Path) -> Result<RuntimeObjectRecord, String> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("invalid input path (missing file name): {}", path.display()))?;
+    let contents = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read input file {}: {err}", path.display()))?;
+    parse_object_file(&contents, file_name)
+}
+
 fn clear_run_in_progress(runtime: &tauri::State<'_, CraftRuntime>) {
     if let Ok(mut inner) = runtime.inner.lock() {
         inner.run_in_progress = false;
@@ -907,19 +917,25 @@ pub async fn run_sdk_action(
         ));
     }
 
-    if input.input_object_ids.len() != descriptor.input_classes.len() {
+    if input.inputs.len() != descriptor.input_classes.len() {
         return Err(format!(
             "{} expects {} inputs, got {}",
             input.action_id,
             descriptor.input_classes.len(),
-            input.input_object_ids.len()
+            input.inputs.len()
         ));
     }
 
-    let mut seen = HashSet::new();
-    for object_id in &input.input_object_ids {
-        if !seen.insert(object_id) {
-            return Err("duplicate input object IDs are not allowed".to_string());
+    let mut seen_paths = HashSet::new();
+    for arg in &input.inputs {
+        let object_path = arg.object_path.trim();
+        if object_path.is_empty() {
+            return Err("each input must include objectPath".to_string());
+        }
+        if !seen_paths.insert(object_path.to_string()) {
+            return Err(format!(
+                "duplicate input object path is not allowed: {object_path}"
+            ));
         }
     }
 
@@ -935,7 +951,16 @@ pub async fn run_sdk_action(
     let sync_wait_timeout_secs = synchronizer_poll_timeout_secs();
     let sync_wait_interval_ms = synchronizer_poll_interval_millis();
 
-    let (input_spendables, verify_targets);
+    struct ResolvedRunInput {
+        id: String,
+        file_name: String,
+        class_name: String,
+        source_action: Option<String>,
+        state_hash: String,
+        stats: Vec<(String, String)>,
+    }
+
+    let (input_spendables, verify_targets, resolved_inputs);
     {
         let mut inner = lock_runtime(&runtime);
         ensure_runtime_loaded(&mut inner, &objects_dir)?;
@@ -943,35 +968,48 @@ pub async fn run_sdk_action(
         if inner.run_in_progress {
             return Err("another action run is already in progress".to_string());
         }
+        refresh_runtime_objects(&mut inner, &objects_dir)?;
         inner.state_root = state_root_for_run.clone();
 
         let mut collected_spendables = Vec::new();
         let mut collected_targets = Vec::new();
+        let mut collected_resolved = Vec::new();
 
-        for (slot, object_id) in input.input_object_ids.iter().enumerate() {
+        for (slot, arg) in input.inputs.iter().enumerate() {
             let expected_class = descriptor.input_classes[slot].as_str();
-            let record = inner
-                .objects
-                .iter()
-                .find(|record| &record.id == object_id)
-                .ok_or_else(|| format!("input object not found: {object_id}"))?;
+            let object_path = arg.object_path.trim();
+            if object_path.is_empty() {
+                return Err(format!("missing objectPath for input slot {}", slot + 1));
+            }
+
+            let path_ref = Path::new(object_path);
+            let record = parse_object_file_from_path(path_ref)?;
+            let target_label = arg.label.clone().unwrap_or_else(|| record.file_name.clone());
 
             if record.validity != RuntimeValidity::Live {
-                return Err(format!("input object is not live: {object_id}"));
+                return Err(format!("input object is not live: {}", record.id));
             }
             if record.class_name != expected_class {
                 return Err(format!(
                     "input class mismatch for {}: expected {}, got {}",
-                    object_id, expected_class, record.class_name
+                    record.id, expected_class, record.class_name
                 ));
             }
 
             let spendable = record
                 .spendable
                 .as_ref()
-                .ok_or_else(|| format!("input object missing spendable witness: {object_id}"))?;
+                .ok_or_else(|| format!("input object missing spendable witness: {}", record.id))?;
             collected_spendables.push(clone_spendable(spendable));
-            collected_targets.push(record.file_name.clone());
+            collected_targets.push(target_label);
+            collected_resolved.push(ResolvedRunInput {
+                id: record.id.clone(),
+                file_name: record.file_name.clone(),
+                class_name: record.class_name.clone(),
+                source_action: record.source_action.clone(),
+                state_hash: record.state_hash.clone(),
+                stats: record.stats.clone(),
+            });
         }
 
         let mut missing_grounding = Vec::new();
@@ -999,6 +1037,7 @@ pub async fn run_sdk_action(
         inner.run_in_progress = true;
         input_spendables = collected_spendables;
         verify_targets = collected_targets;
+        resolved_inputs = collected_resolved;
     }
 
     let run_id = input.action_id.clone();
@@ -1290,18 +1329,33 @@ pub async fn run_sdk_action(
         ensure_runtime_loaded(&mut inner, &objects_dir)?;
 
         let mut nullified_files = Vec::new();
-        for object_id in &input.input_object_ids {
-            let record = inner
+        for resolved in &resolved_inputs {
+            if let Some(record) = inner
                 .objects
                 .iter_mut()
-                .find(|record| &record.id == object_id)
-                .ok_or_else(|| format!("input object not found while finalizing: {object_id}"))?;
-            if record.validity != RuntimeValidity::Live {
-                return Err(format!("input object already nullified: {object_id}"));
+                .find(|record| record.id == resolved.id)
+            {
+                if record.validity != RuntimeValidity::Live {
+                    return Err(format!("input object already nullified: {}", resolved.id));
+                }
+                record.validity = RuntimeValidity::Nullified;
+                record.nullifier =
+                    Some(short_hash(&format!("{}:{}:null", resolved.id, old_root)));
+                nullified_files.push(record.file_name.clone());
+            } else {
+                inner.objects.push(RuntimeObjectRecord {
+                    id: resolved.id.clone(),
+                    file_name: resolved.file_name.clone(),
+                    class_name: resolved.class_name.clone(),
+                    source_action: resolved.source_action.clone(),
+                    validity: RuntimeValidity::Nullified,
+                    state_hash: resolved.state_hash.clone(),
+                    nullifier: Some(short_hash(&format!("{}:{}:null", resolved.id, old_root))),
+                    stats: resolved.stats.clone(),
+                    spendable: None,
+                });
+                nullified_files.push(resolved.file_name.clone());
             }
-            record.validity = RuntimeValidity::Nullified;
-            record.nullifier = Some(short_hash(&format!("{}:{}:null", object_id, old_root)));
-            nullified_files.push(record.file_name.clone());
         }
 
         if spendable_outputs.objs.len() != descriptor.output_classes.len() {

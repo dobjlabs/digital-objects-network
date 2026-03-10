@@ -31,8 +31,13 @@ export function InventoryPanel({
       event.preventDefault();
       return;
     }
+    const basePath = thingsDirPath.endsWith("/")
+      ? thingsDirPath.slice(0, -1)
+      : thingsDirPath;
+    const objectPath = `${basePath}/${item.fileName}`;
+
     const payload = JSON.stringify({
-      itemId: item.id,
+      objectPath,
       name: item.fileName,
       className: item.classMeta.name,
       classHash: item.classMeta.hash,

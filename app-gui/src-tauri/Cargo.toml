@@ -31,3 +31,4 @@ hex = "0.4"
 base64 = "0.22"
 pod2 = { workspace = true }
 notify = "6"
+rfd = "0.14"
