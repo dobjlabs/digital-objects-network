@@ -57,10 +57,9 @@ pub(crate) struct SourceActionMetaDto {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ItemStatDto {
+pub(crate) struct ObjectDataEntryDto {
     pub(crate) key: String,
     pub(crate) value: String,
-    pub(crate) tone: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -76,7 +75,7 @@ pub(crate) struct InventoryItemDto {
     pub(crate) source_action: Option<SourceActionMetaDto>,
     pub(crate) description: Option<String>,
     pub(crate) methods: Vec<ObjectMethodDto>,
-    pub(crate) stats: Vec<ItemStatDto>,
+    pub(crate) obj: Vec<ObjectDataEntryDto>,
 }
 
 #[derive(Debug, Serialize, Clone)]

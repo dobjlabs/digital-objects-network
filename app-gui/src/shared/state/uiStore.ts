@@ -8,12 +8,7 @@ import {
   type RecipePayload,
 } from "../api/tauriClient";
 import { initialUiState } from "./initialState";
-import type {
-  AppUiState,
-  InventoryItem,
-  Recipe,
-  StatTone,
-} from "../types/domain";
+import type { AppUiState, InventoryItem, Recipe } from "../types/domain";
 
 type ProofStatus = "idle" | "generating" | "committing" | "summary" | "error";
 type StepStatus = "pending" | "running" | "done";
@@ -78,15 +73,6 @@ interface UiStoreState extends AppUiState {
   }) => Promise<void>;
 }
 
-const normalizeTone = (value: string | undefined): StatTone | undefined => {
-  if (!value) return undefined;
-  if (value === "neutral") return "neutral";
-  if (value === "good") return "good";
-  if (value === "warn") return "warn";
-  if (value === "danger") return "danger";
-  return undefined;
-};
-
 const mapItem = (item: InventoryItemPayload): InventoryItem => ({
   id: item.id,
   fileName: item.fileName,
@@ -107,10 +93,9 @@ const mapItem = (item: InventoryItemPayload): InventoryItem => ({
       classHash: arg.classHash,
     })),
   })),
-  stats: item.stats.map((stat) => ({
-    key: stat.key,
-    value: stat.value,
-    tone: normalizeTone(stat.tone),
+  obj: item.obj.map((entry) => ({
+    key: entry.key,
+    value: entry.value,
   })),
 });
 

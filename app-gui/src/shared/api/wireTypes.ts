@@ -28,10 +28,9 @@ export interface SourceActionMetaPayload {
   hash: string;
 }
 
-export interface ItemStatPayload {
+export interface ObjectDataEntryPayload {
   key: string;
   value: string;
-  tone?: string;
 }
 
 export interface InventoryItemPayload {
@@ -45,7 +44,7 @@ export interface InventoryItemPayload {
   sourceAction?: SourceActionMetaPayload;
   description?: string;
   methods: ObjectMethodPayload[];
-  stats: ItemStatPayload[];
+  obj: ObjectDataEntryPayload[];
 }
 
 export interface RecipePayload {

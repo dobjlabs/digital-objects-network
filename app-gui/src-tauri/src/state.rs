@@ -52,7 +52,6 @@ pub(crate) struct RuntimeObjectRecord {
     pub(crate) validity: RuntimeValidity,
     pub(crate) state_hash: String,
     pub(crate) nullifier: Option<String>,
-    pub(crate) stats: Vec<(String, String)>,
     pub(crate) spendable: Option<SpendableObject>,
 }
 

@@ -24,7 +24,7 @@ use crate::{
     action_spec,
     state::{CraftRuntime, CraftRuntimeInner, RuntimeObjectRecord, RuntimeValidity},
     types::{
-        ClassMetaDto, InventoryItemDto, ItemStatDto, LoadGuiBootstrapResult, MethodArgDto,
+        ClassMetaDto, InventoryItemDto, LoadGuiBootstrapResult, MethodArgDto, ObjectDataEntryDto,
         ObjectMethodDto, RecipeDto, RunSdkActionInput, RunSdkActionProgress, RunSdkActionResult,
         SourceActionMetaDto,
     },
@@ -41,16 +41,6 @@ struct PersistedStateRoot {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PersistedSpendableObject {
-    pod: serde_json::Value,
-    obj: serde_json::Value,
-    tx_live: serde_json::Value,
-    tx_nullifiers: serde_json::Value,
-    tx_state_root: PersistedStateRoot,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct PersistedObjectRecord {
     id: String,
     file_name: String,
@@ -59,8 +49,11 @@ struct PersistedObjectRecord {
     validity: String,
     state_hash: String,
     nullifier: Option<String>,
-    stats: Vec<(String, String)>,
-    spendable: Option<PersistedSpendableObject>,
+    pod: Option<serde_json::Value>,
+    obj: Option<serde_json::Value>,
+    tx_live: Option<serde_json::Value>,
+    tx_nullifiers: Option<serde_json::Value>,
+    tx_state_root: Option<PersistedStateRoot>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -564,17 +557,13 @@ fn value_string(raw: String) -> String {
     }
 }
 
-fn stats_from_object(spendable: &SpendableObject) -> Vec<(String, String)> {
-    let mut stats = Vec::new();
+fn object_data_from_object(spendable: &SpendableObject) -> Vec<(String, String)> {
+    let mut data = Vec::new();
     for (key, value) in spendable.obj.kvs() {
-        let name = key.name();
-        if matches!(name, "key" | "work" | "blueprint") {
-            continue;
-        }
-        stats.push((name.to_string(), value_string(format!("{value}"))));
+        data.push((key.name().to_string(), value_string(format!("{value}"))));
     }
-    stats.sort_by(|a, b| a.0.cmp(&b.0));
-    stats
+    data.sort_by(|a, b| a.0.cmp(&b.0));
+    data
 }
 
 fn action_descriptors_by_name() -> HashMap<String, action_spec::ActionDescriptor> {
@@ -610,6 +599,11 @@ fn build_action_catalog() -> Vec<RecipeDto> {
 
 fn to_inventory_item(record: &RuntimeObjectRecord) -> InventoryItemDto {
     let class_ui = action_spec::class_ui_meta(&record.class_name);
+    let obj_data = record
+        .spendable
+        .as_ref()
+        .map(object_data_from_object)
+        .unwrap_or_default();
     InventoryItemDto {
         id: record.id.clone(),
         file_name: record.file_name.clone(),
@@ -633,13 +627,11 @@ fn to_inventory_item(record: &RuntimeObjectRecord) -> InventoryItemDto {
             }),
         description: Some(class_ui.description.to_string()),
         methods: Vec::<ObjectMethodDto>::new(),
-        stats: record
-            .stats
+        obj: obj_data
             .iter()
-            .map(|(key, value)| ItemStatDto {
+            .map(|(key, value)| ObjectDataEntryDto {
                 key: key.clone(),
                 value: value.clone(),
-                tone: None,
             })
             .collect(),
     }
@@ -669,36 +661,67 @@ fn restore_state_root(data: PersistedStateRoot) -> Result<StateRoot, String> {
     })
 }
 
-fn persist_spendable(spendable: &SpendableObject) -> Result<PersistedSpendableObject, String> {
-    Ok(PersistedSpendableObject {
-        pod: serde_json::to_value(&spendable.pod)
+fn persist_spendable(
+    spendable: &SpendableObject,
+) -> Result<
+    (
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        PersistedStateRoot,
+    ),
+    String,
+> {
+    Ok((
+        serde_json::to_value(&spendable.pod)
             .map_err(|err| format!("failed to serialize spendable.pod: {err}"))?,
-        obj: serde_json::to_value(&spendable.obj)
+        serde_json::to_value(&spendable.obj)
             .map_err(|err| format!("failed to serialize spendable.obj: {err}"))?,
-        tx_live: serde_json::to_value(&spendable.tx.live)
+        serde_json::to_value(&spendable.tx.live)
             .map_err(|err| format!("failed to serialize spendable.tx.live: {err}"))?,
-        tx_nullifiers: serde_json::to_value(&spendable.tx.nullifiers)
+        serde_json::to_value(&spendable.tx.nullifiers)
             .map_err(|err| format!("failed to serialize spendable.tx.nullifiers: {err}"))?,
-        tx_state_root: persist_state_root(spendable.tx.state_root.as_ref())?,
-    })
+        persist_state_root(spendable.tx.state_root.as_ref())?,
+    ))
 }
 
-fn restore_spendable(data: PersistedSpendableObject) -> Result<SpendableObject, String> {
-    let state_root = restore_state_root(data.tx_state_root)?;
-    let tx = txlib::Tx {
-        live: serde_json::from_value(data.tx_live)
-            .map_err(|err| format!("failed to deserialize spendable.tx.live: {err}"))?,
-        nullifiers: serde_json::from_value(data.tx_nullifiers)
-            .map_err(|err| format!("failed to deserialize spendable.tx.nullifiers: {err}"))?,
-        state_root: Arc::new(state_root),
-    };
-    Ok(SpendableObject {
-        pod: serde_json::from_value(data.pod)
-            .map_err(|err| format!("failed to deserialize spendable.pod: {err}"))?,
-        obj: serde_json::from_value(data.obj)
-            .map_err(|err| format!("failed to deserialize spendable.obj: {err}"))?,
-        tx,
-    })
+fn restore_spendable(
+    pod: Option<serde_json::Value>,
+    obj: Option<serde_json::Value>,
+    tx_live: Option<serde_json::Value>,
+    tx_nullifiers: Option<serde_json::Value>,
+    tx_state_root: Option<PersistedStateRoot>,
+) -> Result<Option<SpendableObject>, String> {
+    match (pod, obj, tx_live, tx_nullifiers, tx_state_root) {
+        (None, None, None, None, None) => Ok(None),
+        (
+            Some(pod),
+            Some(obj),
+            Some(tx_live),
+            Some(tx_nullifiers),
+            Some(tx_state_root),
+        ) => {
+            let state_root = restore_state_root(tx_state_root)?;
+            let tx = txlib::Tx {
+                live: serde_json::from_value(tx_live)
+                    .map_err(|err| format!("failed to deserialize spendable.tx.live: {err}"))?,
+                nullifiers: serde_json::from_value(tx_nullifiers).map_err(|err| {
+                    format!("failed to deserialize spendable.tx.nullifiers: {err}")
+                })?,
+                state_root: Arc::new(state_root),
+            };
+            Ok(Some(SpendableObject {
+                pod: serde_json::from_value(pod)
+                    .map_err(|err| format!("failed to deserialize spendable.pod: {err}"))?,
+                obj: serde_json::from_value(obj)
+                    .map_err(|err| format!("failed to deserialize spendable.obj: {err}"))?,
+                tx,
+            }))
+        }
+        _ => Err("invalid object file: spendable fields must all be present or all absent"
+            .to_string()),
+    }
 }
 
 fn validity_from_str(raw: &str, context: &str) -> Result<RuntimeValidity, String> {
@@ -713,6 +736,13 @@ fn restore_object_record(
     record: PersistedObjectRecord,
     file_name_override: Option<&str>,
 ) -> Result<RuntimeObjectRecord, String> {
+    let spendable = restore_spendable(
+        record.pod,
+        record.obj,
+        record.tx_live,
+        record.tx_nullifiers,
+        record.tx_state_root,
+    )?;
     Ok(RuntimeObjectRecord {
         id: record.id,
         file_name: file_name_override.unwrap_or(&record.file_name).to_string(),
@@ -721,8 +751,7 @@ fn restore_object_record(
         validity: validity_from_str(&record.validity, "object file")?,
         state_hash: record.state_hash,
         nullifier: record.nullifier,
-        stats: record.stats,
-        spendable: record.spendable.map(restore_spendable).transpose()?,
+        spendable,
     })
 }
 
@@ -733,6 +762,20 @@ fn parse_object_file(contents: &str, file_name: &str) -> Result<RuntimeObjectRec
 }
 
 fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObjectRecord, String> {
+    let (pod, obj, tx_live, tx_nullifiers, tx_state_root) = if let Some(spendable) =
+        record.spendable.as_ref()
+    {
+        let (pod, obj, tx_live, tx_nullifiers, tx_state_root) = persist_spendable(spendable)?;
+        (
+            Some(pod),
+            Some(obj),
+            Some(tx_live),
+            Some(tx_nullifiers),
+            Some(tx_state_root),
+        )
+    } else {
+        (None, None, None, None, None)
+    };
     Ok(PersistedObjectRecord {
         id: record.id.clone(),
         file_name: record.file_name.clone(),
@@ -744,12 +787,11 @@ fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObject
         },
         state_hash: record.state_hash.clone(),
         nullifier: record.nullifier.clone(),
-        stats: record.stats.clone(),
-        spendable: record
-            .spendable
-            .as_ref()
-            .map(persist_spendable)
-            .transpose()?,
+        pod,
+        obj,
+        tx_live,
+        tx_nullifiers,
+        tx_state_root,
     })
 }
 
@@ -1073,7 +1115,6 @@ pub async fn run_sdk_action(
         class_name: String,
         source_action: Option<String>,
         state_hash: String,
-        stats: Vec<(String, String)>,
     }
 
     let (input_spendables, verify_targets, resolved_inputs, source_tx_hashes);
@@ -1127,7 +1168,6 @@ pub async fn run_sdk_action(
                 class_name: record.class_name.clone(),
                 source_action: record.source_action.clone(),
                 state_hash: record.state_hash.clone(),
-                stats: record.stats.clone(),
             });
         }
 
@@ -1478,7 +1518,6 @@ pub async fn run_sdk_action(
                     validity: RuntimeValidity::Nullified,
                     state_hash: resolved.state_hash.clone(),
                     nullifier: Some(short_hash(&format!("{}:{}:null", resolved.id, old_root))),
-                    stats: resolved.stats.clone(),
                     spendable: None,
                 });
                 nullified_files.push(resolved.file_name.clone());
@@ -1511,7 +1550,6 @@ pub async fn run_sdk_action(
                 validity: RuntimeValidity::Live,
                 state_hash: short_hash(&format!("{:#}", spendable.obj.commitment())),
                 nullifier: None,
-                stats: stats_from_object(&spendable),
                 spendable: Some(spendable),
             });
         }

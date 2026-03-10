@@ -111,11 +111,11 @@
   font-family: "IBM Plex Sans", sans-serif;
 }
 
-.item-stats {
+.object-data {
   margin-bottom: 12px;
 }
 
-.stat-row {
+.object-data-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -124,25 +124,13 @@
   font-size: 10px;
 }
 
-.stat-key {
+.object-data-key {
   color: var(--text-dim);
 }
 
-.stat-val {
-  color: var(--text-bright);
-  font-weight: 500;
-}
-
-.stat-val.good {
+.object-data-value {
   color: var(--good);
-}
-
-.stat-val.warn {
-  color: var(--warn);
-}
-
-.stat-val.danger {
-  color: var(--danger);
+  font-weight: 500;
 }
 
 .progress-bar {

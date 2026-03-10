@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DragEvent } from "react";
 import type {
   ContextSelection,
-  FieldValue,
   InventoryItem,
   MethodArg,
   Recipe,
@@ -393,21 +392,15 @@ export function ContextPanel({
       ? `~/.objects/.nullified/${filename}`
       : `~/.objects/${filename}`;
 
-  const stringifyField = (value: FieldValue) => {
-    if (value === null) return "null";
-    if (typeof value === "boolean") return value ? "true" : "false";
-    return `${value}`;
-  };
-
-  const renderItemStats = (item: InventoryItem) => {
-    if (item.stats.length === 0) return null;
+  const renderObjectData = (item: InventoryItem) => {
+    if (item.obj.length === 0) return null;
     return (
-      <div className="item-stats">
-        {item.stats.map((stat) => (
-          <div key={stat.key} className="stat-row">
-            <span className="stat-key">{stat.key}</span>
-            <span className={`stat-val ${stat.tone ?? "good"}`.trim()}>
-              {stringifyField(stat.value)}
+      <div className="object-data">
+        {item.obj.map((entry) => (
+          <div key={entry.key} className="object-data-row">
+            <span className="object-data-key">{entry.key}</span>
+            <span className="object-data-value">
+              {entry.value}
             </span>
           </div>
         ))}
@@ -474,7 +467,7 @@ export function ContextPanel({
         </div>
 
         {item.description && <div className="context-desc">{item.description}</div>}
-        {renderItemStats(item)}
+        {renderObjectData(item)}
       </section>
     );
   }

@@ -2,8 +2,6 @@ import type { ActionId, ClassName } from "../generated/ids";
 
 export type Validity = "live" | "nullified";
 
-export type FieldValue = string | number | boolean | null;
-export type StatTone = "neutral" | "good" | "warn" | "danger";
 export type MethodArgKind = "class";
 
 export interface ClassMeta {
@@ -22,12 +20,9 @@ export interface MethodArg {
   classHash: string;
 }
 
-export interface ItemStat {
+export interface ObjectDataEntry {
   key: string;
-  value: FieldValue;
-  tone?: StatTone;
-  progressPercent?: number;
-  progressTone?: Exclude<StatTone, "neutral">;
+  value: string;
 }
 
 export interface ObjectMethod {
@@ -48,7 +43,7 @@ export interface InventoryItem {
   sourceAction?: SourceActionMeta;
   description?: string;
   methods: ObjectMethod[];
-  stats: ItemStat[];
+  obj: ObjectDataEntry[];
 }
 
 export interface Recipe {
