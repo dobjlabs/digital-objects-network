@@ -37,7 +37,6 @@ InputsGrounded(inputs, state_root_hash) = OR(
 InputsGroundedRecursive(inputs, state_root_hash,
     private: input, prev_inputs, source_txn) = AND(
   TxInStateRoot(state_root_hash, source_txn)
-  SetContains(transactions, source_txn)
   SetContains(source_txn.live, input)
   SetInsert(inputs, prev_inputs, input)
   InputsGrounded(prev_inputs, state_root_hash)

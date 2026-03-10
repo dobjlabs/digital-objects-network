@@ -1,4 +1,6 @@
+mod action_spec;
 mod commands;
+mod contract_codegen;
 mod objects_watcher;
 mod state;
 mod types;
@@ -24,10 +26,7 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     Ok(menu)
 }
 
-fn inject_settings_menu_item<R: Runtime>(
-    app: &AppHandle<R>,
-    menu: &Menu<R>,
-) -> tauri::Result<()> {
+fn inject_settings_menu_item<R: Runtime>(app: &AppHandle<R>, menu: &Menu<R>) -> tauri::Result<()> {
     let settings_item = MenuItemBuilder::with_id(MENU_OPEN_SETTINGS_ID, "Settings...")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;

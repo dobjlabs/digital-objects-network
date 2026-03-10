@@ -67,7 +67,7 @@ pub mod api {
         Set { key: String, value: Arg },
     }
 
-    #[derive(Default)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub enum StepKind {
         #[default]
         Depends,
@@ -86,6 +86,26 @@ pub mod api {
     }
 
     impl Step {
+        pub fn kind(&self) -> StepKind {
+            self.kind
+        }
+        pub fn name(&self) -> &str {
+            &self.name
+        }
+        pub fn class(&self) -> Option<&str> {
+            if matches!(self.kind, StepKind::Depends) {
+                None
+            } else {
+                Some(self.class.as_str())
+            }
+        }
+        pub fn action(&self) -> Option<&str> {
+            if matches!(self.kind, StepKind::Depends) {
+                Some(self.action.as_str())
+            } else {
+                None
+            }
+        }
         /// The action consumes an object as input
         pub fn input(name: impl Into<String>, class: impl Into<String>) -> Self {
             Self {
@@ -182,6 +202,15 @@ pub mod api {
     pub struct Action {
         pub name: &'static str,
         pub steps: Vec<Step>,
+    }
+
+    impl Action {
+        pub fn name(&self) -> &str {
+            self.name
+        }
+        pub fn steps(&self) -> &[Step] {
+            &self.steps
+        }
     }
 
     /// Dependency towards another pod module or introduction pod

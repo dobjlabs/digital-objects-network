@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "gen:contracts": "cargo run --manifest-path src-tauri/Cargo.toml --bin gen_contracts",
+    "check:contracts": "pnpm gen:contracts && git diff --exit-code -- src/shared/generated/contracts.ts",
+    "build": "pnpm gen:contracts && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },

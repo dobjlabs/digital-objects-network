@@ -12,17 +12,16 @@ use common::{
     payload::{Payload, PayloadProof},
     shrink::{shrink_compress_pod, ShrunkMainPodSetup},
 };
-use craftlib::{
-    scenario::test_sdk,
-    sdk::{Helper, SpendableObject, SpendableObjects},
-};
+use craft_sdk::{Helper, SpendableObject, SpendableObjects};
 use hex::{FromHex, ToHex};
 use pod2::middleware::{Hash, Params};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 use txlib::StateRoot;
 
+use super::settings::load_effective_endpoint_urls;
 use crate::{
+    action_spec,
     state::{CraftRuntime, CraftRuntimeInner, RuntimeObjectRecord, RuntimeValidity},
     types::{
         ClassMetaDto, InventoryItemDto, ItemStatDto, LoadGuiBootstrapResult, MethodArgDto,
@@ -30,13 +29,14 @@ use crate::{
         SourceActionMetaDto,
     },
 };
-use super::settings::load_effective_endpoint_urls;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PersistedStateRoot {
+    block_number: i64,
     transactions: serde_json::Value,
     nullifiers: serde_json::Value,
+    gsrs: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -451,18 +451,13 @@ fn stats_from_object(spendable: &SpendableObject) -> Vec<(String, String)> {
     stats
 }
 
-fn action_descriptors_by_name() -> HashMap<String, craftlib::scenario::test_sdk::ActionDescriptor> {
-    let mut out = HashMap::new();
-    for descriptor in test_sdk::action_descriptors() {
-        out.insert(descriptor.name.clone(), descriptor);
-    }
-    out
+fn action_descriptors_by_name() -> HashMap<String, action_spec::ActionDescriptor> {
+    action_spec::action_descriptors_by_name()
 }
 
 fn build_action_catalog() -> Vec<RecipeDto> {
-    test_sdk::action_descriptors()
+    action_spec::visible_action_descriptors()
         .into_iter()
-        .filter(|descriptor| !descriptor.hidden)
         .map(|descriptor| RecipeDto {
             id: descriptor.name.clone(),
             group: String::new(),
@@ -488,7 +483,7 @@ fn build_action_catalog() -> Vec<RecipeDto> {
 }
 
 fn to_inventory_item(record: &RuntimeObjectRecord) -> InventoryItemDto {
-    let class_ui = test_sdk::class_ui_meta(&record.class_name);
+    let class_ui = action_spec::class_ui_meta(&record.class_name);
     InventoryItemDto {
         id: record.id.clone(),
         file_name: record.file_name.clone(),
@@ -526,19 +521,25 @@ fn to_inventory_item(record: &RuntimeObjectRecord) -> InventoryItemDto {
 
 fn persist_state_root(state_root: &StateRoot) -> Result<PersistedStateRoot, String> {
     Ok(PersistedStateRoot {
+        block_number: state_root.block_number,
         transactions: serde_json::to_value(&state_root.transactions)
             .map_err(|err| format!("failed to serialize state_root.transactions: {err}"))?,
         nullifiers: serde_json::to_value(&state_root.nullifiers)
             .map_err(|err| format!("failed to serialize state_root.nullifiers: {err}"))?,
+        gsrs: serde_json::to_value(&state_root.gsrs)
+            .map_err(|err| format!("failed to serialize state_root.gsrs: {err}"))?,
     })
 }
 
 fn restore_state_root(data: PersistedStateRoot) -> Result<StateRoot, String> {
     Ok(StateRoot {
+        block_number: data.block_number,
         transactions: serde_json::from_value(data.transactions)
             .map_err(|err| format!("failed to deserialize state_root.transactions: {err}"))?,
         nullifiers: serde_json::from_value(data.nullifiers)
             .map_err(|err| format!("failed to deserialize state_root.nullifiers: {err}"))?,
+        gsrs: serde_json::from_value(data.gsrs)
+            .map_err(|err| format!("failed to deserialize state_root.gsrs: {err}"))?,
     })
 }
 
@@ -851,7 +852,7 @@ fn execute_action(
     state_root: StateRoot,
     inputs: Vec<SpendableObject>,
 ) -> Result<SpendableObjects, String> {
-    let helper = Helper::new(test_sdk::dependencies(), test_sdk::actions());
+    let helper = Helper::new(action_spec::dependencies(), action_spec::actions());
     // Relayed payloads are recursively verified/compressed, which is incompatible with MockMainPod.
     let builder = helper.builder(false, Arc::new(state_root));
     Ok(builder.action(&action_id, inputs))
@@ -928,16 +929,13 @@ pub async fn run_sdk_action(
     }
 
     let effective_urls = load_effective_endpoint_urls(&app)?;
-    let sync_api_url = ensure_non_empty_url(
-        "SYNCHRONIZER_API_URL",
-        effective_urls.synchronizer_api_url,
-    )?;
+    let sync_api_url =
+        ensure_non_empty_url("SYNCHRONIZER_API_URL", effective_urls.synchronizer_api_url)?;
     let sync_state = fetch_synchronizer_state(&sync_api_url)?;
     let state_root_for_run = sync_state.state_root.clone();
     let old_root_hash = sync_state.current_gsr;
     let old_root = short_hash(&format!("{:#}", old_root_hash));
-    let relayer_url =
-        ensure_non_empty_url("RELAYER_API_URL", effective_urls.relayer_api_url)?;
+    let relayer_url = ensure_non_empty_url("RELAYER_API_URL", effective_urls.relayer_api_url)?;
     let relayer_key = relayer_api_key()?;
     let relayer_timeout_secs = relayer_poll_timeout_secs();
     let relayer_poll_interval_ms = relayer_poll_interval_millis();
@@ -977,7 +975,10 @@ pub async fn run_sdk_action(
 
             let path_ref = Path::new(object_path);
             let record = parse_object_file_from_path(path_ref)?;
-            let target_label = arg.label.clone().unwrap_or_else(|| record.file_name.clone());
+            let target_label = arg
+                .label
+                .clone()
+                .unwrap_or_else(|| record.file_name.clone());
 
             if record.validity != RuntimeValidity::Live {
                 return Err(format!("input object is not live: {}", record.id));
@@ -1332,8 +1333,7 @@ pub async fn run_sdk_action(
                     return Err(format!("input object already nullified: {}", resolved.id));
                 }
                 record.validity = RuntimeValidity::Nullified;
-                record.nullifier =
-                    Some(short_hash(&format!("{}:{}:null", resolved.id, old_root)));
+                record.nullifier = Some(short_hash(&format!("{}:{}:null", resolved.id, old_root)));
                 nullified_files.push(record.file_name.clone());
             } else {
                 inner.objects.push(RuntimeObjectRecord {

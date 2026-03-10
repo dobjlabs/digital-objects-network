@@ -46,9 +46,9 @@ env-init:
 test:
     cargo test --workspace
 
-# Wipe local synchronizer state (RocksDB + local Postgres DB)
-reset-db:
-    rm -rf data/
+# Wipe local state (RocksDB + local Postgres DB + objects)
+reset:
+    rm -rf data/ ~/.objects
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
 
 # Run the slow end-to-end proof test

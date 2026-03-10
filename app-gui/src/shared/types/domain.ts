@@ -1,3 +1,5 @@
+import type { ActionId, ClassName } from "../generated/contracts";
+
 export type Validity = "live" | "nullified";
 
 export type FieldValue = string | number | boolean | null;
@@ -5,18 +7,18 @@ export type StatTone = "neutral" | "good" | "warn" | "danger";
 export type MethodArgKind = "class";
 
 export interface ClassMeta {
-  name: string;
+  name: ClassName;
   hash: string;
 }
 
 export interface SourceActionMeta {
-  name: string;
+  name: ActionId;
   hash: string;
 }
 
 export interface MethodArg {
   kind: MethodArgKind;
-  label: string;
+  label: ClassName;
   classHash: string;
 }
 
@@ -50,12 +52,12 @@ export interface InventoryItem {
 }
 
 export interface Recipe {
-  id: string;
+  id: ActionId;
   group: string;
-  name: string;
+  name: ActionId;
   emoji: string;
   hash: string;
-  verb: string;
+  verb: ActionId;
   desc: string;
   cpu: string;
   readsBlock: boolean;

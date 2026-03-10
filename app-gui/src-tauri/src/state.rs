@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 use std::time::Instant;
 
-use craftlib::sdk::SpendableObject;
+use craft_sdk::SpendableObject;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use txlib::StateRoot;
 

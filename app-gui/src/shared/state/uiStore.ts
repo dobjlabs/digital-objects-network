@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   loadGuiBootstrap,
   runSdkAction,
+  type ActionId,
   type RunSdkActionProgress,
   type InventoryItemPayload,
   type RecipePayload,
@@ -67,7 +68,7 @@ interface UiStoreState extends AppUiState {
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   applyRunSdkActionProgress: (event: RunSdkActionProgress) => void;
   runProof: (input: {
-    actionId: string;
+    actionId: ActionId;
     methodName: string;
     inputBindings: Array<{
       objectPath: string;

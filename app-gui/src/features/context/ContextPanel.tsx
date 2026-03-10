@@ -10,6 +10,7 @@ import type {
 import {
   pickDobjFilePath,
   readDobjFileMetadata,
+  type ActionId,
 } from "../../shared/api/tauriClient";
 
 interface ContextPanelProps {
@@ -18,14 +19,14 @@ interface ContextPanelProps {
   recipes: Recipe[];
   onClearSelection: () => void;
   onRunProof: (input: {
-    actionId: string;
+    actionId: ActionId;
     methodName: string;
     inputBindings: Array<{
       objectPath: string;
       label: string;
     }>;
     cpuCost: string;
-  }) => void;
+  }) => Promise<void>;
   proofRunning: boolean;
   proofStatus: "idle" | "generating" | "committing" | "summary" | "error";
 }
