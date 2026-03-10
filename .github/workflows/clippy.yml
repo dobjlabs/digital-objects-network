@@ -21,5 +21,8 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
       - name: Check formatting
         run: cargo clippy
