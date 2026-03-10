@@ -1,6 +1,6 @@
 mod action_spec;
 mod commands;
-mod contract_codegen;
+mod id_codegen;
 mod objects_watcher;
 mod state;
 mod types;

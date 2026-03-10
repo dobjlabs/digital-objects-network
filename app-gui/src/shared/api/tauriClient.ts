@@ -8,12 +8,12 @@ import type {
   RunSdkActionInput,
   RunSdkActionProgress,
   RunSdkActionResult,
-} from "../generated/contracts";
+} from "./wireTypes";
+
+export type { ActionId, ClassName } from "../generated/ids";
 
 export type {
-  ActionId,
   AppSettingsPayload,
-  ClassName,
   CpuSample,
   DobjFileMetadata,
   InventoryItemPayload,
@@ -23,7 +23,7 @@ export type {
   RunSdkActionInput,
   RunSdkActionProgress,
   RunSdkActionResult,
-} from "../generated/contracts";
+} from "./wireTypes";
 
 export function getThingsDir(): Promise<string> {
   return invoke<string>("get_things_dir");

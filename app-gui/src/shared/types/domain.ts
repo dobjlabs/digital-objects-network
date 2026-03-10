@@ -1,4 +1,4 @@
-import type { ActionId, ClassName } from "../generated/contracts";
+import type { ActionId, ClassName } from "../generated/ids";
 
 export type Validity = "live" | "nullified";
 
