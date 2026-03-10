@@ -14,7 +14,7 @@
 //! let (st, tx) = tx_builder.finalize(&mut ctx);
 //! ```
 
-use anyhow::{ensure};
+use anyhow::ensure;
 use pod2::{
     frontend::MultiPodError,
     lang::{Module, MultiOperationError},
@@ -173,7 +173,11 @@ pub fn set_expiry(
 ///
 /// Call `tx_builder.mutate(ctx, locked, obj)` afterwards to record the mutation.
 pub fn lock_object(ctx: &mut BuildContext, obj: Object, duration: i64) -> anyhow::Result<Object> {
-    ensure!(duration > 0, "lock duration must be positive, got {}", duration);
+    ensure!(
+        duration > 0,
+        "lock duration must be positive, got {}",
+        duration
+    );
     let mut locked = obj.clone();
     locked
         .app_layer
@@ -219,9 +223,8 @@ pub fn unlock_object(
         .array()
         .iter()
         .position(|v| v == &target)
-        .ok_or_else(|| {
-            anyhow::anyhow!("gsr_when_locked not found in grounding_gsr.gsrs")
-        })? as i64;
+        .ok_or_else(|| anyhow::anyhow!("gsr_when_locked not found in grounding_gsr.gsrs"))?
+        as i64;
 
     let distance = grounding_gsr.block_number - gsr_when_locked.block_number;
     ensure!(
@@ -265,7 +268,8 @@ pub fn unlock_object(
     .unwrap();
     let st_current_block = st_custom!(
         ctx,
-        BlockNumberForStateRoot(block_number = grounding_gsr.block_number) = (st_grounding_gsr_root)
+        BlockNumberForStateRoot(block_number = grounding_gsr.block_number) =
+            (st_grounding_gsr_root)
     )
     .unwrap();
     let st_when_locked_block = st_custom!(

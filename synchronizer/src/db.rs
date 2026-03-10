@@ -371,10 +371,10 @@ mod tests {
         let root1 = B256::from([1u8; 32]);
         let root2 = B256::from([2u8; 32]);
 
-        db.persist_transaction(tx1, 1, Some(101)).unwrap();
-        db.persist_transaction(tx2, 2, Some(102)).unwrap();
-        db.persist_nullifier(n1, 1, Some(101)).unwrap();
-        db.persist_nullifier(n2, 2, Some(102)).unwrap();
+        db.persist_transaction(tx1, 1, 101).unwrap();
+        db.persist_transaction(tx2, 2, 102).unwrap();
+        db.persist_nullifier(n1, 1, 101).unwrap();
+        db.persist_nullifier(n2, 2, 102).unwrap();
         db.persist_global_state_root(1, 101, g1).unwrap();
         db.persist_global_state_root(2, 102, g2).unwrap();
         db.set_slot_root(1, Some(root1)).unwrap();
@@ -404,8 +404,8 @@ mod tests {
         let n = hash_values(&[Value::from(21)]);
         let g = hash_values(&[Value::from(31)]);
 
-        db.persist_transaction(tx, 1, Some(101)).unwrap();
-        db.persist_nullifier(n, 1, Some(101)).unwrap();
+        db.persist_transaction(tx, 1, 101).unwrap();
+        db.persist_nullifier(n, 1, 101).unwrap();
         db.persist_global_state_root(1, 101, g).unwrap();
         db.set_slot_root(1, Some(B256::from([1u8; 32]))).unwrap();
         db.mark_slot_processed(1, Some(101)).unwrap();

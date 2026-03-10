@@ -259,7 +259,8 @@ mod tests {
                 let inputs = [(obj_with_expiry.clone(), tx_set.clone())];
                 let tx_builder = TxBuilder::new(&mut ctx, &inputs, gsr2_sr.clone());
                 let tx_before = tx_builder.tx.dict();
-                let _ = tx_utils::not_expired(&mut ctx, &gsr2_sr, tx_before, &obj_with_expiry).unwrap();
+                let _ =
+                    tx_utils::not_expired(&mut ctx, &gsr2_sr, tx_before, &obj_with_expiry).unwrap();
                 let (st_finalized, _) = tx_builder.finalize(&mut ctx);
                 ctx.builder.reveal(&st_finalized).unwrap();
             }
@@ -275,5 +276,4 @@ mod tests {
         set_pod.pod.verify().unwrap();
         check_pod.pod.verify().unwrap();
     }
-
 }

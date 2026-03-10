@@ -177,6 +177,7 @@ impl StateMachine {
         )
         .hash();
         state.global_state_roots.push(new_gsr);
+        state.gsr_block_numbers.insert(new_gsr, block_number as i64);
         self.db
             .persist_global_state_root(slot, block_number, new_gsr)?;
 
@@ -237,11 +238,13 @@ impl StateMachine {
             transactions,
             nullifiers,
             global_state_roots,
+            gsr_block_numbers,
         } = self.db.load_state()?;
         let mut state = self.write_state()?;
         state.transactions = transactions;
         state.nullifiers = nullifiers;
         state.global_state_roots = global_state_roots;
+        state.gsr_block_numbers = gsr_block_numbers;
         Ok(())
     }
 }
@@ -427,12 +430,12 @@ mod tests {
     #[test]
     fn test_stale_gsr_rejected() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0).unwrap();
+        sm.advance_block(0, 0).unwrap();
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
         // Advance 301 more blocks so gsr0 is 301 blocks old when the blob arrives.
         for i in 1..=301 {
-            sm.advance_block(i).unwrap();
+            sm.advance_block(i, i).unwrap();
         }
 
         let tx = unique_hash(1);
@@ -446,12 +449,12 @@ mod tests {
     #[test]
     fn test_gsr_at_limit_accepted() {
         let (sm, _dir) = make_sm();
-        sm.advance_block(0).unwrap();
+        sm.advance_block(0, 0).unwrap();
         let gsr0 = sm.state_snapshot().unwrap().2[0];
 
         // Advance 300 more blocks so gsr0 is exactly 300 blocks old — at the limit.
         for i in 1..=300 {
-            sm.advance_block(i).unwrap();
+            sm.advance_block(i, i).unwrap();
         }
 
         let tx = unique_hash(1);
@@ -496,14 +499,14 @@ mod tests {
 
         let tx1 = unique_hash(101);
         let n1 = unique_hash(201);
-        sm.process_blob(&mock_txn_bytes(tx1, &[n1], gsr0), 1, Some(1))
+        sm.process_blob(&mock_txn_bytes(tx1, &[n1], gsr0), 1, 1)
             .unwrap();
         sm.advance_block(1, 1).unwrap();
         let gsr1 = sm.state_snapshot().unwrap().2[1];
 
         let tx2 = unique_hash(102);
         let n2 = unique_hash(202);
-        sm.process_blob(&mock_txn_bytes(tx2, &[n2], gsr1), 2, Some(2))
+        sm.process_blob(&mock_txn_bytes(tx2, &[n2], gsr1), 2, 2)
             .unwrap();
         sm.advance_block(2, 2).unwrap();
 
