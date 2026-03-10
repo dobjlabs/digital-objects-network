@@ -18,12 +18,6 @@ fn objects_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(home.join(".objects"))
 }
 
-fn is_dobj(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("dobj"))
-}
-
 fn is_relevant_kind(kind: &EventKind) -> bool {
     matches!(
         kind,
@@ -42,7 +36,7 @@ fn is_objects_change(event: &Event, watch_dir: &Path) -> bool {
     event
         .paths
         .iter()
-        .any(|path| path.starts_with(watch_dir) && (path == watch_dir || is_dobj(path)))
+        .any(|path| path.starts_with(watch_dir))
 }
 
 pub fn start_objects_watcher(app: AppHandle) -> Result<(), String> {

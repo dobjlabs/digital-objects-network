@@ -435,6 +435,10 @@ fn format_output_file_name(class_name: &str, index: u64) -> String {
     format!("{}_{index}.dobj", normalize_component_name(class_name))
 }
 
+fn object_id_from_spendable(spendable: &SpendableObject) -> String {
+    format!("{:#}", spendable.obj.commitment())
+}
+
 const NULLIFIED_DIR_NAME: &str = ".nullified";
 
 fn nullified_objects_dir(objects_dir: &Path) -> PathBuf {
@@ -724,11 +728,11 @@ fn load_object_files_from_dir(
                     1
                 };
                 let replace = objects
-                    .get(&record.id)
+                    .get(&record.file_name)
                     .map(|(_, existing_score)| score > *existing_score)
                     .unwrap_or(true);
                 if replace {
-                    objects.insert(record.id.clone(), (record, score));
+                    objects.insert(record.file_name.clone(), (record, score));
                 }
             }
             Err(err) => eprintln!("zk-craft: failed to parse {file_name}, skipping: {err}"),
@@ -739,15 +743,15 @@ fn load_object_files_from_dir(
 }
 
 fn load_object_files(objects_dir: &Path) -> Result<Vec<RuntimeObjectRecord>, String> {
-    let mut records_by_id = HashMap::<String, (RuntimeObjectRecord, u8)>::new();
-    load_object_files_from_dir(&mut records_by_id, objects_dir, false)?;
+    let mut records_by_file = HashMap::<String, (RuntimeObjectRecord, u8)>::new();
+    load_object_files_from_dir(&mut records_by_file, objects_dir, false)?;
     load_object_files_from_dir(
-        &mut records_by_id,
+        &mut records_by_file,
         &nullified_objects_dir(objects_dir),
         true,
     )?;
 
-    let mut objects = records_by_id
+    let mut objects = records_by_file
         .into_values()
         .map(|(record, _)| record)
         .collect::<Vec<_>>();
@@ -759,10 +763,9 @@ fn next_object_index_from_records(objects: &[RuntimeObjectRecord]) -> u64 {
     let max_index = objects
         .iter()
         .filter_map(|record| {
-            record
-                .id
-                .strip_prefix("obj-")
-                .and_then(|suffix| suffix.parse::<u64>().ok())
+            let without_ext = record.file_name.strip_suffix(".dobj")?;
+            let (_prefix, suffix) = without_ext.rsplit_once('_')?;
+            suffix.parse::<u64>().ok()
         })
         .max()
         .unwrap_or(0);
@@ -1333,7 +1336,7 @@ pub async fn run_sdk_action(
             if let Some(record) = inner
                 .objects
                 .iter_mut()
-                .find(|record| record.id == resolved.id)
+                .find(|record| record.id == resolved.id && record.file_name == resolved.file_name)
             {
                 if record.validity != RuntimeValidity::Live {
                     return Err(format!("input object already nullified: {}", resolved.id));
@@ -1373,10 +1376,11 @@ pub async fn run_sdk_action(
             let object_index = inner.next_object_index;
             let file_name = format_output_file_name(class_name, object_index);
             inner.next_object_index += 1;
+            let object_id = object_id_from_spendable(&spendable);
 
             output_files.push(file_name.clone());
             inner.objects.push(RuntimeObjectRecord {
-                id: format!("obj-{object_index}"),
+                id: object_id,
                 file_name,
                 class_name: class_name.clone(),
                 source_action: Some(input.action_id.clone()),
