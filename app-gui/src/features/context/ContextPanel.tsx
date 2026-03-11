@@ -402,8 +402,34 @@ export function ContextPanel({
     return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
   };
 
-  const formatObjectValue = (value: string) => {
-    const trimmed = value.trim();
+  const objectValueString = (value: unknown) => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      const rawInner = trimmed
+        .trim()
+        .replace(/^Raw\((.*)\)$/, "$1")
+        .trim();
+      return rawInner;
+    }
+    if (
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      typeof value === "bigint"
+    ) {
+      return String(value);
+    }
+    if (value == null) {
+      return "null";
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatObjectValue = (value: unknown) => {
+    const trimmed = objectValueString(value).trim();
     const isHex = /^0x[0-9a-f]+$/i.test(trimmed);
     if (isHex && trimmed.length > 24) {
       return {
@@ -420,14 +446,18 @@ export function ContextPanel({
   };
 
   const renderObjectData = (item: InventoryItem) => {
-    if (item.obj.length === 0) return null;
+    const entries = Object.entries(item.obj).sort(([left], [right]) =>
+      left.localeCompare(right),
+    );
+    if (entries.length === 0) return null;
+
     return (
       <div className="object-data">
-        {item.obj.map((entry) => {
-          const formatted = formatObjectValue(entry.value);
+        {entries.map(([key, value]) => {
+          const formatted = formatObjectValue(value);
           return (
-            <div key={entry.key} className="object-data-row">
-              <span className="object-data-key">{entry.key}</span>
+            <div key={key} className="object-data-row">
+              <span className="object-data-key">{key}</span>
               <span
                 className={`object-data-value${formatted.mono ? " mono" : ""}`}
                 title={formatted.full}

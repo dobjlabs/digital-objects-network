@@ -5,8 +5,6 @@ use crate::objects::objects_dir;
 use serde::Serialize;
 
 use craft_sdk::Helper;
-use pod2::middleware::containers::Dictionary;
-
 use crate::{objects::ObjectRecord, spec};
 
 #[derive(Debug, Serialize, Clone)]
@@ -33,13 +31,6 @@ pub struct SourceActionMetaDto {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct ObjectDataEntryDto {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct InventoryItemDto {
     pub id: String,
     pub file_name: String,
@@ -48,7 +39,7 @@ pub struct InventoryItemDto {
     pub class_meta: ClassMetaDto,
     pub source_action: SourceActionMetaDto,
     pub description: Option<String>,
-    pub obj: Vec<ObjectDataEntryDto>,
+    pub obj: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -65,44 +56,6 @@ pub struct RecipeDto {
     pub reads_block: bool,
     pub args: Vec<MethodArgDto>,
     pub unlocked: bool,
-}
-
-pub(super) fn short_hash(seed: &str) -> String {
-    let mut bytes = [0u8; 8];
-    for (idx, b) in seed.bytes().enumerate() {
-        bytes[idx % 8] = bytes[idx % 8].wrapping_add(b);
-    }
-    format!(
-        "0x{:02x}{:02x}...{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[6], bytes[7]
-    )
-}
-
-fn value_string(raw: String) -> String {
-    let trimmed = raw.trim();
-    let unquoted = if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-        &trimmed[1..trimmed.len() - 1]
-    } else {
-        trimmed
-    };
-
-    if let Some(raw_inner) = unquoted
-        .strip_prefix("Raw(")
-        .and_then(|value| value.strip_suffix(')'))
-    {
-        raw_inner.trim().to_string()
-    } else {
-        unquoted.to_string()
-    }
-}
-
-fn object_data_from_object(obj: &Dictionary) -> Vec<(String, String)> {
-    let mut data = Vec::new();
-    for (key, value) in obj.kvs() {
-        data.push((key.name().to_string(), value_string(format!("{value}"))));
-    }
-    data.sort_by(|a, b| a.0.cmp(&b.0));
-    data
 }
 
 pub(super) fn build_action_catalog() -> Vec<RecipeDto> {
@@ -130,7 +83,7 @@ pub(super) fn build_action_catalog() -> Vec<RecipeDto> {
                 .map(|class_name| MethodArgDto {
                     kind: "class".to_string(),
                     label: class_name.clone(),
-                    class_hash: short_hash(&class_name),
+                    class_hash: class_name,
                 })
                 .collect(),
             unlocked: true,
@@ -140,7 +93,6 @@ pub(super) fn build_action_catalog() -> Vec<RecipeDto> {
 
 pub(super) fn to_inventory_item(record: &ObjectRecord, file_name: &str) -> InventoryItemDto {
     let class_ui = spec::class_ui_meta(&record.class_name);
-    let obj_data = object_data_from_object(&record.obj);
     InventoryItemDto {
         id: record.id.clone(),
         file_name: file_name.to_string(),
@@ -148,20 +100,14 @@ pub(super) fn to_inventory_item(record: &ObjectRecord, file_name: &str) -> Inven
         nullifier: record.nullifier.clone(),
         class_meta: ClassMetaDto {
             name: record.class_name.clone(),
-            hash: short_hash(&record.class_name),
+            hash: record.class_name.clone(),
         },
         source_action: SourceActionMetaDto {
             name: record.source_action.clone(),
-            hash: short_hash(&record.source_action),
+            hash: record.source_action.clone(),
         },
         description: Some(class_ui.description.to_string()),
-        obj: obj_data
-            .iter()
-            .map(|(key, value)| ObjectDataEntryDto {
-                key: key.clone(),
-                value: value.clone(),
-            })
-            .collect(),
+        obj: serde_json::to_value(&record.obj).expect("object dictionary should serialize"),
     }
 }
 

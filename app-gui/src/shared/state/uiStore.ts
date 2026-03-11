@@ -73,18 +73,30 @@ interface UiStoreState extends AppUiState {
   }) => Promise<void>;
 }
 
+const shortHash = (seed: string): string => {
+  const bytes = new Uint8Array(8);
+  for (let i = 0; i < seed.length; i += 1) {
+    bytes[i % 8] = (bytes[i % 8] + seed.charCodeAt(i)) & 0xff;
+  }
+  const toHex = (value: number) => value.toString(16).padStart(2, "0");
+  return `0x${toHex(bytes[0])}${toHex(bytes[1])}...${toHex(bytes[6])}${toHex(bytes[7])}`;
+};
+
 const mapItem = (item: InventoryItemPayload): InventoryItem => ({
   id: item.id,
   fileName: item.fileName,
   emoji: item.emoji,
   nullifier: item.nullifier,
-  classMeta: item.classMeta,
-  sourceAction: item.sourceAction,
+  classMeta: {
+    ...item.classMeta,
+    hash: shortHash(item.classMeta.hash),
+  },
+  sourceAction: {
+    ...item.sourceAction,
+    hash: shortHash(item.sourceAction.hash),
+  },
   description: item.description,
-  obj: item.obj.map((entry) => ({
-    key: entry.key,
-    value: entry.value,
-  })),
+  obj: item.obj,
 });
 
 const mapRecipe = (recipe: RecipePayload): Recipe => ({
@@ -100,7 +112,7 @@ const mapRecipe = (recipe: RecipePayload): Recipe => ({
   args: recipe.args.map((arg) => ({
     kind: "class",
     label: arg.label,
-    classHash: arg.classHash,
+    classHash: shortHash(arg.classHash),
   })),
   unlocked: recipe.unlocked,
 });

@@ -20,11 +20,6 @@ export interface SourceActionMetaPayload {
   hash: string;
 }
 
-export interface ObjectDataEntryPayload {
-  key: string;
-  value: string;
-}
-
 export interface InventoryItemPayload {
   id: string;
   fileName: string;
@@ -33,7 +28,7 @@ export interface InventoryItemPayload {
   classMeta: ClassMetaPayload;
   sourceAction: SourceActionMetaPayload;
   description?: string;
-  obj: ObjectDataEntryPayload[];
+  obj: Record<string, unknown>;
 }
 
 export interface RecipePayload {

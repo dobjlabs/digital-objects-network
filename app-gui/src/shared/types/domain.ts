@@ -18,11 +18,6 @@ export interface MethodArg {
   classHash: string;
 }
 
-export interface ObjectDataEntry {
-  key: string;
-  value: string;
-}
-
 export interface InventoryItem {
   id: string;
   fileName: string;
@@ -31,7 +26,7 @@ export interface InventoryItem {
   classMeta: ClassMeta;
   sourceAction: SourceActionMeta;
   description?: string;
-  obj: ObjectDataEntry[];
+  obj: Record<string, unknown>;
 }
 
 export interface Recipe {
