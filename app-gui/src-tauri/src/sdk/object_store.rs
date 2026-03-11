@@ -34,7 +34,7 @@ pub(super) fn write_object_file(
 
     let persisted = serde_json::to_value(record)
         .map_err(|err| format!("failed to serialize object file {file_name}: {err}"))?;
-    let serialized = serde_json::to_string_pretty(&persisted)
+    let serialized = serde_json::to_string(&persisted)
         .map_err(|err| format!("failed to serialize object file {file_name}: {err}"))?;
     let target_path = if record.is_nullified() {
         nullified_dir.join(file_name)
