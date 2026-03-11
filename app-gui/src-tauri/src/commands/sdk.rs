@@ -492,8 +492,12 @@ fn normalize_component_name(name: &str) -> String {
         .collect()
 }
 
-fn format_output_file_name(class_name: &str, index: u64) -> String {
-    format!("{}_{index}.dobj", normalize_component_name(class_name))
+fn format_output_file_name(class_name: &str, object_id: &str) -> String {
+    format!(
+        "{}_{}.dobj",
+        normalize_component_name(class_name),
+        normalize_component_name(object_id)
+    )
 }
 
 fn object_id_from_spendable(spendable: &SpendableObject) -> String {
@@ -904,25 +908,11 @@ fn load_object_files(objects_dir: &Path) -> Result<Vec<RuntimeObjectRecord>, Str
     Ok(objects)
 }
 
-fn next_object_index_from_records(objects: &[RuntimeObjectRecord]) -> u64 {
-    let max_index = objects
-        .iter()
-        .filter_map(|record| {
-            let without_ext = record.file_name.strip_suffix(".dobj")?;
-            let (_prefix, suffix) = without_ext.rsplit_once('_')?;
-            suffix.parse::<u64>().ok()
-        })
-        .max()
-        .unwrap_or(0);
-    max_index + 1
-}
-
 fn refresh_runtime_objects(
     inner: &mut ObjectsRuntimeState,
     objects_dir: &Path,
 ) -> Result<(), String> {
     inner.objects = load_object_files(objects_dir)?;
-    inner.next_object_index = next_object_index_from_records(&inner.objects);
     Ok(())
 }
 
@@ -985,7 +975,6 @@ pub async fn load_gui_bootstrap(
     let mut inner = lock_runtime(&runtime);
     if let Err(err) = ensure_runtime_loaded(&mut inner, &objects_dir) {
         eprintln!("zk-craft: bootstrap runtime failed, resetting state: {err}");
-        inner.next_object_index = 1;
         inner.state_root = empty_state_root();
         inner.objects.clear();
         inner.loaded = true;
@@ -1525,10 +1514,8 @@ pub async fn run_sdk_action(
             let mut output_files = Vec::new();
             for (index, class_name) in descriptor.output_classes.iter().enumerate() {
                 let spendable = spendable_outputs.obj(index);
-                let object_index = inner.next_object_index;
-                let file_name = format_output_file_name(class_name, object_index);
-                inner.next_object_index += 1;
                 let object_id = object_id_from_spendable(&spendable);
+                let file_name = format_output_file_name(class_name, &object_id);
 
                 output_files.push(file_name.clone());
                 inner.objects.push(RuntimeObjectRecord {

@@ -59,7 +59,6 @@ pub(crate) struct RuntimeObjectRecord {
 pub(crate) struct ObjectsRuntimeState {
     pub(crate) loaded: bool,
     pub(crate) run_in_progress: bool,
-    pub(crate) next_object_index: u64,
     pub(crate) state_root: StateRoot,
     pub(crate) objects: Vec<RuntimeObjectRecord>,
 }
@@ -75,7 +74,6 @@ impl ObjectsRuntime {
             inner: Mutex::new(ObjectsRuntimeState {
                 loaded: false,
                 run_in_progress: false,
-                next_object_index: 1,
                 state_root: StateRoot::new(0, &empty, &empty, &[]),
                 objects: Vec::new(),
             }),

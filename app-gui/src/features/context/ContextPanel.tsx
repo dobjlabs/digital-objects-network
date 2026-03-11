@@ -11,6 +11,10 @@ import {
   readDobjFileMetadata,
   type ActionId,
 } from "../../shared/api/tauriClient";
+import {
+  objectDisplayFileName,
+  objectDisplayFileNameForClass,
+} from "../../shared/objectDisplay";
 
 interface ContextPanelProps {
   selection: ContextSelection;
@@ -221,7 +225,7 @@ export function ContextPanel({
 
     const className = parsed.className.trim();
     const validity = parsed.validity.trim().toLowerCase();
-    const fileLabel = parsed.fileName.trim().length > 0 ? parsed.fileName.trim() : selectedName;
+    const fileLabel = objectDisplayFileNameForClass(className);
 
     if (!className || !validity) {
       setArgErrors((prev) => ({
@@ -384,13 +388,12 @@ export function ContextPanel({
       );
     })();
 
-  const displayThingPath = (
-    filename: string,
-    validity: InventoryItem["validity"],
-  ) =>
-    validity === "nullified"
-      ? `~/.objects/.nullified/${filename}`
-      : `~/.objects/${filename}`;
+  const displayThingPath = (item: InventoryItem) => {
+    const displayName = objectDisplayFileName(item);
+    return item.validity === "nullified"
+      ? `~/.objects/.nullified/${displayName}`
+      : `~/.objects/${displayName}`;
+  };
 
   const truncateDisplayHash = (value: string) => {
     const trimmed = value.trim();
@@ -455,7 +458,7 @@ export function ContextPanel({
     if (!item)
       return <section className="context-panel">Object not found.</section>;
 
-    const titleName = item.fileName.replace(/\.dobj$/i, "");
+    const titleName = item.classMeta.name;
     const liveValueRaw =
       item.validity === "live" ? item.stateRoot : (item.nullifier ?? "nullified");
     const liveValue = truncateDisplayHash(liveValueRaw);
@@ -493,7 +496,7 @@ export function ContextPanel({
           {renderMetaRow(
             "Path",
             <span className="context-inline-path">
-              {displayThingPath(item.fileName, item.validity)}
+              {displayThingPath(item)}
             </span>,
           )}
         </div>

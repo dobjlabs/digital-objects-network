@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import type { InventoryItem } from "../../shared/types/domain";
 import type { DragEvent } from "react";
+import { objectDisplayFileName } from "../../shared/objectDisplay";
 
 interface InventoryPanelProps {
   items: InventoryItem[];
@@ -42,16 +43,17 @@ export function InventoryPanel({
       ? objectsDirPath.slice(0, -1)
       : objectsDirPath;
     const objectPath = `${basePath}/${item.fileName}`;
+    const displayName = objectDisplayFileName(item);
 
     const payload = JSON.stringify({
       objectPath,
-      name: item.fileName,
+      name: displayName,
       className: item.classMeta.name,
       classHash: item.classMeta.hash,
     });
     event.dataTransfer.setData("application/x-zkcraft-item", payload);
-    event.dataTransfer.setData("text/plain", item.fileName);
-    event.dataTransfer.setData("text", item.fileName);
+    event.dataTransfer.setData("text/plain", displayName);
+    event.dataTransfer.setData("text", displayName);
     event.dataTransfer.effectAllowed = "copy";
     isDraggingRef.current = true;
   };
@@ -69,6 +71,7 @@ export function InventoryPanel({
   const nullifiedItems = items.filter((item) => item.validity === "nullified");
 
   const renderInventoryItem = (item: InventoryItem) => {
+    const displayName = objectDisplayFileName(item);
     const hashLineRaw =
       item.validity === "live"
         ? item.stateRoot
@@ -88,7 +91,7 @@ export function InventoryPanel({
           <span className="inventory-emoji">{item.emoji}</span>
         </span>
         <span className="inventory-main">
-          <span className="inventory-name">{item.fileName}</span>
+          <span className="inventory-name">{displayName}</span>
           <span className="inventory-hash" title={hashLineRaw}>
             {hashLine}
           </span>
