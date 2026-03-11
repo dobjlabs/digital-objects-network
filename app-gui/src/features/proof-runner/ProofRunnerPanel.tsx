@@ -235,7 +235,6 @@ export function ProofRunnerPanel() {
         {proof.status === "generating" && (
           <div className="stage-details">
             <div className="stage-detail-line">
-              <span className="stage-detail-label">Generate Proof</span>
               <span
                 className={`stage-detail-value ${statusClass(generateState)}`}
               >
@@ -255,7 +254,6 @@ export function ProofRunnerPanel() {
         {proof.status === "committing" && (
           <div className="stage-details">
             <div className="stage-detail-line">
-              <span className="stage-detail-label">Commit</span>
               <span
                 className={`stage-detail-value ${statusClass(commitState)}`}
               >

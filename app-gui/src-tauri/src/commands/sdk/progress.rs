@@ -1,7 +1,6 @@
 use serde::Serialize;
 use tauri::Emitter;
 
-use super::relayer_client::JobStatus;
 use super::run_action::RunSdkActionResult;
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +24,6 @@ pub(super) struct RunSdkActionProgress {
     pub(super) phase: ProofPhase,
     pub(super) status: ProofProgressStatus,
     pub(super) message: String,
-    pub(super) detail: Option<String>,
     pub(super) old_root: Option<String>,
     pub(super) new_root: Option<String>,
     pub(super) output_file: Option<String>,
@@ -42,7 +40,6 @@ fn emit_phase(
     phase: ProofPhase,
     status: ProofProgressStatus,
     message: String,
-    detail: Option<String>,
     old_root: Option<&str>,
     new_root: Option<&str>,
     output_file: Option<String>,
@@ -54,7 +51,6 @@ fn emit_phase(
             phase,
             status,
             message,
-            detail,
             old_root: old_root.map(|value| value.to_string()),
             new_root: new_root.map(|value| value.to_string()),
             output_file,
@@ -62,46 +58,40 @@ fn emit_phase(
     )
 }
 
-pub(super) fn emit_generate_proof_running(
+pub(super) fn emit_generate_proof_step(
     app: &tauri::AppHandle,
     run_id: &str,
-    action_id: &str,
-    cpu_cost: &str,
+    step_label: &str,
 ) -> Result<(), String> {
     emit_phase(
         app,
         run_id,
         ProofPhase::GenerateProof,
         ProofProgressStatus::Running,
-        format!("Running {action_id}"),
-        Some(cpu_cost.to_string()),
+        step_label.to_string(),
         None,
         None,
         None,
     )
 }
 
-pub(super) fn emit_generate_proof_done(
-    app: &tauri::AppHandle,
-    run_id: &str,
-    cpu_cost: &str,
-) -> Result<(), String> {
+pub(super) fn emit_generate_proof_done(app: &tauri::AppHandle, run_id: &str) -> Result<(), String> {
     emit_phase(
         app,
         run_id,
         ProofPhase::GenerateProof,
         ProofProgressStatus::Done,
         "Proof generation complete".to_string(),
-        Some(cpu_cost.to_string()),
         None,
         None,
         None,
     )
 }
 
-pub(super) fn emit_commit_submitting(
+pub(super) fn emit_commit_step(
     app: &tauri::AppHandle,
     run_id: &str,
+    step_label: &str,
     old_root: &str,
 ) -> Result<(), String> {
     emit_phase(
@@ -109,28 +99,7 @@ pub(super) fn emit_commit_submitting(
         run_id,
         ProofPhase::Commit,
         ProofProgressStatus::Running,
-        "Submitting proof to relayer".to_string(),
-        Some("submit".to_string()),
-        Some(old_root),
-        None,
-        None,
-    )
-}
-
-pub(super) fn emit_commit_waiting(
-    app: &tauri::AppHandle,
-    run_id: &str,
-    old_root: &str,
-    job_id: &str,
-    status: JobStatus,
-) -> Result<(), String> {
-    emit_phase(
-        app,
-        run_id,
-        ProofPhase::Commit,
-        ProofProgressStatus::Running,
-        format!("Waiting for relayer job {job_id}"),
-        Some(format!("status: {}", status.as_str())),
+        step_label.to_string(),
         Some(old_root),
         None,
         None,
@@ -149,7 +118,6 @@ pub(super) fn emit_commit_done(
         ProofPhase::Commit,
         ProofProgressStatus::Done,
         format!("Commit complete ({da_receipt})"),
-        Some(result.new_root.clone()),
         Some(&result.old_root),
         Some(&result.new_root),
         result.output_files.first().cloned(),

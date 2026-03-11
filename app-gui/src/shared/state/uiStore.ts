@@ -266,15 +266,15 @@ export const useUiStore = create<UiStoreState>((set) => ({
         nextStatus = "generating";
         updateStep("generate-proof", {
           status: event.status,
-          detail: event.detail ?? prev.proof.cpuCost ?? "pending",
+          detail: event.message,
         });
       } else if (event.phase === "commit") {
         nextStatus = "committing";
         nextOldRoot = event.oldRoot ?? nextOldRoot;
-        nextNewRoot = event.newRoot ?? event.detail ?? nextNewRoot;
+        nextNewRoot = event.newRoot ?? nextNewRoot;
         updateStep("commit", {
           status: event.status,
-          detail: event.detail ?? nextNewRoot ?? "pending",
+          detail: event.message,
         });
       }
 

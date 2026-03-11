@@ -121,11 +121,6 @@
   padding: 6px 0;
 }
 
-.stage-detail-label {
-  color: var(--text-dim);
-  font-size: 10px;
-}
-
 .stage-detail-value {
   color: var(--text);
   font-size: 9px;

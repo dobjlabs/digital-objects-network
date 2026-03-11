@@ -13,10 +13,7 @@ use super::{
     mapping::{to_inventory_item, InventoryItemDto},
     naming::format_output_file_name,
     object_store::{parse_object_file_from_path, sync_object_files},
-    progress::{
-        emit_commit_done, emit_commit_submitting, emit_commit_waiting, emit_generate_proof_done,
-        emit_generate_proof_running,
-    },
+    progress::{emit_commit_done, emit_generate_proof_done, emit_generate_proof_step},
     relayer_client::{
         submit_proof_to_relayer, wait_for_relayer_confirmation, JobStatus,
         RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
@@ -32,6 +29,7 @@ use super::{
 };
 use crate::{
     app_paths,
+    commands::sdk::progress::emit_commit_step,
     spec::{self, action_descriptors_by_name},
     state::{ObjectsRuntime, RuntimeObjectRecord, RuntimeValidity},
 };
@@ -195,7 +193,7 @@ async fn submit_and_confirm_relayer(
     timeout_secs: u64,
     poll_interval_ms: u64,
 ) -> Result<RelayerCommitOutcome, String> {
-    emit_commit_submitting(app, run_id, old_root)?;
+    emit_commit_step(app, run_id, "Submitting proof to relayer", old_root)?;
 
     let relayer_url_for_submit = relayer_url.to_string();
     let action_ref = action_id.to_string();
@@ -221,12 +219,11 @@ async fn submit_and_confirm_relayer(
         ));
     }
 
-    emit_commit_waiting(
+    emit_commit_step(
         app,
         run_id,
+        format!("Waiting for relayer job {}", submit_response.job_id).as_str(),
         old_root,
-        &submit_response.job_id,
-        submit_response.status,
     )?;
 
     let relayer_url_for_wait = relayer_url.to_string();
@@ -388,6 +385,9 @@ pub async fn run_sdk_action(
 
     let app_settings = get_app_settings(app.clone())?;
 
+    let action_id = input.action_id.clone();
+    emit_generate_proof_step(&app, &action_id, "Verifying Inputs")?;
+
     let sync_state = fetch_synchronizer_state(&app_settings.synchronizer_api_url)?;
     let state_root_for_run = sync_state.state_root.clone();
     let old_root_hash = sync_state.current_gsr;
@@ -404,9 +404,7 @@ pub async fn run_sdk_action(
     verify_inputs_grounded(&app_settings.synchronizer_api_url, &resolved_inputs)?;
 
     let _run_guard = acquire_run_in_progress_guard(&runtime)?;
-
-    let action_id = input.action_id;
-    emit_generate_proof_running(&app, &action_id, &action_id, descriptor.ui.cpu_cost)?;
+    emit_generate_proof_step(&app, &action_id, "Generating proof")?;
 
     let execution_inputs = resolved_inputs
         .iter()
@@ -428,8 +426,9 @@ pub async fn run_sdk_action(
         Err(err) => Err(format!("failed while executing action: {err}")),
     }?;
 
-    emit_generate_proof_done(&app, &action_id, descriptor.ui.cpu_cost)?;
+    emit_generate_proof_done(&app, &action_id)?;
 
+    emit_commit_step(&app, &action_id, "Shrinking proof", &old_root)?;
     let payload_bytes = build_relayer_payload(&old_root_hash, &spendable_outputs)?;
     let expected_tx_final = spendable_outputs.tx.dict().commitment();
 
@@ -445,6 +444,12 @@ pub async fn run_sdk_action(
     )
     .await?;
 
+    emit_commit_step(
+        &app,
+        &action_id,
+        "Waiting for synchronizer to observe commit",
+        &old_root,
+    )?;
     let sync_state_after = wait_for_synchronizer_commit(
         &app_settings.synchronizer_api_url,
         expected_tx_final,
@@ -453,6 +458,7 @@ pub async fn run_sdk_action(
     )?;
     let new_root = encode_hash_hex(&sync_state_after.current_gsr);
 
+    emit_commit_step(&app, &action_id, "Creating files", &old_root)?;
     let result = apply_commit_to_runtime(
         &runtime,
         &objects_dir,

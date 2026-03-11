@@ -96,7 +96,6 @@ export interface RunSdkActionProgress {
   phase: ProofPhase;
   status: ProofProgressStatus;
   message: string;
-  detail: string | null;
   oldRoot: string | null;
   newRoot: string | null;
   outputFile: string | null;
