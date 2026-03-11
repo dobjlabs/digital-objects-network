@@ -8,8 +8,8 @@ use pod2::{
     frontend::{MainPod, MultiPodBuilder, Operation},
     lang::{Module, load_module},
     middleware::{
-        EMPTY_VALUE, Key, MainPodProver, Params, Statement, TypedValue, VDSet, Value,
-        containers::Dictionary,
+        EMPTY_VALUE, Hash, Key, MainPodProver, Params, Predicate, Statement, TypedValue, VDSet,
+        Value, containers::Dictionary,
     },
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
@@ -296,6 +296,26 @@ impl Helper {
             modules: self.modules.clone(),
             data: &self.data,
         }
+    }
+
+    pub fn action_hash(&self, action_name: &str) -> Option<Hash> {
+        self.data
+            .actions
+            .iter()
+            .find(|action| action.name == action_name)
+            .and_then(|action| action.hash(&self.module))
+    }
+
+    pub fn action_hashes(&self) -> HashMap<String, Hash> {
+        self.data
+            .actions
+            .iter()
+            .filter_map(|action| {
+                action
+                    .hash(&self.module)
+                    .map(|hash| (action.name.clone(), hash))
+            })
+            .collect()
     }
 }
 
@@ -749,6 +769,13 @@ impl Action {
             }
         }
         vars
+    }
+
+    fn hash(&self, module: &Module) -> Option<Hash> {
+        module
+            .predicate_ref_by_name(self.name.as_str())
+            .map(Predicate::Custom)
+            .map(|predicate| predicate.hash())
     }
 }
 

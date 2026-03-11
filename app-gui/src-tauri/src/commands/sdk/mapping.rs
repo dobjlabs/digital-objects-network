@@ -1,4 +1,4 @@
-use craft_sdk::SpendableObject;
+use craft_sdk::{Helper, SpendableObject};
 use serde::Serialize;
 
 use crate::{
@@ -115,6 +115,9 @@ fn object_data_from_object(spendable: &SpendableObject) -> Vec<(String, String)>
 }
 
 pub(super) fn build_action_catalog() -> Vec<RecipeDto> {
+    let helper = Helper::new(spec::dependencies(), spec::actions());
+    let action_hashes = helper.action_hashes();
+
     spec::visible_action_descriptors()
         .into_iter()
         .map(|descriptor| RecipeDto {
@@ -122,7 +125,10 @@ pub(super) fn build_action_catalog() -> Vec<RecipeDto> {
             group: String::new(),
             name: descriptor.name.clone(),
             emoji: descriptor.ui.emoji.to_string(),
-            hash: short_hash(&descriptor.name),
+            hash: action_hashes
+                .get(&descriptor.name)
+                .map(|hash| format!("{:#}", hash))
+                .unwrap_or_default(),
             verb: descriptor.name.clone(),
             desc: descriptor.ui.description.to_string(),
             cpu: descriptor.ui.cpu_cost.to_string(),

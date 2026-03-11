@@ -9,6 +9,13 @@ interface RecipeGridProps {
   onClearSelection: () => void;
 }
 
+function formatDisplayHash(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "—";
+  if (trimmed.length <= 14) return trimmed;
+  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
+}
+
 export function RecipeGrid({
   recipes,
   activeRecipeId,
@@ -91,11 +98,13 @@ export function RecipeGrid({
             type="button"
             className={`action-row ${activeRecipeId === recipe.id ? "active" : ""}`}
             onClick={() => onSelectRecipe(recipe.id)}
-            title={`${recipe.name} (${recipe.verb})`}
+            title={`${recipe.name} (${recipe.verb})${recipe.hash ? `\n${recipe.hash}` : ""}`}
           >
             <span className="action-row-emoji">{recipe.emoji}</span>
             <span className="action-row-name">{recipe.name}</span>
-            <span className="action-row-hash">{recipe.hash}</span>
+            <span className="action-row-hash" title={recipe.hash || "No hash"}>
+              {formatDisplayHash(recipe.hash)}
+            </span>
           </button>
         ))}
         {visibleActions.length === 0 && (
