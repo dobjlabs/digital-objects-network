@@ -27,7 +27,7 @@ use crate::{
     app_paths,
     commands::sdk::progress::emit_commit_step,
     spec::{self, action_descriptors_by_name},
-    state::{ObjectRecord, ObjectsRuntime, RuntimeValidity},
+    state::{ObjectRecord, ObjectValidity, ObjectsRuntime},
 };
 
 use super::super::settings::get_app_settings;
@@ -100,7 +100,7 @@ fn resolve_inputs(
 
         let path_ref = Path::new(object_path);
         let record = parse_object_file_from_path(path_ref)?;
-        if record.validity != RuntimeValidity::Live {
+        if record.validity != ObjectValidity::Live {
             return Err(format!("input object is not live: {}", record.id));
         }
         if record.class_name != expected_class {
@@ -255,7 +255,7 @@ fn save_results(
             file_name: input_record.file_name.clone(),
             class_name: input_record.class_name.clone(),
             source_action: input_record.source_action.clone(),
-            validity: RuntimeValidity::Nullified,
+            validity: ObjectValidity::Nullified,
             state_hash: input_record.state_hash.clone(),
             nullifier: Some(input_nullifier),
             pod: input_record.pod.clone(),
@@ -291,7 +291,7 @@ fn save_results(
             file_name,
             class_name: class_name.clone(),
             source_action: Some(action_id.to_string()),
-            validity: RuntimeValidity::Live,
+            validity: ObjectValidity::Live,
             state_hash: format!("{:#}", spendable.obj.commitment()),
             nullifier: None,
             pod: Some(spendable.pod),

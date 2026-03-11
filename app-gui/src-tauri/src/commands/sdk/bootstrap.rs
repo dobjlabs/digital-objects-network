@@ -12,7 +12,7 @@ use pod2::middleware::containers::Dictionary;
 
 use crate::{
     spec,
-    state::{ObjectRecord, RuntimeValidity},
+    state::{ObjectRecord, ObjectValidity},
 };
 
 #[derive(Debug, Serialize, Clone)]
@@ -168,8 +168,8 @@ pub(super) fn to_inventory_item(record: &ObjectRecord) -> InventoryItemDto {
         file_name: record.file_name.clone(),
         emoji: class_ui.emoji.to_string(),
         validity: match record.validity {
-            RuntimeValidity::Live => "live".to_string(),
-            RuntimeValidity::Nullified => "nullified".to_string(),
+            ObjectValidity::Live => "live".to_string(),
+            ObjectValidity::Nullified => "nullified".to_string(),
         },
         state_root: record.state_hash.clone(),
         nullifier: record.nullifier.clone(),

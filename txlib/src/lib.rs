@@ -6,13 +6,14 @@ use std::{
 };
 
 use pod2::middleware::{
-    EMPTY_VALUE, Hash, Key, Statement, Value,
     containers::{Array, Dictionary, Set},
-    hash_values,
+    hash_values, Hash, Key, Statement, Value, EMPTY_VALUE,
 };
 use pod2utils::{dict, dict_define, macros::BuildContext, rand_raw_value, set, st_custom};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StateRoot {
     pub block_number: i64,
     pub transactions: Set,
@@ -60,6 +61,42 @@ pub struct Tx {
     pub live: Set,
     pub state_root: Arc<StateRoot>,
     pub nullifiers: Set,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TxSerde {
+    live: Set,
+    state_root: StateRoot,
+    nullifiers: Set,
+}
+
+impl Serialize for Tx {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        TxSerde {
+            live: self.live.clone(),
+            state_root: (*self.state_root).clone(),
+            nullifiers: self.nullifiers.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Tx {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let payload = TxSerde::deserialize(deserializer)?;
+        Ok(Self {
+            live: payload.live,
+            state_root: Arc::new(payload.state_root),
+            nullifiers: payload.nullifiers,
+        })
+    }
 }
 
 impl Tx {

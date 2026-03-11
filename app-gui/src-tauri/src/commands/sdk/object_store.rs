@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::state::{ObjectRecord, RuntimeValidity};
+use crate::state::{ObjectRecord, ObjectValidity};
 
 const NULLIFIED_DIR_NAME: &str = ".nullified";
 
@@ -43,15 +43,15 @@ pub(super) fn write_object_file(record: &ObjectRecord, objects_dir: &Path) -> Re
         )
     })?;
     let target_path = match record.validity {
-        RuntimeValidity::Live => objects_dir.join(&record.file_name),
-        RuntimeValidity::Nullified => nullified_dir.join(&record.file_name),
+        ObjectValidity::Live => objects_dir.join(&record.file_name),
+        ObjectValidity::Nullified => nullified_dir.join(&record.file_name),
     };
     fs::write(&target_path, serialized)
         .map_err(|err| format!("failed to write object file {}: {err}", record.file_name))?;
 
     let stale_path = match record.validity {
-        RuntimeValidity::Live => nullified_dir.join(&record.file_name),
-        RuntimeValidity::Nullified => objects_dir.join(&record.file_name),
+        ObjectValidity::Live => nullified_dir.join(&record.file_name),
+        ObjectValidity::Nullified => objects_dir.join(&record.file_name),
     };
     if stale_path != target_path {
         match fs::remove_file(&stale_path) {
@@ -104,9 +104,9 @@ fn load_object_files_from_dir(
         match parse_object_file(&contents, file_name) {
             Ok(record) => {
                 let expected_validity = if in_nullified_dir {
-                    RuntimeValidity::Nullified
+                    ObjectValidity::Nullified
                 } else {
-                    RuntimeValidity::Live
+                    ObjectValidity::Live
                 };
 
                 if record.validity != expected_validity {
@@ -114,13 +114,13 @@ fn load_object_files_from_dir(
                         "invalid object validity placement for {}: expected {} in {}, found {}",
                         record.file_name,
                         match expected_validity {
-                            RuntimeValidity::Live => "live",
-                            RuntimeValidity::Nullified => "nullified",
+                            ObjectValidity::Live => "live",
+                            ObjectValidity::Nullified => "nullified",
                         },
                         source_dir.display(),
                         match record.validity {
-                            RuntimeValidity::Live => "live",
-                            RuntimeValidity::Nullified => "nullified",
+                            ObjectValidity::Live => "live",
+                            ObjectValidity::Nullified => "nullified",
                         }
                     ));
                 }
