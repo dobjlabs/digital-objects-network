@@ -23,7 +23,7 @@ use super::settings::get_app_settings;
 use crate::{
     action_spec,
     app_paths,
-    state::{CraftRuntime, CraftRuntimeInner, RuntimeObjectRecord, RuntimeValidity},
+    state::{ObjectsRuntime, ObjectsRuntimeState, RuntimeObjectRecord, RuntimeValidity},
     types::{
         ClassMetaDto, InventoryItemDto, LoadGuiBootstrapResult, MethodArgDto, ObjectDataEntryDto,
         ObjectMethodDto, RecipeDto, RunSdkActionInput, RunSdkActionProgress, RunSdkActionResult,
@@ -787,7 +787,7 @@ fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObject
     })
 }
 
-fn sync_object_files(inner: &CraftRuntimeInner, objects_dir: &Path) -> Result<(), String> {
+fn sync_object_files(inner: &ObjectsRuntimeState, objects_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(objects_dir)
         .map_err(|err| format!("failed to create objects directory: {err}"))?;
     let nullified_dir = nullified_objects_dir(objects_dir);
@@ -918,7 +918,7 @@ fn next_object_index_from_records(objects: &[RuntimeObjectRecord]) -> u64 {
 }
 
 fn refresh_runtime_objects(
-    inner: &mut CraftRuntimeInner,
+    inner: &mut ObjectsRuntimeState,
     objects_dir: &Path,
 ) -> Result<(), String> {
     inner.objects = load_object_files(objects_dir)?;
@@ -926,7 +926,7 @@ fn refresh_runtime_objects(
     Ok(())
 }
 
-fn ensure_runtime_loaded(inner: &mut CraftRuntimeInner, objects_dir: &Path) -> Result<(), String> {
+fn ensure_runtime_loaded(inner: &mut ObjectsRuntimeState, objects_dir: &Path) -> Result<(), String> {
     if inner.loaded {
         return Ok(());
     }
@@ -955,15 +955,15 @@ fn parse_object_file_from_path(path: &Path) -> Result<RuntimeObjectRecord, Strin
     parse_object_file(&contents, file_name)
 }
 
-fn clear_run_in_progress(runtime: &tauri::State<'_, CraftRuntime>) {
+fn clear_run_in_progress(runtime: &tauri::State<'_, ObjectsRuntime>) {
     if let Ok(mut inner) = runtime.inner.lock() {
         inner.run_in_progress = false;
     }
 }
 
 fn lock_runtime<'a>(
-    runtime: &'a tauri::State<'_, CraftRuntime>,
-) -> std::sync::MutexGuard<'a, CraftRuntimeInner> {
+    runtime: &'a tauri::State<'_, ObjectsRuntime>,
+) -> std::sync::MutexGuard<'a, ObjectsRuntimeState> {
     match runtime.inner.lock() {
         Ok(inner) => inner,
         Err(poisoned) => {
@@ -976,7 +976,7 @@ fn lock_runtime<'a>(
 #[tauri::command]
 pub async fn load_gui_bootstrap(
     app: tauri::AppHandle,
-    runtime: tauri::State<'_, CraftRuntime>,
+    runtime: tauri::State<'_, ObjectsRuntime>,
 ) -> Result<LoadGuiBootstrapResult, String> {
     let objects_dir = app_paths::objects_dir(&app)?;
     let actions = build_action_catalog();
@@ -1050,7 +1050,7 @@ fn build_relayer_payload(
 #[tauri::command]
 pub async fn run_sdk_action(
     app: tauri::AppHandle,
-    runtime: tauri::State<'_, CraftRuntime>,
+    runtime: tauri::State<'_, ObjectsRuntime>,
     input: RunSdkActionInput,
 ) -> Result<RunSdkActionResult, String> {
     let objects_dir = app_paths::objects_dir(&app)?;

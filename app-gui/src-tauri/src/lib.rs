@@ -16,7 +16,7 @@ use commands::{
     read_dobj_file_metadata, run_sdk_action, sample_app_cpu, save_app_settings,
 };
 use objects_watcher::start_objects_watcher;
-use state::{CpuMonitor, CraftRuntime};
+use state::{CpuMonitor, ObjectsRuntime};
 
 const MENU_OPEN_SETTINGS_ID: &str = "app.open-settings";
 const OPEN_SETTINGS_EVENT: &str = "open-settings";
@@ -86,7 +86,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .manage(CpuMonitor::new())
-        .manage(CraftRuntime::new())
+        .manage(ObjectsRuntime::new())
         .setup(|app| {
             if let Err(err) = start_objects_watcher(app.handle().clone()) {
                 eprintln!("zk-craft: objects watcher disabled: {err}");

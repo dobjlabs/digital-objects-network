@@ -56,7 +56,7 @@ pub(crate) struct RuntimeObjectRecord {
 }
 
 #[derive(Debug)]
-pub(crate) struct CraftRuntimeInner {
+pub(crate) struct ObjectsRuntimeState {
     pub(crate) loaded: bool,
     pub(crate) run_in_progress: bool,
     pub(crate) next_object_index: u64,
@@ -64,15 +64,15 @@ pub(crate) struct CraftRuntimeInner {
     pub(crate) objects: Vec<RuntimeObjectRecord>,
 }
 
-pub(crate) struct CraftRuntime {
-    pub(crate) inner: Mutex<CraftRuntimeInner>,
+pub(crate) struct ObjectsRuntime {
+    pub(crate) inner: Mutex<ObjectsRuntimeState>,
 }
 
-impl CraftRuntime {
+impl ObjectsRuntime {
     pub(crate) fn new() -> Self {
         let empty = std::collections::HashSet::new();
         Self {
-            inner: Mutex::new(CraftRuntimeInner {
+            inner: Mutex::new(ObjectsRuntimeState {
                 loaded: false,
                 run_in_progress: false,
                 next_object_index: 1,
