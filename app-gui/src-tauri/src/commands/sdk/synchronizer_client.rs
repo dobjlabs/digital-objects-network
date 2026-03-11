@@ -110,7 +110,10 @@ pub(super) fn fetch_synchronizer_tx_contains(
         return Ok(HashSet::new());
     }
 
-    let endpoint = format!("{}/v1/state/tx/contains", sync_api_url.trim_end_matches('/'));
+    let endpoint = format!(
+        "{}/v1/state/tx/contains",
+        sync_api_url.trim_end_matches('/')
+    );
     let request = TxContainsRequest {
         tx_hashes: tx_hashes.iter().map(encode_hash_hex).collect(),
     };

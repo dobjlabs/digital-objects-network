@@ -1,55 +1,6 @@
-use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 
-/// Persistent relay lifecycle states.
-///
-/// Typical happy path:
-/// `queued -> sending -> submitted -> confirmed`.
-/// Failures/retries can bounce back to `queued` or end in `failed`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JobStatus {
-    /// Accepted by API and waiting for the next worker attempt window.
-    Queued,
-    /// Worker is currently attempting to broadcast the blob transaction.
-    Sending,
-    /// Broadcast succeeded; worker is polling receipts by tx hash.
-    Submitted,
-    /// Receipt confirmed successful execution.
-    Confirmed,
-    /// Terminal failure (max retries, timeout, permanent error, or revert).
-    Failed,
-}
-
-impl JobStatus {
-    /// Canonical lowercase value stored in Postgres and exposed in API JSON.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            JobStatus::Queued => "queued",
-            JobStatus::Sending => "sending",
-            JobStatus::Submitted => "submitted",
-            JobStatus::Confirmed => "confirmed",
-            JobStatus::Failed => "failed",
-        }
-    }
-
-    /// `true` when no further worker processing should occur.
-    pub fn is_terminal(self) -> bool {
-        matches!(self, JobStatus::Confirmed | JobStatus::Failed)
-    }
-
-    /// Parse a status loaded from Postgres.
-    pub fn from_db_str(value: &str) -> anyhow::Result<Self> {
-        match value {
-            "queued" => Ok(JobStatus::Queued),
-            "sending" => Ok(JobStatus::Sending),
-            "submitted" => Ok(JobStatus::Submitted),
-            "confirmed" => Ok(JobStatus::Confirmed),
-            "failed" => Ok(JobStatus::Failed),
-            _ => Err(anyhow!("invalid job status: {value}")),
-        }
-    }
-}
+pub use relayer::api_types::JobStatus;
 
 /// Durable relay job record stored in `relay_jobs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]

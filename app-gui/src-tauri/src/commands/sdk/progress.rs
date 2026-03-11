@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tauri::Emitter;
 
-use super::relayer_client::RelayerJobStatus;
+use super::relayer_client::JobStatus;
 use super::run_action::RunSdkActionResult;
 
 #[derive(Debug, Serialize, Clone)]
@@ -216,7 +216,7 @@ pub(super) fn emit_commit_waiting(
     run_id: &str,
     old_root: &str,
     job_id: &str,
-    status: RelayerJobStatus,
+    status: JobStatus,
 ) -> Result<(), String> {
     emit_phase(
         app,

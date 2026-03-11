@@ -952,6 +952,7 @@ dependencies = [
  "notify",
  "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
  "pod2utils",
+ "relayer",
  "reqwest 0.12.28",
  "rfd",
  "serde",

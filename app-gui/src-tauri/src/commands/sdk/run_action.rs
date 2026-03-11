@@ -21,7 +21,7 @@ use super::{
         emit_hash_running, emit_nullify_done, emit_nullify_running, emit_verify_progress,
     },
     relayer_client::{
-        submit_proof_to_relayer, wait_for_relayer_confirmation, RelayerJobStatus,
+        submit_proof_to_relayer, wait_for_relayer_confirmation, JobStatus,
         RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
     },
     runtime::{
@@ -270,7 +270,7 @@ async fn submit_and_confirm_relayer(
         Err(err) => return Err(format!("failed while submitting proof to relayer: {err}")),
     };
 
-    if submit_response.status == RelayerJobStatus::Failed {
+    if submit_response.status == JobStatus::Failed {
         return Err(format!(
             "relayer rejected job {} immediately",
             submit_response.job_id
