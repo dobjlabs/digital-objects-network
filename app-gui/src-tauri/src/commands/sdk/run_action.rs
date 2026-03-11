@@ -171,10 +171,6 @@ fn verify_inputs_grounded(
     Ok(())
 }
 
-struct RelayerCommitOutcome {
-    da_receipt: String,
-}
-
 async fn submit_and_confirm_relayer(
     app: &tauri::AppHandle,
     run_id: &str,
@@ -184,7 +180,7 @@ async fn submit_and_confirm_relayer(
     payload_bytes: Vec<u8>,
     timeout_secs: u64,
     poll_interval_ms: u64,
-) -> Result<RelayerCommitOutcome, String> {
+) -> Result<(), String> {
     emit_commit_step(app, run_id, "Submitting proof to relayer", old_root)?;
 
     let relayer_url_for_submit = relayer_url.to_string();
@@ -230,18 +226,13 @@ async fn submit_and_confirm_relayer(
     })
     .await;
 
-    let relay_status = match wait_job {
+    match wait_job {
         Ok(Ok(status)) => status,
         Ok(Err(err)) => return Err(err),
         Err(err) => return Err(format!("failed while polling relayer job status: {err}")),
     };
 
-    let da_receipt = relay_status
-        .tx_hash
-        .clone()
-        .unwrap_or_else(|| format!("job {}", relay_status.job_id));
-
-    Ok(RelayerCommitOutcome { da_receipt })
+    Ok(())
 }
 
 fn wait_for_synchronizer_commit(
@@ -261,7 +252,7 @@ fn wait_for_synchronizer_commit(
     })
 }
 
-fn apply_commit_to_runtime(
+fn apply_commit(
     runtime: &tauri::State<'_, ObjectsRuntime>,
     objects_dir: &Path,
     descriptor: &spec::ActionDescriptor,
@@ -424,7 +415,7 @@ pub async fn run_sdk_action(
     let payload_bytes = build_relayer_payload(&old_root_hash, &spendable_outputs)?;
     let expected_tx_final = spendable_outputs.tx.dict().commitment();
 
-    let relayer_outcome = submit_and_confirm_relayer(
+    submit_and_confirm_relayer(
         &app,
         &action_id,
         &old_root,
@@ -451,7 +442,7 @@ pub async fn run_sdk_action(
     let new_root = encode_hash_hex(&sync_state_after.current_gsr);
 
     emit_commit_step(&app, &action_id, "Creating files", &old_root)?;
-    let result = apply_commit_to_runtime(
+    let result = apply_commit(
         &runtime,
         &objects_dir,
         &descriptor,
@@ -463,6 +454,6 @@ pub async fn run_sdk_action(
         &new_root,
     )?;
 
-    emit_commit_done(&app, &action_id, &relayer_outcome.da_receipt, &result)?;
+    emit_commit_done(&app, &action_id, &result)?;
     Ok(result)
 }

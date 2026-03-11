@@ -109,7 +109,6 @@ pub(super) fn emit_commit_step(
 pub(super) fn emit_commit_done(
     app: &tauri::AppHandle,
     run_id: &str,
-    da_receipt: &str,
     result: &RunSdkActionResult,
 ) -> Result<(), String> {
     emit_phase(
@@ -117,7 +116,7 @@ pub(super) fn emit_commit_done(
         run_id,
         ProofPhase::Commit,
         ProofProgressStatus::Done,
-        format!("Commit complete ({da_receipt})"),
+        "Commit complete".to_string(),
         Some(&result.old_root),
         Some(&result.new_root),
         result.output_files.first().cloned(),
