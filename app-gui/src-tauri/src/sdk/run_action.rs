@@ -27,8 +27,8 @@ use super::{
 };
 use crate::{
     app_paths,
-    commands::get_app_settings,
     objects::ObjectRecord,
+    settings::get_app_settings,
     spec::{self, action_descriptors_by_name},
 };
 

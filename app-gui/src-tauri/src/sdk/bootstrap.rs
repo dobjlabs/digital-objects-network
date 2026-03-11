@@ -3,7 +3,7 @@ use super::{
     synchronizer_client::fetch_synchronizer_head,
 };
 use crate::app_paths;
-use crate::commands::get_app_settings;
+use crate::settings::get_app_settings;
 use serde::Serialize;
 
 use craft_sdk::Helper;

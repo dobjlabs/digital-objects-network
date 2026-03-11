@@ -1,17 +1,16 @@
 mod app_paths;
-mod commands;
 mod cpu;
 mod objects;
 mod sdk;
+mod settings;
 mod spec;
 
-use commands::{
-    build_app_menu, get_app_settings, get_objects_dir, handle_settings_menu_event,
-    load_gui_bootstrap, open_objects_dir, pick_dobj_file_path, read_dobj_file, run_sdk_action,
-    sample_app_cpu, save_app_settings, ActionRunGate,
+use cpu::{sample_app_cpu, CpuMonitor};
+use objects::{
+    get_objects_dir, open_objects_dir, pick_dobj_file_path, read_dobj_file, start_objects_watcher,
 };
-use cpu::CpuMonitor;
-use objects::start_objects_watcher;
+use sdk::{load_gui_bootstrap, run_sdk_action, ActionRunGate};
+use settings::{build_app_menu, get_app_settings, handle_settings_menu_event, save_app_settings};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
