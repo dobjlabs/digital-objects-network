@@ -33,10 +33,7 @@ fn is_objects_change(event: &Event, watch_dir: &Path) -> bool {
     if !is_relevant_kind(&event.kind) {
         return false;
     }
-    event
-        .paths
-        .iter()
-        .any(|path| path.starts_with(watch_dir))
+    event.paths.iter().any(|path| path.starts_with(watch_dir))
 }
 
 pub fn start_objects_watcher(app: AppHandle) -> Result<(), String> {

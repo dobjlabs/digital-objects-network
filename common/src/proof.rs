@@ -32,10 +32,10 @@ pub trait BlobParser: Send + Sync {
 /// Hash bytes serialized as lowercase hex strings.
 /// Returns a `Payload` with a dummy `PayloadProof::Groth16(vec![])` since no real proof is needed
 /// for mock testing.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub struct MockBlobParser;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(serde::Deserialize)]
 struct MockProofJson {
     tx_final: String,
@@ -43,7 +43,7 @@ struct MockProofJson {
     state_root_hash: String,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub fn parse_hex_hash(s: &str) -> Result<Hash> {
     use anyhow::Context;
 
@@ -51,7 +51,7 @@ pub fn parse_hex_hash(s: &str) -> Result<Hash> {
     <Hash as hex::FromHex>::from_hex(hex).context("Invalid Hash hex")
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl BlobParser for MockBlobParser {
     fn parse_blob(&self, blob_bytes: &[u8]) -> Result<Option<Payload>> {
         let json: MockProofJson = match serde_json::from_slice(blob_bytes) {

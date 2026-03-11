@@ -327,12 +327,13 @@ impl Node {
             trace!(?hash, ?from, ?to);
 
             for blob in tx_blobs.iter() {
-                let bytes = common::blob::decode_simple_blob(blob.blob.inner()).with_context(|| {
-                    format!(
-                        "Invalid byte encoding in blob at slot {}, blob_index {}",
-                        slot_ctx.slot, blob.index
-                    )
-                })?;
+                let bytes =
+                    common::blob::decode_simple_blob(blob.blob.inner()).with_context(|| {
+                        format!(
+                            "Invalid byte encoding in blob at slot {}, blob_index {}",
+                            slot_ctx.slot, blob.index
+                        )
+                    })?;
                 blob_payloads.push((blob.index, bytes));
                 info!(
                     slot = slot_ctx.slot,

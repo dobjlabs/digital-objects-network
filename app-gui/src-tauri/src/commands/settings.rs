@@ -87,10 +87,11 @@ fn to_effective_settings(
     }
 }
 
-pub(crate) fn load_effective_endpoint_urls(app: &tauri::AppHandle) -> Result<AppSettingsDto, String> {
+pub(crate) fn load_effective_endpoint_urls(
+    app: &tauri::AppHandle,
+) -> Result<AppSettingsDto, String> {
     let persisted = read_persisted_settings(app)?;
-    let sync_default =
-        default_from_env("SYNCHRONIZER_API_URL", DEFAULT_SYNCHRONIZER_API_URL);
+    let sync_default = default_from_env("SYNCHRONIZER_API_URL", DEFAULT_SYNCHRONIZER_API_URL);
     let relayer_default = default_from_env("RELAYER_API_URL", DEFAULT_RELAYER_API_URL);
     Ok(to_effective_settings(
         persisted,

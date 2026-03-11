@@ -6,15 +6,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use common::{
     blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES,
     payload::{Payload, PayloadProof},
-    shrink::{ShrunkMainPodSetup, shrink_compress_pod},
+    shrink::{shrink_compress_pod, ShrunkMainPodSetup},
 };
 use craft_sdk::{Helper, SpendableObject, SpendableObjects};
 use hex::{FromHex, ToHex};
-use pod2::middleware::{Hash, Key, Params, Value, hash_values};
+use pod2::middleware::{hash_values, Hash, Key, Params, Value};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 use txlib::StateRoot;

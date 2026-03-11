@@ -14,11 +14,8 @@ gui:
     cd app-gui && pnpm tauri dev --release
 
 # Run relayer + synchronizer + gui together via mprocs
+# https://github.com/pvolok/mprocs
 dev:
-    @if ! command -v mprocs >/dev/null 2>&1; then \
-        echo "mprocs is not installed. Install with: brew install mprocs"; \
-        exit 1; \
-    fi
     mprocs --config mprocs.yaml
 
 # Initialize local env files from examples (non-destructive)
@@ -42,23 +39,23 @@ env-init:
         echo "kept app-gui/.env"; \
     fi
 
-# Run all tests (except ignored)
-test:
-    cargo test --workspace
-
 # Wipe local state (RocksDB + local Postgres DBs + objects)
 reset:
     rm -rf data/ ~/.objects
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
 
+# Run all tests (except ignored)
+test:
+    cargo test --workspace
+
+# Run all ignored test
+test-ignored:
+    cargo test --workspace -- --ignored --nocapture
+
 # Run the slow end-to-end proof test
 test-e2e:
     cargo test -p synchronizer test_e2e_real_proof -- --ignored --nocapture
-
-# Run ignored Postgres-backed sync_db tests
-test-sync-db:
-    cargo test -p synchronizer sync_db::tests:: -- --ignored --nocapture
 
 # Build all workspace crates
 build:

@@ -189,21 +189,6 @@ async fn submit_proof(
     let tx_final = payload.tx_final.encode_hex::<String>();
     let state_root_hash = payload.state_root_hash.encode_hex::<String>();
 
-    if let Some(existing) = app_state
-        .db
-        .get_job_by_tx_final(&tx_final)
-        .await
-        .map_err(ApiError::Internal)?
-    {
-        info!(
-            job_id = %existing.job_id,
-            status = existing.status.as_str(),
-            tx_final = %existing.tx_final,
-            "Idempotent submission returned existing relay job"
-        );
-        return Ok((StatusCode::OK, Json(to_submit_response(existing))));
-    }
-
     let now = now_ts();
     let job = RelayJob {
         job_id: Uuid::new_v4().to_string(),
@@ -242,7 +227,7 @@ async fn submit_proof(
                 job_id = %existing.job_id,
                 status = existing.status.as_str(),
                 tx_final = %existing.tx_final,
-                "Concurrent idempotent insert returned existing relay job"
+                "Idempotent insert returned existing relay job"
             );
             (StatusCode::OK, to_submit_response(existing))
         }

@@ -25,3 +25,4 @@ txlib = { path = "../txlib" }
 [features]
 default = []
 groth16 = ["pod2_onchain"]
+test-utils = []

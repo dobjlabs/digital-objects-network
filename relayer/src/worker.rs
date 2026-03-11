@@ -105,9 +105,6 @@ async fn send_queued_job(
 ) -> Result<()> {
     let now = now_ts();
     job.status = JobStatus::Sending;
-    job.updated_at = now;
-    db.put_job(&job).await?;
-
     job.attempt_count = job.attempt_count.saturating_add(1);
     job.updated_at = now;
     db.put_job(&job).await?;

@@ -174,10 +174,7 @@ async fn get_state_full(
     } else {
         snapshot.global_state_roots[..snapshot.global_state_roots.len() - 1].to_vec()
     };
-    let gsrs = prior_gsrs
-        .iter()
-        .map(encode_hash_hex)
-        .collect::<Vec<_>>();
+    let gsrs = prior_gsrs.iter().map(encode_hash_hex).collect::<Vec<_>>();
 
     Ok(Json(StateFullResponse {
         block_number: snapshot.current_block_number.unwrap_or(0),
