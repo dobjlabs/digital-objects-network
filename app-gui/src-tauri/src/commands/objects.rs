@@ -1,11 +1,10 @@
 use std::{fs, path::PathBuf};
 
+use super::sdk::parse_object_file_from_path;
 use crate::app_paths;
 use crate::state::ObjectRecord;
 use rfd::FileDialog;
 use tauri_plugin_opener::OpenerExt;
-
-use super::sdk::read_dobj_file as read_dobj_file_impl;
 
 #[tauri::command]
 pub fn get_objects_dir(app: tauri::AppHandle) -> Result<String, String> {
@@ -15,7 +14,7 @@ pub fn get_objects_dir(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 pub fn open_objects_dir(app: tauri::AppHandle) -> Result<String, String> {
-    let path = app_paths::objects_dir(&app)?;
+    let path: PathBuf = app_paths::objects_dir(&app)?;
     fs::create_dir_all(&path)
         .map_err(|err| format!("failed to create objects directory: {err}"))?;
     app.opener()
@@ -38,5 +37,8 @@ pub fn pick_dobj_file_path() -> Result<String, String> {
 #[tauri::command]
 pub fn read_dobj_file(path: String) -> Result<ObjectRecord, String> {
     let path = PathBuf::from(path.trim());
-    read_dobj_file_impl(&path)
+    if !path.exists() {
+        return Err(format!("selected file does not exist: {}", path.display()));
+    }
+    Ok(parse_object_file_from_path(&path)?)
 }

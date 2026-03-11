@@ -4,8 +4,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde_json::Value;
-
 use crate::state::{ObjectRecord, RuntimeValidity};
 
 const NULLIFIED_DIR_NAME: &str = ".nullified";
@@ -28,31 +26,16 @@ fn parse_object_file(contents: &str, file_name: &str) -> Result<ObjectRecord, St
     Ok(record.with_file_name(file_name.to_string()))
 }
 
-fn persist_object_record(record: &ObjectRecord) -> Result<Value, String> {
-    serde_json::to_value(record).map_err(|err| {
-        format!(
-            "failed to serialize object file {}: {err}",
-            record.file_name
-        )
-    })
-}
-
-pub(crate) fn read_dobj_file(path: &Path) -> Result<ObjectRecord, String> {
-    if !path.exists() {
-        return Err(format!("selected file does not exist: {}", path.display()));
-    }
-    let record = parse_object_file_from_path(path)?;
-    if record.class_name.trim().is_empty() {
-        return Err(format!("missing className in {}", path.display()));
-    }
-    Ok(record)
-}
-
 pub(super) fn write_object_file(record: &ObjectRecord, objects_dir: &Path) -> Result<(), String> {
     ensure_objects_dirs(objects_dir)?;
     let nullified_dir = nullified_objects_dir(objects_dir);
 
-    let persisted = persist_object_record(record)?;
+    let persisted = serde_json::to_value(record).map_err(|err| {
+        format!(
+            "failed to serialize object file {}: {err}",
+            record.file_name
+        )
+    });
     let serialized = serde_json::to_string_pretty(&persisted).map_err(|err| {
         format!(
             "failed to serialize object file {}: {err}",
@@ -172,7 +155,7 @@ pub(super) fn load_object_files(objects_dir: &Path) -> Result<Vec<ObjectRecord>,
     Ok(objects)
 }
 
-pub(super) fn parse_object_file_from_path(path: &Path) -> Result<ObjectRecord, String> {
+pub(crate) fn parse_object_file_from_path(path: &Path) -> Result<ObjectRecord, String> {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
