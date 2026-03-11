@@ -3,7 +3,6 @@ use std::time::Instant;
 
 use craft_sdk::SpendableObject;
 use sysinfo::{Pid, ProcessesToUpdate, System};
-use txlib::StateRoot;
 
 /// Shared runtime state used by the CPU sampling command.
 ///
@@ -68,16 +67,10 @@ pub(crate) struct RuntimeObjectRecord {
 }
 
 #[derive(Debug)]
-/// Shared mutable runtime snapshot for object and action execution state.
+/// Shared mutable runtime synchronization state.
 pub(crate) struct ObjectsRuntimeState {
-    /// True after initial objects directory load succeeds (or reset fallback runs).
-    pub(crate) loaded: bool,
     /// Guard to prevent concurrent action runs.
     pub(crate) run_in_progress: bool,
-    /// Latest synchronized state root known to the runtime.
-    pub(crate) state_root: StateRoot,
-    /// Full set of live and nullified objects currently indexed for the UI.
-    pub(crate) objects: Vec<RuntimeObjectRecord>,
 }
 
 pub(crate) struct ObjectsRuntime {
@@ -86,13 +79,9 @@ pub(crate) struct ObjectsRuntime {
 
 impl ObjectsRuntime {
     pub(crate) fn new() -> Self {
-        let empty = std::collections::HashSet::new();
         Self {
             inner: Mutex::new(ObjectsRuntimeState {
-                loaded: false,
                 run_in_progress: false,
-                state_root: StateRoot::new(0, &empty, &empty, &[]),
-                objects: Vec::new(),
             }),
         }
     }

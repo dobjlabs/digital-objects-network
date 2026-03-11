@@ -1,41 +1,6 @@
-use std::{
-    collections::HashSet,
-    path::Path,
-    sync::{Mutex, MutexGuard},
-};
-
-use txlib::StateRoot;
+use std::sync::{Mutex, MutexGuard};
 
 use crate::state::{ObjectsRuntime, ObjectsRuntimeState};
-
-use super::object_store::{ensure_objects_dirs, load_object_files};
-
-pub(super) fn empty_state_root() -> StateRoot {
-    let empty = HashSet::new();
-    StateRoot::new(0, &empty, &empty, &[])
-}
-
-pub(super) fn refresh_runtime_objects(
-    inner: &mut ObjectsRuntimeState,
-    objects_dir: &Path,
-) -> Result<(), String> {
-    inner.objects = load_object_files(objects_dir)?;
-    Ok(())
-}
-
-pub(super) fn ensure_runtime_loaded(
-    inner: &mut ObjectsRuntimeState,
-    objects_dir: &Path,
-) -> Result<(), String> {
-    if inner.loaded {
-        return Ok(());
-    }
-    ensure_objects_dirs(objects_dir)?;
-    refresh_runtime_objects(inner, objects_dir)?;
-    inner.state_root = empty_state_root();
-    inner.loaded = true;
-    Ok(())
-}
 
 pub(super) fn lock_runtime_state<'a>(
     state_lock: &'a Mutex<ObjectsRuntimeState>,

@@ -6,20 +6,18 @@ use std::{
 use craft_sdk::SpendableObjects;
 use pod2::middleware::Hash;
 use serde::{Deserialize, Serialize};
-use txlib::{object_nullifier_hash, StateRoot};
+use txlib::object_nullifier_hash;
 
 use super::{
     engine::{build_relayer_payload, execute_action},
     mapping::{to_inventory_item, InventoryItemDto},
-    object_store::{parse_object_file_from_path, sync_object_files},
+    object_store::{load_object_files, parse_object_file_from_path, write_object_file},
     progress::{emit_commit_done, emit_generate_proof_done, emit_generate_proof_step},
     relayer_client::{
         submit_proof_to_relayer, wait_for_relayer_confirmation, JobStatus,
         RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
     },
-    runtime::{
-        acquire_run_in_progress_guard, ensure_runtime_loaded, lock_runtime, refresh_runtime_objects,
-    },
+    runtime::acquire_run_in_progress_guard,
     synchronizer_client::{
         encode_hash_hex, fetch_synchronizer_state, fetch_synchronizer_tx_contains,
         wait_for_synchronizer_tx, SynchronizerState, SYNCHRONIZER_POLL_INTERVAL_MS,
@@ -90,21 +88,9 @@ fn validate_run_request(
 }
 
 fn resolve_inputs(
-    runtime: &tauri::State<'_, ObjectsRuntime>,
-    objects_dir: &Path,
     input: &RunSdkActionInput,
     descriptor: &spec::ActionDescriptor,
-    state_root_for_run: &StateRoot,
 ) -> Result<Vec<RuntimeObjectRecord>, String> {
-    let mut inner = lock_runtime(runtime);
-    ensure_runtime_loaded(&mut inner, objects_dir)?;
-
-    if inner.run_in_progress {
-        return Err("another action run is already in progress".to_string());
-    }
-    refresh_runtime_objects(&mut inner, objects_dir)?;
-    inner.state_root = state_root_for_run.clone();
-
     let mut resolved_inputs = Vec::new();
 
     for (slot, object_path_raw) in input.input_object_paths.iter().enumerate() {
@@ -252,19 +238,14 @@ fn wait_for_synchronizer_commit(
 }
 
 fn apply_commit(
-    runtime: &tauri::State<'_, ObjectsRuntime>,
     objects_dir: &Path,
     descriptor: &spec::ActionDescriptor,
     action_id: &str,
     resolved_inputs: &[RuntimeObjectRecord],
     spendable_outputs: &SpendableObjects,
-    sync_state_after: SynchronizerState,
     old_root: &str,
     new_root: &str,
 ) -> Result<RunSdkActionResult, String> {
-    let mut inner = lock_runtime(runtime);
-    ensure_runtime_loaded(&mut inner, objects_dir)?;
-
     let mut nullified_files = Vec::new();
     for input_record in resolved_inputs {
         let input_nullifier = {
@@ -282,31 +263,19 @@ fn apply_commit(
             })?;
             encode_hash_hex(&nullifier_hash)
         };
-        if let Some(record) = inner.objects.iter_mut().find(|record| {
-            record.id == input_record.id && record.file_name == input_record.file_name
-        }) {
-            if record.validity != RuntimeValidity::Live {
-                return Err(format!(
-                    "input object already nullified: {}",
-                    input_record.id
-                ));
-            }
-            record.validity = RuntimeValidity::Nullified;
-            record.nullifier = Some(input_nullifier.clone());
-            nullified_files.push(record.file_name.clone());
-        } else {
-            inner.objects.push(RuntimeObjectRecord {
-                id: input_record.id.clone(),
-                file_name: input_record.file_name.clone(),
-                class_name: input_record.class_name.clone(),
-                source_action: input_record.source_action.clone(),
-                validity: RuntimeValidity::Nullified,
-                state_hash: input_record.state_hash.clone(),
-                nullifier: Some(input_nullifier),
-                spendable: None,
-            });
-            nullified_files.push(input_record.file_name.clone());
-        }
+
+        let nullified_record = RuntimeObjectRecord {
+            id: input_record.id.clone(),
+            file_name: input_record.file_name.clone(),
+            class_name: input_record.class_name.clone(),
+            source_action: input_record.source_action.clone(),
+            validity: RuntimeValidity::Nullified,
+            state_hash: input_record.state_hash.clone(),
+            nullifier: Some(input_nullifier),
+            spendable: input_record.spendable.clone(),
+        };
+        write_object_file(&nullified_record, objects_dir)?;
+        nullified_files.push(nullified_record.file_name);
     }
 
     if spendable_outputs.objs.len() != descriptor.output_classes.len() {
@@ -329,7 +298,7 @@ fn apply_commit(
         );
 
         output_files.push(file_name.clone());
-        inner.objects.push(RuntimeObjectRecord {
+        let live_record = RuntimeObjectRecord {
             id: object_id,
             file_name,
             class_name: class_name.clone(),
@@ -338,11 +307,11 @@ fn apply_commit(
             state_hash: format!("{:#}", spendable.obj.commitment()),
             nullifier: None,
             spendable: Some(spendable),
-        });
+        };
+        write_object_file(&live_record, objects_dir)?;
     }
 
-    inner.state_root = sync_state_after.state_root;
-    sync_object_files(&inner, objects_dir)?;
+    let objects = load_object_files(objects_dir)?;
 
     Ok(RunSdkActionResult {
         ok: true,
@@ -350,7 +319,7 @@ fn apply_commit(
         new_root: new_root.to_string(),
         output_files,
         nullified_files,
-        objects: inner.objects.iter().map(to_inventory_item).collect(),
+        objects: objects.iter().map(to_inventory_item).collect(),
     })
 }
 
@@ -370,6 +339,7 @@ pub async fn run_sdk_action(
     validate_run_request(&input, &descriptor)?;
 
     let app_settings = get_app_settings(app.clone())?;
+    let _run_guard = acquire_run_in_progress_guard(&runtime)?;
 
     let action_id = input.action_id.clone();
     emit_generate_proof_step(&app, &action_id, "Verifying Inputs")?;
@@ -379,17 +349,10 @@ pub async fn run_sdk_action(
     let old_root_hash = sync_state.current_gsr;
     let old_root = encode_hash_hex(&old_root_hash);
 
-    let resolved_inputs = resolve_inputs(
-        &runtime,
-        &objects_dir,
-        &input,
-        &descriptor,
-        &state_root_for_run,
-    )?;
+    let resolved_inputs = resolve_inputs(&input, &descriptor)?;
 
     verify_inputs_grounded(&app_settings.synchronizer_api_url, &resolved_inputs)?;
 
-    let _run_guard = acquire_run_in_progress_guard(&runtime)?;
     emit_generate_proof_step(&app, &action_id, "Generating proof")?;
 
     let execution_inputs = resolved_inputs
@@ -446,13 +409,11 @@ pub async fn run_sdk_action(
 
     emit_commit_step(&app, &action_id, "Creating files", &old_root)?;
     let result = apply_commit(
-        &runtime,
         &objects_dir,
         &descriptor,
         &action_id,
         &resolved_inputs,
         &spendable_outputs,
-        sync_state_after,
         &old_root,
         &new_root,
     )?;

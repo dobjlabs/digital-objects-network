@@ -9,7 +9,7 @@ use craft_sdk::SpendableObject;
 use serde::{Deserialize, Serialize};
 use txlib::StateRoot;
 
-use crate::state::{ObjectsRuntimeState, RuntimeObjectRecord, RuntimeValidity};
+use crate::state::{RuntimeObjectRecord, RuntimeValidity};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -254,42 +254,40 @@ pub(crate) fn read_object_file_metadata(path: &Path) -> Result<ObjectFileMetadat
     })
 }
 
-pub(super) fn sync_object_files(
-    inner: &ObjectsRuntimeState,
+pub(super) fn write_object_file(
+    record: &RuntimeObjectRecord,
     objects_dir: &Path,
 ) -> Result<(), String> {
     ensure_objects_dirs(objects_dir)?;
     let nullified_dir = nullified_objects_dir(objects_dir);
 
-    for record in &inner.objects {
-        let persisted = persist_object_record(record)?;
-        let serialized = serde_json::to_string_pretty(&persisted).map_err(|err| {
-            format!(
-                "failed to serialize object file {}: {err}",
-                record.file_name
-            )
-        })?;
-        let target_path = match record.validity {
-            RuntimeValidity::Live => objects_dir.join(&record.file_name),
-            RuntimeValidity::Nullified => nullified_dir.join(&record.file_name),
-        };
-        fs::write(&target_path, serialized)
-            .map_err(|err| format!("failed to write object file {}: {err}", record.file_name))?;
+    let persisted = persist_object_record(record)?;
+    let serialized = serde_json::to_string_pretty(&persisted).map_err(|err| {
+        format!(
+            "failed to serialize object file {}: {err}",
+            record.file_name
+        )
+    })?;
+    let target_path = match record.validity {
+        RuntimeValidity::Live => objects_dir.join(&record.file_name),
+        RuntimeValidity::Nullified => nullified_dir.join(&record.file_name),
+    };
+    fs::write(&target_path, serialized)
+        .map_err(|err| format!("failed to write object file {}: {err}", record.file_name))?;
 
-        let stale_path = match record.validity {
-            RuntimeValidity::Live => nullified_dir.join(&record.file_name),
-            RuntimeValidity::Nullified => objects_dir.join(&record.file_name),
-        };
-        if stale_path != target_path {
-            match fs::remove_file(&stale_path) {
-                Ok(_) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    eprintln!(
-                        "zk-craft: failed to remove stale object file {}: {err}",
-                        stale_path.display()
-                    );
-                }
+    let stale_path = match record.validity {
+        RuntimeValidity::Live => nullified_dir.join(&record.file_name),
+        RuntimeValidity::Nullified => objects_dir.join(&record.file_name),
+    };
+    if stale_path != target_path {
+        match fs::remove_file(&stale_path) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                eprintln!(
+                    "zk-craft: failed to remove stale object file {}: {err}",
+                    stale_path.display()
+                );
             }
         }
     }
@@ -378,9 +376,7 @@ pub(super) fn load_object_files(objects_dir: &Path) -> Result<Vec<RuntimeObjectR
         true,
     )?;
 
-    let mut objects = records_by_file
-        .into_values()
-        .collect::<Vec<_>>();
+    let mut objects = records_by_file.into_values().collect::<Vec<_>>();
     objects.sort_by(|a, b| a.file_name.cmp(&b.file_name));
     Ok(objects)
 }
