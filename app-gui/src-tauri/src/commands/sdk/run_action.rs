@@ -6,14 +6,12 @@ use std::{
 use craft_sdk::SpendableObjects;
 use pod2::middleware::Hash;
 use serde::{Deserialize, Serialize};
-use txlib::{StateRoot, object_nullifier_hash};
+use txlib::{object_nullifier_hash, StateRoot};
 
 use super::{
-    engine::{build_relayer_payload, clone_spendable, execute_action},
+    engine::{build_relayer_payload, execute_action},
     mapping::{to_inventory_item, InventoryItemDto},
-    naming::{
-        format_output_file_name, object_id_from_spendable, object_state_hash_from_spendable,
-    },
+    naming::{format_output_file_name, object_id_from_spendable, object_state_hash_from_spendable},
     object_store::{parse_object_file_from_path, sync_object_files},
     progress::{
         emit_commit_done, emit_commit_submitting, emit_commit_waiting, emit_generate_proof_done,
@@ -159,10 +157,7 @@ fn verify_inputs_grounded(
         .iter()
         .map(|record| {
             let spendable = record.spendable.as_ref().ok_or_else(|| {
-                format!(
-                    "resolved input missing spendable witness: {}",
-                    record.id
-                )
+                format!("resolved input missing spendable witness: {}", record.id)
             })?;
             Ok((record.file_name.clone(), spendable.tx.dict().commitment()))
         })
@@ -173,26 +168,17 @@ fn verify_inputs_grounded(
         .map(|(_, source_tx_hash)| *source_tx_hash)
         .collect::<Vec<_>>();
     let grounded_txs = fetch_synchronizer_tx_contains(sync_api_url, &source_tx_hashes)?;
-    let mut missing_grounding = Vec::new();
 
     for (file_name, source_tx_hash) in input_sources {
         if !grounded_txs.contains(&source_tx_hash) {
-            missing_grounding.push(format!(
-                "{} -> {}",
-                file_name,
-                encode_hash_hex(&source_tx_hash)
+            return Err(format!(
+                "input not yet synchronized; wait and retry: {}",
+                format!("{} -> {}", file_name, encode_hash_hex(&source_tx_hash))
             ));
         }
     }
 
-    if missing_grounding.is_empty() {
-        return Ok(());
-    }
-
-    Err(format!(
-        "inputs not yet synchronized; wait and retry: {}",
-        missing_grounding.join(", ")
-    ))
+    Ok(())
 }
 
 struct RelayerCommitOutcome {
@@ -317,15 +303,14 @@ fn apply_commit_to_runtime(
             })?;
             encode_hash_hex(&nullifier_hash)
         };
-        if let Some(record) = inner
-            .objects
-            .iter_mut()
-            .find(|record| {
-                record.id == input_record.id && record.file_name == input_record.file_name
-            })
-        {
+        if let Some(record) = inner.objects.iter_mut().find(|record| {
+            record.id == input_record.id && record.file_name == input_record.file_name
+        }) {
             if record.validity != RuntimeValidity::Live {
-                return Err(format!("input object already nullified: {}", input_record.id));
+                return Err(format!(
+                    "input object already nullified: {}",
+                    input_record.id
+                ));
             }
             record.validity = RuntimeValidity::Nullified;
             record.nullifier = Some(input_nullifier.clone());
@@ -416,24 +401,21 @@ pub async fn run_sdk_action(
         &state_root_for_run,
     )?;
 
-    let action_id = input.action_id.clone();
-    let run_id = action_id.clone();
     verify_inputs_grounded(&app_settings.synchronizer_api_url, &resolved_inputs)?;
 
     let _run_guard = acquire_run_in_progress_guard(&runtime)?;
 
+    let action_id = input.action_id.clone();
+    let run_id = action_id.clone();
     emit_generate_proof_running(&app, &run_id, &action_id, descriptor.ui.cpu_cost)?;
 
     let execution_inputs = resolved_inputs
         .iter()
         .map(|record| {
             let spendable = record.spendable.as_ref().ok_or_else(|| {
-                format!(
-                    "resolved input missing spendable witness: {}",
-                    record.id
-                )
+                format!("resolved input missing spendable witness: {}", record.id)
             })?;
-            Ok(clone_spendable(spendable))
+            Ok(spendable.clone())
         })
         .collect::<Result<Vec<_>, String>>()?;
 

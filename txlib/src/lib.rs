@@ -242,8 +242,7 @@ impl TxBuilder {
     }
 
     fn st_tx_obj_nullified(&mut self, ctx: &mut BuildContext, obj: &Dictionary) -> Statement {
-        let obj_key_hash =
-            object_key_hash(obj).expect("tx object must include required key field");
+        let obj_key_hash = object_key_hash(obj).expect("tx object must include required key field");
         let obj_nullifier = object_nullifier_from_key_hash(obj_key_hash);
         let tx_before = self.tx.dict();
         self.tx

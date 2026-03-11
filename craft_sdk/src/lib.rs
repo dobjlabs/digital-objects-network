@@ -325,7 +325,7 @@ fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
     solution.prove(prover).unwrap().pods.pop().unwrap()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SpendableObject {
     pub pod: MainPod,
     pub obj: Dictionary,

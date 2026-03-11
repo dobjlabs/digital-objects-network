@@ -10,14 +10,6 @@ use txlib::StateRoot;
 
 use crate::spec;
 
-pub(super) fn clone_spendable(spendable: &SpendableObject) -> SpendableObject {
-    SpendableObject {
-        pod: spendable.pod.clone(),
-        obj: spendable.obj.clone(),
-        tx: spendable.tx.clone(),
-    }
-}
-
 pub(super) fn execute_action(
     action_id: String,
     state_root: StateRoot,
