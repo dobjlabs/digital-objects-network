@@ -30,6 +30,7 @@ common = { path = "../../common" }
 pod2utils = { path = "../../pod2utils" }
 vdfpod = { path = "../../intro_pods/vdfpod" }
 lt_eq_u256_pod = { path = "../../intro_pods/lt_eq_u256_pod" }
+synchronizer = { path = "../../synchronizer" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 hex = "0.4"
 base64 = "0.22"

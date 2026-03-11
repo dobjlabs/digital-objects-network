@@ -5,46 +5,13 @@ use std::{
 
 use hex::{FromHex, ToHex};
 use pod2::middleware::Hash;
-use serde::{Deserialize, Serialize};
+use synchronizer::api_types::{
+    StateFullResponse, StateHeadResponse, TxContainsRequest, TxContainsResponse, TxStatusResponse,
+};
 use txlib::StateRoot;
 
 pub(super) const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
 pub(super) const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
-
-#[derive(Debug, Deserialize)]
-struct SynchronizerStateFullResponse {
-    block_number: i64,
-    transactions: Vec<String>,
-    nullifiers: Vec<String>,
-    gsrs: Vec<String>,
-    current_gsr: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SynchronizerStateHeadResponse {
-    current_gsr: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct SynchronizerTxContainsRequest {
-    tx_hashes: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SynchronizerTxContainsResponse {
-    results: Vec<SynchronizerTxContainsEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SynchronizerTxContainsEntry {
-    tx_hash: String,
-    present: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct SynchronizerTxStatusResponse {
-    present: bool,
-}
 
 pub(super) struct SynchronizerState {
     pub(super) state_root: StateRoot,
@@ -60,31 +27,8 @@ pub(super) fn encode_hash_hex(hash: &Hash) -> String {
     format!("0x{}", hash.encode_hex::<String>())
 }
 
-fn synchronizer_state_head_endpoint(sync_api_url: &str) -> String {
-    format!("{}/v1/state/head", sync_api_url.trim_end_matches('/'))
-}
-
-fn synchronizer_state_full_endpoint(sync_api_url: &str) -> String {
-    format!("{}/v1/state/full", sync_api_url.trim_end_matches('/'))
-}
-
-fn synchronizer_state_tx_contains_endpoint(sync_api_url: &str) -> String {
-    format!(
-        "{}/v1/state/tx/contains",
-        sync_api_url.trim_end_matches('/')
-    )
-}
-
-fn synchronizer_state_tx_endpoint(sync_api_url: &str, tx_hash: &Hash) -> String {
-    format!(
-        "{}/v1/state/tx/{}",
-        sync_api_url.trim_end_matches('/'),
-        encode_hash_hex(tx_hash)
-    )
-}
-
 pub(super) fn fetch_synchronizer_head(sync_api_url: &str) -> Result<Option<Hash>, String> {
-    let endpoint = synchronizer_state_head_endpoint(sync_api_url);
+    let endpoint = format!("{}/v1/state/head", sync_api_url.trim_end_matches('/'));
     let response = reqwest::blocking::get(&endpoint)
         .map_err(|err| format!("failed to query synchronizer at {endpoint}: {err}"))?;
     if !response.status().is_success() {
@@ -95,7 +39,7 @@ pub(super) fn fetch_synchronizer_head(sync_api_url: &str) -> Result<Option<Hash>
         ));
     }
 
-    let payload: SynchronizerStateHeadResponse = response
+    let payload: StateHeadResponse = response
         .json()
         .map_err(|err| format!("failed to decode synchronizer head response: {err}"))?;
     payload
@@ -106,7 +50,7 @@ pub(super) fn fetch_synchronizer_head(sync_api_url: &str) -> Result<Option<Hash>
 }
 
 pub(super) fn fetch_synchronizer_state(sync_api_url: &str) -> Result<SynchronizerState, String> {
-    let endpoint = synchronizer_state_full_endpoint(sync_api_url);
+    let endpoint = format!("{}/v1/state/full", sync_api_url.trim_end_matches('/'));
     let response = reqwest::blocking::get(&endpoint)
         .map_err(|err| format!("failed to query synchronizer at {endpoint}: {err}"))?;
     if !response.status().is_success() {
@@ -116,7 +60,7 @@ pub(super) fn fetch_synchronizer_state(sync_api_url: &str) -> Result<Synchronize
             response.status()
         ));
     }
-    let payload: SynchronizerStateFullResponse = response
+    let payload: StateFullResponse = response
         .json()
         .map_err(|err| format!("failed to decode synchronizer full state response: {err}"))?;
 
@@ -166,8 +110,8 @@ pub(super) fn fetch_synchronizer_tx_contains(
         return Ok(HashSet::new());
     }
 
-    let endpoint = synchronizer_state_tx_contains_endpoint(sync_api_url);
-    let request = SynchronizerTxContainsRequest {
+    let endpoint = format!("{}/v1/state/tx/contains", sync_api_url.trim_end_matches('/'));
+    let request = TxContainsRequest {
         tx_hashes: tx_hashes.iter().map(encode_hash_hex).collect(),
     };
     let client = reqwest::blocking::Client::new();
@@ -184,7 +128,7 @@ pub(super) fn fetch_synchronizer_tx_contains(
         ));
     }
 
-    let payload: SynchronizerTxContainsResponse = response
+    let payload: TxContainsResponse = response
         .json()
         .map_err(|err| format!("failed to decode synchronizer tx/contains response: {err}"))?;
     let mut present = HashSet::new();
@@ -199,8 +143,12 @@ pub(super) fn fetch_synchronizer_tx_contains(
 fn fetch_synchronizer_tx_status(
     sync_api_url: &str,
     tx_hash: &Hash,
-) -> Result<SynchronizerTxStatusResponse, String> {
-    let endpoint = synchronizer_state_tx_endpoint(sync_api_url, tx_hash);
+) -> Result<TxStatusResponse, String> {
+    let endpoint = format!(
+        "{}/v1/state/tx/{}",
+        sync_api_url.trim_end_matches('/'),
+        encode_hash_hex(tx_hash)
+    );
     let response = reqwest::blocking::get(&endpoint)
         .map_err(|err| format!("failed to query synchronizer at {endpoint}: {err}"))?;
     if !response.status().is_success() {
@@ -212,7 +160,7 @@ fn fetch_synchronizer_tx_status(
     }
 
     response
-        .json::<SynchronizerTxStatusResponse>()
+        .json::<TxStatusResponse>()
         .map_err(|err| format!("failed to decode synchronizer tx status response: {err}"))
 }
 

@@ -10,9 +10,7 @@ use tauri_plugin_opener::OpenerExt;
 pub struct DobjFileMetadata {
     #[serde(default)]
     pub file_name: String,
-    #[serde(default)]
     pub class_name: String,
-    #[serde(default)]
     pub validity: String,
 }
 

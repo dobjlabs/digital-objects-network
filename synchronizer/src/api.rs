@@ -9,7 +9,10 @@ use axum::{
 };
 use hex::{FromHex, ToHex};
 use pod2::middleware::Hash;
-use serde::{Deserialize, Serialize};
+use synchronizer::api_types::{
+    StateFullResponse, StateHeadResponse, SyncProgressResponse, TxContainsEntry, TxContainsRequest,
+    TxContainsResponse, TxStatusResponse,
+};
 use tokio::sync::watch;
 use tracing::info;
 
@@ -19,58 +22,6 @@ use crate::{state_machine::StateMachine, sync_db::SyncDb};
 struct AppState {
     sync_db: Arc<SyncDb>,
     state_machine: Arc<StateMachine>,
-}
-
-#[derive(Serialize)]
-struct SyncProgressResponse {
-    last_processed_slot: Option<u32>,
-    last_processed_block_number: Option<u32>,
-}
-
-#[derive(Serialize)]
-struct StateHeadResponse {
-    last_processed_slot: Option<u32>,
-    last_processed_block_number: Option<u32>,
-    current_gsr: Option<String>,
-    current_block_number: Option<i64>,
-    tx_count: usize,
-    nullifier_count: usize,
-    gsr_count: usize,
-}
-
-#[derive(Serialize)]
-struct StateFullResponse {
-    block_number: i64,
-    current_gsr: Option<String>,
-    transactions: Vec<String>,
-    nullifiers: Vec<String>,
-    gsrs: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TxContainsRequest {
-    tx_hashes: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct TxContainsEntry {
-    tx_hash: String,
-    present: bool,
-}
-
-#[derive(Serialize)]
-struct TxContainsResponse {
-    last_processed_slot: Option<u32>,
-    current_gsr: Option<String>,
-    results: Vec<TxContainsEntry>,
-}
-
-#[derive(Serialize)]
-struct TxStatusResponse {
-    tx_hash: String,
-    present: bool,
-    last_processed_slot: Option<u32>,
-    current_gsr: Option<String>,
 }
 
 struct HeadSnapshot {
