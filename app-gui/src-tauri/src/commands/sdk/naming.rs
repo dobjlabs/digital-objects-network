@@ -1,5 +1,3 @@
-use craft_sdk::SpendableObject;
-
 pub(super) fn normalize_component_name(name: &str) -> String {
     name.chars()
         .map(|ch| {
@@ -18,14 +16,6 @@ pub(super) fn format_output_file_name(class_name: &str, object_id: &str) -> Stri
         normalize_component_name(class_name),
         normalize_component_name(object_id)
     )
-}
-
-pub(super) fn object_id_from_spendable(spendable: &SpendableObject) -> String {
-    format!("{:#}", spendable.obj.commitment())
-}
-
-pub(super) fn object_state_hash_from_spendable(spendable: &SpendableObject) -> String {
-    format!("{:#}", spendable.obj.commitment())
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ use txlib::{object_nullifier_hash, StateRoot};
 use super::{
     engine::{build_relayer_payload, execute_action},
     mapping::{to_inventory_item, InventoryItemDto},
-    naming::{format_output_file_name, object_id_from_spendable, object_state_hash_from_spendable},
+    naming::format_output_file_name,
     object_store::{parse_object_file_from_path, sync_object_files},
     progress::{
         emit_commit_done, emit_commit_submitting, emit_commit_waiting, emit_generate_proof_done,
@@ -342,7 +342,7 @@ fn apply_commit_to_runtime(
     let mut output_files = Vec::new();
     for (index, class_name) in descriptor.output_classes.iter().enumerate() {
         let spendable = spendable_outputs.obj(index);
-        let object_id = object_id_from_spendable(&spendable);
+        let object_id = format!("{:#}", spendable.obj.commitment());
         let file_name = format_output_file_name(class_name, &object_id);
 
         output_files.push(file_name.clone());
@@ -352,7 +352,7 @@ fn apply_commit_to_runtime(
             class_name: class_name.clone(),
             source_action: Some(action_id.to_string()),
             validity: RuntimeValidity::Live,
-            state_hash: object_state_hash_from_spendable(&spendable),
+            state_hash: format!("{:#}", spendable.obj.commitment()),
             nullifier: None,
             spendable: Some(spendable),
         });
@@ -405,9 +405,8 @@ pub async fn run_sdk_action(
 
     let _run_guard = acquire_run_in_progress_guard(&runtime)?;
 
-    let action_id = input.action_id.clone();
-    let run_id = action_id.clone();
-    emit_generate_proof_running(&app, &run_id, &action_id, descriptor.ui.cpu_cost)?;
+    let action_id = input.action_id;
+    emit_generate_proof_running(&app, &action_id, &action_id, descriptor.ui.cpu_cost)?;
 
     let execution_inputs = resolved_inputs
         .iter()
@@ -429,14 +428,14 @@ pub async fn run_sdk_action(
         Err(err) => Err(format!("failed while executing action: {err}")),
     }?;
 
-    emit_generate_proof_done(&app, &run_id, descriptor.ui.cpu_cost)?;
+    emit_generate_proof_done(&app, &action_id, descriptor.ui.cpu_cost)?;
 
     let payload_bytes = build_relayer_payload(&old_root_hash, &spendable_outputs)?;
     let expected_tx_final = spendable_outputs.tx.dict().commitment();
 
     let relayer_outcome = submit_and_confirm_relayer(
         &app,
-        &run_id,
+        &action_id,
         &old_root,
         &app_settings.relayer_api_url,
         &action_id,
@@ -466,6 +465,6 @@ pub async fn run_sdk_action(
         &new_root,
     )?;
 
-    emit_commit_done(&app, &run_id, &relayer_outcome.da_receipt, &result)?;
+    emit_commit_done(&app, &action_id, &relayer_outcome.da_receipt, &result)?;
     Ok(result)
 }

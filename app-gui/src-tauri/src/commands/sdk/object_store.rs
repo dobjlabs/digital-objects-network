@@ -11,8 +11,6 @@ use txlib::StateRoot;
 
 use crate::state::{ObjectsRuntimeState, RuntimeObjectRecord, RuntimeValidity};
 
-use super::naming::object_state_hash_from_spendable;
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ObjectFileStateRoot {
@@ -163,7 +161,7 @@ fn restore_object_record(
     )?;
     let state_hash = spendable
         .as_ref()
-        .map(object_state_hash_from_spendable)
+        .map(|spendable| format!("{:#}", spendable.obj.commitment()))
         .unwrap_or(record.state_hash);
     Ok(RuntimeObjectRecord {
         id: record.id,
@@ -200,7 +198,7 @@ fn persist_object_record(record: &RuntimeObjectRecord) -> Result<ObjectFile, Str
     let state_hash = record
         .spendable
         .as_ref()
-        .map(object_state_hash_from_spendable)
+        .map(|spendable| format!("{:#}", spendable.obj.commitment()))
         .unwrap_or_else(|| record.state_hash.clone());
     Ok(ObjectFile {
         id: record.id.clone(),
