@@ -235,7 +235,7 @@ fn wait_for_synchronizer_commit(
     })
 }
 
-fn apply_commit(
+fn save_results(
     objects_dir: &Path,
     descriptor: &spec::ActionDescriptor,
     action_id: &str,
@@ -400,10 +400,10 @@ pub async fn run_sdk_action(
         SYNCHRONIZER_POLL_TIMEOUT_SECS,
         SYNCHRONIZER_POLL_INTERVAL_MS,
     )?;
-    let new_root = encode_hash_hex(&sync_state_after.current_gsr);
 
     emit_commit_step(&app, &action_id, "Creating files", &old_root)?;
-    let result = apply_commit(
+    let new_root = encode_hash_hex(&sync_state_after.current_gsr);
+    let result = save_results(
         &objects_dir,
         &descriptor,
         &action_id,
