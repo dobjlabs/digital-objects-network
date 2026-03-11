@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use hex::{FromHex, ToHex};
+use hex::FromHex;
 use pod2::middleware::Hash;
 use synchronizer::api_types::{
     StateFullResponse, StateHeadResponse, TxContainsRequest, TxContainsResponse, TxStatusResponse,
@@ -12,6 +12,7 @@ use txlib::StateRoot;
 
 pub(super) const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
 pub(super) const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
+pub(super) use common::encode_hash_hex;
 
 pub(super) struct SynchronizerState {
     pub(super) state_root: StateRoot,
@@ -21,10 +22,6 @@ pub(super) struct SynchronizerState {
 fn parse_hash_hex(value: &str) -> Result<Hash, String> {
     let trimmed = value.trim().strip_prefix("0x").unwrap_or(value.trim());
     Hash::from_hex(trimmed).map_err(|err| format!("invalid hash {value}: {err}"))
-}
-
-pub(super) fn encode_hash_hex(hash: &Hash) -> String {
-    format!("0x{}", hash.encode_hex::<String>())
 }
 
 pub(super) fn fetch_synchronizer_head(sync_api_url: &str) -> Result<Option<Hash>, String> {

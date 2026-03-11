@@ -10,7 +10,7 @@ use txlib::StateRoot;
 
 use super::{
     engine::{build_relayer_payload, clone_spendable, execute_action},
-    mapping::{short_hash, to_inventory_item, InventoryItemDto},
+    mapping::{to_inventory_item, InventoryItemDto},
     naming::{
         format_output_file_name, object_id_from_spendable, object_nullifier_from_spendable,
         object_state_hash_from_spendable,
@@ -416,7 +416,7 @@ pub async fn run_sdk_action(
     let sync_state = fetch_synchronizer_state(&app_settings.synchronizer_api_url)?;
     let state_root_for_run = sync_state.state_root.clone();
     let old_root_hash = sync_state.current_gsr;
-    let old_root = short_hash(&format!("{:#}", old_root_hash));
+    let old_root = encode_hash_hex(&old_root_hash);
 
     let resolved = resolve_inputs_from_paths(
         &runtime,
@@ -475,7 +475,7 @@ pub async fn run_sdk_action(
         SYNCHRONIZER_POLL_TIMEOUT_SECS,
         SYNCHRONIZER_POLL_INTERVAL_MS,
     )?;
-    let new_root = short_hash(&format!("{:#}", sync_state_after.current_gsr));
+    let new_root = encode_hash_hex(&sync_state_after.current_gsr);
 
     let result = apply_commit_to_runtime(
         &runtime,

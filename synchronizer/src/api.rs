@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use hex::{FromHex, ToHex};
+use hex::FromHex;
 use pod2::middleware::Hash;
 use synchronizer::api_types::{
     StateFullResponse, StateHeadResponse, SyncProgressResponse, TxContainsEntry, TxContainsRequest,
@@ -17,6 +17,7 @@ use tokio::sync::watch;
 use tracing::info;
 
 use crate::{state_machine::StateMachine, sync_db::SyncDb};
+use common::encode_hash_hex;
 
 #[derive(Clone)]
 struct AppState {
@@ -223,10 +224,6 @@ fn parse_hash_hex(value: &str) -> Result<Hash, (StatusCode, String)> {
             format!("invalid hash `{value}`: {err}"),
         )
     })
-}
-
-fn encode_hash_hex(hash: &Hash) -> String {
-    format!("0x{}", hash.encode_hex::<String>())
 }
 
 fn internal_error(err: anyhow::Error) -> (StatusCode, String) {
