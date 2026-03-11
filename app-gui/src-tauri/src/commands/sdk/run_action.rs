@@ -27,7 +27,7 @@ use crate::{
     app_paths,
     commands::sdk::progress::emit_commit_step,
     spec::{self, action_descriptors_by_name},
-    state::{ObjectsRuntime, RuntimeObjectRecord, RuntimeValidity},
+    state::{ObjectRecord, ObjectsRuntime, RuntimeValidity},
 };
 
 use super::super::settings::get_app_settings;
@@ -88,7 +88,7 @@ fn validate_run_request(
 fn resolve_inputs(
     input: &RunSdkActionInput,
     descriptor: &spec::ActionDescriptor,
-) -> Result<Vec<RuntimeObjectRecord>, String> {
+) -> Result<Vec<ObjectRecord>, String> {
     let mut resolved_inputs = Vec::new();
 
     for (slot, object_path_raw) in input.input_object_paths.iter().enumerate() {
@@ -110,7 +110,7 @@ fn resolve_inputs(
             ));
         }
 
-        if record.spendable.is_none() {
+        if record.spendable()?.is_none() {
             return Err(format!(
                 "input object missing spendable witness: {}",
                 record.id
@@ -122,16 +122,11 @@ fn resolve_inputs(
     Ok(resolved_inputs)
 }
 
-fn verify_inputs_grounded(
-    sync_api_url: &str,
-    inputs: &[RuntimeObjectRecord],
-) -> Result<(), String> {
+fn verify_inputs_grounded(sync_api_url: &str, inputs: &[ObjectRecord]) -> Result<(), String> {
     let input_sources = inputs
         .iter()
         .map(|record| {
-            let spendable = record.spendable.as_ref().ok_or_else(|| {
-                format!("resolved input missing spendable witness: {}", record.id)
-            })?;
+            let spendable = record.require_spendable()?;
             Ok((record.file_name.clone(), spendable.tx.dict().commitment()))
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -239,30 +234,23 @@ fn save_results(
     objects_dir: &Path,
     descriptor: &spec::ActionDescriptor,
     action_id: &str,
-    resolved_inputs: &[RuntimeObjectRecord],
+    resolved_inputs: &[ObjectRecord],
     spendable_outputs: &SpendableObjects,
     old_root: &str,
     new_root: &str,
 ) -> Result<RunSdkActionResult, String> {
     let mut nullified_files = Vec::new();
     for input_record in resolved_inputs {
-        let input_nullifier = {
-            let spendable = input_record.spendable.as_ref().ok_or_else(|| {
-                format!(
-                    "input object missing spendable witness: {}",
-                    input_record.id
-                )
-            })?;
-            let nullifier_hash = object_nullifier_hash(&spendable.obj).map_err(|err| {
-                format!(
-                    "failed to compute input nullifier for {}: {err}",
-                    input_record.id
-                )
-            })?;
-            encode_hash_hex(&nullifier_hash)
-        };
+        let spendable = input_record.require_spendable()?;
+        let nullifier_hash = object_nullifier_hash(&spendable.obj).map_err(|err| {
+            format!(
+                "failed to compute input nullifier for {}: {err}",
+                input_record.id
+            )
+        })?;
+        let input_nullifier = encode_hash_hex(&nullifier_hash);
 
-        let nullified_record = RuntimeObjectRecord {
+        let nullified_record = ObjectRecord {
             id: input_record.id.clone(),
             file_name: input_record.file_name.clone(),
             class_name: input_record.class_name.clone(),
@@ -270,7 +258,9 @@ fn save_results(
             validity: RuntimeValidity::Nullified,
             state_hash: input_record.state_hash.clone(),
             nullifier: Some(input_nullifier),
-            spendable: input_record.spendable.clone(),
+            pod: input_record.pod.clone(),
+            obj: input_record.obj.clone(),
+            tx: input_record.tx.clone(),
         };
         write_object_file(&nullified_record, objects_dir)?;
         nullified_files.push(nullified_record.file_name);
@@ -296,7 +286,7 @@ fn save_results(
         );
 
         output_files.push(file_name.clone());
-        let live_record = RuntimeObjectRecord {
+        let live_record = ObjectRecord {
             id: object_id,
             file_name,
             class_name: class_name.clone(),
@@ -304,7 +294,9 @@ fn save_results(
             validity: RuntimeValidity::Live,
             state_hash: format!("{:#}", spendable.obj.commitment()),
             nullifier: None,
-            spendable: Some(spendable),
+            pod: Some(spendable.pod),
+            obj: Some(spendable.obj),
+            tx: Some(spendable.tx),
         };
         write_object_file(&live_record, objects_dir)?;
     }
@@ -352,12 +344,7 @@ pub async fn run_sdk_action(
 
     let execution_inputs = resolved_inputs
         .iter()
-        .map(|record| {
-            let spendable = record.spendable.as_ref().ok_or_else(|| {
-                format!("resolved input missing spendable witness: {}", record.id)
-            })?;
-            Ok(spendable.clone())
-        })
+        .map(|record| record.require_spendable())
         .collect::<Result<Vec<_>, String>>()?;
 
     let action_id_for_exec = action_id.clone();

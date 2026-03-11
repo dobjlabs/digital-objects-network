@@ -1,9 +1,10 @@
-use craft_sdk::{Helper, SpendableObject};
+use craft_sdk::Helper;
+use pod2::middleware::containers::Dictionary;
 use serde::Serialize;
 
 use crate::{
     spec,
-    state::{RuntimeObjectRecord, RuntimeValidity},
+    state::{ObjectRecord, RuntimeValidity},
 };
 
 #[derive(Debug, Serialize, Clone)]
@@ -105,9 +106,9 @@ fn value_string(raw: String) -> String {
     }
 }
 
-fn object_data_from_object(spendable: &SpendableObject) -> Vec<(String, String)> {
+fn object_data_from_object(obj: &Dictionary) -> Vec<(String, String)> {
     let mut data = Vec::new();
-    for (key, value) in spendable.obj.kvs() {
+    for (key, value) in obj.kvs() {
         data.push((key.name().to_string(), value_string(format!("{value}"))));
     }
     data.sort_by(|a, b| a.0.cmp(&b.0));
@@ -147,10 +148,10 @@ pub(super) fn build_action_catalog() -> Vec<RecipeDto> {
         .collect()
 }
 
-pub(super) fn to_inventory_item(record: &RuntimeObjectRecord) -> InventoryItemDto {
+pub(super) fn to_inventory_item(record: &ObjectRecord) -> InventoryItemDto {
     let class_ui = spec::class_ui_meta(&record.class_name);
     let obj_data = record
-        .spendable
+        .obj
         .as_ref()
         .map(object_data_from_object)
         .unwrap_or_default();
