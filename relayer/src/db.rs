@@ -9,7 +9,7 @@ pub enum InsertJobResult {
     /// A new row was inserted.
     Inserted,
     /// A row with this `tx_final` already existed.
-    Existing(RelayJob),
+    Existing(Box<RelayJob>),
 }
 
 /// Postgres-backed queue/state store for relay jobs.
@@ -119,7 +119,7 @@ impl Db {
         }
 
         if let Some(existing) = self.get_job_by_tx_final(&job.tx_final).await? {
-            Ok(InsertJobResult::Existing(existing))
+            Ok(InsertJobResult::Existing(Box::new(existing)))
         } else {
             Err(anyhow!(
                 "idempotent insert conflict but existing job not found for tx_final={}",
@@ -354,8 +354,9 @@ mod tests {
     use super::*;
     use crate::model::{JobStatus, RelayJob};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::Mutex;
 
     fn now() -> i64 {
         1_700_000_000
@@ -430,7 +431,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn idempotent_insert_by_tx_final() -> Result<()> {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (db, admin_url, db_name) = setup_db().await?;
 
         let job = mk_job("job-1", "0xaa", JobStatus::Queued, Some(now()));
@@ -452,7 +453,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn recover_sending_to_queued() -> Result<()> {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (db, admin_url, db_name) = setup_db().await?;
 
         let mut sending = mk_job("job-1", "0xaa", JobStatus::Sending, None);
@@ -473,7 +474,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn recover_submitted_without_hash_to_queued() -> Result<()> {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (db, admin_url, db_name) = setup_db().await?;
 
         let submitted = mk_job("job-1", "0xaa", JobStatus::Submitted, None);
@@ -493,7 +494,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn picks_next_due_job() -> Result<()> {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (db, admin_url, db_name) = setup_db().await?;
 
         let a = mk_job("job-a", "0xaa", JobStatus::Queued, Some(now() + 5));

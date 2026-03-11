@@ -1595,7 +1595,7 @@ pub async fn run_sdk_action(
     emit_progress(
         &app,
         &RunSdkActionProgress {
-            run_id: run_id,
+            run_id,
             phase: "commit".to_string(),
             status: "done".to_string(),
             message: format!("Commit complete ({da_receipt})"),

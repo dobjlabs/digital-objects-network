@@ -223,6 +223,7 @@ async fn submit_proof(
             (StatusCode::ACCEPTED, to_submit_response(job))
         }
         InsertJobResult::Existing(existing) => {
+            let existing = *existing;
             info!(
                 job_id = %existing.job_id,
                 status = existing.status.as_str(),
@@ -296,8 +297,9 @@ mod tests {
     use serde_json::Value as JsonValue;
     use sqlx::{postgres::PgPoolOptions, Executor};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::Mutex;
     use tower::ServiceExt;
     use url::Url;
 
@@ -382,7 +384,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn submit_rejects_invalid_base64() {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (app, admin_url, db_name) = test_app(ParseMode::Valid).await;
         let req = Request::builder()
             .method("POST")
@@ -404,7 +406,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn submit_rejects_oversize_payload() {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (app, admin_url, db_name) = test_app(ParseMode::Valid).await;
         let payload = STANDARD.encode(vec![7u8; MAX_SIMPLE_BLOB_PAYLOAD_BYTES + 1]);
         let req = Request::builder()
@@ -427,7 +429,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn submit_rejects_invalid_payload_format() {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (app, admin_url, db_name) = test_app(ParseMode::None).await;
         let req = Request::builder()
             .method("POST")
@@ -450,7 +452,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn submit_rejects_invalid_proof() {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (app, admin_url, db_name) = test_app(ParseMode::Err).await;
         let req = Request::builder()
             .method("POST")
@@ -473,7 +475,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn submit_is_idempotent_by_tx_final() {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (app, admin_url, db_name) = test_app(ParseMode::Valid).await;
         let payload = STANDARD.encode([1u8, 2u8, 3u8]);
         let body = serde_json::json!({"payload_base64": payload}).to_string();
