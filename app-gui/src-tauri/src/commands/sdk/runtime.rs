@@ -10,14 +10,6 @@ use crate::state::{ObjectsRuntime, ObjectsRuntimeState};
 
 use super::object_store::{ensure_objects_dirs, load_object_files};
 
-pub(super) fn ensure_non_empty_url(name: &str, value: String) -> Result<String, String> {
-    let trimmed = value.trim().to_string();
-    if trimmed.is_empty() {
-        return Err(format!("{name} is empty"));
-    }
-    Ok(trimmed)
-}
-
 pub(super) fn empty_state_root() -> StateRoot {
     let empty = HashSet::new();
     StateRoot::new(0, &empty, &empty, &[])

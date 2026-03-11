@@ -25,8 +25,7 @@ use super::{
         RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
     },
     runtime::{
-        acquire_run_in_progress_guard, ensure_non_empty_url, ensure_runtime_loaded, lock_runtime,
-        refresh_runtime_objects,
+        acquire_run_in_progress_guard, ensure_runtime_loaded, lock_runtime, refresh_runtime_objects,
     },
     synchronizer_client::{
         encode_hash_hex, fetch_synchronizer_state, fetch_synchronizer_tx_contains,
@@ -426,12 +425,9 @@ pub async fn run_sdk_action(
 
     validate_run_request(&input, &descriptor)?;
 
-    let effective_urls = get_app_settings(app.clone())?;
-    let sync_api_url =
-        ensure_non_empty_url("synchronizerApiUrl", effective_urls.synchronizer_api_url)?;
-    let relayer_url = ensure_non_empty_url("relayerApiUrl", effective_urls.relayer_api_url)?;
+    let app_settings = get_app_settings(app.clone())?;
 
-    let sync_state = fetch_synchronizer_state(&sync_api_url)?;
+    let sync_state = fetch_synchronizer_state(&app_settings.synchronizer_api_url)?;
     let state_root_for_run = sync_state.state_root.clone();
     let old_root_hash = sync_state.current_gsr;
     let old_root = short_hash(&format!("{:#}", old_root_hash));
@@ -445,7 +441,7 @@ pub async fn run_sdk_action(
     )?;
 
     verify_inputs_grounded(
-        &sync_api_url,
+        &app_settings.synchronizer_api_url,
         &resolved.source_tx_hashes,
         &resolved.verify_targets,
     )?;
@@ -474,7 +470,7 @@ pub async fn run_sdk_action(
         &app,
         &run_id,
         &old_root,
-        &relayer_url,
+        &app_settings.relayer_api_url,
         &input.action_id,
         payload_bytes,
         RELAYER_POLL_TIMEOUT_SECS,
@@ -483,7 +479,7 @@ pub async fn run_sdk_action(
     .await?;
 
     let sync_state_after = wait_for_synchronizer_commit(
-        &sync_api_url,
+        &app_settings.synchronizer_api_url,
         expected_tx_final,
         SYNCHRONIZER_POLL_TIMEOUT_SECS,
         SYNCHRONIZER_POLL_INTERVAL_MS,
