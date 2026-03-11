@@ -4,22 +4,22 @@ import type { DragEvent } from "react";
 
 interface InventoryPanelProps {
   items: InventoryItem[];
-  thingsDirPath: string;
+  objectsDirPath: string;
   activeItemId: string | null;
   showNullifiedItems: boolean;
   onSelectItem: (itemId: string) => void;
   onToggleNullified: () => void;
-  onOpenThingsDir: () => void;
+  onOpenObjectsDir: () => void;
 }
 
 export function InventoryPanel({
   items,
-  thingsDirPath,
+  objectsDirPath,
   activeItemId,
   showNullifiedItems,
   onSelectItem,
   onToggleNullified,
-  onOpenThingsDir,
+  onOpenObjectsDir,
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
 
@@ -38,9 +38,9 @@ export function InventoryPanel({
       event.preventDefault();
       return;
     }
-    const basePath = thingsDirPath.endsWith("/")
-      ? thingsDirPath.slice(0, -1)
-      : thingsDirPath;
+    const basePath = objectsDirPath.endsWith("/")
+      ? objectsDirPath.slice(0, -1)
+      : objectsDirPath;
     const objectPath = `${basePath}/${item.fileName}`;
 
     const payload = JSON.stringify({
@@ -105,8 +105,8 @@ export function InventoryPanel({
       <button
         type="button"
         className="panel-header panel-header-button"
-        onClick={onOpenThingsDir}
-        title={thingsDirPath}
+        onClick={onOpenObjectsDir}
+        title={objectsDirPath}
       >
         Your Objects
       </button>

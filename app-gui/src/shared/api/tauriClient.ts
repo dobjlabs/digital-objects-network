@@ -25,12 +25,12 @@ export type {
   RunSdkActionResult,
 } from "./wireTypes";
 
-export function getThingsDir(): Promise<string> {
-  return invoke<string>("get_things_dir");
+export function getObjectsDir(): Promise<string> {
+  return invoke<string>("get_objects_dir");
 }
 
-export function openThingsDir(): Promise<string> {
-  return invoke<string>("open_things_dir");
+export function openObjectsDir(): Promise<string> {
+  return invoke<string>("open_objects_dir");
 }
 
 export function loadGuiBootstrap(): Promise<LoadGuiBootstrapResult> {

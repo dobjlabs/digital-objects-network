@@ -5,30 +5,25 @@ use serde::{Deserialize, Serialize};
 use tauri_plugin_opener::OpenerExt;
 use crate::app_paths;
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PersistedObjectFile {
-    file_name: Option<String>,
-    class_name: Option<String>,
-    validity: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DobjFileMetadata {
+    #[serde(default)]
     pub file_name: String,
+    #[serde(default)]
     pub class_name: String,
+    #[serde(default)]
     pub validity: String,
 }
 
 #[tauri::command]
-pub fn get_things_dir(app: tauri::AppHandle) -> Result<String, String> {
+pub fn get_objects_dir(app: tauri::AppHandle) -> Result<String, String> {
     let path = app_paths::objects_dir(&app)?;
     Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-pub fn open_things_dir(app: tauri::AppHandle) -> Result<String, String> {
+pub fn open_objects_dir(app: tauri::AppHandle) -> Result<String, String> {
     let path = app_paths::objects_dir(&app)?;
     fs::create_dir_all(&path)
         .map_err(|err| format!("failed to create objects directory: {err}"))?;
@@ -62,41 +57,32 @@ pub fn read_dobj_file_metadata(path: String) -> Result<DobjFileMetadata, String>
         .to_string();
     let contents = fs::read_to_string(&path)
         .map_err(|err| format!("failed to read selected file {}: {err}", path.display()))?;
-    let parsed = serde_json::from_str::<PersistedObjectFile>(&contents)
+    let mut parsed = serde_json::from_str::<DobjFileMetadata>(&contents)
         .map_err(|err| format!("invalid .dobj JSON in {}: {err}", path.display()))?;
 
-    let file_name = parsed
-        .file_name
-        .and_then(|name| {
-            let trimmed = name.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        })
-        .unwrap_or(file_name_from_path);
-    let class_name = parsed
-        .class_name
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| format!("missing className in {}", path.display()))?;
-    let validity = parsed
-        .validity
-        .map(|value| value.trim().to_lowercase())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("missing validity in {}", path.display()))?;
-    if validity != "live" && validity != "nullified" {
+    parsed.file_name = {
+        let trimmed = parsed.file_name.trim().to_string();
+        if trimmed.is_empty() {
+            file_name_from_path
+        } else {
+            trimmed
+        }
+    };
+    parsed.class_name = parsed.class_name.trim().to_string();
+    if parsed.class_name.is_empty() {
+        return Err(format!("missing className in {}", path.display()));
+    }
+    parsed.validity = parsed.validity.trim().to_lowercase();
+    if parsed.validity.is_empty() {
+        return Err(format!("missing validity in {}", path.display()));
+    }
+    if parsed.validity != "live" && parsed.validity != "nullified" {
         return Err(format!(
             "invalid validity '{}' in {} (expected 'live' or 'nullified')",
-            validity,
+            parsed.validity,
             path.display()
         ));
     }
 
-    Ok(DobjFileMetadata {
-        file_name,
-        class_name,
-        validity,
-    })
+    Ok(parsed)
 }

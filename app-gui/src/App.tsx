@@ -5,11 +5,11 @@ import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { RecipeGrid } from "./features/recipes/RecipeGrid";
 import { SettingsModal } from "./features/settings/SettingsModal";
 import {
-  getThingsDir,
+  getObjectsDir,
   listenOpenSettings,
   listenObjectsChanged,
   listenRunSdkActionProgress,
-  openThingsDir,
+  openObjectsDir,
   sampleAppCpu,
 } from "./shared/api/tauriClient";
 import { useUiStore } from "./shared/state/uiStore";
@@ -24,7 +24,7 @@ import "./features/recipes/RecipeGrid.css";
 import "./features/settings/SettingsModal.css";
 
 function App() {
-  const [thingsDirPath, setThingsDirPath] = useState("~/.objects");
+  const [objectsDirPath, setObjectsDirPath] = useState("~/.objects");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const items = useUiStore((state) => state.items);
   const recipes = useUiStore((state) => state.recipes);
@@ -60,12 +60,12 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    getThingsDir()
+    getObjectsDir()
       .then((path) => {
-        if (!cancelled) setThingsDirPath(path);
+        if (!cancelled) setObjectsDirPath(path);
       })
       .catch(() => {
-        if (!cancelled) setThingsDirPath("~/.objects");
+        if (!cancelled) setObjectsDirPath("~/.objects");
       });
     return () => {
       cancelled = true;
@@ -203,12 +203,12 @@ function App() {
     };
   }, []);
 
-  const handleOpenThingsDir = async () => {
+  const handleOpenObjectsDir = async () => {
     try {
-      const dir = await openThingsDir();
-      setThingsDirPath(dir);
+      const dir = await openObjectsDir();
+      setObjectsDirPath(dir);
     } catch (error) {
-      console.error("Failed to open things directory:", error);
+      console.error("Failed to open objects directory:", error);
     }
   };
 
@@ -217,12 +217,12 @@ function App() {
       <main className="app-shell">
         <InventoryPanel
           items={items}
-          thingsDirPath={thingsDirPath}
+          objectsDirPath={objectsDirPath}
           activeItemId={activeItemId}
           showNullifiedItems={showNullifiedItems}
           onSelectItem={selectItem}
           onToggleNullified={toggleNullified}
-          onOpenThingsDir={handleOpenThingsDir}
+          onOpenObjectsDir={handleOpenObjectsDir}
         />
 
         <div className="main-column">

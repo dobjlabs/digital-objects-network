@@ -12,7 +12,7 @@ use tauri::{
 };
 
 use commands::{
-    get_app_settings, get_things_dir, load_gui_bootstrap, open_things_dir, pick_dobj_file_path,
+    get_app_settings, get_objects_dir, load_gui_bootstrap, open_objects_dir, pick_dobj_file_path,
     read_dobj_file_metadata, run_sdk_action, sample_app_cpu, save_app_settings,
 };
 use objects_watcher::start_objects_watcher;
@@ -97,8 +97,8 @@ pub fn run() {
             sample_app_cpu,
             load_gui_bootstrap,
             run_sdk_action,
-            get_things_dir,
-            open_things_dir,
+            get_objects_dir,
+            open_objects_dir,
             pick_dobj_file_path,
             read_dobj_file_metadata,
             get_app_settings,
