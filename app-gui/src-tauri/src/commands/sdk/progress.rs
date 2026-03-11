@@ -4,14 +4,27 @@ use tauri::Emitter;
 use super::relayer_client::JobStatus;
 use super::run_action::RunSdkActionResult;
 
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ProofPhase {
+    GenerateProof,
+    Commit,
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ProofProgressStatus {
+    Running,
+    Done,
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct RunSdkActionProgress {
     pub(super) run_id: String,
-    pub(super) phase: String,
-    pub(super) status: String,
+    pub(super) phase: ProofPhase,
+    pub(super) status: ProofProgressStatus,
     pub(super) message: String,
-    pub(super) verify_index: Option<usize>,
     pub(super) detail: Option<String>,
     pub(super) old_root: Option<String>,
     pub(super) new_root: Option<String>,
@@ -26,10 +39,9 @@ fn emit_progress(app: &tauri::AppHandle, payload: &RunSdkActionProgress) -> Resu
 fn emit_phase(
     app: &tauri::AppHandle,
     run_id: &str,
-    phase: &str,
-    status: &str,
+    phase: ProofPhase,
+    status: ProofProgressStatus,
     message: String,
-    verify_index: Option<usize>,
     detail: Option<String>,
     old_root: Option<&str>,
     new_root: Option<&str>,
@@ -39,10 +51,9 @@ fn emit_phase(
         app,
         &RunSdkActionProgress {
             run_id: run_id.to_string(),
-            phase: phase.to_string(),
-            status: status.to_string(),
+            phase,
+            status,
             message,
-            verify_index,
             detail,
             old_root: old_root.map(|value| value.to_string()),
             new_root: new_root.map(|value| value.to_string()),
@@ -51,7 +62,7 @@ fn emit_phase(
     )
 }
 
-pub(super) fn emit_hash_running(
+pub(super) fn emit_generate_proof_running(
     app: &tauri::AppHandle,
     run_id: &str,
     action_id: &str,
@@ -60,10 +71,9 @@ pub(super) fn emit_hash_running(
     emit_phase(
         app,
         run_id,
-        "hash",
-        "running",
+        ProofPhase::GenerateProof,
+        ProofProgressStatus::Running,
         format!("Running {action_id}"),
-        None,
         Some(cpu_cost.to_string()),
         None,
         None,
@@ -71,7 +81,7 @@ pub(super) fn emit_hash_running(
     )
 }
 
-pub(super) fn emit_hash_done(
+pub(super) fn emit_generate_proof_done(
     app: &tauri::AppHandle,
     run_id: &str,
     cpu_cost: &str,
@@ -79,114 +89,11 @@ pub(super) fn emit_hash_done(
     emit_phase(
         app,
         run_id,
-        "hash",
-        "done",
+        ProofPhase::GenerateProof,
+        ProofProgressStatus::Done,
         "Proof generation complete".to_string(),
-        None,
         Some(cpu_cost.to_string()),
         None,
-        None,
-        None,
-    )
-}
-
-pub(super) fn emit_verify_progress(
-    app: &tauri::AppHandle,
-    run_id: &str,
-    verify_targets: &[String],
-) -> Result<(), String> {
-    if verify_targets.is_empty() {
-        let placeholder = "(no inputs)";
-        emit_phase(
-            app,
-            run_id,
-            "verify",
-            "running",
-            format!("Verifying {placeholder}"),
-            Some(0),
-            Some(placeholder.to_string()),
-            None,
-            None,
-            None,
-        )?;
-        emit_phase(
-            app,
-            run_id,
-            "verify",
-            "done",
-            format!("Verified {placeholder}"),
-            Some(0),
-            Some(placeholder.to_string()),
-            None,
-            None,
-            None,
-        )?;
-        return Ok(());
-    }
-
-    for (index, target) in verify_targets.iter().enumerate() {
-        emit_phase(
-            app,
-            run_id,
-            "verify",
-            "running",
-            format!("Verifying {target}"),
-            Some(index),
-            Some(target.clone()),
-            None,
-            None,
-            None,
-        )?;
-        emit_phase(
-            app,
-            run_id,
-            "verify",
-            "done",
-            format!("Verified {target}"),
-            Some(index),
-            Some(target.clone()),
-            None,
-            None,
-            None,
-        )?;
-    }
-
-    Ok(())
-}
-
-pub(super) fn emit_nullify_running(
-    app: &tauri::AppHandle,
-    run_id: &str,
-    old_root: &str,
-) -> Result<(), String> {
-    emit_phase(
-        app,
-        run_id,
-        "nullify",
-        "running",
-        format!("Nullifying {old_root}"),
-        None,
-        Some(old_root.to_string()),
-        Some(old_root),
-        None,
-        None,
-    )
-}
-
-pub(super) fn emit_nullify_done(
-    app: &tauri::AppHandle,
-    run_id: &str,
-    old_root: &str,
-) -> Result<(), String> {
-    emit_phase(
-        app,
-        run_id,
-        "nullify",
-        "done",
-        "Nullify complete".to_string(),
-        None,
-        Some(old_root.to_string()),
-        Some(old_root),
         None,
         None,
     )
@@ -200,10 +107,9 @@ pub(super) fn emit_commit_submitting(
     emit_phase(
         app,
         run_id,
-        "commit",
-        "running",
+        ProofPhase::Commit,
+        ProofProgressStatus::Running,
         "Submitting proof to relayer".to_string(),
-        None,
         Some("submit".to_string()),
         Some(old_root),
         None,
@@ -221,10 +127,9 @@ pub(super) fn emit_commit_waiting(
     emit_phase(
         app,
         run_id,
-        "commit",
-        "running",
+        ProofPhase::Commit,
+        ProofProgressStatus::Running,
         format!("Waiting for relayer job {job_id}"),
-        None,
         Some(format!("status: {}", status.as_str())),
         Some(old_root),
         None,
@@ -241,10 +146,9 @@ pub(super) fn emit_commit_done(
     emit_phase(
         app,
         run_id,
-        "commit",
-        "done",
+        ProofPhase::Commit,
+        ProofProgressStatus::Done,
         format!("Commit complete ({da_receipt})"),
-        None,
         Some(result.new_root.clone()),
         Some(&result.old_root),
         Some(&result.new_root),

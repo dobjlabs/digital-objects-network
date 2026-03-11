@@ -17,8 +17,8 @@ use super::{
     },
     object_store::{parse_object_file_from_path, sync_object_files},
     progress::{
-        emit_commit_done, emit_commit_submitting, emit_commit_waiting, emit_hash_done,
-        emit_hash_running, emit_nullify_done, emit_nullify_running, emit_verify_progress,
+        emit_commit_done, emit_commit_submitting, emit_commit_waiting, emit_generate_proof_done,
+        emit_generate_proof_running,
     },
     relayer_client::{
         submit_proof_to_relayer, wait_for_relayer_confirmation, JobStatus,
@@ -202,11 +202,12 @@ fn verify_inputs_grounded(
     let mut missing_grounding = Vec::new();
 
     for (index, tx_hash) in source_tx_hashes.iter().enumerate() {
+        let label = verify_targets
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| format!("input-{index}"));
+
         if !grounded_txs.contains(tx_hash) {
-            let label = verify_targets
-                .get(index)
-                .cloned()
-                .unwrap_or_else(|| format!("input-{index}"));
             missing_grounding.push(format!("{} -> {}", label, encode_hash_hex(tx_hash)));
         }
     }
@@ -219,21 +220,6 @@ fn verify_inputs_grounded(
         "inputs not yet synchronized; wait and retry: {}",
         missing_grounding.join(", ")
     ))
-}
-
-async fn execute_action_blocking(
-    action_id: String,
-    state_root: StateRoot,
-    inputs: Vec<SpendableObject>,
-) -> Result<SpendableObjects, String> {
-    match tauri::async_runtime::spawn_blocking(move || {
-        execute_action(action_id, state_root, inputs)
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(err) => Err(format!("failed while executing action: {err}")),
-    }
 }
 
 struct RelayerCommitOutcome {
@@ -440,6 +426,7 @@ pub async fn run_sdk_action(
         &state_root_for_run,
     )?;
 
+    let run_id = input.action_id.clone();
     verify_inputs_grounded(
         &app_settings.synchronizer_api_url,
         &resolved.source_tx_hashes,
@@ -447,21 +434,23 @@ pub async fn run_sdk_action(
     )?;
 
     let _run_guard = acquire_run_in_progress_guard(&runtime)?;
-    let run_id = input.action_id.clone();
 
-    emit_hash_running(&app, &run_id, &input.action_id, descriptor.ui.cpu_cost)?;
+    emit_generate_proof_running(&app, &run_id, &input.action_id, descriptor.ui.cpu_cost)?;
 
-    let spendable_outputs = execute_action_blocking(
-        input.action_id.clone(),
-        state_root_for_run,
-        resolved.input_spendables,
-    )
-    .await?;
+    let spendable_outputs = match tauri::async_runtime::spawn_blocking(move || {
+        execute_action(
+            input.action_id.clone(),
+            state_root_for_run,
+            resolved.input_spendables,
+        )
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => Err(format!("failed while executing action: {err}")),
+    }?;
 
-    emit_hash_done(&app, &run_id, descriptor.ui.cpu_cost)?;
-    emit_verify_progress(&app, &run_id, &resolved.verify_targets)?;
-    emit_nullify_running(&app, &run_id, &old_root)?;
-    emit_nullify_done(&app, &run_id, &old_root)?;
+    emit_generate_proof_done(&app, &run_id, descriptor.ui.cpu_cost)?;
 
     let payload_bytes = build_relayer_payload(&old_root_hash, &spendable_outputs)?;
     let expected_tx_final = spendable_outputs.tx.dict().commitment();

@@ -204,86 +204,62 @@ export function ProofRunnerPanel() {
   }
 
   if (proof.status === "generating" || proof.status === "committing") {
-    const stage1Done = proof.status === "committing";
-    const stage2Active = proof.status === "committing";
-    const hashStep = proof.steps.find((step) => step.id === "hash");
-    const verifySteps = proof.steps.filter((step) =>
-      step.id.startsWith("verify-"),
+    const generateProofStep = proof.steps.find(
+      (step) => step.id === "generate-proof",
     );
-    const nullifyStep = proof.steps.find((step) => step.id === "nullify");
     const commitStep = proof.steps.find((step) => step.id === "commit");
 
     const statusClass = (status: "pending" | "running" | "done") =>
       status === "done" ? "done" : status === "running" ? "running" : "pending";
+    const stageClass = (status: "pending" | "running" | "done") =>
+      status === "done" ? "done" : status === "running" ? "active" : "pending";
+    const stageHeaderClass = (status: "pending" | "running" | "done") =>
+      status === "pending" ? "stage-header pending" : "stage-header";
+
+    const generateState: "pending" | "running" | "done" =
+      generateProofStep?.status ??
+      (proof.status === "generating" ? "running" : "pending");
+    const commitState: "pending" | "running" | "done" =
+      commitStep?.status ?? (proof.status === "committing" ? "running" : "pending");
 
     return (
       <section className="cpu-panel proof-panel proof-run-card">
         {controlsRow}
-        <div className="stage-header">
-          <span className={`stage-num ${stage1Done ? "done" : "active"}`}>
+        <div className={stageHeaderClass(generateState)}>
+          <span className={`stage-num ${stageClass(generateState)}`}>
             1
           </span>
-          <span className="stage-title">Generating Recursive Proof</span>
+          <span className="stage-title">Generate Proof</span>
         </div>
 
         {proof.status === "generating" && (
           <div className="stage-details">
             <div className="stage-detail-line">
-              <span className="stage-detail-label">Hashing</span>
+              <span className="stage-detail-label">Generate Proof</span>
               <span
-                className={`stage-detail-value ${statusClass(hashStep?.status ?? "running")}`}
+                className={`stage-detail-value ${statusClass(generateState)}`}
               >
-                {hashStep?.detail ?? proof.cpuCost ?? "..."}
+                {generateProofStep?.detail ?? proof.cpuCost ?? "..."}
               </span>
             </div>
-            {verifySteps.map((step) => (
-              <div key={step.id} className="stage-detail-line">
-                <span className="stage-detail-label">Verifying</span>
-                <span
-                  className={`stage-detail-value ${statusClass(step.status)}`}
-                >
-                  {step.detail}
-                </span>
-              </div>
-            ))}
           </div>
         )}
 
-        <div className={`stage-header ${stage2Active ? "" : "pending"}`}>
-          <span className={`stage-num ${stage2Active ? "active" : "pending"}`}>
+        <div className={stageHeaderClass(commitState)}>
+          <span className={`stage-num ${stageClass(commitState)}`}>
             2
           </span>
-          <span className="stage-title">Committing New State Root</span>
+          <span className="stage-title">Commit</span>
         </div>
 
         {proof.status === "committing" && (
           <div className="stage-details">
             <div className="stage-detail-line">
-              <span className="stage-detail-label">Nullifying</span>
+              <span className="stage-detail-label">Commit</span>
               <span
-                className={`stage-detail-value danger ${
-                  nullifyStep?.status === "running"
-                    ? "running"
-                    : nullifyStep?.status === "pending"
-                      ? "pending"
-                      : ""
-                }`}
+                className={`stage-detail-value ${statusClass(commitState)}`}
               >
-                {nullifyStep?.detail ?? proof.oldRoot ?? "pending"}
-              </span>
-            </div>
-            <div className="stage-detail-line">
-              <span className="stage-detail-label">New State Root</span>
-              <span
-                className={`stage-detail-value ${
-                  commitStep?.status === "done"
-                    ? "done"
-                    : commitStep?.status === "running"
-                      ? "running"
-                      : "pending"
-                }`}
-              >
-                {commitStep?.status === "pending"
+                {commitState === "pending"
                   ? "—"
                   : (commitStep?.detail ?? proof.newRoot ?? "pending")}
               </span>

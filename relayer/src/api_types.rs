@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// `queued -> sending -> submitted -> confirmed`.
 /// Failures/retries can bounce back to `queued` or end in `failed`.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum JobStatus {
     /// Accepted by API and waiting for the next worker attempt window.
     Queued,

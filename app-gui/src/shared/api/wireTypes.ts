@@ -2,7 +2,7 @@ import type { ActionId, ClassName } from "../generated/ids";
 
 export type Validity = "live" | "nullified";
 export type MethodArgKind = "class";
-export type ProofPhase = "hash" | "verify" | "nullify" | "commit";
+export type ProofPhase = "generateProof" | "commit";
 export type ProofProgressStatus = "running" | "done";
 
 export interface MethodArgPayload {
@@ -96,7 +96,6 @@ export interface RunSdkActionProgress {
   phase: ProofPhase;
   status: ProofProgressStatus;
   message: string;
-  verifyIndex: number | null;
   detail: string | null;
   oldRoot: string | null;
   newRoot: string | null;

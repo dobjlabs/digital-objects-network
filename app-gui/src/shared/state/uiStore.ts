@@ -262,28 +262,15 @@ export const useUiStore = create<UiStoreState>((set) => ({
       let nextOldRoot = prev.proof.oldRoot;
       let nextNewRoot = prev.proof.newRoot;
 
-      if (event.phase === "hash") {
+      if (event.phase === "generateProof") {
         nextStatus = "generating";
-        updateStep("hash", {
+        updateStep("generate-proof", {
           status: event.status,
           detail: event.detail ?? prev.proof.cpuCost ?? "pending",
         });
-      } else if (event.phase === "verify") {
-        nextStatus = "generating";
-        const index = event.verifyIndex ?? 0;
-        updateStep(`verify-${index}`, {
-          status: event.status,
-          detail: event.detail ?? "input",
-        });
-      } else if (event.phase === "nullify") {
-        nextStatus = "committing";
-        nextOldRoot = event.oldRoot ?? event.detail ?? nextOldRoot;
-        updateStep("nullify", {
-          status: event.status,
-          detail: event.detail ?? nextOldRoot ?? "pending",
-        });
       } else if (event.phase === "commit") {
         nextStatus = "committing";
+        nextOldRoot = event.oldRoot ?? nextOldRoot;
         nextNewRoot = event.newRoot ?? event.detail ?? nextNewRoot;
         updateStep("commit", {
           status: event.status,
@@ -350,26 +337,14 @@ export const useUiStore = create<UiStoreState>((set) => ({
           messages: ["Running SDK action..."],
           steps: [
             {
-              id: "hash",
-              label: "Hashing",
+              id: "generate-proof",
+              label: "Generate Proof",
               detail: cpuCost,
-              status: "pending",
-            },
-            ...verifyTargets.map((arg, i) => ({
-              id: `verify-${i}`,
-              label: "Verifying",
-              detail: arg,
-              status: "pending" as StepStatus,
-            })),
-            {
-              id: "nullify",
-              label: "Nullifying Root",
-              detail: "pending",
               status: "pending",
             },
             {
               id: "commit",
-              label: "Committing New Root",
+              label: "Commit",
               detail: "pending",
               status: "pending",
             },
