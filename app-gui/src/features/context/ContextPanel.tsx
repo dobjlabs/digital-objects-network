@@ -8,7 +8,7 @@ import type {
 } from "../../shared/types/domain";
 import {
   pickDobjFilePath,
-  readDobjFileMetadata,
+  readDobjFile,
   type ActionId,
 } from "../../shared/api/tauriClient";
 import {
@@ -209,12 +209,11 @@ export function ContextPanel({
     }
 
     let parsed: {
-      fileName: string;
       className: string;
       validity: string;
     };
     try {
-      parsed = await readDobjFileMetadata(selectedPath);
+      parsed = await readDobjFile(selectedPath);
     } catch {
       setArgErrors((prev) => ({
         ...prev,

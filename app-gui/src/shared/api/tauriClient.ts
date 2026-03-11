@@ -4,7 +4,7 @@ import type {
   AppSettingsPayload,
   CpuSample,
   LoadGuiBootstrapResult,
-  ObjectFileMetadata,
+  ObjectRecordPayload,
   RunSdkActionInput,
   RunSdkActionProgress,
   RunSdkActionResult,
@@ -17,7 +17,7 @@ export type {
   CpuSample,
   InventoryItemPayload,
   LoadGuiBootstrapResult,
-  ObjectFileMetadata,
+  ObjectRecordPayload,
   RecipePayload,
   RunSdkActionInput,
   RunSdkActionProgress,
@@ -46,8 +46,8 @@ export function pickDobjFilePath(): Promise<string> {
   return invoke<string>("pick_dobj_file_path");
 }
 
-export function readDobjFileMetadata(path: string): Promise<ObjectFileMetadata> {
-  return invoke<ObjectFileMetadata>("read_dobj_file_metadata", { path });
+export function readDobjFile(path: string): Promise<ObjectRecordPayload> {
+  return invoke<ObjectRecordPayload>("read_dobj_file", { path });
 }
 
 export function listenRunSdkActionProgress(

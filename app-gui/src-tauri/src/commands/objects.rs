@@ -1,10 +1,11 @@
 use std::{fs, path::PathBuf};
 
 use crate::app_paths;
+use crate::state::ObjectRecord;
 use rfd::FileDialog;
 use tauri_plugin_opener::OpenerExt;
 
-use super::sdk::{ObjectFileMetadata, read_object_file_metadata};
+use super::sdk::read_dobj_file as read_dobj_file_impl;
 
 #[tauri::command]
 pub fn get_objects_dir(app: tauri::AppHandle) -> Result<String, String> {
@@ -35,7 +36,7 @@ pub fn pick_dobj_file_path() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn read_dobj_file_metadata(path: String) -> Result<ObjectFileMetadata, String> {
+pub fn read_dobj_file(path: String) -> Result<ObjectRecord, String> {
     let path = PathBuf::from(path.trim());
-    read_object_file_metadata(&path)
+    read_dobj_file_impl(&path)
 }

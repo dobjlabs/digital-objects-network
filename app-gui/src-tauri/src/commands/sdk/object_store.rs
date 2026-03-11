@@ -4,18 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::state::{ObjectRecord, RuntimeValidity};
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ObjectFileMetadata {
-    pub file_name: String,
-    pub class_name: String,
-    pub validity: String,
-}
 
 const NULLIFIED_DIR_NAME: &str = ".nullified";
 
@@ -31,83 +22,37 @@ pub(super) fn ensure_objects_dirs(objects_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn take_required_string(
-    fields: &mut Map<String, Value>,
-    key: &str,
-    context: &str,
-) -> Result<String, String> {
-    match fields.remove(key) {
-        Some(Value::String(value)) => Ok(value),
-        Some(Value::Null) => Err(format!("missing {key} in {context}")),
-        Some(_) => Err(format!("invalid {key} in {context}: expected string")),
-        None => Err(format!("missing {key} in {context}")),
-    }
-}
-
-fn validity_from_str(raw: &str, context: &str) -> Result<RuntimeValidity, String> {
-    match raw {
-        "live" => Ok(RuntimeValidity::Live),
-        "nullified" => Ok(RuntimeValidity::Nullified),
-        other => Err(format!("invalid object validity in {context}: {other}")),
-    }
-}
-
 fn parse_object_file(contents: &str, file_name: &str) -> Result<ObjectRecord, String> {
     let record = serde_json::from_str::<ObjectRecord>(contents)
         .map_err(|err| format!("failed to parse {file_name} as object file: {err}"))?;
     Ok(record.with_file_name(file_name.to_string()))
 }
 
-pub(crate) fn read_object_file_metadata(path: &Path) -> Result<ObjectFileMetadata, String> {
+fn persist_object_record(record: &ObjectRecord) -> Result<Value, String> {
+    serde_json::to_value(record).map_err(|err| {
+        format!(
+            "failed to serialize object file {}: {err}",
+            record.file_name
+        )
+    })
+}
+
+pub(crate) fn read_dobj_file(path: &Path) -> Result<ObjectRecord, String> {
     if !path.exists() {
         return Err(format!("selected file does not exist: {}", path.display()));
     }
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| format!("invalid input path (missing file name): {}", path.display()))?
-        .to_string();
-    let contents = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read selected file {}: {err}", path.display()))?;
-    let mut parsed = serde_json::from_str::<Map<String, Value>>(&contents)
-        .map_err(|err| format!("invalid .dobj JSON in {}: {err}", path.display()))?;
-
-    let class_name = take_required_string(&mut parsed, "className", &path.display().to_string())?
-        .trim()
-        .to_string();
-    if class_name.is_empty() {
+    let record = parse_object_file_from_path(path)?;
+    if record.class_name.trim().is_empty() {
         return Err(format!("missing className in {}", path.display()));
     }
-
-    let validity_raw = take_required_string(&mut parsed, "validity", &path.display().to_string())?
-        .trim()
-        .to_lowercase();
-    if validity_raw.is_empty() {
-        return Err(format!("missing validity in {}", path.display()));
-    }
-    let context = path.display().to_string();
-    let validity = validity_from_str(&validity_raw, &context)?;
-
-    Ok(ObjectFileMetadata {
-        file_name,
-        class_name,
-        validity: match validity {
-            RuntimeValidity::Live => "live".to_string(),
-            RuntimeValidity::Nullified => "nullified".to_string(),
-        },
-    })
+    Ok(record)
 }
 
 pub(super) fn write_object_file(record: &ObjectRecord, objects_dir: &Path) -> Result<(), String> {
     ensure_objects_dirs(objects_dir)?;
     let nullified_dir = nullified_objects_dir(objects_dir);
 
-    let persisted = serde_json::to_value(record).map_err(|err| {
-        format!(
-            "failed to serialize object file {}: {err}",
-            record.file_name
-        )
-    })?;
+    let persisted = persist_object_record(record)?;
     let serialized = serde_json::to_string_pretty(&persisted).map_err(|err| {
         format!(
             "failed to serialize object file {}: {err}",

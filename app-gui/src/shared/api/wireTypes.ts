@@ -79,10 +79,16 @@ export interface RunSdkActionResult {
   nullifiedFiles: string[];
 }
 
-export interface ObjectFileMetadata {
-  fileName: string;
+export interface ObjectRecordPayload {
+  id: string;
   className: ClassName;
+  sourceAction: ActionId | null;
   validity: Validity;
+  stateHash: string;
+  nullifier: string | null;
+  pod: unknown | null;
+  obj: unknown | null;
+  tx: unknown | null;
 }
 
 export interface RunSdkActionProgress {
