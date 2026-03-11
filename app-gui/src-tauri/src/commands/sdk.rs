@@ -16,12 +16,13 @@ use craft_sdk::{Helper, SpendableObject, SpendableObjects};
 use hex::{FromHex, ToHex};
 use pod2::middleware::{hash_values, Hash, Key, Params, Value};
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use txlib::StateRoot;
 
 use super::settings::load_effective_endpoint_urls;
 use crate::{
     action_spec,
+    app_paths,
     state::{CraftRuntime, CraftRuntimeInner, RuntimeObjectRecord, RuntimeValidity},
     types::{
         ClassMetaDto, InventoryItemDto, LoadGuiBootstrapResult, MethodArgDto, ObjectDataEntryDto,
@@ -146,14 +147,6 @@ fn short_hash(seed: &str) -> String {
         "0x{:02x}{:02x}...{:02x}{:02x}",
         bytes[0], bytes[1], bytes[6], bytes[7]
     )
-}
-
-fn resolve_objects_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let home = app
-        .path()
-        .home_dir()
-        .map_err(|err| format!("failed to resolve home directory: {err}"))?;
-    Ok(home.join(".objects"))
 }
 
 fn relayer_poll_timeout_secs() -> u64 {
@@ -1012,7 +1005,7 @@ pub async fn load_gui_bootstrap(
     app: tauri::AppHandle,
     runtime: tauri::State<'_, CraftRuntime>,
 ) -> Result<LoadGuiBootstrapResult, String> {
-    let objects_dir = resolve_objects_dir(&app)?;
+    let objects_dir = app_paths::objects_dir(&app)?;
     let actions = build_action_catalog();
     let effective_urls = load_effective_endpoint_urls(&app)?;
     let sync_head = fetch_synchronizer_head(&effective_urls.synchronizer_api_url);
@@ -1087,7 +1080,7 @@ pub async fn run_sdk_action(
     runtime: tauri::State<'_, CraftRuntime>,
     input: RunSdkActionInput,
 ) -> Result<RunSdkActionResult, String> {
-    let objects_dir = resolve_objects_dir(&app)?;
+    let objects_dir = app_paths::objects_dir(&app)?;
     let descriptors = action_descriptors_by_name();
     let descriptor = descriptors
         .get(&input.action_id)
