@@ -550,10 +550,19 @@ fn nullified_objects_dir(objects_dir: &Path) -> PathBuf {
 
 fn value_string(raw: String) -> String {
     let trimmed = raw.trim();
-    if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-        trimmed[1..trimmed.len() - 1].to_string()
+    let unquoted = if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+        &trimmed[1..trimmed.len() - 1]
     } else {
-        trimmed.to_string()
+        trimmed
+    };
+
+    if let Some(raw_inner) = unquoted
+        .strip_prefix("Raw(")
+        .and_then(|value| value.strip_suffix(')'))
+    {
+        raw_inner.trim().to_string()
+    } else {
+        unquoted.to_string()
     }
 }
 

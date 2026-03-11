@@ -392,18 +392,41 @@ export function ContextPanel({
       ? `~/.objects/.nullified/${filename}`
       : `~/.objects/${filename}`;
 
+  const formatObjectValue = (value: string) => {
+    const trimmed = value.trim();
+    const isHex = /^0x[0-9a-f]+$/i.test(trimmed);
+    if (isHex && trimmed.length > 24) {
+      return {
+        display: `${trimmed.slice(0, 10)}...${trimmed.slice(-8)}`,
+        full: trimmed,
+        mono: true,
+      };
+    }
+    return {
+      display: trimmed,
+      full: undefined,
+      mono: isHex,
+    };
+  };
+
   const renderObjectData = (item: InventoryItem) => {
     if (item.obj.length === 0) return null;
     return (
       <div className="object-data">
-        {item.obj.map((entry) => (
-          <div key={entry.key} className="object-data-row">
-            <span className="object-data-key">{entry.key}</span>
-            <span className="object-data-value">
-              {entry.value}
-            </span>
-          </div>
-        ))}
+        {item.obj.map((entry) => {
+          const formatted = formatObjectValue(entry.value);
+          return (
+            <div key={entry.key} className="object-data-row">
+              <span className="object-data-key">{entry.key}</span>
+              <span
+                className={`object-data-value${formatted.mono ? " mono" : ""}`}
+                title={formatted.full}
+              >
+                {formatted.display}
+              </span>
+            </div>
+          );
+        })}
       </div>
     );
   };
