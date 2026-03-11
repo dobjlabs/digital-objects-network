@@ -16,7 +16,7 @@ use super::{
         submit_proof_to_relayer, wait_for_relayer_confirmation, JobStatus,
         RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
     },
-    runtime::acquire_run_in_progress_guard,
+    runtime::{acquire_run_in_progress_guard, ActionRunGate},
     synchronizer_client::{
         encode_hash_hex, fetch_synchronizer_state, fetch_synchronizer_tx_contains,
         wait_for_synchronizer_tx, SynchronizerState, SYNCHRONIZER_POLL_INTERVAL_MS,
@@ -26,8 +26,8 @@ use super::{
 use crate::{
     app_paths,
     commands::sdk::progress::emit_commit_step,
+    objects::{ObjectRecord, ObjectValidity},
     spec::{self, action_descriptors_by_name},
-    state::{ObjectRecord, ObjectValidity, ObjectsRuntime},
 };
 
 use super::super::settings::get_app_settings;
@@ -313,7 +313,7 @@ fn save_results(
 #[tauri::command]
 pub async fn run_sdk_action(
     app: tauri::AppHandle,
-    runtime: tauri::State<'_, ObjectsRuntime>,
+    runtime: tauri::State<'_, ActionRunGate>,
     input: RunSdkActionInput,
 ) -> Result<RunSdkActionResult, String> {
     let objects_dir: PathBuf = app_paths::objects_dir(&app)?;

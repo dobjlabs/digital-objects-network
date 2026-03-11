@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use super::sdk::parse_object_file_from_path;
 use crate::app_paths;
-use crate::state::ObjectRecord;
+use crate::objects::ObjectRecord;
 use rfd::FileDialog;
 use tauri_plugin_opener::OpenerExt;
 

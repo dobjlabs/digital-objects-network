@@ -1,8 +1,9 @@
 mod app_paths;
 mod commands;
+mod cpu;
+mod objects;
 mod objects_watcher;
 mod spec;
-mod state;
 
 use tauri::{
     menu::{Menu, MenuItem, MenuItemBuilder},
@@ -11,10 +12,10 @@ use tauri::{
 
 use commands::{
     get_app_settings, get_objects_dir, load_gui_bootstrap, open_objects_dir, pick_dobj_file_path,
-    read_dobj_file, run_sdk_action, sample_app_cpu, save_app_settings,
+    read_dobj_file, run_sdk_action, sample_app_cpu, save_app_settings, ActionRunGate,
 };
+use cpu::CpuMonitor;
 use objects_watcher::start_objects_watcher;
-use state::{CpuMonitor, ObjectsRuntime};
 
 const MENU_OPEN_SETTINGS_ID: &str = "app.open-settings";
 const OPEN_SETTINGS_EVENT: &str = "open-settings";
@@ -84,7 +85,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .manage(CpuMonitor::new())
-        .manage(ObjectsRuntime::new())
+        .manage(ActionRunGate::new())
         .setup(|app| {
             if let Err(err) = start_objects_watcher(app.handle().clone()) {
                 eprintln!("zk-craft: objects watcher disabled: {err}");

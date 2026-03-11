@@ -11,8 +11,8 @@ use craft_sdk::Helper;
 use pod2::middleware::containers::Dictionary;
 
 use crate::{
+    objects::{ObjectRecord, ObjectValidity},
     spec,
-    state::{ObjectRecord, ObjectValidity},
 };
 
 #[derive(Debug, Serialize, Clone)]

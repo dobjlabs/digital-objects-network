@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::state::{ObjectRecord, ObjectValidity};
+use crate::objects::{ObjectRecord, ObjectValidity};
 
 const NULLIFIED_DIR_NAME: &str = ".nullified";
 
