@@ -26,7 +26,7 @@ use super::{
 use crate::{
     app_paths,
     commands::sdk::progress::emit_commit_step,
-    objects::{ObjectRecord, ObjectValidity},
+    objects::ObjectRecord,
     spec::{self, action_descriptors_by_name},
 };
 
@@ -114,7 +114,7 @@ fn resolve_inputs(
         let path_ref = Path::new(object_path);
         let record = parse_object_file_from_path(path_ref)?;
         let file_name = file_name_from_path(path_ref)?;
-        if record.validity != ObjectValidity::Live {
+        if record.is_nullified() {
             return Err(format!("input object is not live: {}", record.id));
         }
         if record.class_name != expected_class {
@@ -262,7 +262,6 @@ fn save_results(
             id: input_record.id.clone(),
             class_name: input_record.class_name.clone(),
             source_action: input_record.source_action.clone(),
-            validity: ObjectValidity::Nullified,
             nullifier: Some(input_nullifier),
             pod: input_record.pod.clone(),
             obj: input_record.obj.clone(),
@@ -296,7 +295,6 @@ fn save_results(
             id: object_id,
             class_name: class_name.clone(),
             source_action: action_id.to_string(),
-            validity: ObjectValidity::Live,
             nullifier: None,
             pod: spendable.pod,
             obj: spendable.obj,

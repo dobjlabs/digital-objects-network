@@ -1,6 +1,5 @@
 import type { ActionId, ClassName } from "../generated/ids";
 
-export type Validity = "live" | "nullified";
 export type MethodArgKind = "class";
 export type ProofPhase = "generateProof" | "commit";
 export type ProofProgressStatus = "running" | "done";
@@ -37,7 +36,6 @@ export interface InventoryItemPayload {
   id: string;
   fileName: string;
   emoji: string;
-  validity: Validity;
   stateRoot: string;
   nullifier?: string;
   classMeta: ClassMetaPayload;
@@ -83,7 +81,6 @@ export interface ObjectRecordPayload {
   id: string;
   className: ClassName;
   sourceAction: ActionId;
-  validity: Validity;
   nullifier: string | null;
   pod: unknown;
   obj: unknown;

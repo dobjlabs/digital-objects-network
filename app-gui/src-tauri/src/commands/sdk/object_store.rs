@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::objects::{ObjectRecord, ObjectValidity};
+use crate::objects::ObjectRecord;
 
 const NULLIFIED_DIR_NAME: &str = ".nullified";
 
@@ -42,16 +42,18 @@ pub(super) fn write_object_file(
         .map_err(|err| format!("failed to serialize object file {file_name}: {err}"))?;
     let serialized = serde_json::to_string_pretty(&persisted)
         .map_err(|err| format!("failed to serialize object file {file_name}: {err}"))?;
-    let target_path = match record.validity {
-        ObjectValidity::Live => objects_dir.join(file_name),
-        ObjectValidity::Nullified => nullified_dir.join(file_name),
+    let target_path = if record.is_nullified() {
+        nullified_dir.join(file_name)
+    } else {
+        objects_dir.join(file_name)
     };
     fs::write(&target_path, serialized)
         .map_err(|err| format!("failed to write object file {file_name}: {err}"))?;
 
-    let stale_path = match record.validity {
-        ObjectValidity::Live => nullified_dir.join(file_name),
-        ObjectValidity::Nullified => objects_dir.join(file_name),
+    let stale_path = if record.is_nullified() {
+        objects_dir.join(file_name)
+    } else {
+        nullified_dir.join(file_name)
     };
     if stale_path != target_path {
         match fs::remove_file(&stale_path) {
@@ -103,25 +105,18 @@ fn load_object_files_from_dir(
 
         match parse_object_file(&contents, file_name) {
             Ok(record) => {
-                let expected_validity = if in_nullified_dir {
-                    ObjectValidity::Nullified
-                } else {
-                    ObjectValidity::Live
-                };
-
-                if record.validity != expected_validity {
+                let is_nullified = record.is_nullified();
+                if is_nullified != in_nullified_dir {
                     return Err(format!(
-                        "invalid object validity placement for {}: expected {} in {}, found {}",
+                        "invalid object placement for {}: expected {} in {}, found {}",
                         file_name,
-                        match expected_validity {
-                            ObjectValidity::Live => "live",
-                            ObjectValidity::Nullified => "nullified",
+                        if in_nullified_dir {
+                            "nullified"
+                        } else {
+                            "live"
                         },
                         source_dir.display(),
-                        match record.validity {
-                            ObjectValidity::Live => "live",
-                            ObjectValidity::Nullified => "nullified",
-                        }
+                        if is_nullified { "nullified" } else { "live" }
                     ));
                 }
 

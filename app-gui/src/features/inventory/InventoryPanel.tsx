@@ -23,6 +23,7 @@ export function InventoryPanel({
   onOpenObjectsDir,
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
+  const isLive = (item: InventoryItem) => item.nullifier == null;
 
   const truncateDisplayHash = (value: string) => {
     const trimmed = value.trim();
@@ -35,7 +36,7 @@ export function InventoryPanel({
     event: DragEvent<HTMLButtonElement>,
     item: InventoryItem,
   ) => {
-    if (item.validity !== "live") {
+    if (!isLive(item)) {
       event.preventDefault();
       return;
     }
@@ -67,15 +68,14 @@ export function InventoryPanel({
     onSelectItem(itemId);
   };
 
-  const liveItems = items.filter((item) => item.validity === "live");
-  const nullifiedItems = items.filter((item) => item.validity === "nullified");
+  const liveItems = items.filter((item) => isLive(item));
+  const nullifiedItems = items.filter((item) => !isLive(item));
 
   const renderInventoryItem = (item: InventoryItem) => {
     const displayName = objectDisplayFileName(item);
-    const hashLineRaw =
-      item.validity === "live"
-        ? item.stateRoot
-        : (item.nullifier ?? "nullified");
+    const hashLineRaw = isLive(item)
+      ? item.stateRoot
+      : (item.nullifier ?? "nullified");
     const hashLine = truncateDisplayHash(hashLineRaw);
     return (
       <button
@@ -83,7 +83,7 @@ export function InventoryPanel({
         type="button"
         className={`inventory-item ${activeItemId === item.id ? "active" : ""}`}
         onClick={() => handleClickItem(item.id)}
-        draggable={item.validity === "live"}
+        draggable={isLive(item)}
         onDragStart={(event) => handleDragStart(event, item)}
         onDragEnd={handleDragEnd}
       >
@@ -97,7 +97,7 @@ export function InventoryPanel({
           </span>
         </span>
         <span
-          className={`inventory-dot ${item.validity === "live" ? "live" : "nullified"}`}
+          className={`inventory-dot ${isLive(item) ? "live" : "nullified"}`}
         />
       </button>
     );

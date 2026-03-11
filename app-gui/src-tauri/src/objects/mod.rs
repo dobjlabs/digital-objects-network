@@ -1,3 +1,3 @@
 mod record;
 
-pub(crate) use record::{ObjectRecord, ObjectValidity};
+pub(crate) use record::ObjectRecord;

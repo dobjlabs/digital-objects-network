@@ -1,7 +1,5 @@
 import type { ActionId, ClassName } from "../generated/ids";
 
-export type Validity = "live" | "nullified";
-
 export type MethodArgKind = "class";
 
 export interface ClassMeta {
@@ -36,7 +34,6 @@ export interface InventoryItem {
   id: string;
   fileName: string;
   emoji: string;
-  validity: Validity;
   stateRoot: string;
   nullifier?: string;
   classMeta: ClassMeta;

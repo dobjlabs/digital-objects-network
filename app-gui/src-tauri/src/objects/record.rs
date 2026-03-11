@@ -6,15 +6,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use txlib::Tx;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Lifecycle marker for an object tracked by the runtime.
-pub(crate) enum ObjectValidity {
-    /// Object is available for use as an input to actions.
-    Live,
-    /// Object has been consumed/nullified by a committed action.
-    Nullified,
-}
-
 #[derive(Debug)]
 pub(crate) struct ObjectRecord {
     pub(crate) id: String,
@@ -22,8 +13,6 @@ pub(crate) struct ObjectRecord {
     pub(crate) class_name: String,
     /// Action that produced this object.
     pub(crate) source_action: String,
-    /// Current lifecycle status for this record.
-    pub(crate) validity: ObjectValidity,
     /// Nullifier value once object is consumed.
     pub(crate) nullifier: Option<String>,
     /// Pod proof for this object
@@ -59,24 +48,11 @@ fn parse_optional_field<T: DeserializeOwned>(
     }
 }
 
-impl ObjectValidity {
-    fn as_file_str(self) -> &'static str {
-        match self {
-            ObjectValidity::Live => "live",
-            ObjectValidity::Nullified => "nullified",
-        }
-    }
-
-    fn from_file_str(raw: &str) -> Result<Self, String> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "live" => Ok(ObjectValidity::Live),
-            "nullified" => Ok(ObjectValidity::Nullified),
-            other => Err(format!("invalid object validity: {other}")),
-        }
-    }
-}
-
 impl ObjectRecord {
+    pub(crate) fn is_nullified(&self) -> bool {
+        self.nullifier.is_some()
+    }
+
     pub(crate) fn spendable(&self) -> SpendableObject {
         SpendableObject {
             pod: self.pod.clone(),
@@ -95,10 +71,6 @@ impl ObjectRecord {
         fields.insert(
             "sourceAction".to_string(),
             Value::String(self.source_action.clone()),
-        );
-        fields.insert(
-            "validity".to_string(),
-            Value::String(self.validity.as_file_str().to_string()),
         );
         fields.insert(
             "nullifier".to_string(),
@@ -132,8 +104,6 @@ impl ObjectRecord {
         let id = parse_required_field::<String>(fields, "id", "id")?;
         let class_name = parse_required_field::<String>(fields, "className", "className")?;
         let source_action = parse_required_field::<String>(fields, "sourceAction", "sourceAction")?;
-        let validity_raw = parse_required_field::<String>(fields, "validity", "validity")?;
-        let validity = ObjectValidity::from_file_str(&validity_raw)?;
         let nullifier = parse_optional_field::<String>(fields, "nullifier", "nullifier")?;
         let pod = parse_required_field::<MainPod>(fields, "pod", "spendable.pod")?;
         let obj = parse_required_field::<Dictionary>(fields, "obj", "spendable.obj")?;
@@ -143,7 +113,6 @@ impl ObjectRecord {
             id,
             class_name,
             source_action,
-            validity,
             nullifier,
             pod,
             obj,

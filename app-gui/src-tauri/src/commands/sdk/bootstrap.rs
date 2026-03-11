@@ -10,10 +10,7 @@ use super::super::settings::get_app_settings;
 use craft_sdk::Helper;
 use pod2::middleware::containers::Dictionary;
 
-use crate::{
-    objects::{ObjectRecord, ObjectValidity},
-    spec,
-};
+use crate::{objects::ObjectRecord, spec};
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -59,7 +56,6 @@ pub struct InventoryItemDto {
     pub id: String,
     pub file_name: String,
     pub emoji: String,
-    pub validity: String,
     pub state_root: String,
     pub nullifier: Option<String>,
     pub class_meta: ClassMetaDto,
@@ -163,10 +159,6 @@ pub(super) fn to_inventory_item(record: &ObjectRecord, file_name: &str) -> Inven
         id: record.id.clone(),
         file_name: file_name.to_string(),
         emoji: class_ui.emoji.to_string(),
-        validity: match record.validity {
-            ObjectValidity::Live => "live".to_string(),
-            ObjectValidity::Nullified => "nullified".to_string(),
-        },
         state_root: record.id.clone(),
         nullifier: record.nullifier.clone(),
         class_meta: ClassMetaDto {

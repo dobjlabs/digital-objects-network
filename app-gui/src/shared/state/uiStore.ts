@@ -77,7 +77,6 @@ const mapItem = (item: InventoryItemPayload): InventoryItem => ({
   id: item.id,
   fileName: item.fileName,
   emoji: item.emoji,
-  validity: item.validity,
   stateRoot: item.stateRoot,
   nullifier: item.nullifier,
   classMeta: item.classMeta,

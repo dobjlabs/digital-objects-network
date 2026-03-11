@@ -52,6 +52,7 @@ export function ContextPanel({
   const [hoverArgKey, setHoverArgKey] = useState<string | null>(null);
   const [argErrors, setArgErrors] = useState<Record<string, string>>({});
   const previousProofStatusRef = useRef(proofStatus);
+  const isLive = (item: InventoryItem) => item.nullifier == null;
   const selectionKey =
     selection.kind === "item"
       ? `item:${selection.itemId}`
@@ -210,7 +211,7 @@ export function ContextPanel({
 
     let parsed: {
       className: string;
-      validity: string;
+      nullifier: string | null;
     };
     try {
       parsed = await readDobjFile(selectedPath);
@@ -223,10 +224,10 @@ export function ContextPanel({
     }
 
     const className = parsed.className.trim();
-    const validity = parsed.validity.trim().toLowerCase();
+    const isLive = parsed.nullifier === null;
     const fileLabel = objectDisplayFileNameForClass(className);
 
-    if (!className || !validity) {
+    if (!className) {
       setArgErrors((prev) => ({
         ...prev,
         [key]: `Missing required fields in .dobj: ${selectedName}`,
@@ -244,7 +245,7 @@ export function ContextPanel({
       return;
     }
 
-    if (validity !== "live") {
+    if (!isLive) {
       setArgErrors((prev) => ({
         ...prev,
         [key]: "Only live objects can be bound",
@@ -389,7 +390,7 @@ export function ContextPanel({
 
   const displayThingPath = (item: InventoryItem) => {
     const displayName = objectDisplayFileName(item);
-    return item.validity === "nullified"
+    return !isLive(item)
       ? `~/.objects/.nullified/${displayName}`
       : `~/.objects/${displayName}`;
   };
@@ -458,8 +459,9 @@ export function ContextPanel({
       return <section className="context-panel">Object not found.</section>;
 
     const titleName = item.classMeta.name;
-    const liveValueRaw =
-      item.validity === "live" ? item.stateRoot : (item.nullifier ?? "nullified");
+    const liveValueRaw = isLive(item)
+      ? item.stateRoot
+      : (item.nullifier ?? "nullified");
     const liveValue = truncateDisplayHash(liveValueRaw);
 
     return (
@@ -482,7 +484,7 @@ export function ContextPanel({
           {renderMetaRow(
             "Live",
             <span
-              className={`context-inline-hash ${item.validity === "live" ? "live" : "nullified"}`}
+              className={`context-inline-hash ${isLive(item) ? "live" : "nullified"}`}
               title={liveValueRaw}
             >
               {liveValue}
