@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -8,6 +8,13 @@ use tauri::Manager;
 pub struct AppSettings {
     pub synchronizer_api_url: String,
     pub relayer_api_url: String,
+}
+
+fn default_settings() -> AppSettings {
+    AppSettings {
+        synchronizer_api_url: "http://127.0.0.1:3000".to_string(),
+        relayer_api_url: "http://127.0.0.1:3200".to_string(),
+    }
 }
 
 fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -43,19 +50,14 @@ fn write_settings(
         .map_err(|err| format!("failed to write settings file {}: {err}", path.display()))
 }
 
-fn required_env(name: &str) -> Result<String, String> {
-    env::var(name).map_err(|_| format!("{name} is required"))
-}
-
 #[tauri::command]
 pub fn get_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
     if let Some(settings) = read_settings(&app)? {
         return Ok(settings);
     }
-    Ok(AppSettings {
-        synchronizer_api_url: required_env("SYNCHRONIZER_API_URL")?,
-        relayer_api_url: required_env("RELAYER_API_URL")?,
-    })
+    let defaults = default_settings();
+    write_settings(&app, &defaults)?;
+    Ok(defaults)
 }
 
 #[tauri::command]

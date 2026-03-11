@@ -18,27 +18,6 @@ gui:
 dev:
     mprocs --config mprocs.yaml
 
-# Initialize local env files from examples (non-destructive)
-env-init:
-    @if [ ! -f synchronizer/.env ]; then \
-        cp synchronizer/.env.example synchronizer/.env; \
-        echo "created synchronizer/.env"; \
-    else \
-        echo "kept synchronizer/.env"; \
-    fi
-    @if [ ! -f relayer/.env ]; then \
-        cp relayer/.env.example relayer/.env; \
-        echo "created relayer/.env"; \
-    else \
-        echo "kept relayer/.env"; \
-    fi
-    @if [ ! -f app-gui/.env ]; then \
-        cp app-gui/.env.example app-gui/.env; \
-        echo "created app-gui/.env"; \
-    else \
-        echo "kept app-gui/.env"; \
-    fi
-
 # Wipe local state (RocksDB + local Postgres DBs + objects)
 reset:
     rm -rf data/ ~/.objects

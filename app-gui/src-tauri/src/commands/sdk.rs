@@ -149,37 +149,10 @@ fn short_hash(seed: &str) -> String {
     )
 }
 
-fn relayer_poll_timeout_secs() -> u64 {
-    std::env::var("RELAYER_POLL_TIMEOUT_SECS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(180)
-}
-
-fn relayer_poll_interval_millis() -> u64 {
-    std::env::var("RELAYER_POLL_INTERVAL_MS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .filter(|value| *value >= 250)
-        .unwrap_or(1500)
-}
-
-fn synchronizer_poll_timeout_secs() -> u64 {
-    std::env::var("SYNCHRONIZER_POLL_TIMEOUT_SECS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(120)
-}
-
-fn synchronizer_poll_interval_millis() -> u64 {
-    std::env::var("SYNCHRONIZER_POLL_INTERVAL_MS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .filter(|value| *value >= 250)
-        .unwrap_or(1200)
-}
+const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
+const RELAYER_POLL_INTERVAL_MS: u64 = 1500;
+const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
+const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
 
 fn ensure_non_empty_url(name: &str, value: String) -> Result<String, String> {
     let trimmed = value.trim().to_string();
@@ -1122,10 +1095,10 @@ pub async fn run_sdk_action(
     let old_root_hash = sync_state.current_gsr;
     let old_root = short_hash(&format!("{:#}", old_root_hash));
     let relayer_url = ensure_non_empty_url("RELAYER_API_URL", effective_urls.relayer_api_url)?;
-    let relayer_timeout_secs = relayer_poll_timeout_secs();
-    let relayer_poll_interval_ms = relayer_poll_interval_millis();
-    let sync_wait_timeout_secs = synchronizer_poll_timeout_secs();
-    let sync_wait_interval_ms = synchronizer_poll_interval_millis();
+    let relayer_timeout_secs = RELAYER_POLL_TIMEOUT_SECS;
+    let relayer_poll_interval_ms = RELAYER_POLL_INTERVAL_MS;
+    let sync_wait_timeout_secs = SYNCHRONIZER_POLL_TIMEOUT_SECS;
+    let sync_wait_interval_ms = SYNCHRONIZER_POLL_INTERVAL_MS;
 
     struct ResolvedRunInput {
         id: String,
