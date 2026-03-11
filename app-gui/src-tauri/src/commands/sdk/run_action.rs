@@ -38,17 +38,9 @@ use super::super::settings::get_app_settings;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RunSdkActionArgInput {
-    pub object_path: String,
-    #[serde(default, rename = "label")]
-    pub _label: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RunSdkActionInput {
     pub action_id: String,
-    pub inputs: Vec<RunSdkActionArgInput>,
+    pub input_object_paths: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,20 +65,20 @@ fn validate_run_request(
         ));
     }
 
-    if input.inputs.len() != descriptor.input_classes.len() {
+    if input.input_object_paths.len() != descriptor.input_classes.len() {
         return Err(format!(
             "{} expects {} inputs, got {}",
             input.action_id,
             descriptor.input_classes.len(),
-            input.inputs.len()
+            input.input_object_paths.len()
         ));
     }
 
     let mut seen_paths = HashSet::new();
-    for arg in &input.inputs {
-        let object_path = arg.object_path.trim();
+    for object_path_raw in &input.input_object_paths {
+        let object_path = object_path_raw.trim();
         if object_path.is_empty() {
-            return Err("each input must include objectPath".to_string());
+            return Err("each inputObjectPaths entry must be a non-empty path".to_string());
         }
         if !seen_paths.insert(object_path.to_string()) {
             return Err(format!(
@@ -116,9 +108,9 @@ fn resolve_inputs(
 
     let mut resolved_inputs = Vec::new();
 
-    for (slot, arg) in input.inputs.iter().enumerate() {
+    for (slot, object_path_raw) in input.input_object_paths.iter().enumerate() {
         let expected_class = descriptor.input_classes[slot].as_str();
-        let object_path = arg.object_path.trim();
+        let object_path = object_path_raw.trim();
         if object_path.is_empty() {
             return Err(format!("missing objectPath for input slot {}", slot + 1));
         }

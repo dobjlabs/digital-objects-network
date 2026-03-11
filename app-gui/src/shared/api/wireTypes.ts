@@ -66,14 +66,9 @@ export interface LoadGuiBootstrapResult {
   actions: RecipePayload[];
 }
 
-export interface RunSdkActionArgInput {
-  objectPath: string;
-  label?: string;
-}
-
 export interface RunSdkActionInput {
   actionId: ActionId;
-  inputs: RunSdkActionArgInput[];
+  inputObjectPaths: string[];
 }
 
 export interface RunSdkActionResult {

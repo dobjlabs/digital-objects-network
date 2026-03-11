@@ -19,7 +19,6 @@ export type {
   LoadGuiBootstrapResult,
   ObjectFileMetadata,
   RecipePayload,
-  RunSdkActionArgInput,
   RunSdkActionInput,
   RunSdkActionProgress,
   RunSdkActionResult,

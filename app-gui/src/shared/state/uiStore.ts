@@ -361,10 +361,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
     try {
       const result = await runSdkAction({
         actionId,
-        inputs: inputBindings.map((binding) => ({
-          objectPath: binding.objectPath,
-          label: binding.label,
-        })),
+        inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
       });
 
       set((prev) => {
