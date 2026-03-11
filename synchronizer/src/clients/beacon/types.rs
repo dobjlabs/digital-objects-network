@@ -42,7 +42,7 @@ pub enum BlockId {
 }
 
 #[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum Topic {
     Head,
     FinalizedCheckpoint,

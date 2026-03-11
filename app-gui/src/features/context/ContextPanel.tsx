@@ -491,7 +491,7 @@ export function ContextPanel({
           )}
           {renderMetaRow(
             "Type",
-            renderHashChip(`# ${item.classMeta.name}`, item.classMeta.hash),
+            <span className="from-action-label"># {item.classMeta.name}</span>,
           )}
           {renderMetaRow(
             "Path",
@@ -530,7 +530,12 @@ export function ContextPanel({
       </div>
 
       <div className="context-meta-block">
-        {renderMetaRow("Type", renderHashChip(`# ${recipe.hash}`, recipe.hash))}
+        {renderMetaRow(
+          "Type",
+          <span className="from-action-label">
+            # {truncateDisplayHash(recipe.hash)}
+          </span>,
+        )}
       </div>
 
       <div className="context-desc">{recipe.desc}</div>
