@@ -19,6 +19,7 @@ use db::Db;
 use eth::{EthClient, EthGateway};
 use worker::{run_worker, WorkerConfig};
 
+/// Boot relayer dependencies, then run API server and background worker together.
 #[tokio::main]
 async fn main() -> Result<()> {
     common::log_init();
@@ -28,7 +29,7 @@ async fn main() -> Result<()> {
 
     let db = Arc::new(Db::connect(&cfg.db_url).await?);
     let parser: Arc<dyn BlobParser> = Arc::new(ProofParser::new()?);
-    let eth_client: Arc<dyn EthGateway> = Arc::new(EthClient::new(&cfg)?);
+    let eth_client: Arc<dyn EthGateway> = Arc::new(EthClient::new(&cfg).await?);
 
     let worker_cfg = WorkerConfig {
         max_attempts: cfg.max_attempts,
@@ -88,6 +89,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Normalize spawned task exit handling into a single error/logging path.
 fn handle_task_exit(task_name: &str, join_result: Result<Result<()>, JoinError>) -> Result<()> {
     match join_result {
         Ok(Ok(())) => {

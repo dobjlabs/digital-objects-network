@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use tokio::sync::watch;
 use tracing::{info, warn};
 
@@ -10,7 +10,8 @@ use crate::{
     model::{JobStatus, RelayJob},
 };
 
-#[derive(Clone)]
+/// Runtime knobs controlling retry/poll cadence and failure thresholds.
+#[derive(Clone, Debug)]
 pub struct WorkerConfig {
     pub max_attempts: u32,
     pub retry_initial_secs: u64,
@@ -20,21 +21,14 @@ pub struct WorkerConfig {
     pub idle_sleep_ms: u64,
 }
 
+/// Main worker loop: recover inflight rows, then repeatedly pick and process due jobs.
 pub async fn run_worker(
     db: Arc<Db>,
     eth_client: Arc<dyn EthGateway>,
     cfg: WorkerConfig,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
-    info!(
-        max_attempts = cfg.max_attempts,
-        retry_initial_secs = cfg.retry_initial_secs,
-        retry_max_secs = cfg.retry_max_secs,
-        receipt_poll_secs = cfg.receipt_poll_secs,
-        receipt_timeout_secs = ?cfg.receipt_timeout_secs,
-        idle_sleep_ms = cfg.idle_sleep_ms,
-        "Relayer worker started"
-    );
+    info!(?cfg, "Relayer worker started");
 
     let recovered = db.recover_inflight_jobs(now_ts()).await?;
     if recovered > 0 {
@@ -70,6 +64,7 @@ pub async fn run_worker(
     }
 }
 
+/// Sleep for `duration` unless shutdown is requested first.
 async fn wait_or_shutdown(duration: Duration, shutdown_rx: &mut watch::Receiver<bool>) -> bool {
     tokio::select! {
         _ = tokio::time::sleep(duration) => false,
@@ -82,6 +77,7 @@ async fn wait_or_shutdown(duration: Duration, shutdown_rx: &mut watch::Receiver<
     }
 }
 
+/// Route a due job to submit-path or receipt-poll path.
 async fn process_due_job(
     db: &Db,
     eth_client: &dyn EthGateway,
@@ -99,6 +95,7 @@ async fn process_due_job(
     }
 }
 
+/// Submit a queued payload as an EIP-4844 transaction and update job state accordingly.
 async fn send_queued_job(
     db: &Db,
     eth_client: &dyn EthGateway,
@@ -147,6 +144,7 @@ async fn send_queued_job(
     }
 }
 
+/// Poll receipt for a previously submitted tx and transition job state.
 async fn poll_submitted_job(
     db: &Db,
     eth_client: &dyn EthGateway,
@@ -168,10 +166,12 @@ async fn poll_submitted_job(
                 elapsed_secs = now.saturating_sub(submitted_at),
                 "Receipt polling timeout reached"
             );
-            fail_job(
+            let block_number = job.block_number;
+            fail_job_with_block(
                 db,
                 &mut job,
                 now,
+                block_number,
                 format!("receipt timeout after {}s", timeout_secs),
             )
             .await?;
@@ -251,7 +251,8 @@ async fn poll_submitted_job(
                     error = %err,
                     "Permanent receipt polling error; marking failed"
                 );
-                fail_job(db, &mut job, now, err.to_string()).await?;
+                let block_number = job.block_number;
+                fail_job_with_block(db, &mut job, now, block_number, err.to_string()).await?;
                 return Ok(());
             }
             schedule_retry_or_fail(db, cfg, job, now, err).await?;
@@ -260,10 +261,7 @@ async fn poll_submitted_job(
     }
 }
 
-async fn fail_job(db: &Db, job: &mut RelayJob, now: i64, reason: String) -> Result<()> {
-    fail_job_with_block(db, job, now, job.block_number, reason).await
-}
-
+/// Mark a job as failed while preserving any known receipt block number.
 async fn fail_job_with_block(
     db: &Db,
     job: &mut RelayJob,
@@ -285,6 +283,7 @@ async fn fail_job_with_block(
     db.put_job(job).await
 }
 
+/// Apply exponential backoff retries, or fail permanently if attempts are exhausted.
 async fn schedule_retry_or_fail(
     db: &Db,
     cfg: &WorkerConfig,
@@ -355,7 +354,7 @@ mod tests {
     use std::{collections::VecDeque, sync::Mutex};
 
     use async_trait::async_trait;
-    use sqlx::{Executor, postgres::PgPoolOptions};
+    use sqlx::{postgres::PgPoolOptions, Executor};
     use url::Url;
 
     use super::*;
@@ -529,12 +528,10 @@ mod tests {
         poll_submitted_job(&db, &gateway, &cfg, job).await?;
         let timed_out = db.get_job("job-1").await?.expect("job");
         assert_eq!(timed_out.status, JobStatus::Failed);
-        assert!(
-            timed_out
-                .last_error
-                .expect("error")
-                .contains("receipt timeout after")
-        );
+        assert!(timed_out
+            .last_error
+            .expect("error")
+            .contains("receipt timeout after"));
 
         drop(db);
         drop_db(&admin_url, &db_name).await?;

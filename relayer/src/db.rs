@@ -4,16 +4,21 @@ use url::Url;
 
 use crate::model::{JobStatus, RelayJob};
 
+/// Result of inserting by idempotency key (`tx_final`).
 pub enum InsertJobResult {
+    /// A new row was inserted.
     Inserted,
+    /// A row with this `tx_final` already existed.
     Existing(RelayJob),
 }
 
+/// Postgres-backed queue/state store for relay jobs.
 pub struct Db {
     pool: PgPool,
 }
 
 impl Db {
+    /// Connect to Postgres, create database if needed, and bootstrap schema/indexes.
     pub async fn connect(database_url: &str) -> Result<Self> {
         ensure_database_exists(database_url).await?;
         let pool = PgPoolOptions::new()
@@ -27,6 +32,7 @@ impl Db {
         Ok(db)
     }
 
+    /// Create queue table/indexes used by API idempotency and worker scheduling.
     async fn bootstrap(&self) -> Result<()> {
         let statements = [
             r#"
@@ -66,6 +72,7 @@ impl Db {
         Ok(())
     }
 
+    /// Insert a new job, or return the existing row if `tx_final` already exists.
     pub async fn insert_job(&self, job: &RelayJob) -> Result<InsertJobResult> {
         let inserted = sqlx::query(
             r#"
@@ -121,6 +128,7 @@ impl Db {
         }
     }
 
+    /// Persist the current in-memory state of a known job row.
     pub async fn put_job(&self, job: &RelayJob) -> Result<()> {
         let rows_affected = sqlx::query(
             r#"
@@ -166,6 +174,7 @@ impl Db {
         Ok(())
     }
 
+    /// Lookup by API-facing `job_id`.
     pub async fn get_job(&self, job_id: &str) -> Result<Option<RelayJob>> {
         let row = sqlx::query(
             r#"
@@ -194,6 +203,7 @@ impl Db {
         row.map(row_to_job).transpose()
     }
 
+    /// Lookup by idempotency key.
     pub async fn get_job_by_tx_final(&self, tx_final: &str) -> Result<Option<RelayJob>> {
         let row = sqlx::query(
             r#"
@@ -222,6 +232,7 @@ impl Db {
         row.map(row_to_job).transpose()
     }
 
+    /// Requeue in-flight states that can be left behind on crash/restart.
     pub async fn recover_inflight_jobs(&self, now: i64) -> Result<usize> {
         let result = sqlx::query(
             r#"
@@ -239,6 +250,7 @@ impl Db {
         Ok(result.rows_affected() as usize)
     }
 
+    /// Pick the next due non-terminal job by schedule time.
     pub async fn next_due_job(&self, now: i64) -> Result<Option<RelayJob>> {
         let row = sqlx::query(
             r#"
@@ -271,6 +283,7 @@ impl Db {
     }
 }
 
+/// Decode a SQL row into `RelayJob` with explicit integer range checks.
 fn row_to_job(row: sqlx::postgres::PgRow) -> Result<RelayJob> {
     let status_raw: &str = row.get("status");
     let status = JobStatus::from_db_str(status_raw)?;
@@ -303,6 +316,7 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<RelayJob> {
     })
 }
 
+/// Local-dev convenience: ensure the target database exists before connecting.
 async fn ensure_database_exists(database_url: &str) -> Result<()> {
     let parsed = Url::parse(database_url).with_context(|| "Invalid RELAYER_DB_URL")?;
     let db_name = parsed
