@@ -25,7 +25,6 @@ use sync_loop::run_sync_loop;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // In order to view logs, run `RUST_LOG=info cargo run`
     common::log_init();
 
     let cfg = load_config()?;

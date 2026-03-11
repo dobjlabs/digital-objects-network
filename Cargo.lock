@@ -6590,14 +6590,14 @@ dependencies = [
  "dotenvy",
  "hex",
  "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
- "rocksdb",
  "serde",
  "serde_json",
- "tempfile",
+ "sqlx",
  "tokio",
  "tower",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

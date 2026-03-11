@@ -6,15 +6,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use common::{
     blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES,
     payload::{Payload, PayloadProof},
-    shrink::{shrink_compress_pod, ShrunkMainPodSetup},
+    shrink::{ShrunkMainPodSetup, shrink_compress_pod},
 };
 use craft_sdk::{Helper, SpendableObject, SpendableObjects};
 use hex::{FromHex, ToHex};
-use pod2::middleware::{hash_values, Hash, Key, Params, Value};
+use pod2::middleware::{Hash, Key, Params, Value, hash_values};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 use txlib::StateRoot;
@@ -156,15 +156,6 @@ fn resolve_objects_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(home.join(".objects"))
 }
 
-fn relayer_api_key() -> Result<String, String> {
-    let key = std::env::var("RELAYER_API_KEY")
-        .map_err(|_| "RELAYER_API_KEY is required to relay proofs".to_string())?;
-    if key.trim().is_empty() {
-        return Err("RELAYER_API_KEY is empty".to_string());
-    }
-    Ok(key)
-}
-
 fn relayer_poll_timeout_secs() -> u64 {
     std::env::var("RELAYER_POLL_TIMEOUT_SECS")
         .ok()
@@ -218,7 +209,6 @@ fn relayer_proof_status_endpoint(relayer_api_url: &str, job_id: &str) -> String 
 
 fn submit_proof_to_relayer(
     relayer_api_url: &str,
-    relayer_api_key: &str,
     payload_bytes: &[u8],
     client_ref: Option<String>,
 ) -> Result<RelayerSubmitResponse, String> {
@@ -239,7 +229,6 @@ fn submit_proof_to_relayer(
     let client = reqwest::blocking::Client::new();
     let response = client
         .post(&endpoint)
-        .bearer_auth(relayer_api_key)
         .json(&request)
         .send()
         .map_err(|err| format!("failed to submit proof to relayer at {endpoint}: {err}"))?;
@@ -261,14 +250,12 @@ fn submit_proof_to_relayer(
 
 fn fetch_relayer_job_status(
     relayer_api_url: &str,
-    relayer_api_key: &str,
     job_id: &str,
 ) -> Result<RelayerJobStatusResponse, String> {
     let endpoint = relayer_proof_status_endpoint(relayer_api_url, job_id);
     let client = reqwest::blocking::Client::new();
     let response = client
         .get(&endpoint)
-        .bearer_auth(relayer_api_key)
         .send()
         .map_err(|err| format!("failed to query relayer job at {endpoint}: {err}"))?;
 
@@ -289,7 +276,6 @@ fn fetch_relayer_job_status(
 
 fn wait_for_relayer_confirmation(
     relayer_api_url: &str,
-    relayer_api_key: &str,
     job_id: &str,
     timeout_secs: u64,
     poll_interval_ms: u64,
@@ -299,7 +285,7 @@ fn wait_for_relayer_confirmation(
     let start = Instant::now();
 
     loop {
-        let status = fetch_relayer_job_status(relayer_api_url, relayer_api_key, job_id)?;
+        let status = fetch_relayer_job_status(relayer_api_url, job_id)?;
         match status.status {
             RelayerJobStatus::Confirmed => return Ok(status),
             RelayerJobStatus::Failed => {
@@ -343,7 +329,10 @@ fn synchronizer_state_full_endpoint(sync_api_url: &str) -> String {
 }
 
 fn synchronizer_state_tx_contains_endpoint(sync_api_url: &str) -> String {
-    format!("{}/v1/state/tx/contains", sync_api_url.trim_end_matches('/'))
+    format!(
+        "{}/v1/state/tx/contains",
+        sync_api_url.trim_end_matches('/')
+    )
 }
 
 fn synchronizer_state_tx_endpoint(sync_api_url: &str, tx_hash: &Hash) -> String {
@@ -369,7 +358,11 @@ fn fetch_synchronizer_head(sync_api_url: &str) -> Result<Option<Hash>, String> {
     let payload: SynchronizerStateHeadResponse = response
         .json()
         .map_err(|err| format!("failed to decode synchronizer head response: {err}"))?;
-    payload.current_gsr.as_deref().map(parse_hash_hex).transpose()
+    payload
+        .current_gsr
+        .as_deref()
+        .map(parse_hash_hex)
+        .transpose()
 }
 
 fn fetch_synchronizer_state(sync_api_url: &str) -> Result<SynchronizerState, String> {
@@ -726,13 +719,7 @@ fn restore_spendable(
 ) -> Result<Option<SpendableObject>, String> {
     match (pod, obj, tx_live, tx_nullifiers, tx_state_root) {
         (None, None, None, None, None) => Ok(None),
-        (
-            Some(pod),
-            Some(obj),
-            Some(tx_live),
-            Some(tx_nullifiers),
-            Some(tx_state_root),
-        ) => {
+        (Some(pod), Some(obj), Some(tx_live), Some(tx_nullifiers), Some(tx_state_root)) => {
             let state_root = restore_state_root(tx_state_root)?;
             let tx = txlib::Tx {
                 live: serde_json::from_value(tx_live)
@@ -750,8 +737,9 @@ fn restore_spendable(
                 tx,
             }))
         }
-        _ => Err("invalid object file: spendable fields must all be present or all absent"
-            .to_string()),
+        _ => Err(
+            "invalid object file: spendable fields must all be present or all absent".to_string(),
+        ),
     }
 }
 
@@ -797,20 +785,19 @@ fn parse_object_file(contents: &str, file_name: &str) -> Result<RuntimeObjectRec
 }
 
 fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObjectRecord, String> {
-    let (pod, obj, tx_live, tx_nullifiers, tx_state_root) = if let Some(spendable) =
-        record.spendable.as_ref()
-    {
-        let (pod, obj, tx_live, tx_nullifiers, tx_state_root) = persist_spendable(spendable)?;
-        (
-            Some(pod),
-            Some(obj),
-            Some(tx_live),
-            Some(tx_nullifiers),
-            Some(tx_state_root),
-        )
-    } else {
-        (None, None, None, None, None)
-    };
+    let (pod, obj, tx_live, tx_nullifiers, tx_state_root) =
+        if let Some(spendable) = record.spendable.as_ref() {
+            let (pod, obj, tx_live, tx_nullifiers, tx_state_root) = persist_spendable(spendable)?;
+            (
+                Some(pod),
+                Some(obj),
+                Some(tx_live),
+                Some(tx_nullifiers),
+                Some(tx_state_root),
+            )
+        } else {
+            (None, None, None, None, None)
+        };
     let state_hash = record
         .spendable
         .as_ref()
@@ -1142,7 +1129,6 @@ pub async fn run_sdk_action(
     let old_root_hash = sync_state.current_gsr;
     let old_root = short_hash(&format!("{:#}", old_root_hash));
     let relayer_url = ensure_non_empty_url("RELAYER_API_URL", effective_urls.relayer_api_url)?;
-    let relayer_key = relayer_api_key()?;
     let relayer_timeout_secs = relayer_poll_timeout_secs();
     let relayer_poll_interval_ms = relayer_poll_interval_millis();
     let sync_wait_timeout_secs = synchronizer_poll_timeout_secs();
@@ -1442,12 +1428,10 @@ pub async fn run_sdk_action(
     )?;
 
     let relayer_url_for_submit = relayer_url.clone();
-    let relayer_key_for_submit = relayer_key.clone();
     let action_ref = input.action_id.clone();
     let submit_job = tauri::async_runtime::spawn_blocking(move || {
         submit_proof_to_relayer(
             &relayer_url_for_submit,
-            &relayer_key_for_submit,
             &payload_bytes,
             Some(format!("app-gui:{action_ref}")),
         )
@@ -1490,12 +1474,10 @@ pub async fn run_sdk_action(
     )?;
 
     let relayer_url_for_wait = relayer_url.clone();
-    let relayer_key_for_wait = relayer_key.clone();
     let job_id_for_wait = submitted_job_id.clone();
     let wait_job = tauri::async_runtime::spawn_blocking(move || {
         wait_for_relayer_confirmation(
             &relayer_url_for_wait,
-            &relayer_key_for_wait,
             &job_id_for_wait,
             relayer_timeout_secs,
             relayer_poll_interval_ms,
@@ -1535,79 +1517,78 @@ pub async fn run_sdk_action(
     let new_root = short_hash(&format!("{:#}", sync_state_after.current_gsr));
 
     let mut inner = lock_runtime(&runtime);
-    let apply_result = (|| {
-        ensure_runtime_loaded(&mut inner, &objects_dir)?;
+    let apply_result =
+        (|| {
+            ensure_runtime_loaded(&mut inner, &objects_dir)?;
 
-        let mut nullified_files = Vec::new();
-        for resolved in &resolved_inputs {
-            if let Some(record) = inner
-                .objects
-                .iter_mut()
-                .find(|record| record.id == resolved.id && record.file_name == resolved.file_name)
-            {
-                if record.validity != RuntimeValidity::Live {
-                    return Err(format!("input object already nullified: {}", resolved.id));
+            let mut nullified_files = Vec::new();
+            for resolved in &resolved_inputs {
+                if let Some(record) = inner.objects.iter_mut().find(|record| {
+                    record.id == resolved.id && record.file_name == resolved.file_name
+                }) {
+                    if record.validity != RuntimeValidity::Live {
+                        return Err(format!("input object already nullified: {}", resolved.id));
+                    }
+                    record.validity = RuntimeValidity::Nullified;
+                    record.nullifier = Some(resolved.nullifier.clone());
+                    nullified_files.push(record.file_name.clone());
+                } else {
+                    inner.objects.push(RuntimeObjectRecord {
+                        id: resolved.id.clone(),
+                        file_name: resolved.file_name.clone(),
+                        class_name: resolved.class_name.clone(),
+                        source_action: resolved.source_action.clone(),
+                        validity: RuntimeValidity::Nullified,
+                        state_hash: resolved.state_hash.clone(),
+                        nullifier: Some(resolved.nullifier.clone()),
+                        spendable: None,
+                    });
+                    nullified_files.push(resolved.file_name.clone());
                 }
-                record.validity = RuntimeValidity::Nullified;
-                record.nullifier = Some(resolved.nullifier.clone());
-                nullified_files.push(record.file_name.clone());
-            } else {
-                inner.objects.push(RuntimeObjectRecord {
-                    id: resolved.id.clone(),
-                    file_name: resolved.file_name.clone(),
-                    class_name: resolved.class_name.clone(),
-                    source_action: resolved.source_action.clone(),
-                    validity: RuntimeValidity::Nullified,
-                    state_hash: resolved.state_hash.clone(),
-                    nullifier: Some(resolved.nullifier.clone()),
-                    spendable: None,
-                });
-                nullified_files.push(resolved.file_name.clone());
             }
-        }
 
-        if spendable_outputs.objs.len() != descriptor.output_classes.len() {
-            return Err(format!(
-                "action {} output mismatch: descriptor expects {}, engine returned {}",
-                input.action_id,
-                descriptor.output_classes.len(),
-                spendable_outputs.objs.len()
-            ));
-        }
+            if spendable_outputs.objs.len() != descriptor.output_classes.len() {
+                return Err(format!(
+                    "action {} output mismatch: descriptor expects {}, engine returned {}",
+                    input.action_id,
+                    descriptor.output_classes.len(),
+                    spendable_outputs.objs.len()
+                ));
+            }
 
-        let mut output_files = Vec::new();
-        for (index, class_name) in descriptor.output_classes.iter().enumerate() {
-            let spendable = spendable_outputs.obj(index);
-            let object_index = inner.next_object_index;
-            let file_name = format_output_file_name(class_name, object_index);
-            inner.next_object_index += 1;
-            let object_id = object_id_from_spendable(&spendable);
+            let mut output_files = Vec::new();
+            for (index, class_name) in descriptor.output_classes.iter().enumerate() {
+                let spendable = spendable_outputs.obj(index);
+                let object_index = inner.next_object_index;
+                let file_name = format_output_file_name(class_name, object_index);
+                inner.next_object_index += 1;
+                let object_id = object_id_from_spendable(&spendable);
 
-            output_files.push(file_name.clone());
-            inner.objects.push(RuntimeObjectRecord {
-                id: object_id,
-                file_name,
-                class_name: class_name.clone(),
-                source_action: Some(input.action_id.clone()),
-                validity: RuntimeValidity::Live,
-                state_hash: object_state_hash_from_spendable(&spendable),
-                nullifier: None,
-                spendable: Some(spendable),
-            });
-        }
+                output_files.push(file_name.clone());
+                inner.objects.push(RuntimeObjectRecord {
+                    id: object_id,
+                    file_name,
+                    class_name: class_name.clone(),
+                    source_action: Some(input.action_id.clone()),
+                    validity: RuntimeValidity::Live,
+                    state_hash: object_state_hash_from_spendable(&spendable),
+                    nullifier: None,
+                    spendable: Some(spendable),
+                });
+            }
 
-        inner.state_root = sync_state_after.state_root;
-        sync_object_files(&inner, &objects_dir)?;
+            inner.state_root = sync_state_after.state_root;
+            sync_object_files(&inner, &objects_dir)?;
 
-        Ok(RunSdkActionResult {
-            ok: true,
-            old_root: old_root.clone(),
-            new_root: new_root.clone(),
-            output_files,
-            nullified_files,
-            objects: inner.objects.iter().map(to_inventory_item).collect(),
-        })
-    })();
+            Ok(RunSdkActionResult {
+                ok: true,
+                old_root: old_root.clone(),
+                new_root: new_root.clone(),
+                output_files,
+                nullified_files,
+                objects: inner.objects.iter().map(to_inventory_item).collect(),
+            })
+        })();
     inner.run_in_progress = false;
     let result = apply_result?;
 

@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use tokio::sync::watch;
 use tracing::{info, warn};
 
@@ -36,7 +36,7 @@ pub async fn run_worker(
         "Relayer worker started"
     );
 
-    let recovered = db.recover_inflight_jobs(now_ts())?;
+    let recovered = db.recover_inflight_jobs(now_ts()).await?;
     if recovered > 0 {
         info!(recovered, "Recovered in-flight relay jobs");
     }
@@ -48,7 +48,7 @@ pub async fn run_worker(
         }
 
         let now = now_ts();
-        let Some(job) = db.next_due_job(now)? else {
+        let Some(job) = db.next_due_job(now).await? else {
             if wait_or_shutdown(Duration::from_millis(cfg.idle_sleep_ms), &mut shutdown_rx).await {
                 info!("Relayer worker shutting down");
                 return Ok(());
@@ -108,11 +108,11 @@ async fn send_queued_job(
     let now = now_ts();
     job.status = JobStatus::Sending;
     job.updated_at = now;
-    db.put_job(&job)?;
+    db.put_job(&job).await?;
 
     job.attempt_count = job.attempt_count.saturating_add(1);
     job.updated_at = now;
-    db.put_job(&job)?;
+    db.put_job(&job).await?;
 
     info!(
         job_id = %job.job_id,
@@ -131,7 +131,7 @@ async fn send_queued_job(
             job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
             job.last_error = None;
             job.updated_at = now;
-            db.put_job(&job)?;
+            db.put_job(&job).await?;
             info!(
                 job_id = %job.job_id,
                 tx_hash = ?job.tx_hash,
@@ -141,7 +141,7 @@ async fn send_queued_job(
             Ok(())
         }
         Err(err) => {
-            schedule_retry_or_fail(db, cfg, job, now, err)?;
+            schedule_retry_or_fail(db, cfg, job, now, err).await?;
             Ok(())
         }
     }
@@ -173,14 +173,15 @@ async fn poll_submitted_job(
                 &mut job,
                 now,
                 format!("receipt timeout after {}s", timeout_secs),
-            )?;
+            )
+            .await?;
             return Ok(());
         }
     }
 
     job.attempt_count = job.attempt_count.saturating_add(1);
     job.updated_at = now;
-    db.put_job(&job)?;
+    db.put_job(&job).await?;
 
     info!(
         job_id = %job.job_id,
@@ -199,7 +200,7 @@ async fn poll_submitted_job(
             job.next_attempt_at = None;
             job.last_error = None;
             job.updated_at = now;
-            db.put_job(&job)?;
+            db.put_job(&job).await?;
             info!(
                 job_id = %job.job_id,
                 tx_hash = %tx_hash_str,
@@ -219,7 +220,8 @@ async fn poll_submitted_job(
                 now,
                 block_number,
                 "transaction reverted on-chain".to_string(),
-            )?;
+            )
+            .await?;
             warn!(
                 job_id = %job.job_id,
                 tx_hash = %tx_hash_str,
@@ -232,7 +234,7 @@ async fn poll_submitted_job(
             job.status = JobStatus::Submitted;
             job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
             job.updated_at = now;
-            db.put_job(&job)?;
+            db.put_job(&job).await?;
             info!(
                 job_id = %job.job_id,
                 tx_hash = %tx_hash_str,
@@ -249,20 +251,20 @@ async fn poll_submitted_job(
                     error = %err,
                     "Permanent receipt polling error; marking failed"
                 );
-                fail_job(db, &mut job, now, err.to_string())?;
+                fail_job(db, &mut job, now, err.to_string()).await?;
                 return Ok(());
             }
-            schedule_retry_or_fail(db, cfg, job, now, err)?;
+            schedule_retry_or_fail(db, cfg, job, now, err).await?;
             Ok(())
         }
     }
 }
 
-fn fail_job(db: &Db, job: &mut RelayJob, now: i64, reason: String) -> Result<()> {
-    fail_job_with_block(db, job, now, job.block_number, reason)
+async fn fail_job(db: &Db, job: &mut RelayJob, now: i64, reason: String) -> Result<()> {
+    fail_job_with_block(db, job, now, job.block_number, reason).await
 }
 
-fn fail_job_with_block(
+async fn fail_job_with_block(
     db: &Db,
     job: &mut RelayJob,
     now: i64,
@@ -280,10 +282,10 @@ fn fail_job_with_block(
     job.next_attempt_at = None;
     job.last_error = Some(reason);
     job.updated_at = now;
-    db.put_job(job)
+    db.put_job(job).await
 }
 
-fn schedule_retry_or_fail(
+async fn schedule_retry_or_fail(
     db: &Db,
     cfg: &WorkerConfig,
     mut job: RelayJob,
@@ -296,7 +298,7 @@ fn schedule_retry_or_fail(
         job.next_attempt_at = None;
         job.last_error = Some(msg);
         job.updated_at = now;
-        db.put_job(&job)?;
+        db.put_job(&job).await?;
         warn!(
             job_id = %job.job_id,
             attempts = job.attempt_count,
@@ -316,7 +318,7 @@ fn schedule_retry_or_fail(
     job.next_attempt_at = Some(now + backoff as i64);
     job.last_error = Some(msg);
     job.updated_at = now;
-    db.put_job(&job)?;
+    db.put_job(&job).await?;
 
     warn!(
         job_id = %job.job_id,
@@ -353,7 +355,8 @@ mod tests {
     use std::{collections::VecDeque, sync::Mutex};
 
     use async_trait::async_trait;
-    use tempfile::TempDir;
+    use sqlx::{Executor, postgres::PgPoolOptions};
+    use url::Url;
 
     use super::*;
 
@@ -412,72 +415,129 @@ mod tests {
         }
     }
 
+    fn test_urls() -> (String, String, String) {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let admin_url = std::env::var("TEST_RELAYER_DB_ADMIN")
+            .unwrap_or_else(|_| "postgres://postgres@localhost:5432/postgres".to_string());
+        let mut url = Url::parse(&admin_url).expect("valid admin url");
+        let db_name = format!(
+            "relayer_worker_test_{}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        url.set_path(&format!("/{db_name}"));
+        (admin_url, url.to_string(), db_name)
+    }
+
+    async fn drop_db(admin_url: &str, db_name: &str) -> Result<()> {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(admin_url)
+            .await?;
+        sqlx::query(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+        )
+        .bind(db_name)
+        .execute(&pool)
+        .await?;
+        let escaped = db_name.replace('"', "\"\"");
+        let stmt = format!("DROP DATABASE IF EXISTS \"{escaped}\"");
+        pool.execute(stmt.as_str()).await?;
+        Ok(())
+    }
+
+    async fn setup_db() -> Result<(Db, String, String)> {
+        let (admin_url, db_url, db_name) = test_urls();
+        drop_db(&admin_url, &db_name).await?;
+        let db = Db::connect(&db_url).await?;
+        Ok((db, admin_url, db_name))
+    }
+
     #[tokio::test]
-    async fn retryable_submit_error_then_confirmed() {
-        let dir = TempDir::new().unwrap();
-        let db = Db::connect(dir.path().to_str().unwrap()).unwrap();
+    #[ignore = "requires local postgres"]
+    async fn retryable_submit_error_then_confirmed() -> Result<()> {
+        let (db, admin_url, db_name) = setup_db().await?;
         let gateway = MockEthGateway::default();
         gateway
             .submit_results
             .lock()
-            .unwrap()
+            .expect("poisoned")
             .push_back(Err(anyhow!("rpc unavailable")));
-        gateway.submit_results.lock().unwrap().push_back(Ok(
-            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-        ));
+        gateway
+            .submit_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(
+                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            ));
         gateway
             .poll_results
             .lock()
-            .unwrap()
+            .expect("poisoned")
             .push_back(Ok(Some(ReceiptOutcome {
                 success: true,
                 block_number: Some(42),
             })));
 
         let job = mk_job(JobStatus::Queued);
-        db.insert_job_idempotent(&job).unwrap();
+        db.insert_job_idempotent(&job).await?;
         let cfg = cfg();
 
-        let job = db.get_job("job-1").unwrap().unwrap();
-        send_queued_job(&db, &gateway, &cfg, job).await.unwrap();
-        let first = db.get_job("job-1").unwrap().unwrap();
+        let job = db.get_job("job-1").await?.expect("job");
+        send_queued_job(&db, &gateway, &cfg, job).await?;
+        let first = db.get_job("job-1").await?.expect("job");
         assert_eq!(first.status, JobStatus::Queued);
         assert_eq!(first.attempt_count, 1);
         assert!(first.last_error.is_some());
 
-        let job = db.get_job("job-1").unwrap().unwrap();
-        send_queued_job(&db, &gateway, &cfg, job).await.unwrap();
-        let second = db.get_job("job-1").unwrap().unwrap();
+        let job = db.get_job("job-1").await?.expect("job");
+        send_queued_job(&db, &gateway, &cfg, job).await?;
+        let second = db.get_job("job-1").await?.expect("job");
         assert_eq!(second.status, JobStatus::Submitted);
         assert!(second.tx_hash.is_some());
         assert!(second.submitted_at.is_some());
 
-        let job = db.get_job("job-1").unwrap().unwrap();
-        poll_submitted_job(&db, &gateway, &cfg, job).await.unwrap();
-        let final_job = db.get_job("job-1").unwrap().unwrap();
+        let job = db.get_job("job-1").await?.expect("job");
+        poll_submitted_job(&db, &gateway, &cfg, job).await?;
+        let final_job = db.get_job("job-1").await?.expect("job");
         assert_eq!(final_job.status, JobStatus::Confirmed);
         assert_eq!(final_job.block_number, Some(42));
+
+        drop(db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn submitted_job_times_out() {
-        let dir = TempDir::new().unwrap();
-        let db = Db::connect(dir.path().to_str().unwrap()).unwrap();
+    #[ignore = "requires local postgres"]
+    async fn submitted_job_times_out() -> Result<()> {
+        let (db, admin_url, db_name) = setup_db().await?;
         let gateway = MockEthGateway::default();
+
         let mut job = mk_job(JobStatus::Submitted);
         job.tx_hash =
             Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
         job.submitted_at = Some(now_ts() - 100);
-        db.insert_job_idempotent(&job).unwrap();
+        db.insert_job_idempotent(&job).await?;
 
         let cfg = cfg();
-        let job = db.get_job("job-1").unwrap().unwrap();
-        poll_submitted_job(&db, &gateway, &cfg, job).await.unwrap();
-        let timed_out = db.get_job("job-1").unwrap().unwrap();
+        let job = db.get_job("job-1").await?.expect("job");
+        poll_submitted_job(&db, &gateway, &cfg, job).await?;
+        let timed_out = db.get_job("job-1").await?.expect("job");
         assert_eq!(timed_out.status, JobStatus::Failed);
-        assert!(timed_out
-            .last_error
-            .unwrap()
-            .contains("receipt timeout after"));
+        assert!(
+            timed_out
+                .last_error
+                .expect("error")
+                .contains("receipt timeout after")
+        );
+
+        drop(db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
     }
 }

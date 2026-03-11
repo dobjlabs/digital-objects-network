@@ -2,23 +2,22 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use axum::{
+    Json, Router,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use hex::ToHex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use uuid::Uuid;
 
 use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
 
 use crate::{
-    auth::is_authorized,
     db::{Db, InsertJobResult},
     model::{JobStatus, RelayJob},
 };
@@ -27,7 +26,6 @@ use crate::{
 pub struct AppState {
     pub db: Arc<Db>,
     pub parser: Arc<dyn BlobParser>,
-    pub api_key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,7 +64,6 @@ struct HealthResponse {
 }
 
 pub enum ApiError {
-    Unauthorized,
     BadRequest(String),
     NotFound(String),
     Internal(anyhow::Error),
@@ -75,11 +72,6 @@ pub enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
-            ApiError::Unauthorized => (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error": "unauthorized"})),
-            )
-                .into_response(),
             ApiError::BadRequest(msg) => (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": msg})),
@@ -102,15 +94,10 @@ impl IntoResponse for ApiError {
 pub async fn run_api_server(
     db: Arc<Db>,
     parser: Arc<dyn BlobParser>,
-    api_key: String,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
-    let app_state = AppState {
-        db,
-        parser,
-        api_key,
-    };
+    let app_state = AppState { db, parser };
 
     let app = build_router(app_state);
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
@@ -146,11 +133,8 @@ async fn healthz() -> Json<HealthResponse> {
 
 async fn submit_proof(
     State(app_state): State<AppState>,
-    headers: HeaderMap,
     Json(req): Json<SubmitProofRequest>,
 ) -> Result<(StatusCode, Json<SubmitProofResponse>), ApiError> {
-    ensure_auth(&headers, &app_state.api_key)?;
-
     let payload_bytes = STANDARD
         .decode(req.payload_base64.as_bytes())
         .map_err(|_| ApiError::BadRequest("payload_base64 is invalid base64".to_string()))?;
@@ -183,6 +167,7 @@ async fn submit_proof(
     if let Some(existing) = app_state
         .db
         .get_job_by_tx_final(&tx_final)
+        .await
         .map_err(ApiError::Internal)?
     {
         info!(
@@ -215,6 +200,7 @@ async fn submit_proof(
     let status = match app_state
         .db
         .insert_job_idempotent(&job)
+        .await
         .map_err(ApiError::Internal)?
     {
         InsertJobResult::Inserted => {
@@ -242,15 +228,14 @@ async fn submit_proof(
 
 async fn get_proof(
     State(app_state): State<AppState>,
-    headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> Result<Json<JobStatusResponse>, ApiError> {
-    ensure_auth(&headers, &app_state.api_key)?;
     debug!(job_id = %job_id, "Handling relay job status request");
 
     let job = app_state
         .db
         .get_job(&job_id)
+        .await
         .map_err(ApiError::Internal)?
         .ok_or_else(|| ApiError::NotFound(format!("job not found: {job_id}")))?;
 
@@ -262,15 +247,6 @@ async fn get_proof(
         "Returning relay job status"
     );
     Ok(Json(to_status_response(job)))
-}
-
-fn ensure_auth(headers: &HeaderMap, api_key: &str) -> Result<(), ApiError> {
-    if is_authorized(headers, api_key) {
-        Ok(())
-    } else {
-        warn!("Unauthorized relayer API request");
-        Err(ApiError::Unauthorized)
-    }
 }
 
 fn to_submit_response(job: RelayJob) -> SubmitProofResponse {
@@ -316,8 +292,12 @@ mod tests {
     use common::{payload::Payload, payload::PayloadProof};
     use pod2::middleware::EMPTY_HASH;
     use serde_json::Value as JsonValue;
-    use tempfile::TempDir;
+    use sqlx::{Executor, postgres::PgPoolOptions};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
     use tower::ServiceExt;
+    use url::Url;
 
     enum ParseMode {
         Valid,
@@ -344,122 +324,185 @@ mod tests {
         }
     }
 
-    fn test_state(mode: ParseMode) -> AppState {
-        let dir = TempDir::new().unwrap();
-        let db = Arc::new(Db::connect(dir.path().to_str().unwrap()).unwrap());
-        AppState {
+    fn test_urls() -> (String, String, String) {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let admin_url = std::env::var("TEST_RELAYER_DB_ADMIN")
+            .unwrap_or_else(|_| "postgres://postgres@localhost:5432/postgres".to_string());
+        let mut url = Url::parse(&admin_url).expect("valid admin url");
+        let db_name = format!(
+            "relayer_api_test_{}_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        url.set_path(&format!("/{db_name}"));
+        (admin_url, url.to_string(), db_name)
+    }
+
+    fn test_db_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    async fn drop_db(admin_url: &str, db_name: &str) -> anyhow::Result<()> {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(admin_url)
+            .await?;
+        sqlx::query(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+        )
+        .bind(db_name)
+        .execute(&pool)
+        .await?;
+        let escaped = db_name.replace('"', "\"\"");
+        let stmt = format!("DROP DATABASE IF EXISTS \"{escaped}\"");
+        pool.execute(stmt.as_str()).await?;
+        Ok(())
+    }
+
+    async fn test_app(mode: ParseMode) -> (Router, String, String) {
+        let (admin_url, db_url, db_name) = test_urls();
+        drop_db(&admin_url, &db_name)
+            .await
+            .expect("drop test db before run");
+        let db = Arc::new(Db::connect(&db_url).await.expect("connect test db"));
+        let state = AppState {
             db,
             parser: Arc::new(MockParser { mode }),
-            api_key: "test-key".to_string(),
-        }
+        };
+        (build_router(state), admin_url, db_name)
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn submit_rejects_invalid_base64() {
-        let app = build_router(test_state(ParseMode::Valid));
+        let _guard = test_db_lock().lock().expect("lock");
+        let (app, admin_url, db_name) = test_app(ParseMode::Valid).await;
         let req = Request::builder()
             .method("POST")
             .uri("/api/v1/proofs")
-            .header("authorization", "Bearer test-key")
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::json!({"payload_base64": "!not-b64!"}).to_string(),
             ))
-            .unwrap();
+            .expect("request");
 
-        let resp = app.oneshot(req).await.unwrap();
+        let resp = app.clone().oneshot(req).await.expect("response");
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        drop(app);
+        drop_db(&admin_url, &db_name)
+            .await
+            .expect("cleanup test db");
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn submit_rejects_oversize_payload() {
-        let app = build_router(test_state(ParseMode::Valid));
+        let _guard = test_db_lock().lock().expect("lock");
+        let (app, admin_url, db_name) = test_app(ParseMode::Valid).await;
         let payload = STANDARD.encode(vec![7u8; MAX_SIMPLE_BLOB_PAYLOAD_BYTES + 1]);
         let req = Request::builder()
             .method("POST")
             .uri("/api/v1/proofs")
-            .header("authorization", "Bearer test-key")
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::json!({ "payload_base64": payload }).to_string(),
             ))
-            .unwrap();
+            .expect("request");
 
-        let resp = app.oneshot(req).await.unwrap();
+        let resp = app.clone().oneshot(req).await.expect("response");
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        drop(app);
+        drop_db(&admin_url, &db_name)
+            .await
+            .expect("cleanup test db");
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn submit_rejects_invalid_payload_format() {
-        let app = build_router(test_state(ParseMode::None));
+        let _guard = test_db_lock().lock().expect("lock");
+        let (app, admin_url, db_name) = test_app(ParseMode::None).await;
         let req = Request::builder()
             .method("POST")
             .uri("/api/v1/proofs")
-            .header("authorization", "Bearer test-key")
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::json!({ "payload_base64": STANDARD.encode([1u8, 2u8, 3u8]) })
                     .to_string(),
             ))
-            .unwrap();
+            .expect("request");
 
-        let resp = app.oneshot(req).await.unwrap();
+        let resp = app.clone().oneshot(req).await.expect("response");
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        drop(app);
+        drop_db(&admin_url, &db_name)
+            .await
+            .expect("cleanup test db");
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn submit_rejects_invalid_proof() {
-        let app = build_router(test_state(ParseMode::Err));
+        let _guard = test_db_lock().lock().expect("lock");
+        let (app, admin_url, db_name) = test_app(ParseMode::Err).await;
         let req = Request::builder()
             .method("POST")
             .uri("/api/v1/proofs")
-            .header("authorization", "Bearer test-key")
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::json!({ "payload_base64": STANDARD.encode([1u8, 2u8, 3u8]) })
                     .to_string(),
             ))
-            .unwrap();
+            .expect("request");
 
-        let resp = app.oneshot(req).await.unwrap();
+        let resp = app.clone().oneshot(req).await.expect("response");
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        drop(app);
+        drop_db(&admin_url, &db_name)
+            .await
+            .expect("cleanup test db");
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn submit_is_idempotent_by_tx_final() {
-        let app = build_router(test_state(ParseMode::Valid));
+        let _guard = test_db_lock().lock().expect("lock");
+        let (app, admin_url, db_name) = test_app(ParseMode::Valid).await;
         let payload = STANDARD.encode([1u8, 2u8, 3u8]);
         let body = serde_json::json!({"payload_base64": payload}).to_string();
 
         let req1 = Request::builder()
             .method("POST")
             .uri("/api/v1/proofs")
-            .header("authorization", "Bearer test-key")
             .header("content-type", "application/json")
             .body(Body::from(body.clone()))
-            .unwrap();
+            .expect("request");
         let req2 = Request::builder()
             .method("POST")
             .uri("/api/v1/proofs")
-            .header("authorization", "Bearer test-key")
             .header("content-type", "application/json")
             .body(Body::from(body))
-            .unwrap();
+            .expect("request");
 
-        let resp1 = app.clone().oneshot(req1).await.unwrap();
+        let resp1 = app.clone().oneshot(req1).await.expect("response");
         assert_eq!(resp1.status(), StatusCode::ACCEPTED);
         let bytes1 = axum::body::to_bytes(resp1.into_body(), usize::MAX)
             .await
-            .unwrap();
-        let first: SubmitProofResponse = serde_json::from_slice(&bytes1).unwrap();
+            .expect("body");
+        let first: SubmitProofResponse = serde_json::from_slice(&bytes1).expect("json");
 
-        let resp2 = app.oneshot(req2).await.unwrap();
+        let resp2 = app.clone().oneshot(req2).await.expect("response");
         assert_eq!(resp2.status(), StatusCode::OK);
         let bytes2 = axum::body::to_bytes(resp2.into_body(), usize::MAX)
             .await
-            .unwrap();
-        let second: SubmitProofResponse = serde_json::from_slice(&bytes2).unwrap();
-        let second_json: JsonValue = serde_json::from_slice(&bytes2).unwrap();
+            .expect("body");
+        let second: SubmitProofResponse = serde_json::from_slice(&bytes2).expect("json");
+        let second_json: JsonValue = serde_json::from_slice(&bytes2).expect("json");
 
         assert_eq!(first.job_id, second.job_id);
         assert_eq!(first.tx_final, second.tx_final);
@@ -467,5 +510,10 @@ mod tests {
         assert!(second_json.get("state_root_hash").is_some());
         assert!(second_json.get("attempt_count").is_some());
         assert!(second_json.get("txFinal").is_none());
+
+        drop(app);
+        drop_db(&admin_url, &db_name)
+            .await
+            .expect("cleanup test db");
     }
 }

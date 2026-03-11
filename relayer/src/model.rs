@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +24,17 @@ impl JobStatus {
 
     pub fn is_terminal(self) -> bool {
         matches!(self, JobStatus::Confirmed | JobStatus::Failed)
+    }
+
+    pub fn from_db_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "queued" => Ok(JobStatus::Queued),
+            "sending" => Ok(JobStatus::Sending),
+            "submitted" => Ok(JobStatus::Submitted),
+            "confirmed" => Ok(JobStatus::Confirmed),
+            "failed" => Ok(JobStatus::Failed),
+            _ => Err(anyhow!("invalid job status: {value}")),
+        }
     }
 }
 

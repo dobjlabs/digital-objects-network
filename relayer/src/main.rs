@@ -3,10 +3,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::watch;
 use tokio::task::JoinError;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 mod api;
-mod auth;
 mod config;
 mod db;
 mod eth;
@@ -25,22 +24,9 @@ async fn main() -> Result<()> {
     common::log_init();
 
     let cfg = load_config()?;
-    info!(
-        bind = %cfg.bind,
-        db_path = %cfg.db_path,
-        rpc_url = %cfg.rpc_url,
-        to_address = %cfg.to_address,
-        max_attempts = cfg.max_attempts,
-        retry_initial_secs = cfg.retry_initial_secs,
-        retry_max_secs = cfg.retry_max_secs,
-        receipt_poll_secs = cfg.receipt_poll_secs,
-        receipt_timeout_secs = ?cfg.receipt_timeout_secs,
-        worker_idle_sleep_ms = cfg.worker_idle_sleep_ms,
-        max_fee_per_blob_gas = ?cfg.max_fee_per_blob_gas,
-        "Loaded relayer config"
-    );
+    debug!(?cfg, "Loaded relayer config");
 
-    let db = Arc::new(Db::connect(&cfg.db_path)?);
+    let db = Arc::new(Db::connect(&cfg.db_url).await?);
     let parser: Arc<dyn BlobParser> = Arc::new(ProofParser::new()?);
     let eth_client: Arc<dyn EthGateway> = Arc::new(EthClient::new(&cfg)?);
 
@@ -58,7 +44,6 @@ async fn main() -> Result<()> {
     let api_task = tokio::spawn(run_api_server(
         Arc::clone(&db),
         Arc::clone(&parser),
-        cfg.api_key.clone(),
         cfg.bind,
         shutdown_rx.clone(),
     ));

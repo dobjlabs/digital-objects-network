@@ -12,11 +12,10 @@ const DEFAULT_WORKER_IDLE_SLEEP_MS: u64 = 1000;
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub bind: SocketAddr,
-    pub db_path: String,
+    pub db_url: String,
     pub rpc_url: String,
     pub to_address: Address,
     pub private_key: String,
-    pub api_key: String,
     pub max_attempts: u32,
     pub retry_initial_secs: u64,
     pub retry_max_secs: u64,
@@ -33,7 +32,7 @@ pub fn load_config() -> Result<AppConfig> {
     let bind = dotenvy::var("RELAYER_BIND").context("RELAYER_BIND is required")?;
     let bind: SocketAddr = bind.parse().context("invalid RELAYER_BIND")?;
 
-    let db_path = dotenvy::var("RELAYER_DB_PATH").context("RELAYER_DB_PATH is required")?;
+    let db_url = dotenvy::var("RELAYER_DB_URL").context("RELAYER_DB_URL is required")?;
     let rpc_url = dotenvy::var("RELAYER_RPC_URL").context("RELAYER_RPC_URL is required")?;
     let to_address = Address::from_str(
         &dotenvy::var("RELAYER_TO_ADDRESS").context("RELAYER_TO_ADDRESS is required")?,
@@ -41,7 +40,6 @@ pub fn load_config() -> Result<AppConfig> {
     .context("invalid RELAYER_TO_ADDRESS")?;
     let private_key =
         dotenvy::var("RELAYER_PRIVATE_KEY").context("RELAYER_PRIVATE_KEY is required")?;
-    let api_key = dotenvy::var("RELAYER_API_KEY").context("RELAYER_API_KEY is required")?;
 
     let max_attempts = dotenvy::var("RELAYER_MAX_ATTEMPTS")
         .ok()
@@ -84,11 +82,10 @@ pub fn load_config() -> Result<AppConfig> {
 
     Ok(AppConfig {
         bind,
-        db_path,
+        db_url,
         rpc_url,
         to_address,
         private_key,
-        api_key,
         max_attempts,
         retry_initial_secs,
         retry_max_secs,
