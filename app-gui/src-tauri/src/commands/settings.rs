@@ -22,10 +22,7 @@ pub(crate) fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Me
     Ok(menu)
 }
 
-pub(crate) fn handle_settings_menu_event<R: Runtime>(
-    app: &AppHandle<R>,
-    menu_id: impl AsRef<str>,
-) {
+pub(crate) fn handle_settings_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: impl AsRef<str>) {
     if menu_id.as_ref() == MENU_OPEN_SETTINGS_ID {
         let _ = app.emit(OPEN_SETTINGS_EVENT, ());
     }

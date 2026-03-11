@@ -3,9 +3,8 @@ use super::{
     synchronizer_client::fetch_synchronizer_head,
 };
 use crate::app_paths;
+use crate::commands::get_app_settings;
 use serde::Serialize;
-
-use super::super::settings::get_app_settings;
 
 use craft_sdk::Helper;
 use pod2::middleware::containers::Dictionary;

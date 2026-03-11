@@ -2,6 +2,7 @@ mod app_paths;
 mod commands;
 mod cpu;
 mod objects;
+mod sdk;
 mod spec;
 
 use commands::{

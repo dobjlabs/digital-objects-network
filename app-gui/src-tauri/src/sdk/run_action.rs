@@ -11,7 +11,9 @@ use txlib::object_nullifier_hash;
 use super::{
     engine::{build_relayer_payload, execute_action},
     object_store::{parse_object_file_from_path, write_object_file},
-    progress::{emit_commit_done, emit_generate_proof_done, emit_generate_proof_step},
+    progress::{
+        emit_commit_done, emit_commit_step, emit_generate_proof_done, emit_generate_proof_step,
+    },
     relayer_client::{
         submit_proof_to_relayer, wait_for_relayer_confirmation, JobStatus,
         RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
@@ -25,12 +27,10 @@ use super::{
 };
 use crate::{
     app_paths,
-    commands::sdk::progress::emit_commit_step,
+    commands::get_app_settings,
     objects::ObjectRecord,
     spec::{self, action_descriptors_by_name},
 };
-
-use super::super::settings::get_app_settings;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
