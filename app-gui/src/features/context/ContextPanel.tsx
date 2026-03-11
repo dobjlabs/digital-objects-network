@@ -460,7 +460,7 @@ export function ContextPanel({
 
     const titleName = item.classMeta.name;
     const liveValueRaw = isLive(item)
-      ? item.stateRoot
+      ? item.id
       : (item.nullifier ?? "nullified");
     const liveValue = truncateDisplayHash(liveValueRaw);
 

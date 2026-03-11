@@ -10,13 +10,6 @@ export interface MethodArgPayload {
   classHash: string;
 }
 
-export interface ObjectMethodPayload {
-  methodName: string;
-  cpuCost: string;
-  readsBlock: boolean;
-  args: MethodArgPayload[];
-}
-
 export interface ClassMetaPayload {
   name: ClassName;
   hash: string;
@@ -36,12 +29,10 @@ export interface InventoryItemPayload {
   id: string;
   fileName: string;
   emoji: string;
-  stateRoot: string;
   nullifier?: string;
   classMeta: ClassMetaPayload;
   sourceAction: SourceActionMetaPayload;
   description?: string;
-  methods: ObjectMethodPayload[];
   obj: ObjectDataEntryPayload[];
 }
 

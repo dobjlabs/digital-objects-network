@@ -1,9 +1,7 @@
 use super::{
     object_store::{ensure_objects_dirs, load_object_files},
-    synchronizer_client::fetch_synchronizer_head,
 };
 use crate::objects::objects_dir;
-use crate::settings::get_app_settings;
 use serde::Serialize;
 
 use craft_sdk::Helper;
@@ -17,15 +15,6 @@ pub struct MethodArgDto {
     pub kind: String,
     pub label: String,
     pub class_hash: String,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ObjectMethodDto {
-    pub method_name: String,
-    pub cpu_cost: String,
-    pub reads_block: bool,
-    pub args: Vec<MethodArgDto>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -55,12 +44,10 @@ pub struct InventoryItemDto {
     pub id: String,
     pub file_name: String,
     pub emoji: String,
-    pub state_root: String,
     pub nullifier: Option<String>,
     pub class_meta: ClassMetaDto,
     pub source_action: SourceActionMetaDto,
     pub description: Option<String>,
-    pub methods: Vec<ObjectMethodDto>,
     pub obj: Vec<ObjectDataEntryDto>,
 }
 
@@ -158,7 +145,6 @@ pub(super) fn to_inventory_item(record: &ObjectRecord, file_name: &str) -> Inven
         id: record.id.clone(),
         file_name: file_name.to_string(),
         emoji: class_ui.emoji.to_string(),
-        state_root: record.id.clone(),
         nullifier: record.nullifier.clone(),
         class_meta: ClassMetaDto {
             name: record.class_name.clone(),
@@ -169,7 +155,6 @@ pub(super) fn to_inventory_item(record: &ObjectRecord, file_name: &str) -> Inven
             hash: short_hash(&record.source_action),
         },
         description: Some(class_ui.description.to_string()),
-        methods: Vec::<ObjectMethodDto>::new(),
         obj: obj_data
             .iter()
             .map(|(key, value)| ObjectDataEntryDto {
@@ -193,12 +178,6 @@ pub async fn load_gui_bootstrap(app: tauri::AppHandle) -> Result<LoadGuiBootstra
     ensure_objects_dirs(&objects_dir)?;
     let objects = load_object_files(&objects_dir)?;
     let actions = build_action_catalog();
-    let app_settings = get_app_settings(app.clone())?;
-    let sync_head = fetch_synchronizer_head(&app_settings.synchronizer_api_url);
-
-    if let Err(err) = sync_head {
-        eprintln!("zk-craft: synchronizer unavailable during bootstrap: {err}");
-    }
 
     Ok(LoadGuiBootstrapResult {
         objects: objects

@@ -23,23 +23,14 @@ export interface ObjectDataEntry {
   value: string;
 }
 
-export interface ObjectMethod {
-  methodName: string;
-  cpuCost: string;
-  readsBlock: boolean;
-  args: MethodArg[];
-}
-
 export interface InventoryItem {
   id: string;
   fileName: string;
   emoji: string;
-  stateRoot: string;
   nullifier?: string;
   classMeta: ClassMeta;
   sourceAction: SourceActionMeta;
   description?: string;
-  methods: ObjectMethod[];
   obj: ObjectDataEntry[];
 }
 

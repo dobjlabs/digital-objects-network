@@ -74,7 +74,7 @@ export function InventoryPanel({
   const renderInventoryItem = (item: InventoryItem) => {
     const displayName = objectDisplayFileName(item);
     const hashLineRaw = isLive(item)
-      ? item.stateRoot
+      ? item.id
       : (item.nullifier ?? "nullified");
     const hashLine = truncateDisplayHash(hashLineRaw);
     return (

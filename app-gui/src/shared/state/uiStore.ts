@@ -77,21 +77,10 @@ const mapItem = (item: InventoryItemPayload): InventoryItem => ({
   id: item.id,
   fileName: item.fileName,
   emoji: item.emoji,
-  stateRoot: item.stateRoot,
   nullifier: item.nullifier,
   classMeta: item.classMeta,
   sourceAction: item.sourceAction,
   description: item.description,
-  methods: item.methods.map((method) => ({
-    methodName: method.methodName,
-    cpuCost: method.cpuCost,
-    readsBlock: method.readsBlock,
-    args: method.args.map((arg) => ({
-      kind: "class",
-      label: arg.label,
-      classHash: arg.classHash,
-    })),
-  })),
   obj: item.obj.map((entry) => ({
     key: entry.key,
     value: entry.value,
