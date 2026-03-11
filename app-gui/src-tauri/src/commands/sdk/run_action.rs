@@ -426,7 +426,8 @@ pub async fn run_sdk_action(
         &state_root_for_run,
     )?;
 
-    let run_id = input.action_id.clone();
+    let action_id = input.action_id.clone();
+    let run_id = action_id.clone();
     verify_inputs_grounded(
         &app_settings.synchronizer_api_url,
         &resolved.source_tx_hashes,
@@ -435,11 +436,12 @@ pub async fn run_sdk_action(
 
     let _run_guard = acquire_run_in_progress_guard(&runtime)?;
 
-    emit_generate_proof_running(&app, &run_id, &input.action_id, descriptor.ui.cpu_cost)?;
+    emit_generate_proof_running(&app, &run_id, &action_id, descriptor.ui.cpu_cost)?;
 
+    let action_id_for_exec = action_id.clone();
     let spendable_outputs = match tauri::async_runtime::spawn_blocking(move || {
         execute_action(
-            input.action_id.clone(),
+            action_id_for_exec,
             state_root_for_run,
             resolved.input_spendables,
         )
@@ -460,7 +462,7 @@ pub async fn run_sdk_action(
         &run_id,
         &old_root,
         &app_settings.relayer_api_url,
-        &input.action_id,
+        &action_id,
         payload_bytes,
         RELAYER_POLL_TIMEOUT_SECS,
         RELAYER_POLL_INTERVAL_MS,
@@ -479,7 +481,7 @@ pub async fn run_sdk_action(
         &runtime,
         &objects_dir,
         &descriptor,
-        &input.action_id,
+        &action_id,
         &resolved.resolved_inputs,
         &spendable_outputs,
         sync_state_after,
