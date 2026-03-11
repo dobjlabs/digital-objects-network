@@ -13,7 +13,7 @@ Service that tracks Digital Object blob transactions on Ethereum and exposes cur
    - finds blob txs sent to `TO_ADDRESS`
    - fetches matching blob sidecars
    - decodes payload bytes and derives new state
-4. Persists app state in RocksDB and sync metadata in Postgres, and serves sync progress at `/sync-progress`.
+4. Persists app state in RocksDB and sync metadata in Postgres, and serves sync/state query APIs over HTTP.
 
 ## Storage model
 
@@ -44,6 +44,37 @@ RocksDB is updated from Postgres journaled slot deltas and rolled back using the
 
 - `GET /sync-progress`
   - returns `last_processed_slot`, `last_processed_block_number`
+- `GET /v1/state/head`
+  - returns:
+    - `last_processed_slot`
+    - `last_processed_block_number`
+    - `current_gsr`
+    - `current_block_number`
+    - `tx_count`
+    - `nullifier_count`
+    - `gsr_count`
+- `GET /v1/state/full`
+  - returns:
+    - `block_number`
+    - `current_gsr`
+    - `transactions` (array of tx hashes)
+    - `nullifiers` (array of nullifier hashes)
+    - `gsrs` (array of prior GSR hashes)
+- `POST /v1/state/tx/contains`
+  - request body:
+    - `tx_hashes` (array of hash strings)
+  - returns:
+    - `last_processed_slot`
+    - `current_gsr`
+    - `results` (array of `{ tx_hash, present }`)
+- `GET /v1/state/tx/{tx_hash}`
+  - returns:
+    - `tx_hash`
+    - `present`
+    - `last_processed_slot`
+    - `current_gsr`
+
+Hash parsing accepts `0x`-prefixed or raw hex input; responses are normalized to lowercase `0x...`.
 
 ## Required env vars
 
