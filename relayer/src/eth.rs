@@ -119,7 +119,8 @@ impl EthGateway for EthClient {
 
     /// Query receipt status for a previously broadcast transaction hash.
     async fn poll_receipt(&self, tx_hash: &str) -> Result<Option<ReceiptOutcome>> {
-        let tx_hash = parse_tx_hash(tx_hash)?;
+        let tx_hash =
+            B256::from_str(tx_hash).map_err(|e| anyhow!("invalid tx hash '{tx_hash}': {e}"))?;
         debug!(tx_hash = %format!("{tx_hash:#x}"), "Querying Ethereum transaction receipt");
         let receipt = self.provider.get_transaction_receipt(tx_hash).await?;
         Ok(receipt.map(|r| ReceiptOutcome {
@@ -127,9 +128,4 @@ impl EthGateway for EthClient {
             block_number: r.block_number,
         }))
     }
-}
-
-/// Parse and validate hex tx hash values from job storage/API payloads.
-pub fn parse_tx_hash(value: &str) -> Result<B256> {
-    B256::from_str(value).map_err(|e| anyhow!("invalid tx hash '{value}': {e}"))
 }

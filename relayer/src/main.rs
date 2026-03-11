@@ -10,6 +10,7 @@ mod config;
 mod db;
 mod eth;
 mod model;
+mod time_utils;
 mod worker;
 
 use api::run_api_server;

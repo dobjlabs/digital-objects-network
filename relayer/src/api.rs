@@ -2,13 +2,13 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use axum::{
-    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
+    Json, Router,
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use hex::ToHex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -20,6 +20,7 @@ use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
 use crate::{
     db::{Db, InsertJobResult},
     model::{JobStatus, RelayJob},
+    time_utils::now_ts,
 };
 
 /// Shared API dependencies.
@@ -300,15 +301,6 @@ fn to_status_response(job: RelayJob) -> JobStatusResponse {
     }
 }
 
-fn now_ts() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,7 +309,7 @@ mod tests {
     use common::{payload::Payload, payload::PayloadProof};
     use pod2::middleware::EMPTY_HASH;
     use serde_json::Value as JsonValue;
-    use sqlx::{Executor, postgres::PgPoolOptions};
+    use sqlx::{postgres::PgPoolOptions, Executor};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};

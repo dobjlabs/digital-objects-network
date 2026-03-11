@@ -1,5 +1,5 @@
-use anyhow::{Context, Result, anyhow};
-use sqlx::{Executor, PgPool, Row, postgres::PgPoolOptions};
+use anyhow::{anyhow, Context, Result};
+use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
 use url::Url;
 
 use crate::model::{JobStatus, RelayJob};

@@ -8,6 +8,7 @@ use crate::{
     db::Db,
     eth::{EthGateway, ReceiptOutcome},
     model::{JobStatus, RelayJob},
+    time_utils::now_ts,
 };
 
 /// Runtime knobs controlling retry/poll cadence and failure thresholds.
@@ -338,15 +339,6 @@ fn backoff_secs(attempt_count: u32, initial: u64, max: u64) -> u64 {
     let shift = attempt_count.saturating_sub(1).min(20);
     let exp = 1u64 << shift;
     initial.saturating_mul(exp).min(max)
-}
-
-fn now_ts() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
 }
 
 #[cfg(test)]
