@@ -3,17 +3,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use craft_sdk::{SpendableObject, SpendableObjects};
+use craft_sdk::SpendableObjects;
 use pod2::middleware::Hash;
 use serde::{Deserialize, Serialize};
-use txlib::StateRoot;
+use txlib::{StateRoot, object_nullifier_hash};
 
 use super::{
     engine::{build_relayer_payload, clone_spendable, execute_action},
     mapping::{to_inventory_item, InventoryItemDto},
     naming::{
-        format_output_file_name, object_id_from_spendable, object_nullifier_from_spendable,
-        object_state_hash_from_spendable,
+        format_output_file_name, object_id_from_spendable, object_state_hash_from_spendable,
     },
     object_store::{parse_object_file_from_path, sync_object_files},
     progress::{
@@ -45,7 +44,8 @@ use super::super::settings::get_app_settings;
 #[serde(rename_all = "camelCase")]
 pub struct RunSdkActionArgInput {
     pub object_path: String,
-    pub label: Option<String>,
+    #[serde(default, rename = "label")]
+    pub _label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,30 +102,13 @@ fn validate_run_request(
     Ok(())
 }
 
-#[derive(Debug)]
-struct ResolvedRunInput {
-    id: String,
-    file_name: String,
-    class_name: String,
-    source_action: Option<String>,
-    state_hash: String,
-    nullifier: String,
-}
-
-struct ResolvedInputBatch {
-    input_spendables: Vec<SpendableObject>,
-    verify_targets: Vec<String>,
-    resolved_inputs: Vec<ResolvedRunInput>,
-    source_tx_hashes: Vec<Hash>,
-}
-
-fn resolve_inputs_from_paths(
+fn resolve_inputs(
     runtime: &tauri::State<'_, ObjectsRuntime>,
     objects_dir: &Path,
     input: &RunSdkActionInput,
     descriptor: &spec::ActionDescriptor,
     state_root_for_run: &StateRoot,
-) -> Result<ResolvedInputBatch, String> {
+) -> Result<Vec<RuntimeObjectRecord>, String> {
     let mut inner = lock_runtime(runtime);
     ensure_runtime_loaded(&mut inner, objects_dir)?;
 
@@ -135,9 +118,7 @@ fn resolve_inputs_from_paths(
     refresh_runtime_objects(&mut inner, objects_dir)?;
     inner.state_root = state_root_for_run.clone();
 
-    let mut collected_spendables = Vec::new();
-    let mut collected_targets = Vec::new();
-    let mut collected_resolved = Vec::new();
+    let mut resolved_inputs = Vec::new();
 
     for (slot, arg) in input.inputs.iter().enumerate() {
         let expected_class = descriptor.input_classes[slot].as_str();
@@ -148,11 +129,6 @@ fn resolve_inputs_from_paths(
 
         let path_ref = Path::new(object_path);
         let record = parse_object_file_from_path(path_ref)?;
-        let target_label = arg
-            .label
-            .clone()
-            .unwrap_or_else(|| record.file_name.clone());
-
         if record.validity != RuntimeValidity::Live {
             return Err(format!("input object is not live: {}", record.id));
         }
@@ -163,52 +139,49 @@ fn resolve_inputs_from_paths(
             ));
         }
 
-        let spendable = record
-            .spendable
-            .as_ref()
-            .ok_or_else(|| format!("input object missing spendable witness: {}", record.id))?;
-        let input_nullifier = object_nullifier_from_spendable(spendable)?;
-        collected_spendables.push(clone_spendable(spendable));
-        collected_targets.push(target_label);
-        collected_resolved.push(ResolvedRunInput {
-            id: record.id.clone(),
-            file_name: record.file_name.clone(),
-            class_name: record.class_name.clone(),
-            source_action: record.source_action.clone(),
-            state_hash: record.state_hash.clone(),
-            nullifier: input_nullifier,
-        });
+        if record.spendable.is_none() {
+            return Err(format!(
+                "input object missing spendable witness: {}",
+                record.id
+            ));
+        }
+        resolved_inputs.push(record);
     }
 
-    let source_tx_hashes = collected_spendables
-        .iter()
-        .map(|spendable| spendable.tx.dict().commitment())
-        .collect::<Vec<_>>();
-
-    Ok(ResolvedInputBatch {
-        input_spendables: collected_spendables,
-        verify_targets: collected_targets,
-        resolved_inputs: collected_resolved,
-        source_tx_hashes,
-    })
+    Ok(resolved_inputs)
 }
 
 fn verify_inputs_grounded(
     sync_api_url: &str,
-    source_tx_hashes: &[Hash],
-    verify_targets: &[String],
+    inputs: &[RuntimeObjectRecord],
 ) -> Result<(), String> {
-    let grounded_txs = fetch_synchronizer_tx_contains(sync_api_url, source_tx_hashes)?;
+    let input_sources = inputs
+        .iter()
+        .map(|record| {
+            let spendable = record.spendable.as_ref().ok_or_else(|| {
+                format!(
+                    "resolved input missing spendable witness: {}",
+                    record.id
+                )
+            })?;
+            Ok((record.file_name.clone(), spendable.tx.dict().commitment()))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let source_tx_hashes = input_sources
+        .iter()
+        .map(|(_, source_tx_hash)| *source_tx_hash)
+        .collect::<Vec<_>>();
+    let grounded_txs = fetch_synchronizer_tx_contains(sync_api_url, &source_tx_hashes)?;
     let mut missing_grounding = Vec::new();
 
-    for (index, tx_hash) in source_tx_hashes.iter().enumerate() {
-        let label = verify_targets
-            .get(index)
-            .cloned()
-            .unwrap_or_else(|| format!("input-{index}"));
-
-        if !grounded_txs.contains(tx_hash) {
-            missing_grounding.push(format!("{} -> {}", label, encode_hash_hex(tx_hash)));
+    for (file_name, source_tx_hash) in input_sources {
+        if !grounded_txs.contains(&source_tx_hash) {
+            missing_grounding.push(format!(
+                "{} -> {}",
+                file_name,
+                encode_hash_hex(&source_tx_hash)
+            ));
         }
     }
 
@@ -318,7 +291,7 @@ fn apply_commit_to_runtime(
     objects_dir: &Path,
     descriptor: &spec::ActionDescriptor,
     action_id: &str,
-    resolved_inputs: &[ResolvedRunInput],
+    resolved_inputs: &[RuntimeObjectRecord],
     spendable_outputs: &SpendableObjects,
     sync_state_after: SynchronizerState,
     old_root: &str,
@@ -328,30 +301,47 @@ fn apply_commit_to_runtime(
     ensure_runtime_loaded(&mut inner, objects_dir)?;
 
     let mut nullified_files = Vec::new();
-    for resolved in resolved_inputs {
+    for input_record in resolved_inputs {
+        let input_nullifier = {
+            let spendable = input_record.spendable.as_ref().ok_or_else(|| {
+                format!(
+                    "input object missing spendable witness: {}",
+                    input_record.id
+                )
+            })?;
+            let nullifier_hash = object_nullifier_hash(&spendable.obj).map_err(|err| {
+                format!(
+                    "failed to compute input nullifier for {}: {err}",
+                    input_record.id
+                )
+            })?;
+            encode_hash_hex(&nullifier_hash)
+        };
         if let Some(record) = inner
             .objects
             .iter_mut()
-            .find(|record| record.id == resolved.id && record.file_name == resolved.file_name)
+            .find(|record| {
+                record.id == input_record.id && record.file_name == input_record.file_name
+            })
         {
             if record.validity != RuntimeValidity::Live {
-                return Err(format!("input object already nullified: {}", resolved.id));
+                return Err(format!("input object already nullified: {}", input_record.id));
             }
             record.validity = RuntimeValidity::Nullified;
-            record.nullifier = Some(resolved.nullifier.clone());
+            record.nullifier = Some(input_nullifier.clone());
             nullified_files.push(record.file_name.clone());
         } else {
             inner.objects.push(RuntimeObjectRecord {
-                id: resolved.id.clone(),
-                file_name: resolved.file_name.clone(),
-                class_name: resolved.class_name.clone(),
-                source_action: resolved.source_action.clone(),
+                id: input_record.id.clone(),
+                file_name: input_record.file_name.clone(),
+                class_name: input_record.class_name.clone(),
+                source_action: input_record.source_action.clone(),
                 validity: RuntimeValidity::Nullified,
-                state_hash: resolved.state_hash.clone(),
-                nullifier: Some(resolved.nullifier.clone()),
+                state_hash: input_record.state_hash.clone(),
+                nullifier: Some(input_nullifier),
                 spendable: None,
             });
-            nullified_files.push(resolved.file_name.clone());
+            nullified_files.push(input_record.file_name.clone());
         }
     }
 
@@ -418,7 +408,7 @@ pub async fn run_sdk_action(
     let old_root_hash = sync_state.current_gsr;
     let old_root = encode_hash_hex(&old_root_hash);
 
-    let resolved = resolve_inputs_from_paths(
+    let resolved_inputs = resolve_inputs(
         &runtime,
         &objects_dir,
         &input,
@@ -428,23 +418,28 @@ pub async fn run_sdk_action(
 
     let action_id = input.action_id.clone();
     let run_id = action_id.clone();
-    verify_inputs_grounded(
-        &app_settings.synchronizer_api_url,
-        &resolved.source_tx_hashes,
-        &resolved.verify_targets,
-    )?;
+    verify_inputs_grounded(&app_settings.synchronizer_api_url, &resolved_inputs)?;
 
     let _run_guard = acquire_run_in_progress_guard(&runtime)?;
 
     emit_generate_proof_running(&app, &run_id, &action_id, descriptor.ui.cpu_cost)?;
 
+    let execution_inputs = resolved_inputs
+        .iter()
+        .map(|record| {
+            let spendable = record.spendable.as_ref().ok_or_else(|| {
+                format!(
+                    "resolved input missing spendable witness: {}",
+                    record.id
+                )
+            })?;
+            Ok(clone_spendable(spendable))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
     let action_id_for_exec = action_id.clone();
     let spendable_outputs = match tauri::async_runtime::spawn_blocking(move || {
-        execute_action(
-            action_id_for_exec,
-            state_root_for_run,
-            resolved.input_spendables,
-        )
+        execute_action(action_id_for_exec, state_root_for_run, execution_inputs)
     })
     .await
     {
@@ -482,7 +477,7 @@ pub async fn run_sdk_action(
         &objects_dir,
         &descriptor,
         &action_id,
-        &resolved.resolved_inputs,
+        &resolved_inputs,
         &spendable_outputs,
         sync_state_after,
         &old_root,
