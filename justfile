@@ -47,11 +47,11 @@ reset:
 
 # Run all tests (except ignored)
 test:
-    cargo test --workspace
+    cargo test --workspace --release
 
 # Run all ignored test
 test-ignored:
-    cargo test --workspace -- --ignored --nocapture
+    cargo test --workspace --release -- --ignored --nocapture
 
 # Run the slow end-to-end proof test
 test-e2e:
