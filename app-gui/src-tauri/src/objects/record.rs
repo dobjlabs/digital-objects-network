@@ -17,26 +17,21 @@ pub(crate) enum ObjectValidity {
 
 #[derive(Debug)]
 pub(crate) struct ObjectRecord {
-    /// Stable object identifier (commitment string).
     pub(crate) id: String,
-    /// Backing `.dobj` file name on disk.
-    pub(crate) file_name: String,
     /// Object class/type name
     pub(crate) class_name: String,
-    /// Action that produced this object, when known.
-    pub(crate) source_action: Option<String>,
+    /// Action that produced this object.
+    pub(crate) source_action: String,
     /// Current lifecycle status for this record.
     pub(crate) validity: ObjectValidity,
-    /// State hash associated with this object at creation/observation time.
-    pub(crate) state_hash: String,
     /// Nullifier value once object is consumed.
     pub(crate) nullifier: Option<String>,
-    /// Pod proof for this object; absent for metadata-only entries.
-    pub(crate) pod: Option<MainPod>,
-    /// Object payload dictionary; absent for metadata-only entries.
-    pub(crate) obj: Option<Dictionary>,
-    /// Source transaction witness for this object; absent for metadata-only entries.
-    pub(crate) tx: Option<Tx>,
+    /// Pod proof for this object
+    pub(crate) pod: MainPod,
+    /// Object payload dictionary
+    pub(crate) obj: Dictionary,
+    /// Source transaction witness for this object
+    pub(crate) tx: Tx,
 }
 
 fn parse_required_field<T: DeserializeOwned>(
@@ -82,42 +77,15 @@ impl ObjectValidity {
 }
 
 impl ObjectRecord {
-    pub(crate) fn spendable(&self) -> Result<Option<SpendableObject>, String> {
-        match (&self.pod, &self.obj, &self.tx) {
-            (None, None, None) => Ok(None),
-            (Some(pod), Some(obj), Some(tx)) => Ok(Some(SpendableObject {
-                pod: pod.clone(),
-                obj: obj.clone(),
-                tx: tx.clone(),
-            })),
-            _ => Err(
-                "invalid object record: pod, obj and tx must all be present or all absent"
-                    .to_string(),
-            ),
+    pub(crate) fn spendable(&self) -> SpendableObject {
+        SpendableObject {
+            pod: self.pod.clone(),
+            obj: self.obj.clone(),
+            tx: self.tx.clone(),
         }
     }
 
-    pub(crate) fn require_spendable(&self) -> Result<SpendableObject, String> {
-        self.spendable()?
-            .ok_or_else(|| format!("object record missing spendable witness: {}", self.id))
-    }
-
     fn to_file_value(&self) -> Result<Value, String> {
-        let tx = match (&self.pod, &self.obj, &self.tx) {
-            (None, None, None) => None,
-            (Some(_), Some(_), Some(tx)) => Some(tx.clone()),
-            _ => {
-                return Err(
-                    "invalid object record: pod, obj and tx must all be present or all absent"
-                        .to_string(),
-                )
-            }
-        };
-        let state_hash = self
-            .obj
-            .as_ref()
-            .map(|obj| format!("{:#}", obj.commitment()))
-            .unwrap_or_else(|| self.state_hash.clone());
         let mut fields = serde_json::Map::new();
         fields.insert("id".to_string(), Value::String(self.id.clone()));
         fields.insert(
@@ -126,16 +94,12 @@ impl ObjectRecord {
         );
         fields.insert(
             "sourceAction".to_string(),
-            self.source_action
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
+            Value::String(self.source_action.clone()),
         );
         fields.insert(
             "validity".to_string(),
             Value::String(self.validity.as_file_str().to_string()),
         );
-        fields.insert("stateHash".to_string(), Value::String(state_hash));
         fields.insert(
             "nullifier".to_string(),
             self.nullifier
@@ -145,77 +109,46 @@ impl ObjectRecord {
         );
         fields.insert(
             "pod".to_string(),
-            match &self.pod {
-                Some(pod) => serde_json::to_value(pod)
-                    .map_err(|err| format!("failed to serialize spendable.pod: {err}"))?,
-                None => Value::Null,
-            },
+            serde_json::to_value(&self.pod)
+                .map_err(|err| format!("failed to serialize spendable.pod: {err}"))?,
         );
         fields.insert(
             "obj".to_string(),
-            match &self.obj {
-                Some(obj) => serde_json::to_value(obj)
-                    .map_err(|err| format!("failed to serialize spendable.obj: {err}"))?,
-                None => Value::Null,
-            },
+            serde_json::to_value(&self.obj)
+                .map_err(|err| format!("failed to serialize spendable.obj: {err}"))?,
         );
         fields.insert(
             "tx".to_string(),
-            match tx {
-                Some(tx_record) => serde_json::to_value(tx_record)
-                    .map_err(|err| format!("failed to serialize spendable.tx: {err}"))?,
-                None => Value::Null,
-            },
+            serde_json::to_value(&self.tx)
+                .map_err(|err| format!("failed to serialize spendable.tx: {err}"))?,
         );
         Ok(Value::Object(fields))
     }
 
-    fn from_file_value(value: Value, file_name: String) -> Result<Self, String> {
+    fn from_file_value(value: Value) -> Result<Self, String> {
         let fields = value
             .as_object()
             .ok_or_else(|| "invalid object file: expected JSON object".to_string())?;
         let id = parse_required_field::<String>(fields, "id", "id")?;
         let class_name = parse_required_field::<String>(fields, "className", "className")?;
-        let source_action = parse_optional_field::<String>(fields, "sourceAction", "sourceAction")?;
+        let source_action = parse_required_field::<String>(fields, "sourceAction", "sourceAction")?;
         let validity_raw = parse_required_field::<String>(fields, "validity", "validity")?;
         let validity = ObjectValidity::from_file_str(&validity_raw)?;
-        let state_hash_from_file =
-            parse_required_field::<String>(fields, "stateHash", "stateHash")?;
         let nullifier = parse_optional_field::<String>(fields, "nullifier", "nullifier")?;
-        let pod = parse_optional_field::<MainPod>(fields, "pod", "spendable.pod")?;
-        let obj = parse_optional_field::<Dictionary>(fields, "obj", "spendable.obj")?;
-        let tx = parse_optional_field::<Tx>(fields, "tx", "spendable.tx")?;
-        if !matches!(
-            (&pod, &obj, &tx),
-            (None, None, None) | (Some(_), Some(_), Some(_))
-        ) {
-            return Err(
-                "invalid object file: pod, obj and tx must all be present or all absent"
-                    .to_string(),
-            );
-        }
-        let state_hash = obj
-            .as_ref()
-            .map(|obj| format!("{:#}", obj.commitment()))
-            .unwrap_or(state_hash_from_file);
+        let pod = parse_required_field::<MainPod>(fields, "pod", "spendable.pod")?;
+        let obj = parse_required_field::<Dictionary>(fields, "obj", "spendable.obj")?;
+        let tx = parse_required_field::<Tx>(fields, "tx", "spendable.tx")?;
 
         Ok(Self {
             id,
-            file_name,
             class_name,
             source_action,
             validity,
-            state_hash,
             nullifier,
             pod,
             obj,
             tx,
         })
-    }
-
-    pub(crate) fn with_file_name(mut self, file_name: String) -> Self {
-        self.file_name = file_name;
-        self
     }
 }
 
@@ -246,6 +179,6 @@ impl<'de> Deserialize<'de> for ObjectRecord {
                 "invalid object file: legacy txLive/txNullifiers/txStateRoot fields are not supported",
             ));
         }
-        ObjectRecord::from_file_value(value, String::new()).map_err(D::Error::custom)
+        ObjectRecord::from_file_value(value).map_err(D::Error::custom)
     }
 }

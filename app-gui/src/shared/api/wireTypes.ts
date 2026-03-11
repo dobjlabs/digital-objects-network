@@ -41,7 +41,7 @@ export interface InventoryItemPayload {
   stateRoot: string;
   nullifier?: string;
   classMeta: ClassMetaPayload;
-  sourceAction?: SourceActionMetaPayload;
+  sourceAction: SourceActionMetaPayload;
   description?: string;
   methods: ObjectMethodPayload[];
   obj: ObjectDataEntryPayload[];
@@ -82,13 +82,12 @@ export interface RunSdkActionResult {
 export interface ObjectRecordPayload {
   id: string;
   className: ClassName;
-  sourceAction: ActionId | null;
+  sourceAction: ActionId;
   validity: Validity;
-  stateHash: string;
   nullifier: string | null;
-  pod: unknown | null;
-  obj: unknown | null;
-  tx: unknown | null;
+  pod: unknown;
+  obj: unknown;
+  tx: unknown;
 }
 
 export interface RunSdkActionProgress {

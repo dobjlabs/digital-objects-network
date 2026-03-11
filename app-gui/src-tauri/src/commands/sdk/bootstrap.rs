@@ -63,7 +63,7 @@ pub struct InventoryItemDto {
     pub state_root: String,
     pub nullifier: Option<String>,
     pub class_meta: ClassMetaDto,
-    pub source_action: Option<SourceActionMetaDto>,
+    pub source_action: SourceActionMetaDto,
     pub description: Option<String>,
     pub methods: Vec<ObjectMethodDto>,
     pub obj: Vec<ObjectDataEntryDto>,
@@ -156,34 +156,27 @@ pub(super) fn build_action_catalog() -> Vec<RecipeDto> {
         .collect()
 }
 
-pub(super) fn to_inventory_item(record: &ObjectRecord) -> InventoryItemDto {
+pub(super) fn to_inventory_item(record: &ObjectRecord, file_name: &str) -> InventoryItemDto {
     let class_ui = spec::class_ui_meta(&record.class_name);
-    let obj_data = record
-        .obj
-        .as_ref()
-        .map(object_data_from_object)
-        .unwrap_or_default();
+    let obj_data = object_data_from_object(&record.obj);
     InventoryItemDto {
         id: record.id.clone(),
-        file_name: record.file_name.clone(),
+        file_name: file_name.to_string(),
         emoji: class_ui.emoji.to_string(),
         validity: match record.validity {
             ObjectValidity::Live => "live".to_string(),
             ObjectValidity::Nullified => "nullified".to_string(),
         },
-        state_root: record.state_hash.clone(),
+        state_root: record.id.clone(),
         nullifier: record.nullifier.clone(),
         class_meta: ClassMetaDto {
             name: record.class_name.clone(),
             hash: short_hash(&record.class_name),
         },
-        source_action: record
-            .source_action
-            .as_ref()
-            .map(|name| SourceActionMetaDto {
-                name: name.clone(),
-                hash: short_hash(name),
-            }),
+        source_action: SourceActionMetaDto {
+            name: record.source_action.clone(),
+            hash: short_hash(&record.source_action),
+        },
         description: Some(class_ui.description.to_string()),
         methods: Vec::<ObjectMethodDto>::new(),
         obj: obj_data
@@ -217,7 +210,10 @@ pub async fn load_gui_bootstrap(app: tauri::AppHandle) -> Result<LoadGuiBootstra
     }
 
     Ok(LoadGuiBootstrapResult {
-        objects: objects.iter().map(to_inventory_item).collect(),
+        objects: objects
+            .iter()
+            .map(|entry| to_inventory_item(&entry.record, &entry.file_name))
+            .collect(),
         actions,
     })
 }

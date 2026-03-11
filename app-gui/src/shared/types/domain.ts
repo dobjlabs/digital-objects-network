@@ -40,7 +40,7 @@ export interface InventoryItem {
   stateRoot: string;
   nullifier?: string;
   classMeta: ClassMeta;
-  sourceAction?: SourceActionMeta;
+  sourceAction: SourceActionMeta;
   description?: string;
   methods: ObjectMethod[];
   obj: ObjectDataEntry[];

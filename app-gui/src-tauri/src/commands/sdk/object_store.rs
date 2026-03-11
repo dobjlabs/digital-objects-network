@@ -8,6 +8,11 @@ use crate::objects::{ObjectRecord, ObjectValidity};
 
 const NULLIFIED_DIR_NAME: &str = ".nullified";
 
+pub(super) struct ObjectFileEntry {
+    pub(super) file_name: String,
+    pub(super) record: ObjectRecord,
+}
+
 pub(super) fn nullified_objects_dir(objects_dir: &Path) -> PathBuf {
     objects_dir.join(NULLIFIED_DIR_NAME)
 }
@@ -21,37 +26,32 @@ pub(super) fn ensure_objects_dirs(objects_dir: &Path) -> Result<(), String> {
 }
 
 fn parse_object_file(contents: &str, file_name: &str) -> Result<ObjectRecord, String> {
-    let record = serde_json::from_str::<ObjectRecord>(contents)
-        .map_err(|err| format!("failed to parse {file_name} as object file: {err}"))?;
-    Ok(record.with_file_name(file_name.to_string()))
+    serde_json::from_str::<ObjectRecord>(contents)
+        .map_err(|err| format!("failed to parse {file_name} as object file: {err}"))
 }
 
-pub(super) fn write_object_file(record: &ObjectRecord, objects_dir: &Path) -> Result<(), String> {
+pub(super) fn write_object_file(
+    record: &ObjectRecord,
+    file_name: &str,
+    objects_dir: &Path,
+) -> Result<(), String> {
     ensure_objects_dirs(objects_dir)?;
     let nullified_dir = nullified_objects_dir(objects_dir);
 
-    let persisted = serde_json::to_value(record).map_err(|err| {
-        format!(
-            "failed to serialize object file {}: {err}",
-            record.file_name
-        )
-    });
-    let serialized = serde_json::to_string_pretty(&persisted).map_err(|err| {
-        format!(
-            "failed to serialize object file {}: {err}",
-            record.file_name
-        )
-    })?;
+    let persisted = serde_json::to_value(record)
+        .map_err(|err| format!("failed to serialize object file {file_name}: {err}"))?;
+    let serialized = serde_json::to_string_pretty(&persisted)
+        .map_err(|err| format!("failed to serialize object file {file_name}: {err}"))?;
     let target_path = match record.validity {
-        ObjectValidity::Live => objects_dir.join(&record.file_name),
-        ObjectValidity::Nullified => nullified_dir.join(&record.file_name),
+        ObjectValidity::Live => objects_dir.join(file_name),
+        ObjectValidity::Nullified => nullified_dir.join(file_name),
     };
     fs::write(&target_path, serialized)
-        .map_err(|err| format!("failed to write object file {}: {err}", record.file_name))?;
+        .map_err(|err| format!("failed to write object file {file_name}: {err}"))?;
 
     let stale_path = match record.validity {
-        ObjectValidity::Live => nullified_dir.join(&record.file_name),
-        ObjectValidity::Nullified => objects_dir.join(&record.file_name),
+        ObjectValidity::Live => nullified_dir.join(file_name),
+        ObjectValidity::Nullified => objects_dir.join(file_name),
     };
     if stale_path != target_path {
         match fs::remove_file(&stale_path) {
@@ -112,7 +112,7 @@ fn load_object_files_from_dir(
                 if record.validity != expected_validity {
                     return Err(format!(
                         "invalid object validity placement for {}: expected {} in {}, found {}",
-                        record.file_name,
+                        file_name,
                         match expected_validity {
                             ObjectValidity::Live => "live",
                             ObjectValidity::Nullified => "nullified",
@@ -125,14 +125,14 @@ fn load_object_files_from_dir(
                     ));
                 }
 
-                if objects.contains_key(&record.file_name) {
+                if objects.contains_key(file_name) {
                     return Err(format!(
                         "duplicate object file name detected across object directories: {}",
-                        record.file_name
+                        file_name
                     ));
                 }
 
-                objects.insert(record.file_name.clone(), record);
+                objects.insert(file_name.to_string(), record);
             }
             Err(err) => eprintln!("zk-craft: failed to parse {file_name}, skipping: {err}"),
         }
@@ -141,7 +141,7 @@ fn load_object_files_from_dir(
     Ok(())
 }
 
-pub(super) fn load_object_files(objects_dir: &Path) -> Result<Vec<ObjectRecord>, String> {
+pub(super) fn load_object_files(objects_dir: &Path) -> Result<Vec<ObjectFileEntry>, String> {
     let mut records_by_file = HashMap::<String, ObjectRecord>::new();
     load_object_files_from_dir(&mut records_by_file, objects_dir, false)?;
     load_object_files_from_dir(
@@ -150,7 +150,10 @@ pub(super) fn load_object_files(objects_dir: &Path) -> Result<Vec<ObjectRecord>,
         true,
     )?;
 
-    let mut objects = records_by_file.into_values().collect::<Vec<_>>();
+    let mut objects = records_by_file
+        .into_iter()
+        .map(|(file_name, record)| ObjectFileEntry { file_name, record })
+        .collect::<Vec<_>>();
     objects.sort_by(|a, b| a.file_name.cmp(&b.file_name));
     Ok(objects)
 }

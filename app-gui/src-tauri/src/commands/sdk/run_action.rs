@@ -49,6 +49,19 @@ pub struct RunSdkActionResult {
     pub nullified_files: Vec<String>,
 }
 
+#[derive(Debug)]
+struct ResolvedInput {
+    file_name: String,
+    record: ObjectRecord,
+}
+
+fn file_name_from_path(path: &Path) -> Result<String, String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .ok_or_else(|| format!("invalid input path (missing file name): {}", path.display()))
+}
+
 fn validate_run_request(
     input: &RunSdkActionInput,
     descriptor: &spec::ActionDescriptor,
@@ -88,7 +101,7 @@ fn validate_run_request(
 fn resolve_inputs(
     input: &RunSdkActionInput,
     descriptor: &spec::ActionDescriptor,
-) -> Result<Vec<ObjectRecord>, String> {
+) -> Result<Vec<ResolvedInput>, String> {
     let mut resolved_inputs = Vec::new();
 
     for (slot, object_path_raw) in input.input_object_paths.iter().enumerate() {
@@ -100,6 +113,7 @@ fn resolve_inputs(
 
         let path_ref = Path::new(object_path);
         let record = parse_object_file_from_path(path_ref)?;
+        let file_name = file_name_from_path(path_ref)?;
         if record.validity != ObjectValidity::Live {
             return Err(format!("input object is not live: {}", record.id));
         }
@@ -109,27 +123,20 @@ fn resolve_inputs(
                 record.id, expected_class, record.class_name
             ));
         }
-
-        if record.spendable()?.is_none() {
-            return Err(format!(
-                "input object missing spendable witness: {}",
-                record.id
-            ));
-        }
-        resolved_inputs.push(record);
+        resolved_inputs.push(ResolvedInput { file_name, record });
     }
 
     Ok(resolved_inputs)
 }
 
-fn verify_inputs_grounded(sync_api_url: &str, inputs: &[ObjectRecord]) -> Result<(), String> {
+fn verify_inputs_grounded(sync_api_url: &str, inputs: &[ResolvedInput]) -> Result<(), String> {
     let input_sources = inputs
         .iter()
-        .map(|record| {
-            let spendable = record.require_spendable()?;
-            Ok((record.file_name.clone(), spendable.tx.dict().commitment()))
+        .map(|input| {
+            let spendable = input.record.spendable();
+            (input.file_name.clone(), spendable.tx.dict().commitment())
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Vec<_>>();
 
     let source_tx_hashes = input_sources
         .iter()
@@ -234,14 +241,15 @@ fn save_results(
     objects_dir: &Path,
     descriptor: &spec::ActionDescriptor,
     action_id: &str,
-    resolved_inputs: &[ObjectRecord],
+    resolved_inputs: &[ResolvedInput],
     spendable_outputs: &SpendableObjects,
     old_root: &str,
     new_root: &str,
 ) -> Result<RunSdkActionResult, String> {
     let mut nullified_files = Vec::new();
-    for input_record in resolved_inputs {
-        let spendable = input_record.require_spendable()?;
+    for input in resolved_inputs {
+        let input_record = &input.record;
+        let spendable = input_record.spendable();
         let nullifier_hash = object_nullifier_hash(&spendable.obj).map_err(|err| {
             format!(
                 "failed to compute input nullifier for {}: {err}",
@@ -252,18 +260,16 @@ fn save_results(
 
         let nullified_record = ObjectRecord {
             id: input_record.id.clone(),
-            file_name: input_record.file_name.clone(),
             class_name: input_record.class_name.clone(),
             source_action: input_record.source_action.clone(),
             validity: ObjectValidity::Nullified,
-            state_hash: input_record.state_hash.clone(),
             nullifier: Some(input_nullifier),
             pod: input_record.pod.clone(),
             obj: input_record.obj.clone(),
             tx: input_record.tx.clone(),
         };
-        write_object_file(&nullified_record, objects_dir)?;
-        nullified_files.push(nullified_record.file_name);
+        write_object_file(&nullified_record, &input.file_name, objects_dir)?;
+        nullified_files.push(input.file_name.clone());
     }
 
     if spendable_outputs.objs.len() != descriptor.output_classes.len() {
@@ -288,17 +294,15 @@ fn save_results(
         output_files.push(file_name.clone());
         let live_record = ObjectRecord {
             id: object_id,
-            file_name,
             class_name: class_name.clone(),
-            source_action: Some(action_id.to_string()),
+            source_action: action_id.to_string(),
             validity: ObjectValidity::Live,
-            state_hash: format!("{:#}", spendable.obj.commitment()),
             nullifier: None,
-            pod: Some(spendable.pod),
-            obj: Some(spendable.obj),
-            tx: Some(spendable.tx),
+            pod: spendable.pod,
+            obj: spendable.obj,
+            tx: spendable.tx,
         };
-        write_object_file(&live_record, objects_dir)?;
+        write_object_file(&live_record, &file_name, objects_dir)?;
     }
 
     Ok(RunSdkActionResult {
@@ -344,8 +348,8 @@ pub async fn run_sdk_action(
 
     let execution_inputs = resolved_inputs
         .iter()
-        .map(|record| record.require_spendable())
-        .collect::<Result<Vec<_>, String>>()?;
+        .map(|input| input.record.spendable())
+        .collect::<Vec<_>>();
 
     let action_id_for_exec = action_id.clone();
     let spendable_outputs = match tauri::async_runtime::spawn_blocking(move || {
