@@ -368,7 +368,6 @@ export const useUiStore = create<UiStoreState>((set) => ({
         if (prev.proof.runActionId !== actionId) return prev;
         return {
           ...prev,
-          items: result.objects.map(mapItem),
           proof: {
             ...prev.proof,
             status: "summary",

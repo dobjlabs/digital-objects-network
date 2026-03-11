@@ -10,8 +10,7 @@ use txlib::object_nullifier_hash;
 
 use super::{
     engine::{build_relayer_payload, execute_action},
-    mapping::{to_inventory_item, InventoryItemDto},
-    object_store::{load_object_files, parse_object_file_from_path, write_object_file},
+    object_store::{parse_object_file_from_path, write_object_file},
     progress::{emit_commit_done, emit_generate_proof_done, emit_generate_proof_step},
     relayer_client::{
         submit_proof_to_relayer, wait_for_relayer_confirmation, JobStatus,
@@ -48,7 +47,6 @@ pub struct RunSdkActionResult {
     pub new_root: String,
     pub output_files: Vec<String>,
     pub nullified_files: Vec<String>,
-    pub objects: Vec<InventoryItemDto>,
 }
 
 fn validate_run_request(
@@ -311,15 +309,12 @@ fn apply_commit(
         write_object_file(&live_record, objects_dir)?;
     }
 
-    let objects = load_object_files(objects_dir)?;
-
     Ok(RunSdkActionResult {
         ok: true,
         old_root: old_root.to_string(),
         new_root: new_root.to_string(),
         output_files,
         nullified_files,
-        objects: objects.iter().map(to_inventory_item).collect(),
     })
 }
 

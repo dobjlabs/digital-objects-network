@@ -77,7 +77,6 @@ export interface RunSdkActionResult {
   newRoot: string;
   outputFiles: string[];
   nullifiedFiles: string[];
-  objects: InventoryItemPayload[];
 }
 
 export interface ObjectFileMetadata {
