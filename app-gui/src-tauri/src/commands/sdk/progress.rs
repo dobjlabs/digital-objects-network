@@ -1,8 +1,22 @@
+use serde::Serialize;
 use tauri::Emitter;
 
-use crate::types::{RunSdkActionProgress, RunSdkActionResult};
-
 use super::relayer_client::RelayerJobStatus;
+use super::run_action::RunSdkActionResult;
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RunSdkActionProgress {
+    pub(super) run_id: String,
+    pub(super) phase: String,
+    pub(super) status: String,
+    pub(super) message: String,
+    pub(super) verify_index: Option<usize>,
+    pub(super) detail: Option<String>,
+    pub(super) old_root: Option<String>,
+    pub(super) new_root: Option<String>,
+    pub(super) output_file: Option<String>,
+}
 
 fn emit_progress(app: &tauri::AppHandle, payload: &RunSdkActionProgress) -> Result<(), String> {
     app.emit("run-sdk-action-progress", payload)

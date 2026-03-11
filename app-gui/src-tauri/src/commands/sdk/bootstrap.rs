@@ -1,12 +1,20 @@
 use super::{
-    mapping::{build_action_catalog, to_inventory_item},
+    mapping::{build_action_catalog, to_inventory_item, InventoryItemDto, RecipeDto},
     object_store::sync_object_files,
     runtime::{empty_state_root, ensure_runtime_loaded, lock_runtime, refresh_runtime_objects},
     synchronizer_client::fetch_synchronizer_head,
 };
-use crate::{app_paths, state::ObjectsRuntime, types::LoadGuiBootstrapResult};
+use crate::{app_paths, state::ObjectsRuntime};
+use serde::Serialize;
 
 use super::super::settings::get_app_settings;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadGuiBootstrapResult {
+    pub objects: Vec<InventoryItemDto>,
+    pub actions: Vec<RecipeDto>,
+}
 
 #[tauri::command]
 pub async fn load_gui_bootstrap(

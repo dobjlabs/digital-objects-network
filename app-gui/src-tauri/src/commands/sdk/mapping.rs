@@ -1,15 +1,80 @@
-use std::collections::HashMap;
-
 use craft_sdk::SpendableObject;
+use serde::Serialize;
 
 use crate::{
     spec,
     state::{RuntimeObjectRecord, RuntimeValidity},
-    types::{
-        ClassMetaDto, InventoryItemDto, MethodArgDto, ObjectDataEntryDto, ObjectMethodDto,
-        RecipeDto, SourceActionMetaDto,
-    },
 };
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MethodArgDto {
+    pub kind: String,
+    pub label: String,
+    pub class_hash: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectMethodDto {
+    pub method_name: String,
+    pub cpu_cost: String,
+    pub reads_block: bool,
+    pub args: Vec<MethodArgDto>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassMetaDto {
+    pub name: String,
+    pub hash: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceActionMetaDto {
+    pub name: String,
+    pub hash: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectDataEntryDto {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryItemDto {
+    pub id: String,
+    pub file_name: String,
+    pub emoji: String,
+    pub validity: String,
+    pub state_root: String,
+    pub nullifier: Option<String>,
+    pub class_meta: ClassMetaDto,
+    pub source_action: Option<SourceActionMetaDto>,
+    pub description: Option<String>,
+    pub methods: Vec<ObjectMethodDto>,
+    pub obj: Vec<ObjectDataEntryDto>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipeDto {
+    pub id: String,
+    pub group: String,
+    pub name: String,
+    pub emoji: String,
+    pub hash: String,
+    pub verb: String,
+    pub desc: String,
+    pub cpu: String,
+    pub reads_block: bool,
+    pub args: Vec<MethodArgDto>,
+    pub unlocked: bool,
+}
 
 pub(super) fn short_hash(seed: &str) -> String {
     let mut bytes = [0u8; 8];

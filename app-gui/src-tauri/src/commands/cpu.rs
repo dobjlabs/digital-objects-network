@@ -1,9 +1,19 @@
 use crate::state::CpuMonitor;
-use crate::types::CpuSample;
+use serde::Serialize;
 use std::fs;
 use std::time::Instant;
 use sysinfo::ProcessesToUpdate;
 use tauri::Manager;
+
+/// Payload returned to the frontend for a single CPU sample tick.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CpuSample {
+    /// Current process CPU usage normalized to 0..100.
+    pub(crate) usage_pct: f32,
+    /// Running accumulated CPU time in core-seconds.
+    pub(crate) total_cpu_secs: f64,
+}
 
 fn cpu_stats_file_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let base = app

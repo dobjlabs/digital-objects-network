@@ -3,7 +3,6 @@ mod commands;
 mod objects_watcher;
 mod spec;
 mod state;
-mod types;
 
 use tauri::{
     menu::{Menu, MenuItem, MenuItemBuilder},

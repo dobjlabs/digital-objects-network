@@ -5,11 +5,12 @@ use std::{
 
 use craft_sdk::{SpendableObject, SpendableObjects};
 use pod2::middleware::Hash;
+use serde::{Deserialize, Serialize};
 use txlib::StateRoot;
 
 use super::{
     engine::{build_relayer_payload, clone_spendable, execute_action},
-    mapping::{short_hash, to_inventory_item},
+    mapping::{short_hash, to_inventory_item, InventoryItemDto},
     naming::{
         format_output_file_name, object_id_from_spendable, object_nullifier_from_spendable,
         object_state_hash_from_spendable,
@@ -37,10 +38,34 @@ use crate::{
     app_paths,
     spec::{self, action_descriptors_by_name},
     state::{ObjectsRuntime, RuntimeObjectRecord, RuntimeValidity},
-    types::{RunSdkActionInput, RunSdkActionResult},
 };
 
 use super::super::settings::get_app_settings;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSdkActionArgInput {
+    pub object_path: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSdkActionInput {
+    pub action_id: String,
+    pub inputs: Vec<RunSdkActionArgInput>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSdkActionResult {
+    pub ok: bool,
+    pub old_root: String,
+    pub new_root: String,
+    pub output_files: Vec<String>,
+    pub nullified_files: Vec<String>,
+    pub objects: Vec<InventoryItemDto>,
+}
 
 fn validate_run_request(
     input: &RunSdkActionInput,
