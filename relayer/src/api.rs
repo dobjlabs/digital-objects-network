@@ -199,7 +199,7 @@ async fn submit_proof(
 
     let status = match app_state
         .db
-        .insert_job_idempotent(&job)
+        .insert_job(&job)
         .await
         .map_err(ApiError::Internal)?
     {

@@ -484,7 +484,7 @@ mod tests {
             })));
 
         let job = mk_job(JobStatus::Queued);
-        db.insert_job_idempotent(&job).await?;
+        db.insert_job(&job).await?;
         let cfg = cfg();
 
         let job = db.get_job("job-1").await?.expect("job");
@@ -522,7 +522,7 @@ mod tests {
         job.tx_hash =
             Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
         job.submitted_at = Some(now_ts() - 100);
-        db.insert_job_idempotent(&job).await?;
+        db.insert_job(&job).await?;
 
         let cfg = cfg();
         let job = db.get_job("job-1").await?.expect("job");

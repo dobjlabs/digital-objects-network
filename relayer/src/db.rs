@@ -66,7 +66,7 @@ impl Db {
         Ok(())
     }
 
-    pub async fn insert_job_idempotent(&self, job: &RelayJob) -> Result<InsertJobResult> {
+    pub async fn insert_job(&self, job: &RelayJob) -> Result<InsertJobResult> {
         let inserted = sqlx::query(
             r#"
             INSERT INTO relay_jobs (
@@ -420,11 +420,11 @@ mod tests {
         let (db, admin_url, db_name) = setup_db().await?;
 
         let job = mk_job("job-1", "0xaa", JobStatus::Queued, Some(now()));
-        let inserted = db.insert_job_idempotent(&job).await?;
+        let inserted = db.insert_job(&job).await?;
         assert!(matches!(inserted, InsertJobResult::Inserted));
 
         let second = mk_job("job-2", "0xaa", JobStatus::Queued, Some(now()));
-        let existing = db.insert_job_idempotent(&second).await?;
+        let existing = db.insert_job(&second).await?;
         match existing {
             InsertJobResult::Existing(found) => assert_eq!(found.job_id, "job-1"),
             InsertJobResult::Inserted => panic!("expected existing"),
@@ -443,7 +443,7 @@ mod tests {
 
         let mut sending = mk_job("job-1", "0xaa", JobStatus::Sending, None);
         sending.next_attempt_at = None;
-        db.insert_job_idempotent(&sending).await?;
+        db.insert_job(&sending).await?;
 
         let updated = db.recover_inflight_jobs(now()).await?;
         assert_eq!(updated, 1);
@@ -463,7 +463,7 @@ mod tests {
         let (db, admin_url, db_name) = setup_db().await?;
 
         let submitted = mk_job("job-1", "0xaa", JobStatus::Submitted, None);
-        db.insert_job_idempotent(&submitted).await?;
+        db.insert_job(&submitted).await?;
 
         let updated = db.recover_inflight_jobs(now()).await?;
         assert_eq!(updated, 1);
@@ -484,8 +484,8 @@ mod tests {
 
         let a = mk_job("job-a", "0xaa", JobStatus::Queued, Some(now() + 5));
         let b = mk_job("job-b", "0xbb", JobStatus::Queued, Some(now()));
-        db.insert_job_idempotent(&a).await?;
-        db.insert_job_idempotent(&b).await?;
+        db.insert_job(&a).await?;
+        db.insert_job(&b).await?;
 
         let next = db.next_due_job(now()).await?.expect("due job");
         assert_eq!(next.job_id, "job-b");
