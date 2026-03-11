@@ -8,7 +8,7 @@ use craft_sdk::{Helper, SpendableObject, SpendableObjects};
 use pod2::middleware::{Hash, Params};
 use txlib::StateRoot;
 
-use crate::action_spec;
+use crate::spec;
 
 pub(super) fn clone_spendable(spendable: &SpendableObject) -> SpendableObject {
     SpendableObject {
@@ -23,7 +23,7 @@ pub(super) fn execute_action(
     state_root: StateRoot,
     inputs: Vec<SpendableObject>,
 ) -> Result<SpendableObjects, String> {
-    let helper = Helper::new(action_spec::dependencies(), action_spec::actions());
+    let helper = Helper::new(spec::dependencies(), spec::actions());
     // Relayed payloads are recursively verified/compressed, which is incompatible with MockMainPod.
     let builder = helper.builder(false, Arc::new(state_root));
     Ok(builder.action(&action_id, inputs))

@@ -9,7 +9,7 @@ use txlib::StateRoot;
 
 use super::{
     engine::{build_relayer_payload, clone_spendable, execute_action},
-    mapping::{action_descriptors_by_name, short_hash, to_inventory_item},
+    mapping::{short_hash, to_inventory_item},
     naming::{
         format_output_file_name, object_id_from_spendable, object_nullifier_from_spendable,
         object_state_hash_from_spendable,
@@ -34,7 +34,8 @@ use super::{
     },
 };
 use crate::{
-    action_spec, app_paths,
+    app_paths,
+    spec::{self, action_descriptors_by_name},
     state::{ObjectsRuntime, RuntimeObjectRecord, RuntimeValidity},
     types::{RunSdkActionInput, RunSdkActionResult},
 };
@@ -43,7 +44,7 @@ use super::super::settings::get_app_settings;
 
 fn validate_run_request(
     input: &RunSdkActionInput,
-    descriptor: &action_spec::ActionDescriptor,
+    descriptor: &spec::ActionDescriptor,
 ) -> Result<(), String> {
     if descriptor.hidden {
         return Err(format!(
@@ -98,7 +99,7 @@ fn resolve_inputs_from_paths(
     runtime: &tauri::State<'_, ObjectsRuntime>,
     objects_dir: &Path,
     input: &RunSdkActionInput,
-    descriptor: &action_spec::ActionDescriptor,
+    descriptor: &spec::ActionDescriptor,
     state_root_for_run: &StateRoot,
 ) -> Result<ResolvedInputBatch, String> {
     let mut inner = lock_runtime(runtime);
@@ -305,7 +306,7 @@ fn wait_for_synchronizer_commit(
 fn apply_commit_to_runtime(
     runtime: &tauri::State<'_, ObjectsRuntime>,
     objects_dir: &Path,
-    descriptor: &action_spec::ActionDescriptor,
+    descriptor: &spec::ActionDescriptor,
     action_id: &str,
     resolved_inputs: &[ResolvedRunInput],
     spendable_outputs: &SpendableObjects,

@@ -1,8 +1,7 @@
-mod action_spec;
 mod app_paths;
 mod commands;
-mod id_codegen;
 mod objects_watcher;
+mod spec;
 mod state;
 mod types;
 

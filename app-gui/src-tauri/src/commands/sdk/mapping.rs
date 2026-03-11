@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use craft_sdk::SpendableObject;
 
 use crate::{
-    action_spec,
+    spec,
     state::{RuntimeObjectRecord, RuntimeValidity},
     types::{
         ClassMetaDto, InventoryItemDto, MethodArgDto, ObjectDataEntryDto, ObjectMethodDto,
@@ -49,12 +49,8 @@ fn object_data_from_object(spendable: &SpendableObject) -> Vec<(String, String)>
     data
 }
 
-pub(super) fn action_descriptors_by_name() -> HashMap<String, action_spec::ActionDescriptor> {
-    action_spec::action_descriptors_by_name()
-}
-
 pub(super) fn build_action_catalog() -> Vec<RecipeDto> {
-    action_spec::visible_action_descriptors()
+    spec::visible_action_descriptors()
         .into_iter()
         .map(|descriptor| RecipeDto {
             id: descriptor.name.clone(),
@@ -81,7 +77,7 @@ pub(super) fn build_action_catalog() -> Vec<RecipeDto> {
 }
 
 pub(super) fn to_inventory_item(record: &RuntimeObjectRecord) -> InventoryItemDto {
-    let class_ui = action_spec::class_ui_meta(&record.class_name);
+    let class_ui = spec::class_ui_meta(&record.class_name);
     let obj_data = record
         .spendable
         .as_ref()
