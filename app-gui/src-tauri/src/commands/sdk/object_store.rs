@@ -15,7 +15,7 @@ use super::naming::object_state_hash_from_spendable;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PersistedStateRoot {
+struct ObjectFileStateRoot {
     block_number: i64,
     transactions: serde_json::Value,
     nullifiers: serde_json::Value,
@@ -24,7 +24,7 @@ struct PersistedStateRoot {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PersistedObjectRecord {
+struct ObjectFile {
     id: String,
     class_name: String,
     source_action: Option<String>,
@@ -35,7 +35,15 @@ struct PersistedObjectRecord {
     obj: Option<serde_json::Value>,
     tx_live: Option<serde_json::Value>,
     tx_nullifiers: Option<serde_json::Value>,
-    tx_state_root: Option<PersistedStateRoot>,
+    tx_state_root: Option<ObjectFileStateRoot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ObjectFileMetadata {
+    pub file_name: String,
+    pub class_name: String,
+    pub validity: String,
 }
 
 const NULLIFIED_DIR_NAME: &str = ".nullified";
@@ -52,8 +60,8 @@ pub(super) fn ensure_objects_dirs(objects_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn persist_state_root(state_root: &StateRoot) -> Result<PersistedStateRoot, String> {
-    Ok(PersistedStateRoot {
+fn persist_state_root(state_root: &StateRoot) -> Result<ObjectFileStateRoot, String> {
+    Ok(ObjectFileStateRoot {
         block_number: state_root.block_number,
         transactions: serde_json::to_value(&state_root.transactions)
             .map_err(|err| format!("failed to serialize state_root.transactions: {err}"))?,
@@ -64,7 +72,7 @@ fn persist_state_root(state_root: &StateRoot) -> Result<PersistedStateRoot, Stri
     })
 }
 
-fn restore_state_root(data: PersistedStateRoot) -> Result<StateRoot, String> {
+fn restore_state_root(data: ObjectFileStateRoot) -> Result<StateRoot, String> {
     Ok(StateRoot {
         block_number: data.block_number,
         transactions: serde_json::from_value(data.transactions)
@@ -84,7 +92,7 @@ fn persist_spendable(
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
-        PersistedStateRoot,
+        ObjectFileStateRoot,
     ),
     String,
 > {
@@ -106,7 +114,7 @@ fn restore_spendable(
     obj: Option<serde_json::Value>,
     tx_live: Option<serde_json::Value>,
     tx_nullifiers: Option<serde_json::Value>,
-    tx_state_root: Option<PersistedStateRoot>,
+    tx_state_root: Option<ObjectFileStateRoot>,
 ) -> Result<Option<SpendableObject>, String> {
     match (pod, obj, tx_live, tx_nullifiers, tx_state_root) {
         (None, None, None, None, None) => Ok(None),
@@ -143,7 +151,7 @@ fn validity_from_str(raw: &str, context: &str) -> Result<RuntimeValidity, String
 }
 
 fn restore_object_record(
-    record: PersistedObjectRecord,
+    record: ObjectFile,
     file_name: &str,
 ) -> Result<RuntimeObjectRecord, String> {
     let spendable = restore_spendable(
@@ -170,12 +178,12 @@ fn restore_object_record(
 }
 
 fn parse_object_file(contents: &str, file_name: &str) -> Result<RuntimeObjectRecord, String> {
-    let record = serde_json::from_str::<PersistedObjectRecord>(contents)
+    let record = serde_json::from_str::<ObjectFile>(contents)
         .map_err(|err| format!("failed to parse {file_name} as object file: {err}"))?;
     restore_object_record(record, file_name)
 }
 
-fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObjectRecord, String> {
+fn persist_object_record(record: &RuntimeObjectRecord) -> Result<ObjectFile, String> {
     let (pod, obj, tx_live, tx_nullifiers, tx_state_root) =
         if let Some(spendable) = record.spendable.as_ref() {
             let (pod, obj, tx_live, tx_nullifiers, tx_state_root) = persist_spendable(spendable)?;
@@ -194,7 +202,7 @@ fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObject
         .as_ref()
         .map(object_state_hash_from_spendable)
         .unwrap_or_else(|| record.state_hash.clone());
-    Ok(PersistedObjectRecord {
+    Ok(ObjectFile {
         id: record.id.clone(),
         class_name: record.class_name.clone(),
         source_action: record.source_action.clone(),
@@ -209,6 +217,42 @@ fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObject
         tx_live,
         tx_nullifiers,
         tx_state_root,
+    })
+}
+
+pub(crate) fn read_object_file_metadata(path: &Path) -> Result<ObjectFileMetadata, String> {
+    if !path.exists() {
+        return Err(format!("selected file does not exist: {}", path.display()));
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("invalid input path (missing file name): {}", path.display()))?
+        .to_string();
+    let contents = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read selected file {}: {err}", path.display()))?;
+    let parsed = serde_json::from_str::<ObjectFile>(&contents)
+        .map_err(|err| format!("invalid .dobj JSON in {}: {err}", path.display()))?;
+
+    let class_name = parsed.class_name.trim().to_string();
+    if class_name.is_empty() {
+        return Err(format!("missing className in {}", path.display()));
+    }
+
+    let validity_raw = parsed.validity.trim().to_lowercase();
+    if validity_raw.is_empty() {
+        return Err(format!("missing validity in {}", path.display()));
+    }
+    let context = path.display().to_string();
+    let validity = validity_from_str(&validity_raw, &context)?;
+
+    Ok(ObjectFileMetadata {
+        file_name,
+        class_name,
+        validity: match validity {
+            RuntimeValidity::Live => "live".to_string(),
+            RuntimeValidity::Nullified => "nullified".to_string(),
+        },
     })
 }
 
@@ -256,7 +300,7 @@ pub(super) fn sync_object_files(
 }
 
 fn load_object_files_from_dir(
-    objects: &mut HashMap<String, (RuntimeObjectRecord, u8)>,
+    objects: &mut HashMap<String, RuntimeObjectRecord>,
     source_dir: &Path,
     in_nullified_dir: bool,
 ) -> Result<(), String> {
@@ -289,21 +333,36 @@ fn load_object_files_from_dir(
 
         match parse_object_file(&contents, file_name) {
             Ok(record) => {
-                let score = if (in_nullified_dir
-                    && matches!(record.validity, RuntimeValidity::Nullified))
-                    || (!in_nullified_dir && matches!(record.validity, RuntimeValidity::Live))
-                {
-                    2
+                let expected_validity = if in_nullified_dir {
+                    RuntimeValidity::Nullified
                 } else {
-                    1
+                    RuntimeValidity::Live
                 };
-                let replace = objects
-                    .get(&record.file_name)
-                    .map(|(_, existing_score)| score > *existing_score)
-                    .unwrap_or(true);
-                if replace {
-                    objects.insert(record.file_name.clone(), (record, score));
+
+                if record.validity != expected_validity {
+                    return Err(format!(
+                        "invalid object validity placement for {}: expected {} in {}, found {}",
+                        record.file_name,
+                        match expected_validity {
+                            RuntimeValidity::Live => "live",
+                            RuntimeValidity::Nullified => "nullified",
+                        },
+                        source_dir.display(),
+                        match record.validity {
+                            RuntimeValidity::Live => "live",
+                            RuntimeValidity::Nullified => "nullified",
+                        }
+                    ));
                 }
+
+                if objects.contains_key(&record.file_name) {
+                    return Err(format!(
+                        "duplicate object file name detected across object directories: {}",
+                        record.file_name
+                    ));
+                }
+
+                objects.insert(record.file_name.clone(), record);
             }
             Err(err) => eprintln!("zk-craft: failed to parse {file_name}, skipping: {err}"),
         }
@@ -313,7 +372,7 @@ fn load_object_files_from_dir(
 }
 
 pub(super) fn load_object_files(objects_dir: &Path) -> Result<Vec<RuntimeObjectRecord>, String> {
-    let mut records_by_file = HashMap::<String, (RuntimeObjectRecord, u8)>::new();
+    let mut records_by_file = HashMap::<String, RuntimeObjectRecord>::new();
     load_object_files_from_dir(&mut records_by_file, objects_dir, false)?;
     load_object_files_from_dir(
         &mut records_by_file,
@@ -323,7 +382,6 @@ pub(super) fn load_object_files(objects_dir: &Path) -> Result<Vec<RuntimeObjectR
 
     let mut objects = records_by_file
         .into_values()
-        .map(|(record, _)| record)
         .collect::<Vec<_>>();
     objects.sort_by(|a, b| a.file_name.cmp(&b.file_name));
     Ok(objects)
@@ -341,8 +399,41 @@ pub(super) fn parse_object_file_from_path(path: &Path) -> Result<RuntimeObjectRe
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_object_file, persist_object_record};
+    use super::{load_object_files, parse_object_file, persist_object_record};
     use crate::state::{RuntimeObjectRecord, RuntimeValidity};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_dir() -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let unique = format!(
+            "zk-craft-object-store-tests-{}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let dir = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn write_record_file(
+        dir: &std::path::Path,
+        file_name: &str,
+        record: &RuntimeObjectRecord,
+    ) -> Result<(), String> {
+        let persisted = persist_object_record(record)?;
+        let json = serde_json::to_string_pretty(&persisted)
+            .map_err(|err| format!("serialize record: {err}"))?;
+        fs::create_dir_all(dir).map_err(|err| format!("create dir: {err}"))?;
+        fs::write(dir.join(file_name), json).map_err(|err| format!("write file: {err}"))?;
+        Ok(())
+    }
 
     #[test]
     fn metadata_only_record_round_trips() {
@@ -389,5 +480,63 @@ mod tests {
 
         let err = parse_object_file(json, "stone_0xabc.dobj").expect_err("must fail");
         assert!(err.contains("spendable fields must all be present or all absent"));
+    }
+
+    #[test]
+    fn load_object_files_errors_on_duplicate_file_names() {
+        let objects_dir = make_temp_dir();
+        let nullified_dir = objects_dir.join(".nullified");
+        let file_name = "stone_0xdup.dobj";
+
+        let live_record = RuntimeObjectRecord {
+            id: "0xlive".to_string(),
+            file_name: file_name.to_string(),
+            class_name: "Stone".to_string(),
+            source_action: Some("MineStoneWithWoodPick".to_string()),
+            validity: RuntimeValidity::Live,
+            state_hash: "0xstate_live".to_string(),
+            nullifier: None,
+            spendable: None,
+        };
+        write_record_file(&objects_dir, file_name, &live_record).expect("write live");
+
+        let nullified_record = RuntimeObjectRecord {
+            id: "0xnull".to_string(),
+            file_name: file_name.to_string(),
+            class_name: "Stone".to_string(),
+            source_action: Some("MineStoneWithWoodPick".to_string()),
+            validity: RuntimeValidity::Nullified,
+            state_hash: "0xstate_null".to_string(),
+            nullifier: Some("0xnullifier".to_string()),
+            spendable: None,
+        };
+        write_record_file(&nullified_dir, file_name, &nullified_record).expect("write nullified");
+
+        let err = load_object_files(&objects_dir).expect_err("duplicate file name must error");
+        assert!(err.contains("duplicate object file name detected"));
+        let _ = fs::remove_dir_all(objects_dir);
+    }
+
+    #[test]
+    fn load_object_files_errors_on_invalid_validity_placement() {
+        let objects_dir = make_temp_dir();
+        let file_name = "stone_0xbad.dobj";
+
+        // Invalid: nullified record in live directory.
+        let misplaced_record = RuntimeObjectRecord {
+            id: "0xbad".to_string(),
+            file_name: file_name.to_string(),
+            class_name: "Stone".to_string(),
+            source_action: Some("MineStoneWithWoodPick".to_string()),
+            validity: RuntimeValidity::Nullified,
+            state_hash: "0xstate_bad".to_string(),
+            nullifier: Some("0xnullifier".to_string()),
+            spendable: None,
+        };
+        write_record_file(&objects_dir, file_name, &misplaced_record).expect("write misplaced");
+
+        let err = load_object_files(&objects_dir).expect_err("misplaced validity must error");
+        assert!(err.contains("invalid object validity placement"));
+        let _ = fs::remove_dir_all(objects_dir);
     }
 }

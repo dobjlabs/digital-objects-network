@@ -3,8 +3,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppSettingsPayload,
   CpuSample,
-  DobjFileMetadata,
   LoadGuiBootstrapResult,
+  ObjectFileMetadata,
   RunSdkActionInput,
   RunSdkActionProgress,
   RunSdkActionResult,
@@ -15,9 +15,9 @@ export type { ActionId, ClassName } from "../generated/ids";
 export type {
   AppSettingsPayload,
   CpuSample,
-  DobjFileMetadata,
   InventoryItemPayload,
   LoadGuiBootstrapResult,
+  ObjectFileMetadata,
   RecipePayload,
   RunSdkActionArgInput,
   RunSdkActionInput,
@@ -47,8 +47,8 @@ export function pickDobjFilePath(): Promise<string> {
   return invoke<string>("pick_dobj_file_path");
 }
 
-export function readDobjFileMetadata(path: string): Promise<DobjFileMetadata> {
-  return invoke<DobjFileMetadata>("read_dobj_file_metadata", { path });
+export function readDobjFileMetadata(path: string): Promise<ObjectFileMetadata> {
+  return invoke<ObjectFileMetadata>("read_dobj_file_metadata", { path });
 }
 
 export function listenRunSdkActionProgress(

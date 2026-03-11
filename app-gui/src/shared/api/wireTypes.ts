@@ -85,7 +85,7 @@ export interface RunSdkActionResult {
   objects: InventoryItemPayload[];
 }
 
-export interface DobjFileMetadata {
+export interface ObjectFileMetadata {
   fileName: string;
   className: ClassName;
   validity: Validity;

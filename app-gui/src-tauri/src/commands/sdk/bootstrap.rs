@@ -23,8 +23,8 @@ pub async fn load_gui_bootstrap(
 ) -> Result<LoadGuiBootstrapResult, String> {
     let objects_dir = app_paths::objects_dir(&app)?;
     let actions = build_action_catalog();
-    let effective_urls = get_app_settings(app.clone())?;
-    let sync_head = fetch_synchronizer_head(&effective_urls.synchronizer_api_url);
+    let app_settings = get_app_settings(app.clone())?;
+    let sync_head = fetch_synchronizer_head(&app_settings.synchronizer_api_url);
 
     let mut inner = lock_runtime(&runtime);
     if let Err(err) = ensure_runtime_loaded(&mut inner, &objects_dir) {
