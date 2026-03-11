@@ -39,46 +39,48 @@ fn save_total_cpu_secs(app: &tauri::AppHandle, total: f64) -> Result<(), String>
     Ok(())
 }
 
+fn zero_sample() -> CpuSample {
+    CpuSample {
+        usage_pct: 0.0,
+        total_cpu_secs: 0.0,
+    }
+}
+
+fn sample_with_total(usage_pct: f32, total_cpu_secs: f64) -> CpuSample {
+    CpuSample {
+        usage_pct,
+        total_cpu_secs,
+    }
+}
+
+fn normalize_usage_pct(raw_cpu: f32, cpu_count: usize) -> f32 {
+    // `sysinfo` reports per-process CPU where 100 ~= one saturated core.
+    // We normalize to host-level utilization in the 0..100 range.
+    let cores = cpu_count.max(1) as f32;
+    (raw_cpu.max(0.0) / cores).min(100.0)
+}
+
 #[tauri::command]
 pub fn sample_app_cpu(app: tauri::AppHandle, monitor: tauri::State<'_, CpuMonitor>) -> CpuSample {
     let mut system = match monitor.system.lock() {
         Ok(system) => system,
-        Err(_) => {
-            return CpuSample {
-                usage_pct: 0.0,
-                total_cpu_secs: 0.0,
-            }
-        }
+        Err(_) => return zero_sample(),
     };
 
     let mut loaded = match monitor.total_loaded.lock() {
         Ok(loaded) => loaded,
-        Err(_) => {
-            return CpuSample {
-                usage_pct: 0.0,
-                total_cpu_secs: 0.0,
-            }
-        }
+        Err(_) => return zero_sample(),
     };
     let mut total_cpu_secs = match monitor.total_cpu_secs.lock() {
         Ok(total) => total,
-        Err(_) => {
-            return CpuSample {
-                usage_pct: 0.0,
-                total_cpu_secs: 0.0,
-            }
-        }
+        Err(_) => return zero_sample(),
     };
     let mut last_sample_at = match monitor.last_sample_at.lock() {
         Ok(last) => last,
-        Err(_) => {
-            return CpuSample {
-                usage_pct: 0.0,
-                total_cpu_secs: *total_cpu_secs,
-            }
-        }
+        Err(_) => return sample_with_total(0.0, *total_cpu_secs),
     };
 
+    // Load persisted CPU total only once per process lifetime.
     if !*loaded {
         if let Ok(total) = load_total_cpu_secs(&app) {
             *total_cpu_secs = total.max(0.0);
@@ -94,36 +96,31 @@ pub fn sample_app_cpu(app: tauri::AppHandle, monitor: tauri::State<'_, CpuMonito
         .process(monitor.pid)
         .map(|process| process.cpu_usage())
         .unwrap_or(0.0);
-    // `sysinfo` reports per-process CPU where 100 ~= one saturated core.
-    // Keep multi-core values (e.g. 600) so usage can be normalized by host core count.
     let core_usage_pct = raw_cpu.max(0.0);
-    let cpu_count = system.cpus().len().max(1) as f32;
-    let max_host_pct = cpu_count * 100.0;
-    let usage_pct = (core_usage_pct.min(max_host_pct) / cpu_count).clamp(0.0, 100.0);
+    let usage_pct = normalize_usage_pct(core_usage_pct, system.cpus().len());
 
     let now = Instant::now();
-    if let Some(prev) = *last_sample_at {
-        let dt_secs = (now - prev).as_secs_f64();
-        *total_cpu_secs += (core_usage_pct as f64 / 100.0) * dt_secs;
-    } else {
+    let Some(prev) = *last_sample_at else {
+        // First sample has no previous timestamp, so just seed the clock.
+        // We return usage=0 for this tick to avoid charging unknown prior time.
         *last_sample_at = Some(now);
-        let clamped_total = (*total_cpu_secs).max(0.0);
-        let _ = save_total_cpu_secs(&app, clamped_total);
-        return CpuSample {
-            usage_pct: 0.0,
-            total_cpu_secs: clamped_total,
-        };
-    }
+        let total = (*total_cpu_secs).max(0.0);
+        // Keep the persisted accumulator non-negative.
+        *total_cpu_secs = total;
+        let _ = save_total_cpu_secs(&app, total);
+        return sample_with_total(0.0, total);
+    };
+
+    // Integrate process CPU over elapsed wall time into core-seconds.
+    let dt_secs = (now - prev).as_secs_f64();
+    *total_cpu_secs += (core_usage_pct as f64 / 100.0) * dt_secs;
+    // Advance the sampling cursor after consuming this interval.
     *last_sample_at = Some(now);
 
-    if *total_cpu_secs < 0.0 {
-        *total_cpu_secs = 0.0;
-    }
-    let clamped_total = *total_cpu_secs;
-    let _ = save_total_cpu_secs(&app, clamped_total);
+    let total = (*total_cpu_secs).max(0.0);
+    // Keep the persisted accumulator non-negative.
+    *total_cpu_secs = total;
+    let _ = save_total_cpu_secs(&app, total);
 
-    CpuSample {
-        usage_pct,
-        total_cpu_secs: clamped_total,
-    }
+    sample_with_total(usage_pct, total)
 }

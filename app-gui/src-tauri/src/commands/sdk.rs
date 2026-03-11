@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use txlib::StateRoot;
 
-use super::settings::load_effective_endpoint_urls;
+use super::settings::get_app_settings;
 use crate::{
     action_spec,
     app_paths,
@@ -1007,7 +1007,7 @@ pub async fn load_gui_bootstrap(
 ) -> Result<LoadGuiBootstrapResult, String> {
     let objects_dir = app_paths::objects_dir(&app)?;
     let actions = build_action_catalog();
-    let effective_urls = load_effective_endpoint_urls(&app)?;
+    let effective_urls = get_app_settings(app.clone())?;
     let sync_head = fetch_synchronizer_head(&effective_urls.synchronizer_api_url);
     let mut inner = lock_runtime(&runtime);
     if let Err(err) = ensure_runtime_loaded(&mut inner, &objects_dir) {
@@ -1114,7 +1114,7 @@ pub async fn run_sdk_action(
         }
     }
 
-    let effective_urls = load_effective_endpoint_urls(&app)?;
+    let effective_urls = get_app_settings(app.clone())?;
     let sync_api_url =
         ensure_non_empty_url("SYNCHRONIZER_API_URL", effective_urls.synchronizer_api_url)?;
     let sync_state = fetch_synchronizer_state(&sync_api_url)?;
