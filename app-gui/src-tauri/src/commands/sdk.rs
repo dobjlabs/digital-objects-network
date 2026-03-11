@@ -14,7 +14,7 @@ use common::{
 };
 use craft_sdk::{Helper, SpendableObject, SpendableObjects};
 use hex::{FromHex, ToHex};
-use pod2::middleware::{Hash, Params};
+use pod2::middleware::{hash_values, Hash, Key, Params, Value};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 use txlib::StateRoot;
@@ -43,7 +43,6 @@ struct PersistedStateRoot {
 #[serde(rename_all = "camelCase")]
 struct PersistedObjectRecord {
     id: String,
-    file_name: String,
     class_name: String,
     source_action: Option<String>,
     validity: String,
@@ -542,6 +541,29 @@ fn object_id_from_spendable(spendable: &SpendableObject) -> String {
     format!("{:#}", spendable.obj.commitment())
 }
 
+fn object_state_hash_from_spendable(spendable: &SpendableObject) -> String {
+    format!("{:#}", spendable.obj.commitment())
+}
+
+fn object_nullifier_from_spendable(spendable: &SpendableObject) -> Result<String, String> {
+    let object_key = spendable
+        .obj
+        .get(&Key::from("key"))
+        .cloned()
+        .map_err(|err| {
+            format!(
+                "input object missing required key field for {}: {err}",
+                object_id_from_spendable(spendable),
+            )
+        })?;
+    let object_key_hash = hash_values(&[Value::from(spendable.obj.commitment()), object_key]);
+    let object_nullifier = hash_values(&[
+        Value::from(object_key_hash),
+        Value::from("txlib-nullifier-v1"),
+    ]);
+    Ok(encode_hash_hex(&object_nullifier))
+}
+
 const NULLIFIED_DIR_NAME: &str = ".nullified";
 
 fn nullified_objects_dir(objects_dir: &Path) -> PathBuf {
@@ -743,7 +765,7 @@ fn validity_from_str(raw: &str, context: &str) -> Result<RuntimeValidity, String
 
 fn restore_object_record(
     record: PersistedObjectRecord,
-    file_name_override: Option<&str>,
+    file_name: &str,
 ) -> Result<RuntimeObjectRecord, String> {
     let spendable = restore_spendable(
         record.pod,
@@ -752,13 +774,17 @@ fn restore_object_record(
         record.tx_nullifiers,
         record.tx_state_root,
     )?;
+    let state_hash = spendable
+        .as_ref()
+        .map(object_state_hash_from_spendable)
+        .unwrap_or(record.state_hash);
     Ok(RuntimeObjectRecord {
         id: record.id,
-        file_name: file_name_override.unwrap_or(&record.file_name).to_string(),
+        file_name: file_name.to_string(),
         class_name: record.class_name,
         source_action: record.source_action,
         validity: validity_from_str(&record.validity, "object file")?,
-        state_hash: record.state_hash,
+        state_hash,
         nullifier: record.nullifier,
         spendable,
     })
@@ -767,7 +793,7 @@ fn restore_object_record(
 fn parse_object_file(contents: &str, file_name: &str) -> Result<RuntimeObjectRecord, String> {
     let record = serde_json::from_str::<PersistedObjectRecord>(contents)
         .map_err(|err| format!("failed to parse {file_name} as object file: {err}"))?;
-    restore_object_record(record, Some(file_name))
+    restore_object_record(record, file_name)
 }
 
 fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObjectRecord, String> {
@@ -785,16 +811,20 @@ fn persist_object_record(record: &RuntimeObjectRecord) -> Result<PersistedObject
     } else {
         (None, None, None, None, None)
     };
+    let state_hash = record
+        .spendable
+        .as_ref()
+        .map(object_state_hash_from_spendable)
+        .unwrap_or_else(|| record.state_hash.clone());
     Ok(PersistedObjectRecord {
         id: record.id.clone(),
-        file_name: record.file_name.clone(),
         class_name: record.class_name.clone(),
         source_action: record.source_action.clone(),
         validity: match record.validity {
             RuntimeValidity::Live => "live".to_string(),
             RuntimeValidity::Nullified => "nullified".to_string(),
         },
-        state_hash: record.state_hash.clone(),
+        state_hash,
         nullifier: record.nullifier.clone(),
         pod,
         obj,
@@ -1124,6 +1154,7 @@ pub async fn run_sdk_action(
         class_name: String,
         source_action: Option<String>,
         state_hash: String,
+        nullifier: String,
     }
 
     let (input_spendables, verify_targets, resolved_inputs, source_tx_hashes);
@@ -1169,6 +1200,7 @@ pub async fn run_sdk_action(
                 .spendable
                 .as_ref()
                 .ok_or_else(|| format!("input object missing spendable witness: {}", record.id))?;
+            let input_nullifier = object_nullifier_from_spendable(spendable)?;
             collected_spendables.push(clone_spendable(spendable));
             collected_targets.push(target_label);
             collected_resolved.push(ResolvedRunInput {
@@ -1177,6 +1209,7 @@ pub async fn run_sdk_action(
                 class_name: record.class_name.clone(),
                 source_action: record.source_action.clone(),
                 state_hash: record.state_hash.clone(),
+                nullifier: input_nullifier,
             });
         }
 
@@ -1516,7 +1549,7 @@ pub async fn run_sdk_action(
                     return Err(format!("input object already nullified: {}", resolved.id));
                 }
                 record.validity = RuntimeValidity::Nullified;
-                record.nullifier = Some(short_hash(&format!("{}:{}:null", resolved.id, old_root)));
+                record.nullifier = Some(resolved.nullifier.clone());
                 nullified_files.push(record.file_name.clone());
             } else {
                 inner.objects.push(RuntimeObjectRecord {
@@ -1526,7 +1559,7 @@ pub async fn run_sdk_action(
                     source_action: resolved.source_action.clone(),
                     validity: RuntimeValidity::Nullified,
                     state_hash: resolved.state_hash.clone(),
-                    nullifier: Some(short_hash(&format!("{}:{}:null", resolved.id, old_root))),
+                    nullifier: Some(resolved.nullifier.clone()),
                     spendable: None,
                 });
                 nullified_files.push(resolved.file_name.clone());
@@ -1557,7 +1590,7 @@ pub async fn run_sdk_action(
                 class_name: class_name.clone(),
                 source_action: Some(input.action_id.clone()),
                 validity: RuntimeValidity::Live,
-                state_hash: short_hash(&format!("{:#}", spendable.obj.commitment())),
+                state_hash: object_state_hash_from_spendable(&spendable),
                 nullifier: None,
                 spendable: Some(spendable),
             });

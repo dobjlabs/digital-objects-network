@@ -23,6 +23,13 @@ export function InventoryPanel({
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
 
+  const truncateDisplayHash = (value: string) => {
+    const trimmed = value.trim();
+    if (!/^0x[0-9a-f]+$/i.test(trimmed)) return trimmed;
+    if (trimmed.length <= 14) return trimmed;
+    return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
+  };
+
   const handleDragStart = (
     event: DragEvent<HTMLButtonElement>,
     item: InventoryItem,
@@ -62,10 +69,11 @@ export function InventoryPanel({
   const nullifiedItems = items.filter((item) => item.validity === "nullified");
 
   const renderInventoryItem = (item: InventoryItem) => {
-    const hashLine =
+    const hashLineRaw =
       item.validity === "live"
         ? item.stateRoot
         : (item.nullifier ?? "nullified");
+    const hashLine = truncateDisplayHash(hashLineRaw);
     return (
       <button
         key={item.id}
@@ -81,7 +89,9 @@ export function InventoryPanel({
         </span>
         <span className="inventory-main">
           <span className="inventory-name">{item.fileName}</span>
-          <span className="inventory-hash">{hashLine}</span>
+          <span className="inventory-hash" title={hashLineRaw}>
+            {hashLine}
+          </span>
         </span>
         <span
           className={`inventory-dot ${item.validity === "live" ? "live" : "nullified"}`}

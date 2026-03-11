@@ -392,6 +392,13 @@ export function ContextPanel({
       ? `~/.objects/.nullified/${filename}`
       : `~/.objects/${filename}`;
 
+  const truncateDisplayHash = (value: string) => {
+    const trimmed = value.trim();
+    if (!/^0x[0-9a-f]+$/i.test(trimmed)) return trimmed;
+    if (trimmed.length <= 14) return trimmed;
+    return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
+  };
+
   const formatObjectValue = (value: string) => {
     const trimmed = value.trim();
     const isHex = /^0x[0-9a-f]+$/i.test(trimmed);
@@ -449,6 +456,9 @@ export function ContextPanel({
       return <section className="context-panel">Object not found.</section>;
 
     const titleName = item.fileName.replace(/\.dobj$/i, "");
+    const liveValueRaw =
+      item.validity === "live" ? item.stateRoot : (item.nullifier ?? "nullified");
+    const liveValue = truncateDisplayHash(liveValueRaw);
 
     return (
       <section className="context-panel">
@@ -471,10 +481,9 @@ export function ContextPanel({
             "Live",
             <span
               className={`context-inline-hash ${item.validity === "live" ? "live" : "nullified"}`}
+              title={liveValueRaw}
             >
-              {item.validity === "live"
-                ? item.stateRoot
-                : (item.nullifier ?? "nullified")}
+              {liveValue}
             </span>,
           )}
           {renderMetaRow(
