@@ -1,20 +1,14 @@
 use std::{
     collections::HashMap,
     fs,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
-use crate::objects::ObjectRecord;
-
-const NULLIFIED_DIR_NAME: &str = ".nullified";
+use crate::objects::{nullified_objects_dir, ObjectRecord};
 
 pub(super) struct ObjectFileEntry {
     pub(super) file_name: String,
     pub(super) record: ObjectRecord,
-}
-
-pub(super) fn nullified_objects_dir(objects_dir: &Path) -> PathBuf {
-    objects_dir.join(NULLIFIED_DIR_NAME)
 }
 
 pub(super) fn ensure_objects_dirs(objects_dir: &Path) -> Result<(), String> {

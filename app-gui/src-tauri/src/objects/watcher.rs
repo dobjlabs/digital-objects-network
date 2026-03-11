@@ -1,6 +1,6 @@
 use std::{fs, path::Path, sync::mpsc, thread};
 
-use crate::app_paths;
+use crate::objects::objects_dir;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Emitter};
 
@@ -25,7 +25,7 @@ fn is_objects_change(event: &Event, watch_dir: &Path) -> bool {
 }
 
 pub fn start_objects_watcher(app: AppHandle) -> Result<(), String> {
-    let watch_dir = app_paths::objects_dir(&app)?;
+    let watch_dir = objects_dir(&app)?;
     fs::create_dir_all(&watch_dir)
         .map_err(|err| format!("failed to create objects directory for watcher: {err}"))?;
 

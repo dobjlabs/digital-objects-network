@@ -2,7 +2,7 @@ use super::{
     object_store::{ensure_objects_dirs, load_object_files},
     synchronizer_client::fetch_synchronizer_head,
 };
-use crate::app_paths;
+use crate::objects::objects_dir;
 use crate::settings::get_app_settings;
 use serde::Serialize;
 
@@ -189,7 +189,7 @@ pub struct LoadGuiBootstrapResult {
 
 #[tauri::command]
 pub async fn load_gui_bootstrap(app: tauri::AppHandle) -> Result<LoadGuiBootstrapResult, String> {
-    let objects_dir = app_paths::objects_dir(&app)?;
+    let objects_dir = objects_dir(&app)?;
     ensure_objects_dirs(&objects_dir)?;
     let objects = load_object_files(&objects_dir)?;
     let actions = build_action_catalog();

@@ -26,7 +26,7 @@ use super::{
     },
 };
 use crate::{
-    app_paths,
+    objects::objects_dir,
     objects::ObjectRecord,
     settings::get_app_settings,
     spec::{self, action_descriptors_by_name},
@@ -318,7 +318,7 @@ pub async fn run_sdk_action(
     runtime: tauri::State<'_, ActionRunGate>,
     input: RunSdkActionInput,
 ) -> Result<RunSdkActionResult, String> {
-    let objects_dir: PathBuf = app_paths::objects_dir(&app)?;
+    let objects_dir: PathBuf = objects_dir(&app)?;
     let descriptors = action_descriptors_by_name();
     let descriptor = descriptors
         .get(&input.action_id)

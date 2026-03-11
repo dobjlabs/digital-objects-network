@@ -1,4 +1,3 @@
-mod app_paths;
 mod cpu;
 mod objects;
 mod sdk;

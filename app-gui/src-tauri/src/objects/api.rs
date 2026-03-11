@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use crate::app_paths;
+use crate::objects::objects_dir;
 use crate::objects::ObjectRecord;
 use crate::sdk::parse_object_file_from_path;
 use rfd::FileDialog;
@@ -8,13 +8,13 @@ use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
 pub fn get_objects_dir(app: tauri::AppHandle) -> Result<String, String> {
-    let path = app_paths::objects_dir(&app)?;
+    let path = objects_dir(&app)?;
     Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
 pub fn open_objects_dir(app: tauri::AppHandle) -> Result<String, String> {
-    let path: PathBuf = app_paths::objects_dir(&app)?;
+    let path: PathBuf = objects_dir(&app)?;
     fs::create_dir_all(&path)
         .map_err(|err| format!("failed to create objects directory: {err}"))?;
     app.opener()
