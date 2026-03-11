@@ -8,17 +8,6 @@ use relayer::api_types::{JobStatusResponse, SubmitProofRequest, SubmitProofRespo
 pub(super) const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
 pub(super) const RELAYER_POLL_INTERVAL_MS: u64 = 1500;
 
-fn relayer_proofs_endpoint(relayer_api_url: &str) -> String {
-    format!("{}/api/v1/proofs", relayer_api_url.trim_end_matches('/'))
-}
-
-fn relayer_proof_status_endpoint(relayer_api_url: &str, job_id: &str) -> String {
-    format!(
-        "{}/api/v1/proofs/{job_id}",
-        relayer_api_url.trim_end_matches('/')
-    )
-}
-
 pub(super) fn submit_proof_to_relayer(
     relayer_api_url: &str,
     payload_bytes: &[u8],
@@ -32,7 +21,7 @@ pub(super) fn submit_proof_to_relayer(
         ));
     }
 
-    let endpoint = relayer_proofs_endpoint(relayer_api_url);
+    let endpoint = format!("{}/api/v1/proofs", relayer_api_url.trim_end_matches('/'));
     let request = SubmitProofRequest {
         payload_base64: STANDARD.encode(payload_bytes),
         client_ref,
@@ -64,7 +53,10 @@ fn fetch_relayer_job_status(
     relayer_api_url: &str,
     job_id: &str,
 ) -> Result<JobStatusResponse, String> {
-    let endpoint = relayer_proof_status_endpoint(relayer_api_url, job_id);
+    let endpoint = format!(
+        "{}/api/v1/proofs/{job_id}",
+        relayer_api_url.trim_end_matches('/')
+    );
     let client = reqwest::blocking::Client::new();
     let response = client
         .get(&endpoint)
