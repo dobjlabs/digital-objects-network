@@ -11,7 +11,6 @@ use txlib::{object_nullifier_hash, StateRoot};
 use super::{
     engine::{build_relayer_payload, execute_action},
     mapping::{to_inventory_item, InventoryItemDto},
-    naming::format_output_file_name,
     object_store::{parse_object_file_from_path, sync_object_files},
     progress::{emit_commit_done, emit_generate_proof_done, emit_generate_proof_step},
     relayer_client::{
@@ -323,7 +322,11 @@ fn apply_commit(
     for (index, class_name) in descriptor.output_classes.iter().enumerate() {
         let spendable = spendable_outputs.obj(index);
         let object_id = format!("{:#}", spendable.obj.commitment());
-        let file_name = format_output_file_name(class_name, &object_id);
+        let file_name = format!(
+            "{}_{}.dobj",
+            class_name.to_ascii_lowercase(),
+            object_id.to_ascii_lowercase()
+        );
 
         output_files.push(file_name.clone());
         inner.objects.push(RuntimeObjectRecord {
