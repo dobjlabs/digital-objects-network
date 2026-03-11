@@ -1,12 +1,7 @@
-use std::{
-    fs,
-    path::Path,
-    sync::mpsc,
-    thread,
-};
+use std::{fs, path::Path, sync::mpsc, thread};
 
-use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use crate::app_paths;
+use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Emitter};
 
 pub const OBJECTS_CHANGED_EVENT: &str = "objects-changed";

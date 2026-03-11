@@ -39,10 +39,7 @@ fn read_settings(app: &tauri::AppHandle) -> Result<Option<AppSettings>, String> 
     Ok(Some(settings))
 }
 
-fn write_settings(
-    app: &tauri::AppHandle,
-    settings: &AppSettings,
-) -> Result<(), String> {
+fn write_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
     let path = settings_path(app)?;
     let serialized = serde_json::to_string_pretty(settings)
         .map_err(|err| format!("failed to serialize settings: {err}"))?;
@@ -61,10 +58,7 @@ pub fn get_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
-pub fn save_app_settings(
-    app: tauri::AppHandle,
-    input: AppSettings,
-) -> Result<AppSettings, String> {
+pub fn save_app_settings(app: tauri::AppHandle, input: AppSettings) -> Result<AppSettings, String> {
     write_settings(&app, &input)?;
     Ok(input)
 }

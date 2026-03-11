@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf};
 
+use crate::app_paths;
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 use tauri_plugin_opener::OpenerExt;
-use crate::app_paths;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

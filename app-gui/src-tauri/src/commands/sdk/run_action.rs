@@ -1,0 +1,481 @@
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
+
+use craft_sdk::{SpendableObject, SpendableObjects};
+use pod2::middleware::Hash;
+use txlib::StateRoot;
+
+use super::{
+    engine::{build_relayer_payload, clone_spendable, execute_action},
+    mapping::{action_descriptors_by_name, short_hash, to_inventory_item},
+    naming::{
+        format_output_file_name, object_id_from_spendable, object_nullifier_from_spendable,
+        object_state_hash_from_spendable,
+    },
+    object_store::{parse_object_file_from_path, sync_object_files},
+    progress::{
+        emit_commit_done, emit_commit_submitting, emit_commit_waiting, emit_hash_done,
+        emit_hash_running, emit_nullify_done, emit_nullify_running, emit_verify_progress,
+    },
+    relayer_client::{
+        submit_proof_to_relayer, wait_for_relayer_confirmation, RelayerJobStatus,
+        RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
+    },
+    runtime::{
+        acquire_run_in_progress_guard, ensure_non_empty_url, ensure_runtime_loaded, lock_runtime,
+        refresh_runtime_objects,
+    },
+    synchronizer_client::{
+        encode_hash_hex, fetch_synchronizer_state, fetch_synchronizer_tx_contains,
+        wait_for_synchronizer_tx, SynchronizerState, SYNCHRONIZER_POLL_INTERVAL_MS,
+        SYNCHRONIZER_POLL_TIMEOUT_SECS,
+    },
+};
+use crate::{
+    action_spec, app_paths,
+    state::{ObjectsRuntime, RuntimeObjectRecord, RuntimeValidity},
+    types::{RunSdkActionInput, RunSdkActionResult},
+};
+
+use super::super::settings::get_app_settings;
+
+fn validate_run_request(
+    input: &RunSdkActionInput,
+    descriptor: &action_spec::ActionDescriptor,
+) -> Result<(), String> {
+    if descriptor.hidden {
+        return Err(format!(
+            "action is internal and cannot be run directly: {}",
+            input.action_id
+        ));
+    }
+
+    if input.inputs.len() != descriptor.input_classes.len() {
+        return Err(format!(
+            "{} expects {} inputs, got {}",
+            input.action_id,
+            descriptor.input_classes.len(),
+            input.inputs.len()
+        ));
+    }
+
+    let mut seen_paths = HashSet::new();
+    for arg in &input.inputs {
+        let object_path = arg.object_path.trim();
+        if object_path.is_empty() {
+            return Err("each input must include objectPath".to_string());
+        }
+        if !seen_paths.insert(object_path.to_string()) {
+            return Err(format!(
+                "duplicate input object path is not allowed: {object_path}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ResolvedRunInput {
+    id: String,
+    file_name: String,
+    class_name: String,
+    source_action: Option<String>,
+    state_hash: String,
+    nullifier: String,
+}
+
+struct ResolvedInputBatch {
+    input_spendables: Vec<SpendableObject>,
+    verify_targets: Vec<String>,
+    resolved_inputs: Vec<ResolvedRunInput>,
+    source_tx_hashes: Vec<Hash>,
+}
+
+fn resolve_inputs_from_paths(
+    runtime: &tauri::State<'_, ObjectsRuntime>,
+    objects_dir: &Path,
+    input: &RunSdkActionInput,
+    descriptor: &action_spec::ActionDescriptor,
+    state_root_for_run: &StateRoot,
+) -> Result<ResolvedInputBatch, String> {
+    let mut inner = lock_runtime(runtime);
+    ensure_runtime_loaded(&mut inner, objects_dir)?;
+
+    if inner.run_in_progress {
+        return Err("another action run is already in progress".to_string());
+    }
+    refresh_runtime_objects(&mut inner, objects_dir)?;
+    inner.state_root = state_root_for_run.clone();
+
+    let mut collected_spendables = Vec::new();
+    let mut collected_targets = Vec::new();
+    let mut collected_resolved = Vec::new();
+
+    for (slot, arg) in input.inputs.iter().enumerate() {
+        let expected_class = descriptor.input_classes[slot].as_str();
+        let object_path = arg.object_path.trim();
+        if object_path.is_empty() {
+            return Err(format!("missing objectPath for input slot {}", slot + 1));
+        }
+
+        let path_ref = Path::new(object_path);
+        let record = parse_object_file_from_path(path_ref)?;
+        let target_label = arg
+            .label
+            .clone()
+            .unwrap_or_else(|| record.file_name.clone());
+
+        if record.validity != RuntimeValidity::Live {
+            return Err(format!("input object is not live: {}", record.id));
+        }
+        if record.class_name != expected_class {
+            return Err(format!(
+                "input class mismatch for {}: expected {}, got {}",
+                record.id, expected_class, record.class_name
+            ));
+        }
+
+        let spendable = record
+            .spendable
+            .as_ref()
+            .ok_or_else(|| format!("input object missing spendable witness: {}", record.id))?;
+        let input_nullifier = object_nullifier_from_spendable(spendable)?;
+        collected_spendables.push(clone_spendable(spendable));
+        collected_targets.push(target_label);
+        collected_resolved.push(ResolvedRunInput {
+            id: record.id.clone(),
+            file_name: record.file_name.clone(),
+            class_name: record.class_name.clone(),
+            source_action: record.source_action.clone(),
+            state_hash: record.state_hash.clone(),
+            nullifier: input_nullifier,
+        });
+    }
+
+    let source_tx_hashes = collected_spendables
+        .iter()
+        .map(|spendable| spendable.tx.dict().commitment())
+        .collect::<Vec<_>>();
+
+    Ok(ResolvedInputBatch {
+        input_spendables: collected_spendables,
+        verify_targets: collected_targets,
+        resolved_inputs: collected_resolved,
+        source_tx_hashes,
+    })
+}
+
+fn verify_inputs_grounded(
+    sync_api_url: &str,
+    source_tx_hashes: &[Hash],
+    verify_targets: &[String],
+) -> Result<(), String> {
+    let grounded_txs = fetch_synchronizer_tx_contains(sync_api_url, source_tx_hashes)?;
+    let mut missing_grounding = Vec::new();
+
+    for (index, tx_hash) in source_tx_hashes.iter().enumerate() {
+        if !grounded_txs.contains(tx_hash) {
+            let label = verify_targets
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| format!("input-{index}"));
+            missing_grounding.push(format!("{} -> {}", label, encode_hash_hex(tx_hash)));
+        }
+    }
+
+    if missing_grounding.is_empty() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "inputs not yet synchronized; wait and retry: {}",
+        missing_grounding.join(", ")
+    ))
+}
+
+async fn execute_action_blocking(
+    action_id: String,
+    state_root: StateRoot,
+    inputs: Vec<SpendableObject>,
+) -> Result<SpendableObjects, String> {
+    match tauri::async_runtime::spawn_blocking(move || {
+        execute_action(action_id, state_root, inputs)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => Err(format!("failed while executing action: {err}")),
+    }
+}
+
+struct RelayerCommitOutcome {
+    da_receipt: String,
+}
+
+async fn submit_and_confirm_relayer(
+    app: &tauri::AppHandle,
+    run_id: &str,
+    old_root: &str,
+    relayer_url: &str,
+    action_id: &str,
+    payload_bytes: Vec<u8>,
+    timeout_secs: u64,
+    poll_interval_ms: u64,
+) -> Result<RelayerCommitOutcome, String> {
+    emit_commit_submitting(app, run_id, old_root)?;
+
+    let relayer_url_for_submit = relayer_url.to_string();
+    let action_ref = action_id.to_string();
+    let submit_job = tauri::async_runtime::spawn_blocking(move || {
+        submit_proof_to_relayer(
+            &relayer_url_for_submit,
+            &payload_bytes,
+            Some(format!("app-gui:{action_ref}")),
+        )
+    })
+    .await;
+
+    let submit_response = match submit_job {
+        Ok(Ok(response)) => response,
+        Ok(Err(err)) => return Err(err),
+        Err(err) => return Err(format!("failed while submitting proof to relayer: {err}")),
+    };
+
+    if submit_response.status == RelayerJobStatus::Failed {
+        return Err(format!(
+            "relayer rejected job {} immediately",
+            submit_response.job_id
+        ));
+    }
+
+    emit_commit_waiting(
+        app,
+        run_id,
+        old_root,
+        &submit_response.job_id,
+        submit_response.status,
+    )?;
+
+    let relayer_url_for_wait = relayer_url.to_string();
+    let job_id_for_wait = submit_response.job_id.clone();
+    let wait_job = tauri::async_runtime::spawn_blocking(move || {
+        wait_for_relayer_confirmation(
+            &relayer_url_for_wait,
+            &job_id_for_wait,
+            timeout_secs,
+            poll_interval_ms,
+        )
+    })
+    .await;
+
+    let relay_status = match wait_job {
+        Ok(Ok(status)) => status,
+        Ok(Err(err)) => return Err(err),
+        Err(err) => return Err(format!("failed while polling relayer job status: {err}")),
+    };
+
+    let da_receipt = relay_status
+        .tx_hash
+        .clone()
+        .unwrap_or_else(|| format!("job {}", relay_status.job_id));
+
+    Ok(RelayerCommitOutcome { da_receipt })
+}
+
+fn wait_for_synchronizer_commit(
+    sync_api_url: &str,
+    expected_tx_final: Hash,
+    timeout_secs: u64,
+    poll_interval_ms: u64,
+) -> Result<SynchronizerState, String> {
+    wait_for_synchronizer_tx(
+        sync_api_url,
+        expected_tx_final,
+        timeout_secs,
+        poll_interval_ms,
+    )
+    .map_err(|err| {
+        format!("failed to observe relayed tx in synchronizer after relay confirmation: {err}")
+    })
+}
+
+fn apply_commit_to_runtime(
+    runtime: &tauri::State<'_, ObjectsRuntime>,
+    objects_dir: &Path,
+    descriptor: &action_spec::ActionDescriptor,
+    action_id: &str,
+    resolved_inputs: &[ResolvedRunInput],
+    spendable_outputs: &SpendableObjects,
+    sync_state_after: SynchronizerState,
+    old_root: &str,
+    new_root: &str,
+) -> Result<RunSdkActionResult, String> {
+    let mut inner = lock_runtime(runtime);
+    ensure_runtime_loaded(&mut inner, objects_dir)?;
+
+    let mut nullified_files = Vec::new();
+    for resolved in resolved_inputs {
+        if let Some(record) = inner
+            .objects
+            .iter_mut()
+            .find(|record| record.id == resolved.id && record.file_name == resolved.file_name)
+        {
+            if record.validity != RuntimeValidity::Live {
+                return Err(format!("input object already nullified: {}", resolved.id));
+            }
+            record.validity = RuntimeValidity::Nullified;
+            record.nullifier = Some(resolved.nullifier.clone());
+            nullified_files.push(record.file_name.clone());
+        } else {
+            inner.objects.push(RuntimeObjectRecord {
+                id: resolved.id.clone(),
+                file_name: resolved.file_name.clone(),
+                class_name: resolved.class_name.clone(),
+                source_action: resolved.source_action.clone(),
+                validity: RuntimeValidity::Nullified,
+                state_hash: resolved.state_hash.clone(),
+                nullifier: Some(resolved.nullifier.clone()),
+                spendable: None,
+            });
+            nullified_files.push(resolved.file_name.clone());
+        }
+    }
+
+    if spendable_outputs.objs.len() != descriptor.output_classes.len() {
+        return Err(format!(
+            "action {} output mismatch: descriptor expects {}, engine returned {}",
+            action_id,
+            descriptor.output_classes.len(),
+            spendable_outputs.objs.len()
+        ));
+    }
+
+    let mut output_files = Vec::new();
+    for (index, class_name) in descriptor.output_classes.iter().enumerate() {
+        let spendable = spendable_outputs.obj(index);
+        let object_id = object_id_from_spendable(&spendable);
+        let file_name = format_output_file_name(class_name, &object_id);
+
+        output_files.push(file_name.clone());
+        inner.objects.push(RuntimeObjectRecord {
+            id: object_id,
+            file_name,
+            class_name: class_name.clone(),
+            source_action: Some(action_id.to_string()),
+            validity: RuntimeValidity::Live,
+            state_hash: object_state_hash_from_spendable(&spendable),
+            nullifier: None,
+            spendable: Some(spendable),
+        });
+    }
+
+    inner.state_root = sync_state_after.state_root;
+    sync_object_files(&inner, objects_dir)?;
+
+    Ok(RunSdkActionResult {
+        ok: true,
+        old_root: old_root.to_string(),
+        new_root: new_root.to_string(),
+        output_files,
+        nullified_files,
+        objects: inner.objects.iter().map(to_inventory_item).collect(),
+    })
+}
+
+#[tauri::command]
+pub async fn run_sdk_action(
+    app: tauri::AppHandle,
+    runtime: tauri::State<'_, ObjectsRuntime>,
+    input: RunSdkActionInput,
+) -> Result<RunSdkActionResult, String> {
+    let objects_dir: PathBuf = app_paths::objects_dir(&app)?;
+    let descriptors = action_descriptors_by_name();
+    let descriptor = descriptors
+        .get(&input.action_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown action: {}", input.action_id))?;
+
+    validate_run_request(&input, &descriptor)?;
+
+    let effective_urls = get_app_settings(app.clone())?;
+    let sync_api_url =
+        ensure_non_empty_url("synchronizerApiUrl", effective_urls.synchronizer_api_url)?;
+    let relayer_url = ensure_non_empty_url("relayerApiUrl", effective_urls.relayer_api_url)?;
+
+    let sync_state = fetch_synchronizer_state(&sync_api_url)?;
+    let state_root_for_run = sync_state.state_root.clone();
+    let old_root_hash = sync_state.current_gsr;
+    let old_root = short_hash(&format!("{:#}", old_root_hash));
+
+    let resolved = resolve_inputs_from_paths(
+        &runtime,
+        &objects_dir,
+        &input,
+        &descriptor,
+        &state_root_for_run,
+    )?;
+
+    verify_inputs_grounded(
+        &sync_api_url,
+        &resolved.source_tx_hashes,
+        &resolved.verify_targets,
+    )?;
+
+    let _run_guard = acquire_run_in_progress_guard(&runtime)?;
+    let run_id = input.action_id.clone();
+
+    emit_hash_running(&app, &run_id, &input.action_id, descriptor.ui.cpu_cost)?;
+
+    let spendable_outputs = execute_action_blocking(
+        input.action_id.clone(),
+        state_root_for_run,
+        resolved.input_spendables,
+    )
+    .await?;
+
+    emit_hash_done(&app, &run_id, descriptor.ui.cpu_cost)?;
+    emit_verify_progress(&app, &run_id, &resolved.verify_targets)?;
+    emit_nullify_running(&app, &run_id, &old_root)?;
+    emit_nullify_done(&app, &run_id, &old_root)?;
+
+    let payload_bytes = build_relayer_payload(&old_root_hash, &spendable_outputs)?;
+    let expected_tx_final = spendable_outputs.tx.dict().commitment();
+
+    let relayer_outcome = submit_and_confirm_relayer(
+        &app,
+        &run_id,
+        &old_root,
+        &relayer_url,
+        &input.action_id,
+        payload_bytes,
+        RELAYER_POLL_TIMEOUT_SECS,
+        RELAYER_POLL_INTERVAL_MS,
+    )
+    .await?;
+
+    let sync_state_after = wait_for_synchronizer_commit(
+        &sync_api_url,
+        expected_tx_final,
+        SYNCHRONIZER_POLL_TIMEOUT_SECS,
+        SYNCHRONIZER_POLL_INTERVAL_MS,
+    )?;
+    let new_root = short_hash(&format!("{:#}", sync_state_after.current_gsr));
+
+    let result = apply_commit_to_runtime(
+        &runtime,
+        &objects_dir,
+        &descriptor,
+        &input.action_id,
+        &resolved.resolved_inputs,
+        &spendable_outputs,
+        sync_state_after,
+        &old_root,
+        &new_root,
+    )?;
+
+    emit_commit_done(&app, &run_id, &relayer_outcome.da_receipt, &result)?;
+    Ok(result)
+}

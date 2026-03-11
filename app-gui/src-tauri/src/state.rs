@@ -38,28 +38,45 @@ impl CpuMonitor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Lifecycle marker for an object tracked by the runtime.
 pub(crate) enum RuntimeValidity {
+    /// Object is available for use as an input to actions.
     Live,
+    /// Object has been consumed/nullified by a committed action.
     Nullified,
 }
 
 #[derive(Debug)]
+/// In-memory representation of one object file shown in the GUI.
 pub(crate) struct RuntimeObjectRecord {
+    /// Stable object identifier (commitment string).
     pub(crate) id: String,
+    /// Backing `.dobj` file name on disk.
     pub(crate) file_name: String,
+    /// Object class/type name
     pub(crate) class_name: String,
+    /// Action that produced this object, when known.
     pub(crate) source_action: Option<String>,
+    /// Current lifecycle status for this record.
     pub(crate) validity: RuntimeValidity,
+    /// State hash associated with this object at creation/observation time.
     pub(crate) state_hash: String,
+    /// Nullifier value once object is consumed.
     pub(crate) nullifier: Option<String>,
+    /// Parsed SDK object payload; absent for records loaded as metadata-only.
     pub(crate) spendable: Option<SpendableObject>,
 }
 
 #[derive(Debug)]
+/// Shared mutable runtime snapshot for object and action execution state.
 pub(crate) struct ObjectsRuntimeState {
+    /// True after initial objects directory load succeeds (or reset fallback runs).
     pub(crate) loaded: bool,
+    /// Guard to prevent concurrent action runs.
     pub(crate) run_in_progress: bool,
+    /// Latest synchronized state root known to the runtime.
     pub(crate) state_root: StateRoot,
+    /// Full set of live and nullified objects currently indexed for the UI.
     pub(crate) objects: Vec<RuntimeObjectRecord>,
 }
 
