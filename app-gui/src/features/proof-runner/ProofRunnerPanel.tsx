@@ -85,9 +85,9 @@ export function ProofRunnerPanel() {
         type="button"
         className="proof-jump-btn"
         onClick={toggleProofPanelView}
-        title={showCpuDuringRun ? "Show proof action details" : "Show CPU chart"}
+        title={showCpuDuringRun ? "Show action details" : "Show CPU chart"}
       >
-        {showCpuDuringRun ? "Show Proof Action" : "Show CPU Chart"}
+        {showCpuDuringRun ? "Show Action" : "Show CPU Chart"}
       </button>
       {canReturnToAction && (
         <button
@@ -96,7 +96,9 @@ export function ProofRunnerPanel() {
           onClick={returnToRunningAction}
           disabled={alreadyViewingRunningAction}
           title={
-            proof.methodName ? `Open ${proof.methodName}` : "Open running action"
+            proof.methodName
+              ? `Open ${proof.methodName}`
+              : "Open running action"
           }
         >
           {alreadyViewingRunningAction ? "Viewing Action" : "Return to Action"}
@@ -220,15 +222,14 @@ export function ProofRunnerPanel() {
       generateProofStep?.status ??
       (proof.status === "generating" ? "running" : "pending");
     const commitState: "pending" | "running" | "done" =
-      commitStep?.status ?? (proof.status === "committing" ? "running" : "pending");
+      commitStep?.status ??
+      (proof.status === "committing" ? "running" : "pending");
 
     return (
       <section className="cpu-panel proof-panel proof-run-card">
         {controlsRow}
         <div className={stageHeaderClass(generateState)}>
-          <span className={`stage-num ${stageClass(generateState)}`}>
-            1
-          </span>
+          <span className={`stage-num ${stageClass(generateState)}`}>1</span>
           <span className="stage-title">Generate Proof</span>
         </div>
 
@@ -245,9 +246,7 @@ export function ProofRunnerPanel() {
         )}
 
         <div className={stageHeaderClass(commitState)}>
-          <span className={`stage-num ${stageClass(commitState)}`}>
-            2
-          </span>
+          <span className={`stage-num ${stageClass(commitState)}`}>2</span>
           <span className="stage-title">Commit</span>
         </div>
 
@@ -284,7 +283,10 @@ export function ProofRunnerPanel() {
             <div className="summary-line summary-muted">none</div>
           ) : (
             nullified.map((entry, idx) => (
-              <div key={`${entry}-${idx}`} className="summary-line summary-null">
+              <div
+                key={`${entry}-${idx}`}
+                className="summary-line summary-null"
+              >
                 {entry}
               </div>
             ))
