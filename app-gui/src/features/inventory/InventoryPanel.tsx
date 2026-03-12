@@ -1,7 +1,6 @@
 import { useRef } from "react";
 import type { DragEvent } from "react";
 import type { InventoryObjectPayload as InventoryObject } from "../../shared/api/wireTypes";
-import { objectDisplayFileName } from "../../shared/objectDisplay";
 
 interface InventoryPanelProps {
   inventory: InventoryObject[];
@@ -24,6 +23,7 @@ export function InventoryPanel({
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
   const isLive = (object: InventoryObject) => object.nullifier == null;
+  const displayFileName = (className: string) => `${className}.dobj`;
 
   const truncateDisplayHash = (value: string) => {
     const trimmed = value.trim();
@@ -44,7 +44,7 @@ export function InventoryPanel({
       ? objectsDirPath.slice(0, -1)
       : objectsDirPath;
     const objectPath = `${basePath}/${object.fileName}`;
-    const displayName = objectDisplayFileName(object);
+    const displayName = displayFileName(object.className);
 
     const payload = JSON.stringify({
       objectPath,
@@ -71,7 +71,7 @@ export function InventoryPanel({
   const nullifiedObjects = inventory.filter((object) => !isLive(object));
 
   const renderInventoryObject = (object: InventoryObject) => {
-    const displayName = objectDisplayFileName(object);
+    const displayName = displayFileName(object.className);
     const hashLineRaw = isLive(object)
       ? object.id
       : (object.nullifier ?? "nullified");

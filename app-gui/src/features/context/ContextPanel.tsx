@@ -10,10 +10,6 @@ import {
   type ActionId,
 } from "../../shared/api/tauriClient";
 import type { ContextSelection } from "../../shared/state/store";
-import {
-  objectDisplayFileName,
-  objectDisplayFileNameForClass,
-} from "../../shared/objectDisplay";
 
 interface ContextPanelProps {
   selection: ContextSelection;
@@ -52,6 +48,7 @@ export function ContextPanel({
   const [argErrors, setArgErrors] = useState<Record<string, string>>({});
   const previousProofStatusRef = useRef(proofStatus);
   const isLive = (object: InventoryObject) => object.nullifier == null;
+  const displayFileName = (className: string) => `${className}.dobj`;
   const selectionKey =
     selection.kind === "object"
       ? `object:${selection.objectId}`
@@ -77,7 +74,9 @@ export function ContextPanel({
   const argKey = (methodId: string, index: number) =>
     `${selection.kind}:${methodId}:${index}`;
 
-  const parseDropPayload = (raw: string): {
+  const parseDropPayload = (
+    raw: string,
+  ): {
     objectPath?: string;
     name?: string;
     className?: string;
@@ -95,7 +94,10 @@ export function ContextPanel({
 
   const normalizeName = (value: string) => value.trim().toLowerCase();
 
-  const isArgCompatible = (expectedClassName: string, droppedClassName?: string) => {
+  const isArgCompatible = (
+    expectedClassName: string,
+    droppedClassName?: string,
+  ) => {
     if (!droppedClassName) return false;
     return normalizeName(droppedClassName) === normalizeName(expectedClassName);
   };
@@ -181,7 +183,11 @@ export function ContextPanel({
       selectedPath = (await pickDobjFilePath()).trim();
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : typeof error === "string" ? error : "";
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : "";
       if (message.includes("No file selected")) {
         return;
       }
@@ -218,7 +224,7 @@ export function ContextPanel({
 
     const className = parsed.className.trim();
     const objectIsLive = parsed.nullifier === null;
-    const fileLabel = objectDisplayFileNameForClass(className);
+    const fileLabel = displayFileName(className);
 
     if (!className) {
       setArgErrors((prev) => ({
@@ -292,7 +298,10 @@ export function ContextPanel({
                 const err = argErrors[key];
 
                 return (
-                  <div key={`${expectedClassName}:${index}`} className="method-arg">
+                  <div
+                    key={`${expectedClassName}:${index}`}
+                    className="method-arg"
+                  >
                     <div className="method-arg-row">
                       <span className="method-arg-label">
                         <span className="from-action-label">
@@ -326,7 +335,9 @@ export function ContextPanel({
                         }
                       >
                         {bound?.label ??
-                          (isDropActive ? "release to drop" : "drag .dobj here")}
+                          (isDropActive
+                            ? "release to drop"
+                            : "drag .dobj here")}
                       </div>
                       <button
                         type="button"
@@ -370,7 +381,9 @@ export function ContextPanel({
             <button
               type="button"
               className="method-execute"
-              onClick={() => config.onRun(boundArgs.filter(Boolean) as BoundArg[])}
+              onClick={() =>
+                config.onRun(boundArgs.filter(Boolean) as BoundArg[])
+              }
               disabled={proofRunning || !allArgsBound}
             >
               {proofRunning
@@ -385,7 +398,7 @@ export function ContextPanel({
     })();
 
   const displayThingPath = (object: InventoryObject) => {
-    const displayName = objectDisplayFileName(object);
+    const displayName = displayFileName(object.className);
     return !isLive(object)
       ? `~/.objects/.nullified/${displayName}`
       : `~/.objects/${displayName}`;
@@ -524,18 +537,25 @@ export function ContextPanel({
           )}
           {renderMetaRow(
             "Path",
-            <span className="context-inline-path">{displayThingPath(object)}</span>,
+            <span className="context-inline-path">
+              {displayThingPath(object)}
+            </span>,
           )}
         </div>
 
-        {object.description && <div className="context-desc">{object.description}</div>}
+        {object.description && (
+          <div className="context-desc">{object.description}</div>
+        )}
         {renderObjectData(object)}
       </section>
     );
   }
 
-  const action = actions.find((candidate) => candidate.id === selection.actionId);
-  if (!action) return <section className="context-panel">Action not found.</section>;
+  const action = actions.find(
+    (candidate) => candidate.id === selection.actionId,
+  );
+  if (!action)
+    return <section className="context-panel">Action not found.</section>;
 
   return (
     <section className="context-panel">
