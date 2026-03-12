@@ -8,7 +8,7 @@ use crate::{objects::ObjectRecord, spec};
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct InventoryObjectDto {
+pub struct InventoryObject {
     pub id: String,
     pub file_name: String,
     pub class_name: String,
@@ -20,7 +20,7 @@ pub struct InventoryObjectDto {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct ActionDto {
+pub struct Action {
     pub id: String,
     pub emoji: String,
     pub description: String,
@@ -29,10 +29,10 @@ pub struct ActionDto {
     pub input_classes: Vec<String>,
 }
 
-pub(super) fn build_action_catalog() -> Vec<ActionDto> {
+pub(super) fn build_action_catalog() -> Vec<Action> {
     spec::visible_action_descriptors()
         .into_iter()
-        .map(|descriptor| ActionDto {
+        .map(|descriptor| Action {
             id: descriptor.name,
             emoji: descriptor.ui.emoji.to_string(),
             description: descriptor.ui.description.to_string(),
@@ -43,9 +43,9 @@ pub(super) fn build_action_catalog() -> Vec<ActionDto> {
         .collect()
 }
 
-pub(super) fn to_inventory_object(record: &ObjectRecord, file_name: &str) -> InventoryObjectDto {
+pub(super) fn to_inventory_object(record: &ObjectRecord, file_name: &str) -> InventoryObject {
     let class_ui = spec::class_ui_meta(&record.class_name);
-    InventoryObjectDto {
+    InventoryObject {
         id: record.id.clone(),
         file_name: file_name.to_string(),
         class_name: record.class_name.clone(),
@@ -59,8 +59,8 @@ pub(super) fn to_inventory_object(record: &ObjectRecord, file_name: &str) -> Inv
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadGuiInventoryResult {
-    pub inventory: Vec<InventoryObjectDto>,
-    pub actions: Vec<ActionDto>,
+    pub inventory: Vec<InventoryObject>,
+    pub actions: Vec<Action>,
 }
 
 #[tauri::command]
