@@ -275,12 +275,26 @@ export function ContextPanel({
     </div>
   );
 
+  const renderClassChip = (label: string, classHash: string) => {
+    const rawHash = classHash.trim();
+    if (!rawHash) {
+      return <span className="from-action-label">{label}</span>;
+    }
+    return (
+      <span className="from-action-label" title={rawHash}>
+        {label}
+        <span className="proof-tooltip">{truncateDisplayHash(rawHash)}</span>
+      </span>
+    );
+  };
+
   const renderMethodCard = (config: {
     methodId: string;
     methodName: string;
     cpuCost: string;
     readsBlock: boolean;
     inputClasses: string[];
+    inputClassHashes: string[];
     onRun: (boundArgs: BoundArg[]) => void;
     }) =>
     (() => {
@@ -303,6 +317,7 @@ export function ContextPanel({
                 const bound = argBindings[key];
                 const isDropActive = hoverArgKey === key;
                 const err = argErrors[key];
+                const classHash = config.inputClassHashes[index] ?? "";
 
                 return (
                   <div
@@ -311,9 +326,7 @@ export function ContextPanel({
                   >
                     <div className="method-arg-row">
                       <span className="method-arg-label">
-                        <span className="from-action-label">
-                          # {expectedClassName}
-                        </span>
+                        {renderClassChip(`# ${expectedClassName}`, classHash)}
                       </span>
                       <div
                         className={`method-arg-drop ${bound ? "filled" : ""} ${isDropActive ? "drop-active" : ""} ${err ? "error" : ""}`}
@@ -549,7 +562,7 @@ export function ContextPanel({
           )}
           {renderMetaRow(
             "Type",
-            <span className="from-action-label"># {object.className}</span>,
+            renderClassChip(`# ${object.className}`, object.classHash),
           )}
           {renderMetaRow(
             "Path",
@@ -608,6 +621,7 @@ export function ContextPanel({
         cpuCost: action.cpuCost,
         readsBlock: action.readsBlock,
         inputClasses: action.inputClasses,
+        inputClassHashes: action.inputClassHashes,
         onRun: (boundArgs) =>
           onRunProof({
             actionId: action.id,

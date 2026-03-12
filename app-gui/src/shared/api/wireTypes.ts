@@ -7,6 +7,7 @@ export interface InventoryObjectPayload {
   id: string;
   fileName: string;
   className: ClassName;
+  classHash: string;
   emoji: string;
   nullifier: string | null;
   description?: string;
@@ -17,6 +18,7 @@ export interface ActionPayload {
   id: ActionId;
   emoji: string;
   hash: string;
+  inputClassHashes: string[];
   description: string;
   cpuCost: string;
   readsBlock: boolean;

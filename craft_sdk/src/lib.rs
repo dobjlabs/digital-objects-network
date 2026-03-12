@@ -317,6 +317,25 @@ impl Helper {
             })
             .collect()
     }
+
+    pub fn class_hash(&self, class_name: &str) -> Option<Hash> {
+        let predicate_name = format!("Is{class_name}");
+        self.module
+            .predicate_ref_by_name(predicate_name.as_str())
+            .map(Predicate::Custom)
+            .map(|predicate| predicate.hash())
+    }
+
+    pub fn class_hashes(&self) -> HashMap<String, Hash> {
+        self.data
+            .classes
+            .iter()
+            .filter_map(|class| {
+                self.class_hash(class.name.as_str())
+                    .map(|hash| (class.name.clone(), hash))
+            })
+            .collect()
+    }
 }
 
 fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
