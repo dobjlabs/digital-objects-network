@@ -1,8 +1,7 @@
+use std::{fs, path::PathBuf};
+
 #[cfg(target_os = "macos")]
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-};
+use std::path::Path;
 
 #[cfg(target_os = "macos")]
 fn find_scip_lib_dir_from_target(manifest_dir: &Path) -> Option<PathBuf> {
@@ -64,13 +63,12 @@ fn copy_scip_dylibs(lib_dir: &Path, bundle_libs_dir: &Path) {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=DEP_SCIP_LIBDIR");
+    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
+    let bundle_libs_dir = manifest_dir.join("libs");
+    let _ = fs::create_dir_all(&bundle_libs_dir);
 
     #[cfg(target_os = "macos")]
     {
-        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
-        let bundle_libs_dir = manifest_dir.join("libs");
-        let _ = fs::create_dir_all(&bundle_libs_dir);
-
         // Resolve libscip from inside the app bundle at runtime.
         println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Resources/libs");
 
@@ -78,7 +76,7 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,/opt/homebrew/opt/scipopt/lib");
         println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/local/opt/scipopt/lib");
 
-        if let Ok(scip_lib_dir) = env::var("DEP_SCIP_LIBDIR") {
+        if let Ok(scip_lib_dir) = std::env::var("DEP_SCIP_LIBDIR") {
             copy_scip_dylibs(Path::new(&scip_lib_dir), &bundle_libs_dir);
             println!(
                 "cargo:warning=Bundling SCIP dylibs from DEP_SCIP_LIBDIR={}",
