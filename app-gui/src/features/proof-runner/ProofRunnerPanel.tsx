@@ -107,11 +107,15 @@ export function ProofRunnerPanel() {
     </div>
   );
 
-  if (proof.status === "idle") {
+  const showCpuPanel =
+    proof.status === "idle" || (runActive && showCpuDuringRun);
+  const idlePanelClass =
+    proof.status === "idle" && idleFadeIn ? " idle-fade-in" : "";
+
+  if (showCpuPanel) {
     return (
-      <section
-        className={`cpu-panel proof-panel proof-panel-idle ${idleFadeIn ? "idle-fade-in" : ""}`}
-      >
+      <section className={`cpu-panel proof-panel proof-panel-idle${idlePanelClass}`}>
+        {runActive && showCpuDuringRun ? controlsRow : null}
         <div className="idle-section idle-cpu">
           <div className="proof-title cpu-title">CPU Usage</div>
           <div className="dash-cpu-bars">
@@ -157,50 +161,6 @@ export function ProofRunnerPanel() {
       <section className="cpu-panel proof-panel">
         <div className="proof-title">Proof Failed</div>
         <div className="proof-error">{proof.error}</div>
-      </section>
-    );
-  }
-
-  if (runActive && showCpuDuringRun) {
-    return (
-      <section className="cpu-panel proof-panel proof-panel-idle">
-        {controlsRow}
-        <div className="idle-section idle-cpu">
-          <div className="proof-title cpu-title">CPU Usage</div>
-          <div className="dash-cpu-bars">
-            {proof.stats.cpuHistory.map((value, index) => (
-              <div
-                key={`${index}-${value}`}
-                className="dash-cpu-bar"
-                style={{
-                  height: `${Math.max(4, Math.min(100, Math.round(value)))}%`,
-                }}
-              />
-            ))}
-          </div>
-          <div className="proof-line cpu-total">
-            Total:{" "}
-            <span className="proof-muted">
-              {formatCpuDuration(proof.stats.totalCpuSecs)}
-            </span>
-          </div>
-        </div>
-        <div className="idle-section idle-roots">
-          <div className="root-row">
-            <span className="root-row-left">
-              <span className="root-dot live" />
-              <span className="root-label">Global Valid State Roots</span>
-            </span>
-            <span className="root-hash">{aggregateHash(liveRoots)}</span>
-          </div>
-          <div className="root-row">
-            <span className="root-row-left">
-              <span className="root-dot nullified" />
-              <span className="root-label">Global Nullified State Roots</span>
-            </span>
-            <span className="root-hash">{aggregateHash(nullifiedRoots)}</span>
-          </div>
-        </div>
       </section>
     );
   }
