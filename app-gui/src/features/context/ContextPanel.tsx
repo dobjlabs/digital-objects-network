@@ -295,7 +295,7 @@ export function ContextPanel({
     inputClasses: string[];
     inputClassHashes: string[];
     onRun: (boundArgs: BoundArg[]) => void;
-    }) =>
+  }) =>
     (() => {
       const hasInputs = config.inputClasses.length > 0;
       const boundArgs = config.inputClasses.map(
@@ -388,7 +388,9 @@ export function ContextPanel({
               })}
             </div>
           )}
-          <div className={`method-footer ${hasInputs ? "" : "no-inputs"}`.trim()}>
+          <div
+            className={`method-footer ${hasInputs ? "" : "no-inputs"}`.trim()}
+          >
             <div className="method-meta-row">
               <div className="method-meta-line">
                 ⏱ CPU <span className="mval">{config.cpuCost}</span>
@@ -424,38 +426,82 @@ export function ContextPanel({
     return displayPathInObjectsDir(absolutePath, objectsDirPath);
   };
 
-  const objectValueString = (value: unknown) => {
+  const normalizePod2Value = (value: unknown): unknown => {
     if (typeof value === "string") {
-      const trimmed = value.trim();
-      const rawInner = trimmed.trim().replace(/^Raw\((.*)\)$/, "$1").trim();
-      return rawInner;
-    }
-    if (typeof value === "object" && value !== null) {
-      const record = value as Record<string, unknown>;
-      if ("Raw" in record) {
-        return objectValueString(record.Raw);
-      }
+      return value
+        .trim()
+        .replace(/^Raw\((.*)\)$/, "$1")
+        .trim();
     }
     if (
       typeof value === "number" ||
       typeof value === "boolean" ||
-      typeof value === "bigint"
+      typeof value === "bigint" ||
+      value == null
     ) {
-      return String(value);
+      return value;
     }
-    if (value == null) {
+    if (Array.isArray(value)) {
+      return value.map((entry) => normalizePod2Value(entry));
+    }
+    if (typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      const keys = Object.keys(record);
+      if (keys.length === 1) {
+        const key = keys[0];
+        const inner = record[key];
+        if (
+          key === "Raw" ||
+          key === "Int" ||
+          key === "PublicKey" ||
+          key === "SecretKey" ||
+          key === "Predicate" ||
+          key === "Root" ||
+          key === "kvs" ||
+          key === "set" ||
+          key === "array"
+        ) {
+          return normalizePod2Value(inner);
+        }
+      }
+      return Object.fromEntries(
+        Object.entries(record).map(([key, entry]) => [
+          key,
+          normalizePod2Value(entry),
+        ]),
+      );
+    }
+    return value;
+  };
+
+  const objectValueString = (value: unknown) => {
+    const normalized = normalizePod2Value(value);
+    if (typeof normalized === "string") return normalized;
+    if (
+      typeof normalized === "number" ||
+      typeof normalized === "boolean" ||
+      typeof normalized === "bigint"
+    ) {
+      return String(normalized);
+    }
+    if (normalized == null) {
       return "null";
     }
     try {
-      return JSON.stringify(value);
+      return JSON.stringify(normalized);
     } catch {
-      return String(value);
+      return String(normalized);
     }
   };
 
   const formatObjectValue = (value: unknown) => {
     const trimmed = objectValueString(value).trim();
-    const isHexLike = /^(0x)?[0-9a-f]+$/i.test(trimmed);
+    const isHexLike = (() => {
+      if (/^0x[0-9a-f]+$/i.test(trimmed)) return true;
+      if (!/^[0-9a-f]+$/i.test(trimmed)) return false;
+      if (/[a-f]/i.test(trimmed)) return true;
+      return trimmed.length >= 16;
+    })();
     const normalizedHex = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
     const truncatedHex = truncateDisplayHash(normalizedHex);
     if (isHexLike && truncatedHex !== normalizedHex) {
