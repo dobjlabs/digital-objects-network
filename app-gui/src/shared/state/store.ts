@@ -38,7 +38,6 @@ interface ProofSummary {
 interface ProofState {
   runActionId: string | null;
   status: ProofStatus;
-  methodName: string | null;
   cpuCost: string | null;
   args: string[];
   messages: string[];
@@ -72,7 +71,6 @@ export interface AppState {
   applyRunSdkActionProgress: (event: RunSdkActionProgress) => void;
   runProof: (input: {
     actionId: ActionId;
-    methodName: string;
     inputBindings: Array<{
       objectPath: string;
       label: string;
@@ -98,7 +96,6 @@ export const useStore = create<AppState>((set) => ({
   proof: {
     runActionId: null,
     status: "idle",
-    methodName: null,
     cpuCost: null,
     args: [],
     messages: [],
@@ -254,7 +251,7 @@ export const useStore = create<AppState>((set) => ({
         },
       };
     }),
-  runProof: async ({ actionId, methodName, inputBindings, cpuCost }) => {
+  runProof: async ({ actionId, inputBindings, cpuCost }) => {
     const postDoneHoldMs = 2800;
     const verifyTargets =
       inputBindings.length > 0
@@ -273,7 +270,6 @@ export const useStore = create<AppState>((set) => ({
         proof: {
           runActionId: actionId,
           status: "generating",
-          methodName,
           cpuCost,
           args: verifyTargets,
           messages: ["Running SDK action..."],
@@ -330,7 +326,6 @@ export const useStore = create<AppState>((set) => ({
           ...prev.proof,
           runActionId: null,
           status: "idle",
-          methodName: null,
           cpuCost: null,
           args: [],
           messages: [],
@@ -349,7 +344,6 @@ export const useStore = create<AppState>((set) => ({
         proof: {
           runActionId: null,
           status: "error",
-          methodName,
           cpuCost,
           args: verifyTargets,
           messages: [],

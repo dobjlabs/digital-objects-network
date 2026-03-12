@@ -96,8 +96,8 @@ export function ProofRunnerPanel() {
           onClick={returnToRunningAction}
           disabled={alreadyViewingRunningAction}
           title={
-            proof.methodName
-              ? `Open ${proof.methodName}`
+            proof.runActionId
+              ? `Open ${proof.runActionId}`
               : "Open running action"
           }
         >

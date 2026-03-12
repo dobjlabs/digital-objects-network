@@ -26,7 +26,6 @@ interface ContextPanelProps {
   onClearSelection: () => void;
   onRunProof: (input: {
     actionId: ActionId;
-    methodName: string;
     inputBindings: Array<{
       objectPath: string;
       label: string;
@@ -625,7 +624,6 @@ export function ContextPanel({
         onRun: (boundArgs) =>
           onRunProof({
             actionId: action.id,
-            methodName: action.id,
             inputBindings: boundArgs.map((arg) => ({
               objectPath: arg.objectPath,
               label: arg.label,
