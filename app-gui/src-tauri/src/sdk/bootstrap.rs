@@ -1,6 +1,4 @@
-use super::{
-    object_store::{ensure_objects_dirs, load_object_files},
-};
+use super::object_store::{ensure_objects_dirs, load_object_files};
 use crate::objects::objects_dir;
 use craft_sdk::Helper;
 use pod2::middleware::Hash;

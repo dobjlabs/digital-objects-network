@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    fs,
-    path::Path,
-};
+use std::{collections::HashMap, fs, path::Path};
 
 use crate::objects::{nullified_objects_dir, ObjectRecord};
 

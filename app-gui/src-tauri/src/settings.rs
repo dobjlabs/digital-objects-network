@@ -104,8 +104,8 @@ fn read_settings(app: &tauri::AppHandle) -> Result<Option<AppSettings>, String> 
 
 fn write_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
     let path = settings_path(app)?;
-    let serialized =
-        serde_json::to_string(settings).map_err(|err| format!("failed to serialize settings: {err}"))?;
+    let serialized = serde_json::to_string(settings)
+        .map_err(|err| format!("failed to serialize settings: {err}"))?;
     fs::write(&path, serialized)
         .map_err(|err| format!("failed to write settings file {}: {err}", path.display()))
 }
