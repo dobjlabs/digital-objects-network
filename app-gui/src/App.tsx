@@ -12,7 +12,7 @@ import {
   openObjectsDir,
   sampleAppCpu,
 } from "./shared/api/tauriClient";
-import { useUiStore } from "./shared/state/uiStore";
+import { useStore } from "./shared/state/store";
 import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/layout.css";
@@ -26,24 +26,24 @@ import "./features/settings/SettingsModal.css";
 function App() {
   const [objectsDirPath, setObjectsDirPath] = useState("~/.objects");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const inventory = useUiStore((state) => state.inventory);
-  const actions = useUiStore((state) => state.actions);
-  const activeObjectId = useUiStore((state) => state.activeObjectId);
-  const activeActionId = useUiStore((state) => state.activeActionId);
-  const contextSelection = useUiStore((state) => state.contextSelection);
-  const showNullifiedItems = useUiStore((state) => state.showNullifiedItems);
-  const hydrateData = useUiStore((state) => state.hydrateData);
-  const selectObject = useUiStore((state) => state.selectObject);
-  const selectAction = useUiStore((state) => state.selectAction);
-  const clearSelection = useUiStore((state) => state.clearSelection);
-  const toggleNullified = useUiStore((state) => state.toggleNullified);
-  const recordCpuSample = useUiStore((state) => state.recordCpuSample);
-  const applyRunSdkActionProgress = useUiStore(
+  const inventory = useStore((state) => state.inventory);
+  const actions = useStore((state) => state.actions);
+  const activeObjectId = useStore((state) => state.activeObjectId);
+  const activeActionId = useStore((state) => state.activeActionId);
+  const contextSelection = useStore((state) => state.contextSelection);
+  const showNullifiedItems = useStore((state) => state.showNullifiedItems);
+  const hydrateData = useStore((state) => state.hydrateData);
+  const selectObject = useStore((state) => state.selectObject);
+  const selectAction = useStore((state) => state.selectAction);
+  const clearSelection = useStore((state) => state.clearSelection);
+  const toggleNullified = useStore((state) => state.toggleNullified);
+  const recordCpuSample = useStore((state) => state.recordCpuSample);
+  const applyRunSdkActionProgress = useStore(
     (state) => state.applyRunSdkActionProgress,
   );
-  const runProof = useUiStore((state) => state.runProof);
-  const proofStatus = useUiStore((state) => state.proof.status);
-  const proofRunning = useUiStore(
+  const runProof = useStore((state) => state.runProof);
+  const proofStatus = useStore((state) => state.proof.status);
+  const proofRunning = useStore(
     (state) =>
       state.proof.status === "generating" ||
       state.proof.status === "committing" ||

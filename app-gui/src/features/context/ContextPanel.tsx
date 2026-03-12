@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DragEvent } from "react";
 import type {
-  Action,
-  ContextSelection,
-  InventoryObject,
-} from "../../shared/types/domain";
+  ActionPayload as Action,
+  InventoryObjectPayload as InventoryObject,
+} from "../../shared/api/wireTypes";
 import {
   pickDobjFilePath,
   readDobjFile,
   type ActionId,
 } from "../../shared/api/tauriClient";
+import type { ContextSelection } from "../../shared/state/store";
 import {
   objectDisplayFileName,
   objectDisplayFileNameForClass,

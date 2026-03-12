@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { DragEvent } from "react";
-import type { InventoryObject } from "../../shared/types/domain";
+import type { InventoryObjectPayload as InventoryObject } from "../../shared/api/wireTypes";
 import { objectDisplayFileName } from "../../shared/objectDisplay";
 
 interface InventoryPanelProps {

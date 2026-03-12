@@ -1,4 +1,4 @@
-import type { InventoryObject } from "./types/domain";
+import type { InventoryObjectPayload as InventoryObject } from "./api/wireTypes";
 
 export const objectDisplayFileName = (
   item: Pick<InventoryObject, "className">,

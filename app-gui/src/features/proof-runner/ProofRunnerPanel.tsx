@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { useUiStore } from "../../shared/state/uiStore";
+import { useStore } from "../../shared/state/store";
 
 export function ProofRunnerPanel() {
-  const proof = useUiStore((state) => state.proof);
-  const contextSelection = useUiStore((state) => state.contextSelection);
-  const selectAction = useUiStore((state) => state.selectAction);
+  const proof = useStore((state) => state.proof);
+  const contextSelection = useStore((state) => state.contextSelection);
+  const selectAction = useStore((state) => state.selectAction);
   const prevStatusRef = useRef(proof.status);
   const [idleFadeIn, setIdleFadeIn] = useState(false);
   const [showCpuDuringRun, setShowCpuDuringRun] = useState(false);

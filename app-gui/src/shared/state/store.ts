@@ -3,12 +3,10 @@ import {
   loadGuiInventory,
   runSdkAction,
   type ActionId,
-  type ActionPayload,
-  type InventoryObjectPayload,
+  type ActionPayload as Action,
+  type InventoryObjectPayload as InventoryObject,
   type RunSdkActionProgress,
 } from "../api/tauriClient";
-import { initialUiState } from "./initialState";
-import type { Action, AppUiState, InventoryObject } from "../types/domain";
 
 type ProofStatus = "idle" | "generating" | "committing" | "summary" | "error";
 type StepStatus = "pending" | "running" | "done";
@@ -51,7 +49,16 @@ interface ProofState {
   stats: ProofStats;
 }
 
-interface UiStoreState extends AppUiState {
+export type ContextSelection =
+  | { kind: "none" }
+  | { kind: "object"; objectId: string }
+  | { kind: "action"; actionId: string };
+
+export interface AppState {
+  contextSelection: ContextSelection;
+  activeObjectId: string | null;
+  activeActionId: string | null;
+  showNullifiedItems: boolean;
   inventory: InventoryObject[];
   actions: Action[];
   proof: ProofState;
@@ -73,26 +80,15 @@ interface UiStoreState extends AppUiState {
   }) => Promise<void>;
 }
 
-const mapInventoryObject = (
-  object: InventoryObjectPayload,
-): InventoryObject => ({
-  id: object.id,
-  fileName: object.fileName,
-  className: object.className,
-  emoji: object.emoji,
-  nullifier: object.nullifier,
-  description: object.description,
-  obj: object.obj,
-});
-
-const mapAction = (action: ActionPayload): Action => ({
-  id: action.id,
-  emoji: action.emoji,
-  description: action.description,
-  cpuCost: action.cpuCost,
-  readsBlock: action.readsBlock,
-  inputClasses: action.inputClasses,
-});
+const initialAppState: Pick<
+  AppState,
+  "contextSelection" | "activeObjectId" | "activeActionId" | "showNullifiedItems"
+> = {
+  contextSelection: { kind: "none" },
+  activeObjectId: null,
+  activeActionId: null,
+  showNullifiedItems: false,
+};
 
 const formatRunError = (error: unknown): string => {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -121,8 +117,8 @@ const formatRunError = (error: unknown): string => {
   return "Failed to run action";
 };
 
-export const useUiStore = create<UiStoreState>((set) => ({
-  ...initialUiState,
+export const useStore = create<AppState>((set) => ({
+  ...initialAppState,
   inventory: [],
   actions: [],
   proof: {
@@ -150,8 +146,8 @@ export const useUiStore = create<UiStoreState>((set) => ({
     const data = await loadGuiInventory();
     set((prev) => ({
       ...prev,
-      inventory: data.inventory.map(mapInventoryObject),
-      actions: data.actions.map(mapAction),
+      inventory: data.inventory,
+      actions: data.actions,
     }));
   },
   selectObject: (objectId) =>

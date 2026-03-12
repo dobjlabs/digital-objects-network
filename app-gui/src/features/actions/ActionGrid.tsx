@@ -1,5 +1,8 @@
 import { useMemo, useState } from "react";
-import type { Action, InventoryObject } from "../../shared/types/domain";
+import type {
+  ActionPayload as Action,
+  InventoryObjectPayload as InventoryObject,
+} from "../../shared/api/wireTypes";
 
 interface ActionGridProps {
   actions: Action[];
