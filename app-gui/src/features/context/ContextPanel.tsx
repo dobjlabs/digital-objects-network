@@ -281,8 +281,9 @@ export function ContextPanel({
     readsBlock: boolean;
     inputClasses: string[];
     onRun: (boundArgs: BoundArg[]) => void;
-  }) =>
+    }) =>
     (() => {
+      const hasInputs = config.inputClasses.length > 0;
       const boundArgs = config.inputClasses.map(
         (_, index) => argBindings[argKey(config.methodId, index)] ?? null,
       );
@@ -290,12 +291,11 @@ export function ContextPanel({
         (value) => value?.objectPath?.trim().length,
       ).length;
       const allArgsBound =
-        config.inputClasses.length === 0 ||
-        filledCount === config.inputClasses.length;
+        !hasInputs || filledCount === config.inputClasses.length;
 
       return (
         <div className="method-card">
-          {config.inputClasses.length > 0 && (
+          {hasInputs && (
             <div className="method-card-body">
               {config.inputClasses.map((expectedClassName, index) => {
                 const key = argKey(config.methodId, index);
@@ -375,7 +375,7 @@ export function ContextPanel({
               })}
             </div>
           )}
-          <div className="method-footer">
+          <div className={`method-footer ${hasInputs ? "" : "no-inputs"}`.trim()}>
             <div className="method-meta-row">
               <div className="method-meta-line">
                 ⏱ CPU <span className="mval">{config.cpuCost}</span>

@@ -111,6 +111,10 @@
   font-family: "IBM Plex Sans", sans-serif;
 }
 
+.context-title-row + .context-desc {
+  margin-top: 12px;
+}
+
 .object-data {
   margin-bottom: 12px;
 }
@@ -285,6 +289,10 @@
   border-top: 1px solid var(--border);
   display: flex;
   align-items: stretch;
+}
+
+.method-footer.no-inputs {
+  border-top: none;
 }
 
 .method-meta-row {
