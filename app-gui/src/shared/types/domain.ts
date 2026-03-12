@@ -1,56 +1,32 @@
 import type { ActionId, ClassName } from "../generated/ids";
 
-export type MethodArgKind = "class";
-
-export interface ClassMeta {
-  name: ClassName;
-  hash: string;
-}
-
-export interface SourceActionMeta {
-  name: ActionId;
-  hash: string;
-}
-
-export interface MethodArg {
-  kind: MethodArgKind;
-  label: ClassName;
-  classHash: string;
-}
-
-export interface InventoryItem {
+export interface InventoryObject {
   id: string;
   fileName: string;
+  className: ClassName;
   emoji: string;
-  nullifier?: string;
-  classMeta: ClassMeta;
-  sourceAction: SourceActionMeta;
+  nullifier: string | null;
   description?: string;
   obj: Record<string, unknown>;
 }
 
-export interface Recipe {
+export interface Action {
   id: ActionId;
-  group: string;
-  name: ActionId;
   emoji: string;
-  hash: string;
-  verb: ActionId;
-  desc: string;
-  cpu: string;
+  description: string;
+  cpuCost: string;
   readsBlock: boolean;
-  args: MethodArg[];
-  unlocked: boolean;
+  inputClasses: ClassName[];
 }
 
 export type ContextSelection =
   | { kind: "none" }
-  | { kind: "item"; itemId: string }
-  | { kind: "recipe"; recipeId: string };
+  | { kind: "object"; objectId: string }
+  | { kind: "action"; actionId: string };
 
 export interface AppUiState {
   contextSelection: ContextSelection;
-  activeItemId: string | null;
-  activeRecipeId: string | null;
+  activeObjectId: string | null;
+  activeActionId: string | null;
   showNullifiedItems: boolean;
 }

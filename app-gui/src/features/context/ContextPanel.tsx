@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DragEvent } from "react";
 import type {
+  Action,
   ContextSelection,
-  InventoryItem,
-  MethodArg,
-  Recipe,
+  InventoryObject,
 } from "../../shared/types/domain";
 import {
   pickDobjFilePath,
@@ -18,8 +17,8 @@ import {
 
 interface ContextPanelProps {
   selection: ContextSelection;
-  items: InventoryItem[];
-  recipes: Recipe[];
+  inventory: InventoryObject[];
+  actions: Action[];
   onClearSelection: () => void;
   onRunProof: (input: {
     actionId: ActionId;
@@ -41,8 +40,8 @@ interface BoundArg {
 
 export function ContextPanel({
   selection,
-  items,
-  recipes,
+  inventory,
+  actions,
   onClearSelection,
   onRunProof,
   proofRunning,
@@ -52,12 +51,12 @@ export function ContextPanel({
   const [hoverArgKey, setHoverArgKey] = useState<string | null>(null);
   const [argErrors, setArgErrors] = useState<Record<string, string>>({});
   const previousProofStatusRef = useRef(proofStatus);
-  const isLive = (item: InventoryItem) => item.nullifier == null;
+  const isLive = (object: InventoryObject) => object.nullifier == null;
   const selectionKey =
-    selection.kind === "item"
-      ? `item:${selection.itemId}`
-      : selection.kind === "recipe"
-        ? `recipe:${selection.recipeId}`
+    selection.kind === "object"
+      ? `object:${selection.objectId}`
+      : selection.kind === "action"
+        ? `action:${selection.actionId}`
         : "none";
 
   useEffect(() => {
@@ -82,14 +81,12 @@ export function ContextPanel({
     objectPath?: string;
     name?: string;
     className?: string;
-    classHash?: string;
   } => {
     try {
       return JSON.parse(raw) as {
         objectPath?: string;
         name?: string;
         className?: string;
-        classHash?: string;
       };
     } catch {
       return { name: raw };
@@ -98,26 +95,22 @@ export function ContextPanel({
 
   const normalizeName = (value: string) => value.trim().toLowerCase();
 
-  const isArgCompatible = (
-    arg: MethodArg,
-    droppedClassHash?: string,
-    droppedClassName?: string,
-  ) => {
-    if (droppedClassHash && droppedClassHash === arg.classHash) return true;
+  const isArgCompatible = (expectedClassName: string, droppedClassName?: string) => {
     if (!droppedClassName) return false;
-    return normalizeName(droppedClassName) === normalizeName(arg.label);
+    return normalizeName(droppedClassName) === normalizeName(expectedClassName);
   };
 
   const handleDropArg = (
     event: DragEvent<HTMLDivElement>,
     methodId: string,
-    arg: MethodArg,
+    expectedClassName: string,
     index: number,
   ) => {
     if (proofRunning) return;
     event.preventDefault();
     event.stopPropagation();
     const raw =
+      event.dataTransfer.getData("application/x-zkcraft-object") ||
       event.dataTransfer.getData("application/x-zkcraft-item") ||
       event.dataTransfer.getData("text/plain") ||
       event.dataTransfer.getData("text");
@@ -128,11 +121,11 @@ export function ContextPanel({
     const droppedName = parsed.name ?? raw;
     const droppedPath = parsed.objectPath?.trim() ?? "";
 
-    if (!isArgCompatible(arg, parsed.classHash, parsed.className)) {
+    if (!isArgCompatible(expectedClassName, parsed.className)) {
       const got = parsed.className ?? droppedName;
       setArgErrors((prev) => ({
         ...prev,
-        [key]: `Expected ${arg.label} but got ${got}`,
+        [key]: `Expected ${expectedClassName} but got ${got}`,
       }));
       return;
     }
@@ -179,7 +172,7 @@ export function ContextPanel({
 
   const handleBrowseArgFile = async (
     methodId: string,
-    arg: MethodArg,
+    expectedClassName: string,
     index: number,
   ) => {
     const key = argKey(methodId, index);
@@ -224,7 +217,7 @@ export function ContextPanel({
     }
 
     const className = parsed.className.trim();
-    const isLive = parsed.nullifier === null;
+    const objectIsLive = parsed.nullifier === null;
     const fileLabel = objectDisplayFileNameForClass(className);
 
     if (!className) {
@@ -235,17 +228,15 @@ export function ContextPanel({
       return;
     }
 
-    if (
-      !isArgCompatible(arg, undefined, className)
-    ) {
+    if (!isArgCompatible(expectedClassName, className)) {
       setArgErrors((prev) => ({
         ...prev,
-        [key]: `Expected ${arg.label} but got ${className}`,
+        [key]: `Expected ${expectedClassName} but got ${className}`,
       }));
       return;
     }
 
-    if (!isLive) {
+    if (!objectIsLive) {
       setArgErrors((prev) => ({
         ...prev,
         [key]: "Only live objects can be bound",
@@ -264,13 +255,6 @@ export function ContextPanel({
     });
   };
 
-  const renderHashChip = (label: string, hash: string) => (
-    <span className="from-action-label">
-      {label}
-      <span className="proof-tooltip">{hash}</span>
-    </span>
-  );
-
   const renderMetaRow = (label: string, value: ReactNode) => (
     <div className="context-meta-row">
       <span className="context-meta-key">{label}</span>
@@ -283,34 +267,37 @@ export function ContextPanel({
     methodName: string;
     cpuCost: string;
     readsBlock: boolean;
-    args: MethodArg[];
+    inputClasses: string[];
     onRun: (boundArgs: BoundArg[]) => void;
   }) =>
     (() => {
-      const boundArgs = config.args.map(
+      const boundArgs = config.inputClasses.map(
         (_, index) => argBindings[argKey(config.methodId, index)] ?? null,
       );
       const filledCount = boundArgs.filter(
         (value) => value?.objectPath?.trim().length,
       ).length;
       const allArgsBound =
-        config.args.length === 0 || filledCount === config.args.length;
+        config.inputClasses.length === 0 ||
+        filledCount === config.inputClasses.length;
 
       return (
         <div className="method-card">
-          {config.args.length > 0 && (
+          {config.inputClasses.length > 0 && (
             <div className="method-card-body">
-              {config.args.map((arg, index) => {
+              {config.inputClasses.map((expectedClassName, index) => {
                 const key = argKey(config.methodId, index);
                 const bound = argBindings[key];
                 const isDropActive = hoverArgKey === key;
                 const err = argErrors[key];
 
                 return (
-                  <div key={`${arg.classHash}:${index}`} className="method-arg">
+                  <div key={`${expectedClassName}:${index}`} className="method-arg">
                     <div className="method-arg-row">
                       <span className="method-arg-label">
-                        {renderHashChip(`# ${arg.label}`, arg.classHash)}
+                        <span className="from-action-label">
+                          # {expectedClassName}
+                        </span>
                       </span>
                       <div
                         className={`method-arg-drop ${bound ? "filled" : ""} ${isDropActive ? "drop-active" : ""} ${err ? "error" : ""}`}
@@ -330,7 +317,12 @@ export function ContextPanel({
                           if (hoverArgKey !== key) setHoverArgKey(key);
                         }}
                         onDrop={(event) =>
-                          handleDropArg(event, config.methodId, arg, index)
+                          handleDropArg(
+                            event,
+                            config.methodId,
+                            expectedClassName,
+                            index,
+                          )
                         }
                       >
                         {bound?.label ??
@@ -350,7 +342,11 @@ export function ContextPanel({
                             });
                             return;
                           }
-                          void handleBrowseArgFile(config.methodId, arg, index);
+                          void handleBrowseArgFile(
+                            config.methodId,
+                            expectedClassName,
+                            index,
+                          );
                         }}
                       >
                         {bound?.objectPath ? "Clear" : "Browse..."}
@@ -388,9 +384,9 @@ export function ContextPanel({
       );
     })();
 
-  const displayThingPath = (item: InventoryItem) => {
-    const displayName = objectDisplayFileName(item);
-    return !isLive(item)
+  const displayThingPath = (object: InventoryObject) => {
+    const displayName = objectDisplayFileName(object);
+    return !isLive(object)
       ? `~/.objects/.nullified/${displayName}`
       : `~/.objects/${displayName}`;
   };
@@ -445,8 +441,8 @@ export function ContextPanel({
     };
   };
 
-  const renderObjectData = (item: InventoryItem) => {
-    const entries = Object.entries(item.obj).sort(([left], [right]) =>
+  const renderObjectData = (object: InventoryObject) => {
+    const entries = Object.entries(object.obj).sort(([left], [right]) =>
       left.localeCompare(right),
     );
     if (entries.length === 0) return null;
@@ -483,22 +479,24 @@ export function ContextPanel({
     );
   }
 
-  if (selection.kind === "item") {
-    const item = items.find((candidate) => candidate.id === selection.itemId);
-    if (!item)
+  if (selection.kind === "object") {
+    const object = inventory.find(
+      (candidate) => candidate.id === selection.objectId,
+    );
+    if (!object)
       return <section className="context-panel">Object not found.</section>;
 
-    const titleName = item.classMeta.name;
-    const liveValueRaw = isLive(item)
-      ? item.id
-      : (item.nullifier ?? "nullified");
+    const titleName = object.className;
+    const liveValueRaw = isLive(object)
+      ? object.id
+      : (object.nullifier ?? "nullified");
     const liveValue = truncateDisplayHash(liveValueRaw);
 
     return (
       <section className="context-panel">
         <div className="context-title-row">
           <div className="context-title">
-            {item.emoji} {titleName}
+            {object.emoji} {titleName}
           </div>
           <button
             type="button"
@@ -514,7 +512,7 @@ export function ContextPanel({
           {renderMetaRow(
             "Live",
             <span
-              className={`context-inline-hash ${isLive(item) ? "live" : "nullified"}`}
+              className={`context-inline-hash ${isLive(object) ? "live" : "nullified"}`}
               title={liveValueRaw}
             >
               {liveValue}
@@ -522,33 +520,28 @@ export function ContextPanel({
           )}
           {renderMetaRow(
             "Type",
-            <span className="from-action-label"># {item.classMeta.name}</span>,
+            <span className="from-action-label"># {object.className}</span>,
           )}
           {renderMetaRow(
             "Path",
-            <span className="context-inline-path">
-              {displayThingPath(item)}
-            </span>,
+            <span className="context-inline-path">{displayThingPath(object)}</span>,
           )}
         </div>
 
-        {item.description && <div className="context-desc">{item.description}</div>}
-        {renderObjectData(item)}
+        {object.description && <div className="context-desc">{object.description}</div>}
+        {renderObjectData(object)}
       </section>
     );
   }
 
-  const recipe = recipes.find(
-    (candidate) => candidate.id === selection.recipeId,
-  );
-  if (!recipe)
-    return <section className="context-panel">Action not found.</section>;
+  const action = actions.find((candidate) => candidate.id === selection.actionId);
+  if (!action) return <section className="context-panel">Action not found.</section>;
 
   return (
     <section className="context-panel">
       <div className="context-title-row">
         <div className="context-title">
-          {recipe.emoji} {recipe.name}
+          {action.emoji} {action.id}
         </div>
         <button
           type="button"
@@ -560,32 +553,23 @@ export function ContextPanel({
         </button>
       </div>
 
-      <div className="context-meta-block">
-        {renderMetaRow(
-          "Type",
-          <span className="from-action-label">
-            # {truncateDisplayHash(recipe.hash)}
-          </span>,
-        )}
-      </div>
-
-      <div className="context-desc">{recipe.desc}</div>
+      <div className="context-desc">{action.description}</div>
 
       {renderMethodCard({
-        methodId: `${recipe.id}:${recipe.verb}`,
-        methodName: recipe.verb,
-        cpuCost: recipe.cpu,
-        readsBlock: recipe.readsBlock,
-        args: recipe.args,
+        methodId: action.id,
+        methodName: action.id,
+        cpuCost: action.cpuCost,
+        readsBlock: action.readsBlock,
+        inputClasses: action.inputClasses,
         onRun: (boundArgs) =>
           onRunProof({
-            actionId: recipe.id,
-            methodName: recipe.verb,
+            actionId: action.id,
+            methodName: action.id,
             inputBindings: boundArgs.map((arg) => ({
               objectPath: arg.objectPath,
               label: arg.label,
             })),
-            cpuCost: recipe.cpu,
+            cpuCost: action.cpuCost,
           }),
       })}
     </section>

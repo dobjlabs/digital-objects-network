@@ -1,14 +1,14 @@
 import { create } from "zustand";
 import {
-  loadGuiBootstrap,
+  loadGuiInventory,
   runSdkAction,
   type ActionId,
+  type ActionPayload,
+  type InventoryObjectPayload,
   type RunSdkActionProgress,
-  type InventoryItemPayload,
-  type RecipePayload,
 } from "../api/tauriClient";
 import { initialUiState } from "./initialState";
-import type { AppUiState, InventoryItem, Recipe } from "../types/domain";
+import type { Action, AppUiState, InventoryObject } from "../types/domain";
 
 type ProofStatus = "idle" | "generating" | "committing" | "summary" | "error";
 type StepStatus = "pending" | "running" | "done";
@@ -52,12 +52,12 @@ interface ProofState {
 }
 
 interface UiStoreState extends AppUiState {
-  items: InventoryItem[];
-  recipes: Recipe[];
+  inventory: InventoryObject[];
+  actions: Action[];
   proof: ProofState;
   hydrateData: () => Promise<void>;
-  selectItem: (itemId: string) => void;
-  selectRecipe: (recipeId: string) => void;
+  selectObject: (objectId: string) => void;
+  selectAction: (actionId: string) => void;
   clearSelection: () => void;
   toggleNullified: () => void;
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
@@ -73,48 +73,25 @@ interface UiStoreState extends AppUiState {
   }) => Promise<void>;
 }
 
-const shortHash = (seed: string): string => {
-  const bytes = new Uint8Array(8);
-  for (let i = 0; i < seed.length; i += 1) {
-    bytes[i % 8] = (bytes[i % 8] + seed.charCodeAt(i)) & 0xff;
-  }
-  const toHex = (value: number) => value.toString(16).padStart(2, "0");
-  return `0x${toHex(bytes[0])}${toHex(bytes[1])}...${toHex(bytes[6])}${toHex(bytes[7])}`;
-};
-
-const mapItem = (item: InventoryItemPayload): InventoryItem => ({
-  id: item.id,
-  fileName: item.fileName,
-  emoji: item.emoji,
-  nullifier: item.nullifier,
-  classMeta: {
-    ...item.classMeta,
-    hash: shortHash(item.classMeta.hash),
-  },
-  sourceAction: {
-    ...item.sourceAction,
-    hash: shortHash(item.sourceAction.hash),
-  },
-  description: item.description,
-  obj: item.obj,
+const mapInventoryObject = (
+  object: InventoryObjectPayload,
+): InventoryObject => ({
+  id: object.id,
+  fileName: object.fileName,
+  className: object.className,
+  emoji: object.emoji,
+  nullifier: object.nullifier,
+  description: object.description,
+  obj: object.obj,
 });
 
-const mapRecipe = (recipe: RecipePayload): Recipe => ({
-  id: recipe.id,
-  group: recipe.group,
-  name: recipe.name,
-  emoji: recipe.emoji,
-  hash: recipe.hash,
-  verb: recipe.verb,
-  desc: recipe.desc,
-  cpu: recipe.cpu,
-  readsBlock: recipe.readsBlock,
-  args: recipe.args.map((arg) => ({
-    kind: "class",
-    label: arg.label,
-    classHash: shortHash(arg.classHash),
-  })),
-  unlocked: recipe.unlocked,
+const mapAction = (action: ActionPayload): Action => ({
+  id: action.id,
+  emoji: action.emoji,
+  description: action.description,
+  cpuCost: action.cpuCost,
+  readsBlock: action.readsBlock,
+  inputClasses: action.inputClasses,
 });
 
 const formatRunError = (error: unknown): string => {
@@ -146,8 +123,8 @@ const formatRunError = (error: unknown): string => {
 
 export const useUiStore = create<UiStoreState>((set) => ({
   ...initialUiState,
-  items: [],
-  recipes: [],
+  inventory: [],
+  actions: [],
   proof: {
     runActionId: null,
     status: "idle",
@@ -170,60 +147,60 @@ export const useUiStore = create<UiStoreState>((set) => ({
     },
   },
   hydrateData: async () => {
-    const data = await loadGuiBootstrap();
+    const data = await loadGuiInventory();
     set((prev) => ({
       ...prev,
-      items: data.objects.map(mapItem),
-      recipes: data.actions.map(mapRecipe),
+      inventory: data.inventory.map(mapInventoryObject),
+      actions: data.actions.map(mapAction),
     }));
   },
-  selectItem: (itemId) =>
+  selectObject: (objectId) =>
     set((prev) => {
       if (
-        prev.activeItemId === itemId &&
-        prev.activeRecipeId === null &&
-        prev.contextSelection.kind === "item" &&
-        prev.contextSelection.itemId === itemId
+        prev.activeObjectId === objectId &&
+        prev.activeActionId === null &&
+        prev.contextSelection.kind === "object" &&
+        prev.contextSelection.objectId === objectId
       ) {
         return {
           ...prev,
-          activeItemId: null,
+          activeObjectId: null,
           contextSelection: { kind: "none" },
         };
       }
       return {
         ...prev,
-        activeItemId: itemId,
-        activeRecipeId: null,
-        contextSelection: { kind: "item", itemId },
+        activeObjectId: objectId,
+        activeActionId: null,
+        contextSelection: { kind: "object", objectId },
       };
     }),
-  selectRecipe: (recipeId) =>
+  selectAction: (actionId) =>
     set((prev) => {
       if (
-        prev.activeRecipeId === recipeId &&
-        prev.activeItemId === null &&
-        prev.contextSelection.kind === "recipe" &&
-        prev.contextSelection.recipeId === recipeId
+        prev.activeActionId === actionId &&
+        prev.activeObjectId === null &&
+        prev.contextSelection.kind === "action" &&
+        prev.contextSelection.actionId === actionId
       ) {
         return {
           ...prev,
-          activeRecipeId: null,
+          activeActionId: null,
           contextSelection: { kind: "none" },
         };
       }
       return {
         ...prev,
-        activeItemId: null,
-        activeRecipeId: recipeId,
-        contextSelection: { kind: "recipe", recipeId },
+        activeObjectId: null,
+        activeActionId: actionId,
+        contextSelection: { kind: "action", actionId },
       };
     }),
   clearSelection: () =>
     set((prev) => ({
       ...prev,
-      activeItemId: null,
-      activeRecipeId: null,
+      activeObjectId: null,
+      activeActionId: null,
       contextSelection: { kind: "none" },
     })),
   toggleNullified: () =>
@@ -307,12 +284,7 @@ export const useUiStore = create<UiStoreState>((set) => ({
         },
       };
     }),
-  runProof: async ({
-    actionId,
-    methodName,
-    inputBindings,
-    cpuCost,
-  }) => {
+  runProof: async ({ actionId, methodName, inputBindings, cpuCost }) => {
     const postDoneHoldMs = 2800;
     const verifyTargets =
       inputBindings.length > 0

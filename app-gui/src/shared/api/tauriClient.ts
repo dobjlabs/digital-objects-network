@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppSettingsPayload,
   CpuSample,
-  LoadGuiBootstrapResult,
+  LoadGuiInventoryResult,
   ObjectRecordPayload,
   RunSdkActionInput,
   RunSdkActionProgress,
@@ -13,12 +13,12 @@ import type {
 export type { ActionId, ClassName } from "../generated/ids";
 
 export type {
+  ActionPayload,
   AppSettingsPayload,
   CpuSample,
-  InventoryItemPayload,
-  LoadGuiBootstrapResult,
+  InventoryObjectPayload,
+  LoadGuiInventoryResult,
   ObjectRecordPayload,
-  RecipePayload,
   RunSdkActionInput,
   RunSdkActionProgress,
   RunSdkActionResult,
@@ -32,8 +32,8 @@ export function openObjectsDir(): Promise<string> {
   return invoke<string>("open_objects_dir");
 }
 
-export function loadGuiBootstrap(): Promise<LoadGuiBootstrapResult> {
-  return invoke<LoadGuiBootstrapResult>("load_gui_bootstrap");
+export function loadGuiInventory(): Promise<LoadGuiInventoryResult> {
+  return invoke<LoadGuiInventoryResult>("load_gui_inventory");
 }
 
 export function runSdkAction(

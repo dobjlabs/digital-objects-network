@@ -7,7 +7,7 @@ mod run_action;
 mod runtime;
 mod synchronizer_client;
 
-pub use bootstrap::load_gui_bootstrap;
+pub use bootstrap::load_gui_inventory;
 pub(crate) use object_store::parse_object_file_from_path;
 pub use run_action::run_sdk_action;
 pub(crate) use runtime::ActionRunGate;

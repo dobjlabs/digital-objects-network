@@ -1,4 +1,4 @@
-.recipes-panel {
+.actions-panel {
   display: flex;
   flex-direction: column;
   background: var(--panel);
@@ -191,18 +191,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.action-row-hash {
-  font-size: 9px;
-  color: var(--text-dim);
-  white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.02em;
-}
-
-.action-row.active .action-row-hash {
-  color: var(--text);
 }
 
 .action-empty {

@@ -8,7 +8,7 @@ use cpu::{sample_app_cpu, CpuMonitor};
 use objects::{
     get_objects_dir, open_objects_dir, pick_dobj_file_path, read_dobj_file, start_objects_watcher,
 };
-use sdk::{load_gui_bootstrap, run_sdk_action, ActionRunGate};
+use sdk::{load_gui_inventory, run_sdk_action, ActionRunGate};
 use settings::{build_app_menu, get_app_settings, handle_settings_menu_event, save_app_settings};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -32,7 +32,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             sample_app_cpu,
-            load_gui_bootstrap,
+            load_gui_inventory,
             run_sdk_action,
             get_objects_dir,
             open_objects_dir,

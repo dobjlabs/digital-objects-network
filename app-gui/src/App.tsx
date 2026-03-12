@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { ContextPanel } from "./features/context/ContextPanel";
+import { ActionGrid } from "./features/actions/ActionGrid";
 import { InventoryPanel } from "./features/inventory/InventoryPanel";
 import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
-import { RecipeGrid } from "./features/recipes/RecipeGrid";
 import { SettingsModal } from "./features/settings/SettingsModal";
 import {
   getObjectsDir,
@@ -20,21 +20,21 @@ import "./styles/shared.css";
 import "./features/inventory/InventoryPanel.css";
 import "./features/context/ContextPanel.css";
 import "./features/proof-runner/ProofRunnerPanel.css";
-import "./features/recipes/RecipeGrid.css";
+import "./features/actions/ActionGrid.css";
 import "./features/settings/SettingsModal.css";
 
 function App() {
   const [objectsDirPath, setObjectsDirPath] = useState("~/.objects");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const items = useUiStore((state) => state.items);
-  const recipes = useUiStore((state) => state.recipes);
-  const activeItemId = useUiStore((state) => state.activeItemId);
-  const activeRecipeId = useUiStore((state) => state.activeRecipeId);
+  const inventory = useUiStore((state) => state.inventory);
+  const actions = useUiStore((state) => state.actions);
+  const activeObjectId = useUiStore((state) => state.activeObjectId);
+  const activeActionId = useUiStore((state) => state.activeActionId);
   const contextSelection = useUiStore((state) => state.contextSelection);
   const showNullifiedItems = useUiStore((state) => state.showNullifiedItems);
   const hydrateData = useUiStore((state) => state.hydrateData);
-  const selectItem = useUiStore((state) => state.selectItem);
-  const selectRecipe = useUiStore((state) => state.selectRecipe);
+  const selectObject = useUiStore((state) => state.selectObject);
+  const selectAction = useUiStore((state) => state.selectAction);
   const clearSelection = useUiStore((state) => state.clearSelection);
   const toggleNullified = useUiStore((state) => state.toggleNullified);
   const recordCpuSample = useUiStore((state) => state.recordCpuSample);
@@ -49,12 +49,12 @@ function App() {
       state.proof.status === "committing" ||
       state.proof.status === "summary",
   );
-  const selectedItem =
-    items.find((item) => item.id === activeItemId) ?? null;
+  const selectedObject =
+    inventory.find((object) => object.id === activeObjectId) ?? null;
 
   useEffect(() => {
     hydrateData().catch((error) => {
-      console.error("Failed to load GUI bootstrap:", error);
+      console.error("Failed to load GUI inventory:", error);
     });
   }, [hydrateData]);
 
@@ -216,11 +216,11 @@ function App() {
     <>
       <main className="app-shell">
         <InventoryPanel
-          items={items}
+          inventory={inventory}
           objectsDirPath={objectsDirPath}
-          activeItemId={activeItemId}
+          activeObjectId={activeObjectId}
           showNullifiedItems={showNullifiedItems}
-          onSelectItem={selectItem}
+          onSelectObject={selectObject}
           onToggleNullified={toggleNullified}
           onOpenObjectsDir={handleOpenObjectsDir}
         />
@@ -228,8 +228,8 @@ function App() {
         <div className="main-column">
           <ContextPanel
             selection={contextSelection}
-            items={items}
-            recipes={recipes}
+            inventory={inventory}
+            actions={actions}
             onRunProof={runProof}
             proofRunning={proofRunning}
             proofStatus={proofStatus}
@@ -239,11 +239,11 @@ function App() {
         </div>
 
         <div className="right-column">
-          <RecipeGrid
-            recipes={recipes}
-            activeRecipeId={activeRecipeId}
-            selectedItem={selectedItem}
-            onSelectRecipe={selectRecipe}
+          <ActionGrid
+            actions={actions}
+            activeActionId={activeActionId}
+            selectedObject={selectedObject}
+            onSelectAction={selectAction}
             onClearSelection={clearSelection}
           />
         </div>

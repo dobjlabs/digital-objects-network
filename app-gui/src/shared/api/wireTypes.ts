@@ -1,53 +1,30 @@
 import type { ActionId, ClassName } from "../generated/ids";
 
-export type MethodArgKind = "class";
 export type ProofPhase = "generateProof" | "commit";
 export type ProofProgressStatus = "running" | "done";
 
-export interface MethodArgPayload {
-  kind: MethodArgKind;
-  label: ClassName;
-  classHash: string;
-}
-
-export interface ClassMetaPayload {
-  name: ClassName;
-  hash: string;
-}
-
-export interface SourceActionMetaPayload {
-  name: ActionId;
-  hash: string;
-}
-
-export interface InventoryItemPayload {
+export interface InventoryObjectPayload {
   id: string;
   fileName: string;
+  className: ClassName;
   emoji: string;
-  nullifier?: string;
-  classMeta: ClassMetaPayload;
-  sourceAction: SourceActionMetaPayload;
+  nullifier: string | null;
   description?: string;
   obj: Record<string, unknown>;
 }
 
-export interface RecipePayload {
+export interface ActionPayload {
   id: ActionId;
-  group: string;
-  name: ActionId;
   emoji: string;
-  hash: string;
-  verb: ActionId;
-  desc: string;
-  cpu: string;
+  description: string;
+  cpuCost: string;
   readsBlock: boolean;
-  args: MethodArgPayload[];
-  unlocked: boolean;
+  inputClasses: ClassName[];
 }
 
-export interface LoadGuiBootstrapResult {
-  objects: InventoryItemPayload[];
-  actions: RecipePayload[];
+export interface LoadGuiInventoryResult {
+  inventory: InventoryObjectPayload[];
+  actions: ActionPayload[];
 }
 
 export interface RunSdkActionInput {

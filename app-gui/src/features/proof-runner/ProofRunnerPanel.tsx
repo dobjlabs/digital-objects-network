@@ -4,7 +4,7 @@ import { useUiStore } from "../../shared/state/uiStore";
 export function ProofRunnerPanel() {
   const proof = useUiStore((state) => state.proof);
   const contextSelection = useUiStore((state) => state.contextSelection);
-  const selectRecipe = useUiStore((state) => state.selectRecipe);
+  const selectAction = useUiStore((state) => state.selectAction);
   const prevStatusRef = useRef(proof.status);
   const [idleFadeIn, setIdleFadeIn] = useState(false);
   const [showCpuDuringRun, setShowCpuDuringRun] = useState(false);
@@ -67,12 +67,12 @@ export function ProofRunnerPanel() {
       proof.status === "summary");
   const alreadyViewingRunningAction =
     proof.runActionId !== null &&
-    contextSelection.kind === "recipe" &&
-    contextSelection.recipeId === proof.runActionId;
+    contextSelection.kind === "action" &&
+    contextSelection.actionId === proof.runActionId;
 
   const returnToRunningAction = () => {
     if (!proof.runActionId) return;
-    selectRecipe(proof.runActionId);
+    selectAction(proof.runActionId);
   };
 
   const toggleProofPanelView = () => {

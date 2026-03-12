@@ -1,29 +1,29 @@
 import { useRef } from "react";
-import type { InventoryItem } from "../../shared/types/domain";
 import type { DragEvent } from "react";
+import type { InventoryObject } from "../../shared/types/domain";
 import { objectDisplayFileName } from "../../shared/objectDisplay";
 
 interface InventoryPanelProps {
-  items: InventoryItem[];
+  inventory: InventoryObject[];
   objectsDirPath: string;
-  activeItemId: string | null;
+  activeObjectId: string | null;
   showNullifiedItems: boolean;
-  onSelectItem: (itemId: string) => void;
+  onSelectObject: (objectId: string) => void;
   onToggleNullified: () => void;
   onOpenObjectsDir: () => void;
 }
 
 export function InventoryPanel({
-  items,
+  inventory,
   objectsDirPath,
-  activeItemId,
+  activeObjectId,
   showNullifiedItems,
-  onSelectItem,
+  onSelectObject,
   onToggleNullified,
   onOpenObjectsDir,
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
-  const isLive = (item: InventoryItem) => item.nullifier == null;
+  const isLive = (object: InventoryObject) => object.nullifier == null;
 
   const truncateDisplayHash = (value: string) => {
     const trimmed = value.trim();
@@ -34,25 +34,24 @@ export function InventoryPanel({
 
   const handleDragStart = (
     event: DragEvent<HTMLButtonElement>,
-    item: InventoryItem,
+    object: InventoryObject,
   ) => {
-    if (!isLive(item)) {
+    if (!isLive(object)) {
       event.preventDefault();
       return;
     }
     const basePath = objectsDirPath.endsWith("/")
       ? objectsDirPath.slice(0, -1)
       : objectsDirPath;
-    const objectPath = `${basePath}/${item.fileName}`;
-    const displayName = objectDisplayFileName(item);
+    const objectPath = `${basePath}/${object.fileName}`;
+    const displayName = objectDisplayFileName(object);
 
     const payload = JSON.stringify({
       objectPath,
       name: displayName,
-      className: item.classMeta.name,
-      classHash: item.classMeta.hash,
+      className: object.className,
     });
-    event.dataTransfer.setData("application/x-zkcraft-item", payload);
+    event.dataTransfer.setData("application/x-zkcraft-object", payload);
     event.dataTransfer.setData("text/plain", displayName);
     event.dataTransfer.setData("text", displayName);
     event.dataTransfer.effectAllowed = "copy";
@@ -63,32 +62,32 @@ export function InventoryPanel({
     isDraggingRef.current = false;
   };
 
-  const handleClickItem = (itemId: string) => {
+  const handleClickObject = (objectId: string) => {
     if (isDraggingRef.current) return;
-    onSelectItem(itemId);
+    onSelectObject(objectId);
   };
 
-  const liveItems = items.filter((item) => isLive(item));
-  const nullifiedItems = items.filter((item) => !isLive(item));
+  const liveObjects = inventory.filter((object) => isLive(object));
+  const nullifiedObjects = inventory.filter((object) => !isLive(object));
 
-  const renderInventoryItem = (item: InventoryItem) => {
-    const displayName = objectDisplayFileName(item);
-    const hashLineRaw = isLive(item)
-      ? item.id
-      : (item.nullifier ?? "nullified");
+  const renderInventoryObject = (object: InventoryObject) => {
+    const displayName = objectDisplayFileName(object);
+    const hashLineRaw = isLive(object)
+      ? object.id
+      : (object.nullifier ?? "nullified");
     const hashLine = truncateDisplayHash(hashLineRaw);
     return (
       <button
-        key={item.id}
+        key={object.id}
         type="button"
-        className={`inventory-item ${activeItemId === item.id ? "active" : ""}`}
-        onClick={() => handleClickItem(item.id)}
-        draggable={isLive(item)}
-        onDragStart={(event) => handleDragStart(event, item)}
+        className={`inventory-item ${activeObjectId === object.id ? "active" : ""}`}
+        onClick={() => handleClickObject(object.id)}
+        draggable={isLive(object)}
+        onDragStart={(event) => handleDragStart(event, object)}
         onDragEnd={handleDragEnd}
       >
         <span className="inventory-file-icon">
-          <span className="inventory-emoji">{item.emoji}</span>
+          <span className="inventory-emoji">{object.emoji}</span>
         </span>
         <span className="inventory-main">
           <span className="inventory-name">{displayName}</span>
@@ -97,7 +96,7 @@ export function InventoryPanel({
           </span>
         </span>
         <span
-          className={`inventory-dot ${isLive(item) ? "live" : "nullified"}`}
+          className={`inventory-dot ${isLive(object) ? "live" : "nullified"}`}
         />
       </button>
     );
@@ -115,9 +114,9 @@ export function InventoryPanel({
       </button>
 
       <div className="inventory-list">
-        {liveItems.map(renderInventoryItem)}
+        {liveObjects.map(renderInventoryObject)}
 
-        {nullifiedItems.length > 0 && (
+        {nullifiedObjects.length > 0 && (
           <div className="nullified-section">
             <button
               type="button"
@@ -126,10 +125,10 @@ export function InventoryPanel({
             >
               <span className="nullified-label">nullified</span>
               <span className="nullified-count">
-                {showNullifiedItems ? "▴" : "▾"} {nullifiedItems.length}
+                {showNullifiedItems ? "▴" : "▾"} {nullifiedObjects.length}
               </span>
             </button>
-            {showNullifiedItems && nullifiedItems.map(renderInventoryItem)}
+            {showNullifiedItems && nullifiedObjects.map(renderInventoryObject)}
           </div>
         )}
       </div>

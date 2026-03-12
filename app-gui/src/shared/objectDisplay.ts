@@ -1,8 +1,8 @@
-import type { InventoryItem } from "./types/domain";
+import type { InventoryObject } from "./types/domain";
 
 export const objectDisplayFileName = (
-  item: Pick<InventoryItem, "classMeta">,
-) => `${item.classMeta.name}.dobj`;
+  item: Pick<InventoryObject, "className">,
+) => `${item.className}.dobj`;
 
 export const objectDisplayFileNameForClass = (className: string) =>
   `${className}.dobj`;
