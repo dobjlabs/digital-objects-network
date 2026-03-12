@@ -11,6 +11,7 @@ import {
 } from "../../shared/api/tauriClient";
 import { truncateDisplayHash } from "../../shared/format";
 import {
+  displayPathInObjectsDir,
   displayObjectFileName,
   isLiveObject,
   joinObjectsDirPath,
@@ -405,19 +406,23 @@ export function ContextPanel({
 
   const displayThingPath = (object: InventoryObject) => {
     const displayName = displayObjectFileName(object.className);
-    return joinObjectsDirPath(objectsDirPath, displayName, {
+    const absolutePath = joinObjectsDirPath(objectsDirPath, displayName, {
       nullified: !isLiveObject(object),
     });
+    return displayPathInObjectsDir(absolutePath, objectsDirPath);
   };
 
   const objectValueString = (value: unknown) => {
     if (typeof value === "string") {
       const trimmed = value.trim();
-      const rawInner = trimmed
-        .trim()
-        .replace(/^Raw\((.*)\)$/, "$1")
-        .trim();
+      const rawInner = trimmed.trim().replace(/^Raw\((.*)\)$/, "$1").trim();
       return rawInner;
+    }
+    if (typeof value === "object" && value !== null) {
+      const record = value as Record<string, unknown>;
+      if ("Raw" in record) {
+        return objectValueString(record.Raw);
+      }
     }
     if (
       typeof value === "number" ||
@@ -438,10 +443,14 @@ export function ContextPanel({
 
   const formatObjectValue = (value: unknown) => {
     const trimmed = objectValueString(value).trim();
-    const isHex = /^0x[0-9a-f]+$/i.test(trimmed);
-    if (isHex && trimmed.length > 24) {
+    const isHexLike = /^(0x)?[0-9a-f]+$/i.test(trimmed);
+    const normalizedHex = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+    const truncatedHex = truncateDisplayHash(normalizedHex);
+    if (isHexLike && truncatedHex !== normalizedHex) {
       return {
-        display: `${trimmed.slice(0, 10)}...${trimmed.slice(-8)}`,
+        display: trimmed.startsWith("0x")
+          ? truncatedHex
+          : truncatedHex.slice("0x".length),
         full: trimmed,
         mono: true,
       };
@@ -449,14 +458,22 @@ export function ContextPanel({
     return {
       display: trimmed,
       full: undefined,
-      mono: isHex,
+      mono: isHexLike,
     };
   };
 
   const renderObjectData = (object: InventoryObject) => {
-    const entries = Object.entries(object.obj).sort(([left], [right]) =>
-      left.localeCompare(right),
-    );
+    const topLevelEntries = Object.entries(object.obj);
+    const entries = (() => {
+      if (topLevelEntries.length === 1 && topLevelEntries[0][0] === "kvs") {
+        const kvs = topLevelEntries[0][1];
+        if (typeof kvs === "object" && kvs !== null) {
+          return Object.entries(kvs as Record<string, unknown>);
+        }
+      }
+      return topLevelEntries;
+    })().sort(([left], [right]) => left.localeCompare(right));
+
     if (entries.length === 0) return null;
 
     return (

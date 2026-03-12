@@ -3,6 +3,7 @@ import type { DragEvent } from "react";
 import type { InventoryObjectPayload as InventoryObject } from "../../shared/api/wireTypes";
 import { truncateDisplayHash } from "../../shared/format";
 import {
+  displayPathInObjectsDir,
   displayObjectFileName,
   isLiveObject,
   joinObjectsDirPath,
@@ -102,7 +103,7 @@ export function InventoryPanel({
         type="button"
         className="panel-header panel-header-button"
         onClick={onOpenObjectsDir}
-        title={objectsDirPath}
+        title={displayPathInObjectsDir(objectsDirPath, objectsDirPath)}
       >
         Your Objects
       </button>
