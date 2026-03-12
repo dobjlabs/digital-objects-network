@@ -1,8 +1,10 @@
+#[cfg(target_os = "macos")]
 use std::{
     env, fs,
     path::{Path, PathBuf},
 };
 
+#[cfg(target_os = "macos")]
 fn find_scip_lib_dir_from_target(manifest_dir: &Path) -> Option<PathBuf> {
     let workspace_root = manifest_dir.parent()?.parent()?;
     let target_dir = workspace_root.join("target");
@@ -34,6 +36,7 @@ fn find_scip_lib_dir_from_target(manifest_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+#[cfg(target_os = "macos")]
 fn copy_scip_dylibs(lib_dir: &Path, bundle_libs_dir: &Path) {
     if fs::create_dir_all(bundle_libs_dir).is_err() {
         return;
