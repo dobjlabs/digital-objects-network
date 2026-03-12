@@ -193,6 +193,18 @@
   text-overflow: ellipsis;
 }
 
+.action-row-hash {
+  font-size: 9px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em;
+}
+
+.action-row.active .action-row-hash {
+  color: var(--text);
+}
+
 .action-empty {
   padding: 10px 12px;
   font-size: 10px;

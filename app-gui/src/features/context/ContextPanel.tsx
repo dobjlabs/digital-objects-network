@@ -572,6 +572,8 @@ export function ContextPanel({
   );
   if (!action)
     return <section className="context-panel">Action not found.</section>;
+  const actionHashRaw = action.hash.trim();
+  const actionHashDisplay = truncateDisplayHash(actionHashRaw);
 
   return (
     <section className="context-panel">
@@ -587,6 +589,15 @@ export function ContextPanel({
         >
           x
         </button>
+      </div>
+
+      <div className="context-meta-block compact">
+        {renderMetaRow(
+          "Type",
+          <span className="context-inline-hash" title={actionHashRaw}>
+            # {actionHashDisplay}
+          </span>,
+        )}
       </div>
 
       <div className="context-desc">{action.description}</div>

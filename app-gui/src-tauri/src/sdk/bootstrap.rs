@@ -2,6 +2,7 @@ use super::{
     object_store::{ensure_objects_dirs, load_object_files},
 };
 use crate::objects::objects_dir;
+use craft_sdk::Helper;
 use serde::Serialize;
 
 use crate::{objects::ObjectRecord, spec};
@@ -23,6 +24,7 @@ pub struct InventoryObject {
 pub struct Action {
     pub id: String,
     pub emoji: String,
+    pub hash: String,
     pub description: String,
     pub cpu_cost: String,
     pub reads_block: bool,
@@ -30,11 +32,18 @@ pub struct Action {
 }
 
 pub(super) fn build_action_catalog() -> Vec<Action> {
+    let helper = Helper::new(spec::dependencies(), spec::actions());
+    let action_hashes = helper.action_hashes();
+
     spec::visible_action_descriptors()
         .into_iter()
         .map(|descriptor| Action {
-            id: descriptor.name,
+            id: descriptor.name.clone(),
             emoji: descriptor.ui.emoji.to_string(),
+            hash: action_hashes
+                .get(&descriptor.name)
+                .map(|hash| format!("{:#}", hash))
+                .unwrap_or_default(),
             description: descriptor.ui.description.to_string(),
             cpu_cost: descriptor.ui.cpu_cost.to_string(),
             reads_block: descriptor.ui.reads_block,

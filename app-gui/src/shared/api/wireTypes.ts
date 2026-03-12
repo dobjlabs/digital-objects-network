@@ -16,6 +16,7 @@ export interface InventoryObjectPayload {
 export interface ActionPayload {
   id: ActionId;
   emoji: string;
+  hash: string;
   description: string;
   cpuCost: string;
   readsBlock: boolean;
