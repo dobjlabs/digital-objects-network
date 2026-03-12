@@ -91,7 +91,6 @@ export function ActionGrid({
             type="button"
             className={`action-row ${activeActionId === action.id ? "active" : ""}`}
             onClick={() => onSelectAction(action.id)}
-            title={`${action.description}${action.hash ? `\n${action.hash}` : ""}`}
           >
             <span className="action-row-emoji">{action.emoji}</span>
             <span className="action-row-name">{action.id}</span>

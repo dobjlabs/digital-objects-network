@@ -73,7 +73,6 @@ export function ProofRunnerPanel() {
         type="button"
         className="proof-jump-btn"
         onClick={toggleProofPanelView}
-        title={showCpuDuringRun ? "Show action details" : "Show CPU chart"}
       >
         {showCpuDuringRun ? "Show Action" : "Show CPU Chart"}
       </button>
@@ -83,11 +82,6 @@ export function ProofRunnerPanel() {
           className="proof-jump-btn"
           onClick={returnToRunningAction}
           disabled={alreadyViewingRunningAction}
-          title={
-            proof.runActionId
-              ? `Open ${proof.runActionId}`
-              : "Open running action"
-          }
         >
           {alreadyViewingRunningAction ? "Viewing Action" : "Return to Action"}
         </button>
@@ -102,7 +96,9 @@ export function ProofRunnerPanel() {
 
   if (showCpuPanel) {
     return (
-      <section className={`cpu-panel proof-panel proof-panel-idle${idlePanelClass}`}>
+      <section
+        className={`cpu-panel proof-panel proof-panel-idle${idlePanelClass}`}
+      >
         {runActive && showCpuDuringRun ? controlsRow : null}
         <div className="idle-section idle-cpu">
           <div className="proof-title cpu-title">CPU Usage</div>
