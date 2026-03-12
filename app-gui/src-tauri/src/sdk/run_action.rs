@@ -147,8 +147,9 @@ fn verify_inputs_grounded(sync_api_url: &str, inputs: &[ResolvedInput]) -> Resul
     for (file_name, source_tx_hash) in input_sources {
         if !grounded_txs.contains(&source_tx_hash) {
             return Err(format!(
-                "input not yet synchronized; wait and retry: {}",
-                format!("{} -> {}", file_name, encode_hash_hex(&source_tx_hash))
+                "input not yet synchronized; wait and retry: {} -> {}",
+                file_name,
+                encode_hash_hex(&source_tx_hash)
             ));
         }
     }
@@ -156,16 +157,30 @@ fn verify_inputs_grounded(sync_api_url: &str, inputs: &[ResolvedInput]) -> Resul
     Ok(())
 }
 
-async fn submit_and_confirm_relayer(
-    app: &tauri::AppHandle,
-    run_id: &str,
-    old_root: &str,
-    relayer_url: &str,
-    action_id: &str,
+struct RelayerSubmitRequest<'a> {
+    run_id: &'a str,
+    old_root: &'a str,
+    relayer_url: &'a str,
+    action_id: &'a str,
     payload_bytes: Vec<u8>,
     timeout_secs: u64,
     poll_interval_ms: u64,
+}
+
+async fn submit_and_confirm_relayer(
+    app: &tauri::AppHandle,
+    request: RelayerSubmitRequest<'_>,
 ) -> Result<(), String> {
+    let RelayerSubmitRequest {
+        run_id,
+        old_root,
+        relayer_url,
+        action_id,
+        payload_bytes,
+        timeout_secs,
+        poll_interval_ms,
+    } = request;
+
     emit_commit_step(app, run_id, "Submitting proof to relayer", old_root)?;
 
     let relayer_url_for_submit = relayer_url.to_string();
@@ -367,13 +382,15 @@ pub async fn run_sdk_action(
 
     submit_and_confirm_relayer(
         &app,
-        &action_id,
-        &old_root,
-        &app_settings.relayer_api_url,
-        &action_id,
-        payload_bytes,
-        RELAYER_POLL_TIMEOUT_SECS,
-        RELAYER_POLL_INTERVAL_MS,
+        RelayerSubmitRequest {
+            run_id: &action_id,
+            old_root: &old_root,
+            relayer_url: &app_settings.relayer_api_url,
+            action_id: &action_id,
+            payload_bytes,
+            timeout_secs: RELAYER_POLL_TIMEOUT_SECS,
+            poll_interval_ms: RELAYER_POLL_INTERVAL_MS,
+        },
     )
     .await?;
 

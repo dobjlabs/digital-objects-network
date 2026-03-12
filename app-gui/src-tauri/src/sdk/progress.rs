@@ -34,58 +34,34 @@ fn emit_progress(app: &tauri::AppHandle, payload: &RunSdkActionProgress) -> Resu
         .map_err(|err| format!("failed to emit run progress: {err}"))
 }
 
-fn emit_phase(
-    app: &tauri::AppHandle,
-    run_id: &str,
-    phase: ProofPhase,
-    status: ProofProgressStatus,
-    message: String,
-    old_root: Option<&str>,
-    new_root: Option<&str>,
-    output_files: Option<Vec<String>>,
-) -> Result<(), String> {
-    emit_progress(
-        app,
-        &RunSdkActionProgress {
-            run_id: run_id.to_string(),
-            phase,
-            status,
-            message,
-            old_root: old_root.map(|value| value.to_string()),
-            new_root: new_root.map(|value| value.to_string()),
-            output_files,
-        },
-    )
-}
-
 pub(super) fn emit_generate_proof_step(
     app: &tauri::AppHandle,
     run_id: &str,
     step_label: &str,
 ) -> Result<(), String> {
-    emit_phase(
-        app,
-        run_id,
-        ProofPhase::GenerateProof,
-        ProofProgressStatus::Running,
-        step_label.to_string(),
-        None,
-        None,
-        None,
-    )
+    let payload = RunSdkActionProgress {
+        run_id: run_id.to_string(),
+        phase: ProofPhase::GenerateProof,
+        status: ProofProgressStatus::Running,
+        message: step_label.to_string(),
+        old_root: None,
+        new_root: None,
+        output_files: None,
+    };
+    emit_progress(app, &payload)
 }
 
 pub(super) fn emit_generate_proof_done(app: &tauri::AppHandle, run_id: &str) -> Result<(), String> {
-    emit_phase(
-        app,
-        run_id,
-        ProofPhase::GenerateProof,
-        ProofProgressStatus::Done,
-        "Proof generation complete".to_string(),
-        None,
-        None,
-        None,
-    )
+    let payload = RunSdkActionProgress {
+        run_id: run_id.to_string(),
+        phase: ProofPhase::GenerateProof,
+        status: ProofProgressStatus::Done,
+        message: "Proof generation complete".to_string(),
+        old_root: None,
+        new_root: None,
+        output_files: None,
+    };
+    emit_progress(app, &payload)
 }
 
 pub(super) fn emit_commit_step(
@@ -94,16 +70,16 @@ pub(super) fn emit_commit_step(
     step_label: &str,
     old_root: &str,
 ) -> Result<(), String> {
-    emit_phase(
-        app,
-        run_id,
-        ProofPhase::Commit,
-        ProofProgressStatus::Running,
-        step_label.to_string(),
-        Some(old_root),
-        None,
-        None,
-    )
+    let payload = RunSdkActionProgress {
+        run_id: run_id.to_string(),
+        phase: ProofPhase::Commit,
+        status: ProofProgressStatus::Running,
+        message: step_label.to_string(),
+        old_root: Some(old_root.to_string()),
+        new_root: None,
+        output_files: None,
+    };
+    emit_progress(app, &payload)
 }
 
 pub(super) fn emit_commit_done(
@@ -111,14 +87,14 @@ pub(super) fn emit_commit_done(
     run_id: &str,
     result: &RunSdkActionResult,
 ) -> Result<(), String> {
-    emit_phase(
-        app,
-        run_id,
-        ProofPhase::Commit,
-        ProofProgressStatus::Done,
-        "Commit complete".to_string(),
-        Some(&result.old_root),
-        Some(&result.new_root),
-        Some(result.output_files.clone()),
-    )
+    let payload = RunSdkActionProgress {
+        run_id: run_id.to_string(),
+        phase: ProofPhase::Commit,
+        status: ProofProgressStatus::Done,
+        message: "Commit complete".to_string(),
+        old_root: Some(result.old_root.clone()),
+        new_root: Some(result.new_root.clone()),
+        output_files: Some(result.output_files.clone()),
+    };
+    emit_progress(app, &payload)
 }

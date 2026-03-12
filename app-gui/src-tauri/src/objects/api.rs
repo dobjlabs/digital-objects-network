@@ -40,5 +40,5 @@ pub fn read_dobj_file(path: String) -> Result<ObjectRecord, String> {
     if !path.exists() {
         return Err(format!("selected file does not exist: {}", path.display()));
     }
-    Ok(parse_object_file_from_path(&path)?)
+    parse_object_file_from_path(&path)
 }
