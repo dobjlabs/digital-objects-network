@@ -26,7 +26,7 @@ pub(super) struct RunSdkActionProgress {
     pub(super) message: String,
     pub(super) old_root: Option<String>,
     pub(super) new_root: Option<String>,
-    pub(super) output_file: Option<String>,
+    pub(super) output_files: Option<Vec<String>>,
 }
 
 fn emit_progress(app: &tauri::AppHandle, payload: &RunSdkActionProgress) -> Result<(), String> {
@@ -42,7 +42,7 @@ fn emit_phase(
     message: String,
     old_root: Option<&str>,
     new_root: Option<&str>,
-    output_file: Option<String>,
+    output_files: Option<Vec<String>>,
 ) -> Result<(), String> {
     emit_progress(
         app,
@@ -53,7 +53,7 @@ fn emit_phase(
             message,
             old_root: old_root.map(|value| value.to_string()),
             new_root: new_root.map(|value| value.to_string()),
-            output_file,
+            output_files,
         },
     )
 }
@@ -119,6 +119,6 @@ pub(super) fn emit_commit_done(
         "Commit complete".to_string(),
         Some(&result.old_root),
         Some(&result.new_root),
-        result.output_files.first().cloned(),
+        Some(result.output_files.clone()),
     )
 }

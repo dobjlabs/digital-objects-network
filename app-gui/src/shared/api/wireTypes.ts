@@ -57,7 +57,7 @@ export interface RunSdkActionProgress {
   message: string;
   oldRoot: string | null;
   newRoot: string | null;
-  outputFile: string | null;
+  outputFiles: string[] | null;
 }
 
 export interface CpuSample {

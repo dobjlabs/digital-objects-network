@@ -137,17 +137,6 @@ impl<'de> Deserialize<'de> for ObjectRecord {
         D: Deserializer<'de>,
     {
         let value = Value::deserialize(deserializer)?;
-        let fields = value
-            .as_object()
-            .ok_or_else(|| D::Error::custom("invalid object file: expected JSON object"))?;
-        if fields.contains_key("txLive")
-            || fields.contains_key("txNullifiers")
-            || fields.contains_key("txStateRoot")
-        {
-            return Err(D::Error::custom(
-                "invalid object file: legacy txLive/txNullifiers/txStateRoot fields are not supported",
-            ));
-        }
         ObjectRecord::from_file_value(value).map_err(D::Error::custom)
     }
 }
