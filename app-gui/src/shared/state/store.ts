@@ -7,6 +7,7 @@ import {
   type InventoryObjectPayload as InventoryObject,
   type RunSdkActionProgress,
 } from "../api/tauriClient";
+import { normalizeErrorMessage } from "../error";
 
 type ProofStatus = "idle" | "generating" | "committing" | "summary" | "error";
 type StepStatus = "pending" | "running" | "done";
@@ -88,33 +89,6 @@ const initialAppState: Pick<
   activeObjectId: null,
   activeActionId: null,
   showNullifiedItems: false,
-};
-
-const formatRunError = (error: unknown): string => {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-  if (typeof error === "string" && error.trim().length > 0) {
-    return error;
-  }
-  if (error && typeof error === "object") {
-    const record = error as Record<string, unknown>;
-    for (const key of ["message", "error", "cause"]) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim().length > 0) {
-        return value;
-      }
-    }
-    try {
-      const serialized = JSON.stringify(error);
-      if (serialized && serialized !== "{}") {
-        return serialized;
-      }
-    } catch {
-      // fall through to generic text
-    }
-  }
-  return "Failed to run action";
 };
 
 export const useStore = create<AppState>((set) => ({
@@ -368,7 +342,7 @@ export const useStore = create<AppState>((set) => ({
         },
       }));
     } catch (error) {
-      const errorMessage = formatRunError(error);
+      const errorMessage = normalizeErrorMessage(error, "Failed to run action");
       console.error("Failed to run SDK action:", error);
       set((prev) => ({
         ...prev,

@@ -5,20 +5,11 @@ import {
   saveAppSettings,
   type AppSettingsPayload,
 } from "../../shared/api/tauriClient";
+import { normalizeErrorMessage } from "../../shared/error";
 
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
-}
-
-function normalizeError(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-  if (typeof error === "string" && error.trim().length > 0) {
-    return error;
-  }
-  return "Failed to save settings";
 }
 
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
@@ -42,7 +33,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(normalizeError(err));
+        setError(normalizeErrorMessage(err, "Failed to save settings"));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -76,7 +67,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       setForm(next);
       onClose();
     } catch (err) {
-      setError(normalizeError(err));
+      setError(normalizeErrorMessage(err, "Failed to save settings"));
     } finally {
       setSaving(false);
     }
