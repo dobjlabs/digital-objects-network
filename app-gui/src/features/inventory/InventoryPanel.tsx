@@ -1,6 +1,12 @@
 import { useRef } from "react";
 import type { DragEvent } from "react";
 import type { InventoryObjectPayload as InventoryObject } from "../../shared/api/wireTypes";
+import { truncateDisplayHash } from "../../shared/format";
+import {
+  displayObjectFileName,
+  isLiveObject,
+  joinObjectsDirPath,
+} from "../../shared/objectUtils";
 
 interface InventoryPanelProps {
   inventory: InventoryObject[];
@@ -22,29 +28,17 @@ export function InventoryPanel({
   onOpenObjectsDir,
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
-  const isLive = (object: InventoryObject) => object.nullifier == null;
-  const displayFileName = (className: string) => `${className}.dobj`;
-
-  const truncateDisplayHash = (value: string) => {
-    const trimmed = value.trim();
-    if (!/^0x[0-9a-f]+$/i.test(trimmed)) return trimmed;
-    if (trimmed.length <= 14) return trimmed;
-    return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
-  };
 
   const handleDragStart = (
     event: DragEvent<HTMLButtonElement>,
     object: InventoryObject,
   ) => {
-    if (!isLive(object)) {
+    if (!isLiveObject(object)) {
       event.preventDefault();
       return;
     }
-    const basePath = objectsDirPath.endsWith("/")
-      ? objectsDirPath.slice(0, -1)
-      : objectsDirPath;
-    const objectPath = `${basePath}/${object.fileName}`;
-    const displayName = displayFileName(object.className);
+    const objectPath = joinObjectsDirPath(objectsDirPath, object.fileName);
+    const displayName = displayObjectFileName(object.className);
 
     const payload = JSON.stringify({
       objectPath,
@@ -67,12 +61,12 @@ export function InventoryPanel({
     onSelectObject(objectId);
   };
 
-  const liveObjects = inventory.filter((object) => isLive(object));
-  const nullifiedObjects = inventory.filter((object) => !isLive(object));
+  const liveObjects = inventory.filter((object) => isLiveObject(object));
+  const nullifiedObjects = inventory.filter((object) => !isLiveObject(object));
 
   const renderInventoryObject = (object: InventoryObject) => {
-    const displayName = displayFileName(object.className);
-    const hashLineRaw = isLive(object)
+    const displayName = displayObjectFileName(object.className);
+    const hashLineRaw = isLiveObject(object)
       ? object.id
       : (object.nullifier ?? "nullified");
     const hashLine = truncateDisplayHash(hashLineRaw);
@@ -82,7 +76,7 @@ export function InventoryPanel({
         type="button"
         className={`inventory-item ${activeObjectId === object.id ? "active" : ""}`}
         onClick={() => handleClickObject(object.id)}
-        draggable={isLive(object)}
+        draggable={isLiveObject(object)}
         onDragStart={(event) => handleDragStart(event, object)}
         onDragEnd={handleDragEnd}
       >
@@ -96,7 +90,7 @@ export function InventoryPanel({
           </span>
         </span>
         <span
-          className={`inventory-dot ${isLive(object) ? "live" : "nullified"}`}
+          className={`inventory-dot ${isLiveObject(object) ? "live" : "nullified"}`}
         />
       </button>
     );

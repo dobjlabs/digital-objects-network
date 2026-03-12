@@ -229,6 +229,7 @@ function App() {
           <ContextPanel
             selection={contextSelection}
             inventory={inventory}
+            objectsDirPath={objectsDirPath}
             actions={actions}
             onRunProof={runProof}
             proofRunning={proofRunning}

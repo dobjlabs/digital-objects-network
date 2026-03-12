@@ -9,11 +9,18 @@ import {
   readDobjFile,
   type ActionId,
 } from "../../shared/api/tauriClient";
+import { truncateDisplayHash } from "../../shared/format";
+import {
+  displayObjectFileName,
+  isLiveObject,
+  joinObjectsDirPath,
+} from "../../shared/objectUtils";
 import type { ContextSelection } from "../../shared/state/store";
 
 interface ContextPanelProps {
   selection: ContextSelection;
   inventory: InventoryObject[];
+  objectsDirPath: string;
   actions: Action[];
   onClearSelection: () => void;
   onRunProof: (input: {
@@ -37,6 +44,7 @@ interface BoundArg {
 export function ContextPanel({
   selection,
   inventory,
+  objectsDirPath,
   actions,
   onClearSelection,
   onRunProof,
@@ -47,8 +55,6 @@ export function ContextPanel({
   const [hoverArgKey, setHoverArgKey] = useState<string | null>(null);
   const [argErrors, setArgErrors] = useState<Record<string, string>>({});
   const previousProofStatusRef = useRef(proofStatus);
-  const isLive = (object: InventoryObject) => object.nullifier == null;
-  const displayFileName = (className: string) => `${className}.dobj`;
   const selectionKey =
     selection.kind === "object"
       ? `object:${selection.objectId}`
@@ -224,7 +230,7 @@ export function ContextPanel({
 
     const className = parsed.className.trim();
     const objectIsLive = parsed.nullifier === null;
-    const fileLabel = displayFileName(className);
+    const fileLabel = displayObjectFileName(className);
 
     if (!className) {
       setArgErrors((prev) => ({
@@ -398,17 +404,10 @@ export function ContextPanel({
     })();
 
   const displayThingPath = (object: InventoryObject) => {
-    const displayName = displayFileName(object.className);
-    return !isLive(object)
-      ? `~/.objects/.nullified/${displayName}`
-      : `~/.objects/${displayName}`;
-  };
-
-  const truncateDisplayHash = (value: string) => {
-    const trimmed = value.trim();
-    if (!/^0x[0-9a-f]+$/i.test(trimmed)) return trimmed;
-    if (trimmed.length <= 14) return trimmed;
-    return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
+    const displayName = displayObjectFileName(object.className);
+    return joinObjectsDirPath(objectsDirPath, displayName, {
+      nullified: !isLiveObject(object),
+    });
   };
 
   const objectValueString = (value: unknown) => {
@@ -500,7 +499,7 @@ export function ContextPanel({
       return <section className="context-panel">Object not found.</section>;
 
     const titleName = object.className;
-    const liveValueRaw = isLive(object)
+    const liveValueRaw = isLiveObject(object)
       ? object.id
       : (object.nullifier ?? "nullified");
     const liveValue = truncateDisplayHash(liveValueRaw);
@@ -525,7 +524,7 @@ export function ContextPanel({
           {renderMetaRow(
             "Live",
             <span
-              className={`context-inline-hash ${isLive(object) ? "live" : "nullified"}`}
+              className={`context-inline-hash ${isLiveObject(object) ? "live" : "nullified"}`}
               title={liveValueRaw}
             >
               {liveValue}
