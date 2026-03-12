@@ -74,6 +74,10 @@ export function sampleAppCpu(): Promise<CpuSample> {
   return invoke<CpuSample>("sample_app_cpu");
 }
 
+export function getGlobalStateRoot(): Promise<string> {
+  return invoke<string>("get_global_state_root");
+}
+
 export function getAppSettings(): Promise<AppSettingsPayload> {
   return invoke<AppSettingsPayload>("get_app_settings");
 }

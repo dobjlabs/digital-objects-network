@@ -7,7 +7,9 @@ use pod2::middleware::Hash;
 use serde::Serialize;
 use std::collections::HashMap;
 
-use crate::{objects::ObjectRecord, spec};
+use crate::{objects::ObjectRecord, settings::get_app_settings, spec};
+
+use super::synchronizer_client::{encode_hash_hex, fetch_synchronizer_state};
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -111,4 +113,11 @@ pub async fn load_gui_inventory(app: tauri::AppHandle) -> Result<LoadGuiInventor
             .collect(),
         actions,
     })
+}
+
+#[tauri::command]
+pub async fn get_global_state_root(app: tauri::AppHandle) -> Result<String, String> {
+    let app_settings = get_app_settings(app)?;
+    let sync_state = fetch_synchronizer_state(&app_settings.synchronizer_api_url)?;
+    Ok(encode_hash_hex(&sync_state.current_gsr))
 }

@@ -19,15 +19,10 @@ interface ProofStep {
   status: StepStatus;
 }
 
-interface RootSnapshot {
-  hash: string;
-  state: "live" | "nullified";
-}
-
 interface ProofStats {
   cpuHistory: number[];
   totalCpuSecs: number;
-  roots: RootSnapshot[];
+  globalStateRoot: string | null;
 }
 
 interface ProofSummary {
@@ -68,6 +63,7 @@ export interface AppState {
   clearSelection: () => void;
   toggleNullified: () => void;
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
+  setGlobalStateRoot: (hash: string | null) => void;
   applyRunSdkActionProgress: (event: RunSdkActionProgress) => void;
   runProof: (input: {
     actionId: ActionId;
@@ -107,10 +103,7 @@ export const useStore = create<AppState>((set) => ({
     stats: {
       cpuHistory: Array.from({ length: 24 }, () => 0),
       totalCpuSecs: 0,
-      roots: [
-        { hash: "0x0000...0000", state: "live" },
-        { hash: "0x0000...0000", state: "nullified" },
-      ],
+      globalStateRoot: null,
     },
   },
   hydrateData: async () => {
@@ -191,6 +184,23 @@ export const useStore = create<AppState>((set) => ({
         },
       };
     }),
+  setGlobalStateRoot: (hash) =>
+    set((prev) => {
+      const nextHash = hash?.trim() || null;
+      if (prev.proof.stats.globalStateRoot === nextHash) {
+        return prev;
+      }
+      return {
+        ...prev,
+        proof: {
+          ...prev.proof,
+          stats: {
+            ...prev.proof.stats,
+            globalStateRoot: nextHash,
+          },
+        },
+      };
+    }),
   applyRunSdkActionProgress: (event) =>
     set((prev) => {
       if (prev.proof.runActionId !== event.runId) return prev;
@@ -222,13 +232,6 @@ export const useStore = create<AppState>((set) => ({
         });
       }
 
-      const shouldUpdateRoots =
-        event.phase === "commit" &&
-        event.status === "done" &&
-        !!(nextOldRoot && nextNewRoot);
-      const liveRoot = nextNewRoot ?? "";
-      const nullifiedRoot = nextOldRoot ?? "";
-
       return {
         ...prev,
         proof: {
@@ -238,16 +241,7 @@ export const useStore = create<AppState>((set) => ({
           steps: nextSteps,
           oldRoot: nextOldRoot,
           newRoot: nextNewRoot,
-          stats: shouldUpdateRoots
-            ? {
-                ...prev.proof.stats,
-                roots: [
-                  { hash: liveRoot, state: "live" },
-                  { hash: nullifiedRoot, state: "nullified" },
-                  ...prev.proof.stats.roots.slice(0, 6),
-                ],
-              }
-            : prev.proof.stats,
+          stats: prev.proof.stats,
         },
       };
     }),

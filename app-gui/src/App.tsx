@@ -5,6 +5,7 @@ import { InventoryPanel } from "./features/inventory/InventoryPanel";
 import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { SettingsModal } from "./features/settings/SettingsModal";
 import {
+  getGlobalStateRoot,
   getObjectsDir,
   listenOpenSettings,
   listenObjectsChanged,
@@ -38,6 +39,7 @@ function App() {
   const clearSelection = useStore((state) => state.clearSelection);
   const toggleNullified = useStore((state) => state.toggleNullified);
   const recordCpuSample = useStore((state) => state.recordCpuSample);
+  const setGlobalStateRoot = useStore((state) => state.setGlobalStateRoot);
   const applyRunSdkActionProgress = useStore(
     (state) => state.applyRunSdkActionProgress,
   );
@@ -166,6 +168,32 @@ function App() {
       window.clearInterval(interval);
     };
   }, [recordCpuSample]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const root = await getGlobalStateRoot();
+        if (!cancelled) {
+          setGlobalStateRoot(root);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to fetch global state root:", error);
+        }
+      }
+    };
+
+    void poll();
+    const interval = window.setInterval(() => {
+      void poll();
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [setGlobalStateRoot]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

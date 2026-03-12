@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import { truncateDisplayHash } from "../../shared/format";
 import { useStore } from "../../shared/state/store";
 
 export function ProofRunnerPanel() {
@@ -32,23 +33,10 @@ export function ProofRunnerPanel() {
     }
   }, [runActive, proof.runActionId]);
 
-  const liveRoots = proof.stats.roots.filter((root) => root.state === "live");
-  const nullifiedRoots = proof.stats.roots.filter(
-    (root) => root.state === "nullified",
-  );
-
-  const aggregateHash = (roots: Array<{ hash: string }>) => {
-    if (roots.length === 0) return "0x----...----";
-    const first = roots
-      .map((root) => root.hash.slice(2, 6))
-      .join("")
-      .slice(0, 4);
-    const last = roots
-      .map((root) => root.hash.slice(-4))
-      .join("")
-      .slice(-4);
-    return `0x${first}...${last}`;
-  };
+  const globalRootRaw = proof.stats.globalStateRoot?.trim() ?? "";
+  const globalRootDisplay = globalRootRaw
+    ? truncateDisplayHash(globalRootRaw)
+    : "0x----...----";
 
   const formatCpuDuration = (totalSecs: number) => {
     const secs = Math.max(0, Math.floor(totalSecs));
@@ -142,14 +130,18 @@ export function ProofRunnerPanel() {
               <span className="root-dot live" />
               <span className="root-label">Global Valid State Roots</span>
             </span>
-            <span className="root-hash">{aggregateHash(liveRoots)}</span>
+            <span className="root-hash" title={globalRootRaw || undefined}>
+              {globalRootDisplay}
+            </span>
           </div>
           <div className="root-row">
             <span className="root-row-left">
               <span className="root-dot nullified" />
               <span className="root-label">Global Nullified State Roots</span>
             </span>
-            <span className="root-hash">{aggregateHash(nullifiedRoots)}</span>
+            <span className="root-hash" title={globalRootRaw || undefined}>
+              {globalRootDisplay}
+            </span>
           </div>
         </div>
       </section>
