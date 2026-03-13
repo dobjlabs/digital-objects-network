@@ -1,0 +1,105 @@
+use anyhow::anyhow;
+use serde::{Deserialize, Serialize};
+
+/// Persistent relay lifecycle states.
+///
+/// Typical happy path:
+/// `queued -> sending -> submitted -> confirmed`.
+/// Failures/retries can bounce back to `queued` or end in `failed`.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum JobStatus {
+    /// Accepted by API and waiting for the next worker attempt window.
+    Queued,
+    /// Worker is currently attempting to broadcast the blob transaction.
+    Sending,
+    /// Broadcast succeeded; worker is polling receipts by tx hash.
+    Submitted,
+    /// Receipt confirmed successful execution.
+    Confirmed,
+    /// Terminal failure (max retries, timeout, permanent error, or revert).
+    Failed,
+}
+
+impl JobStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JobStatus::Queued => "queued",
+            JobStatus::Sending => "sending",
+            JobStatus::Submitted => "submitted",
+            JobStatus::Confirmed => "confirmed",
+            JobStatus::Failed => "failed",
+        }
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(self, JobStatus::Confirmed | JobStatus::Failed)
+    }
+
+    pub fn from_db_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "queued" => Ok(JobStatus::Queued),
+            "sending" => Ok(JobStatus::Sending),
+            "submitted" => Ok(JobStatus::Submitted),
+            "confirmed" => Ok(JobStatus::Confirmed),
+            "failed" => Ok(JobStatus::Failed),
+            _ => Err(anyhow!("invalid job status: {value}")),
+        }
+    }
+}
+
+/// Client submit payload for creating/looking up a relay job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitProofRequest {
+    /// Base64-encoded binary proof payload expected by `common::proof::BlobParser`.
+    pub payload_base64: String,
+    /// Optional caller-supplied reference stored with the job for tracing.
+    pub client_ref: Option<String>,
+}
+
+/// Submit response returns the created/existing job identity and key metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitProofResponse {
+    /// Stable job id used for status polling.
+    pub job_id: String,
+    /// Current lifecycle status of the returned job.
+    pub status: JobStatus,
+    /// Idempotency key derived from the decoded payload.
+    pub tx_final: String,
+    /// State root hash claimed by the payload.
+    pub state_root_hash: String,
+    /// Attempts observed so far for this job.
+    pub attempt_count: u32,
+    /// Job creation timestamp in unix seconds.
+    pub created_at: i64,
+}
+
+/// Status response is the durable view of worker progress for one job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobStatusResponse {
+    /// Stable job id used for status polling.
+    pub job_id: String,
+    /// Current lifecycle status.
+    pub status: JobStatus,
+    /// Ethereum tx hash once broadcast has succeeded.
+    pub tx_hash: Option<String>,
+    /// Receipt block number when known.
+    pub block_number: Option<u64>,
+    /// Total attempts made so far by the worker.
+    pub attempt_count: u32,
+    /// Most recent failure reason, if any.
+    pub last_error: Option<String>,
+    /// Last update timestamp in unix seconds.
+    pub updated_at: i64,
+    /// Creation timestamp in unix seconds.
+    pub created_at: i64,
+    /// Idempotency key derived from the decoded payload.
+    pub tx_final: String,
+    /// State root hash claimed by the payload.
+    pub state_root_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthResponse {
+    pub ok: bool,
+}

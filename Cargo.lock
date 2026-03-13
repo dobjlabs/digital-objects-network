@@ -1943,16 +1943,21 @@ dependencies = [
 name = "common"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "dotenvy",
+ "hex",
  "itertools 0.14.0",
  "log",
  "plonky2",
  "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
  "pod2_onchain",
+ "serde",
+ "serde_json",
  "time 0.3.47",
  "tracing",
  "tracing-subscriber",
+ "txlib",
 ]
 
 [[package]]
@@ -6339,6 +6344,30 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+
+[[package]]
+name = "relayer"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "common",
+ "dotenvy",
+ "hex",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
 
 [[package]]
 name = "reqwest"

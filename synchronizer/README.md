@@ -13,11 +13,11 @@ Service that tracks Digital Object blob transactions on Ethereum and exposes cur
    - finds blob txs sent to `TO_ADDRESS`
    - fetches matching blob sidecars
    - decodes payload bytes and derives new state
-4. Persists app state in RocksDB and sync metadata in Postgres, and serves sync progress at `/sync-progress`.
+4. Persists app state in RocksDB and sync metadata in Postgres, and serves sync/state query APIs over HTTP.
 
 ## Storage model
 
-### Postgres (`SYNC_METADATA_DB`) — sync control plane
+### Postgres (`SYNC_METADATA_DB_URL`) — sync control plane
 
 Postgres stores synchronizer metadata and slot-level apply/rollback journaling:
 
@@ -30,7 +30,7 @@ Postgres stores synchronizer metadata and slot-level apply/rollback journaling:
 
 This is used for deterministic reorg handling and crash-safe recovery.
 
-### RocksDB (`APP_STATE_DB`) — app-derived state store
+### RocksDB (`APP_STATE_DB_PATH`) — app-derived state store
 
 RocksDB stores only app-derived state:
 
@@ -44,6 +44,37 @@ RocksDB is updated from Postgres journaled slot deltas and rolled back using the
 
 - `GET /sync-progress`
   - returns `last_processed_slot`, `last_processed_block_number`
+- `GET /v1/state/head`
+  - returns:
+    - `last_processed_slot`
+    - `last_processed_block_number`
+    - `current_gsr`
+    - `current_block_number`
+    - `tx_count`
+    - `nullifier_count`
+    - `gsr_count`
+- `GET /v1/state/full`
+  - returns:
+    - `block_number`
+    - `current_gsr`
+    - `transactions` (array of tx hashes)
+    - `nullifiers` (array of nullifier hashes)
+    - `gsrs` (array of prior GSR hashes)
+- `POST /v1/state/tx/contains`
+  - request body:
+    - `tx_hashes` (array of hash strings)
+  - returns:
+    - `last_processed_slot`
+    - `current_gsr`
+    - `results` (array of `{ tx_hash, present }`)
+- `GET /v1/state/tx/{tx_hash}`
+  - returns:
+    - `tx_hash`
+    - `present`
+    - `last_processed_slot`
+    - `current_gsr`
+
+Hash parsing accepts `0x`-prefixed or raw hex input; responses are normalized to lowercase `0x...`.
 
 ## Required env vars
 
@@ -53,8 +84,8 @@ RocksDB is updated from Postgres journaled slot deltas and rolled back using the
 
 ## Optional env vars
 
-- `APP_STATE_DB` (default: `data/synchronizer-db`)
-- `SYNC_METADATA_DB` (default: `postgres://postgres@localhost:5432/synchronizer`)
+- `APP_STATE_DB_PATH` (default: `data/synchronizer-db`)
+- `SYNC_METADATA_DB_URL` (default: `postgres://postgres@localhost:5432/synchronizer`)
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
 - `SYNC_DELAY_MS` (default: `333`)
 - `INITIAL_START_SLOT` (default: unset, meaning start from current head on first run)

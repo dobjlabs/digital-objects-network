@@ -507,12 +507,12 @@ impl SyncDb {
 
 /// Ensure target Postgres database exists (local/dev convenience).
 async fn ensure_database_exists(database_url: &str) -> Result<()> {
-    let parsed = Url::parse(database_url).with_context(|| "Invalid SYNC_METADATA_DB URL")?;
+    let parsed = Url::parse(database_url).with_context(|| "Invalid SYNC_METADATA_DB_URL value")?;
     let db_name = parsed
         .path_segments()
         .and_then(|mut segments| segments.next_back())
         .filter(|segment| !segment.is_empty())
-        .ok_or_else(|| anyhow!("SYNC_METADATA_DB must include a database name"))?;
+        .ok_or_else(|| anyhow!("SYNC_METADATA_DB_URL must include a database name"))?;
 
     let mut admin_url = parsed.clone();
     admin_url.set_path("/postgres");
@@ -542,14 +542,15 @@ async fn ensure_database_exists(database_url: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::app_db::AppDb;
-    use crate::proof::MockBlobParser;
     use crate::state_machine::StateMachine;
+    use common::proof::MockBlobParser;
     use pod2::middleware::{hash_values, Value};
     use sqlx::Executor;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Arc, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
+    use tokio::sync::Mutex;
 
     fn unique_hash(n: i64) -> Hash {
         hash_values(&[Value::from(n)])
@@ -598,7 +599,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_recover_pending_replays_journal_and_finalizes() -> Result<()> {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (admin_url, db_url, db_name) = test_urls();
         drop_db(&admin_url, &db_name).await?;
         let sync_db = SyncDb::connect(&db_url).await?;
@@ -659,7 +660,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_rollback_to_slot_rewinds_pg_and_kv() -> Result<()> {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (admin_url, db_url, db_name) = test_urls();
         drop_db(&admin_url, &db_name).await?;
         let sync_db = SyncDb::connect(&db_url).await?;
@@ -723,7 +724,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_rollback_staging_survives_crash_and_recovers() -> Result<()> {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (admin_url, db_url, db_name) = test_urls();
         drop_db(&admin_url, &db_name).await?;
         let sync_db = SyncDb::connect(&db_url).await?;
@@ -803,7 +804,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_empty_slot_finalize_sets_none_root_and_advances_cursor() -> Result<()> {
-        let _guard = test_db_lock().lock().expect("lock");
+        let _guard = test_db_lock().lock().await;
         let (admin_url, db_url, db_name) = test_urls();
         drop_db(&admin_url, &db_name).await?;
         let sync_db = SyncDb::connect(&db_url).await?;
