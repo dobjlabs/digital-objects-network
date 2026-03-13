@@ -17,7 +17,7 @@ Service that tracks Digital Object blob transactions on Ethereum and exposes cur
 
 ## Storage model
 
-### Postgres (`SYNC_METADATA_DB`) — sync control plane
+### Postgres (`SYNC_METADATA_DB_URL`) — sync control plane
 
 Postgres stores synchronizer metadata and slot-level apply/rollback journaling:
 
@@ -30,7 +30,7 @@ Postgres stores synchronizer metadata and slot-level apply/rollback journaling:
 
 This is used for deterministic reorg handling and crash-safe recovery.
 
-### RocksDB (`APP_STATE_DB`) — app-derived state store
+### RocksDB (`APP_STATE_DB_PATH`) — app-derived state store
 
 RocksDB stores only app-derived state:
 
@@ -84,8 +84,8 @@ Hash parsing accepts `0x`-prefixed or raw hex input; responses are normalized to
 
 ## Optional env vars
 
-- `APP_STATE_DB` (default: `data/synchronizer-db`)
-- `SYNC_METADATA_DB` (default: `postgres://postgres@localhost:5432/synchronizer`)
+- `APP_STATE_DB_PATH` (default: `data/synchronizer-db`)
+- `SYNC_METADATA_DB_URL` (default: `postgres://postgres@localhost:5432/synchronizer`)
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
 - `SYNC_DELAY_MS` (default: `333`)
 - `INITIAL_START_SLOT` (default: unset, meaning start from current head on first run)

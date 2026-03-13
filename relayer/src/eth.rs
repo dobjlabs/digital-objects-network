@@ -45,7 +45,7 @@ impl EthClient {
         let signer: PrivateKeySigner = cfg
             .private_key
             .parse()
-            .map_err(|e| anyhow!("invalid RELAYER_PRIVATE_KEY: {e}"))?;
+            .map_err(|e| anyhow!("invalid PRIVATE_KEY: {e}"))?;
         let from = signer.address();
 
         let provider = ProviderBuilder::new()

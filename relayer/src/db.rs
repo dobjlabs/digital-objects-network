@@ -318,12 +318,12 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<RelayJob> {
 
 /// Local-dev convenience: ensure the target database exists before connecting.
 async fn ensure_database_exists(database_url: &str) -> Result<()> {
-    let parsed = Url::parse(database_url).with_context(|| "Invalid RELAYER_DB_URL")?;
+    let parsed = Url::parse(database_url).with_context(|| "Invalid DB_URL")?;
     let db_name = parsed
         .path_segments()
         .and_then(|mut segments| segments.next_back())
         .filter(|segment| !segment.is_empty())
-        .ok_or_else(|| anyhow!("RELAYER_DB_URL must include a database name"))?;
+        .ok_or_else(|| anyhow!("DB_URL must include a database name"))?;
 
     let mut admin_url = parsed.clone();
     admin_url.set_path("/postgres");

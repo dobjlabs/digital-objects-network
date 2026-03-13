@@ -37,14 +37,15 @@ cp relayer/.env.example relayer/.env
 Then fill in the required values:
 
 - In `relayer/.env`:
-  - `RELAYER_RPC_URL`
-  - `RELAYER_PRIVATE_KEY`
+  - `RPC_URL`
+  - `TO_ADDRESS`
+  - `PRIVATE_KEY`
 - In `synchronizer/.env`:
   - `RPC_URL`
   - `BEACON_URL`
+  - `TO_ADDRESS`
 
-`TO_ADDRESS` in `synchronizer/.env` must match `RELAYER_TO_ADDRESS` in
-`relayer/.env`.
+`TO_ADDRESS` must match in both `synchronizer/.env` and `relayer/.env`.
 
 ## Run
 

@@ -507,12 +507,12 @@ impl SyncDb {
 
 /// Ensure target Postgres database exists (local/dev convenience).
 async fn ensure_database_exists(database_url: &str) -> Result<()> {
-    let parsed = Url::parse(database_url).with_context(|| "Invalid SYNC_METADATA_DB URL")?;
+    let parsed = Url::parse(database_url).with_context(|| "Invalid SYNC_METADATA_DB_URL value")?;
     let db_name = parsed
         .path_segments()
         .and_then(|mut segments| segments.next_back())
         .filter(|segment| !segment.is_empty())
-        .ok_or_else(|| anyhow!("SYNC_METADATA_DB must include a database name"))?;
+        .ok_or_else(|| anyhow!("SYNC_METADATA_DB_URL must include a database name"))?;
 
     let mut admin_url = parsed.clone();
     admin_url.set_path("/postgres");

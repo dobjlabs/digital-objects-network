@@ -12,7 +12,7 @@ Service that accepts zk-craft proof payloads over HTTP and relays them to Ethere
 
 ## Storage model
 
-### Postgres (`RELAYER_DB_URL`) — relay job queue and state
+### Postgres (`DB_URL`) — relay job queue and state
 
 `relay_jobs` relation:
 
@@ -45,21 +45,21 @@ Indexes:
 
 ## Required env vars
 
-- `RELAYER_BIND`
-- `RELAYER_DB_URL`
-- `RELAYER_RPC_URL`
-- `RELAYER_TO_ADDRESS`
-- `RELAYER_PRIVATE_KEY`
+- `RPC_URL`
+- `TO_ADDRESS`
+- `PRIVATE_KEY`
 
 ## Optional env vars
 
-- `RELAYER_MAX_ATTEMPTS` (default: `8`)
-- `RELAYER_RETRY_INITIAL_SECS` (default: `4`)
-- `RELAYER_RETRY_MAX_SECS` (default: `300`)
-- `RELAYER_RECEIPT_POLL_SECS` (default: `6`)
-- `RELAYER_RECEIPT_TIMEOUT_SECS` (optional timeout for submitted tx receipts)
-- `RELAYER_WORKER_IDLE_SLEEP_MS` (default: `1000`)
-- `RELAYER_MAX_FEE_PER_BLOB_GAS` (optional override)
+- `HTTP_BIND` (default: `127.0.0.1:3200`)
+- `DB_URL` (default: `postgres://postgres@localhost:5432/relayer`)
+- `MAX_ATTEMPTS` (default: `8`)
+- `RETRY_INITIAL_SECS` (default: `4`)
+- `RETRY_MAX_SECS` (default: `300`)
+- `RECEIPT_POLL_SECS` (default: `6`)
+- `RECEIPT_TIMEOUT_SECS` (optional timeout for submitted tx receipts)
+- `WORKER_IDLE_SLEEP_MS` (default: `1000`)
+- `MAX_FEE_PER_BLOB_GAS` (optional override)
 
 ## Run
 

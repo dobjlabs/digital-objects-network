@@ -30,8 +30,8 @@ async fn main() -> Result<()> {
     let cfg = load_config()?;
     debug!(?cfg, "Loaded synchronizer config");
 
-    let app_db = AppDb::connect(&cfg.app_state_db)?;
-    let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db).await?);
+    let app_db = AppDb::connect(&cfg.app_state_db_path)?;
+    let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db_url).await?);
     let state_machine = Arc::new(StateMachine::new(app_db, Arc::new(ProofParser::new()?))?);
     let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine), Arc::clone(&sync_db)).await?);
     node.recover_pending().await?;
