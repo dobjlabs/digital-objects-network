@@ -17,6 +17,9 @@ Proof-driven digital objects with:
 The relayer and synchronizer will create their own Postgres databases/tables if
 Postgres is running, using the URLs in their `.env` files.
 
+On macOS, [Postgres.app](https://postgresapp.com/) is an easy way to get a
+local Postgres install.
+
 ## Install
 
 Install the GUI dependencies:
@@ -34,6 +37,17 @@ cp synchronizer/.env.example synchronizer/.env
 cp relayer/.env.example relayer/.env
 ```
 
+If you want the repo's default Postgres URLs to work unchanged, make your local
+Postgres match them once:
+
+```bash
+createuser -s postgres
+```
+
+The services will then connect through the default local admin database
+`postgres://postgres@localhost:5432/postgres` and create the `synchronizer` and
+`relayer` databases automatically on first run.
+
 Then fill in the required values:
 
 - In `relayer/.env`:
@@ -46,6 +60,13 @@ Then fill in the required values:
   - `TO_ADDRESS`
 
 `TO_ADDRESS` must match in both `synchronizer/.env` and `relayer/.env`.
+
+If you do not want to create the local `postgres` role, also set:
+
+- In `relayer/.env`:
+  - `DB_URL`
+- In `synchronizer/.env`:
+  - `SYNC_METADATA_DB_URL`
 
 ## Run
 
@@ -73,3 +94,7 @@ just reset
 
 This clears local RocksDB state, local object files, and the local Postgres
 databases used by the synchronizer and relayer.
+
+If you are not using the default local `postgres` role/admin database, either
+adjust the `just reset` command or drop the `synchronizer` and `relayer`
+databases manually.
