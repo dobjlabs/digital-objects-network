@@ -62,3 +62,14 @@ This runs:
 - `just gui`
 
 You can also run each service individually with those commands.
+
+## Restarting Fresh
+
+If you want to wipe local state and start over, run:
+
+```bash
+just reset
+```
+
+This clears local RocksDB state, local object files, and the local Postgres
+databases used by the synchronizer and relayer.
