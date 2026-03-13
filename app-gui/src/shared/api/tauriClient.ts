@@ -1,0 +1,89 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type {
+  AppSettingsPayload,
+  CpuSample,
+  LoadGuiInventoryResult,
+  ObjectRecordPayload,
+  RunSdkActionInput,
+  RunSdkActionProgress,
+  RunSdkActionResult,
+} from "./wireTypes";
+
+export type { ActionId, ClassName } from "../generated/ids";
+
+export type {
+  ActionPayload,
+  AppSettingsPayload,
+  CpuSample,
+  InventoryObjectPayload,
+  LoadGuiInventoryResult,
+  ObjectRecordPayload,
+  RunSdkActionInput,
+  RunSdkActionProgress,
+  RunSdkActionResult,
+} from "./wireTypes";
+
+export function getObjectsDir(): Promise<string> {
+  return invoke<string>("get_objects_dir");
+}
+
+export function openObjectsDir(): Promise<string> {
+  return invoke<string>("open_objects_dir");
+}
+
+export function loadGuiInventory(): Promise<LoadGuiInventoryResult> {
+  return invoke<LoadGuiInventoryResult>("load_gui_inventory");
+}
+
+export function runSdkAction(
+  input: RunSdkActionInput,
+): Promise<RunSdkActionResult> {
+  return invoke<RunSdkActionResult>("run_sdk_action", { input });
+}
+
+export function pickDobjFilePath(): Promise<string> {
+  return invoke<string>("pick_dobj_file_path");
+}
+
+export function readDobjFile(path: string): Promise<ObjectRecordPayload> {
+  return invoke<ObjectRecordPayload>("read_dobj_file", { path });
+}
+
+export function listenRunSdkActionProgress(
+  handler: (event: RunSdkActionProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<RunSdkActionProgress>("run-sdk-action-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+export function listenObjectsChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen("objects-changed", () => {
+    handler();
+  });
+}
+
+export function listenOpenSettings(handler: () => void): Promise<UnlistenFn> {
+  return listen("open-settings", () => {
+    handler();
+  });
+}
+
+export function sampleAppCpu(): Promise<CpuSample> {
+  return invoke<CpuSample>("sample_app_cpu");
+}
+
+export function getGlobalStateRoot(): Promise<string> {
+  return invoke<string>("get_global_state_root");
+}
+
+export function getAppSettings(): Promise<AppSettingsPayload> {
+  return invoke<AppSettingsPayload>("get_app_settings");
+}
+
+export function saveAppSettings(
+  input: AppSettingsPayload,
+): Promise<AppSettingsPayload> {
+  return invoke<AppSettingsPayload>("save_app_settings", { input });
+}

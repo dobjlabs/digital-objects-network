@@ -8,8 +8,8 @@ use pod2::{
     frontend::{MainPod, MultiPodBuilder, Operation},
     lang::{Module, load_module},
     middleware::{
-        EMPTY_VALUE, Key, MainPodProver, Params, Statement, TypedValue, VDSet, Value,
-        containers::Dictionary,
+        EMPTY_VALUE, Hash, Key, MainPodProver, Params, Predicate, Statement, TypedValue, VDSet,
+        Value, containers::Dictionary,
     },
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
@@ -67,7 +67,7 @@ pub mod api {
         Set { key: String, value: Arg },
     }
 
-    #[derive(Default)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub enum StepKind {
         #[default]
         Depends,
@@ -86,6 +86,26 @@ pub mod api {
     }
 
     impl Step {
+        pub fn kind(&self) -> StepKind {
+            self.kind
+        }
+        pub fn name(&self) -> &str {
+            &self.name
+        }
+        pub fn class(&self) -> Option<&str> {
+            if matches!(self.kind, StepKind::Depends) {
+                None
+            } else {
+                Some(self.class.as_str())
+            }
+        }
+        pub fn action(&self) -> Option<&str> {
+            if matches!(self.kind, StepKind::Depends) {
+                Some(self.action.as_str())
+            } else {
+                None
+            }
+        }
         /// The action consumes an object as input
         pub fn input(name: impl Into<String>, class: impl Into<String>) -> Self {
             Self {
@@ -184,6 +204,15 @@ pub mod api {
         pub steps: Vec<Step>,
     }
 
+    impl Action {
+        pub fn name(&self) -> &str {
+            self.name
+        }
+        pub fn steps(&self) -> &[Step] {
+            &self.steps
+        }
+    }
+
     /// Dependency towards another pod module or introduction pod
     pub enum Dependency {
         Module { name: &'static str, hash: Hash },
@@ -268,6 +297,45 @@ impl Helper {
             data: &self.data,
         }
     }
+
+    pub fn action_hash(&self, action_name: &str) -> Option<Hash> {
+        self.data
+            .actions
+            .iter()
+            .find(|action| action.name == action_name)
+            .and_then(|action| action.hash(&self.module))
+    }
+
+    pub fn action_hashes(&self) -> HashMap<String, Hash> {
+        self.data
+            .actions
+            .iter()
+            .filter_map(|action| {
+                action
+                    .hash(&self.module)
+                    .map(|hash| (action.name.clone(), hash))
+            })
+            .collect()
+    }
+
+    pub fn class_hash(&self, class_name: &str) -> Option<Hash> {
+        let predicate_name = format!("Is{class_name}");
+        self.module
+            .predicate_ref_by_name(predicate_name.as_str())
+            .map(Predicate::Custom)
+            .map(|predicate| predicate.hash())
+    }
+
+    pub fn class_hashes(&self) -> HashMap<String, Hash> {
+        self.data
+            .classes
+            .iter()
+            .filter_map(|class| {
+                self.class_hash(class.name.as_str())
+                    .map(|hash| (class.name.clone(), hash))
+            })
+            .collect()
+    }
 }
 
 fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
@@ -276,7 +344,7 @@ fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
     solution.prove(prover).unwrap().pods.pop().unwrap()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SpendableObject {
     pub pod: MainPod,
     pub obj: Dictionary,
@@ -720,6 +788,13 @@ impl Action {
             }
         }
         vars
+    }
+
+    fn hash(&self, module: &Module) -> Option<Hash> {
+        module
+            .predicate_ref_by_name(self.name.as_str())
+            .map(Predicate::Custom)
+            .map(|predicate| predicate.hash())
     }
 }
 
