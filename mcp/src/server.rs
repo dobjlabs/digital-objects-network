@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::handler::server::wrapper::Parameters;
+use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{ServerCapabilities, ServerInfo};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
@@ -53,76 +53,81 @@ impl<T: CraftOps> CraftMcpService<T> {
     #[tool(
         description = "List all objects in the inventory with their types, fields, and liveness status"
     )]
-    fn list_inventory(&self) -> String {
-        match self.ops.list_inventory() {
-            Ok(items) => serde_json::to_string_pretty(&items)
-                .unwrap_or_else(|e| format!("serialization error: {e}")),
-            Err(e) => format!("error: {e}"),
-        }
+    fn list_inventory(&self) -> Result<Json<InventoryList>, String> {
+        self.ops
+            .list_inventory()
+            .map(|objects| Json(InventoryList { objects }))
+            .map_err(|e| e.to_string())
     }
 
     #[tool(
         description = "List all available crafting actions with input/output class requirements and CPU cost"
     )]
-    fn list_actions(&self) -> String {
-        match self.ops.list_actions() {
-            Ok(actions) => serde_json::to_string_pretty(&actions)
-                .unwrap_or_else(|e| format!("serialization error: {e}")),
-            Err(e) => format!("error: {e}"),
-        }
+    fn list_actions(&self) -> Result<Json<ActionList>, String> {
+        self.ops
+            .list_actions()
+            .map(|actions| Json(ActionList { actions }))
+            .map_err(|e| e.to_string())
     }
 
     #[tool(description = "Get the current global state root hash from the synchronizer")]
-    fn get_state_root(&self) -> String {
-        match self.ops.get_state_root() {
-            Ok(root) => serde_json::to_string_pretty(&StateRootResponse { state_root: root })
-                .unwrap_or_else(|e| format!("serialization error: {e}")),
-            Err(e) => format!("error: {e}"),
-        }
+    fn get_state_root(&self) -> Result<Json<StateRootResponse>, String> {
+        self.ops
+            .get_state_root()
+            .map(|root| Json(StateRootResponse { state_root: root }))
+            .map_err(|e| e.to_string())
     }
 
     #[tool(
         description = "Inspect an object by ID: full detail including fields, class, liveness, and predicate source"
     )]
-    fn inspect_object(&self, Parameters(params): Parameters<InspectObjectParams>) -> String {
-        match self.ops.inspect_object(&params.object_id) {
-            Ok(detail) => serde_json::to_string_pretty(&detail)
-                .unwrap_or_else(|e| format!("serialization error: {e}")),
-            Err(e) => format!("error: {e}"),
-        }
+    fn inspect_object(
+        &self,
+        Parameters(params): Parameters<InspectObjectParams>,
+    ) -> Result<Json<ObjectDetail>, String> {
+        self.ops
+            .inspect_object(&params.object_id)
+            .map(Json)
+            .map_err(|e| e.to_string())
     }
 
     #[tool(
         description = "Inspect a class by name: predicate definition, and which actions produce/consume it"
     )]
-    fn inspect_class(&self, Parameters(params): Parameters<InspectClassParams>) -> String {
-        match self.ops.inspect_class(&params.class_name) {
-            Ok(detail) => serde_json::to_string_pretty(&detail)
-                .unwrap_or_else(|e| format!("serialization error: {e}")),
-            Err(e) => format!("error: {e}"),
-        }
+    fn inspect_class(
+        &self,
+        Parameters(params): Parameters<InspectClassParams>,
+    ) -> Result<Json<ClassDetail>, String> {
+        self.ops
+            .inspect_class(&params.class_name)
+            .map(Json)
+            .map_err(|e| e.to_string())
     }
 
     #[tool(
         description = "Execute a crafting action. Blocks until proof generation completes. Returns error if another action is already in progress."
     )]
-    fn run_action(&self, Parameters(params): Parameters<RunActionInput>) -> String {
-        match self.ops.run_action(params) {
-            Ok(result) => serde_json::to_string_pretty(&result)
-                .unwrap_or_else(|e| format!("serialization error: {e}")),
-            Err(e) => format!("error: {e}"),
-        }
+    fn run_action(
+        &self,
+        Parameters(params): Parameters<RunActionInput>,
+    ) -> Result<Json<RunActionResult>, String> {
+        self.ops
+            .run_action(params)
+            .map(Json)
+            .map_err(|e| e.to_string())
     }
 
     #[tool(
         description = "Check whether an action can be executed with the current inventory. Reports available and missing inputs."
     )]
-    fn check_feasibility(&self, Parameters(params): Parameters<CheckFeasibilityParams>) -> String {
-        match self.ops.check_feasibility(&params.action_id) {
-            Ok(report) => serde_json::to_string_pretty(&report)
-                .unwrap_or_else(|e| format!("serialization error: {e}")),
-            Err(e) => format!("error: {e}"),
-        }
+    fn check_feasibility(
+        &self,
+        Parameters(params): Parameters<CheckFeasibilityParams>,
+    ) -> Result<Json<FeasibilityReport>, String> {
+        self.ops
+            .check_feasibility(&params.action_id)
+            .map(Json)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -142,6 +147,7 @@ impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
 mod tests {
     use super::*;
     use crate::mock::MockCraftOps;
+    use rmcp::handler::server::wrapper::Json;
 
     fn make_service() -> CraftMcpService<MockCraftOps> {
         CraftMcpService::new(Arc::new(MockCraftOps::new()))
@@ -176,40 +182,38 @@ mod tests {
     }
 
     #[test]
-    fn test_list_inventory_returns_valid_json() {
+    fn test_list_inventory_returns_structured() {
         let service = make_service();
-        let result = service.list_inventory();
-        let parsed: Vec<InventoryObject> = serde_json::from_str(&result).unwrap();
-        assert!(!parsed.is_empty());
-        assert!(parsed.iter().any(|o| o.class_name == "Log"));
+        let Json(list) = service.list_inventory().unwrap();
+        assert!(!list.objects.is_empty());
+        assert!(list.objects.iter().any(|o| o.class_name == "Log"));
     }
 
     #[test]
-    fn test_list_actions_returns_valid_json() {
+    fn test_list_actions_returns_structured() {
         let service = make_service();
-        let result = service.list_actions();
-        let parsed: Vec<Action> = serde_json::from_str(&result).unwrap();
-        assert!(!parsed.is_empty());
-        assert!(parsed.iter().any(|a| a.id == "CraftWoodPick"));
+        let Json(list) = service.list_actions().unwrap();
+        assert!(!list.actions.is_empty());
+        assert!(list.actions.iter().any(|a| a.id == "CraftWoodPick"));
     }
 
     #[test]
-    fn test_get_state_root_returns_valid_json() {
+    fn test_get_state_root_returns_structured() {
         let service = make_service();
-        let result = service.get_state_root();
-        let parsed: StateRootResponse = serde_json::from_str(&result).unwrap();
-        assert!(parsed.state_root.starts_with("0x"));
+        let Json(resp) = service.get_state_root().unwrap();
+        assert!(resp.state_root.starts_with("0x"));
     }
 
     #[test]
     fn test_inspect_object_via_handler() {
         let service = make_service();
-        let result = service.inspect_object(Parameters(InspectObjectParams {
-            object_id: "0xabc4444444444444".to_string(),
-        }));
-        let parsed: ObjectDetail = serde_json::from_str(&result).unwrap();
-        assert_eq!(parsed.class_name, "WoodPick");
-        assert!(parsed.predicate_source.contains("CraftWoodPick"));
+        let Json(detail) = service
+            .inspect_object(Parameters(InspectObjectParams {
+                object_id: "0xabc4444444444444".to_string(),
+            }))
+            .unwrap();
+        assert_eq!(detail.class_name, "WoodPick");
+        assert!(detail.predicate_source.contains("CraftWoodPick"));
     }
 
     #[test]
@@ -218,29 +222,32 @@ mod tests {
         let result = service.inspect_object(Parameters(InspectObjectParams {
             object_id: "0xnonexistent".to_string(),
         }));
-        assert!(result.starts_with("error:"));
+        let err = result.err().expect("should be an error");
+        assert!(err.contains("not found"));
     }
 
     #[test]
     fn test_inspect_class_via_handler() {
         let service = make_service();
-        let result = service.inspect_class(Parameters(InspectClassParams {
-            class_name: "Stick".to_string(),
-        }));
-        let parsed: ClassDetail = serde_json::from_str(&result).unwrap();
-        assert_eq!(parsed.class_name, "Stick");
-        assert!(parsed.produced_by.contains(&"CraftSticks".to_string()));
+        let Json(detail) = service
+            .inspect_class(Parameters(InspectClassParams {
+                class_name: "Stick".to_string(),
+            }))
+            .unwrap();
+        assert_eq!(detail.class_name, "Stick");
+        assert!(detail.produced_by.contains(&"CraftSticks".to_string()));
     }
 
     #[test]
     fn test_run_action_via_handler() {
         let service = make_service();
-        let result = service.run_action(Parameters(RunActionInput {
-            action_id: "FindLog".to_string(),
-            input_object_paths: vec![],
-        }));
-        let parsed: RunActionResult = serde_json::from_str(&result).unwrap();
-        assert!(parsed.success);
+        let Json(result) = service
+            .run_action(Parameters(RunActionInput {
+                action_id: "FindLog".to_string(),
+                input_object_paths: vec![],
+            }))
+            .unwrap();
+        assert!(result.success);
     }
 
     #[test]
@@ -250,32 +257,33 @@ mod tests {
             action_id: "FindLog".to_string(),
             input_object_paths: vec![],
         }));
-        assert!(result.starts_with("error:"));
-        assert!(result.contains("already in progress"));
+        let err = result.err().expect("should be an error");
+        assert!(err.contains("already in progress"));
     }
 
     #[test]
     fn test_check_feasibility_via_handler() {
         let service = make_service();
-        let result = service.check_feasibility(Parameters(CheckFeasibilityParams {
-            action_id: "CraftWoodPick".to_string(),
-        }));
-        let parsed: FeasibilityReport = serde_json::from_str(&result).unwrap();
-        assert!(parsed.feasible);
-        assert_eq!(parsed.available_inputs.len(), 2);
+        let Json(report) = service
+            .check_feasibility(Parameters(CheckFeasibilityParams {
+                action_id: "CraftWoodPick".to_string(),
+            }))
+            .unwrap();
+        assert!(report.feasible);
+        assert_eq!(report.available_inputs.len(), 2);
     }
 
     #[test]
     fn test_check_feasibility_infeasible() {
-        // Use an empty inventory so nothing is available
         let mock = MockCraftOps::new().with_inventory(vec![]);
         let service = CraftMcpService::new(Arc::new(mock));
-        let result = service.check_feasibility(Parameters(CheckFeasibilityParams {
-            action_id: "CraftWoodPick".to_string(),
-        }));
-        let parsed: FeasibilityReport = serde_json::from_str(&result).unwrap();
-        assert!(!parsed.feasible);
-        assert!(!parsed.missing_inputs.is_empty());
+        let Json(report) = service
+            .check_feasibility(Parameters(CheckFeasibilityParams {
+                action_id: "CraftWoodPick".to_string(),
+            }))
+            .unwrap();
+        assert!(!report.feasible);
+        assert!(!report.missing_inputs.is_empty());
     }
 
     #[tokio::test]

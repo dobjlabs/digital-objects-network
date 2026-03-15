@@ -1,6 +1,6 @@
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
-use zk_craft_mcp::{McpConfig, McpServer};
 use zk_craft_mcp::mock::MockCraftOps;
+use zk_craft_mcp::{McpConfig, McpServer};
 
 const BIND_ADDRESS: &str = "127.0.0.1:3001";
 

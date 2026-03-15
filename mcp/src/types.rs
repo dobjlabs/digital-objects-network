@@ -3,6 +3,22 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+// -- List response wrappers (MCP outputSchema requires root type "object") --
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryList {
+    /// All objects in the inventory
+    pub objects: Vec<InventoryObject>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionList {
+    /// All available crafting actions
+    pub actions: Vec<Action>,
+}
+
 // -- Inventory / State --
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
