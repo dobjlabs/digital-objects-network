@@ -1,0 +1,14 @@
+use crate::types::*;
+
+/// The interface the MCP server needs from the host application.
+/// During testing, this is mocked. In production, implemented by
+/// the Tauri app (or a future headless binary).
+pub trait CraftOps: Send + Sync + 'static {
+    fn list_inventory(&self) -> anyhow::Result<Vec<InventoryObject>>;
+    fn list_actions(&self) -> anyhow::Result<Vec<Action>>;
+    fn get_state_root(&self) -> anyhow::Result<String>;
+    fn inspect_object(&self, object_id: &str) -> anyhow::Result<ObjectDetail>;
+    fn inspect_class(&self, class_name: &str) -> anyhow::Result<ClassDetail>;
+    fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunActionResult>;
+    fn check_feasibility(&self, action_id: &str) -> anyhow::Result<FeasibilityReport>;
+}

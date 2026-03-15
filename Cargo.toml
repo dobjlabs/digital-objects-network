@@ -10,6 +10,7 @@ members = [
     "craft_sdk",
     "intro_pods/vdfpod",
     "intro_pods/lt_eq_u256_pod",
+    "mcp",
 ]
 resolver = "2"
 
