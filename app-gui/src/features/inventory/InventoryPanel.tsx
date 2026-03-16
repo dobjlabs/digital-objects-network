@@ -30,11 +30,14 @@ export function InventoryPanel({
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
 
+  const isUsable = (object: InventoryObject) =>
+    isLiveObject(object) && object.grounded;
+
   const handleDragStart = (
     event: DragEvent<HTMLButtonElement>,
     object: InventoryObject,
   ) => {
-    if (!isLiveObject(object)) {
+    if (!isUsable(object)) {
       event.preventDefault();
       return;
     }
@@ -77,7 +80,7 @@ export function InventoryPanel({
         type="button"
         className={`inventory-item ${activeObjectId === object.id ? "active" : ""}`}
         onClick={() => handleClickObject(object.id)}
-        draggable={isLiveObject(object)}
+        draggable={isUsable(object)}
         onDragStart={(event) => handleDragStart(event, object)}
         onDragEnd={handleDragEnd}
       >
@@ -91,7 +94,8 @@ export function InventoryPanel({
           </span>
         </span>
         <span
-          className={`inventory-dot ${isLiveObject(object) ? "live" : "nullified"}`}
+          className={`inventory-dot ${!isLiveObject(object) ? "nullified" : object.grounded ? "live" : "pending"}`}
+          title={isLiveObject(object) && !object.grounded ? "pending confirmation" : undefined}
         />
       </button>
     );

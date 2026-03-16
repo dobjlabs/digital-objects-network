@@ -10,6 +10,7 @@ export interface InventoryObjectPayload {
   classHash: string;
   emoji: string;
   nullifier: string | null;
+  grounded: boolean;
   description?: string;
   obj: Record<string, unknown>;
 }

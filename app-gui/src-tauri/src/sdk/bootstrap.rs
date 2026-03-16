@@ -3,11 +3,13 @@ use crate::objects::objects_dir;
 use craft_sdk::Helper;
 use pod2::middleware::Hash;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{objects::ObjectRecord, settings::get_app_settings, spec};
 
-use super::synchronizer_client::{encode_hash_hex, fetch_synchronizer_state};
+use super::synchronizer_client::{
+    encode_hash_hex, fetch_synchronizer_state, fetch_synchronizer_tx_contains,
+};
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +20,7 @@ pub struct InventoryObject {
     pub class_hash: String,
     pub emoji: String,
     pub nullifier: Option<String>,
+    pub grounded: bool,
     pub description: Option<String>,
     pub obj: serde_json::Value,
 }
@@ -70,8 +73,11 @@ pub(super) fn to_inventory_object(
     record: &ObjectRecord,
     file_name: &str,
     class_hashes: &HashMap<String, Hash>,
+    grounded_txs: &HashSet<Hash>,
 ) -> InventoryObject {
     let class_ui = spec::class_ui_meta(&record.class_name);
+    let source_tx_hash = record.spendable().tx.dict().commitment();
+    let grounded = record.is_nullified() || grounded_txs.contains(&source_tx_hash);
     InventoryObject {
         id: record.id.clone(),
         file_name: file_name.to_string(),
@@ -82,6 +88,7 @@ pub(super) fn to_inventory_object(
             .unwrap_or_default(),
         emoji: class_ui.emoji.to_string(),
         nullifier: record.nullifier.clone(),
+        grounded,
         description: Some(class_ui.description.to_string()),
         obj: serde_json::to_value(&record.obj).expect("object dictionary should serialize"),
     }
@@ -104,10 +111,27 @@ pub async fn load_gui_inventory(app: tauri::AppHandle) -> Result<LoadGuiInventor
     let class_hashes = helper.class_hashes();
     let actions = build_action_catalog(&action_hashes, &class_hashes);
 
+    let app_settings = get_app_settings(app)?;
+    let live_tx_hashes: Vec<Hash> = objects
+        .iter()
+        .filter(|entry| !entry.record.is_nullified())
+        .map(|entry| entry.record.spendable().tx.dict().commitment())
+        .collect();
+    let grounded_txs =
+        fetch_synchronizer_tx_contains(&app_settings.synchronizer_api_url, &live_tx_hashes)
+            .unwrap_or_default();
+
     Ok(LoadGuiInventoryResult {
         inventory: objects
             .iter()
-            .map(|entry| to_inventory_object(&entry.record, &entry.file_name, &class_hashes))
+            .map(|entry| {
+                to_inventory_object(
+                    &entry.record,
+                    &entry.file_name,
+                    &class_hashes,
+                    &grounded_txs,
+                )
+            })
             .collect(),
         actions,
     })
