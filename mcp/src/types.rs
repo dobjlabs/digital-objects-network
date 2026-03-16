@@ -19,6 +19,26 @@ pub struct ActionList {
     pub actions: Vec<Action>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassList {
+    /// All known object classes
+    pub classes: Vec<ClassSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassSummary {
+    /// Class name, e.g. "WoodPick"
+    pub name: String,
+    /// Number of live objects of this class in inventory
+    pub live_count: usize,
+    /// Actions that produce objects of this class
+    pub produced_by: Vec<String>,
+    /// Actions that consume objects of this class
+    pub consumed_by: Vec<String>,
+}
+
 // -- Inventory / State --
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

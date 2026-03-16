@@ -54,6 +54,39 @@ impl CraftOps for MockCraftOps {
         Ok(self.actions.clone())
     }
 
+    fn list_classes(&self) -> anyhow::Result<Vec<ClassSummary>> {
+        let mut classes: Vec<ClassSummary> = KNOWN_CLASSES
+            .iter()
+            .map(|&name| {
+                let live_count = self
+                    .inventory
+                    .iter()
+                    .filter(|o| o.class_name == name && o.live)
+                    .count();
+                let produced_by = self
+                    .actions
+                    .iter()
+                    .filter(|a| a.output_classes.contains(&name.to_string()))
+                    .map(|a| a.id.clone())
+                    .collect();
+                let consumed_by = self
+                    .actions
+                    .iter()
+                    .filter(|a| a.input_classes.contains(&name.to_string()))
+                    .map(|a| a.id.clone())
+                    .collect();
+                ClassSummary {
+                    name: name.to_string(),
+                    live_count,
+                    produced_by,
+                    consumed_by,
+                }
+            })
+            .collect();
+        classes.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(classes)
+    }
+
     fn get_state_root(&self) -> anyhow::Result<String> {
         Ok(self.state_root.clone())
     }

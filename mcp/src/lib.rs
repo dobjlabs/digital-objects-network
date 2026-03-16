@@ -1,5 +1,6 @@
 pub mod mock;
 pub mod ops;
+pub mod resources;
 pub mod server;
 pub mod types;
 

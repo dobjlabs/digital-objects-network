@@ -6,6 +6,7 @@ use crate::types::*;
 pub trait CraftOps: Send + Sync + 'static {
     fn list_inventory(&self) -> anyhow::Result<Vec<InventoryObject>>;
     fn list_actions(&self) -> anyhow::Result<Vec<Action>>;
+    fn list_classes(&self) -> anyhow::Result<Vec<ClassSummary>>;
     fn get_state_root(&self) -> anyhow::Result<String>;
     fn inspect_object(&self, object_id: &str) -> anyhow::Result<ObjectDetail>;
     fn inspect_class(&self, class_name: &str) -> anyhow::Result<ClassDetail>;

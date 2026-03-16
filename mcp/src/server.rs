@@ -1,8 +1,13 @@
 use std::sync::Arc;
 
+use rmcp::ErrorData as McpError;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::{ServerCapabilities, ServerInfo};
+use rmcp::model::{
+    ListResourcesResult, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
+    ServerInfo,
+};
+use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -46,6 +51,12 @@ pub struct CheckFeasibilityParams {
     pub action_id: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReadDocParams {
+    /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "txlib.podlang", "time.podlang"
+    pub name: String,
+}
+
 // -- Tool implementations --
 
 #[tool_router]
@@ -67,6 +78,16 @@ impl<T: CraftOps> CraftMcpService<T> {
         self.ops
             .list_actions()
             .map(|actions| Json(ActionList { actions }))
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "List all known object classes with live inventory counts and which actions produce/consume each class"
+    )]
+    fn list_classes(&self) -> Result<Json<ClassList>, String> {
+        self.ops
+            .list_classes()
+            .map(|classes| Json(ClassList { classes }))
             .map_err(|e| e.to_string())
     }
 
@@ -129,17 +150,159 @@ impl<T: CraftOps> CraftMcpService<T> {
             .map(Json)
             .map_err(|e| e.to_string())
     }
+
+    #[tool(
+        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source). Pass \"list\" to see all available documents."
+    )]
+    fn read_doc(&self, Parameters(params): Parameters<ReadDocParams>) -> String {
+        match params.name.as_str() {
+            "list" => {
+                let docs = crate::resources::list();
+                let lines: Vec<String> = docs
+                    .iter()
+                    .map(|r| {
+                        format!(
+                            "- {} ({})\n  {}",
+                            r.name,
+                            r.uri,
+                            r.description.as_deref().unwrap_or("")
+                        )
+                    })
+                    .collect();
+                lines.join("\n")
+            }
+            _ => {
+                let uri = match params.name.as_str() {
+                    "podlang-reference" => "zk-craft://docs/podlang-reference",
+                    "object-lifecycle" => "zk-craft://docs/object-lifecycle",
+                    "txlib.podlang" => "zk-craft://source/txlib.podlang",
+                    "time.podlang" => "zk-craft://source/time.podlang",
+                    other => {
+                        return format!(
+                            "Unknown document: \"{other}\". Use read_doc(\"list\") to see available documents."
+                        );
+                    }
+                };
+                crate::resources::read(uri)
+                    .map(|r| {
+                        r.contents
+                            .into_iter()
+                            .next()
+                            .map(|c| match c {
+                                rmcp::model::ResourceContents::TextResourceContents {
+                                    text,
+                                    ..
+                                } => text,
+                                rmcp::model::ResourceContents::BlobResourceContents {
+                                    blob,
+                                    ..
+                                } => blob,
+                            })
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_else(|| "Resource not found".to_string())
+            }
+        }
+    }
 }
+
+// -- Instructions --
+
+const INSTRUCTIONS: &str = "\
+# ZK-Craft MCP Server
+
+You are connected to a ZK-Craft game instance. This server lets you inspect \
+and manipulate Digital Objects — items whose entire existence is proved by \
+zero-knowledge proofs. There is no central database of objects; each object is \
+a self-contained ZK certificate that its holder stores locally.
+
+## Core concepts
+
+**Digital Objects.** Each object is a key-value dictionary (fields like \
+`blueprint`, `durability`, `key`) paired with a ZK proof that the object was \
+created or transformed by a valid sequence of actions. The proof is constant-size \
+regardless of history — it does not reveal how many transitions occurred or when \
+the object was created.
+
+**Classes.** Every object belongs to a class. The class is determined by a \
+podlang predicate — a declarative rule that defines all valid ways the object \
+could have reached its current state. Use `list_actions` and `inspect_class` \
+to discover the available classes and how they relate.
+
+**Actions.** Actions are state transitions that consume input objects, generate \
+a ZK proof, and produce output objects. Each action takes seconds to minutes of \
+CPU time for proof generation. Only one action can run at a time. Use \
+`list_actions` to see what's available and what each action requires.
+
+**Nullifiers and liveness.** When an action consumes an object, it publishes a \
+nullifier (a hash derived from the object's key). This prevents double-spending. \
+An object is \"live\" if its nullifier has not been published. Dead objects remain \
+in inventory for reference but cannot be used as inputs.
+
+**State root.** A Global State Root (GSR) is a hash of all published transactions \
+and nullifiers at a given Ethereum block. Actions must be grounded in a recent GSR \
+(within ~300 blocks / ~1 hour). The `get_state_root` tool returns the current GSR.
+
+## Using the tools
+
+- Start with `list_inventory` and `list_actions` to understand what's available.
+- Use `check_feasibility` before `run_action` to verify inputs exist.
+- Use `inspect_object` to see an object's fields and the predicate that certifies it.
+- Use `inspect_class` to understand a class without needing a specific instance.
+- `run_action` blocks for proof generation. It returns an error if another \
+  action is already running — do not retry immediately.
+- After `run_action`, call `list_inventory` again to see the updated state.
+
+## Podlang predicates
+
+The `predicateSource` field on objects and classes shows the podlang definition. \
+Podlang is a declarative language for specifying ZK proof constraints:
+
+- `AND(...)` — all clauses must hold
+- `OR(...)` — any one branch must hold (used for state-machine patterns)
+- `DictContains(dict, \"key\", value)` — the dictionary contains this key-value pair
+- `DictInsert/DictUpdate/DictDelete` — dictionary mutation operations
+- `GtEq`, `Equal`, `SumOf` — arithmetic constraints
+- `HashOf` — hash computation
+
+The top-level pattern is always `IsClassName(state) = OR(Action1(...), Action2(...))`, \
+meaning the object's current state must be reachable via at least one valid action.
+";
 
 // -- ServerHandler --
 
 #[tool_handler]
 impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "ZK-Craft MCP server. Provides tools to inspect inventory, \
-             explore crafting actions, and execute ZK proof-based crafting operations.",
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
         )
+        .with_instructions(INSTRUCTIONS)
+    }
+
+    fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
+        std::future::ready(Ok(ListResourcesResult {
+            meta: None,
+            resources: crate::resources::list(),
+            next_cursor: None,
+        }))
+    }
+
+    fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+        std::future::ready(crate::resources::read(&request.uri).ok_or_else(|| {
+            McpError::resource_not_found(format!("unknown resource: {}", request.uri), None)
+        }))
     }
 }
 
@@ -169,7 +332,9 @@ mod tests {
         assert!(tools.contains(&"inspect_class".to_string()));
         assert!(tools.contains(&"run_action".to_string()));
         assert!(tools.contains(&"check_feasibility".to_string()));
-        assert_eq!(tools.len(), 7);
+        assert!(tools.contains(&"list_classes".to_string()));
+        assert!(tools.contains(&"read_doc".to_string()));
+        assert_eq!(tools.len(), 9);
     }
 
     #[test]
@@ -178,7 +343,7 @@ mod tests {
         let info = service.get_info();
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
-        assert!(info.instructions.unwrap().contains("ZK-Craft MCP server"));
+        assert!(info.instructions.unwrap().contains("ZK-Craft MCP Server"));
     }
 
     #[test]
