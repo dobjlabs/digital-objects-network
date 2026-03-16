@@ -252,15 +252,18 @@ fn wait_for_synchronizer_commit(
     })
 }
 
+struct SavedFiles {
+    output_files: Vec<String>,
+    nullified_files: Vec<String>,
+}
+
 fn save_results(
     objects_dir: &Path,
     descriptor: &spec::ActionDescriptor,
     action_id: &str,
     resolved_inputs: &[ResolvedInput],
     spendable_outputs: &SpendableObjects,
-    old_root: &str,
-    new_root: &str,
-) -> Result<RunSdkActionResult, String> {
+) -> Result<SavedFiles, String> {
     let mut nullified_files = Vec::new();
     for input in resolved_inputs {
         let input_record = &input.record;
@@ -318,13 +321,41 @@ fn save_results(
         write_object_file(&live_record, &file_name, objects_dir)?;
     }
 
-    Ok(RunSdkActionResult {
-        ok: true,
-        old_root: old_root.to_string(),
-        new_root: new_root.to_string(),
+    Ok(SavedFiles {
         output_files,
         nullified_files,
     })
+}
+
+fn rollback_results(
+    objects_dir: &Path,
+    resolved_inputs: &[ResolvedInput],
+    saved: &SavedFiles,
+) {
+    for input in resolved_inputs {
+        let live_record = ObjectRecord {
+            id: input.record.id.clone(),
+            class_name: input.record.class_name.clone(),
+            source_action: input.record.source_action.clone(),
+            nullifier: None,
+            pod: input.record.pod.clone(),
+            obj: input.record.obj.clone(),
+            tx: input.record.tx.clone(),
+        };
+        if let Err(e) = write_object_file(&live_record, &input.file_name, objects_dir) {
+            eprintln!("zk-craft: rollback failed for {}: {e}", input.file_name);
+        }
+    }
+    for file_name in &saved.output_files {
+        let path = objects_dir.join(file_name);
+        match std::fs::remove_file(&path) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!("zk-craft: rollback failed to remove {file_name}: {e}");
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -380,45 +411,61 @@ pub async fn run_sdk_action(
     let payload_bytes = build_relayer_payload(&old_root_hash, &spendable_outputs)?;
     let expected_tx_final = spendable_outputs.tx.dict().commitment();
 
-    submit_and_confirm_relayer(
-        &app,
-        RelayerSubmitRequest {
-            run_id: &action_id,
-            old_root: &old_root,
-            relayer_url: &app_settings.relayer_api_url,
-            action_id: &action_id,
-            payload_bytes,
-            timeout_secs: RELAYER_POLL_TIMEOUT_SECS,
-            poll_interval_ms: RELAYER_POLL_INTERVAL_MS,
-        },
-    )
-    .await?;
-
-    emit_commit_step(
-        &app,
-        &action_id,
-        "Waiting for synchronizer to observe commit",
-        &old_root,
-    )?;
-    let sync_state_after = wait_for_synchronizer_commit(
-        &app_settings.synchronizer_api_url,
-        expected_tx_final,
-        SYNCHRONIZER_POLL_TIMEOUT_SECS,
-        SYNCHRONIZER_POLL_INTERVAL_MS,
-    )?;
-
     emit_commit_step(&app, &action_id, "Creating files", &old_root)?;
-    let new_root = encode_hash_hex(&sync_state_after.current_gsr);
-    let result = save_results(
+    let saved = save_results(
         &objects_dir,
         &descriptor,
         &action_id,
         &resolved_inputs,
         &spendable_outputs,
-        &old_root,
-        &new_root,
     )?;
 
-    emit_commit_done(&app, &action_id, &result)?;
-    Ok(result)
+    let commit_result: Result<SynchronizerState, String> = async {
+        submit_and_confirm_relayer(
+            &app,
+            RelayerSubmitRequest {
+                run_id: &action_id,
+                old_root: &old_root,
+                relayer_url: &app_settings.relayer_api_url,
+                action_id: &action_id,
+                payload_bytes,
+                timeout_secs: RELAYER_POLL_TIMEOUT_SECS,
+                poll_interval_ms: RELAYER_POLL_INTERVAL_MS,
+            },
+        )
+        .await?;
+
+        emit_commit_step(
+            &app,
+            &action_id,
+            "Waiting for synchronizer to observe commit",
+            &old_root,
+        )?;
+        wait_for_synchronizer_commit(
+            &app_settings.synchronizer_api_url,
+            expected_tx_final,
+            SYNCHRONIZER_POLL_TIMEOUT_SECS,
+            SYNCHRONIZER_POLL_INTERVAL_MS,
+        )
+    }
+    .await;
+
+    match commit_result {
+        Ok(sync_state_after) => {
+            let new_root = encode_hash_hex(&sync_state_after.current_gsr);
+            let result = RunSdkActionResult {
+                ok: true,
+                old_root: old_root.clone(),
+                new_root,
+                output_files: saved.output_files,
+                nullified_files: saved.nullified_files,
+            };
+            emit_commit_done(&app, &action_id, &result)?;
+            Ok(result)
+        }
+        Err(err) => {
+            rollback_results(&objects_dir, &resolved_inputs, &saved);
+            Err(err)
+        }
+    }
 }
