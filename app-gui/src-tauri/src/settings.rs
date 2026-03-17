@@ -8,6 +8,8 @@ use tauri::{
 
 const MENU_OPEN_SETTINGS_ID: &str = "app.open-settings";
 const OPEN_SETTINGS_EVENT: &str = "open-settings";
+const DEFAULT_SYNCHRONIZER_API_URL: &str = "http://127.0.0.1:3000";
+const DEFAULT_RELAYER_API_URL: &str = "http://127.0.0.1:3200";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,8 +77,12 @@ fn append_settings_to_named_submenu<R: Runtime>(
 
 fn default_settings() -> AppSettings {
     AppSettings {
-        synchronizer_api_url: "http://127.0.0.1:3000".to_string(),
-        relayer_api_url: "http://127.0.0.1:3200".to_string(),
+        synchronizer_api_url: option_env!("DEFAULT_SYNCHRONIZER_API_URL")
+            .unwrap_or(DEFAULT_SYNCHRONIZER_API_URL)
+            .to_string(),
+        relayer_api_url: option_env!("DEFAULT_RELAYER_API_URL")
+            .unwrap_or(DEFAULT_RELAYER_API_URL)
+            .to_string(),
     }
 }
 

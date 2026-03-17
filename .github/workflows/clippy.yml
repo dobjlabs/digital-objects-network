@@ -25,4 +25,4 @@ jobs:
         with:
           shared-key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
       - name: Check formatting
-        run: cargo clippy
+        run: cargo clippy --release
