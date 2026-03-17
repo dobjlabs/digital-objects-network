@@ -177,7 +177,6 @@ async fn poll_submitted_job(
         }
     }
 
-    job.attempt_count = job.attempt_count.saturating_add(1);
     job.updated_at = now;
     db.put_job(&job).await?;
 

@@ -68,7 +68,7 @@ pub struct SubmitProofResponse {
     pub tx_final: String,
     /// State root hash claimed by the payload.
     pub state_root_hash: String,
-    /// Attempts observed so far for this job.
+    /// Submission attempts observed so far for this job.
     pub attempt_count: u32,
     /// Job creation timestamp in unix seconds.
     pub created_at: i64,
@@ -85,7 +85,7 @@ pub struct JobStatusResponse {
     pub tx_hash: Option<String>,
     /// Receipt block number when known.
     pub block_number: Option<u64>,
-    /// Total attempts made so far by the worker.
+    /// Total submission attempts made so far by the worker.
     pub attempt_count: u32,
     /// Most recent failure reason, if any.
     pub last_error: Option<String>,

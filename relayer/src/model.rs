@@ -17,7 +17,7 @@ pub struct RelayJob {
     pub state_root_hash: String,
     /// Optional caller-provided trace string for observability.
     pub client_ref: Option<String>,
-    /// Total worker attempts made so far (submit + poll attempts).
+    /// Total submission attempts made so far.
     pub attempt_count: u32,
     /// Ethereum tx hash once broadcast succeeds.
     pub tx_hash: Option<String>,
