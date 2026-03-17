@@ -70,7 +70,6 @@ impl EthClient {
         };
 
         info!(
-            rpc_url = %cfg.rpc_url,
             from = %client.from,
             to = %client.to,
             signer_balance_wei = %signer_balance,
