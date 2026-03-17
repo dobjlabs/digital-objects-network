@@ -70,6 +70,16 @@ App config (`settings.json`) contains:
 
 Editable via Settings dialog.
 
+You can also bake different first-run defaults into the packaged app at build time:
+
+```bash
+DEFAULT_SYNCHRONIZER_API_URL=http://YOUR_HOST:3000 \
+DEFAULT_RELAYER_API_URL=http://YOUR_HOST:3200 \
+pnpm tauri build
+```
+
+These compile-time defaults are only used when the app has no existing `settings.json` yet.
+
 ## Run
 
 From repo root:
