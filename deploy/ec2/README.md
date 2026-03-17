@@ -83,7 +83,7 @@ journalctl -u relayer -f
 On AWS, you must open the EC2 security group inbound rules for these ports or the services will only be reachable from the instance itself.
 
 - TCP `3000` to `0.0.0.0/0`
-- TCP `3200`to `0.0.0.0/0`
+- TCP `3200` to `0.0.0.0/0`
 
 ## Updating after a git pull
 
