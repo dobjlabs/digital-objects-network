@@ -37,8 +37,7 @@ async fn main() -> Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let server_task = tokio::spawn(run_api_server(
-        Arc::clone(&sync_db),
-        Arc::clone(&state_machine),
+        Arc::clone(&node),
         node.config.http_bind,
         shutdown_rx.clone(),
     ));

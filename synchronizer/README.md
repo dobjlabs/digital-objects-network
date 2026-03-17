@@ -75,6 +75,34 @@ RocksDB is updated from Postgres journaled slot deltas and rolled back using the
     - `present`
     - `last_processed_slot`
     - `current_gsr`
+- `GET /v1/dashboard/summary`
+  - returns:
+    - `status`
+    - `status_reason`
+    - `last_processed_slot`
+    - `beacon_head_slot`
+    - `slot_lag`
+    - `last_processed_block_number`
+    - `current_block_number`
+    - `current_gsr`
+    - `tx_count`
+    - `nullifier_count`
+    - `gsr_count`
+    - `pending_recovery_count`
+    - `cursor_updated_at`
+- `GET /v1/dashboard/recent-slots?limit=25`
+  - returns:
+    - `slots` array of:
+      - `slot`
+      - `execution_block_number`
+      - `status`
+      - `is_empty`
+      - `block_root`
+      - `parent_root`
+      - `tx_count`
+      - `nullifier_count`
+      - `gsr_hash`
+      - `updated_at`
 
 Hash parsing accepts `0x`-prefixed or raw hex input; responses are normalized to lowercase `0x...`.
 
@@ -89,6 +117,7 @@ Hash parsing accepts `0x`-prefixed or raw hex input; responses are normalized to
 - `APP_STATE_DB_PATH` (default: `data/synchronizer-db`)
 - `SYNC_METADATA_DB_URL` (default: `postgres://postgres@localhost:5432/synchronizer`)
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
+- `CORS_ALLOWED_ORIGINS` (default: unset; comma-separated browser origins allowed to call the API)
 - `SYNC_DELAY_MS` (default: `333`)
 - `INITIAL_START_SLOT` (default: unset, meaning start from current head on first run)
 

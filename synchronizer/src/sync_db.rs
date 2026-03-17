@@ -2,6 +2,7 @@ use alloy::primitives::B256;
 use anyhow::{anyhow, Context, Result};
 use pod2::middleware::Hash;
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
+use synchronizer::api_types::{DashboardRecentSlotRow, DashboardSlotStatus};
 use url::Url;
 
 use crate::app_db::{db_bytes_to_hash, hash_to_db_bytes};
@@ -14,6 +15,14 @@ use crate::app_db::{db_bytes_to_hash, hash_to_db_bytes};
 pub struct SyncProgress {
     pub last_processed_slot: u32,
     pub last_processed_block_number: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncCursorInfo {
+    pub last_processed_slot: Option<u32>,
+    pub last_processed_block_number: Option<u32>,
+    pub updated_at_unix: i64,
+    pub updated_at: String,
 }
 
 /// Per-slot app-state delta persisted in Postgres so apply/rollback can be replayed idempotently.
@@ -194,6 +203,88 @@ impl SyncDb {
                 .get::<Option<i32>, _>("last_processed_block_number")
                 .map(|v| v as u32),
         }))
+    }
+
+    pub async fn last_cursor_info(&self) -> Result<Option<SyncCursorInfo>> {
+        let row = sqlx::query(
+            r#"
+            SELECT last_processed_slot,
+                   last_processed_block_number,
+                   EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at_unix,
+                   to_char(
+                       updated_at AT TIME ZONE 'UTC',
+                       'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+                   ) AS updated_at
+            FROM sync_cursor
+            WHERE id = 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        Ok(Some(SyncCursorInfo {
+            last_processed_slot: row
+                .get::<Option<i32>, _>("last_processed_slot")
+                .map(|value| value as u32),
+            last_processed_block_number: row
+                .get::<Option<i32>, _>("last_processed_block_number")
+                .map(|value| value as u32),
+            updated_at_unix: row.get::<i64, _>("updated_at_unix"),
+            updated_at: row.get::<String, _>("updated_at"),
+        }))
+    }
+
+    pub async fn recent_canonical_slots(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<DashboardRecentSlotRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT c.slot,
+                   c.execution_block_number,
+                   c.status,
+                   c.is_empty,
+                   c.block_root,
+                   c.parent_root,
+                   COALESCE(array_length(j.tx_hashes, 1), 0) AS tx_count,
+                   COALESCE(array_length(j.nullifiers, 1), 0) AS nullifier_count,
+                   CASE
+                       WHEN COALESCE(array_length(j.gsr_hashes, 1), 0) = 0 THEN NULL
+                       ELSE j.gsr_hashes[array_length(j.gsr_hashes, 1)]
+                   END AS gsr_hash,
+                   to_char(
+                       c.updated_at AT TIME ZONE 'UTC',
+                       'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+                   ) AS updated_at
+            FROM canonical_slots c
+            LEFT JOIN slot_apply_journal j ON j.slot = c.slot
+            ORDER BY c.slot DESC
+            LIMIT $1
+            "#,
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(row_to_recent_slot).collect()
+    }
+
+    pub async fn pending_recovery_count(&self) -> Result<usize> {
+        let count = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)
+            FROM canonical_slots c
+            JOIN slot_apply_journal j ON j.slot = c.slot
+            WHERE c.status = 'pending' OR j.kv_applied = false
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        usize::try_from(count).map_err(|_| anyhow!("pending recovery count out of range: {count}"))
     }
 
     pub async fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
@@ -503,6 +594,37 @@ impl SyncDb {
         tx.commit().await?;
         Ok(())
     }
+}
+
+fn row_to_recent_slot(row: sqlx::postgres::PgRow) -> Result<DashboardRecentSlotRow> {
+    let status = match row.get::<&str, _>("status") {
+        "pending" => DashboardSlotStatus::Pending,
+        "applied" => DashboardSlotStatus::Applied,
+        other => return Err(anyhow!("invalid canonical slot status: {other}")),
+    };
+
+    let execution_block_number = row
+        .get::<Option<i32>, _>("execution_block_number")
+        .map(|value| value as u32);
+    let tx_count: i32 = row.get("tx_count");
+    let nullifier_count: i32 = row.get("nullifier_count");
+    let block_root: Option<Vec<u8>> = row.get("block_root");
+    let parent_root: Option<Vec<u8>> = row.get("parent_root");
+    let gsr_hash: Option<Vec<u8>> = row.get("gsr_hash");
+
+    Ok(DashboardRecentSlotRow {
+        slot: row.get::<i32, _>("slot") as u32,
+        execution_block_number,
+        status,
+        is_empty: row.get("is_empty"),
+        block_root: block_root.map(|bytes| format!("0x{}", hex::encode(bytes))),
+        parent_root: parent_root.map(|bytes| format!("0x{}", hex::encode(bytes))),
+        tx_count: usize::try_from(tx_count).map_err(|_| anyhow!("invalid tx_count: {tx_count}"))?,
+        nullifier_count: usize::try_from(nullifier_count)
+            .map_err(|_| anyhow!("invalid nullifier_count: {nullifier_count}"))?,
+        gsr_hash: gsr_hash.map(|bytes| format!("0x{}", hex::encode(bytes))),
+        updated_at: row.get::<String, _>("updated_at"),
+    })
 }
 
 /// Ensure target Postgres database exists (local/dev convenience).
@@ -826,6 +948,54 @@ mod tests {
         let progress = sync_db.last_progress().await?.expect("progress");
         assert_eq!(progress.last_processed_slot, slot);
         assert_eq!(progress.last_processed_block_number, None);
+
+        drop(sync_db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn test_recent_canonical_slots_and_pending_count_for_dashboard() -> Result<()> {
+        let _guard = test_db_lock().lock().await;
+        let (admin_url, db_url, db_name) = test_urls();
+        drop_db(&admin_url, &db_name).await?;
+        let sync_db = SyncDb::connect(&db_url).await?;
+
+        let slot = 77;
+        let root = B256::from([7u8; 32]);
+        let parent = B256::from([6u8; 32]);
+        let gsr_hash = unique_hash(700);
+        let journal = SlotJournal {
+            slot,
+            tx_hashes: vec![unique_hash(701)],
+            nullifiers: vec![unique_hash(702)],
+            gsr_block_numbers: vec![7700],
+            gsr_hashes: vec![gsr_hash],
+        };
+
+        sync_db
+            .save_pending_slot(slot, Some(root), Some(parent), Some(7700), false, &journal)
+            .await?;
+
+        let pending_rows = sync_db.recent_canonical_slots(5).await?;
+        assert_eq!(pending_rows.len(), 1);
+        assert_eq!(pending_rows[0].slot, slot);
+        assert_eq!(pending_rows[0].status, DashboardSlotStatus::Pending);
+        assert_eq!(pending_rows[0].tx_count, 1);
+        assert_eq!(pending_rows[0].nullifier_count, 1);
+        assert_eq!(
+            pending_rows[0].gsr_hash,
+            Some(format!("0x{}", hex::encode(hash_to_db_bytes(gsr_hash))))
+        );
+        assert_eq!(sync_db.pending_recovery_count().await?, 1);
+
+        sync_db.finalize_slot_applied(slot, Some(7700)).await?;
+
+        let applied_rows = sync_db.recent_canonical_slots(5).await?;
+        assert_eq!(applied_rows.len(), 1);
+        assert_eq!(applied_rows[0].status, DashboardSlotStatus::Applied);
+        assert_eq!(sync_db.pending_recovery_count().await?, 0);
 
         drop(sync_db);
         drop_db(&admin_url, &db_name).await?;

@@ -3,6 +3,7 @@
 Proof-driven digital objects with:
 
 - a Tauri desktop app
+- a standalone synchronizer dashboard web app
 - a relayer that submits proof payloads as EIP-4844 blob transactions
 - a synchronizer that rebuilds app state from chain data
 
@@ -26,6 +27,14 @@ Install the GUI dependencies:
 
 ```bash
 cd app-gui
+pnpm install
+cd ..
+```
+
+Install the dashboard dependencies:
+
+```bash
+cd sync-dashboard
 pnpm install
 cd ..
 ```
@@ -61,6 +70,13 @@ Then fill in the required values:
 
 `TO_ADDRESS` must match in both `synchronizer/.env` and `relayer/.env`.
 
+If you want the browser-based dashboard to call the synchronizer from another
+origin, also set:
+
+- In `synchronizer/.env`:
+  - `CORS_ALLOWED_ORIGINS`
+    - example: `http://127.0.0.1:4173`
+
 If you do not want to create the local `postgres` role, also set:
 
 - In `relayer/.env`:
@@ -83,6 +99,15 @@ This runs:
 - `just gui`
 
 You can also run each service individually with those commands.
+
+Run the standalone dashboard separately:
+
+```bash
+just dashboard
+```
+
+The dashboard reads `VITE_SYNCHRONIZER_API_BASE_URL` from `sync-dashboard/.env`
+or your shell. If unset, it defaults to `http://127.0.0.1:3000`.
 
 ## Restarting Fresh
 

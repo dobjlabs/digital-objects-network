@@ -1,6 +1,8 @@
 procs:
   synchronizer:
     shell: just sync
+  sync-dashboard:
+    shell: just dashboard
   relayer:
     shell: just relayer
   gui:

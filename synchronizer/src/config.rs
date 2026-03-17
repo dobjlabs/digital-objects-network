@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub app_state_db_path: String,
     pub sync_metadata_db_url: String,
     pub http_bind: SocketAddr,
+    pub cors_allowed_origins: Vec<String>,
     pub sync_delay: Duration,
     pub initial_start_slot: Option<u32>,
     pub rpc_url: String,
@@ -29,6 +30,13 @@ pub fn load_config() -> Result<AppConfig> {
         .unwrap_or_else(|_| DEFAULT_SYNC_METADATA_DB_URL.to_string());
     let http_bind = dotenvy::var("HTTP_BIND").unwrap_or_else(|_| DEFAULT_HTTP_BIND.to_string());
     let http_bind: SocketAddr = http_bind.parse()?;
+    let cors_allowed_origins = dotenvy::var("CORS_ALLOWED_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect();
     let sync_delay_ms = dotenvy::var("SYNC_DELAY_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -45,6 +53,7 @@ pub fn load_config() -> Result<AppConfig> {
         app_state_db_path,
         sync_metadata_db_url,
         http_bind,
+        cors_allowed_origins,
         sync_delay: Duration::from_millis(sync_delay_ms),
         initial_start_slot,
         rpc_url,

@@ -13,6 +13,10 @@ relayer:
 gui:
     cd app-gui && pnpm tauri dev --release
 
+# Run the standalone synchronizer dashboard
+dashboard:
+    cd sync-dashboard && pnpm dev
+
 # Run relayer + synchronizer + gui together via mprocs
 # https://github.com/pvolok/mprocs
 dev:
