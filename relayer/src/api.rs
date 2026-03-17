@@ -14,7 +14,7 @@ use relayer::api_types::{
     HealthResponse, JobStatusResponse, SubmitProofRequest, SubmitProofResponse,
 };
 use tokio::sync::watch;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
@@ -38,6 +38,8 @@ pub enum ApiError {
     Internal(anyhow::Error),
 }
 
+const INTERNAL_ERROR_MESSAGE: &str = "internal server error";
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
@@ -51,11 +53,18 @@ impl IntoResponse for ApiError {
                 Json(serde_json::json!({"error": msg})),
             )
                 .into_response(),
-            ApiError::Internal(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": err.to_string()})),
-            )
-                .into_response(),
+            ApiError::Internal(err) => {
+                let error_id = Uuid::new_v4().simple().to_string();
+                error!(%error_id, ?err, "Internal relayer API error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": INTERNAL_ERROR_MESSAGE,
+                        "error_id": error_id,
+                    })),
+                )
+                    .into_response()
+            }
         }
     }
 }

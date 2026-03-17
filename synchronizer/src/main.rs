@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::watch;
 use tokio::task::JoinError;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 mod api;
 mod app_db;
@@ -28,7 +28,6 @@ async fn main() -> Result<()> {
     common::log_init();
 
     let cfg = load_config()?;
-    debug!(?cfg, "Loaded synchronizer config");
 
     let app_db = AppDb::connect(&cfg.app_state_db_path)?;
     let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db_url).await?);

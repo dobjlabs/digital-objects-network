@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::watch;
 use tokio::task::JoinError;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 mod api;
 mod config;
@@ -26,7 +26,6 @@ async fn main() -> Result<()> {
     common::log_init();
 
     let cfg = load_config()?;
-    debug!(?cfg, "Loaded relayer config");
 
     let db = Arc::new(Db::connect(&cfg.db_url).await?);
     let parser: Arc<dyn BlobParser> = Arc::new(ProofParser::new()?);
