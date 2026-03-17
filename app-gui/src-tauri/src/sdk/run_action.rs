@@ -327,11 +327,7 @@ fn save_results(
     })
 }
 
-fn rollback_results(
-    objects_dir: &Path,
-    resolved_inputs: &[ResolvedInput],
-    saved: &SavedFiles,
-) {
+fn rollback_results(objects_dir: &Path, resolved_inputs: &[ResolvedInput], saved: &SavedFiles) {
     for input in resolved_inputs {
         let live_record = ObjectRecord {
             id: input.record.id.clone(),
