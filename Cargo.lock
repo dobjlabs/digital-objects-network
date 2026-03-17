@@ -964,8 +964,10 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-opener",
  "thiserror 2.0.18",
+ "tokio",
  "txlib",
  "vdfpod",
+ "zk-craft-mcp",
 ]
 
 [[package]]
@@ -10757,6 +10759,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "reqwest 0.12.28",
  "rmcp",
  "schemars 1.2.1",
  "serde",

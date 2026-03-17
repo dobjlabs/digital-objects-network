@@ -3,13 +3,13 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES;
-pub(super) use relayer::api_types::JobStatus;
+pub(crate) use relayer::api_types::JobStatus;
 use relayer::api_types::{JobStatusResponse, SubmitProofRequest, SubmitProofResponse};
 
-pub(super) const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
-pub(super) const RELAYER_POLL_INTERVAL_MS: u64 = 1500;
+pub(crate) const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
+pub(crate) const RELAYER_POLL_INTERVAL_MS: u64 = 1500;
 
-pub(super) fn submit_proof_to_relayer(
+pub(crate) fn submit_proof_to_relayer(
     relayer_api_url: &str,
     payload_bytes: &[u8],
     client_ref: Option<String>,
@@ -76,7 +76,7 @@ fn fetch_relayer_job_status(relayer_api_url: &str, job_id: &str) -> Result<JobSt
         .map_err(|err| anyhow!("failed to decode relayer status response: {err}; body={body}"))
 }
 
-pub(super) fn wait_for_relayer_confirmation(
+pub(crate) fn wait_for_relayer_confirmation(
     relayer_api_url: &str,
     job_id: &str,
     timeout_secs: u64,

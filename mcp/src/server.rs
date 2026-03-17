@@ -128,12 +128,16 @@ impl<T: CraftOps> CraftMcpService<T> {
     #[tool(
         description = "Execute a crafting action. Blocks until proof generation completes. Returns error if another action is already in progress."
     )]
-    fn run_action(
+    async fn run_action(
         &self,
         Parameters(params): Parameters<RunActionInput>,
     ) -> Result<Json<RunActionResult>, String> {
-        self.ops
-            .run_action(params)
+        // Run on the blocking thread pool so we don't starve the async runtime
+        // while proof generation, relayer submission, and sync polling happen.
+        let ops = self.ops.clone();
+        tokio::task::spawn_blocking(move || ops.run_action(params))
+            .await
+            .map_err(|e| format!("action task failed: {e}"))?
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -403,25 +407,28 @@ mod tests {
         assert!(detail.produced_by.contains(&"CraftSticks".to_string()));
     }
 
-    #[test]
-    fn test_run_action_via_handler() {
+    #[tokio::test]
+    async fn test_run_action_via_handler() {
         let service = make_service();
         let Json(result) = service
             .run_action(Parameters(RunActionInput {
                 action_id: "FindLog".to_string(),
                 input_object_paths: vec![],
             }))
+            .await
             .unwrap();
         assert!(result.success);
     }
 
-    #[test]
-    fn test_run_action_in_progress_returns_error() {
+    #[tokio::test]
+    async fn test_run_action_in_progress_returns_error() {
         let service = CraftMcpService::new(Arc::new(MockCraftOps::new().with_action_in_progress()));
-        let result = service.run_action(Parameters(RunActionInput {
-            action_id: "FindLog".to_string(),
-            input_object_paths: vec![],
-        }));
+        let result = service
+            .run_action(Parameters(RunActionInput {
+                action_id: "FindLog".to_string(),
+                input_object_paths: vec![],
+            }))
+            .await;
         let err = result.err().expect("should be an error");
         assert!(err.contains("already in progress"));
     }

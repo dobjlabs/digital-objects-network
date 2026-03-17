@@ -44,6 +44,7 @@ function App() {
   const applyRunSdkActionProgress = useStore(
     (state) => state.applyRunSdkActionProgress,
   );
+  const initProofPanel = useStore((state) => state.initProofPanel);
   const runProof = useStore((state) => state.runProof);
   const proofStatus = useStore((state) => state.proof.status);
   const proofRunning = useStore(
@@ -107,6 +108,41 @@ function App() {
       if (unlisten) unlisten();
     };
   }, [applyRunSdkActionProgress]);
+
+  // Listen for MCP-initiated actions so the proof panel shows progress
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<{ actionId: string; cpuCost: string }>(
+          "mcp-action-started",
+          (event) => {
+            if (!cancelled) {
+              initProofPanel({
+                actionId: event.payload.actionId,
+                cpuCost: event.payload.cpuCost,
+                args: ["(via MCP)"],
+              });
+            }
+          },
+        ),
+      )
+      .then((dispose) => {
+        if (cancelled) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+      })
+      .catch((error) => {
+        console.error("Failed to subscribe to mcp-action-started:", error);
+      });
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [initProofPanel]);
 
   useEffect(() => {
     let cancelled = false;

@@ -20,7 +20,7 @@ impl ActionRunGate {
     }
 }
 
-pub(super) fn lock_runtime_state<'a>(
+pub(crate) fn lock_runtime_state<'a>(
     state_lock: &'a Mutex<ActionRunState>,
 ) -> MutexGuard<'a, ActionRunState> {
     match state_lock.lock() {
@@ -32,13 +32,7 @@ pub(super) fn lock_runtime_state<'a>(
     }
 }
 
-pub(super) fn lock_runtime<'a>(
-    runtime: &'a tauri::State<'_, ActionRunGate>,
-) -> MutexGuard<'a, ActionRunState> {
-    lock_runtime_state(&runtime.inner)
-}
-
-pub(super) struct RunInProgressGuard<'a> {
+pub(crate) struct RunInProgressGuard<'a> {
     state_lock: &'a Mutex<ActionRunState>,
 }
 
@@ -49,15 +43,15 @@ impl Drop for RunInProgressGuard<'_> {
     }
 }
 
-pub(super) fn acquire_run_in_progress_guard<'a, 'b>(
-    runtime: &'a tauri::State<'b, ActionRunGate>,
-) -> Result<RunInProgressGuard<'a>> {
-    let mut inner = lock_runtime(runtime);
+pub(crate) fn acquire_run_in_progress_guard(
+    gate: &ActionRunGate,
+) -> Result<RunInProgressGuard<'_>> {
+    let mut inner = lock_runtime_state(&gate.inner);
     if inner.run_in_progress {
         return Err(anyhow!("another action run is already in progress"));
     }
     inner.run_in_progress = true;
     Ok(RunInProgressGuard {
-        state_lock: &runtime.inner,
+        state_lock: &gate.inner,
     })
 }
