@@ -42,6 +42,8 @@ RocksDB is updated from Postgres journaled slot deltas and rolled back using the
 
 ## API
 
+- `GET /healthz`
+  - returns `{"ok": true}`
 - `GET /sync-progress`
   - returns `last_processed_slot`, `last_processed_block_number`
 - `GET /v1/state/head`

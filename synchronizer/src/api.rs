@@ -10,8 +10,8 @@ use axum::{
 use hex::FromHex;
 use pod2::middleware::Hash;
 use synchronizer::api_types::{
-    StateFullResponse, StateHeadResponse, SyncProgressResponse, TxContainsEntry, TxContainsRequest,
-    TxContainsResponse, TxStatusResponse,
+    HealthResponse, StateFullResponse, StateHeadResponse, SyncProgressResponse, TxContainsEntry,
+    TxContainsRequest, TxContainsResponse, TxStatusResponse,
 };
 use tokio::sync::watch;
 use tracing::info;
@@ -42,6 +42,7 @@ pub async fn run_api_server(
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     let app = Router::new()
+        .route("/healthz", get(healthz))
         .route("/sync-progress", get(get_sync_progress))
         .route("/v1/state/head", get(get_state_head))
         .route("/v1/state/full", get(get_state_full))
@@ -60,6 +61,10 @@ pub async fn run_api_server(
         })
         .await?;
     Ok(())
+}
+
+async fn healthz() -> Json<HealthResponse> {
+    Json(HealthResponse { ok: true })
 }
 
 async fn get_sync_progress(
