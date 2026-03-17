@@ -1,0 +1,335 @@
+.context-panel {
+  border-right: 2px solid var(--col-border);
+  border-bottom: 1px solid var(--border);
+  padding: 14px;
+  background: var(--panel);
+  overflow-y: auto;
+}
+
+.context-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: center;
+  line-height: 2;
+}
+
+.context-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 10px;
+}
+
+.context-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.context-title-row .context-title {
+  margin-bottom: 0;
+}
+
+.context-clear-btn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.context-clear-btn:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+
+.context-meta-block {
+  margin: 6px 0 12px;
+}
+
+.context-meta-block.compact {
+  margin-top: 0;
+}
+
+.context-meta-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin-top: 3px;
+}
+
+.context-meta-key {
+  font-size: 9px;
+  color: var(--text-dim);
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  flex-shrink: 0;
+  width: 80px;
+}
+
+.context-meta-val {
+  font-size: 9px;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-bright);
+}
+
+.context-inline-hash {
+  font-size: 10px;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.context-inline-hash.live {
+  color: var(--good);
+}
+
+.context-inline-hash.nullified {
+  color: var(--danger);
+}
+
+.context-inline-path {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.context-desc {
+  font-size: 10px;
+  color: var(--text);
+  line-height: 1.55;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  padding: 9px;
+  background: var(--panel-alt);
+  font-family: "IBM Plex Sans", sans-serif;
+}
+
+.context-title-row + .context-desc {
+  margin-top: 12px;
+}
+
+.object-data {
+  margin-bottom: 12px;
+}
+
+.object-data-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: start;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 0;
+  font-size: 10px;
+}
+
+.object-data-key {
+  color: var(--text-dim);
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.object-data-value {
+  color: var(--good);
+  font-weight: 500;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.object-data-value.mono {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  margin-top: 4px;
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--good);
+}
+
+.progress-fill.warn {
+  background: var(--warn);
+}
+
+.progress-fill.danger {
+  background: var(--danger);
+}
+
+.method-list {
+  margin-top: 12px;
+}
+
+.method-card {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  margin-top: 10px;
+}
+
+.method-card-body {
+  padding: 12px;
+}
+
+.method-arg {
+  margin-bottom: 8px;
+}
+
+.method-arg:last-child {
+  margin-bottom: 0;
+}
+
+.method-arg-row {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.method-arg-label {
+  font-size: 9px;
+  color: var(--text-dim);
+  min-width: 120px;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.from-action-label {
+  position: relative;
+  cursor: default;
+  color: var(--text-bright);
+}
+
+.proof-tooltip {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  padding: 3px 7px;
+  border: none;
+  background: var(--accent);
+  color: #0e1e1a;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.from-action-label:hover .proof-tooltip {
+  display: block;
+}
+
+.method-arg-drop {
+  border: 1px dashed var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+  font-size: 10px;
+  padding: 5px 8px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  transition: all 0.12s;
+}
+
+.method-arg-drop.filled {
+  border-style: solid;
+  border-color: var(--good);
+  color: var(--good);
+  background: var(--green-bg);
+}
+
+.method-arg-drop.drop-active {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.method-arg-drop.error {
+  border-style: solid;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.method-arg-browse {
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  color: var(--text-dim);
+  font-size: 9px;
+  padding: 4px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.method-arg-browse:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+
+.method-arg-browse:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.method-arg-error {
+  color: var(--danger);
+  font-size: 9px;
+  margin-top: 3px;
+}
+
+.method-footer {
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: stretch;
+}
+
+.method-footer.no-inputs {
+  border-top: none;
+}
+
+.method-meta-row {
+  flex: 1;
+  font-size: 9px;
+  color: var(--text-dim);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 10px;
+  background: var(--panel-alt);
+  border-right: 1px solid var(--border);
+}
+
+.method-meta-line .mval {
+  color: var(--text);
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.method-execute {
+  border: none;
+  background: var(--accent);
+  color: #0e1e1a;
+  min-width: 118px;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.method-execute:hover {
+  background: var(--accent-hover);
+}
+
+.method-execute:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

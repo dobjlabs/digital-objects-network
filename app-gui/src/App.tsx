@@ -1,50 +1,288 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { useEffect, useState } from "react";
+import { ContextPanel } from "./features/context/ContextPanel";
+import { ActionGrid } from "./features/actions/ActionGrid";
+import { InventoryPanel } from "./features/inventory/InventoryPanel";
+import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
+import { SettingsModal } from "./features/settings/SettingsModal";
+import {
+  getGlobalStateRoot,
+  getObjectsDir,
+  listenOpenSettings,
+  listenObjectsChanged,
+  listenRunSdkActionProgress,
+  openObjectsDir,
+  sampleAppCpu,
+} from "./shared/api/tauriClient";
+import { useStore } from "./shared/state/store";
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./styles/layout.css";
+import "./styles/shared.css";
+import "./features/inventory/InventoryPanel.css";
+import "./features/context/ContextPanel.css";
+import "./features/proof-runner/ProofRunnerPanel.css";
+import "./features/actions/ActionGrid.css";
+import "./features/settings/SettingsModal.css";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [objectsDirPath, setObjectsDirPath] = useState("~/.objects");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const inventory = useStore((state) => state.inventory);
+  const actions = useStore((state) => state.actions);
+  const activeObjectId = useStore((state) => state.activeObjectId);
+  const activeActionId = useStore((state) => state.activeActionId);
+  const contextSelection = useStore((state) => state.contextSelection);
+  const showNullifiedItems = useStore((state) => state.showNullifiedItems);
+  const hydrateData = useStore((state) => state.hydrateData);
+  const selectObject = useStore((state) => state.selectObject);
+  const selectAction = useStore((state) => state.selectAction);
+  const clearSelection = useStore((state) => state.clearSelection);
+  const toggleNullified = useStore((state) => state.toggleNullified);
+  const recordCpuSample = useStore((state) => state.recordCpuSample);
+  const setGlobalStateRoot = useStore((state) => state.setGlobalStateRoot);
+  const applyRunSdkActionProgress = useStore(
+    (state) => state.applyRunSdkActionProgress,
+  );
+  const runProof = useStore((state) => state.runProof);
+  const proofStatus = useStore((state) => state.proof.status);
+  const proofRunning = useStore(
+    (state) =>
+      state.proof.status === "generating" ||
+      state.proof.status === "committing" ||
+      state.proof.status === "summary",
+  );
+  const selectedObject =
+    inventory.find((object) => object.id === activeObjectId) ?? null;
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  useEffect(() => {
+    hydrateData().catch((error) => {
+      console.error("Failed to load GUI inventory:", error);
+    });
+  }, [hydrateData]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getObjectsDir()
+      .then((path) => {
+        if (!cancelled) setObjectsDirPath(path);
+      })
+      .catch(() => {
+        if (!cancelled) setObjectsDirPath("~/.objects");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    listenRunSdkActionProgress((event) => {
+      if (!cancelled) {
+        applyRunSdkActionProgress(event);
+      }
+    })
+      .then((dispose) => {
+        if (cancelled) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+      })
+      .catch((error) => {
+        console.error("Failed to subscribe to run-sdk-action progress:", error);
+      });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [applyRunSdkActionProgress]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    let refreshTimer: number | null = null;
+
+    const scheduleRefresh = () => {
+      if (cancelled) return;
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        if (cancelled) return;
+        hydrateData().catch((error) => {
+          if (!cancelled) {
+            console.error("Failed to refresh GUI after objects change:", error);
+          }
+        });
+      }, 120);
+    };
+
+    listenObjectsChanged(() => {
+      scheduleRefresh();
+    })
+      .then((dispose) => {
+        if (cancelled) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+      })
+      .catch((error) => {
+        console.error("Failed to subscribe to objects-changed:", error);
+      });
+
+    return () => {
+      cancelled = true;
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      if (unlisten) unlisten();
+    };
+  }, [hydrateData]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const sample = await sampleAppCpu();
+        if (!cancelled) {
+          recordCpuSample(sample.usagePct, sample.totalCpuSecs);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to sample CPU usage:", error);
+        }
+      }
+    };
+
+    void poll();
+    const interval = window.setInterval(() => {
+      void poll();
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [recordCpuSample]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const root = await getGlobalStateRoot();
+        if (!cancelled) {
+          setGlobalStateRoot(root);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to fetch global state root:", error);
+        }
+      }
+    };
+
+    void poll();
+    const interval = window.setInterval(() => {
+      void poll();
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [setGlobalStateRoot]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (settingsOpen) return;
+      if (event.key === "Escape") {
+        clearSelection();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [clearSelection, settingsOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    listenOpenSettings(() => {
+      if (!cancelled) {
+        setSettingsOpen(true);
+      }
+    })
+      .then((dispose) => {
+        if (cancelled) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+      })
+      .catch((error) => {
+        console.error("Failed to subscribe to open-settings:", error);
+      });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  const handleOpenObjectsDir = async () => {
+    try {
+      const dir = await openObjectsDir();
+      setObjectsDirPath(dir);
+    } catch (error) {
+      console.error("Failed to open objects directory:", error);
+    }
+  };
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
+    <>
+      <main className="app-shell">
+        <InventoryPanel
+          inventory={inventory}
+          objectsDirPath={objectsDirPath}
+          activeObjectId={activeObjectId}
+          showNullifiedItems={showNullifiedItems}
+          onSelectObject={selectObject}
+          onToggleNullified={toggleNullified}
+          onOpenObjectsDir={handleOpenObjectsDir}
         />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+
+        <div className="main-column">
+          <ContextPanel
+            selection={contextSelection}
+            inventory={inventory}
+            objectsDirPath={objectsDirPath}
+            actions={actions}
+            onRunProof={runProof}
+            proofRunning={proofRunning}
+            proofStatus={proofStatus}
+            onClearSelection={clearSelection}
+          />
+          <ProofRunnerPanel />
+        </div>
+
+        <div className="right-column">
+          <ActionGrid
+            actions={actions}
+            activeActionId={activeActionId}
+            selectedObject={selectedObject}
+            onSelectAction={selectAction}
+            onClearSelection={clearSelection}
+          />
+        </div>
+      </main>
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
+    </>
   );
 }
 

@@ -1,0 +1,18 @@
+:root {
+  --bg: #1a1a1a;
+  --panel: #242424;
+  --panel-alt: #2d2d2d;
+  --border: #3a3a3a;
+  --border-light: #313131;
+  --col-border: #474747;
+  --green-bg: #162210;
+  --text: #c8c5c0;
+  --text-bright: #e8e6e2;
+  --text-dim: #666360;
+  --accent: #d4714a;
+  --accent-hover: #e07d54;
+  --good: #4a9e30;
+  --warn: #c89010;
+  --danger: #c84030;
+  --blue: #5580cc;
+}

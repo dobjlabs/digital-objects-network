@@ -11,8 +11,10 @@ use pod2::middleware::{
     hash_values,
 };
 use pod2utils::{dict, dict_define, macros::BuildContext, rand_raw_value, set, st_custom};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StateRoot {
     pub block_number: i64,
     pub transactions: Set,
@@ -62,6 +64,42 @@ pub struct Tx {
     pub nullifiers: Set,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TxSerde {
+    live: Set,
+    state_root: StateRoot,
+    nullifiers: Set,
+}
+
+impl Serialize for Tx {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        TxSerde {
+            live: self.live.clone(),
+            state_root: (*self.state_root).clone(),
+            nullifiers: self.nullifiers.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Tx {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let payload = TxSerde::deserialize(deserializer)?;
+        Ok(Self {
+            live: payload.live,
+            state_root: Arc::new(payload.state_root),
+            nullifiers: payload.nullifiers,
+        })
+    }
+}
+
 impl Tx {
     pub fn dict(&self) -> Dictionary {
         dict!({
@@ -75,6 +113,27 @@ impl Tx {
 pub fn rekey(obj: &mut Dictionary) {
     obj.update(&Key::from("key"), &Value::from(rand_raw_value()))
         .unwrap();
+}
+
+const OBJECT_NULLIFIER_VERSION: &str = "txlib-nullifier-v1";
+
+pub fn object_key_hash(obj: &Dictionary) -> Result<Hash, String> {
+    let key = obj
+        .get(&Key::from("key"))
+        .cloned()
+        .map_err(|err| format!("object missing required key field: {err}"))?;
+    Ok(hash_values(&[Value::from(obj.commitment()), key]))
+}
+
+pub fn object_nullifier_from_key_hash(obj_key_hash: Hash) -> Hash {
+    hash_values(&[
+        Value::from(obj_key_hash),
+        Value::from(OBJECT_NULLIFIER_VERSION),
+    ])
+}
+
+pub fn object_nullifier_hash(obj: &Dictionary) -> Result<Hash, String> {
+    object_key_hash(obj).map(object_nullifier_from_key_hash)
 }
 
 pub struct TxBuilder {
@@ -221,10 +280,8 @@ impl TxBuilder {
     }
 
     fn st_tx_obj_nullified(&mut self, ctx: &mut BuildContext, obj: &Dictionary) -> Statement {
-        let key = obj.get(&Key::from("key")).unwrap().clone();
-        let obj_key_hash = hash_values(&[Value::from(obj.commitment()), key]);
-        let obj_nullifier =
-            hash_values(&[Value::from(obj_key_hash), Value::from("txlib-nullifier-v1")]);
+        let obj_key_hash = object_key_hash(obj).expect("tx object must include required key field");
+        let obj_nullifier = object_nullifier_from_key_hash(obj_key_hash);
         let tx_before = self.tx.dict();
         self.tx
             .nullifiers
@@ -234,7 +291,7 @@ impl TxBuilder {
             ctx,
             TxObjectStateNullified(tx_before = tx_before) = (
                 HashOf(obj_key_hash, obj, (obj, "key")),
-                HashOf(obj_nullifier, obj_key_hash, "txlib-nullifier-v1"),
+                HashOf(obj_nullifier, obj_key_hash, OBJECT_NULLIFIER_VERSION),
                 SetInsert(
                     self.tx.nullifiers,
                     (&tx_before, "nullifiers"),
@@ -343,6 +400,23 @@ mod tests {
     use pod2utils::{macros::BuildContext, set};
 
     use super::*;
+
+    #[test]
+    fn object_nullifier_hash_matches_key_hash_path() {
+        let obj = new_obj();
+        let key_hash = object_key_hash(&obj).expect("new_obj should always set key");
+        let nullifier = object_nullifier_hash(&obj).expect("new_obj should always set key");
+        assert_eq!(nullifier, object_nullifier_from_key_hash(key_hash));
+    }
+
+    #[test]
+    fn object_nullifier_hash_errors_without_key() {
+        let mut obj = new_obj();
+        obj.delete(&Key::from("key"))
+            .expect("deleting key from dictionary should succeed");
+        let err = object_nullifier_hash(&obj).expect_err("missing key must fail");
+        assert!(err.contains("missing required key field"));
+    }
 
     fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
         let solution = builder.solve().unwrap();
