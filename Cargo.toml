@@ -4,6 +4,7 @@ members = [
     "common",
     "pod2utils",
     "synchronizer",
+    "relayer",
     "timelib",
     "txlib",
     "craft_sdk",
@@ -22,6 +23,16 @@ pod2 = { git = "https://github.com/0xPARC/pod2", rev = "9993799c08e6e95b11eb0167
 plonky2 = { git = "https://github.com/0xPARC/plonky2.git", rev = "109d517d09c210ae4c2cee381d3e3fbc04aa3812" }
 serde = { version = "1.0.150", features = ["derive"] }
 serde_json = "1.0.143"
+alloy = { version = "1.2.1", features = [
+    "eips",
+    "full",
+    "json-rpc",
+    "hyper", #
+    "transport-http",
+    "signer-local",
+    "rpc-client",
+    "rpc-types-beacon"
+] }
 
 # common
 anyhow = "1.0.56"

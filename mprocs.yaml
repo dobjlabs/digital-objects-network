@@ -1,0 +1,7 @@
+procs:
+  synchronizer:
+    shell: just sync
+  relayer:
+    shell: just relayer
+  gui:
+    shell: just gui

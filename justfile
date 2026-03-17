@@ -5,22 +5,36 @@
 sync:
     RUST_LOG=info cargo run -p synchronizer --release
 
+# Run the relayer (loads env from relayer/.env if present)
+relayer:
+    RUST_LOG=info cargo run -p relayer --release
+
+# Run the gui
+gui:
+    cd app-gui && pnpm tauri dev --release
+
+# Run relayer + synchronizer + gui together via mprocs
+# https://github.com/pvolok/mprocs
+dev:
+    mprocs --config mprocs.yaml
+
+# Wipe local state (RocksDB + local Postgres DBs + objects)
+reset:
+    rm -rf data/ ~/.objects
+    psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
+    psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
+
 # Run all tests (except ignored)
 test:
-    cargo test --workspace
+    cargo test --workspace --release
 
-# Wipe local synchronizer state (RocksDB + local Postgres DB)
-reset-db:
-    rm -rf data/
-    psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
+# Run all ignored test
+test-ignored:
+    cargo test --workspace --release -- --ignored --nocapture
 
-# Run the slow end-to-end proof test 
+# Run the slow end-to-end proof test
 test-e2e:
-    cargo test -p synchronizer test_e2e_real_proof -- --ignored --nocapture
-
-# Run ignored Postgres-backed sync_db tests
-test-sync-db:
-    cargo test -p synchronizer sync_db::tests:: -- --ignored --nocapture
+    cargo test -p synchronizer test_e2e_real_proof --release -- --ignored --nocapture
 
 # Build all workspace crates
 build:

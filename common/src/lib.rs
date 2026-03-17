@@ -1,5 +1,6 @@
 //! `common` contains shared logic across the various crates of the project.
 
+pub mod blob;
 /// POD proving:
 /// 2 options to prepare the POD proofs:
 ///   A) "groth":
@@ -11,6 +12,7 @@
 #[cfg(feature = "groth16")]
 pub mod groth;
 pub mod payload;
+pub mod proof;
 ///   B) "shrink":
 ///     first shrinks the given MainPod's proof, and then compresses it,
 ///     returning the compressed proof (without public inputs). this is a plonky2 specific optimization,
@@ -28,7 +30,8 @@ pub mod groth {
 use std::io;
 
 use anyhow::{Result, anyhow};
-use pod2::middleware::{Value, containers};
+use hex::ToHex;
+use pod2::middleware::{Hash, Value, containers};
 use tracing_subscriber::{EnvFilter, fmt::time::OffsetTime, prelude::*};
 
 pub fn load_dotenv() -> Result<()> {
@@ -81,6 +84,10 @@ pub fn set_from_value(v: &Value) -> Result<containers::Set> {
         pod2::middleware::TypedValue::Set(s) => Ok(s.clone()),
         _ => Err(anyhow!("Invalid set")),
     }
+}
+
+pub fn encode_hash_hex(hash: &Hash) -> String {
+    format!("0x{}", hash.encode_hex::<String>())
 }
 
 pub fn log_init() {
