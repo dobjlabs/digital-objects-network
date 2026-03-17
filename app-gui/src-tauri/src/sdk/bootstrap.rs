@@ -1,15 +1,15 @@
-use super::object_store::{ensure_objects_dirs, load_object_files};
+use super::object_store::{ensure_objects_dirs, load_object_files, write_object_file};
 use crate::objects::objects_dir;
 use craft_sdk::Helper;
 use pod2::middleware::Hash;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use txlib::object_nullifier_hash;
 
 use crate::{objects::ObjectRecord, settings::get_app_settings, spec};
 
-use super::synchronizer_client::{
-    encode_hash_hex, fetch_synchronizer_state, fetch_synchronizer_tx_contains,
-};
+use super::synchronizer_client::{encode_hash_hex, fetch_synchronizer_state};
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -101,25 +101,63 @@ pub struct LoadGuiInventoryResult {
     pub actions: Vec<Action>,
 }
 
+/// Reconcile live objects against on-chain state.
+/// If a live object's nullifier is already spent on-chain, auto-nullify it on disk.
+fn reconcile_objects(
+    objects_dir: &Path,
+    objects: &mut Vec<super::object_store::ObjectFileEntry>,
+    on_chain_nullifiers: &HashSet<Hash>,
+) {
+    for entry in objects.iter_mut() {
+        if entry.record.is_nullified() {
+            continue;
+        }
+        let nullifier_hash = match object_nullifier_hash(&entry.record.obj) {
+            Ok(hash) => hash,
+            Err(_) => continue,
+        };
+        if !on_chain_nullifiers.contains(&nullifier_hash) {
+            continue;
+        }
+        let nullified_record = ObjectRecord {
+            id: entry.record.id.clone(),
+            class_name: entry.record.class_name.clone(),
+            source_action: entry.record.source_action.clone(),
+            nullifier: Some(encode_hash_hex(&nullifier_hash)),
+            pod: entry.record.pod.clone(),
+            obj: entry.record.obj.clone(),
+            tx: entry.record.tx.clone(),
+        };
+        if let Err(e) = write_object_file(&nullified_record, &entry.file_name, objects_dir) {
+            eprintln!(
+                "zk-craft: reconcile failed to nullify {}: {e}",
+                entry.file_name
+            );
+            continue;
+        }
+        entry.record = nullified_record;
+    }
+}
+
 #[tauri::command]
 pub async fn load_gui_inventory(app: tauri::AppHandle) -> Result<LoadGuiInventoryResult, String> {
     let objects_dir = objects_dir(&app)?;
     ensure_objects_dirs(&objects_dir)?;
-    let objects = load_object_files(&objects_dir)?;
+    let mut objects = load_object_files(&objects_dir)?;
     let helper = Helper::new(spec::dependencies(), spec::actions());
     let action_hashes = helper.action_hashes();
     let class_hashes = helper.class_hashes();
     let actions = build_action_catalog(&action_hashes, &class_hashes);
 
     let app_settings = get_app_settings(app)?;
-    let live_tx_hashes: Vec<Hash> = objects
-        .iter()
-        .filter(|entry| !entry.record.is_nullified())
-        .map(|entry| entry.record.spendable().tx.dict().commitment())
-        .collect();
-    let grounded_txs =
-        fetch_synchronizer_tx_contains(&app_settings.synchronizer_api_url, &live_tx_hashes)
-            .unwrap_or_default();
+    let sync_state = fetch_synchronizer_state(&app_settings.synchronizer_api_url);
+
+    let (grounded_txs, on_chain_nullifiers) = match &sync_state {
+        Ok(state) => (state.transactions.clone(), state.nullifiers.clone()),
+        Err(_) => (HashSet::new(), HashSet::new()),
+    };
+
+    reconcile_objects(&objects_dir, &mut objects, &on_chain_nullifiers);
 
     Ok(LoadGuiInventoryResult {
         inventory: objects

@@ -17,6 +17,8 @@ pub(super) use common::encode_hash_hex;
 pub(super) struct SynchronizerState {
     pub(super) state_root: StateRoot,
     pub(super) current_gsr: Hash,
+    pub(super) transactions: HashSet<Hash>,
+    pub(super) nullifiers: HashSet<Hash>,
 }
 
 fn parse_hash_hex(value: &str) -> Result<Hash, String> {
@@ -74,6 +76,8 @@ pub(super) fn fetch_synchronizer_state(sync_api_url: &str) -> Result<Synchronize
     Ok(SynchronizerState {
         state_root,
         current_gsr,
+        transactions,
+        nullifiers,
     })
 }
 
