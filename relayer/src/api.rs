@@ -9,7 +9,6 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
-use hex::ToHex;
 use relayer::api_types::{
     HealthResponse, JobStatusResponse, SubmitProofRequest, SubmitProofResponse,
 };
@@ -17,7 +16,7 @@ use tokio::sync::watch;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
+use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, encode_hash_hex, proof::BlobParser};
 
 use crate::{
     db::{Db, InsertJobResult},
@@ -141,8 +140,8 @@ async fn submit_proof(
             ApiError::BadRequest("payload did not decode into a valid proof payload".to_string())
         })?;
 
-    let tx_final = payload.tx_final.encode_hex::<String>();
-    let state_root_hash = payload.state_root_hash.encode_hex::<String>();
+    let tx_final = encode_hash_hex(&payload.tx_final);
+    let state_root_hash = encode_hash_hex(&payload.state_root_hash);
 
     let now = now_ts();
     let job = RelayJob {
