@@ -105,7 +105,7 @@ pub struct LoadGuiInventoryResult {
 /// If a live object's nullifier is already spent on-chain, auto-nullify it on disk.
 fn reconcile_objects(
     objects_dir: &Path,
-    objects: &mut Vec<super::object_store::ObjectFileEntry>,
+    objects: &mut [super::object_store::ObjectFileEntry],
     on_chain_nullifiers: &HashSet<Hash>,
 ) {
     for entry in objects.iter_mut() {
