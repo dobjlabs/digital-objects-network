@@ -77,16 +77,12 @@ jobs:
         include:
           - platform: "macos-latest"
             args: "--target aarch64-apple-darwin"
-            artifact_name: "macos-aarch64"
           - platform: "macos-latest"
             args: "--target x86_64-apple-darwin"
-            artifact_name: "macos-x86_64"
           - platform: "ubuntu-latest"
-            args: "--bundles deb,rpm"
-            artifact_name: "linux"
+            args: ""
           - platform: "windows-latest"
             args: ""
-            artifact_name: "windows"
 
     runs-on: ${{ matrix.platform }}
     defaults:
@@ -146,7 +142,7 @@ jobs:
             - macOS (Apple Silicon)
             - macOS (Intel)
             - Windows
-            - Linux (.deb and .rpm)
+            - Linux
 
             Notes:
             - macOS builds are ad-hoc signed.
@@ -156,15 +152,3 @@ jobs:
           args: ${{ matrix.args }}
           dryRun: ${{ (github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run) || false }}
           uploadWorkflowArtifacts: ${{ (github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run) || false }}
-
-      - name: Upload bundle artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: zk-craft-${{ matrix.artifact_name }}-bundles
-          if-no-files-found: warn
-          path: |
-            target/release/bundle/**
-            target/*/release/bundle/**
-            app-gui/src-tauri/target/release/bundle/**
-            app-gui/src-tauri/target/*/release/bundle/**
