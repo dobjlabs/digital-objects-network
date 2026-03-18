@@ -25,6 +25,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "macOS": {
+      "frameworks": [
+        "./libs/libscip.9.2.4.0.dylib",
+        "./libs/libscip.9.2.dylib",
+        "./libs/libscip.dylib"
+      ]
+    },
     "linux": {
       "appimage": {
         "files": {

@@ -80,8 +80,8 @@ fn main() {
 
     #[cfg(target_os = "macos")]
     {
-        // Resolve libscip from inside the app bundle at runtime.
-        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Resources/libs");
+        // Resolve libscip from the signed Frameworks directory inside the app bundle.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
 
         // Keep common fallback paths for local dev environments.
         println!("cargo:rustc-link-arg=-Wl,-rpath,/opt/homebrew/opt/scipopt/lib");
