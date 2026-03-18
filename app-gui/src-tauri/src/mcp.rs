@@ -19,14 +19,20 @@ pub(crate) struct AppCraftOps {
     objects_dir: PathBuf,
     app: tauri::AppHandle,
     settings: AppSettings,
+    /// Generated podlang source from craft_sdk::Helper.
+    /// Contains all action predicates and IsClassName class predicates.
+    podlang_src: String,
 }
 
 impl AppCraftOps {
     pub(crate) fn new(objects_dir: PathBuf, app: tauri::AppHandle, settings: AppSettings) -> Self {
+        let helper = craft_sdk::Helper::new(spec::dependencies(), spec::actions());
+        let podlang_src = helper.podlang_src.clone();
         Self {
             objects_dir,
             app,
             settings,
+            podlang_src,
         }
     }
 
@@ -150,8 +156,8 @@ impl CraftOps for AppCraftOps {
             .map(|a| a.name.clone())
             .collect();
 
-        // TODO: retrieve actual podlang source when available
-        let predicate_source = format!("Is{class_name}(state) = OR(...)");
+        let predicate_source = extract_predicate(&self.podlang_src, &format!("Is{class_name}"))
+            .unwrap_or_else(|| format!("Is{class_name}(state) = OR(...)"));
 
         Ok(mcp::ClassDetail {
             class_name: class_name.to_string(),
@@ -278,6 +284,10 @@ impl CraftOps for AppCraftOps {
             missing_inputs: missing,
         })
     }
+
+    fn generated_podlang(&self) -> Option<String> {
+        Some(self.podlang_src.clone())
+    }
 }
 
 fn to_mcp_inventory_object(record: &ObjectRecord, file_name: &str) -> mcp::InventoryObject {
@@ -300,4 +310,42 @@ fn object_fields(record: &ObjectRecord) -> HashMap<String, serde_json::Value> {
         }
         Err(_) => HashMap::new(),
     }
+}
+
+/// Extract a named predicate definition from podlang source.
+///
+/// Podlang definitions have the form:
+///   Name(args) = AND/OR(\n  ...\n)\n
+///
+/// We find `name(` at a line start, then scan forward to find the
+/// `= AND(` or `= OR(` combiner, and track paren depth from there
+/// to find the closing `)`.
+fn extract_predicate(podlang_src: &str, name: &str) -> Option<String> {
+    let prefix = format!("{name}(");
+    let start = podlang_src.find(&prefix)?;
+    let after_prefix = &podlang_src[start..];
+
+    // Find the combiner `= AND(` or `= OR(`
+    let combiner_pos = after_prefix
+        .find("= AND(")
+        .or_else(|| after_prefix.find("= OR("))?;
+
+    // Find the opening `(` of the combiner
+    let open = start + combiner_pos + after_prefix[combiner_pos..].find('(')?;
+
+    // Track depth from the combiner's `(`
+    let mut depth = 0;
+    for (i, ch) in podlang_src[open..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(podlang_src[start..open + i + 1].trim().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }

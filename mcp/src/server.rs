@@ -156,13 +156,13 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source). Pass \"list\" to see all available documents."
+        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes in this game). Pass \"list\" to see all available documents."
     )]
     fn read_doc(&self, Parameters(params): Parameters<ReadDocParams>) -> String {
         match params.name.as_str() {
             "list" => {
                 let docs = crate::resources::list();
-                let lines: Vec<String> = docs
+                let mut lines: Vec<String> = docs
                     .iter()
                     .map(|r| {
                         format!(
@@ -173,6 +173,10 @@ impl<T: CraftOps> CraftMcpService<T> {
                         )
                     })
                     .collect();
+                lines.push(
+                    "- generated.podlang\n  Generated podlang source for all actions and IsClassName predicates in this game instance."
+                        .to_string(),
+                );
                 lines.join("\n")
             }
             _ => {
@@ -181,6 +185,12 @@ impl<T: CraftOps> CraftMcpService<T> {
                     "object-lifecycle" => "zk-craft://docs/object-lifecycle",
                     "txlib.podlang" => "zk-craft://source/txlib.podlang",
                     "time.podlang" => "zk-craft://source/time.podlang",
+                    "generated.podlang" => {
+                        return self
+                            .ops
+                            .generated_podlang()
+                            .unwrap_or_else(|| "(not available in mock mode)".to_string());
+                    }
                     other => {
                         return format!(
                             "Unknown document: \"{other}\". Use read_doc(\"list\") to see available documents."
