@@ -88,7 +88,7 @@ You can also run each service individually with those commands.
 
 If you want to wipe local state and start over, run:
 
-```bash
+```
 just reset
 ```
 
