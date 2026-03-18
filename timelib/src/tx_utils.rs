@@ -220,7 +220,7 @@ pub fn unlock_object(
     let mut idx = None;
     for entry in grounding_gsr.gsrs.iter() {
         let (i, v) = entry?;
-        if &v == &target {
+        if v == target {
             idx = Some(i);
             break;
         }
