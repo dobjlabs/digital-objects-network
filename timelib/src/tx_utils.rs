@@ -18,7 +18,7 @@ use anyhow::ensure;
 use pod2::{
     frontend::MultiPodError,
     lang::{Module, MultiOperationError},
-    middleware::{containers::Dictionary, hash_values, Key, Statement, Value},
+    middleware::{Key, Statement, Value, containers::Dictionary, hash_values},
 };
 use pod2utils::{macros::BuildContext, op, st_custom};
 use txlib::{StateRoot, Tx};

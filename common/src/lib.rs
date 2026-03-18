@@ -29,10 +29,10 @@ pub mod groth {
 
 use std::io;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use hex::ToHex;
 use pod2::middleware::Hash;
-use tracing_subscriber::{fmt::time::OffsetTime, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt::time::OffsetTime, prelude::*};
 
 pub fn load_dotenv() -> Result<()> {
     for filename in [".env.default", ".env"] {
