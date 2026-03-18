@@ -2,6 +2,8 @@ name: Release Desktop App
 
 on:
   push:
+    branches:
+      - "dhvanipa/release"
     tags:
       - "v*"
   workflow_dispatch:
@@ -18,7 +20,7 @@ on:
 
 jobs:
   check-ci:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name != 'workflow_dispatch' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -150,5 +152,5 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-          dryRun: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
-          uploadWorkflowArtifacts: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+          dryRun: ${{ (github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run) || false }}
+          uploadWorkflowArtifacts: ${{ (github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run) || false }}
