@@ -1,4 +1,5 @@
 mod cpu;
+mod error;
 mod objects;
 mod sdk;
 mod settings;

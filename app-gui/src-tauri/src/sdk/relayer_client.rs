@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES;
 pub(super) use relayer::api_types::JobStatus;
@@ -12,9 +13,9 @@ pub(super) fn submit_proof_to_relayer(
     relayer_api_url: &str,
     payload_bytes: &[u8],
     client_ref: Option<String>,
-) -> Result<SubmitProofResponse, String> {
+) -> Result<SubmitProofResponse> {
     if payload_bytes.len() > MAX_SIMPLE_BLOB_PAYLOAD_BYTES {
-        return Err(format!(
+        return Err(anyhow!(
             "payload exceeds single-blob limit: {} > {}",
             payload_bytes.len(),
             MAX_SIMPLE_BLOB_PAYLOAD_BYTES
@@ -32,12 +33,12 @@ pub(super) fn submit_proof_to_relayer(
         .post(&endpoint)
         .json(&request)
         .send()
-        .map_err(|err| format!("failed to submit proof to relayer at {endpoint}: {err}"))?;
+        .map_err(|err| anyhow!("failed to submit proof to relayer at {endpoint}: {err}"))?;
 
     let status = response.status();
     let body = response.text().unwrap_or_default();
     if !status.is_success() {
-        return Err(format!(
+        return Err(anyhow!(
             "relayer submit failed with {} {}: {}",
             status.as_u16(),
             status,
@@ -46,13 +47,10 @@ pub(super) fn submit_proof_to_relayer(
     }
 
     serde_json::from_str::<SubmitProofResponse>(&body)
-        .map_err(|err| format!("failed to decode relayer submit response: {err}; body={body}"))
+        .map_err(|err| anyhow!("failed to decode relayer submit response: {err}; body={body}"))
 }
 
-fn fetch_relayer_job_status(
-    relayer_api_url: &str,
-    job_id: &str,
-) -> Result<JobStatusResponse, String> {
+fn fetch_relayer_job_status(relayer_api_url: &str, job_id: &str) -> Result<JobStatusResponse> {
     let endpoint = format!(
         "{}/api/v1/proofs/{job_id}",
         relayer_api_url.trim_end_matches('/')
@@ -61,12 +59,12 @@ fn fetch_relayer_job_status(
     let response = client
         .get(&endpoint)
         .send()
-        .map_err(|err| format!("failed to query relayer job at {endpoint}: {err}"))?;
+        .map_err(|err| anyhow!("failed to query relayer job at {endpoint}: {err}"))?;
 
     let status = response.status();
     let body = response.text().unwrap_or_default();
     if !status.is_success() {
-        return Err(format!(
+        return Err(anyhow!(
             "relayer status failed with {} {}: {}",
             status.as_u16(),
             status,
@@ -75,7 +73,7 @@ fn fetch_relayer_job_status(
     }
 
     serde_json::from_str::<JobStatusResponse>(&body)
-        .map_err(|err| format!("failed to decode relayer status response: {err}; body={body}"))
+        .map_err(|err| anyhow!("failed to decode relayer status response: {err}; body={body}"))
 }
 
 pub(super) fn wait_for_relayer_confirmation(
@@ -83,7 +81,7 @@ pub(super) fn wait_for_relayer_confirmation(
     job_id: &str,
     timeout_secs: u64,
     poll_interval_ms: u64,
-) -> Result<JobStatusResponse, String> {
+) -> Result<JobStatusResponse> {
     let timeout = Duration::from_secs(timeout_secs);
     let poll_interval = Duration::from_millis(poll_interval_ms);
     let start = Instant::now();
@@ -93,7 +91,7 @@ pub(super) fn wait_for_relayer_confirmation(
         match status.status {
             JobStatus::Confirmed => return Ok(status),
             JobStatus::Failed => {
-                return Err(format!(
+                return Err(anyhow!(
                     "relayer job {} failed: {}",
                     status.job_id,
                     status
@@ -106,9 +104,10 @@ pub(super) fn wait_for_relayer_confirmation(
         }
 
         if start.elapsed() >= timeout {
-            return Err(format!(
+            return Err(anyhow!(
                 "timed out waiting for relayer job {} after {}s",
-                job_id, timeout_secs
+                job_id,
+                timeout_secs
             ));
         }
         std::thread::sleep(poll_interval);

@@ -761,10 +761,10 @@ mod tests {
         let tx_final = tx.dict().commitment();
         let nullifiers: Vec<Hash> = tx
             .nullifiers
-            .set()
             .iter()
-            .map(|v| Hash(v.raw().0))
-            .collect();
+            .map(|v| Ok(Hash(v?.raw().0)))
+            .collect::<Result<_>>()
+            .unwrap();
 
         let payload = Payload {
             proof: PayloadProof::Plonky2(Box::new(compressed_proof)),
