@@ -313,6 +313,9 @@ export const useStore = create<AppState>((set) => ({
         };
       });
 
+      const hydrateData = useStore.getState().hydrateData;
+      await hydrateData();
+
       await new Promise((resolve) => setTimeout(resolve, postDoneHoldMs));
       set((prev) => ({
         ...prev,

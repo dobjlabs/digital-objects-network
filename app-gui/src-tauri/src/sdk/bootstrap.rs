@@ -1,9 +1,11 @@
-use super::object_store::{ensure_objects_dirs, load_object_files};
+use super::object_store::{ensure_objects_dirs, load_object_files, write_object_file};
 use crate::objects::objects_dir;
 use craft_sdk::Helper;
 use pod2::middleware::Hash;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use txlib::object_nullifier_hash;
 
 use crate::{objects::ObjectRecord, settings::get_app_settings, spec};
 
@@ -18,6 +20,7 @@ pub struct InventoryObject {
     pub class_hash: String,
     pub emoji: String,
     pub nullifier: Option<String>,
+    pub grounded: bool,
     pub description: Option<String>,
     pub obj: serde_json::Value,
 }
@@ -70,8 +73,11 @@ pub(super) fn to_inventory_object(
     record: &ObjectRecord,
     file_name: &str,
     class_hashes: &HashMap<String, Hash>,
+    grounded_txs: &HashSet<Hash>,
 ) -> InventoryObject {
     let class_ui = spec::class_ui_meta(&record.class_name);
+    let source_tx_hash = record.spendable().tx.dict().commitment();
+    let grounded = record.is_nullified() || grounded_txs.contains(&source_tx_hash);
     InventoryObject {
         id: record.id.clone(),
         file_name: file_name.to_string(),
@@ -82,6 +88,7 @@ pub(super) fn to_inventory_object(
             .unwrap_or_default(),
         emoji: class_ui.emoji.to_string(),
         nullifier: record.nullifier.clone(),
+        grounded,
         description: Some(class_ui.description.to_string()),
         obj: serde_json::to_value(&record.obj).expect("object dictionary should serialize"),
     }
@@ -94,20 +101,75 @@ pub struct LoadGuiInventoryResult {
     pub actions: Vec<Action>,
 }
 
+/// Reconcile live objects against on-chain state.
+/// If a live object's nullifier is already spent on-chain, auto-nullify it on disk.
+fn reconcile_objects(
+    objects_dir: &Path,
+    objects: &mut [super::object_store::ObjectFileEntry],
+    on_chain_nullifiers: &HashSet<Hash>,
+) {
+    for entry in objects.iter_mut() {
+        if entry.record.is_nullified() {
+            continue;
+        }
+        let nullifier_hash = match object_nullifier_hash(&entry.record.obj) {
+            Ok(hash) => hash,
+            Err(_) => continue,
+        };
+        if !on_chain_nullifiers.contains(&nullifier_hash) {
+            continue;
+        }
+        let nullified_record = ObjectRecord {
+            id: entry.record.id.clone(),
+            class_name: entry.record.class_name.clone(),
+            source_action: entry.record.source_action.clone(),
+            nullifier: Some(encode_hash_hex(&nullifier_hash)),
+            pod: entry.record.pod.clone(),
+            obj: entry.record.obj.clone(),
+            tx: entry.record.tx.clone(),
+        };
+        if let Err(e) = write_object_file(&nullified_record, &entry.file_name, objects_dir) {
+            eprintln!(
+                "zk-craft: reconcile failed to nullify {}: {e}",
+                entry.file_name
+            );
+            continue;
+        }
+        entry.record = nullified_record;
+    }
+}
+
 #[tauri::command]
 pub async fn load_gui_inventory(app: tauri::AppHandle) -> Result<LoadGuiInventoryResult, String> {
     let objects_dir = objects_dir(&app)?;
     ensure_objects_dirs(&objects_dir)?;
-    let objects = load_object_files(&objects_dir)?;
+    let mut objects = load_object_files(&objects_dir)?;
     let helper = Helper::new(spec::dependencies(), spec::actions());
     let action_hashes = helper.action_hashes();
     let class_hashes = helper.class_hashes();
     let actions = build_action_catalog(&action_hashes, &class_hashes);
 
+    let app_settings = get_app_settings(app)?;
+    let sync_state = fetch_synchronizer_state(&app_settings.synchronizer_api_url);
+
+    let (grounded_txs, on_chain_nullifiers) = match &sync_state {
+        Ok(state) => (state.transactions.clone(), state.nullifiers.clone()),
+        Err(_) => (HashSet::new(), HashSet::new()),
+    };
+
+    reconcile_objects(&objects_dir, &mut objects, &on_chain_nullifiers);
+
     Ok(LoadGuiInventoryResult {
         inventory: objects
             .iter()
-            .map(|entry| to_inventory_object(&entry.record, &entry.file_name, &class_hashes))
+            .map(|entry| {
+                to_inventory_object(
+                    &entry.record,
+                    &entry.file_name,
+                    &class_hashes,
+                    &grounded_txs,
+                )
+            })
             .collect(),
         actions,
     })

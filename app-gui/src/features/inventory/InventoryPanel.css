@@ -118,6 +118,10 @@
   background: var(--good);
 }
 
+.inventory-dot.pending {
+  background: var(--warn);
+}
+
 .inventory-dot.nullified {
   background: var(--danger);
 }
