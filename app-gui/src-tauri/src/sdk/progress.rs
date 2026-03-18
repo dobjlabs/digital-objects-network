@@ -2,6 +2,7 @@ use serde::Serialize;
 use tauri::Emitter;
 
 use super::run_action::RunSdkActionResult;
+use anyhow::{anyhow, Result};
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -29,16 +30,16 @@ pub(super) struct RunSdkActionProgress {
     pub(super) output_files: Option<Vec<String>>,
 }
 
-fn emit_progress(app: &tauri::AppHandle, payload: &RunSdkActionProgress) -> Result<(), String> {
+fn emit_progress(app: &tauri::AppHandle, payload: &RunSdkActionProgress) -> Result<()> {
     app.emit("run-sdk-action-progress", payload)
-        .map_err(|err| format!("failed to emit run progress: {err}"))
+        .map_err(|err| anyhow!("failed to emit run progress: {err}"))
 }
 
 pub(super) fn emit_generate_proof_step(
     app: &tauri::AppHandle,
     run_id: &str,
     step_label: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     let payload = RunSdkActionProgress {
         run_id: run_id.to_string(),
         phase: ProofPhase::GenerateProof,
@@ -51,7 +52,7 @@ pub(super) fn emit_generate_proof_step(
     emit_progress(app, &payload)
 }
 
-pub(super) fn emit_generate_proof_done(app: &tauri::AppHandle, run_id: &str) -> Result<(), String> {
+pub(super) fn emit_generate_proof_done(app: &tauri::AppHandle, run_id: &str) -> Result<()> {
     let payload = RunSdkActionProgress {
         run_id: run_id.to_string(),
         phase: ProofPhase::GenerateProof,
@@ -69,7 +70,7 @@ pub(super) fn emit_commit_step(
     run_id: &str,
     step_label: &str,
     old_root: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     let payload = RunSdkActionProgress {
         run_id: run_id.to_string(),
         phase: ProofPhase::Commit,
@@ -86,7 +87,7 @@ pub(super) fn emit_commit_done(
     app: &tauri::AppHandle,
     run_id: &str,
     result: &RunSdkActionResult,
-) -> Result<(), String> {
+) -> Result<()> {
     let payload = RunSdkActionProgress {
         run_id: run_id.to_string(),
         phase: ProofPhase::Commit,

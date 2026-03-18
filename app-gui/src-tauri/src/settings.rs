@@ -1,5 +1,7 @@
+use anyhow::{anyhow, Result};
 use std::{fs, path::PathBuf};
 
+use crate::error::CommandError;
 use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem, MenuItemBuilder},
@@ -86,38 +88,38 @@ fn default_settings() -> AppSettings {
     }
 }
 
-fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf> {
     let config_dir = app
         .path()
         .app_config_dir()
-        .map_err(|err| format!("failed to resolve app config directory: {err}"))?;
+        .map_err(|err| anyhow!("failed to resolve app config directory: {err}"))?;
     fs::create_dir_all(&config_dir)
-        .map_err(|err| format!("failed to create app config directory: {err}"))?;
+        .map_err(|err| anyhow!("failed to create app config directory: {err}"))?;
     Ok(config_dir.join("settings.json"))
 }
 
-fn read_settings(app: &tauri::AppHandle) -> Result<Option<AppSettings>, String> {
+fn read_settings(app: &tauri::AppHandle) -> Result<Option<AppSettings>> {
     let path = settings_path(app)?;
     if !path.exists() {
         return Ok(None);
     }
     let raw = fs::read_to_string(&path)
-        .map_err(|err| format!("failed to read settings file {}: {err}", path.display()))?;
+        .map_err(|err| anyhow!("failed to read settings file {}: {err}", path.display()))?;
     let settings = serde_json::from_str::<AppSettings>(&raw)
-        .map_err(|err| format!("failed to parse settings file {}: {err}", path.display()))?;
+        .map_err(|err| anyhow!("failed to parse settings file {}: {err}", path.display()))?;
     Ok(Some(settings))
 }
 
-fn write_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
+fn write_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Result<()> {
     let path = settings_path(app)?;
     let serialized = serde_json::to_string(settings)
-        .map_err(|err| format!("failed to serialize settings: {err}"))?;
+        .map_err(|err| anyhow!("failed to serialize settings: {err}"))?;
     fs::write(&path, serialized)
-        .map_err(|err| format!("failed to write settings file {}: {err}", path.display()))
+        .map_err(|err| anyhow!("failed to write settings file {}: {err}", path.display()))
 }
 
 #[tauri::command]
-pub fn get_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
+pub fn get_app_settings(app: tauri::AppHandle) -> Result<AppSettings, CommandError> {
     if let Some(settings) = read_settings(&app)? {
         return Ok(settings);
     }
@@ -127,7 +129,10 @@ pub fn get_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
-pub fn save_app_settings(app: tauri::AppHandle, input: AppSettings) -> Result<AppSettings, String> {
+pub fn save_app_settings(
+    app: tauri::AppHandle,
+    input: AppSettings,
+) -> Result<AppSettings, CommandError> {
     write_settings(&app, &input)?;
     Ok(input)
 }

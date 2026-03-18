@@ -233,19 +233,23 @@ fn use_pick_details(step: Step, name: &'static str, vdf_iters: usize) -> Step {
     step.condition(
         "Gt({state}.durability, 0)",
         Box::new(|ctx| {
-            let obj = ctx.vars.get_dict(name).unwrap();
+            let obj = ctx.vars.get(name).as_dictionary().unwrap();
             ctx.bld
                 .builder
-                .priv_op(Operation::gt((obj, "durability"), 0))
+                .priv_op(Operation::gt((&obj, "durability"), 0))
                 .unwrap()
         }),
     )
     .var(
         "durability",
         Box::new(|ctx| {
-            let obj = ctx.vars.get_dict(name).unwrap();
-            let mut durability =
-                i64::try_from(obj.get(&Key::from("durability")).unwrap().typed()).unwrap();
+            let obj = ctx.vars.get(name).as_dictionary().unwrap();
+            let mut durability = obj
+                .get(&Key::from("durability"))
+                .unwrap()
+                .unwrap()
+                .as_int()
+                .unwrap();
             durability -= 1;
             ctx.store("durability", Box::new(durability));
             Value::from(durability)
@@ -255,10 +259,10 @@ fn use_pick_details(step: Step, name: &'static str, vdf_iters: usize) -> Step {
         "SumOf({state}.durability, durability, 1)",
         Box::new(|ctx| {
             let durability: Box<i64> = ctx.take("durability");
-            let obj = ctx.vars.get_dict(name).unwrap();
+            let obj = ctx.vars.get(name).as_dictionary().unwrap();
             ctx.bld
                 .builder
-                .priv_op(Operation::sum_of((obj, "durability"), *durability, 1))
+                .priv_op(Operation::sum_of((&obj, "durability"), *durability, 1))
                 .unwrap()
         }),
     )
@@ -269,7 +273,7 @@ fn use_pick_details(step: Step, name: &'static str, vdf_iters: usize) -> Step {
         "work",
         Box::new(move |ctx| {
             let obj = ctx.vars.get(name);
-            let obj_raw = RawValue::from(obj);
+            let obj_raw = obj.as_raw();
             let (vdf_pod, st_vdf, work) = vdf(ctx, vdf_iters, obj_raw);
             ctx.store("vdf_pod", Box::new(vdf_pod));
             ctx.store("st_vdf", Box::new(st_vdf));
@@ -318,7 +322,7 @@ pub(crate) fn actions() -> Vec<api::Action> {
                         "work",
                         Box::new(|ctx| {
                             let log = ctx.vars.get("log");
-                            let log_raw = RawValue::from(log);
+                            let log_raw = log.as_raw();
                             let (vdf_pod, st_vdf, work) = vdf(ctx, 3, log_raw);
                             ctx.store("vdf_pod", Box::new(vdf_pod));
                             ctx.store("st_vdf", Box::new(st_vdf));
@@ -346,7 +350,7 @@ pub(crate) fn actions() -> Vec<api::Action> {
                     .var(
                         "key",
                         Box::new(|ctx| {
-                            let mut wood = ctx.vars.get_dict("wood").unwrap().clone();
+                            let mut wood = ctx.vars.get("wood").as_dictionary().unwrap();
                             let mut key = Value::from(rand_raw_value());
                             if !ctx.mock {
                                 while RawValue::from(wood.commitment()).0[3].0 > WOOD_POW_DIFFICULTY
@@ -363,7 +367,7 @@ pub(crate) fn actions() -> Vec<api::Action> {
                         "LtEqU256({state}, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))",
                         Box::new(|ctx| {
                             let wood = ctx.vars.get("wood");
-                            let wood_raw = RawValue::from(wood);
+                            let wood_raw = wood.as_raw();
                             let (lt_eq_u256_pod, st_lt_eq_u256) = lt_eq_u256(
                                 ctx,
                                 wood_raw,

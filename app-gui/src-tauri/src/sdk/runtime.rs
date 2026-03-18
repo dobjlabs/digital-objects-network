@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
@@ -50,10 +51,10 @@ impl Drop for RunInProgressGuard<'_> {
 
 pub(super) fn acquire_run_in_progress_guard<'a, 'b>(
     runtime: &'a tauri::State<'b, ActionRunGate>,
-) -> Result<RunInProgressGuard<'a>, String> {
+) -> Result<RunInProgressGuard<'a>> {
     let mut inner = lock_runtime(runtime);
     if inner.run_in_progress {
-        return Err("another action run is already in progress".to_string());
+        return Err(anyhow!("another action run is already in progress"));
     }
     inner.run_in_progress = true;
     Ok(RunInProgressGuard {

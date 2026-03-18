@@ -14,8 +14,10 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-# Branch `tmp/more-wildcards`
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "9993799c08e6e95b11eb016763fcc13f5030293e", default-features = false, features = [
+# Branch `next/2026-03-18`: Includes:
+# - bump params wildcards to 9
+# - Support persistent storage in Containers https://github.com/0xPARC/pod2/pull/493
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "f49fdd816bc73240cdca6610f9cf6924fc109ead", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
@@ -53,3 +55,4 @@ tracing-subscriber = { version = "0.3", features = [
 tracing-log = "0.1.1"
 time = { version = "0.3.44", features = ["formatting", "local-offset"] }
 rand = { version = "0.9.2", features = ["std_rng"] }
+thiserror = "2.0.18"

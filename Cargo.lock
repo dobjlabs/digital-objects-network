@@ -944,13 +944,14 @@ checksum = "170433209e817da6aae2c51aa0dd443009a613425dd041ebfb2492d1c4c11a25"
 name = "app-gui"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "base64 0.22.1",
  "common",
  "craft_sdk",
  "hex",
  "lt_eq_u256_pod",
  "notify",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=f49fdd816bc73240cdca6610f9cf6924fc109ead)",
  "pod2utils",
  "relayer",
  "reqwest 0.12.28",
@@ -962,6 +963,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "thiserror 2.0.18",
  "txlib",
  "vdfpod",
 ]
@@ -2011,7 +2013,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=f49fdd816bc73240cdca6610f9cf6924fc109ead)",
  "pod2_onchain",
  "serde",
  "serde_json",
@@ -2188,7 +2190,7 @@ dependencies = [
  "log",
  "lt_eq_u256_pod",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=f49fdd816bc73240cdca6610f9cf6924fc109ead)",
  "pod2utils",
  "rand 0.9.2",
  "serde",
@@ -4612,7 +4614,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=f49fdd816bc73240cdca6610f9cf6924fc109ead)",
  "pod2utils",
  "serde",
  "serde_json",
@@ -5929,7 +5931,7 @@ dependencies = [
 [[package]]
 name = "pod2"
 version = "0.1.0"
-source = "git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e#9993799c08e6e95b11eb016763fcc13f5030293e"
+source = "git+https://github.com/0xPARC/pod2?rev=f49fdd816bc73240cdca6610f9cf6924fc109ead#f49fdd816bc73240cdca6610f9cf6924fc109ead"
 dependencies = [
  "annotate-snippets",
  "anyhow",
@@ -6030,7 +6032,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=f49fdd816bc73240cdca6610f9cf6924fc109ead)",
  "rand 0.9.2",
  "serde",
  "serde_json",
@@ -6591,7 +6593,7 @@ dependencies = [
  "common",
  "dotenvy",
  "hex",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=f49fdd816bc73240cdca6610f9cf6924fc109ead)",
  "serde",
  "serde_json",
  "sqlx",
@@ -7947,7 +7949,7 @@ dependencies = [
  "hex",
  "minicbor-serde 0.6.2",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=f49fdd816bc73240cdca6610f9cf6924fc109ead)",
  "pod2utils",
  "rand 0.8.5",
  "reqwest 0.12.28",
@@ -8474,7 +8476,7 @@ dependencies = [
  "hex",
  "log",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=f49fdd816bc73240cdca6610f9cf6924fc109ead)",
  "pod2utils",
  "rand 0.9.2",
  "serde",
@@ -8883,7 +8885,7 @@ dependencies = [
  "hex",
  "log",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=f49fdd816bc73240cdca6610f9cf6924fc109ead)",
  "pod2utils",
  "rand 0.9.2",
  "serde",
@@ -9143,7 +9145,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=9993799c08e6e95b11eb016763fcc13f5030293e)",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=f49fdd816bc73240cdca6610f9cf6924fc109ead)",
  "pod2utils",
  "serde",
  "serde_json",

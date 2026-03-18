@@ -5,10 +5,10 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::{anyhow, Result};
 use pod2::middleware::{
-    EMPTY_VALUE, Hash, Key, Statement, Value,
     containers::{Array, Dictionary, Set},
-    hash_values,
+    hash_values, Hash, Key, Statement, Value, EMPTY_VALUE,
 };
 use pod2utils::{dict, dict_define, macros::BuildContext, rand_raw_value, set, st_custom};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -117,11 +117,10 @@ pub fn rekey(obj: &mut Dictionary) {
 
 const OBJECT_NULLIFIER_VERSION: &str = "txlib-nullifier-v1";
 
-pub fn object_key_hash(obj: &Dictionary) -> Result<Hash, String> {
+pub fn object_key_hash(obj: &Dictionary) -> Result<Hash> {
     let key = obj
-        .get(&Key::from("key"))
-        .cloned()
-        .map_err(|err| format!("object missing required key field: {err}"))?;
+        .get(&Key::from("key"))?
+        .ok_or_else(|| anyhow!("object missing required key field"))?;
     Ok(hash_values(&[Value::from(obj.commitment()), key]))
 }
 
@@ -132,7 +131,7 @@ pub fn object_nullifier_from_key_hash(obj_key_hash: Hash) -> Hash {
     ])
 }
 
-pub fn object_nullifier_hash(obj: &Dictionary) -> Result<Hash, String> {
+pub fn object_nullifier_hash(obj: &Dictionary) -> Result<Hash> {
     object_key_hash(obj).map(object_nullifier_from_key_hash)
 }
 
@@ -415,7 +414,7 @@ mod tests {
         obj.delete(&Key::from("key"))
             .expect("deleting key from dictionary should succeed");
         let err = object_nullifier_hash(&obj).expect_err("missing key must fail");
-        assert!(err.contains("missing required key field"));
+        assert!(format!("{err}").contains("missing required key field"));
     }
 
     fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
@@ -467,8 +466,9 @@ mod tests {
             .transactions
             .insert(&Value::from(tx0.dict()))
             .unwrap();
-        for nullifier in tx0.nullifiers.set() {
-            state_root.transactions.insert(nullifier).unwrap();
+        for nullifier in tx0.nullifiers.iter() {
+            let nullifier = nullifier.unwrap();
+            state_root.transactions.insert(&nullifier).unwrap();
         }
 
         // Mutate
@@ -493,8 +493,9 @@ mod tests {
             .transactions
             .insert(&Value::from(tx1.dict()))
             .unwrap();
-        for nullifier in tx1.nullifiers.set() {
-            state_root.transactions.insert(nullifier).unwrap();
+        for nullifier in tx1.nullifiers.iter() {
+            let nullifier = nullifier.unwrap();
+            state_root.transactions.insert(&nullifier).unwrap();
         }
 
         // Delete
@@ -517,8 +518,9 @@ mod tests {
             .transactions
             .insert(&Value::from(tx2.dict()))
             .unwrap();
-        for nullifier in tx2.nullifiers.set() {
-            state_root.transactions.insert(nullifier).unwrap();
+        for nullifier in tx2.nullifiers.iter() {
+            let nullifier = nullifier.unwrap();
+            state_root.transactions.insert(&nullifier).unwrap();
         }
     }
 }
