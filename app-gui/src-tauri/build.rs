@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf};
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use std::path::Path;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::{collections::VecDeque, process::Command};
 
@@ -217,7 +217,10 @@ fn configure_macos_tauri_overrides() {
         // `pnpm build` runs `cargo run --bin gen_ids` in debug mode before the
         // actual release bundle step. That helper binary does not need macOS
         // framework staging, and skipping it keeps the host-side build light.
-        std::env::set_var("TAURI_CONFIG", r#"{"bundle":{"macOS":{"frameworks":null}}}"#);
+        std::env::set_var(
+            "TAURI_CONFIG",
+            r#"{"bundle":{"macOS":{"frameworks":null}}}"#,
+        );
     }
 }
 
