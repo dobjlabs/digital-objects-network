@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::path::Path;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn find_scip_lib_dir_from_target(manifest_dir: &Path) -> Option<PathBuf> {
     let workspace_root = manifest_dir.parent()?.parent()?;
     let target_dir = workspace_root.join("target");
@@ -24,9 +24,15 @@ fn find_scip_lib_dir_from_target(manifest_dir: &Path) -> Option<PathBuf> {
             }
 
             let candidate = entry.path().join("out/scip_install/lib");
-            if candidate.join("libscip.9.2.dylib").exists()
-                || candidate.join("libscip.dylib").exists()
-            {
+            #[cfg(target_os = "macos")]
+            let has_scip_lib = candidate.join("libscip.9.2.dylib").exists()
+                || candidate.join("libscip.dylib").exists();
+
+            #[cfg(target_os = "linux")]
+            let has_scip_lib = candidate.join("libscip.so.9.2").exists()
+                || candidate.join("libscip.so").exists();
+
+            if has_scip_lib {
                 return Some(candidate);
             }
         }
@@ -35,8 +41,8 @@ fn find_scip_lib_dir_from_target(manifest_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-#[cfg(target_os = "macos")]
-fn copy_scip_dylibs(lib_dir: &Path, bundle_libs_dir: &Path) {
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn copy_scip_shared_libs(lib_dir: &Path, bundle_libs_dir: &Path) {
     if fs::create_dir_all(bundle_libs_dir).is_err() {
         return;
     }
@@ -51,8 +57,14 @@ fn copy_scip_dylibs(lib_dir: &Path, bundle_libs_dir: &Path) {
             continue;
         };
 
-        let is_scip_dylib = file_name.starts_with("libscip") && file_name.ends_with(".dylib");
-        if !is_scip_dylib {
+        #[cfg(target_os = "macos")]
+        let is_scip_shared_lib =
+            file_name.starts_with("libscip") && file_name.ends_with(".dylib");
+
+        #[cfg(target_os = "linux")]
+        let is_scip_shared_lib = file_name.starts_with("libscip") && file_name.contains(".so");
+
+        if !is_scip_shared_lib {
             continue;
         }
 
@@ -77,19 +89,42 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/local/opt/scipopt/lib");
 
         if let Ok(scip_lib_dir) = std::env::var("DEP_SCIP_LIBDIR") {
-            copy_scip_dylibs(Path::new(&scip_lib_dir), &bundle_libs_dir);
+            copy_scip_shared_libs(Path::new(&scip_lib_dir), &bundle_libs_dir);
             println!(
                 "cargo:warning=Bundling SCIP dylibs from DEP_SCIP_LIBDIR={}",
                 scip_lib_dir
             );
         } else if let Some(scip_lib_dir) = find_scip_lib_dir_from_target(&manifest_dir) {
-            copy_scip_dylibs(&scip_lib_dir, &bundle_libs_dir);
+            copy_scip_shared_libs(&scip_lib_dir, &bundle_libs_dir);
             println!(
                 "cargo:warning=Bundling SCIP dylibs from {}",
                 scip_lib_dir.display()
             );
         } else {
             println!("cargo:warning=Could not locate SCIP dylibs; libs directory left empty");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Tauri resources on Linux live under ../lib/<exe_name>, so the bundled
+        // SCIP shared objects are placed under ../lib/app-gui/libs.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib/app-gui/libs");
+
+        if let Ok(scip_lib_dir) = std::env::var("DEP_SCIP_LIBDIR") {
+            copy_scip_shared_libs(Path::new(&scip_lib_dir), &bundle_libs_dir);
+            println!(
+                "cargo:warning=Bundling SCIP shared libs from DEP_SCIP_LIBDIR={}",
+                scip_lib_dir
+            );
+        } else if let Some(scip_lib_dir) = find_scip_lib_dir_from_target(&manifest_dir) {
+            copy_scip_shared_libs(&scip_lib_dir, &bundle_libs_dir);
+            println!(
+                "cargo:warning=Bundling SCIP shared libs from {}",
+                scip_lib_dir.display()
+            );
+        } else {
+            println!("cargo:warning=Could not locate SCIP shared libs; libs directory left empty");
         }
     }
 
