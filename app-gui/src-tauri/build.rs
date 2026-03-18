@@ -109,6 +109,16 @@ fn run_command(program: &str, args: &[&str]) -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
+fn ad_hoc_sign(path: &Path) {
+    let Some(path_str) = path.to_str() else {
+        return;
+    };
+    let _ = Command::new("codesign")
+        .args(["--force", "--sign", "-", "--timestamp=none", path_str])
+        .status();
+}
+
+#[cfg(target_os = "macos")]
 fn dylib_dependencies(path: &Path) -> Vec<String> {
     let Some(path_str) = path.to_str() else {
         return Vec::new();
@@ -122,6 +132,24 @@ fn dylib_dependencies(path: &Path) -> Vec<String> {
         .skip(1)
         .filter_map(|line| line.split_once(" (").map(|(dep, _)| dep.trim().to_string()))
         .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn resign_mac_dylibs(bundle_libs_dir: &Path) {
+    let Ok(entries) = fs::read_dir(bundle_libs_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext == "dylib")
+        {
+            ad_hoc_sign(&path);
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -257,6 +285,7 @@ fn main() {
 
         copy_mac_gcc_runtime_libs(&bundle_libs_dir);
         rewrite_mac_dylib_ids(&bundle_libs_dir);
+        resign_mac_dylibs(&bundle_libs_dir);
         configure_macos_tauri_overrides();
     }
 
