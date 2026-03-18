@@ -139,6 +139,10 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && '-' || '' }}
           DEFAULT_SYNCHRONIZER_API_URL: http://18.119.100.201:3000
           DEFAULT_RELAYER_API_URL: http://18.119.100.201:3200
+          # Work around upstream linuxdeploy AppImage failures on Linux:
+          # https://github.com/tauri-apps/tauri/issues/8929
+          NO_STRIP: ${{ matrix.platform == 'ubuntu-22.04' && 'true' || '' }}
+          LDAI_VERBOSE: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
         with:
           projectPath: app-gui
           tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
