@@ -56,11 +56,11 @@ pub fn not_expired(
     state: Dictionary,
 ) -> anyhow::Result<Statement> {
     let timeout_val = state
-        .get(&Key::from("timeout_block"))
-        .cloned()
-        .map_err(|e| anyhow::anyhow!("{e}: state missing timeout_block field"))?;
-    let timeout_block = i64::try_from(timeout_val.typed())
-        .map_err(|_| anyhow::anyhow!("timeout_block is not an integer"))?;
+        .get(&Key::from("timeout_block"))?
+        .ok_or_else(|| anyhow::anyhow!("state missing timeout_block field"))?;
+    let timeout_block = timeout_val
+        .as_int()
+        .ok_or_else(|| anyhow::anyhow!("timeout_block is not an integer"))?;
     let gsr_block = grounding_gsr.block_number;
     ensure!(
         gsr_block <= timeout_block,
@@ -209,21 +209,24 @@ pub fn unlock_object(
     gsr_when_locked: &StateRoot,
 ) -> anyhow::Result<Dictionary> {
     let lock_duration = locked_obj
-        .get(&Key::from("locked"))
-        .cloned()
-        .map_err(|e| anyhow::anyhow!("{e}: locked_obj missing 'locked' field"))?;
-    let lock_duration = i64::try_from(lock_duration.typed())
-        .map_err(|_| anyhow::anyhow!("'locked' field is not an integer"))?;
+        .get(&Key::from("locked"))?
+        .ok_or_else(|| anyhow::anyhow!("locked_obj missing 'locked' field"))?;
+    let lock_duration = lock_duration
+        .as_int()
+        .ok_or_else(|| anyhow::anyhow!("'locked' field is not an integer"))?;
 
     // Find where gsr_when_locked sits in the current state root's gsrs array.
     let target = Value::from(gsr_when_locked.hash());
-    let idx = grounding_gsr
-        .gsrs
-        .array()
-        .iter()
-        .position(|v| v == &target)
-        .ok_or_else(|| anyhow::anyhow!("gsr_when_locked not found in grounding_gsr.gsrs"))?
-        as i64;
+    let mut idx = None;
+    for entry in grounding_gsr.gsrs.iter() {
+        let (i, v) = entry?;
+        if v == target {
+            idx = Some(i);
+            break;
+        }
+    }
+    let idx =
+        idx.ok_or_else(|| anyhow::anyhow!("gsr_when_locked not found in grounding_gsr.gsrs"))?;
 
     let distance = grounding_gsr.block_number - gsr_when_locked.block_number;
     ensure!(
@@ -256,7 +259,7 @@ pub fn unlock_object(
         .builder
         .priv_op(op!(ArrayContains(
             grounding_gsr.gsrs,
-            idx,
+            idx as i64,
             gsr_when_locked.hash()
         )))
         .unwrap();

@@ -31,7 +31,7 @@ use std::io;
 
 use anyhow::{Result, anyhow};
 use hex::ToHex;
-use pod2::middleware::{Hash, Value, containers};
+use pod2::middleware::Hash;
 use tracing_subscriber::{EnvFilter, fmt::time::OffsetTime, prelude::*};
 
 pub fn load_dotenv() -> Result<()> {
@@ -76,13 +76,6 @@ impl ProofType {
             ProofType::Plonky2 => 0u8,
             ProofType::Groth16 => 1u8,
         }
-    }
-}
-
-pub fn set_from_value(v: &Value) -> Result<containers::Set> {
-    match v.typed() {
-        pod2::middleware::TypedValue::Set(s) => Ok(s.clone()),
-        _ => Err(anyhow!("Invalid set")),
     }
 }
 

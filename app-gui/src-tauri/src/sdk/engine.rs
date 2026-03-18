@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::{anyhow, Result};
 use common::{
     payload::{Payload, PayloadProof},
     shrink::{shrink_compress_pod, ShrunkMainPodSetup},
@@ -14,7 +15,7 @@ pub(super) fn execute_action(
     action_id: String,
     state_root: StateRoot,
     inputs: Vec<SpendableObject>,
-) -> Result<SpendableObjects, String> {
+) -> Result<SpendableObjects> {
     let helper = Helper::new(spec::dependencies(), spec::actions());
     // Relayed payloads are recursively verified/compressed, which is incompatible with MockMainPod.
     let builder = helper.builder(false, Arc::new(state_root));
@@ -24,22 +25,21 @@ pub(super) fn execute_action(
 pub(super) fn build_relayer_payload(
     old_state_root_hash: &Hash,
     action_output: &SpendableObjects,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>> {
     let params = Params::default();
     let shrunk_main_pod = ShrunkMainPodSetup::new(&params)
         .build()
-        .map_err(|err| format!("failed to build shrunk proof circuit: {err}"))?;
+        .map_err(|err| anyhow!("failed to build shrunk proof circuit: {err}"))?;
     let compressed = shrink_compress_pod(&shrunk_main_pod, action_output.tx_pod.clone())
-        .map_err(|err| format!("failed to shrink/compress tx proof: {err}"))?;
+        .map_err(|err| anyhow!("failed to shrink/compress tx proof: {err}"))?;
 
     let tx_final = action_output.tx.dict().commitment();
     let nullifiers = action_output
         .tx
         .nullifiers
-        .set()
         .iter()
-        .map(|entry| Hash(entry.raw().0))
-        .collect::<Vec<_>>();
+        .map(|entry| Ok(Hash(entry?.raw().0)))
+        .collect::<Result<Vec<_>>>()?;
     let payload = Payload {
         proof: PayloadProof::Plonky2(Box::new(compressed)),
         tx_final,

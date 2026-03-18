@@ -8,8 +8,8 @@ use pod2::{
     frontend::{MainPod, MultiPodBuilder, Operation},
     lang::{Module, load_module},
     middleware::{
-        EMPTY_VALUE, Hash, Key, MainPodProver, Params, Predicate, Statement, TypedValue, VDSet,
-        Value, containers::Dictionary,
+        EMPTY_VALUE, Hash, Key, MainPodProver, Params, Predicate, Statement, VDSet, Value,
+        containers::Dictionary,
     },
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
@@ -498,7 +498,7 @@ impl<'a> ObjectBuilder<'a> {
             // On Mutate we save a copy of the initial object because it's required by the mutate
             // transaction
             if matches!(step.kind, StepKind::Mutate) {
-                let obj = ctx.vars.get_dict(&step.name).unwrap();
+                let obj = ctx.vars.get(&step.name).as_dictionary().unwrap();
                 objs0.insert(&step.name, obj.clone());
             }
 
@@ -509,8 +509,9 @@ impl<'a> ObjectBuilder<'a> {
                 match detail {
                     api::Detail::Set { key, value } => {
                         let value = ctx.vars.value(value);
-                        let obj = ctx.vars.get_dict_mut(&step.name).unwrap();
-                        obj.insert(&Key::from(key.clone()), &value).unwrap();
+                        ctx.vars.mut_dict(&step.name, |obj| {
+                            obj.insert(&Key::from(key.clone()), &value).unwrap();
+                        });
                         details_set_kv.push((key.clone(), value));
                     }
                     api::Detail::Update { key, value } => {
@@ -518,24 +519,21 @@ impl<'a> ObjectBuilder<'a> {
                             panic!("Update before last Set in the Step");
                         }
                         let value = ctx.vars.value(value);
-                        let obj = ctx.vars.get_dict_mut(&step.name).unwrap();
-                        let obj0 = obj.clone();
-                        obj.update(&Key::from(key.clone()), &value).unwrap();
+                        let (obj0, obj) = ctx.vars.mut_dict(&step.name, |obj| {
+                            let obj0 = obj.clone();
+                            obj.update(&Key::from(key.clone()), &value).unwrap();
+                            (obj0, obj.clone())
+                        });
                         sts.push(
                             ctx.bld
                                 .builder
-                                .priv_op(Operation::dict_update(
-                                    obj.clone(),
-                                    obj0,
-                                    key.clone(),
-                                    value,
-                                ))
+                                .priv_op(Operation::dict_update(obj, obj0, key.clone(), value))
                                 .unwrap(),
                         );
                     }
                     api::Detail::Var { name, f } => {
                         let value = f(ctx);
-                        ctx.vars.insert(name, value.take_typed());
+                        ctx.vars.insert(name, value);
                     }
                     api::Detail::Condition { pred: _, f } => {
                         if !details_set_done {
@@ -549,7 +547,7 @@ impl<'a> ObjectBuilder<'a> {
                 // refer to the same object state.
                 if !details_set_done && details_set_kv.len() == details_set_len {
                     for (key, value) in mem::take(&mut details_set_kv).into_iter() {
-                        let obj = ctx.vars.get_dict_mut(&step.name).unwrap();
+                        let obj = ctx.vars.get(&step.name).as_dictionary().unwrap();
                         sts.push(
                             ctx.bld
                                 .builder
@@ -563,7 +561,7 @@ impl<'a> ObjectBuilder<'a> {
 
             match step.kind {
                 StepKind::Output => {
-                    let obj = ctx.vars.get_dict(step.name.as_str()).unwrap().clone();
+                    let obj = ctx.vars.get(step.name.as_str()).as_dictionary().unwrap();
                     outputs.push(OutputData {
                         class: &step.class,
                         obj: obj.clone(),
@@ -571,12 +569,12 @@ impl<'a> ObjectBuilder<'a> {
                     sts.push(tx_builder.insert(&mut ctx.bld, obj));
                 }
                 StepKind::Input => {
-                    let obj = ctx.vars.get_dict(step.name.as_str()).unwrap().clone();
+                    let obj = ctx.vars.get(step.name.as_str()).as_dictionary().unwrap();
                     sts.push(tx_builder.delete(&mut ctx.bld, obj));
                 }
                 StepKind::Mutate => {
                     let obj0 = objs0.get(step.name.as_str()).unwrap();
-                    let obj = ctx.vars.get_dict(step.name.as_str()).unwrap().clone();
+                    let obj = ctx.vars.get(step.name.as_str()).as_dictionary().unwrap();
                     outputs.push(OutputData {
                         class: &step.class,
                         obj: obj.clone(),
@@ -683,35 +681,32 @@ impl<'a> ObjectBuilder<'a> {
 
 #[derive(Default)]
 pub struct Vars<'a> {
-    vars: HashMap<&'a str, TypedValue>,
+    vars: HashMap<&'a str, Value>,
 }
 
 impl<'a> Vars<'a> {
-    pub fn insert(&mut self, name: &'a str, value: impl Into<TypedValue>) {
+    pub(crate) fn insert(&mut self, name: &'a str, value: impl Into<Value>) {
         self.vars.insert(name, value.into());
     }
-    pub fn get(&self, name: &'a str) -> &TypedValue {
+    pub fn get(&self, name: &'a str) -> &Value {
         self.vars.get(name).unwrap()
     }
-    pub fn get_dict_mut(&mut self, name: &'a str) -> Option<&mut Dictionary> {
-        let v = self.vars.get_mut(name).unwrap();
-        match v {
-            TypedValue::Dictionary(v) => Some(v),
-            _ => None,
-        }
-    }
-    pub fn get_dict(&self, name: &'a str) -> Option<&Dictionary> {
-        let v = self.vars.get(name).unwrap();
-        match v {
-            TypedValue::Dictionary(v) => Some(v),
-            _ => None,
-        }
+    pub(crate) fn mut_dict<T>(
+        &mut self,
+        name: &'a str,
+        mut f: impl FnMut(&mut Dictionary) -> T,
+    ) -> T {
+        let obj = self.vars.get_mut(name).unwrap();
+        let mut dict = obj.as_dictionary().unwrap();
+        let output = f(&mut dict);
+        *obj = Value::from(dict);
+        output
     }
     // Resolve a Arg::Var or return its Literal value
     pub fn value(&self, arg: &api::Arg) -> Value {
         match arg {
             api::Arg::Literal(v) => v.clone(),
-            api::Arg::Var(name) => Value::new(self.vars[name.as_str()].clone()),
+            api::Arg::Var(name) => self.vars[name.as_str()].clone(),
         }
     }
 }
@@ -1119,8 +1114,9 @@ mod tests {
             .transactions
             .insert(&Value::from(tx.dict()))
             .unwrap();
-        for nullifier in tx.nullifiers.set() {
-            state_root.nullifiers.insert(nullifier).unwrap();
+        for nullifier in tx.nullifiers.iter() {
+            let nullifier = nullifier.unwrap();
+            state_root.nullifiers.insert(&nullifier).unwrap();
         }
         state_root.block_number += 1;
     }
@@ -1172,7 +1168,7 @@ mod tests {
                         "work",
                         Box::new(|ctx| {
                             let log = ctx.vars.get("log");
-                            let log_raw = RawValue::from(log);
+                            let log_raw = log.as_raw();
                             let (vdf_pod, st_vdf, work) = vdf(ctx, 3, log_raw);
                             ctx.store("vdf_pod", Box::new(vdf_pod));
                             ctx.store("st_vdf", Box::new(st_vdf));
@@ -1201,7 +1197,7 @@ mod tests {
                     .var(
                         "key",
                         Box::new(|ctx| {
-                            let mut wood = ctx.vars.get_dict("wood").unwrap().clone();
+                            let mut wood = ctx.vars.get("wood").as_dictionary().unwrap();
                             let mut key = Value::from(rand_raw_value());
                             if !ctx.mock {
                                 while RawValue::from(wood.commitment()).0[3].0
@@ -1220,7 +1216,7 @@ mod tests {
                         "LtEqU256({state}, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))",
                         Box::new(|ctx| {
                             let wood = ctx.vars.get("wood");
-                            let wood_raw = RawValue::from(wood);
+                            let wood_raw = wood.as_raw();
                             let (lt_eq_u256_pod, st_lt_eq_u256) = lt_eq_u256(
                                 ctx,
                                 wood_raw,
@@ -1268,19 +1264,23 @@ mod tests {
             step.condition(
                 "Gt({state}.durability, 0)",
                 Box::new(|ctx| {
-                    let obj = ctx.vars.get_dict(name).unwrap();
+                    let obj = ctx.vars.get(name).as_dictionary().unwrap();
                     ctx.bld
                         .builder
-                        .priv_op(Operation::gt((obj, "durability"), 0))
+                        .priv_op(Operation::gt((&obj, "durability"), 0))
                         .unwrap()
                 }),
             )
             .var(
                 "durability",
                 Box::new(|ctx| {
-                    let obj = ctx.vars.get_dict(name).unwrap();
-                    let mut durability =
-                        i64::try_from(obj.get(&Key::from("durability")).unwrap().typed()).unwrap();
+                    let obj = ctx.vars.get(name).as_dictionary().unwrap();
+                    let mut durability = obj
+                        .get(&Key::from("durability"))
+                        .unwrap()
+                        .unwrap()
+                        .as_int()
+                        .unwrap();
                     durability -= 1;
                     ctx.store("durability", Box::new(durability));
                     Value::from(durability)
@@ -1290,10 +1290,10 @@ mod tests {
                 "SumOf({state}.durability, durability, 1)",
                 Box::new(|ctx| {
                     let durability: Box<i64> = ctx.take("durability");
-                    let obj = ctx.vars.get_dict(name).unwrap();
+                    let obj = ctx.vars.get(name).as_dictionary().unwrap();
                     ctx.bld
                         .builder
-                        .priv_op(Operation::sum_of((obj, "durability"), *durability, 1))
+                        .priv_op(Operation::sum_of((&obj, "durability"), *durability, 1))
                         .unwrap()
                 }),
             )
@@ -1304,7 +1304,7 @@ mod tests {
                 "work",
                 Box::new(move |ctx| {
                     let obj = ctx.vars.get(name);
-                    let obj_raw = RawValue::from(obj);
+                    let obj_raw = obj.as_raw();
                     let (vdf_pod, st_vdf, work) = vdf(ctx, vdf_iters, obj_raw);
                     ctx.store("vdf_pod", Box::new(vdf_pod));
                     ctx.store("st_vdf", Box::new(st_vdf));

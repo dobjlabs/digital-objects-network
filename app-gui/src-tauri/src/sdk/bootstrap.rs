@@ -1,5 +1,7 @@
 use super::object_store::{ensure_objects_dirs, load_object_files, write_object_file};
+use crate::error::CommandError;
 use crate::objects::objects_dir;
+use anyhow::Result;
 use craft_sdk::Helper;
 use pod2::middleware::Hash;
 use serde::Serialize;
@@ -140,7 +142,9 @@ fn reconcile_objects(
 }
 
 #[tauri::command]
-pub async fn load_gui_inventory(app: tauri::AppHandle) -> Result<LoadGuiInventoryResult, String> {
+pub async fn load_gui_inventory(
+    app: tauri::AppHandle,
+) -> Result<LoadGuiInventoryResult, CommandError> {
     let objects_dir = objects_dir(&app)?;
     ensure_objects_dirs(&objects_dir)?;
     let mut objects = load_object_files(&objects_dir)?;
@@ -176,7 +180,7 @@ pub async fn load_gui_inventory(app: tauri::AppHandle) -> Result<LoadGuiInventor
 }
 
 #[tauri::command]
-pub async fn get_global_state_root(app: tauri::AppHandle) -> Result<String, String> {
+pub async fn get_global_state_root(app: tauri::AppHandle) -> Result<String, CommandError> {
     let app_settings = get_app_settings(app)?;
     let sync_state = fetch_synchronizer_state(&app_settings.synchronizer_api_url)?;
     Ok(encode_hash_hex(&sync_state.current_gsr))

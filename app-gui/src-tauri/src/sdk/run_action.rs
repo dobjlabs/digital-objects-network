@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::{anyhow, Result};
 use craft_sdk::SpendableObjects;
 use pod2::middleware::Hash;
 use serde::{Deserialize, Serialize};
@@ -26,8 +27,8 @@ use super::{
     },
 };
 use crate::{
-    objects::objects_dir,
-    objects::ObjectRecord,
+    error::CommandError,
+    objects::{objects_dir, ObjectRecord},
     settings::get_app_settings,
     spec::{self, action_descriptors_by_name},
 };
@@ -55,26 +56,26 @@ struct ResolvedInput {
     record: ObjectRecord,
 }
 
-fn file_name_from_path(path: &Path) -> Result<String, String> {
+fn file_name_from_path(path: &Path) -> Result<String> {
     path.file_name()
         .and_then(|name| name.to_str())
         .map(str::to_string)
-        .ok_or_else(|| format!("invalid input path (missing file name): {}", path.display()))
+        .ok_or_else(|| anyhow!("invalid input path (missing file name): {}", path.display()))
 }
 
 fn validate_run_request(
     input: &RunSdkActionInput,
     descriptor: &spec::ActionDescriptor,
-) -> Result<(), String> {
+) -> Result<()> {
     if descriptor.hidden {
-        return Err(format!(
+        return Err(anyhow!(
             "action is internal and cannot be run directly: {}",
             input.action_id
         ));
     }
 
     if input.input_object_paths.len() != descriptor.input_classes.len() {
-        return Err(format!(
+        return Err(anyhow!(
             "{} expects {} inputs, got {}",
             input.action_id,
             descriptor.input_classes.len(),
@@ -86,10 +87,12 @@ fn validate_run_request(
     for object_path_raw in &input.input_object_paths {
         let object_path = object_path_raw.trim();
         if object_path.is_empty() {
-            return Err("each inputObjectPaths entry must be a non-empty path".to_string());
+            return Err(anyhow!(
+                "each inputObjectPaths entry must be a non-empty path"
+            ));
         }
         if !seen_paths.insert(object_path.to_string()) {
-            return Err(format!(
+            return Err(anyhow!(
                 "duplicate input object path is not allowed: {object_path}"
             ));
         }
@@ -101,26 +104,28 @@ fn validate_run_request(
 fn resolve_inputs(
     input: &RunSdkActionInput,
     descriptor: &spec::ActionDescriptor,
-) -> Result<Vec<ResolvedInput>, String> {
+) -> Result<Vec<ResolvedInput>> {
     let mut resolved_inputs = Vec::new();
 
     for (slot, object_path_raw) in input.input_object_paths.iter().enumerate() {
         let expected_class = descriptor.input_classes[slot].as_str();
         let object_path = object_path_raw.trim();
         if object_path.is_empty() {
-            return Err(format!("missing objectPath for input slot {}", slot + 1));
+            return Err(anyhow!("missing objectPath for input slot {}", slot + 1));
         }
 
         let path_ref = Path::new(object_path);
         let record = parse_object_file_from_path(path_ref)?;
         let file_name = file_name_from_path(path_ref)?;
         if record.is_nullified() {
-            return Err(format!("input object is not live: {}", record.id));
+            return Err(anyhow!("input object is not live: {}", record.id));
         }
         if record.class_name != expected_class {
-            return Err(format!(
+            return Err(anyhow!(
                 "input class mismatch for {}: expected {}, got {}",
-                record.id, expected_class, record.class_name
+                record.id,
+                expected_class,
+                record.class_name
             ));
         }
         resolved_inputs.push(ResolvedInput { file_name, record });
@@ -129,7 +134,7 @@ fn resolve_inputs(
     Ok(resolved_inputs)
 }
 
-fn verify_inputs_grounded(sync_api_url: &str, inputs: &[ResolvedInput]) -> Result<(), String> {
+fn verify_inputs_grounded(sync_api_url: &str, inputs: &[ResolvedInput]) -> Result<()> {
     let input_sources = inputs
         .iter()
         .map(|input| {
@@ -146,7 +151,7 @@ fn verify_inputs_grounded(sync_api_url: &str, inputs: &[ResolvedInput]) -> Resul
 
     for (file_name, source_tx_hash) in input_sources {
         if !grounded_txs.contains(&source_tx_hash) {
-            return Err(format!(
+            return Err(anyhow!(
                 "input not yet synchronized; wait and retry: {} -> {}",
                 file_name,
                 encode_hash_hex(&source_tx_hash)
@@ -170,7 +175,7 @@ struct RelayerSubmitRequest<'a> {
 async fn submit_and_confirm_relayer(
     app: &tauri::AppHandle,
     request: RelayerSubmitRequest<'_>,
-) -> Result<(), String> {
+) -> Result<()> {
     let RelayerSubmitRequest {
         run_id,
         old_root,
@@ -197,11 +202,11 @@ async fn submit_and_confirm_relayer(
     let submit_response = match submit_job {
         Ok(Ok(response)) => response,
         Ok(Err(err)) => return Err(err),
-        Err(err) => return Err(format!("failed while submitting proof to relayer: {err}")),
+        Err(err) => return Err(anyhow!("failed while submitting proof to relayer: {err}")),
     };
 
     if submit_response.status == JobStatus::Failed {
-        return Err(format!(
+        return Err(anyhow!(
             "relayer rejected job {} immediately",
             submit_response.job_id
         ));
@@ -229,7 +234,7 @@ async fn submit_and_confirm_relayer(
     match wait_job {
         Ok(Ok(status)) => status,
         Ok(Err(err)) => return Err(err),
-        Err(err) => return Err(format!("failed while polling relayer job status: {err}")),
+        Err(err) => return Err(anyhow!("failed while polling relayer job status: {err}")),
     };
 
     Ok(())
@@ -240,7 +245,7 @@ fn wait_for_synchronizer_commit(
     expected_tx_final: Hash,
     timeout_secs: u64,
     poll_interval_ms: u64,
-) -> Result<SynchronizerState, String> {
+) -> Result<SynchronizerState> {
     wait_for_synchronizer_tx(
         sync_api_url,
         expected_tx_final,
@@ -248,7 +253,7 @@ fn wait_for_synchronizer_commit(
         poll_interval_ms,
     )
     .map_err(|err| {
-        format!("failed to observe relayed tx in synchronizer after relay confirmation: {err}")
+        anyhow!("failed to observe relayed tx in synchronizer after relay confirmation: {err}")
     })
 }
 
@@ -263,13 +268,13 @@ fn save_results(
     action_id: &str,
     resolved_inputs: &[ResolvedInput],
     spendable_outputs: &SpendableObjects,
-) -> Result<SavedFiles, String> {
+) -> Result<SavedFiles> {
     let mut nullified_files = Vec::new();
     for input in resolved_inputs {
         let input_record = &input.record;
         let spendable = input_record.spendable();
         let nullifier_hash = object_nullifier_hash(&spendable.obj).map_err(|err| {
-            format!(
+            anyhow!(
                 "failed to compute input nullifier for {}: {err}",
                 input_record.id
             )
@@ -290,7 +295,7 @@ fn save_results(
     }
 
     if spendable_outputs.objs.len() != descriptor.output_classes.len() {
-        return Err(format!(
+        return Err(anyhow!(
             "action {} output mismatch: descriptor expects {}, engine returned {}",
             action_id,
             descriptor.output_classes.len(),
@@ -359,13 +364,13 @@ pub async fn run_sdk_action(
     app: tauri::AppHandle,
     runtime: tauri::State<'_, ActionRunGate>,
     input: RunSdkActionInput,
-) -> Result<RunSdkActionResult, String> {
+) -> Result<RunSdkActionResult, CommandError> {
     let objects_dir: PathBuf = objects_dir(&app)?;
     let descriptors = action_descriptors_by_name();
     let descriptor = descriptors
         .get(&input.action_id)
         .cloned()
-        .ok_or_else(|| format!("unknown action: {}", input.action_id))?;
+        .ok_or_else(|| anyhow!("unknown action: {}", input.action_id))?;
 
     validate_run_request(&input, &descriptor)?;
 
@@ -398,7 +403,7 @@ pub async fn run_sdk_action(
     .await
     {
         Ok(result) => result,
-        Err(err) => Err(format!("failed while executing action: {err}")),
+        Err(err) => Err(anyhow!("failed while executing action: {err}")),
     }?;
 
     emit_generate_proof_done(&app, &action_id)?;
@@ -416,7 +421,7 @@ pub async fn run_sdk_action(
         &spendable_outputs,
     )?;
 
-    let commit_result: Result<SynchronizerState, String> = async {
+    let commit_result: Result<SynchronizerState> = async {
         submit_and_confirm_relayer(
             &app,
             RelayerSubmitRequest {
@@ -461,7 +466,7 @@ pub async fn run_sdk_action(
         }
         Err(err) => {
             rollback_results(&objects_dir, &resolved_inputs, &saved);
-            Err(err)
+            Err(err.into())
         }
     }
 }

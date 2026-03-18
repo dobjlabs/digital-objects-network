@@ -219,7 +219,7 @@ mod tests {
                 )
                 .unwrap();
                 // Pre-materialise key for TxObjectStateNullified inside mutate.
-                let key = obj.get(&Key::from("key")).unwrap().clone();
+                let key = obj.get(&Key::from("key")).unwrap().unwrap();
                 let _ = ctx
                     .builder
                     .priv_op(op!(DictContains(obj, "key", key)))

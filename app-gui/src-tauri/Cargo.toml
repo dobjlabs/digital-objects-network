@@ -38,3 +38,5 @@ base64 = "0.22"
 pod2 = { workspace = true }
 notify = "6"
 rfd = "0.14"
+anyhow = { workspace = true }
+thiserror = { workspace = true }
