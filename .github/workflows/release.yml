@@ -77,12 +77,16 @@ jobs:
         include:
           - platform: "macos-latest"
             args: "--target aarch64-apple-darwin"
+            artifact_name: "macos-aarch64"
           - platform: "macos-latest"
             args: "--target x86_64-apple-darwin"
+            artifact_name: "macos-x86_64"
           - platform: "ubuntu-22.04"
             args: ""
+            artifact_name: "linux"
           - platform: "windows-latest"
             args: ""
+            artifact_name: "windows"
 
     runs-on: ${{ matrix.platform }}
     defaults:
@@ -132,7 +136,48 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri application
+      - name: Build Tauri application (dry run)
+        if: |
+          (github.event_name == 'push' && github.ref_type == 'branch') ||
+          (github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        run: pnpm tauri build ${{ matrix.args }} --verbose
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && '-' || '' }}
+          DEFAULT_SYNCHRONIZER_API_URL: http://18.119.100.201:3000
+          DEFAULT_RELAYER_API_URL: http://18.119.100.201:3200
+          # Work around upstream linuxdeploy AppImage failures on Linux:
+          # https://github.com/tauri-apps/tauri/issues/8929
+          NO_STRIP: ${{ matrix.platform == 'ubuntu-22.04' && 'true' || '' }}
+          LDAI_VERBOSE: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
+
+      - name: Upload final bundle artifacts
+        if: |
+          (github.event_name == 'push' && github.ref_type == 'branch') ||
+          (github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: zk-craft-${{ matrix.artifact_name }}
+          if-no-files-found: error
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app.tar.gz
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
+            target/*/release/bundle/deb/*.deb
+            target/*/release/bundle/rpm/*.rpm
+            target/*/release/bundle/appimage/*.AppImage
+            target/*/release/bundle/dmg/*.dmg
+            target/*/release/bundle/macos/*.app.tar.gz
+            target/*/release/bundle/nsis/*.exe
+            target/*/release/bundle/msi/*.msi
+
+      - name: Publish Tauri release
+        if: |
+          github.ref_type == 'tag' ||
+          (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         uses: tauri-apps/tauri-action@v0.6.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -162,5 +207,3 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-          dryRun: ${{ (github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run) || false }}
-          uploadWorkflowArtifacts: ${{ (github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run) || false }}
