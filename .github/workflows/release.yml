@@ -77,12 +77,16 @@ jobs:
         include:
           - platform: "macos-latest"
             args: "--target aarch64-apple-darwin"
+            artifact_name: "macos-aarch64"
           - platform: "macos-latest"
             args: "--target x86_64-apple-darwin"
+            artifact_name: "macos-x86_64"
           - platform: "ubuntu-latest"
-            args: ""
+            args: "--bundles deb,rpm"
+            artifact_name: "linux"
           - platform: "windows-latest"
             args: ""
+            artifact_name: "windows"
 
     runs-on: ${{ matrix.platform }}
     defaults:
@@ -101,15 +105,13 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: release-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          cache-workspace-crates: true
 
       - name: Add Rust targets (macOS only)
         if: matrix.platform == 'macos-latest'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -144,7 +146,7 @@ jobs:
             - macOS (Apple Silicon)
             - macOS (Intel)
             - Windows
-            - Linux
+            - Linux (.deb and .rpm)
 
             Notes:
             - macOS builds are ad-hoc signed.
@@ -154,3 +156,15 @@ jobs:
           args: ${{ matrix.args }}
           dryRun: ${{ (github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run) || false }}
           uploadWorkflowArtifacts: ${{ (github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run) || false }}
+
+      - name: Upload bundle artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zk-craft-${{ matrix.artifact_name }}-bundles
+          if-no-files-found: warn
+          path: |
+            target/release/bundle/**
+            target/*/release/bundle/**
+            app-gui/src-tauri/target/release/bundle/**
+            app-gui/src-tauri/target/*/release/bundle/**
