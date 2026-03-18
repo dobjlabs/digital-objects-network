@@ -1,0 +1,154 @@
+name: Release Desktop App
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build release artifacts without publishing a GitHub release"
+        required: false
+        default: false
+        type: boolean
+      tag_name:
+        description: "Release tag to publish when dry_run is false (for example v0.1.0)"
+        required: false
+        type: string
+
+jobs:
+  check-ci:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check CI status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflows = [
+              { name: 'Clippy Check', file: 'clippy.yml' },
+              { name: 'Rust Tests', file: 'rust_tests.yml' },
+              { name: 'Rustfmt Check', file: 'rustfmt.yml' },
+            ];
+
+            for (const workflow of workflows) {
+              const runs = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflow.file,
+                head_sha: context.sha,
+                status: 'completed',
+              });
+
+              const latestRun = runs.data.workflow_runs[0];
+              if (!latestRun || latestRun.conclusion !== 'success') {
+                core.setFailed(`Workflow "${workflow.name}" has not passed for this commit`);
+                return;
+              }
+            }
+
+  validate-dispatch:
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run && inputs.tag_name == ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a tag for manual publish
+        run: |
+          echo "::error::workflow_dispatch releases require tag_name when dry_run is false."
+          exit 1
+
+  release:
+    needs:
+      - check-ci
+      - validate-dispatch
+    if: |
+      always() &&
+      (needs.check-ci.result == 'success' || needs.check-ci.result == 'skipped') &&
+      (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest"
+            args: "--target aarch64-apple-darwin"
+          - platform: "macos-latest"
+            args: "--target x86_64-apple-darwin"
+          - platform: "ubuntu-latest"
+            args: ""
+          - platform: "windows-latest"
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    defaults:
+      run:
+        working-directory: app-gui
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Add Rust targets (macOS only)
+        if: matrix.platform == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: app-gui/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri application
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && '-' || '' }}
+          DEFAULT_SYNCHRONIZER_API_URL: http://18.119.100.201:3000
+          DEFAULT_RELAYER_API_URL: http://18.119.100.201:3200
+        with:
+          projectPath: app-gui
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+          releaseName: "zk-craft ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}"
+          releaseBody: |
+            Release ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }} for the zk-craft desktop app.
+
+            Included assets:
+            - macOS (Apple Silicon)
+            - macOS (Intel)
+            - Windows
+            - Linux
+
+            Notes:
+            - macOS builds are ad-hoc signed.
+            - The app defaults to http://18.119.100.201:3000 for the synchronizer and http://18.119.100.201:3200 for the relayer unless changed in Settings.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+          dryRun: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+          uploadWorkflowArtifacts: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
