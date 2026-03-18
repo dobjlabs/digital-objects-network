@@ -2,6 +2,10 @@ use std::{fs, path::PathBuf};
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::path::Path;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(target_os = "macos")]
+use std::{collections::VecDeque, process::Command};
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn find_scip_lib_dir_from_target(manifest_dir: &Path) -> Option<PathBuf> {
@@ -68,7 +72,152 @@ fn copy_scip_shared_libs(lib_dir: &Path, bundle_libs_dir: &Path) {
         }
 
         let dest = bundle_libs_dir.join(file_name);
-        let _ = fs::copy(&path, dest);
+        let _ = copy_dylib(&path, &dest);
+    }
+}
+
+#[cfg(unix)]
+fn make_writable_and_executable(path: &Path) {
+    if let Ok(metadata) = fs::metadata(path) {
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o755);
+        let _ = fs::set_permissions(path, permissions);
+    }
+}
+
+#[cfg(unix)]
+fn copy_dylib(src: &Path, dest: &Path) -> std::io::Result<u64> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if dest.exists() {
+        make_writable_and_executable(dest);
+        let _ = fs::remove_file(dest);
+    }
+    let bytes = fs::copy(src, dest)?;
+    make_writable_and_executable(dest);
+    Ok(bytes)
+}
+
+#[cfg(target_os = "macos")]
+fn run_command(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn dylib_dependencies(path: &Path) -> Vec<String> {
+    let Some(path_str) = path.to_str() else {
+        return Vec::new();
+    };
+    let Some(output) = run_command("otool", &["-L", path_str]) else {
+        return Vec::new();
+    };
+
+    output
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(" (").map(|(dep, _)| dep.trim().to_string()))
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn is_non_system_dylib(path: &str) -> bool {
+    (path.starts_with("/opt/homebrew/") || path.starts_with("/usr/local/"))
+        && path.ends_with(".dylib")
+}
+
+#[cfg(target_os = "macos")]
+fn rewrite_mac_dylib_ids(bundle_libs_dir: &Path) {
+    let Ok(entries) = fs::read_dir(bundle_libs_dir) else {
+        return;
+    };
+
+    let mut queue = VecDeque::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext == "dylib")
+        {
+            queue.push_back(path);
+        }
+    }
+
+    while let Some(path) = queue.pop_front() {
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(path_str) = path.to_str() else {
+            continue;
+        };
+
+        let _ = Command::new("install_name_tool")
+            .args(["-id", &format!("@rpath/{file_name}"), path_str])
+            .status();
+
+        for dep in dylib_dependencies(&path) {
+            if !is_non_system_dylib(&dep) {
+                continue;
+            }
+
+            let dep_path = PathBuf::from(&dep);
+            let Some(dep_name) = dep_path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let dep_dest = bundle_libs_dir.join(dep_name);
+            if !dep_dest.exists() {
+                let _ = copy_dylib(&dep_path, &dep_dest);
+                queue.push_back(dep_dest.clone());
+            } else {
+                make_writable_and_executable(&dep_dest);
+            }
+
+            let _ = Command::new("install_name_tool")
+                .args(["-change", &dep, &format!("@rpath/{dep_name}"), path_str])
+                .status();
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn copy_mac_gcc_runtime_libs(bundle_libs_dir: &Path) {
+    let gcc_roots = [
+        PathBuf::from("/opt/homebrew/opt/gcc/lib/gcc/current"),
+        PathBuf::from("/usr/local/opt/gcc/lib/gcc/current"),
+    ];
+    let runtime_names = [
+        "libgfortran.5.dylib",
+        "libquadmath.0.dylib",
+        "libgcc_s.1.1.dylib",
+    ];
+
+    for root in gcc_roots {
+        if !root.exists() {
+            continue;
+        }
+
+        for name in runtime_names {
+            let src = root.join(name);
+            let dest = bundle_libs_dir.join(name);
+            if src.exists() {
+                let _ = copy_dylib(&src, &dest);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn configure_macos_tauri_overrides() {
+    if std::env::var("PROFILE").as_deref() == Ok("debug") {
+        // `pnpm build` runs `cargo run --bin gen_ids` in debug mode before the
+        // actual release bundle step. That helper binary does not need macOS
+        // framework staging, and skipping it keeps the host-side build light.
+        std::env::set_var("TAURI_CONFIG", r#"{"bundle":{"macOS":{"frameworks":null}}}"#);
     }
 }
 
@@ -102,6 +251,10 @@ fn main() {
         } else {
             println!("cargo:warning=Could not locate SCIP dylibs; libs directory left empty");
         }
+
+        copy_mac_gcc_runtime_libs(&bundle_libs_dir);
+        rewrite_mac_dylib_ids(&bundle_libs_dir);
+        configure_macos_tauri_overrides();
     }
 
     #[cfg(target_os = "linux")]

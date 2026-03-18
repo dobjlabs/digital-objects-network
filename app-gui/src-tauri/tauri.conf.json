@@ -29,7 +29,10 @@
       "frameworks": [
         "./libs/libscip.9.2.4.0.dylib",
         "./libs/libscip.9.2.dylib",
-        "./libs/libscip.dylib"
+        "./libs/libscip.dylib",
+        "./libs/libgfortran.5.dylib",
+        "./libs/libquadmath.0.dylib",
+        "./libs/libgcc_s.1.1.dylib"
       ]
     },
     "linux": {
@@ -37,9 +40,18 @@
         "files": {
           "/usr/lib/app-gui/libs": "libs/"
         }
+      },
+      "deb": {
+        "files": {
+          "/usr/lib/app-gui/libs": "libs/"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/lib/app-gui/libs": "libs/"
+        }
       }
     },
-    "resources": ["libs"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
