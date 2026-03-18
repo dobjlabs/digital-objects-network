@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "gen:ids": "cargo run --manifest-path src-tauri/Cargo.toml --features gen-ids-bin --bin gen_ids",
+    "gen:ids": "cargo run --manifest-path src-tauri/Cargo.toml --example gen_ids",
     "build": "pnpm gen:ids && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"

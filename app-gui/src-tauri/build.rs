@@ -214,7 +214,7 @@ fn copy_mac_gcc_runtime_libs(bundle_libs_dir: &Path) {
 #[cfg(target_os = "macos")]
 fn configure_macos_tauri_overrides() {
     if std::env::var("PROFILE").as_deref() == Ok("debug") {
-        // `pnpm build` runs `cargo run --bin gen_ids` in debug mode before the
+        // `pnpm build` runs `cargo run --example gen_ids` in debug mode before the
         // actual release bundle step. That helper binary does not need macOS
         // framework staging, and skipping it keeps the host-side build light.
         std::env::set_var(

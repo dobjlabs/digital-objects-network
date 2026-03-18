@@ -15,15 +15,6 @@ default-run = "app-gui"
 name = "app_gui_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-[features]
-default = []
-gen-ids-bin = []
-
-[[bin]]
-name = "gen_ids"
-path = "src/bin/gen_ids.rs"
-required-features = ["gen-ids-bin"]
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
