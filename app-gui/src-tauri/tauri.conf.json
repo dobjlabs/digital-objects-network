@@ -25,6 +25,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "linux": {
+      "appimage": {
+        "files": {
+          "/usr/lib/app-gui/libs": "libs/"
+        }
+      }
+    },
     "resources": ["libs"],
     "icon": [
       "icons/32x32.png",

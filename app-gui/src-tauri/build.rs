@@ -29,8 +29,8 @@ fn find_scip_lib_dir_from_target(manifest_dir: &Path) -> Option<PathBuf> {
                 || candidate.join("libscip.dylib").exists();
 
             #[cfg(target_os = "linux")]
-            let has_scip_lib = candidate.join("libscip.so.9.2").exists()
-                || candidate.join("libscip.so").exists();
+            let has_scip_lib =
+                candidate.join("libscip.so.9.2").exists() || candidate.join("libscip.so").exists();
 
             if has_scip_lib {
                 return Some(candidate);
@@ -58,8 +58,7 @@ fn copy_scip_shared_libs(lib_dir: &Path, bundle_libs_dir: &Path) {
         };
 
         #[cfg(target_os = "macos")]
-        let is_scip_shared_lib =
-            file_name.starts_with("libscip") && file_name.ends_with(".dylib");
+        let is_scip_shared_lib = file_name.starts_with("libscip") && file_name.ends_with(".dylib");
 
         #[cfg(target_os = "linux")]
         let is_scip_shared_lib = file_name.starts_with("libscip") && file_name.contains(".so");
