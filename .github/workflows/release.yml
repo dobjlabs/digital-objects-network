@@ -1,0 +1,268 @@
+name: Release Desktop App
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build release artifacts without publishing a GitHub release"
+        required: false
+        default: false
+        type: boolean
+      tag_name:
+        description: "Release tag to publish when dry_run is false (for example v0.1.0)"
+        required: false
+        type: string
+
+jobs:
+  check-ci:
+    if: github.event_name != 'workflow_dispatch' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check CI status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflows = [
+              { name: 'Clippy Check', file: 'clippy.yml' },
+              { name: 'Rust Tests', file: 'rust_tests.yml' },
+              { name: 'Rustfmt Check', file: 'rustfmt.yml' },
+            ];
+
+            for (const workflow of workflows) {
+              const runs = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflow.file,
+                head_sha: context.sha,
+                status: 'completed',
+              });
+
+              const latestRun = runs.data.workflow_runs[0];
+              if (!latestRun || latestRun.conclusion !== 'success') {
+                core.setFailed(`Workflow "${workflow.name}" has not passed for this commit`);
+                return;
+              }
+            }
+
+  validate-dispatch:
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run && inputs.tag_name == ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a tag for manual publish
+        run: |
+          echo "::error::workflow_dispatch releases require tag_name when dry_run is false."
+          exit 1
+
+  release:
+    needs:
+      - check-ci
+      - validate-dispatch
+    if: |
+      always() &&
+      (needs.check-ci.result == 'success' || needs.check-ci.result == 'skipped') &&
+      (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest"
+            args: "--target aarch64-apple-darwin"
+            artifact_name: "macos-aarch64"
+          - platform: "macos-latest"
+            args: "--target x86_64-apple-darwin"
+            artifact_name: "macos-x86_64"
+          - platform: "ubuntu-22.04"
+            args: ""
+            artifact_name: "linux"
+          - platform: "windows-latest"
+            args: ""
+            artifact_name: "windows"
+
+    runs-on: ${{ matrix.platform }}
+    defaults:
+      run:
+        working-directory: app-gui
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            file \
+            libfuse2 \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: release-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('**/Cargo.lock') }}
+          cache-workspace-crates: true
+
+      - name: Add Rust targets (macOS only)
+        if: matrix.platform == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: app-gui/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate macOS signing secrets
+        if: |
+          runner.os == 'macOS' &&
+          (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run))
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY_SECRET KEYCHAIN_PASSWORD APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_CONTENT; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing required macOS signing/notarization secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Prepare macOS signing assets
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          if [[ -n "$APPLE_CERTIFICATE" && -n "$APPLE_CERTIFICATE_PASSWORD" && -n "$APPLE_SIGNING_IDENTITY_SECRET" && -n "$KEYCHAIN_PASSWORD" ]]; then
+            CERT_PATH="$RUNNER_TEMP/apple-certificate.p12"
+            KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+            echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security default-keychain -s "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security set-keychain-settings -t 3600 -u "$KEYCHAIN_PATH"
+            security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            echo "MACOS_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY_SECRET" >> "$GITHUB_ENV"
+          else
+            echo "MACOS_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
+
+          if [[ -n "$APPLE_API_KEY_CONTENT" && -n "$APPLE_API_KEY" && -n "$APPLE_API_ISSUER" ]]; then
+            APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY.p8"
+            printf '%s' "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY_PATH"
+            echo "APPLE_API_KEY=$APPLE_API_KEY" >> "$GITHUB_ENV"
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
+            echo "APPLE_API_KEY_PATH=$APPLE_API_KEY_PATH" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build Tauri application (dry run)
+        if: |
+          github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: pnpm tauri build ${{ matrix.args }} --verbose
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && env.MACOS_SIGNING_IDENTITY || '' }}
+          DEFAULT_SYNCHRONIZER_API_URL: http://18.119.100.201:3000
+          DEFAULT_RELAYER_API_URL: http://18.119.100.201:3200
+          # Work around upstream linuxdeploy AppImage failures on Linux:
+          # https://github.com/tauri-apps/tauri/issues/8929
+          NO_STRIP: ${{ matrix.platform == 'ubuntu-22.04' && 'true' || '' }}
+          LDAI_VERBOSE: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
+
+      - name: Upload final bundle artifacts
+        if: |
+          github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: zk-craft-${{ matrix.artifact_name }}
+          if-no-files-found: error
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app.tar.gz
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
+            target/*/release/bundle/deb/*.deb
+            target/*/release/bundle/rpm/*.rpm
+            target/*/release/bundle/appimage/*.AppImage
+            target/*/release/bundle/dmg/*.dmg
+            target/*/release/bundle/macos/*.app.tar.gz
+            target/*/release/bundle/nsis/*.exe
+            target/*/release/bundle/msi/*.msi
+
+      - name: Publish Tauri release
+        if: |
+          github.ref_type == 'tag' ||
+          (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        uses: tauri-apps/tauri-action@v0.6.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && env.MACOS_SIGNING_IDENTITY || '' }}
+          APPLE_API_KEY: ${{ env.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+          DEFAULT_SYNCHRONIZER_API_URL: http://18.119.100.201:3000
+          DEFAULT_RELAYER_API_URL: http://18.119.100.201:3200
+          # Work around upstream linuxdeploy AppImage failures on Linux:
+          # https://github.com/tauri-apps/tauri/issues/8929
+          NO_STRIP: ${{ matrix.platform == 'ubuntu-22.04' && 'true' || '' }}
+          LDAI_VERBOSE: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
+        with:
+          projectPath: app-gui
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+          releaseName: "zk-craft ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}"
+          releaseBody: |
+            Release ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }} for the zk-craft desktop app.
+
+            Included assets:
+            - macOS (Apple Silicon)
+            - macOS (Intel)
+            - Windows
+            - Linux
+
+            Notes:
+            - macOS release builds are signed and notarized.
+            - The app defaults to http://18.119.100.201:3000 for the synchronizer and http://18.119.100.201:3200 for the relayer unless changed in Settings.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
