@@ -2,8 +2,6 @@ name: Release Desktop App
 
 on:
   push:
-    branches:
-      - "dhvanipa/release"
     tags:
       - "v*"
   workflow_dispatch:
@@ -198,8 +196,7 @@ jobs:
 
       - name: Build Tauri application (dry run)
         if: |
-          (github.event_name == 'push' && github.ref_type == 'branch') ||
-          (github.event_name == 'workflow_dispatch' && inputs.dry_run)
+          github.event_name == 'workflow_dispatch' && inputs.dry_run
         run: pnpm tauri build ${{ matrix.args }} --verbose
         env:
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && env.MACOS_SIGNING_IDENTITY || '' }}
@@ -212,8 +209,7 @@ jobs:
 
       - name: Upload final bundle artifacts
         if: |
-          (github.event_name == 'push' && github.ref_type == 'branch') ||
-          (github.event_name == 'workflow_dispatch' && inputs.dry_run)
+          github.event_name == 'workflow_dispatch' && inputs.dry_run
         uses: actions/upload-artifact@v4
         with:
           name: zk-craft-${{ matrix.artifact_name }}
