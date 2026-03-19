@@ -7,18 +7,18 @@ use common::{
 };
 use craft_sdk::{Helper, SpendableObject, SpendableObjects};
 use pod2::middleware::{Hash, Params};
-use txlib::StateRoot;
+use txlib::GroundingWitness;
 
 use crate::spec;
 
 pub(crate) fn execute_action(
     action_id: String,
-    state_root: StateRoot,
+    grounding_witness: GroundingWitness,
     inputs: Vec<SpendableObject>,
 ) -> Result<SpendableObjects> {
     let helper = Helper::new(spec::dependencies(), spec::actions());
     // Relayed payloads are recursively verified/compressed, which is incompatible with MockMainPod.
-    let builder = helper.builder(false, Arc::new(state_root));
+    let builder = helper.builder(false, Arc::new(grounding_witness));
     Ok(builder.action(&action_id, inputs))
 }
 

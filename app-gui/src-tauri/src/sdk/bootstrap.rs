@@ -11,7 +11,10 @@ use txlib::object_nullifier_hash;
 
 use crate::{objects::ObjectRecord, settings::get_app_settings, spec};
 
-use super::synchronizer_client::{encode_hash_hex, fetch_synchronizer_state};
+use super::synchronizer_client::{
+    encode_hash_hex, fetch_synchronizer_head, fetch_synchronizer_nullifier_contains,
+    fetch_synchronizer_tx_contains,
+};
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -154,12 +157,26 @@ pub async fn load_gui_inventory(
     let actions = build_action_catalog(&action_hashes, &class_hashes);
 
     let app_settings = get_app_settings(app)?;
-    let sync_state = fetch_synchronizer_state(&app_settings.synchronizer_api_url);
+    let source_tx_hashes = objects
+        .iter()
+        .map(|entry| entry.record.spendable().tx.dict().commitment())
+        .collect::<HashSet<_>>();
+    let live_nullifiers = objects
+        .iter()
+        .filter(|entry| !entry.record.is_nullified())
+        .filter_map(|entry| object_nullifier_hash(&entry.record.obj).ok())
+        .collect::<HashSet<_>>();
 
-    let (grounded_txs, on_chain_nullifiers) = match &sync_state {
-        Ok(state) => (state.transactions.clone(), state.nullifiers.clone()),
-        Err(_) => (HashSet::new(), HashSet::new()),
-    };
+    let grounded_txs = fetch_synchronizer_tx_contains(
+        &app_settings.synchronizer_api_url,
+        &source_tx_hashes.iter().copied().collect::<Vec<_>>(),
+    )
+    .unwrap_or_default();
+    let on_chain_nullifiers = fetch_synchronizer_nullifier_contains(
+        &app_settings.synchronizer_api_url,
+        &live_nullifiers.iter().copied().collect::<Vec<_>>(),
+    )
+    .unwrap_or_default();
 
     reconcile_objects(&objects_dir, &mut objects, &on_chain_nullifiers);
 
@@ -182,6 +199,6 @@ pub async fn load_gui_inventory(
 #[tauri::command]
 pub async fn get_global_state_root(app: tauri::AppHandle) -> Result<String, CommandError> {
     let app_settings = get_app_settings(app)?;
-    let sync_state = fetch_synchronizer_state(&app_settings.synchronizer_api_url)?;
-    Ok(encode_hash_hex(&sync_state.current_gsr))
+    let sync_head = fetch_synchronizer_head(&app_settings.synchronizer_api_url)?;
+    Ok(encode_hash_hex(&sync_head.current_gsr))
 }

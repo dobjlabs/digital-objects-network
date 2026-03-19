@@ -22,7 +22,7 @@ use chrono::{DateTime, Utc};
 use tracing::{debug, info, trace};
 
 use crate::config::AppConfig;
-use crate::state_machine::{SlotDelta, StateMachine};
+use crate::state_machine::{SlotDelta, StateMachine, MAX_GSR_AGE_BLOCKS};
 use crate::sync_db::{JournalOp, SlotJournal, SyncDb};
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
@@ -98,6 +98,7 @@ impl Node {
         self.state_machine.rollback_journals(&journals)?;
         let rollback_slots: Vec<u32> = journals.iter().map(|j| j.slot).collect();
         self.sync_db.complete_rollback(&rollback_slots).await?;
+        self.refresh_recent_gsr_cache().await?;
         Ok(())
     }
 
@@ -107,8 +108,12 @@ impl Node {
     pub async fn recover_pending(&self) -> Result<()> {
         let recoveries = self.sync_db.pending_recoveries().await?;
         if recoveries.is_empty() {
+            self.refresh_recent_gsr_cache().await?;
             return Ok(());
         }
+
+        let mut rollback_journals = Vec::new();
+        let mut rollback_slots = Vec::new();
 
         for recovery in recoveries {
             match recovery.op {
@@ -119,13 +124,18 @@ impl Node {
                         .await?;
                 }
                 JournalOp::Rollback => {
-                    self.state_machine
-                        .rollback_journals(std::slice::from_ref(&recovery.journal))?;
-                    self.sync_db.complete_rollback(&[recovery.slot]).await?;
+                    rollback_slots.push(recovery.slot);
+                    rollback_journals.push(recovery.journal);
                 }
             }
         }
+        if !rollback_journals.is_empty() {
+            rollback_journals.sort_by_key(|journal| std::cmp::Reverse(journal.slot));
+            self.state_machine.rollback_journals(&rollback_journals)?;
+            self.sync_db.complete_rollback(&rollback_slots).await?;
+        }
         self.state_machine.reload_from_db()?;
+        self.refresh_recent_gsr_cache().await?;
         Ok(())
     }
 
@@ -212,7 +222,7 @@ impl Node {
                 parent_root: beacon_block_header.parent_root,
                 block_number: None,
                 is_empty: true,
-                delta: SlotDelta::default(),
+                delta: self.state_machine.noop_delta()?,
             });
         };
 
@@ -374,10 +384,8 @@ impl Node {
     pub async fn save_pending_slot(&self, processed: &ProcessedSlot) -> Result<()> {
         let journal = SlotJournal {
             slot: processed.slot,
-            tx_hashes: processed.delta.tx_hashes.clone(),
-            nullifiers: processed.delta.nullifiers.clone(),
-            gsr_block_numbers: processed.delta.gsr_block_numbers.clone(),
-            gsr_hashes: processed.delta.gsr_hashes.clone(),
+            old_head: processed.delta.old_head,
+            new_head: processed.delta.new_head,
         };
 
         self.sync_db
@@ -394,6 +402,11 @@ impl Node {
                     Some(processed.parent_root)
                 },
                 processed.block_number,
+                if processed.is_empty {
+                    None
+                } else {
+                    processed.delta.new_head.current_gsr
+                },
                 processed.is_empty,
                 &journal,
             )
@@ -408,5 +421,15 @@ impl Node {
     /// Reload in-memory state from the persisted app database.
     pub fn reload_from_db(&self) -> Result<()> {
         self.state_machine.reload_from_db()
+    }
+
+    async fn refresh_recent_gsr_cache(&self) -> Result<()> {
+        let head = self.state_machine.head_snapshot()?;
+        let min_block_number = head
+            .current_block_number
+            .map(|block_number| block_number.saturating_sub(MAX_GSR_AGE_BLOCKS as u32));
+        let recent_gsrs = self.sync_db.recent_gsrs(min_block_number).await?;
+        self.state_machine.replace_recent_gsrs(recent_gsrs)?;
+        Ok(())
     }
 }

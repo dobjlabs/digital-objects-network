@@ -10,8 +10,9 @@ use axum::{
 use hex::FromHex;
 use pod2::middleware::Hash;
 use synchronizer::api_types::{
-    HealthResponse, StateFullResponse, StateHeadResponse, SyncProgressResponse, TxContainsEntry,
-    TxContainsRequest, TxContainsResponse, TxStatusResponse,
+    GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, NullifierContainsEntry,
+    NullifierContainsRequest, NullifierContainsResponse, SourceTxProofResponse, StateHeadResponse,
+    SyncProgressResponse, TxContainsEntry, TxContainsRequest, TxContainsResponse, TxStatusResponse,
 };
 use tokio::sync::watch;
 use tracing::info;
@@ -45,9 +46,13 @@ pub async fn run_api_server(
         .route("/healthz", get(healthz))
         .route("/sync-progress", get(get_sync_progress))
         .route("/v1/state/head", get(get_state_head))
-        .route("/v1/state/full", get(get_state_full))
         .route("/v1/state/tx/contains", post(post_state_tx_contains))
+        .route(
+            "/v1/state/nullifier/contains",
+            post(post_state_nullifier_contains),
+        )
         .route("/v1/state/tx/{tx_hash}", get(get_state_tx))
+        .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
         .with_state(AppState {
             sync_db,
             state_machine,
@@ -104,44 +109,6 @@ async fn get_state_head(
     }))
 }
 
-async fn get_state_full(
-    State(app_state): State<AppState>,
-) -> Result<Json<StateFullResponse>, (StatusCode, String)> {
-    let snapshot = app_state
-        .state_machine
-        .api_state_snapshot()
-        .map_err(internal_error)?;
-
-    let mut transactions = snapshot
-        .transactions
-        .iter()
-        .map(encode_hash_hex)
-        .collect::<Vec<_>>();
-    transactions.sort();
-
-    let mut nullifiers = snapshot
-        .nullifiers
-        .iter()
-        .map(encode_hash_hex)
-        .collect::<Vec<_>>();
-    nullifiers.sort();
-
-    let prior_gsrs = if snapshot.global_state_roots.is_empty() {
-        Vec::new()
-    } else {
-        snapshot.global_state_roots[..snapshot.global_state_roots.len() - 1].to_vec()
-    };
-    let gsrs = prior_gsrs.iter().map(encode_hash_hex).collect::<Vec<_>>();
-
-    Ok(Json(StateFullResponse {
-        block_number: snapshot.current_block_number.unwrap_or(0),
-        current_gsr: snapshot.current_gsr.as_ref().map(encode_hash_hex),
-        transactions,
-        nullifiers,
-        gsrs,
-    }))
-}
-
 async fn post_state_tx_contains(
     State(app_state): State<AppState>,
     Json(body): Json<TxContainsRequest>,
@@ -173,6 +140,37 @@ async fn post_state_tx_contains(
     }))
 }
 
+async fn post_state_nullifier_contains(
+    State(app_state): State<AppState>,
+    Json(body): Json<NullifierContainsRequest>,
+) -> Result<Json<NullifierContainsResponse>, (StatusCode, String)> {
+    let hashes = body
+        .nullifiers
+        .iter()
+        .map(|raw| parse_hash_hex(raw))
+        .collect::<Result<Vec<_>, _>>()?;
+    let present = app_state
+        .state_machine
+        .nullifier_exists_batch(&hashes)
+        .map_err(internal_error)?;
+    let head = build_head_snapshot(&app_state).await?;
+
+    let results = hashes
+        .iter()
+        .zip(present.into_iter())
+        .map(|(hash, present)| NullifierContainsEntry {
+            nullifier: encode_hash_hex(hash),
+            present,
+        })
+        .collect();
+
+    Ok(Json(NullifierContainsResponse {
+        last_processed_slot: head.last_processed_slot,
+        current_gsr: head.current_gsr,
+        results,
+    }))
+}
+
 async fn get_state_tx(
     State(app_state): State<AppState>,
     Path(tx_hash): Path<String>,
@@ -188,6 +186,46 @@ async fn get_state_tx(
         present,
         last_processed_slot: head.last_processed_slot,
         current_gsr: head.current_gsr,
+    }))
+}
+
+async fn post_grounding_witness(
+    State(app_state): State<AppState>,
+    Json(body): Json<GroundingWitnessRequest>,
+) -> Result<Json<GroundingWitnessResponse>, (StatusCode, String)> {
+    let source_tx_hashes = body
+        .source_tx_hashes
+        .iter()
+        .map(|raw| parse_hash_hex(raw))
+        .collect::<Result<Vec<_>, _>>()?;
+    let snapshot = app_state
+        .state_machine
+        .grounding_witness(&source_tx_hashes)
+        .map_err(internal_error)?;
+    let head = snapshot.head;
+    let state_root = head.current_state_root().ok_or_else(|| {
+        (
+            StatusCode::CONFLICT,
+            "synchronizer has no canonical grounded state yet".to_string(),
+        )
+    })?;
+    let state_root_hash = head.current_gsr.unwrap_or_else(|| state_root.hash());
+
+    Ok(Json(GroundingWitnessResponse {
+        state_root_hash: encode_hash_hex(&state_root_hash),
+        block_number: state_root.block_number,
+        transactions_root: encode_hash_hex(&state_root.transactions_root),
+        nullifiers_root: encode_hash_hex(&state_root.nullifiers_root),
+        gsrs_root: encode_hash_hex(&state_root.gsrs_root),
+        source_tx_proofs: snapshot
+            .source_tx_proofs
+            .into_iter()
+            .map(|entry| SourceTxProofResponse {
+                tx_hash: encode_hash_hex(&entry.tx_hash),
+                present: entry.present,
+                proof: entry.proof,
+            })
+            .collect(),
     }))
 }
 
@@ -209,15 +247,16 @@ async fn build_head_snapshot(app_state: &AppState) -> Result<HeadSnapshot, (Stat
         .state_machine
         .api_state_snapshot()
         .map_err(internal_error)?;
+    let head = snapshot.head;
 
     Ok(HeadSnapshot {
         last_processed_slot,
         last_processed_block_number,
-        current_gsr: snapshot.current_gsr.as_ref().map(encode_hash_hex),
-        current_block_number: snapshot.current_block_number,
-        tx_count: snapshot.transactions.len(),
-        nullifier_count: snapshot.nullifiers.len(),
-        gsr_count: snapshot.global_state_roots.len(),
+        current_gsr: head.current_gsr.as_ref().map(encode_hash_hex),
+        current_block_number: head.current_block_number.map(i64::from),
+        tx_count: head.tx_count as usize,
+        nullifier_count: head.nullifier_count as usize,
+        gsr_count: head.gsr_count as usize,
     })
 }
 

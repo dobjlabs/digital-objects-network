@@ -1,10 +1,10 @@
 use alloy::primitives::B256;
 use anyhow::{anyhow, Context, Result};
 use pod2::middleware::Hash;
-use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
+use sqlx::{postgres::PgPoolOptions, types::Json, Executor, PgPool, Row};
 use url::Url;
 
-use crate::app_db::{db_bytes_to_hash, hash_to_db_bytes};
+use crate::app_db::{db_bytes_to_hash, hash_to_db_bytes, AppHead};
 
 /// Sync cursor exposed to API callers.
 ///
@@ -20,10 +20,8 @@ pub struct SyncProgress {
 #[derive(Debug, Clone)]
 pub struct SlotJournal {
     pub slot: u32,
-    pub tx_hashes: Vec<Hash>,
-    pub nullifiers: Vec<Hash>,
-    pub gsr_block_numbers: Vec<u32>,
-    pub gsr_hashes: Vec<Hash>,
+    pub old_head: AppHead,
+    pub new_head: AppHead,
 }
 
 /// Startup recovery task derived from rows that are pending or not fully applied.
@@ -72,12 +70,6 @@ impl SyncDb {
     }
 
     /// Create schema objects used by the sync control plane.
-    ///
-    /// Creates:
-    /// 1. `sync_cursor` for single-row progress tracking
-    /// 2. `canonical_slots` for canonical slot metadata + status
-    /// 3. `slot_apply_journal` for per-slot apply/rollback replay
-    /// 4. supporting indexes for recovery and lookup paths
     async fn bootstrap(&self) -> Result<()> {
         let statements = [
             r#"
@@ -94,6 +86,7 @@ impl SyncDb {
                 block_root BYTEA NULL,
                 parent_root BYTEA NULL,
                 execution_block_number INTEGER NULL,
+                current_gsr BYTEA NULL,
                 is_empty BOOLEAN NOT NULL,
                 status TEXT NOT NULL CHECK (status IN ('pending','applied')),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -108,10 +101,8 @@ impl SyncDb {
             CREATE TABLE IF NOT EXISTS slot_apply_journal (
                 slot INTEGER PRIMARY KEY REFERENCES canonical_slots(slot) ON DELETE CASCADE,
                 block_root BYTEA NULL,
-                tx_hashes BYTEA[] NOT NULL DEFAULT '{}'::bytea[],
-                nullifiers BYTEA[] NOT NULL DEFAULT '{}'::bytea[],
-                gsr_block_numbers INTEGER[] NOT NULL DEFAULT '{}'::integer[],
-                gsr_hashes BYTEA[] NOT NULL DEFAULT '{}'::bytea[],
+                old_head JSONB NOT NULL,
+                new_head JSONB NOT NULL,
                 op TEXT NOT NULL DEFAULT 'apply',
                 kv_applied BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -121,6 +112,11 @@ impl SyncDb {
             r#"
             CREATE INDEX IF NOT EXISTS canonical_slots_status_slot_idx
                 ON canonical_slots(status, slot)
+            "#,
+            r#"
+            CREATE INDEX IF NOT EXISTS canonical_slots_gsr_block_idx
+                ON canonical_slots(status, execution_block_number)
+                WHERE current_gsr IS NOT NULL AND execution_block_number IS NOT NULL
             "#,
             r#"
             CREATE INDEX IF NOT EXISTS slot_apply_journal_kv_applied_slot_idx
@@ -229,6 +225,7 @@ impl SyncDb {
         block_root: Option<B256>,
         parent_root: Option<B256>,
         block_number: Option<u32>,
+        current_gsr: Option<Hash>,
         is_empty: bool,
         journal: &SlotJournal,
     ) -> Result<()> {
@@ -236,12 +233,13 @@ impl SyncDb {
 
         sqlx::query(
             r#"
-            INSERT INTO canonical_slots(slot, block_root, parent_root, execution_block_number, is_empty, status)
-            VALUES ($1, $2, $3, $4, $5, 'pending')
+            INSERT INTO canonical_slots(slot, block_root, parent_root, execution_block_number, current_gsr, is_empty, status)
+            VALUES ($1, $2, $3, $4, $5, $6, 'pending')
             ON CONFLICT (slot) DO UPDATE
             SET block_root = EXCLUDED.block_root,
                 parent_root = EXCLUDED.parent_root,
                 execution_block_number = EXCLUDED.execution_block_number,
+                current_gsr = EXCLUDED.current_gsr,
                 is_empty = EXCLUDED.is_empty,
                 status = 'pending',
                 updated_at = now()
@@ -251,20 +249,19 @@ impl SyncDb {
         .bind(block_root.map(|v| v.as_slice().to_vec()))
         .bind(parent_root.map(|v| v.as_slice().to_vec()))
         .bind(block_number.map(|v| v as i32))
+        .bind(current_gsr.map(hash_to_db_bytes))
         .bind(is_empty)
         .execute(&mut *tx)
         .await?;
 
         sqlx::query(
             r#"
-            INSERT INTO slot_apply_journal(slot, block_root, tx_hashes, nullifiers, gsr_block_numbers, gsr_hashes, op, kv_applied)
-            VALUES ($1, $2, $3, $4, $5, $6, 'apply', false)
+            INSERT INTO slot_apply_journal(slot, block_root, old_head, new_head, op, kv_applied)
+            VALUES ($1, $2, $3, $4, 'apply', false)
             ON CONFLICT (slot) DO UPDATE
             SET block_root = EXCLUDED.block_root,
-                tx_hashes = EXCLUDED.tx_hashes,
-                nullifiers = EXCLUDED.nullifiers,
-                gsr_block_numbers = EXCLUDED.gsr_block_numbers,
-                gsr_hashes = EXCLUDED.gsr_hashes,
+                old_head = EXCLUDED.old_head,
+                new_head = EXCLUDED.new_head,
                 op = 'apply',
                 kv_applied = false,
                 kv_applied_at = NULL
@@ -272,28 +269,8 @@ impl SyncDb {
         )
         .bind(slot as i32)
         .bind(block_root.map(|v| v.as_slice().to_vec()))
-        .bind(journal.tx_hashes.iter().map(|h| hash_to_db_bytes(*h)).collect::<Vec<_>>())
-        .bind(
-            journal
-                .nullifiers
-                .iter()
-                .map(|h| hash_to_db_bytes(*h))
-                .collect::<Vec<_>>(),
-        )
-        .bind(
-            journal
-                .gsr_block_numbers
-                .iter()
-                .map(|v| *v as i32)
-                .collect::<Vec<_>>(),
-        )
-        .bind(
-            journal
-                .gsr_hashes
-                .iter()
-                .map(|h| hash_to_db_bytes(*h))
-                .collect::<Vec<_>>(),
-        )
+        .bind(Json(journal.old_head))
+        .bind(Json(journal.new_head))
         .execute(&mut *tx)
         .await?;
 
@@ -305,16 +282,20 @@ impl SyncDb {
     pub async fn finalize_slot_applied(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query("UPDATE slot_apply_journal SET kv_applied = true, kv_applied_at = now() WHERE slot = $1")
-            .bind(slot as i32)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE slot_apply_journal SET kv_applied = true, kv_applied_at = now() WHERE slot = $1",
+        )
+        .bind(slot as i32)
+        .execute(&mut *tx)
+        .await?;
 
-        sqlx::query("UPDATE canonical_slots SET status = 'applied', execution_block_number = $2, updated_at = now() WHERE slot = $1")
-            .bind(slot as i32)
-            .bind(block_number.map(|v| v as i32))
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE canonical_slots SET status = 'applied', execution_block_number = $2, updated_at = now() WHERE slot = $1",
+        )
+        .bind(slot as i32)
+        .bind(block_number.map(|v| v as i32))
+        .execute(&mut *tx)
+        .await?;
 
         sqlx::query(
             r#"
@@ -344,10 +325,8 @@ impl SyncDb {
             SELECT c.slot,
                    c.execution_block_number,
                    j.op,
-                   j.tx_hashes,
-                   j.nullifiers,
-                   j.gsr_block_numbers,
-                   j.gsr_hashes
+                   j.old_head,
+                   j.new_head
             FROM canonical_slots c
             JOIN slot_apply_journal j ON j.slot = c.slot
             WHERE c.status = 'pending' OR j.kv_applied = false
@@ -359,32 +338,16 @@ impl SyncDb {
 
         let mut recoveries = Vec::with_capacity(rows.len());
         for row in rows {
-            let tx_hash_bytes: Vec<Vec<u8>> = row.get("tx_hashes");
-            let nullifier_bytes: Vec<Vec<u8>> = row.get("nullifiers");
-            let gsr_hash_bytes: Vec<Vec<u8>> = row.get("gsr_hashes");
-            let gsr_block_numbers: Vec<i32> = row.get("gsr_block_numbers");
-            let op = JournalOp::from_str(row.get::<&str, _>("op"))?;
             recoveries.push(PendingRecovery {
                 slot: row.get::<i32, _>("slot") as u32,
                 block_number: row
                     .get::<Option<i32>, _>("execution_block_number")
                     .map(|v| v as u32),
-                op,
+                op: JournalOp::from_str(row.get::<&str, _>("op"))?,
                 journal: SlotJournal {
                     slot: row.get::<i32, _>("slot") as u32,
-                    tx_hashes: tx_hash_bytes
-                        .iter()
-                        .map(|b| db_bytes_to_hash(b))
-                        .collect::<Result<Vec<_>>>()?,
-                    nullifiers: nullifier_bytes
-                        .iter()
-                        .map(|b| db_bytes_to_hash(b))
-                        .collect::<Result<Vec<_>>>()?,
-                    gsr_block_numbers: gsr_block_numbers.iter().map(|v| *v as u32).collect(),
-                    gsr_hashes: gsr_hash_bytes
-                        .iter()
-                        .map(|b| db_bytes_to_hash(b))
-                        .collect::<Result<Vec<_>>>()?,
+                    old_head: row.get::<Json<AppHead>, _>("old_head").0,
+                    new_head: row.get::<Json<AppHead>, _>("new_head").0,
                 },
             });
         }
@@ -392,16 +355,11 @@ impl SyncDb {
         Ok(recoveries)
     }
 
-    /// Stage rollback in Postgres and return affected journals for RocksDB delete replay.
-    ///
-    /// Two-phase rollback:
-    /// 1. Mark affected slots/journals as rollback-pending and rewind cursor in Postgres.
-    /// 2. Caller replays journal deletes in RocksDB.
-    /// 3. Caller invokes `complete_rollback` to finalize and delete pending rows.
+    /// Stage rollback in Postgres and return affected journals for head rewind replay.
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<Vec<SlotJournal>> {
         let rows = sqlx::query(
             r#"
-            SELECT j.slot, j.tx_hashes, j.nullifiers, j.gsr_block_numbers, j.gsr_hashes
+            SELECT j.slot, j.old_head, j.new_head
             FROM slot_apply_journal j
             WHERE j.slot > $1
             ORDER BY j.slot DESC
@@ -413,25 +371,10 @@ impl SyncDb {
 
         let mut journals = Vec::with_capacity(rows.len());
         for row in rows {
-            let tx_hash_bytes: Vec<Vec<u8>> = row.get("tx_hashes");
-            let nullifier_bytes: Vec<Vec<u8>> = row.get("nullifiers");
-            let gsr_hash_bytes: Vec<Vec<u8>> = row.get("gsr_hashes");
-            let gsr_block_numbers: Vec<i32> = row.get("gsr_block_numbers");
             journals.push(SlotJournal {
                 slot: row.get::<i32, _>("slot") as u32,
-                tx_hashes: tx_hash_bytes
-                    .iter()
-                    .map(|b| db_bytes_to_hash(b))
-                    .collect::<Result<Vec<_>>>()?,
-                nullifiers: nullifier_bytes
-                    .iter()
-                    .map(|b| db_bytes_to_hash(b))
-                    .collect::<Result<Vec<_>>>()?,
-                gsr_block_numbers: gsr_block_numbers.iter().map(|v| *v as u32).collect(),
-                gsr_hashes: gsr_hash_bytes
-                    .iter()
-                    .map(|b| db_bytes_to_hash(b))
-                    .collect::<Result<Vec<_>>>()?,
+                old_head: row.get::<Json<AppHead>, _>("old_head").0,
+                new_head: row.get::<Json<AppHead>, _>("new_head").0,
             });
         }
 
@@ -473,10 +416,6 @@ impl SyncDb {
     }
 
     /// Finalize rollback by deleting pending canonical rows for the provided slots.
-    ///
-    /// Steps:
-    /// 1. Delete rollback-pending rows from `canonical_slots` for provided slots.
-    /// 2. Let FK cascade delete matching `slot_apply_journal` rows.
     pub async fn complete_rollback(&self, slots: &[u32]) -> Result<()> {
         if slots.is_empty() {
             return Ok(());
@@ -502,6 +441,35 @@ impl SyncDb {
         .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    pub async fn recent_gsrs(&self, min_block_number: Option<u32>) -> Result<Vec<(Hash, i64)>> {
+        let Some(min_block_number) = min_block_number else {
+            return Ok(Vec::new());
+        };
+
+        let rows = sqlx::query(
+            r#"
+            SELECT current_gsr, execution_block_number
+            FROM canonical_slots
+            WHERE status = 'applied'
+              AND current_gsr IS NOT NULL
+              AND execution_block_number IS NOT NULL
+              AND execution_block_number >= $1
+            ORDER BY execution_block_number ASC, slot ASC
+            "#,
+        )
+        .bind(min_block_number as i32)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let current_gsr: Vec<u8> = row.get("current_gsr");
+                let block_number = row.get::<i32, _>("execution_block_number");
+                Ok((db_bytes_to_hash(&current_gsr)?, i64::from(block_number)))
+            })
+            .collect()
     }
 }
 
@@ -541,11 +509,9 @@ async fn ensure_database_exists(database_url: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_db::AppDb;
-    use crate::state_machine::StateMachine;
+    use crate::{app_db::AppDb, state_machine::StateMachine};
     use common::proof::MockBlobParser;
     use pod2::middleware::{hash_values, Value};
-    use sqlx::Executor;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -556,78 +522,75 @@ mod tests {
         hash_values(&[Value::from(n)])
     }
 
+    fn unique_head(block_number: u32, marker: i64) -> AppHead {
+        AppHead {
+            transactions_root: unique_hash(marker),
+            nullifiers_root: unique_hash(marker + 1),
+            state_root_gsrs_root: unique_hash(marker + 2),
+            gsr_history_root: unique_hash(marker + 3),
+            current_gsr: Some(unique_hash(marker + 4)),
+            current_block_number: Some(block_number),
+            tx_count: block_number as u64,
+            nullifier_count: block_number as u64 + 1,
+            gsr_count: block_number as u64 + 2,
+        }
+    }
+
     fn test_urls() -> (String, String, String) {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let admin_url = std::env::var("TEST_SYNC_METADATA_DB_ADMIN")
-            .unwrap_or_else(|_| "postgres://postgres@localhost:5432/postgres".to_string());
-        let mut url = Url::parse(&admin_url).expect("valid admin url");
-        let db_name = format!(
-            "sync_test_{}_{}_{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time")
-                .as_nanos(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        url.set_path(&format!("/{}", db_name));
-        (admin_url, url.to_string(), db_name)
+        let pid = std::process::id();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let ctr = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let db_name = format!("syncdb_test_{}_{}_{}", pid, nanos, ctr);
+        let admin_url = std::env::var("TEST_PG_ADMIN_URL")
+            .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/postgres".into());
+        let base = admin_url.trim_end_matches("/postgres");
+        let db_url = format!("{}/{}", base, db_name);
+        (db_name, db_url, admin_url)
     }
 
-    fn test_db_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    async fn fresh_sync_db() -> Result<(SyncDb, String, String)> {
+        static DB_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = DB_TEST_MUTEX.get_or_init(|| Mutex::new(())).lock().await;
+        let (db_name, db_url, admin_url) = test_urls();
+        let sync_db = SyncDb::connect(&db_url).await?;
+        Ok((sync_db, db_name, admin_url))
     }
 
-    async fn drop_db(admin_url: &str, db_name: &str) -> Result<()> {
+    async fn drop_db(db_name: &str, admin_url: &str) -> Result<()> {
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(admin_url)
             .await?;
-        sqlx::query(
-            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
-        )
-        .bind(db_name)
-        .execute(&pool)
-        .await?;
+        sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1")
+            .bind(db_name)
+            .execute(&pool)
+            .await?;
         let escaped = db_name.replace('"', "\"\"");
-        let stmt = format!("DROP DATABASE IF EXISTS \"{escaped}\"");
-        pool.execute(stmt.as_str()).await?;
+        sqlx::query(&format!("DROP DATABASE IF EXISTS \"{escaped}\""))
+            .execute(&pool)
+            .await?;
         Ok(())
     }
 
     #[tokio::test]
-    #[ignore = "requires local postgres"]
-    async fn test_recover_pending_replays_journal_and_finalizes() -> Result<()> {
-        let _guard = test_db_lock().lock().await;
-        let (admin_url, db_url, db_name) = test_urls();
-        drop_db(&admin_url, &db_name).await?;
-        let sync_db = SyncDb::connect(&db_url).await?;
-
-        let dir = TempDir::new().unwrap();
-        let app_db = AppDb::connect(dir.path().to_str().unwrap())?;
-        let state_machine = StateMachine::new(app_db, Arc::new(MockBlobParser))?;
-
-        let slot = 100;
-        let block_number = 4242;
-        let tx_hash = unique_hash(1);
-        let nullifier = unique_hash(2);
-        let gsr_hash = unique_hash(3);
+    async fn test_pending_recovery_roundtrip() -> Result<()> {
+        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let journal = SlotJournal {
-            slot,
-            tx_hashes: vec![tx_hash],
-            nullifiers: vec![nullifier],
-            gsr_block_numbers: vec![block_number],
-            gsr_hashes: vec![gsr_hash],
+            slot: 10,
+            old_head: AppHead::empty(),
+            new_head: unique_head(7, 100),
         };
-        let root = B256::from([7u8; 32]);
-        let parent = B256::from([6u8; 32]);
         sync_db
             .save_pending_slot(
-                slot,
-                Some(root),
-                Some(parent),
-                Some(block_number),
+                10,
+                None,
+                None,
+                Some(7),
+                journal.new_head.current_gsr,
                 false,
                 &journal,
             )
@@ -635,200 +598,81 @@ mod tests {
 
         let pending = sync_db.pending_recoveries().await?;
         assert_eq!(pending.len(), 1);
-        let recovery = &pending[0];
-        state_machine.apply_journal(&recovery.journal)?;
-        sync_db
-            .finalize_slot_applied(recovery.slot, recovery.block_number)
-            .await?;
-        state_machine.reload_from_db()?;
+        assert_eq!(pending[0].journal.new_head, journal.new_head);
 
-        assert!(sync_db.pending_recoveries().await?.is_empty());
-        let progress = sync_db.last_progress().await?.expect("progress");
-        assert_eq!(progress.last_processed_slot, slot);
-        assert_eq!(progress.last_processed_block_number, Some(block_number));
-
-        let (txs, nullifiers, gsrs) = state_machine.state_snapshot()?;
-        assert!(txs.contains(&tx_hash));
-        assert!(nullifiers.contains(&nullifier));
-        assert!(gsrs.contains(&gsr_hash));
-
-        drop(sync_db);
-        drop_db(&admin_url, &db_name).await?;
+        drop_db(&db_name, &admin_url).await?;
         Ok(())
     }
 
     #[tokio::test]
-    #[ignore = "requires local postgres"]
-    async fn test_rollback_to_slot_rewinds_pg_and_kv() -> Result<()> {
-        let _guard = test_db_lock().lock().await;
-        let (admin_url, db_url, db_name) = test_urls();
-        drop_db(&admin_url, &db_name).await?;
-        let sync_db = SyncDb::connect(&db_url).await?;
+    async fn test_recent_gsrs_query() -> Result<()> {
+        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let j1 = SlotJournal {
+            slot: 1,
+            old_head: AppHead::empty(),
+            new_head: unique_head(5, 10),
+        };
+        sync_db
+            .save_pending_slot(1, None, None, Some(5), j1.new_head.current_gsr, false, &j1)
+            .await?;
+        sync_db.finalize_slot_applied(1, Some(5)).await?;
 
-        let dir = TempDir::new().unwrap();
+        let j2 = SlotJournal {
+            slot: 2,
+            old_head: j1.new_head,
+            new_head: unique_head(9, 20),
+        };
+        sync_db
+            .save_pending_slot(2, None, None, Some(9), j2.new_head.current_gsr, false, &j2)
+            .await?;
+        sync_db.finalize_slot_applied(2, Some(9)).await?;
+
+        let recent = sync_db.recent_gsrs(Some(6)).await?;
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].0, j2.new_head.current_gsr.unwrap());
+
+        drop_db(&db_name, &admin_url).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_rollback_staging_replays_old_head() -> Result<()> {
+        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let dir = TempDir::new()?;
         let app_db = AppDb::connect(dir.path().to_str().unwrap())?;
         let state_machine = StateMachine::new(app_db, Arc::new(MockBlobParser))?;
 
-        let root1 = B256::from([1u8; 32]);
-        let root2 = B256::from([2u8; 32]);
-        let parent = B256::from([9u8; 32]);
         let j1 = SlotJournal {
-            slot: 10,
-            tx_hashes: vec![unique_hash(10)],
-            nullifiers: vec![unique_hash(11)],
-            gsr_block_numbers: vec![1000],
-            gsr_hashes: vec![unique_hash(12)],
+            slot: 1,
+            old_head: AppHead::empty(),
+            new_head: unique_head(1, 100),
         };
-        sync_db
-            .save_pending_slot(10, Some(root1), Some(parent), Some(1000), false, &j1)
-            .await?;
         state_machine.apply_journal(&j1)?;
-        sync_db.finalize_slot_applied(10, Some(1000)).await?;
+        sync_db
+            .save_pending_slot(1, None, None, Some(1), j1.new_head.current_gsr, false, &j1)
+            .await?;
+        sync_db.finalize_slot_applied(1, Some(1)).await?;
+        state_machine.apply_delta_to_memory(&crate::state_machine::SlotDelta {
+            old_head: j1.old_head,
+            new_head: j1.new_head,
+        })?;
 
         let j2 = SlotJournal {
-            slot: 11,
-            tx_hashes: vec![unique_hash(20)],
-            nullifiers: vec![unique_hash(21)],
-            gsr_block_numbers: vec![1001],
-            gsr_hashes: vec![unique_hash(22)],
+            slot: 2,
+            old_head: j1.new_head,
+            new_head: unique_head(2, 200),
         };
-        sync_db
-            .save_pending_slot(11, Some(root2), Some(root1), Some(1001), false, &j2)
-            .await?;
         state_machine.apply_journal(&j2)?;
-        sync_db.finalize_slot_applied(11, Some(1001)).await?;
-        state_machine.reload_from_db()?;
+        sync_db
+            .save_pending_slot(2, None, None, Some(2), j2.new_head.current_gsr, false, &j2)
+            .await?;
+        sync_db.finalize_slot_applied(2, Some(2)).await?;
 
-        let journals = sync_db.rollback_to_slot(10).await?;
+        let journals = sync_db.rollback_to_slot(1).await?;
         state_machine.rollback_journals(&journals)?;
+        assert_eq!(state_machine.head_snapshot()?, j1.new_head);
 
-        let progress = sync_db.last_progress().await?.expect("progress");
-        assert_eq!(progress.last_processed_slot, 10);
-        assert_eq!(progress.last_processed_block_number, Some(1000));
-        assert_eq!(sync_db.slot_root(10).await?, Some(root1));
-        assert_eq!(sync_db.slot_root(11).await?, None);
-
-        let (txs, nullifiers, gsrs) = state_machine.state_snapshot()?;
-        assert!(txs.contains(&j1.tx_hashes[0]));
-        assert!(!txs.contains(&j2.tx_hashes[0]));
-        assert!(nullifiers.contains(&j1.nullifiers[0]));
-        assert!(!nullifiers.contains(&j2.nullifiers[0]));
-        assert!(gsrs.contains(&j1.gsr_hashes[0]));
-        assert!(!gsrs.contains(&j2.gsr_hashes[0]));
-
-        drop(sync_db);
-        drop_db(&admin_url, &db_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "requires local postgres"]
-    async fn test_rollback_staging_survives_crash_and_recovers() -> Result<()> {
-        let _guard = test_db_lock().lock().await;
-        let (admin_url, db_url, db_name) = test_urls();
-        drop_db(&admin_url, &db_name).await?;
-        let sync_db = SyncDb::connect(&db_url).await?;
-
-        let dir = TempDir::new().unwrap();
-        let app_db = AppDb::connect(dir.path().to_str().unwrap())?;
-        let state_machine = StateMachine::new(app_db, Arc::new(MockBlobParser))?;
-
-        let root1 = B256::from([1u8; 32]);
-        let root2 = B256::from([2u8; 32]);
-        let parent = B256::from([9u8; 32]);
-        let j1 = SlotJournal {
-            slot: 30,
-            tx_hashes: vec![unique_hash(30)],
-            nullifiers: vec![unique_hash(31)],
-            gsr_block_numbers: vec![3000],
-            gsr_hashes: vec![unique_hash(32)],
-        };
-        sync_db
-            .save_pending_slot(30, Some(root1), Some(parent), Some(3000), false, &j1)
-            .await?;
-        state_machine.apply_journal(&j1)?;
-        sync_db.finalize_slot_applied(30, Some(3000)).await?;
-
-        let j2 = SlotJournal {
-            slot: 31,
-            tx_hashes: vec![unique_hash(40)],
-            nullifiers: vec![unique_hash(41)],
-            gsr_block_numbers: vec![3001],
-            gsr_hashes: vec![unique_hash(42)],
-        };
-        sync_db
-            .save_pending_slot(31, Some(root2), Some(root1), Some(3001), false, &j2)
-            .await?;
-        state_machine.apply_journal(&j2)?;
-        sync_db.finalize_slot_applied(31, Some(3001)).await?;
-        state_machine.reload_from_db()?;
-
-        // Stage rollback only; simulate crash before KV rollback/complete step.
-        let staged = sync_db.rollback_to_slot(30).await?;
-        assert_eq!(staged.len(), 1);
-
-        // "Restart" recovery path should still see rollback work pending.
-        let pending = sync_db.pending_recoveries().await?;
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].slot, 31);
-        assert_eq!(pending[0].op, JournalOp::Rollback);
-
-        // Replay what Node::recover_pending does for rollback entries.
-        for recovery in pending {
-            if recovery.op == JournalOp::Rollback {
-                state_machine.rollback_journals(std::slice::from_ref(&recovery.journal))?;
-                sync_db.complete_rollback(&[recovery.slot]).await?;
-            }
-        }
-
-        assert!(sync_db.pending_recoveries().await?.is_empty());
-        let progress = sync_db.last_progress().await?.expect("progress");
-        assert_eq!(progress.last_processed_slot, 30);
-        assert_eq!(progress.last_processed_block_number, Some(3000));
-        assert_eq!(sync_db.slot_root(30).await?, Some(root1));
-        assert_eq!(sync_db.slot_root(31).await?, None);
-
-        let (txs, nullifiers, gsrs) = state_machine.state_snapshot()?;
-        assert!(txs.contains(&j1.tx_hashes[0]));
-        assert!(!txs.contains(&j2.tx_hashes[0]));
-        assert!(nullifiers.contains(&j1.nullifiers[0]));
-        assert!(!nullifiers.contains(&j2.nullifiers[0]));
-        assert!(gsrs.contains(&j1.gsr_hashes[0]));
-        assert!(!gsrs.contains(&j2.gsr_hashes[0]));
-
-        drop(sync_db);
-        drop_db(&admin_url, &db_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "requires local postgres"]
-    async fn test_empty_slot_finalize_sets_none_root_and_advances_cursor() -> Result<()> {
-        let _guard = test_db_lock().lock().await;
-        let (admin_url, db_url, db_name) = test_urls();
-        drop_db(&admin_url, &db_name).await?;
-        let sync_db = SyncDb::connect(&db_url).await?;
-
-        let slot = 55;
-        let journal = SlotJournal {
-            slot,
-            tx_hashes: vec![],
-            nullifiers: vec![],
-            gsr_block_numbers: vec![],
-            gsr_hashes: vec![],
-        };
-        sync_db
-            .save_pending_slot(slot, None, None, None, true, &journal)
-            .await?;
-        sync_db.finalize_slot_applied(slot, None).await?;
-
-        assert_eq!(sync_db.slot_root(slot).await?, None);
-        let progress = sync_db.last_progress().await?.expect("progress");
-        assert_eq!(progress.last_processed_slot, slot);
-        assert_eq!(progress.last_processed_block_number, None);
-
-        drop(sync_db);
-        drop_db(&admin_url, &db_name).await?;
+        drop_db(&db_name, &admin_url).await?;
         Ok(())
     }
 }

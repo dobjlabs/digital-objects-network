@@ -6,24 +6,108 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use pod2::middleware::{
-    EMPTY_VALUE, Hash, Key, Statement, Value,
-    containers::{Array, Dictionary, Set},
-    hash_values,
+use pod2::{
+    backends::plonky2::primitives::merkletree::MerkleProof,
+    frontend::Operation,
+    middleware::{
+        EMPTY_VALUE, Hash, Key, NativeOperation, OperationAux, OperationType, Statement, Value,
+        containers::{Array, Dictionary, Set},
+        hash_values,
+    },
 };
-use pod2utils::{dict, dict_define, macros::BuildContext, rand_raw_value, set, st_custom};
+use pod2utils::{
+    dict, dict_define,
+    macros::{BuildContext, find_custom_pred_by_name},
+    rand_raw_value, set, st_custom,
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateRoot {
     pub block_number: i64,
-    pub transactions: Set,
-    pub nullifiers: Set,
-    pub gsrs: Array,
+    pub transactions_root: Hash,
+    pub nullifiers_root: Hash,
+    pub gsrs_root: Hash,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompactStateRootSerde {
+    block_number: i64,
+    transactions_root: Hash,
+    nullifiers_root: Hash,
+    gsrs_root: Hash,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyStateRootSerde {
+    block_number: i64,
+    transactions: Set,
+    nullifiers: Set,
+    gsrs: Array,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum StateRootSerde {
+    Compact(CompactStateRootSerde),
+    Legacy(LegacyStateRootSerde),
+}
+
+impl Serialize for StateRoot {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        CompactStateRootSerde {
+            block_number: self.block_number,
+            transactions_root: self.transactions_root,
+            nullifiers_root: self.nullifiers_root,
+            gsrs_root: self.gsrs_root,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for StateRoot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match StateRootSerde::deserialize(deserializer)? {
+            StateRootSerde::Compact(compact) => Ok(Self {
+                block_number: compact.block_number,
+                transactions_root: compact.transactions_root,
+                nullifiers_root: compact.nullifiers_root,
+                gsrs_root: compact.gsrs_root,
+            }),
+            StateRootSerde::Legacy(legacy) => Ok(Self {
+                block_number: legacy.block_number,
+                transactions_root: legacy.transactions.commitment(),
+                nullifiers_root: legacy.nullifiers.commitment(),
+                gsrs_root: legacy.gsrs.commitment(),
+            }),
+        }
+    }
 }
 
 impl StateRoot {
+    /// Construct a `StateRoot` from root commitments.
+    pub fn from_roots(
+        block_number: i64,
+        transactions_root: Hash,
+        nullifiers_root: Hash,
+        gsrs_root: Hash,
+    ) -> Self {
+        Self {
+            block_number,
+            transactions_root,
+            nullifiers_root,
+            gsrs_root,
+        }
+    }
+
     /// Construct a `StateRoot` from raw accumulated sets, a block number, and prior GSR history.
     ///
     /// `txns` and `nullifiers` are sets of hashes; `prior_gsrs` is the ordered array of all
@@ -34,27 +118,43 @@ impl StateRoot {
         nullifiers: &HashSet<Hash>,
         prior_gsrs: &[Hash],
     ) -> Self {
-        Self {
+        let transactions = Set::new(txns.iter().map(|h| Value::from(*h)).collect());
+        let nullifiers = Set::new(nullifiers.iter().map(|h| Value::from(*h)).collect());
+        let gsrs = Array::new(prior_gsrs.iter().map(|h| Value::from(*h)).collect());
+        Self::from_roots(
             block_number,
-            transactions: Set::new(txns.iter().map(|h| Value::from(*h)).collect()),
-            nullifiers: Set::new(nullifiers.iter().map(|h| Value::from(*h)).collect()),
-            gsrs: Array::new(prior_gsrs.iter().map(|h| Value::from(*h)).collect()),
-        }
+            transactions.commitment(),
+            nullifiers.commitment(),
+            gsrs.commitment(),
+        )
     }
 
     pub fn hash(&self) -> Hash {
         let txn_nullifiers_hash = hash_values(&[
-            Value::from(self.transactions.clone()),
-            Value::from(self.nullifiers.clone()),
+            Value::from(self.transactions_root),
+            Value::from(self.nullifiers_root),
         ]);
-        let block_number_gsrs_hash = hash_values(&[
-            Value::from(self.block_number),
-            Value::from(self.gsrs.clone()),
-        ]);
+        let block_number_gsrs_hash =
+            hash_values(&[Value::from(self.block_number), Value::from(self.gsrs_root)]);
         hash_values(&[
             Value::from(txn_nullifiers_hash),
             Value::from(block_number_gsrs_hash),
         ])
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GroundingWitness {
+    pub state_root: StateRoot,
+    pub source_tx_proofs: HashMap<Hash, MerkleProof>,
+}
+
+impl GroundingWitness {
+    pub fn new(state_root: StateRoot, source_tx_proofs: HashMap<Hash, MerkleProof>) -> Self {
+        Self {
+            state_root,
+            source_tx_proofs,
+        }
     }
 }
 
@@ -145,17 +245,18 @@ impl TxBuilder {
     pub fn new(
         ctx: &mut BuildContext,
         inputs: &[(Dictionary, Tx)],
-        state_root: Arc<StateRoot>,
+        grounding_witness: Arc<GroundingWitness>,
     ) -> Self {
-        let (st_inputs_grounded, inputs_set) = Self::st_inputs_grounded(ctx, inputs, &state_root);
+        let (st_inputs_grounded, inputs_set) =
+            Self::st_inputs_grounded(ctx, inputs, &grounding_witness);
 
         let tx = Tx {
             live: inputs_set.clone(),
             nullifiers: set!(),
-            state_root: state_root.clone(),
+            state_root: Arc::new(grounding_witness.state_root.clone()),
         };
 
-        let state_root_hash = state_root.hash();
+        let state_root_hash = grounding_witness.state_root.hash();
         let [s0, s1, s2, tx_after] = dict_define!({"live" => &inputs_set, "state_root_hash" => &state_root_hash, "nullifiers" => set!()});
 
         let st_tx_init = st_custom!(
@@ -199,19 +300,19 @@ impl TxBuilder {
     fn st_inputs_grounded(
         ctx: &mut BuildContext,
         inputs: &[(Dictionary, Tx)],
-        state_root: &StateRoot,
+        grounding_witness: &GroundingWitness,
     ) -> (Statement, Set) {
+        let state_root = &grounding_witness.state_root;
         let state_root_hash = state_root.hash();
-        let transactions = state_root.transactions.clone();
-        let nullifiers = state_root.nullifiers.clone();
-        let gsrs = state_root.gsrs.clone();
+        let transactions = state_root.transactions_root;
+        let nullifiers = state_root.nullifiers_root;
+        let gsrs = state_root.gsrs_root;
         let block_number = state_root.block_number;
-        let txn_nullifiers_hash = hash_values(&[
-            Value::from(transactions.clone()),
-            Value::from(nullifiers.clone()),
-        ]);
-        let block_number_gsrs_hash =
-            hash_values(&[Value::from(block_number), Value::from(gsrs.clone())]);
+        let txn_nullifiers_hash =
+            hash_values(&[Value::from(transactions), Value::from(nullifiers)]);
+        let block_number_gsrs_hash = hash_values(&[Value::from(block_number), Value::from(gsrs)]);
+        let tx_in_state_root_pred =
+            find_custom_pred_by_name(&ctx.modules, "TxInStateRoot").expect("TxInStateRoot exists");
         let mut st = st_custom!(
             ctx,
             InputsGrounded(state_root_hash = state_root_hash) =
@@ -231,11 +332,27 @@ impl TxBuilder {
                 )
             )
             .unwrap();
-            let st_tx_in_state_root = st_custom!(
-                ctx,
-                TxInStateRoot() = (st_state_root, SetContains(transactions, source_tx.dict()))
-            )
-            .unwrap();
+            let source_tx_hash = source_tx.dict().commitment();
+            let source_tx_proof = grounding_witness
+                .source_tx_proofs
+                .get(&source_tx_hash)
+                .cloned()
+                .expect("missing source tx proof in grounding witness");
+            let st_tx_membership = ctx
+                .builder
+                .priv_op(Operation(
+                    OperationType::Native(NativeOperation::SetContainsFromEntries),
+                    vec![transactions.into(), source_tx.dict().into()],
+                    OperationAux::MerkleProof(source_tx_proof),
+                ))
+                .unwrap();
+            let st_tx_in_state_root = ctx
+                .builder
+                .priv_op(Operation::custom(
+                    tx_in_state_root_pred.clone(),
+                    [st_state_root, st_tx_membership],
+                ))
+                .unwrap();
             let st_rec = st_custom!(
                 ctx,
                 InputsGroundedRecursive() = (
@@ -389,7 +506,9 @@ pub fn new_obj() -> Dictionary {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
 
+    use hex::FromHex;
     use pod2::{
         backends::plonky2::{
             basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver,
@@ -397,9 +516,59 @@ mod tests {
         frontend::{MainPod, MultiPodBuilder},
         middleware::{MainPodProver, Params, VDSet},
     };
-    use pod2utils::{macros::BuildContext, set};
+    use pod2utils::macros::BuildContext;
 
     use super::*;
+
+    #[derive(Default)]
+    struct TestState {
+        block_number: i64,
+        transactions: HashSet<Hash>,
+        nullifiers: HashSet<Hash>,
+        gsrs: Vec<Hash>,
+    }
+
+    fn test_hash(byte: u8) -> Hash {
+        Hash::from_hex(hex::encode([byte; 32])).expect("valid test hash")
+    }
+
+    impl TestState {
+        fn state_root(&self) -> StateRoot {
+            StateRoot::new(
+                self.block_number,
+                &self.transactions,
+                &self.nullifiers,
+                &self.gsrs,
+            )
+        }
+
+        fn grounding_witness(&self, inputs: &[Tx]) -> GroundingWitness {
+            let tx_set = Set::new(
+                self.transactions
+                    .iter()
+                    .map(|hash| Value::from(*hash))
+                    .collect(),
+            );
+            let source_tx_proofs = inputs
+                .iter()
+                .map(|tx| {
+                    let tx_hash = tx.dict().commitment();
+                    let proof = tx_set.prove(&Value::from(tx_hash)).unwrap();
+                    (tx_hash, proof)
+                })
+                .collect::<HashMap<_, _>>();
+            GroundingWitness::new(self.state_root(), source_tx_proofs)
+        }
+
+        fn apply_tx(&mut self, tx: &Tx) {
+            self.transactions.insert(tx.dict().commitment());
+            for nullifier in tx.nullifiers.iter() {
+                let nullifier = nullifier.unwrap();
+                self.nullifiers.insert(Hash(nullifier.raw().0));
+            }
+            self.block_number += 1;
+        }
+    }
 
     #[test]
     fn object_nullifier_hash_matches_key_hash_path() {
@@ -418,6 +587,50 @@ mod tests {
         assert!(format!("{err}").contains("missing required key field"));
     }
 
+    #[test]
+    fn state_root_compact_hash_matches_legacy_commitments() {
+        let txns = [test_hash(1), test_hash(2)]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let nullifiers = [test_hash(3)].into_iter().collect::<HashSet<_>>();
+        let prior_gsrs = vec![test_hash(4), test_hash(5)];
+
+        let compact = StateRoot::new(7, &txns, &nullifiers, &prior_gsrs);
+        let legacy_txs = Set::new(txns.iter().map(|hash| Value::from(*hash)).collect());
+        let legacy_nullifiers =
+            Set::new(nullifiers.iter().map(|hash| Value::from(*hash)).collect());
+        let legacy_gsrs = Array::new(prior_gsrs.iter().map(|hash| Value::from(*hash)).collect());
+        let legacy_hash = hash_values(&[
+            Value::from(hash_values(&[
+                Value::from(legacy_txs.commitment()),
+                Value::from(legacy_nullifiers.commitment()),
+            ])),
+            Value::from(hash_values(&[
+                Value::from(7_i64),
+                Value::from(legacy_gsrs.commitment()),
+            ])),
+        ]);
+        assert_eq!(compact.hash(), legacy_hash);
+    }
+
+    #[test]
+    fn state_root_deserializes_legacy_container_shape() {
+        let txs = Set::new([Value::from(test_hash(1))].into_iter().collect());
+        let nullifiers = Set::new([Value::from(test_hash(2))].into_iter().collect());
+        let gsrs = Array::new(vec![Value::from(test_hash(3))]);
+        let legacy = serde_json::json!({
+            "blockNumber": 9,
+            "transactions": txs,
+            "nullifiers": nullifiers,
+            "gsrs": gsrs,
+        });
+        let decoded: StateRoot = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.block_number, 9);
+        assert_eq!(decoded.transactions_root, txs.commitment());
+        assert_eq!(decoded.nullifiers_root, nullifiers.commitment());
+        assert_eq!(decoded.gsrs_root, gsrs.commitment());
+    }
+
     fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
         let solution = builder.solve().unwrap();
         solution.prove(prover).unwrap().pods.pop().unwrap()
@@ -427,13 +640,7 @@ mod tests {
     fn test_tx_builder() {
         let txlib_mod = crate::predicates::module();
         let modules = vec![Arc::new(txlib_mod)];
-
-        let mut state_root = StateRoot {
-            block_number: 0,
-            transactions: set!(),
-            nullifiers: set!(),
-            gsrs: Array::new(vec![]),
-        };
+        let mut state = TestState::default();
 
         let mock = true;
 
@@ -454,7 +661,7 @@ mod tests {
             modules: modules.clone(),
         };
 
-        let mut tx_builder = TxBuilder::new(&mut ctx, &[], Arc::new(state_root.clone()));
+        let mut tx_builder = TxBuilder::new(&mut ctx, &[], Arc::new(state.grounding_witness(&[])));
         let obj0 = new_obj();
         tx_builder.insert(&mut ctx, obj0.clone());
         let (st, tx0) = tx_builder.finalize(&mut ctx);
@@ -462,15 +669,7 @@ mod tests {
 
         let tx_pod = prove(ctx.builder, prover);
         tx_pod.pod.verify().unwrap();
-
-        state_root
-            .transactions
-            .insert(&Value::from(tx0.dict()))
-            .unwrap();
-        for nullifier in tx0.nullifiers.iter() {
-            let nullifier = nullifier.unwrap();
-            state_root.transactions.insert(&nullifier).unwrap();
-        }
+        state.apply_tx(&tx0);
 
         // Mutate
         let builder = MultiPodBuilder::new(&params, vd_set);
@@ -480,7 +679,11 @@ mod tests {
         };
 
         let inputs = vec![(obj0.clone(), tx0)];
-        let mut tx_builder = TxBuilder::new(&mut ctx, &inputs, Arc::new(state_root.clone()));
+        let mut tx_builder = TxBuilder::new(
+            &mut ctx,
+            &inputs,
+            Arc::new(state.grounding_witness(&[inputs[0].1.clone()])),
+        );
         let mut obj1 = obj0.clone();
         obj1.insert(&Key::from("foo"), &Value::from("bar")).unwrap();
         tx_builder.mutate(&mut ctx, obj1.clone(), obj0);
@@ -489,15 +692,7 @@ mod tests {
 
         let tx_pod = prove(ctx.builder, prover);
         tx_pod.pod.verify().unwrap();
-
-        state_root
-            .transactions
-            .insert(&Value::from(tx1.dict()))
-            .unwrap();
-        for nullifier in tx1.nullifiers.iter() {
-            let nullifier = nullifier.unwrap();
-            state_root.transactions.insert(&nullifier).unwrap();
-        }
+        state.apply_tx(&tx1);
 
         // Delete
         let builder = MultiPodBuilder::new(&params, vd_set);
@@ -507,21 +702,17 @@ mod tests {
         };
 
         let inputs = vec![(obj1.clone(), tx1)];
-        let mut tx_builder = TxBuilder::new(&mut ctx, &inputs, Arc::new(state_root.clone()));
+        let mut tx_builder = TxBuilder::new(
+            &mut ctx,
+            &inputs,
+            Arc::new(state.grounding_witness(&[inputs[0].1.clone()])),
+        );
         tx_builder.delete(&mut ctx, obj1);
         let (st, tx2) = tx_builder.finalize(&mut ctx);
         ctx.builder.reveal(&st).unwrap();
 
         let tx_pod = prove(ctx.builder, prover);
         tx_pod.pod.verify().unwrap();
-
-        state_root
-            .transactions
-            .insert(&Value::from(tx2.dict()))
-            .unwrap();
-        for nullifier in tx2.nullifiers.iter() {
-            let nullifier = nullifier.unwrap();
-            state_root.transactions.insert(&nullifier).unwrap();
-        }
+        state.apply_tx(&tx2);
     }
 }

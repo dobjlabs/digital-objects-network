@@ -1,3 +1,4 @@
+use pod2::backends::plonky2::primitives::merkletree::MerkleProof;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,15 +24,6 @@ pub struct StateHeadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StateFullResponse {
-    pub block_number: i64,
-    pub current_gsr: Option<String>,
-    pub transactions: Vec<String>,
-    pub nullifiers: Vec<String>,
-    pub gsrs: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TxContainsRequest {
     pub tx_hashes: Vec<String>,
 }
@@ -50,9 +42,52 @@ pub struct TxContainsResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NullifierContainsRequest {
+    pub nullifiers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NullifierContainsEntry {
+    pub nullifier: String,
+    pub present: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NullifierContainsResponse {
+    pub last_processed_slot: Option<u32>,
+    pub current_gsr: Option<String>,
+    pub results: Vec<NullifierContainsEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TxStatusResponse {
     pub tx_hash: String,
     pub present: bool,
     pub last_processed_slot: Option<u32>,
     pub current_gsr: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingWitnessRequest {
+    pub source_tx_hashes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceTxProofResponse {
+    pub tx_hash: String,
+    pub present: bool,
+    pub proof: MerkleProof,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingWitnessResponse {
+    pub state_root_hash: String,
+    pub block_number: i64,
+    pub transactions_root: String,
+    pub nullifiers_root: String,
+    pub gsrs_root: String,
+    pub source_tx_proofs: Vec<SourceTxProofResponse>,
 }

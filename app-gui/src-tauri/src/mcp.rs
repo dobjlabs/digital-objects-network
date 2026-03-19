@@ -113,7 +113,7 @@ impl CraftOps for AppCraftOps {
 
     fn get_state_root(&self) -> anyhow::Result<String> {
         let sync_state =
-            synchronizer_client::fetch_synchronizer_state(&self.settings.synchronizer_api_url)
+            synchronizer_client::fetch_synchronizer_head(&self.settings.synchronizer_api_url)
                 .map_err(|e| anyhow::anyhow!(e))?;
         Ok(synchronizer_client::encode_hash_hex(
             &sync_state.current_gsr,

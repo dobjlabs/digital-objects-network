@@ -5,55 +5,57 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use common::proof::BlobParser;
-use pod2::middleware::Hash;
+use pod2::{
+    backends::plonky2::primitives::merkletree::MerkleProof,
+    middleware::{containers::Array, containers::Set, Hash, Value},
+};
 use tracing::{info, warn};
+
+use crate::{
+    app_db::{AppDb, AppHead},
+    sync_db::SlotJournal,
+};
+use txlib::StateRoot;
 
 /// The maximum age of a GSR used as grounding for a transaction.
 /// At one block per 12 seconds, this is one hour.
-const MAX_GSR_AGE_BLOCKS: i64 = 300;
+pub const MAX_GSR_AGE_BLOCKS: i64 = 300;
 
-use txlib::StateRoot;
-
-use crate::app_db::{AppDb, DerivedState};
-use crate::sync_db::SlotJournal;
-
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlotDelta {
-    pub tx_hashes: Vec<Hash>,
-    pub nullifiers: Vec<Hash>,
-    pub gsr_block_numbers: Vec<u32>,
-    pub gsr_hashes: Vec<Hash>,
+    pub old_head: AppHead,
+    pub new_head: AppHead,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ApiStateSnapshot {
+    pub head: AppHead,
 }
 
 #[derive(Debug, Clone)]
-pub struct ApiStateSnapshot {
-    pub transactions: Vec<Hash>,
-    pub nullifiers: Vec<Hash>,
-    pub global_state_roots: Vec<Hash>,
-    pub current_gsr: Option<Hash>,
-    pub current_block_number: Option<i64>,
+pub struct TxMembershipProof {
+    pub tx_hash: Hash,
+    pub present: bool,
+    pub proof: MerkleProof,
 }
 
-/// In-memory view of the consensus state, kept in sync with the database.
+#[derive(Debug, Clone)]
+pub struct GroundingWitnessSnapshot {
+    pub head: AppHead,
+    pub source_tx_proofs: Vec<TxMembershipProof>,
+}
+
 struct InnerState {
-    /// Set of accepted transaction hashes; used for duplicate detection.
-    transactions: HashSet<Hash>,
-    /// Set of spent nullifiers; a nullifier appearing twice indicates a double-spend.
-    nullifiers: HashSet<Hash>,
-    /// Ordered history of Global State Roots, one per processed block.
-    /// Blobs may reference any GSR in this history, not just the latest.
-    global_state_roots: Vec<Hash>,
-    /// Maps each known GSR hash to the EL block number at which it was produced.
-    /// Used to enforce the maximum GSR age limit on incoming blobs.
-    gsr_block_numbers: HashMap<Hash, i64>,
+    head: AppHead,
+    recent_gsrs: HashMap<Hash, i64>,
 }
 
-#[derive(Clone)]
 struct WorkingState {
-    transactions: HashSet<Hash>,
-    nullifiers: HashSet<Hash>,
-    global_state_roots: Vec<Hash>,
-    gsr_block_numbers: HashMap<Hash, i64>,
+    head: AppHead,
+    transactions: Set,
+    nullifiers: Set,
+    gsr_history: Array,
+    recent_gsrs: HashMap<Hash, i64>,
 }
 
 /// Domain logic for the synchronizer: proof verification, state validation, and persistence.
@@ -81,18 +83,11 @@ impl StateMachine {
     }
 
     pub fn new(app_db: AppDb, proof_parser: Arc<dyn BlobParser>) -> Result<Self> {
-        let DerivedState {
-            transactions,
-            nullifiers,
-            global_state_roots,
-            gsr_block_numbers,
-        } = app_db.load_state()?;
+        let head = app_db.load_head()?;
         Ok(Self {
             state: RwLock::new(InnerState {
-                transactions,
-                nullifiers,
-                global_state_roots,
-                gsr_block_numbers,
+                head,
+                recent_gsrs: HashMap::new(),
             }),
             app_db,
             proof_parser,
@@ -100,77 +95,91 @@ impl StateMachine {
     }
 
     pub fn reload_from_db(&self) -> Result<()> {
-        let DerivedState {
-            transactions,
-            nullifiers,
-            global_state_roots,
-            gsr_block_numbers,
-        } = self.app_db.load_state()?;
+        let head = self.app_db.load_head()?;
         let mut state = self.write_state()?;
-        state.transactions = transactions;
-        state.nullifiers = nullifiers;
-        state.global_state_roots = global_state_roots;
-        state.gsr_block_numbers = gsr_block_numbers;
+        state.head = head;
         Ok(())
+    }
+
+    pub fn replace_recent_gsrs(
+        &self,
+        recent_gsrs: impl IntoIterator<Item = (Hash, i64)>,
+    ) -> Result<()> {
+        let mut state = self.write_state()?;
+        state.recent_gsrs = recent_gsrs.into_iter().collect();
+        Ok(())
+    }
+
+    pub fn head_snapshot(&self) -> Result<AppHead> {
+        Ok(self.read_state()?.head)
+    }
+
+    pub fn noop_delta(&self) -> Result<SlotDelta> {
+        let head = self.head_snapshot()?;
+        Ok(SlotDelta {
+            old_head: head,
+            new_head: head,
+        })
     }
 
     fn snapshot_working_state(&self) -> Result<WorkingState> {
         let state = self.read_state()?;
         Ok(WorkingState {
-            transactions: state.transactions.clone(),
-            nullifiers: state.nullifiers.clone(),
-            global_state_roots: state.global_state_roots.clone(),
-            gsr_block_numbers: state.gsr_block_numbers.clone(),
+            head: state.head,
+            transactions: self
+                .app_db
+                .open_transactions(state.head.transactions_root)?,
+            nullifiers: self.app_db.open_nullifiers(state.head.nullifiers_root)?,
+            gsr_history: self.app_db.open_gsr_history(state.head.gsr_history_root)?,
+            recent_gsrs: state.recent_gsrs.clone(),
         })
     }
 
     pub fn api_state_snapshot(&self) -> Result<ApiStateSnapshot> {
-        let state = self.read_state()?;
-        let current_gsr = state.global_state_roots.last().copied();
-        let current_block_number =
-            current_gsr.and_then(|hash| state.gsr_block_numbers.get(&hash).copied());
         Ok(ApiStateSnapshot {
-            transactions: state.transactions.iter().copied().collect(),
-            nullifiers: state.nullifiers.iter().copied().collect(),
-            global_state_roots: state.global_state_roots.clone(),
-            current_gsr,
-            current_block_number,
+            head: self.head_snapshot()?,
         })
     }
 
     pub fn tx_exists(&self, tx_hash: &Hash) -> Result<bool> {
-        let state = self.read_state()?;
-        Ok(state.transactions.contains(tx_hash))
+        Ok(self.tx_exists_batch(std::slice::from_ref(tx_hash))?[0])
     }
 
     pub fn tx_exists_batch(&self, tx_hashes: &[Hash]) -> Result<Vec<bool>> {
-        let state = self.read_state()?;
-        Ok(tx_hashes
-            .iter()
-            .map(|hash| state.transactions.contains(hash))
-            .collect())
+        let head = self.head_snapshot()?;
+        self.app_db.tx_exists_batch(&head, tx_hashes)
     }
 
-    /// Process raw blob content (post-blob-encoding extraction).
-    ///
-    /// Steps:
-    /// 1. Attempt to parse and cryptographically verify the blob as a `TxnFinalized` payload.
-    ///    Blobs that don't match our format are silently skipped (they may belong to other apps).
-    /// 2. Reject payloads whose `state_root_hash` is not in our GSR history.
-    ///    This ensures every transaction is grounded in a state root we have computed ourselves.
-    /// 3. Check for duplicate `tx_final` and spent nullifiers before recording the delta.
-    ///    Updates are all-or-nothing per payload: either all nullifiers are accepted or none are.
-    ///
-    /// Note: this method mutates only the provided `WorkingState` plus the provided `SlotDelta`.
-    /// Writes happen later through `apply_delta_to_db`, and in-memory state is applied
-    /// only after finalize via `apply_delta_to_memory`.
+    pub fn nullifier_exists_batch(&self, nullifiers: &[Hash]) -> Result<Vec<bool>> {
+        let head = self.head_snapshot()?;
+        self.app_db.nullifier_exists_batch(&head, nullifiers)
+    }
+
+    pub fn grounding_witness(&self, source_tx_hashes: &[Hash]) -> Result<GroundingWitnessSnapshot> {
+        let head = self.head_snapshot()?;
+        let source_tx_proofs = source_tx_hashes
+            .iter()
+            .map(|tx_hash| {
+                let (present, proof) = self.app_db.prove_tx(&head, *tx_hash)?;
+                Ok(TxMembershipProof {
+                    tx_hash: *tx_hash,
+                    present,
+                    proof,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(GroundingWitnessSnapshot {
+            head,
+            source_tx_proofs,
+        })
+    }
+
     fn process_blob(
         &self,
         state: &mut WorkingState,
         bytes: &[u8],
         slot: u32,
         block_number: u32,
-        delta: &mut SlotDelta,
     ) -> Result<()> {
         let payload = match self.proof_parser.parse_blob(bytes) {
             Ok(Some(payload)) => payload,
@@ -192,17 +201,15 @@ impl StateMachine {
             }
         };
 
-        // A payload is only valid if it references a GSR we have previously computed,
-        // and that GSR must be no more than MAX_GSR_AGE_BLOCKS old.
-        let Some(&gsr_block) = state.gsr_block_numbers.get(&payload.state_root_hash) else {
+        let Some(&gsr_block) = state.recent_gsrs.get(&payload.state_root_hash) else {
             warn!(
                 slot,
                 block_number,
-                "Blob proof state_root_hash not found in known GSR history; rejecting"
+                "Blob proof state_root_hash not found in recent GSR history; rejecting"
             );
             return Ok(());
         };
-        let current_block: i64 = block_number.into();
+        let current_block = i64::from(block_number);
         let age = current_block - gsr_block;
         if age > MAX_GSR_AGE_BLOCKS {
             warn!(
@@ -212,13 +219,8 @@ impl StateMachine {
             return Ok(());
         }
 
-        // All uniqueness checks and DB writes happen under the write lock so that
-        // concurrent calls cannot interleave partial state.
-        //
-        // Strategy: insert tx_final optimistically, then scan all nullifiers.
-        // On any collision, roll back the tx_final insertion and bail without touching the DB.
-        // Only after all checks pass do we write nullifiers to the DB.
-        if !state.transactions.insert(payload.tx_final) {
+        let tx_value = Value::from(payload.tx_final);
+        if state.transactions.contains(&tx_value)? {
             warn!(slot, block_number, "Duplicate tx_final; rejecting");
             return Ok(());
         }
@@ -230,28 +232,26 @@ impl StateMachine {
                     slot,
                     block_number, "Duplicate nullifier within payload; rejecting"
                 );
-                state.transactions.remove(&payload.tx_final);
                 return Ok(());
             }
-            if state.nullifiers.contains(nullifier) {
+            if state.nullifiers.contains(&Value::from(*nullifier))? {
                 warn!(slot, block_number, "Duplicate nullifier; rejecting");
-                // Roll back the optimistic tx_final insertion.
-                state.transactions.remove(&payload.tx_final);
                 return Ok(());
             }
         }
 
-        delta.tx_hashes.push(payload.tx_final);
+        state.transactions.insert(&tx_value)?;
+        state.head.tx_count += 1;
         for nullifier in &payload.nullifiers {
-            state.nullifiers.insert(*nullifier);
-            delta.nullifiers.push(*nullifier);
+            state.nullifiers.insert(&Value::from(*nullifier))?;
+            state.head.nullifier_count += 1;
         }
 
         info!(
             slot,
             block_number,
-            transaction_count = state.transactions.len(),
-            nullifier_count = state.nullifiers.len(),
+            transaction_count = state.head.tx_count,
+            nullifier_count = state.head.nullifier_count,
             "Validated blob state update in slot derivation"
         );
         Ok(())
@@ -264,10 +264,10 @@ impl StateMachine {
         blob_payloads: &[(u32, Vec<u8>)],
     ) -> Result<SlotDelta> {
         let mut working = self.snapshot_working_state()?;
-        let mut delta = SlotDelta::default();
+        let old_head = working.head;
 
         for (blob_index, bytes) in blob_payloads {
-            self.process_blob(&mut working, bytes, slot, block_number, &mut delta)
+            self.process_blob(&mut working, bytes, slot, block_number)
                 .with_context(|| {
                     format!(
                         "Failed to process blob at slot {}, blob_index {}",
@@ -276,91 +276,87 @@ impl StateMachine {
                 })?;
         }
 
-        let new_gsr = StateRoot::new(
-            block_number as i64,
-            &working.transactions,
-            &working.nullifiers,
-            &working.global_state_roots,
+        let prior_gsrs_root = old_head.gsr_history_root;
+        let new_gsr = StateRoot::from_roots(
+            i64::from(block_number),
+            working.transactions.commitment(),
+            working.nullifiers.commitment(),
+            prior_gsrs_root,
         )
         .hash();
-        working.global_state_roots.push(new_gsr);
-        delta.gsr_block_numbers.push(block_number);
-        delta.gsr_hashes.push(new_gsr);
+
+        working
+            .gsr_history
+            .insert(old_head.gsr_count as usize, Value::from(new_gsr))?;
+        working.recent_gsrs.insert(new_gsr, i64::from(block_number));
+
+        let min_block = i64::from(block_number) - MAX_GSR_AGE_BLOCKS;
+        working
+            .recent_gsrs
+            .retain(|_, seen_block| *seen_block >= min_block);
+
+        let new_head = AppHead {
+            transactions_root: working.transactions.commitment(),
+            nullifiers_root: working.nullifiers.commitment(),
+            state_root_gsrs_root: prior_gsrs_root,
+            gsr_history_root: working.gsr_history.commitment(),
+            current_gsr: Some(new_gsr),
+            current_block_number: Some(block_number),
+            tx_count: working.head.tx_count,
+            nullifier_count: working.head.nullifier_count,
+            gsr_count: old_head.gsr_count + 1,
+        };
 
         info!(
             slot,
             block_number,
-            gsr_count = working.global_state_roots.len(),
+            gsr_count = new_head.gsr_count,
             "Slot data"
         );
 
-        Ok(delta)
+        Ok(SlotDelta { old_head, new_head })
     }
 
     pub fn apply_delta_to_memory(&self, delta: &SlotDelta) -> Result<()> {
         let mut state = self.write_state()?;
-        for tx_hash in &delta.tx_hashes {
-            state.transactions.insert(*tx_hash);
-        }
-        for nullifier in &delta.nullifiers {
-            state.nullifiers.insert(*nullifier);
-        }
-        for gsr in &delta.gsr_hashes {
-            state.global_state_roots.push(*gsr);
-        }
-        for (gsr, block_number) in delta.gsr_hashes.iter().zip(delta.gsr_block_numbers.iter()) {
-            state.gsr_block_numbers.insert(*gsr, *block_number as i64);
+        state.head = delta.new_head;
+        if let (Some(current_gsr), Some(current_block_number)) = (
+            delta.new_head.current_gsr,
+            delta.new_head.current_block_number,
+        ) {
+            state
+                .recent_gsrs
+                .insert(current_gsr, i64::from(current_block_number));
+            let min_block = i64::from(current_block_number) - MAX_GSR_AGE_BLOCKS;
+            state
+                .recent_gsrs
+                .retain(|_, seen_block| *seen_block >= min_block);
         }
         Ok(())
     }
 
     pub fn apply_delta_to_db(&self, delta: &SlotDelta) -> Result<()> {
-        self.app_db.apply_delta(
-            &delta.tx_hashes,
-            &delta.nullifiers,
-            &delta.gsr_block_numbers,
-            &delta.gsr_hashes,
-        )
+        self.app_db.store_head(&delta.new_head)
     }
 
     pub fn apply_journal(&self, journal: &SlotJournal) -> Result<()> {
-        self.app_db.apply_delta(
-            &journal.tx_hashes,
-            &journal.nullifiers,
-            &journal.gsr_block_numbers,
-            &journal.gsr_hashes,
-        )
+        self.app_db.store_head(&journal.new_head)
     }
 
     pub fn rollback_journals(&self, journals: &[SlotJournal]) -> Result<()> {
-        for journal in journals {
-            self.app_db.delete_slot_delta(
-                &journal.tx_hashes,
-                &journal.nullifiers,
-                &journal.gsr_block_numbers,
-            )?;
+        if let Some(final_journal) = journals.last() {
+            self.app_db.store_head(&final_journal.old_head)?;
         }
         self.reload_from_db()
     }
 
-    /// Returns `(transactions, nullifiers, global_state_roots)` as owned vecs.
-    /// Primarily used in tests; callers that need only one field should add a dedicated accessor.
-    #[allow(dead_code)]
-    pub fn state_snapshot(&self) -> Result<(Vec<Hash>, Vec<Hash>, Vec<Hash>)> {
-        let state = self.read_state()?;
-        Ok((
-            state.transactions.iter().copied().collect(),
-            state.nullifiers.iter().copied().collect(),
-            state.global_state_roots.clone(),
-        ))
-    }
-
     pub fn log_current_state(&self) -> Result<()> {
-        let state = self.read_state()?;
+        let head = self.head_snapshot()?;
         info!(
-            transaction_count = state.transactions.len(),
-            nullifier_count = state.nullifiers.len(),
-            gsr_count = state.global_state_roots.len(),
+            transaction_count = head.tx_count,
+            nullifier_count = head.nullifier_count,
+            gsr_count = head.gsr_count,
+            current_gsr = ?head.current_gsr,
             "Current state"
         );
         Ok(())
@@ -372,10 +368,8 @@ mod tests {
     use super::*;
     use crate::app_db::AppDb;
     use common::proof::MockBlobParser;
-    use hex::ToHex;
-    use pod2::middleware::{hash_values, Value};
+    use pod2::middleware::hash_values;
     use tempfile::TempDir;
-    use txlib::new_obj;
 
     fn make_sm() -> (StateMachine, TempDir) {
         let dir = TempDir::new().unwrap();
@@ -391,14 +385,12 @@ mod tests {
     fn mock_txn_bytes(tx_final: Hash, nullifiers: &[Hash], state_root: Hash) -> Vec<u8> {
         let nullifiers_json = nullifiers
             .iter()
-            .map(|h| format!("\"{}\"", h.encode_hex::<String>()))
+            .map(|h| format!("\"{:#}\"", h))
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            r#"{{"tx_final":"{}","nullifiers":[{}],"state_root_hash":"{}"}}"#,
-            tx_final.encode_hex::<String>(),
-            nullifiers_json,
-            state_root.encode_hex::<String>()
+            r#"{{"tx_final":"{:#}","nullifiers":[{}],"state_root_hash":"{:#}"}}"#,
+            tx_final, nullifiers_json, state_root
         )
         .into_bytes()
     }
@@ -407,377 +399,71 @@ mod tests {
         let d = sm.derive_slot_delta(0, 0, &[]).unwrap();
         sm.apply_delta_to_db(&d).unwrap();
         sm.apply_delta_to_memory(&d).unwrap();
-        sm.state_snapshot().unwrap().2[0]
-    }
-
-    fn process_and_commit_blob(
-        sm: &StateMachine,
-        blob: &[u8],
-        slot: u32,
-        block_number: u32,
-    ) -> SlotDelta {
-        let d = sm
-            .derive_slot_delta(slot, block_number, &[(0, blob.to_vec())])
-            .unwrap();
-        sm.apply_delta_to_db(&d).unwrap();
-        sm.apply_delta_to_memory(&d).unwrap();
-        d
-    }
-
-    fn advance_and_commit(sm: &StateMachine, slot: u32, block_number: u32) -> SlotDelta {
-        let d = sm.derive_slot_delta(slot, block_number, &[]).unwrap();
-        sm.apply_delta_to_db(&d).unwrap();
-        sm.apply_delta_to_memory(&d).unwrap();
-        d
+        sm.head_snapshot().unwrap().current_gsr.unwrap()
     }
 
     #[test]
-    fn test_happy_path_single_tx() {
+    fn test_persistent_head_roundtrip() {
+        let (sm, _dir) = make_sm();
+        let delta = sm.derive_slot_delta(1, 7, &[]).unwrap();
+        sm.apply_delta_to_db(&delta).unwrap();
+        sm.reload_from_db().unwrap();
+        let head = sm.head_snapshot().unwrap();
+        assert_eq!(head.current_block_number, Some(7));
+        assert_eq!(head.gsr_count, 1);
+    }
+
+    #[test]
+    fn test_accepts_valid_blob_and_updates_counts() {
         let (sm, _dir) = make_sm();
         let gsr0 = seed_gsr0(&sm);
+        sm.replace_recent_gsrs([(gsr0, 0)]).unwrap();
 
-        let tx_hash = unique_hash(1);
-        let nullifier = unique_hash(2);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx_hash, &[nullifier], gsr0), 1, 1);
+        let tx_final = unique_hash(10);
+        let nullifier = unique_hash(11);
+        let blob = mock_txn_bytes(tx_final, &[nullifier], gsr0);
+        let delta = sm.derive_slot_delta(1, 1, &[(0, blob)]).unwrap();
+        sm.apply_delta_to_db(&delta).unwrap();
+        sm.apply_delta_to_memory(&delta).unwrap();
 
-        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
-        assert!(txns.contains(&tx_hash));
-        assert!(nullifiers.contains(&nullifier));
+        let head = sm.head_snapshot().unwrap();
+        assert_eq!(head.tx_count, 1);
+        assert_eq!(head.nullifier_count, 1);
+        assert_eq!(head.gsr_count, 2);
+        assert!(sm.tx_exists(&tx_final).unwrap());
+        assert_eq!(sm.nullifier_exists_batch(&[nullifier]).unwrap(), vec![true]);
     }
 
     #[test]
-    fn test_sequence_across_blocks() {
-        let (sm, _dir) = make_sm();
-        let gsr0 = seed_gsr0(&sm);
-
-        let tx1 = unique_hash(1);
-        let null1 = unique_hash(2);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[null1], gsr0), 1, 1);
-
-        let gsr1 = sm.state_snapshot().unwrap().2[1];
-        assert_ne!(gsr0, gsr1);
-
-        let tx2 = unique_hash(3);
-        let null2 = unique_hash(4);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[null2], gsr1), 2, 2);
-
-        let (txns, nullifiers, gsrs) = sm.state_snapshot().unwrap();
-        assert!(txns.contains(&tx1));
-        assert!(txns.contains(&tx2));
-        assert!(nullifiers.contains(&null1));
-        assert!(nullifiers.contains(&null2));
-        assert_eq!(gsrs.len(), 3);
-    }
-
-    #[test]
-    fn test_old_gsr_still_valid() {
-        let (sm, _dir) = make_sm();
-        let gsr0 = seed_gsr0(&sm);
-
-        let tx1 = unique_hash(1);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[], gsr0), 1, 1);
-
-        // tx2 is grounded against gsr0, not the newer gsr1 — still valid
-        let tx2 = unique_hash(2);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[], gsr0), 1, 1);
-
-        let (txns, _, _) = sm.state_snapshot().unwrap();
-        assert!(txns.contains(&tx1));
-        assert!(txns.contains(&tx2));
-    }
-
-    #[test]
-    fn test_duplicate_tx_rejected() {
-        let (sm, _dir) = make_sm();
-        let gsr0 = seed_gsr0(&sm);
-
-        let tx_final = unique_hash(1);
-        let bytes = mock_txn_bytes(tx_final, &[], gsr0);
-
-        process_and_commit_blob(&sm, &bytes, 1, 1);
-        process_and_commit_blob(&sm, &bytes, 1, 1); // duplicate; silently rejected
-
-        let (txns, _, _) = sm.state_snapshot().unwrap();
-        assert_eq!(txns.len(), 1);
-    }
-
-    #[test]
-    fn test_duplicate_nullifier_rejected() {
-        let (sm, _dir) = make_sm();
-        let gsr0 = seed_gsr0(&sm);
-
-        let null = unique_hash(10);
-
-        let tx1 = unique_hash(1);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[null], gsr0), 1, 1);
-
-        let tx2 = unique_hash(2);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[null], gsr0), 1, 1); // rejected
-
-        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
-        assert!(txns.contains(&tx1));
-        assert!(!txns.contains(&tx2));
-        assert_eq!(nullifiers.len(), 1);
-    }
-
-    #[test]
-    fn test_duplicate_nullifier_within_payload_rejected() {
-        let (sm, _dir) = make_sm();
-        let gsr0 = seed_gsr0(&sm);
-
-        let tx = unique_hash(1);
-        let nullifier = unique_hash(10);
-        process_and_commit_blob(
-            &sm,
-            &mock_txn_bytes(tx, &[nullifier, nullifier], gsr0),
-            1,
-            1,
-        );
-
-        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
-        assert!(!txns.contains(&tx));
-        assert!(!nullifiers.contains(&nullifier));
-    }
-
-    #[test]
-    fn test_nullifier_collision_is_atomic() {
-        let (sm, _dir) = make_sm();
-        let gsr0 = seed_gsr0(&sm);
-
-        let spent = unique_hash(10);
-        let fresh_a = unique_hash(11);
-        let fresh_b = unique_hash(12);
-
-        let tx1 = unique_hash(1);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[spent], gsr0), 1, 1);
-
-        // tx2 has [fresh_a, spent, fresh_b] — 'spent' is a duplicate
-        let tx2 = unique_hash(2);
-        process_and_commit_blob(
-            &sm,
-            &mock_txn_bytes(tx2, &[fresh_a, spent, fresh_b], gsr0),
-            1,
-            1,
-        );
-
-        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
-        assert!(!txns.contains(&tx2));
-        assert!(!nullifiers.contains(&fresh_a));
-        assert!(!nullifiers.contains(&fresh_b));
-    }
-
-    #[test]
-    fn test_unknown_gsr_rejected() {
+    fn test_rejects_unknown_grounding_gsr() {
         let (sm, _dir) = make_sm();
         seed_gsr0(&sm);
+        sm.replace_recent_gsrs([]).unwrap();
 
-        let bogus_gsr = unique_hash(999);
-        let tx_final = unique_hash(1);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx_final, &[], bogus_gsr), 1, 1);
-
-        let (txns, _, _) = sm.state_snapshot().unwrap();
-        assert!(txns.is_empty());
+        let tx_final = unique_hash(21);
+        let blob = mock_txn_bytes(tx_final, &[], unique_hash(99));
+        let delta = sm.derive_slot_delta(2, 2, &[(0, blob)]).unwrap();
+        assert_eq!(delta.new_head.tx_count, delta.old_head.tx_count);
     }
 
     #[test]
-    fn test_stale_gsr_rejected() {
+    fn test_rollbacks_restore_previous_head() {
         let (sm, _dir) = make_sm();
-        let gsr0 = seed_gsr0(&sm);
+        let d0 = sm.derive_slot_delta(0, 0, &[]).unwrap();
+        sm.apply_delta_to_db(&d0).unwrap();
+        sm.apply_delta_to_memory(&d0).unwrap();
+        let h0 = sm.head_snapshot().unwrap();
 
-        // Advance 301 more blocks so gsr0 is 301 blocks old when the blob arrives.
-        for i in 1..=301 {
-            advance_and_commit(&sm, i, i);
-        }
+        let d1 = sm.derive_slot_delta(1, 1, &[]).unwrap();
+        sm.apply_delta_to_db(&d1).unwrap();
+        sm.apply_delta_to_memory(&d1).unwrap();
 
-        let tx = unique_hash(1);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx, &[], gsr0), 0, 301);
-
-        let (txns, _, _) = sm.state_snapshot().unwrap();
-        assert!(txns.is_empty());
-    }
-
-    #[test]
-    fn test_gsr_at_limit_accepted() {
-        let (sm, _dir) = make_sm();
-        let gsr0 = seed_gsr0(&sm);
-
-        // Advance 300 more blocks so gsr0 is exactly 300 blocks old — at the limit.
-        for i in 1..=300 {
-            advance_and_commit(&sm, i, i);
-        }
-
-        let tx = unique_hash(1);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx, &[], gsr0), 0, 300);
-
-        let (txns, _, _) = sm.state_snapshot().unwrap();
-        assert!(txns.contains(&tx));
-    }
-
-    #[test]
-    fn test_invalid_blob_skipped() {
-        let (sm, _dir) = make_sm();
-        seed_gsr0(&sm);
-
-        process_and_commit_blob(&sm, b"not json", 1, 1);
-
-        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
-        assert!(txns.is_empty());
-        assert!(nullifiers.is_empty());
-    }
-
-    #[test]
-    fn test_proof_parse_error_skipped() {
-        let (sm, _dir) = make_sm();
-        seed_gsr0(&sm);
-
-        // JSON shape matches mock parser, but hash decoding fails, causing parser error.
-        process_and_commit_blob(
-            &sm,
-            br#"{"tx_final":"zz","nullifiers":[],"state_root_hash":"zz"}"#,
-            1,
-            1,
-        );
-
-        let (txns, nullifiers, _) = sm.state_snapshot().unwrap();
-        assert!(txns.is_empty());
-        assert!(nullifiers.is_empty());
-    }
-
-    #[test]
-    fn test_rollback_reloads_gsrs_from_retained_slot() {
-        let (sm, _dir) = make_sm();
-        seed_gsr0(&sm);
-        let _g1 = advance_and_commit(&sm, 1, 1);
-        let g2 = advance_and_commit(&sm, 2, 2);
-        assert_eq!(sm.state_snapshot().unwrap().2.len(), 3);
-
-        let journals = vec![SlotJournal {
-            slot: 2,
-            tx_hashes: vec![],
-            nullifiers: vec![],
-            gsr_block_numbers: g2.gsr_block_numbers,
-            gsr_hashes: g2.gsr_hashes,
-        }];
-        sm.rollback_journals(&journals).unwrap();
-
-        let (_, _, gsrs) = sm.state_snapshot().unwrap();
-        assert_eq!(gsrs.len(), 2);
-    }
-
-    #[test]
-    fn test_reorg_rollback_restores_in_memory_sets() {
-        let (sm, _dir) = make_sm();
-        let gsr0 = seed_gsr0(&sm);
-
-        let tx1 = unique_hash(101);
-        let n1 = unique_hash(201);
-        process_and_commit_blob(&sm, &mock_txn_bytes(tx1, &[n1], gsr0), 1, 1);
-        let gsr1 = sm.state_snapshot().unwrap().2[1];
-
-        let tx2 = unique_hash(102);
-        let n2 = unique_hash(202);
-        let d2 = process_and_commit_blob(&sm, &mock_txn_bytes(tx2, &[n2], gsr1), 2, 2);
-        let g2_gsr_block_numbers = d2.gsr_block_numbers.clone();
-        let g2_gsr_hashes = d2.gsr_hashes.clone();
-
-        let journals = vec![SlotJournal {
-            slot: 2,
-            tx_hashes: d2.tx_hashes,
-            nullifiers: d2.nullifiers,
-            gsr_block_numbers: g2_gsr_block_numbers,
-            gsr_hashes: g2_gsr_hashes,
-        }];
-        sm.rollback_journals(&journals).unwrap();
-
-        let (txns, nullifiers, gsrs) = sm.state_snapshot().unwrap();
-        assert!(txns.contains(&tx1));
-        assert!(!txns.contains(&tx2));
-        assert!(nullifiers.contains(&n1));
-        assert!(!nullifiers.contains(&n2));
-        assert_eq!(gsrs.len(), 2);
-    }
-
-    #[test]
-    #[ignore = "slow: requires Plonky2 proving (builds circuit on first run, cached thereafter)"]
-    fn test_e2e_real_proof() {
-        use common::{
-            payload::{Payload, PayloadProof},
-            shrink::{shrink_compress_pod, ShrunkMainPodSetup},
-        };
-        use pod2::{
-            backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover},
-            frontend::MultiPodBuilder,
-            middleware::Params,
-        };
-        use pod2utils::macros::BuildContext;
-        use std::collections::HashSet;
-        use txlib::TxBuilder;
-
-        let params = Params::default();
-        let vd_set = &*DEFAULT_VD_SET;
-        let shrunk_main_pod_build = ShrunkMainPodSetup::new(&params).build().unwrap();
-
-        let dir = TempDir::new().unwrap();
-        let app_db = AppDb::connect(dir.path().to_str().unwrap()).unwrap();
-        let sm = StateMachine::new(app_db, Arc::new(common::proof::ProofParser::new().unwrap()))
-            .unwrap();
-
-        let gsr0 = seed_gsr0(&sm);
-
-        // Build a txlib StateRoot matching the empty GSR0 and verify it agrees.
-        let state_root = Arc::new(StateRoot {
-            block_number: 0,
-            transactions: pod2::middleware::containers::Set::new(HashSet::new()),
-            nullifiers: pod2::middleware::containers::Set::new(HashSet::new()),
-            gsrs: pod2::middleware::containers::Array::new(vec![]),
-        });
-        assert_eq!(
-            state_root.hash(),
-            gsr0,
-            "txlib StateRoot must match computed GSR0"
-        );
-
-        // Prove a transaction using txlib's TxBuilder.
-        let txlib_modules = vec![Arc::new(txlib::predicates::module())];
-        let builder = MultiPodBuilder::new(&params, vd_set);
-        let mut ctx = BuildContext {
-            builder,
-            modules: txlib_modules,
-        };
-
-        let obj = new_obj();
-        let mut tx_builder = TxBuilder::new(&mut ctx, &[], state_root);
-        tx_builder.insert(&mut ctx, obj);
-        let (st_finalized, tx) = tx_builder.finalize(&mut ctx);
-        ctx.builder.reveal(&st_finalized).unwrap();
-
-        let solution = ctx.builder.solve().unwrap();
-        let pod = solution.prove(&Prover {}).unwrap().pods.pop().unwrap();
-        pod.pod.verify().unwrap();
-
-        let compressed_proof = shrink_compress_pod(&shrunk_main_pod_build, pod).unwrap();
-
-        // tx.dict().commitment() is the public tx_final value committed to in the proof.
-        let tx_final = tx.dict().commitment();
-        let nullifiers: Vec<Hash> = tx
-            .nullifiers
-            .iter()
-            .map(|v| Ok(Hash(v?.raw().0)))
-            .collect::<Result<_>>()
-            .unwrap();
-
-        let payload = Payload {
-            proof: PayloadProof::Plonky2(Box::new(compressed_proof)),
-            tx_final,
-            state_root_hash: gsr0,
-            nullifiers: nullifiers.clone(),
-        };
-        process_and_commit_blob(&sm, &payload.to_bytes(), 1, 1);
-
-        let (txns, spent_nullifiers, _) = sm.state_snapshot().unwrap();
-        assert!(txns.contains(&tx_final));
-        for n in &nullifiers {
-            assert!(spent_nullifiers.contains(n));
-        }
+        sm.rollback_journals(&[SlotJournal {
+            slot: 1,
+            old_head: h0,
+            new_head: d1.new_head,
+        }])
+        .unwrap();
+        assert_eq!(sm.head_snapshot().unwrap(), h0);
     }
 }

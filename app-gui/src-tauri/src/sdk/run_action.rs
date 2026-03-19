@@ -21,9 +21,8 @@ use super::{
     },
     runtime::{acquire_run_in_progress_guard, ActionRunGate},
     synchronizer_client::{
-        encode_hash_hex, fetch_synchronizer_state, fetch_synchronizer_tx_contains,
-        wait_for_synchronizer_tx, SynchronizerState, SYNCHRONIZER_POLL_INTERVAL_MS,
-        SYNCHRONIZER_POLL_TIMEOUT_SECS,
+        encode_hash_hex, fetch_grounding_witness, wait_for_synchronizer_tx, SynchronizerHead,
+        SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS,
     },
 };
 use crate::{
@@ -134,34 +133,6 @@ fn resolve_inputs(
     Ok(resolved_inputs)
 }
 
-fn verify_inputs_grounded(sync_api_url: &str, inputs: &[ResolvedInput]) -> Result<()> {
-    let input_sources = inputs
-        .iter()
-        .map(|input| {
-            let spendable = input.record.spendable();
-            (input.file_name.clone(), spendable.tx.dict().commitment())
-        })
-        .collect::<Vec<_>>();
-
-    let source_tx_hashes = input_sources
-        .iter()
-        .map(|(_, source_tx_hash)| *source_tx_hash)
-        .collect::<Vec<_>>();
-    let grounded_txs = fetch_synchronizer_tx_contains(sync_api_url, &source_tx_hashes)?;
-
-    for (file_name, source_tx_hash) in input_sources {
-        if !grounded_txs.contains(&source_tx_hash) {
-            return Err(anyhow!(
-                "input not yet synchronized; wait and retry: {} -> {}",
-                file_name,
-                encode_hash_hex(&source_tx_hash)
-            ));
-        }
-    }
-
-    Ok(())
-}
-
 struct RelayerSubmitRequest<'a> {
     run_id: &'a str,
     old_root: &'a str,
@@ -245,7 +216,7 @@ fn wait_for_synchronizer_commit(
     expected_tx_final: Hash,
     timeout_secs: u64,
     poll_interval_ms: u64,
-) -> Result<SynchronizerState> {
+) -> Result<SynchronizerHead> {
     wait_for_synchronizer_tx(
         sync_api_url,
         expected_tx_final,
@@ -389,14 +360,15 @@ pub(crate) async fn run_sdk_action_core(
     let action_id = input.action_id.clone();
     emit_generate_proof_step(&app, &action_id, "Verifying Inputs")?;
 
-    let sync_state = fetch_synchronizer_state(&app_settings.synchronizer_api_url)?;
-    let state_root_for_run = sync_state.state_root.clone();
-    let old_root_hash = sync_state.current_gsr;
-    let old_root = encode_hash_hex(&old_root_hash);
-
     let resolved_inputs = resolve_inputs(&input, &descriptor)?;
-
-    verify_inputs_grounded(&app_settings.synchronizer_api_url, &resolved_inputs)?;
+    let source_tx_hashes = resolved_inputs
+        .iter()
+        .map(|input| input.record.spendable().tx.dict().commitment())
+        .collect::<Vec<_>>();
+    let grounding_witness =
+        fetch_grounding_witness(&app_settings.synchronizer_api_url, &source_tx_hashes)?;
+    let old_root_hash = grounding_witness.state_root.hash();
+    let old_root = encode_hash_hex(&old_root_hash);
 
     emit_generate_proof_step(&app, &action_id, "Generating proof")?;
 
@@ -407,7 +379,7 @@ pub(crate) async fn run_sdk_action_core(
 
     let action_id_for_exec = action_id.clone();
     let spendable_outputs = match tauri::async_runtime::spawn_blocking(move || {
-        execute_action(action_id_for_exec, state_root_for_run, execution_inputs)
+        execute_action(action_id_for_exec, grounding_witness, execution_inputs)
     })
     .await
     {
@@ -430,7 +402,7 @@ pub(crate) async fn run_sdk_action_core(
         &spendable_outputs,
     )?;
 
-    let commit_result: Result<SynchronizerState> = async {
+    let commit_result: Result<SynchronizerHead> = async {
         submit_and_confirm_relayer(
             &app,
             RelayerSubmitRequest {

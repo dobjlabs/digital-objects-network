@@ -15,7 +15,7 @@ use pod2::{
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
 use serde::Serialize;
 use tinytemplate::TinyTemplate;
-use txlib::{StateRoot, Tx, TxBuilder};
+use txlib::{GroundingWitness, Tx, TxBuilder};
 
 pub mod api {
     use std::fmt;
@@ -277,7 +277,11 @@ impl Helper {
             module,
         }
     }
-    pub fn builder(&self, mock: bool, state_root: Arc<StateRoot>) -> ObjectBuilder<'_> {
+    pub fn builder(
+        &self,
+        mock: bool,
+        grounding_witness: Arc<GroundingWitness>,
+    ) -> ObjectBuilder<'_> {
         let mock_prover = MockProver {};
         let real_prover = Prover {};
         let (vd_set, prover): (_, Box<dyn MainPodProver>) = if mock {
@@ -291,7 +295,7 @@ impl Helper {
             mock,
             params: self.params.clone(),
             vd_set,
-            state_root,
+            grounding_witness,
             prover,
             modules: self.modules.clone(),
             data: &self.data,
@@ -382,7 +386,7 @@ pub struct ObjectBuilder<'a> {
     mock: bool,
     params: Params,
     vd_set: VDSet,
-    state_root: Arc<StateRoot>,
+    grounding_witness: Arc<GroundingWitness>,
     prover: Box<dyn MainPodProver>,
     modules: Vec<Arc<Module>>,
     data: &'a Data,
@@ -422,7 +426,7 @@ impl<'a> ObjectBuilder<'a> {
     }
 
     fn new_tx_builder(&self, ctx: &mut BuildContext, inputs: &[(Dictionary, Tx)]) -> TxBuilder {
-        TxBuilder::new(ctx, inputs, self.state_root.clone())
+        TxBuilder::new(ctx, inputs, self.grounding_witness.clone())
     }
 
     // Returns Action statement, Output objects and data required to make the object class
@@ -1093,32 +1097,66 @@ impl Data {
 #[cfg(test)]
 mod tests {
 
-    use std::sync::Arc;
+    use std::{collections::HashSet, sync::Arc};
 
     use hex::FromHex;
     use lt_eq_u256_pod::LtEqU256Pod;
     use pod2::{
         frontend::{MainPod, Operation},
-        middleware::{F, Hash, Key, Pod, RawValue, Statement, Value, containers::Array},
+        middleware::{F, Hash, Key, Pod, RawValue, Statement, Value, containers::Set},
     };
-    use pod2utils::{rand_raw_value, set};
-    use txlib::{StateRoot, Tx};
+    use pod2utils::rand_raw_value;
+    use txlib::{GroundingWitness, StateRoot, Tx};
     use vdfpod::VdfPod;
 
     use super::{Context, Helper, api::*};
 
     const WOOD_POW_DIFFICULTY: u64 = 0x0020_0000_0000_0000;
 
-    fn update_state_root(state_root: &mut StateRoot, tx: &Tx) {
-        state_root
-            .transactions
-            .insert(&Value::from(tx.dict()))
-            .unwrap();
-        for nullifier in tx.nullifiers.iter() {
-            let nullifier = nullifier.unwrap();
-            state_root.nullifiers.insert(&nullifier).unwrap();
+    #[derive(Default)]
+    struct TestState {
+        block_number: i64,
+        transactions: HashSet<Hash>,
+        nullifiers: HashSet<Hash>,
+        gsrs: Vec<Hash>,
+    }
+
+    impl TestState {
+        fn state_root(&self) -> StateRoot {
+            StateRoot::new(
+                self.block_number,
+                &self.transactions,
+                &self.nullifiers,
+                &self.gsrs,
+            )
         }
-        state_root.block_number += 1;
+
+        fn grounding_witness(&self, inputs: &[Tx]) -> GroundingWitness {
+            let tx_set = Set::new(
+                self.transactions
+                    .iter()
+                    .map(|hash| Value::from(*hash))
+                    .collect(),
+            );
+            let source_tx_proofs = inputs
+                .iter()
+                .map(|tx| {
+                    let tx_hash = tx.dict().commitment();
+                    let proof = tx_set.prove(&Value::from(tx_hash)).unwrap();
+                    (tx_hash, proof)
+                })
+                .collect();
+            GroundingWitness::new(self.state_root(), source_tx_proofs)
+        }
+
+        fn apply_tx(&mut self, tx: &Tx) {
+            self.transactions.insert(tx.dict().commitment());
+            for nullifier in tx.nullifiers.iter() {
+                let nullifier = nullifier.unwrap();
+                self.nullifiers.insert(Hash(nullifier.raw().0));
+            }
+            self.block_number += 1;
+        }
     }
 
     fn main_pod(ctx: &Context, pod: Box<dyn Pod>) -> MainPod {
@@ -1388,63 +1426,76 @@ mod tests {
         );
         println!("{}", helper.podlang_src);
 
-        let mut state_root = StateRoot {
-            transactions: set!(),
-            nullifiers: set!(),
-            block_number: 0,
-            gsrs: Array::new(vec![]),
-        };
+        let mut state = TestState::default();
 
         let mock = true;
 
-        let builder = helper.builder(mock, Arc::new(state_root.clone()));
+        let builder = helper.builder(mock, Arc::new(state.grounding_witness(&[])));
         let [log_a] = builder.action("FindLog", vec![]).objs();
-        update_state_root(&mut state_root, &log_a.tx);
+        state.apply_tx(&log_a.tx);
 
-        let builder = helper.builder(mock, Arc::new(state_root.clone()));
+        let builder = helper.builder(mock, Arc::new(state.grounding_witness(&[log_a.tx.clone()])));
         let [wood_a] = builder.action("CraftWood", vec![log_a]).objs();
-        update_state_root(&mut state_root, &wood_a.tx);
+        state.apply_tx(&wood_a.tx);
 
-        let builder = helper.builder(mock, Arc::new(state_root.clone()));
+        let builder = helper.builder(
+            mock,
+            Arc::new(state.grounding_witness(&[wood_a.tx.clone()])),
+        );
         let [stick_a, stick_b] = builder.action("CraftSticks", vec![wood_a]).objs();
-        update_state_root(&mut state_root, &stick_a.tx);
+        state.apply_tx(&stick_a.tx);
 
-        let builder = helper.builder(mock, Arc::new(state_root.clone()));
+        let builder = helper.builder(mock, Arc::new(state.grounding_witness(&[])));
         let [log_b] = builder.action("FindLog", vec![]).objs();
-        update_state_root(&mut state_root, &log_b.tx);
+        state.apply_tx(&log_b.tx);
 
-        let builder = helper.builder(mock, Arc::new(state_root.clone()));
+        let builder = helper.builder(mock, Arc::new(state.grounding_witness(&[log_b.tx.clone()])));
         let [wood_b] = builder.action("CraftWood", vec![log_b]).objs();
-        update_state_root(&mut state_root, &wood_b.tx);
+        state.apply_tx(&wood_b.tx);
 
-        let builder = helper.builder(mock, Arc::new(state_root.clone()));
+        let builder = helper.builder(
+            mock,
+            Arc::new(state.grounding_witness(&[wood_b.tx.clone(), stick_a.tx.clone()])),
+        );
         let [wood_pick] = builder
             .action("CraftWoodPick", vec![wood_b, stick_a])
             .objs();
-        update_state_root(&mut state_root, &wood_pick.tx);
+        state.apply_tx(&wood_pick.tx);
 
-        let builder = helper.builder(mock, Arc::new(state_root.clone()));
+        let builder = helper.builder(
+            mock,
+            Arc::new(state.grounding_witness(&[wood_pick.tx.clone()])),
+        );
         let [wood_pick, stone_a] = builder
             .action("MineStoneWithWoodPick", vec![wood_pick])
             .objs();
-        update_state_root(&mut state_root, &wood_pick.tx);
+        state.apply_tx(&wood_pick.tx);
 
-        let builder = helper.builder(mock, Arc::new(state_root.clone()));
+        let builder = helper.builder(
+            mock,
+            Arc::new(state.grounding_witness(&[stone_a.tx.clone(), stick_b.tx.clone()])),
+        );
         let [stone_pick] = builder
             .action("CraftStonePick", vec![stone_a, stick_b])
             .objs();
-        update_state_root(&mut state_root, &stone_pick.tx);
+        state.apply_tx(&stone_pick.tx);
 
-        let builder = helper.builder(mock, Arc::new(state_root.clone()));
+        let builder = helper.builder(
+            mock,
+            Arc::new(state.grounding_witness(&[stone_pick.tx.clone()])),
+        );
         let [stone_pick, _stone_b] = builder
             .action("MineStoneWithStonePick", vec![stone_pick])
             .objs();
-        update_state_root(&mut state_root, &stone_pick.tx);
+        state.apply_tx(&stone_pick.tx);
 
-        let builder = helper.builder(mock, Arc::new(state_root.clone()));
+        let builder = helper.builder(
+            mock,
+            Arc::new(state.grounding_witness(&[stone_pick.tx.clone()])),
+        );
         let [stone_pick, _stone_c] = builder
             .action("MineStoneWithStonePick", vec![stone_pick])
             .objs();
-        update_state_root(&mut state_root, &stone_pick.tx);
+        state.apply_tx(&stone_pick.tx);
     }
 }
