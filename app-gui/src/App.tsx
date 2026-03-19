@@ -27,6 +27,7 @@ import "./features/settings/SettingsModal.css";
 function App() {
   const [objectsDirPath, setObjectsDirPath] = useState("~/.objects");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [initialHydrationPending, setInitialHydrationPending] = useState(true);
   const inventory = useStore((state) => state.inventory);
   const actions = useStore((state) => state.actions);
   const activeObjectId = useStore((state) => state.activeObjectId);
@@ -55,9 +56,17 @@ function App() {
     inventory.find((object) => object.id === activeObjectId) ?? null;
 
   useEffect(() => {
+    let cancelled = false;
     hydrateData().catch((error) => {
       console.error("Failed to load GUI inventory:", error);
+    }).finally(() => {
+      if (!cancelled) {
+        setInitialHydrationPending(false);
+      }
     });
+    return () => {
+      cancelled = true;
+    };
   }, [hydrateData]);
 
   useEffect(() => {
@@ -242,41 +251,59 @@ function App() {
 
   return (
     <>
-      <main className="app-shell">
-        <InventoryPanel
-          inventory={inventory}
-          objectsDirPath={objectsDirPath}
-          activeObjectId={activeObjectId}
-          showNullifiedItems={showNullifiedItems}
-          onSelectObject={selectObject}
-          onToggleNullified={toggleNullified}
-          onOpenObjectsDir={handleOpenObjectsDir}
-        />
-
-        <div className="main-column">
-          <ContextPanel
-            selection={contextSelection}
+      <div className="app-frame">
+        <main className="app-shell" aria-busy={initialHydrationPending}>
+          <InventoryPanel
             inventory={inventory}
             objectsDirPath={objectsDirPath}
-            actions={actions}
-            onRunProof={runProof}
-            proofRunning={proofRunning}
-            proofStatus={proofStatus}
-            onClearSelection={clearSelection}
+            activeObjectId={activeObjectId}
+            showNullifiedItems={showNullifiedItems}
+            onSelectObject={selectObject}
+            onToggleNullified={toggleNullified}
+            onOpenObjectsDir={handleOpenObjectsDir}
           />
-          <ProofRunnerPanel />
-        </div>
 
-        <div className="right-column">
-          <ActionGrid
-            actions={actions}
-            activeActionId={activeActionId}
-            selectedObject={selectedObject}
-            onSelectAction={selectAction}
-            onClearSelection={clearSelection}
-          />
-        </div>
-      </main>
+          <div className="main-column">
+            <ContextPanel
+              selection={contextSelection}
+              inventory={inventory}
+              objectsDirPath={objectsDirPath}
+              actions={actions}
+              onRunProof={runProof}
+              proofRunning={proofRunning}
+              proofStatus={proofStatus}
+              onClearSelection={clearSelection}
+            />
+            <ProofRunnerPanel />
+          </div>
+
+          <div className="right-column">
+            <ActionGrid
+              actions={actions}
+              activeActionId={activeActionId}
+              selectedObject={selectedObject}
+              onSelectAction={selectAction}
+              onClearSelection={clearSelection}
+            />
+          </div>
+        </main>
+
+        {initialHydrationPending && (
+          <div
+            className="app-loading-overlay"
+            role="status"
+            aria-live="polite"
+            aria-label="Loading objects and actions"
+          >
+            <div className="app-loading-card">
+              <span className="app-loading-spinner" aria-hidden="true" />
+              <span className="app-loading-label">
+                Loading objects and actions...
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
 
       <SettingsModal
         open={settingsOpen}
