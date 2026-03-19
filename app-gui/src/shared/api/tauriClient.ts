@@ -78,6 +78,17 @@ export function getGlobalStateRoot(): Promise<string> {
   return invoke<string>("get_global_state_root");
 }
 
+export function listenMcpActionStarted(
+  handler: (event: { actionId: string; cpuCost: string }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ actionId: string; cpuCost: string }>(
+    "mcp-action-started",
+    (event) => {
+      handler(event.payload);
+    },
+  );
+}
+
 export function getAppSettings(): Promise<AppSettingsPayload> {
   return invoke<AppSettingsPayload>("get_app_settings");
 }

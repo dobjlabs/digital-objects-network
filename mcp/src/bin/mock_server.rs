@@ -1,24 +1,19 @@
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
-use zk_craft_mcp::mock::MockCraftOps;
-use zk_craft_mcp::{McpConfig, McpServer};
-
-const BIND_ADDRESS: &str = "127.0.0.1:3001";
+use craft_mcp::mock::MockCraftOps;
+use craft_mcp::{DEFAULT_PORT, McpConfig, McpServer};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    craft_mcp::logging::init();
 
+    let bind_address = format!("127.0.0.1:{DEFAULT_PORT}");
     let ct = tokio_util::sync::CancellationToken::new();
     let config = McpConfig {
         cancellation_token: ct.clone(),
     };
     let server = McpServer::new(MockCraftOps::new(), config);
-    let listener = tokio::net::TcpListener::bind(BIND_ADDRESS).await?;
+    let listener = tokio::net::TcpListener::bind(&bind_address).await?;
 
-    tracing::info!("ZK-Craft MCP mock server listening on http://{BIND_ADDRESS}/mcp");
+    tracing::info!("ZK-Craft MCP mock server listening on http://{bind_address}/mcp");
 
     let ct2 = ct.clone();
     tokio::spawn(async move {

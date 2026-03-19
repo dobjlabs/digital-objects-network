@@ -1,8 +1,12 @@
+pub mod logging;
 pub mod mock;
 pub mod ops;
 pub mod resources;
 pub mod server;
 pub mod types;
+
+/// Default port for the MCP server.
+pub const DEFAULT_PORT: u16 = 3001;
 
 use std::sync::Arc;
 

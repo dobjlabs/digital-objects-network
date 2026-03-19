@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use craft_mcp::ops::CraftOps;
+use craft_mcp::types as mcp;
 use tauri::Emitter;
-use zk_craft_mcp::ops::CraftOps;
-use zk_craft_mcp::types as mcp;
 
 use crate::objects::ObjectRecord;
 use crate::sdk::{object_store, synchronizer_client};

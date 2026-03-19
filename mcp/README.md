@@ -5,7 +5,7 @@ An MCP (Model Context Protocol) server that exposes ZK-Craft's digital object op
 ## Architecture
 
 ```
-Claude Desktop <--stdio--> zk-craft-mcp-proxy <--HTTP--> Tauri app (MCP + GUI)
+Claude Desktop <--stdio--> craft-mcp-proxy <--HTTP--> Tauri app (MCP + GUI)
 ```
 
 The Tauri app embeds a streamable HTTP MCP server on port 3001. A thin stdio proxy binary bridges Claude Desktop (which expects stdio transport) to the app's HTTP endpoint. The GUI and MCP server share in-process state — when Claude runs an action, the GUI shows real-time progress.
@@ -54,7 +54,7 @@ All tools return structured content (`structuredContent` + `outputSchema`) for c
 
 ```sh
 cd zk-craft
-cargo build -p zk-craft-mcp --bin zk-craft-mcp-proxy --features proxy --release
+cargo build -p craft-mcp --bin craft-mcp-proxy --features proxy --release
 ```
 
 ### 2. Add to Claude Desktop config
@@ -65,7 +65,7 @@ Open Claude Desktop settings and edit the MCP server configuration (`claude_desk
 {
   "mcpServers": {
     "zk-craft": {
-      "command": "/absolute/path/to/zk-craft/target/release/zk-craft-mcp-proxy",
+      "command": "/absolute/path/to/zk-craft/target/release/craft-mcp-proxy",
       "args": ["--port", "3001"]
     }
   }
@@ -74,14 +74,14 @@ Open Claude Desktop settings and edit the MCP server configuration (`claude_desk
 
 ### 3. Start the Tauri app
 
-The proxy connects to the app's MCP endpoint. The app must be running first:
+The proxy connects to the app's MCP endpoint. The app (plus the synchronizer and relayer it depends on) must be running first:
 
 ```sh
-cd zk-craft/app-gui
-npm run tauri dev
+cd zk-craft
+just dev
 ```
 
-The MCP server starts automatically on `http://127.0.0.1:3001/mcp`.
+This starts the synchronizer, relayer, and GUI together. The MCP server starts automatically on `http://127.0.0.1:3001/mcp`.
 
 ### 4. Restart Claude Desktop
 
@@ -92,7 +92,7 @@ Claude Desktop reads the config on startup. After adding the server config and s
 The proxy works with Claude Code the same way as Claude Desktop. With the app running:
 
 ```sh
-claude mcp add zk-craft /absolute/path/to/zk-craft/target/release/zk-craft-mcp-proxy -- --port 3001
+claude mcp add zk-craft /absolute/path/to/zk-craft/target/release/craft-mcp-proxy -- --port 3001
 ```
 
 Or add to `.claude/settings.json` manually:
@@ -101,7 +101,7 @@ Or add to `.claude/settings.json` manually:
 {
   "mcpServers": {
     "zk-craft": {
-      "command": "/absolute/path/to/zk-craft/target/release/zk-craft-mcp-proxy",
+      "command": "/absolute/path/to/zk-craft/target/release/craft-mcp-proxy",
       "args": ["--port", "3001"]
     }
   }
@@ -113,7 +113,7 @@ Or add to `.claude/settings.json` manually:
 For development and testing without the full app stack, use the stdio mock server:
 
 ```sh
-claude mcp add zk-craft-mock /absolute/path/to/zk-craft/target/release/zk-craft-mcp-stdio
+claude mcp add zk-craft-mock /absolute/path/to/zk-craft/target/release/craft-mcp-stdio
 ```
 
 This serves mock data — useful for testing MCP tools or developing new ones.
@@ -123,7 +123,7 @@ This serves mock data — useful for testing MCP tools or developing new ones.
 ### Running tests
 
 ```sh
-cargo test -p zk-craft-mcp --release
+cargo test -p craft-mcp --release
 ```
 
 Tests run against `MockCraftOps` and cover tool handlers, structured output, error cases, and server startup.
@@ -133,20 +133,20 @@ Tests run against `MockCraftOps` and cover tool handlers, structured output, err
 **HTTP mock** (for testing the proxy or direct HTTP clients):
 
 ```sh
-cargo run -p zk-craft-mcp --bin zk-craft-mcp-mock --release
+cargo run -p craft-mcp --bin craft-mcp-mock --release
 # Listens on http://127.0.0.1:3001/mcp
 ```
 
 **Stdio mock** (for testing with Claude Desktop/Code without the app):
 
 ```sh
-cargo run -p zk-craft-mcp --bin zk-craft-mcp-stdio --release
+cargo run -p craft-mcp --bin craft-mcp-stdio --release
 ```
 
 ### Proxy
 
 ```sh
-cargo run -p zk-craft-mcp --bin zk-craft-mcp-proxy --features proxy --release -- --port 3001
+cargo run -p craft-mcp --bin craft-mcp-proxy --features proxy --release -- --port 3001
 ```
 
 The proxy accepts `--port <PORT>` or `--url <URL>` to configure the upstream endpoint. Default: `http://127.0.0.1:3001/mcp`.

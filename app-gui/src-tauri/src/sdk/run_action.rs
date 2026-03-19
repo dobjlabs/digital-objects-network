@@ -364,7 +364,7 @@ pub async fn run_sdk_action(
     app: tauri::AppHandle,
     runtime: tauri::State<'_, std::sync::Arc<ActionRunGate>>,
     input: RunSdkActionInput,
-) -> Result<RunSdkActionResult, String> {
+) -> Result<RunSdkActionResult, CommandError> {
     run_sdk_action_core(app, &runtime, input).await
 }
 

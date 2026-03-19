@@ -5,15 +5,8 @@
 /// writes responses to stdout.
 use std::io::{BufRead, Write};
 
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
-
-const DEFAULT_URL: &str = "http://127.0.0.1:3001/mcp";
-
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .init();
+    craft_mcp::logging::init_stderr();
 
     let url = parse_url_from_args();
     tracing::info!("ZK-Craft MCP proxy connecting to {url}");
@@ -103,5 +96,5 @@ fn parse_url_from_args() -> String {
             _ => i += 1,
         }
     }
-    DEFAULT_URL.to_string()
+    format!("http://127.0.0.1:{}/mcp", craft_mcp::DEFAULT_PORT)
 }

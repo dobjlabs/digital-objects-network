@@ -947,6 +947,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "common",
+ "craft-mcp",
  "craft_sdk",
  "hex",
  "lt_eq_u256_pod",
@@ -967,7 +968,6 @@ dependencies = [
  "tokio",
  "txlib",
  "vdfpod",
- "zk-craft-mcp",
 ]
 
 [[package]]
@@ -2200,6 +2200,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "craft-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "reqwest 0.12.28",
+ "rmcp",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -10751,24 +10769,6 @@ dependencies = [
  "log",
  "thiserror 1.0.69",
  "zip 0.6.6",
-]
-
-[[package]]
-name = "zk-craft-mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "reqwest 0.12.28",
- "rmcp",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

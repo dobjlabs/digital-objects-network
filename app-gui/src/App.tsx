@@ -10,6 +10,7 @@ import {
   listenOpenSettings,
   listenObjectsChanged,
   listenRunSdkActionProgress,
+  listenMcpActionStarted,
   openObjectsDir,
   sampleAppCpu,
 } from "./shared/api/tauriClient";
@@ -113,21 +114,15 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    import("@tauri-apps/api/event")
-      .then(({ listen }) =>
-        listen<{ actionId: string; cpuCost: string }>(
-          "mcp-action-started",
-          (event) => {
-            if (!cancelled) {
-              initProofPanel({
-                actionId: event.payload.actionId,
-                cpuCost: event.payload.cpuCost,
-                args: ["(via MCP)"],
-              });
-            }
-          },
-        ),
-      )
+    listenMcpActionStarted((event) => {
+      if (!cancelled) {
+        initProofPanel({
+          actionId: event.actionId,
+          cpuCost: event.cpuCost,
+          args: ["(via MCP)"],
+        });
+      }
+    })
       .then((dispose) => {
         if (cancelled) {
           dispose();

@@ -1,5 +1,5 @@
 [package]
-name = "zk-craft-mcp"
+name = "craft-mcp"
 version = "0.1.0"
 edition = "2024"
 
@@ -30,14 +30,14 @@ proxy = ["reqwest"]
 tokio = { version = "1", features = ["full"] }
 
 [[bin]]
-name = "zk-craft-mcp-mock"
+name = "craft-mcp-mock"
 path = "src/bin/mock_server.rs"
 
 [[bin]]
-name = "zk-craft-mcp-stdio"
+name = "craft-mcp-stdio"
 path = "src/bin/mock_stdio.rs"
 
 [[bin]]
-name = "zk-craft-mcp-proxy"
+name = "craft-mcp-proxy"
 path = "src/bin/proxy_stdio.rs"
 required-features = ["proxy"]

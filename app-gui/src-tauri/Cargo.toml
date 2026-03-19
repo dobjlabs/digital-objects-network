@@ -36,7 +36,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "blo
 hex = "0.4"
 base64 = "0.22"
 pod2 = { workspace = true }
-zk-craft-mcp = { path = "../../mcp" }
+craft-mcp = { path = "../../mcp" }
 tokio = { version = "1", features = ["net"] }
 notify = "6"
 rfd = "0.14"

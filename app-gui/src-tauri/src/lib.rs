@@ -15,7 +15,7 @@ use objects::{
 use sdk::{get_global_state_root, load_gui_inventory, run_sdk_action, ActionRunGate};
 use settings::{build_app_menu, get_app_settings, handle_settings_menu_event, save_app_settings};
 
-const MCP_PORT: u16 = 3001;
+use craft_mcp::DEFAULT_PORT as MCP_PORT;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -67,8 +67,8 @@ async fn start_mcp_server(app: tauri::AppHandle) -> Result<(), Box<dyn std::erro
     let app_settings = get_app_settings(app.clone())?;
 
     let ops = mcp::AppCraftOps::new(objects_dir, app, app_settings);
-    let config = zk_craft_mcp::McpConfig::default();
-    let server = zk_craft_mcp::McpServer::new(ops, config);
+    let config = craft_mcp::McpConfig::default();
+    let server = craft_mcp::McpServer::new(ops, config);
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{MCP_PORT}")).await?;
     eprintln!("zk-craft: MCP server listening on http://127.0.0.1:{MCP_PORT}/mcp");
