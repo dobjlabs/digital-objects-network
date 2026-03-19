@@ -90,7 +90,7 @@ const initialAppState: Pick<
   showNullifiedItems: false,
 };
 
-export const useStore = create<AppState>((set) => ({
+export const useStore = create<AppState>((set, get) => ({
   ...initialAppState,
   inventory: [],
   actions: [],
