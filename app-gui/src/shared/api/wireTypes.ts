@@ -12,7 +12,7 @@ export interface InventoryObjectPayload {
   nullifier: string | null;
   grounded: boolean;
   description?: string;
-  obj: Record<string, unknown>;
+  obj: unknown;
 }
 
 export interface ActionPayload {
