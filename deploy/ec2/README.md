@@ -94,3 +94,13 @@ sudo ./deploy/ec2/bootstrap.sh
 ```
 
 That will resync the repo into `/srv/zkcraft/repo`, rebuild the binaries, and reinstall the systemd units without overwriting existing env files.
+
+## Resetting local state
+
+To recreate the local Postgres databases and clear the synchronizer RocksDB state:
+
+```bash
+sudo ./deploy/ec2/reset-db.sh
+```
+
+This always resets Postgres, clears `/var/lib/zkcraft/synchronizer-db`, and restarts `synchronizer` and `relayer`.
