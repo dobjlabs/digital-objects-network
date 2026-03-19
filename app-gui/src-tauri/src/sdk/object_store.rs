@@ -3,12 +3,12 @@ use std::{collections::HashMap, fs, path::Path};
 
 use crate::objects::{nullified_objects_dir, ObjectRecord};
 
-pub(super) struct ObjectFileEntry {
-    pub(super) file_name: String,
-    pub(super) record: ObjectRecord,
+pub(crate) struct ObjectFileEntry {
+    pub(crate) file_name: String,
+    pub(crate) record: ObjectRecord,
 }
 
-pub(super) fn ensure_objects_dirs(objects_dir: &Path) -> Result<()> {
+pub(crate) fn ensure_objects_dirs(objects_dir: &Path) -> Result<()> {
     fs::create_dir_all(objects_dir)
         .map_err(|err| anyhow!("failed to create objects directory: {err}"))?;
     fs::create_dir_all(nullified_objects_dir(objects_dir))
@@ -21,7 +21,7 @@ fn parse_object_file(contents: &str, file_name: &str) -> Result<ObjectRecord> {
         .map_err(|err| anyhow!("failed to parse {file_name} as object file: {err}"))
 }
 
-pub(super) fn write_object_file(
+pub(crate) fn write_object_file(
     record: &ObjectRecord,
     file_name: &str,
     objects_dir: &Path,
@@ -127,7 +127,7 @@ fn load_object_files_from_dir(
     Ok(())
 }
 
-pub(super) fn load_object_files(objects_dir: &Path) -> Result<Vec<ObjectFileEntry>> {
+pub(crate) fn load_object_files(objects_dir: &Path) -> Result<Vec<ObjectFileEntry>> {
     let mut records_by_file = HashMap::<String, ObjectRecord>::new();
     load_object_files_from_dir(&mut records_by_file, objects_dir, false)?;
     load_object_files_from_dir(

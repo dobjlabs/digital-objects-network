@@ -1,9 +1,12 @@
 mod cpu;
 mod error;
+mod mcp;
 mod objects;
 mod sdk;
 mod settings;
 mod spec;
+
+use std::sync::Arc;
 
 use cpu::{sample_app_cpu, CpuMonitor};
 use objects::{
@@ -12,11 +15,14 @@ use objects::{
 use sdk::{get_global_state_root, load_gui_inventory, run_sdk_action, ActionRunGate};
 use settings::{build_app_menu, get_app_settings, handle_settings_menu_event, save_app_settings};
 
+use craft_mcp::DEFAULT_PORT as MCP_PORT;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if let Err(err) = common::load_dotenv() {
         eprintln!("zk-craft: failed to load app-gui env: {err}");
     }
+
     tauri::Builder::default()
         .menu(build_app_menu)
         .on_menu_event(|app, event| {
@@ -24,11 +30,20 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .manage(CpuMonitor::new())
-        .manage(ActionRunGate::new())
+        .manage(Arc::new(ActionRunGate::new()))
         .setup(|app| {
             if let Err(err) = start_objects_watcher(app.handle().clone()) {
                 eprintln!("zk-craft: objects watcher disabled: {err}");
             }
+
+            // Start MCP server
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = start_mcp_server(handle).await {
+                    eprintln!("zk-craft: MCP server failed: {err}");
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -45,4 +60,19 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+async fn start_mcp_server(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let objects_dir = objects::objects_dir(&app)?;
+    let app_settings = get_app_settings(app.clone())?;
+
+    let ops = mcp::AppCraftOps::new(objects_dir, app, app_settings);
+    let config = craft_mcp::McpConfig::default();
+    let server = craft_mcp::McpServer::new(ops, config);
+
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{MCP_PORT}")).await?;
+    eprintln!("zk-craft: MCP server listening on http://127.0.0.1:{MCP_PORT}/mcp");
+
+    server.serve(listener).await?;
+    Ok(())
 }

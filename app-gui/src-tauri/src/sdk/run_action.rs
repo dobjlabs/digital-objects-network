@@ -362,7 +362,16 @@ fn rollback_results(objects_dir: &Path, resolved_inputs: &[ResolvedInput], saved
 #[tauri::command]
 pub async fn run_sdk_action(
     app: tauri::AppHandle,
-    runtime: tauri::State<'_, ActionRunGate>,
+    runtime: tauri::State<'_, std::sync::Arc<ActionRunGate>>,
+    input: RunSdkActionInput,
+) -> Result<RunSdkActionResult, CommandError> {
+    run_sdk_action_core(app, &runtime, input).await
+}
+
+/// Core action pipeline shared by the Tauri command and MCP server.
+pub(crate) async fn run_sdk_action_core(
+    app: tauri::AppHandle,
+    runtime: &ActionRunGate,
     input: RunSdkActionInput,
 ) -> Result<RunSdkActionResult, CommandError> {
     let objects_dir: PathBuf = objects_dir(&app)?;
@@ -375,7 +384,7 @@ pub async fn run_sdk_action(
     validate_run_request(&input, &descriptor)?;
 
     let app_settings = get_app_settings(app.clone())?;
-    let _run_guard = acquire_run_in_progress_guard(&runtime)?;
+    let _run_guard = acquire_run_in_progress_guard(runtime)?;
 
     let action_id = input.action_id.clone();
     emit_generate_proof_step(&app, &action_id, "Verifying Inputs")?;

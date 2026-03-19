@@ -19,7 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -36,6 +36,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "blo
 hex = "0.4"
 base64 = "0.22"
 pod2 = { workspace = true }
+craft-mcp = { path = "../../mcp" }
+tokio = { version = "1", features = ["net"] }
 notify = "6"
 rfd = "0.14"
 anyhow = { workspace = true }

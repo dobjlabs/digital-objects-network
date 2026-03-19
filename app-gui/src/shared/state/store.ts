@@ -65,6 +65,11 @@ export interface AppState {
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   setGlobalStateRoot: (hash: string | null) => void;
   applyRunSdkActionProgress: (event: RunSdkActionProgress) => void;
+  initProofPanel: (input: {
+    actionId: string;
+    cpuCost: string;
+    args: string[];
+  }) => void;
   runProof: (input: {
     actionId: ActionId;
     inputBindings: Array<{
@@ -85,7 +90,7 @@ const initialAppState: Pick<
   showNullifiedItems: false,
 };
 
-export const useStore = create<AppState>((set) => ({
+export const useStore = create<AppState>((set, get) => ({
   ...initialAppState,
   inventory: [],
   actions: [],
@@ -245,13 +250,7 @@ export const useStore = create<AppState>((set) => ({
         },
       };
     }),
-  runProof: async ({ actionId, inputBindings, cpuCost }) => {
-    const postDoneHoldMs = 2800;
-    const verifyTargets =
-      inputBindings.length > 0
-        ? inputBindings.map((binding) => binding.label)
-        : ["(no inputs)"];
-
+  initProofPanel: ({ actionId, cpuCost, args }) =>
     set((prev) => {
       if (
         prev.proof.status === "generating" ||
@@ -265,7 +264,7 @@ export const useStore = create<AppState>((set) => ({
           runActionId: actionId,
           status: "generating",
           cpuCost,
-          args: verifyTargets,
+          args,
           messages: ["Running SDK action..."],
           steps: [
             {
@@ -288,7 +287,15 @@ export const useStore = create<AppState>((set) => ({
           stats: prev.proof.stats,
         },
       };
-    });
+    }),
+  runProof: async ({ actionId, inputBindings, cpuCost }) => {
+    const postDoneHoldMs = 2800;
+    const verifyTargets =
+      inputBindings.length > 0
+        ? inputBindings.map((binding) => binding.label)
+        : ["(no inputs)"];
+
+    get().initProofPanel({ actionId, cpuCost, args: verifyTargets });
 
     try {
       const result = await runSdkAction({

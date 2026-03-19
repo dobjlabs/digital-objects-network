@@ -11,15 +11,15 @@ use synchronizer::api_types::{
 };
 use txlib::StateRoot;
 
-pub(super) const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
-pub(super) const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
-pub(super) use common::encode_hash_hex;
+pub(crate) const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
+pub(crate) const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
+pub(crate) use common::encode_hash_hex;
 
-pub(super) struct SynchronizerState {
-    pub(super) state_root: StateRoot,
-    pub(super) current_gsr: Hash,
-    pub(super) transactions: HashSet<Hash>,
-    pub(super) nullifiers: HashSet<Hash>,
+pub(crate) struct SynchronizerState {
+    pub(crate) state_root: StateRoot,
+    pub(crate) current_gsr: Hash,
+    pub(crate) transactions: HashSet<Hash>,
+    pub(crate) nullifiers: HashSet<Hash>,
 }
 
 fn parse_hash_hex(value: &str) -> Result<Hash> {
@@ -27,7 +27,7 @@ fn parse_hash_hex(value: &str) -> Result<Hash> {
     Hash::from_hex(trimmed).map_err(|err| anyhow!("invalid hash {value}: {err}"))
 }
 
-pub(super) fn fetch_synchronizer_state(sync_api_url: &str) -> Result<SynchronizerState> {
+pub(crate) fn fetch_synchronizer_state(sync_api_url: &str) -> Result<SynchronizerState> {
     let endpoint = format!("{}/v1/state/full", sync_api_url.trim_end_matches('/'));
     let response = reqwest::blocking::get(&endpoint)
         .map_err(|err| anyhow!("failed to query synchronizer at {endpoint}: {err}"))?;
@@ -82,7 +82,7 @@ pub(super) fn fetch_synchronizer_state(sync_api_url: &str) -> Result<Synchronize
     })
 }
 
-pub(super) fn fetch_synchronizer_tx_contains(
+pub(crate) fn fetch_synchronizer_tx_contains(
     sync_api_url: &str,
     tx_hashes: &[Hash],
 ) -> Result<HashSet<Hash>> {
@@ -144,7 +144,7 @@ fn fetch_synchronizer_tx_status(sync_api_url: &str, tx_hash: &Hash) -> Result<Tx
         .map_err(|err| anyhow!("failed to decode synchronizer tx status response: {err}"))
 }
 
-pub(super) fn wait_for_synchronizer_tx(
+pub(crate) fn wait_for_synchronizer_tx(
     sync_api_url: &str,
     tx_final: Hash,
     timeout_secs: u64,

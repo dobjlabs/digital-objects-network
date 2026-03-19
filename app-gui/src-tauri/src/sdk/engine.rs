@@ -11,7 +11,7 @@ use txlib::StateRoot;
 
 use crate::spec;
 
-pub(super) fn execute_action(
+pub(crate) fn execute_action(
     action_id: String,
     state_root: StateRoot,
     inputs: Vec<SpendableObject>,
@@ -22,7 +22,7 @@ pub(super) fn execute_action(
     Ok(builder.action(&action_id, inputs))
 }
 
-pub(super) fn build_relayer_payload(
+pub(crate) fn build_relayer_payload(
     old_state_root_hash: &Hash,
     action_output: &SpendableObjects,
 ) -> Result<Vec<u8>> {
