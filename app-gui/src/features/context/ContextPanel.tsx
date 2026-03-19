@@ -16,6 +16,7 @@ import {
   isLiveObject,
   joinObjectsDirPath,
 } from "../../shared/objectUtils";
+import { isRecord, normalizePod2Value } from "../../shared/pod2utils";
 import type { ContextSelection } from "../../shared/state/store";
 
 interface ContextPanelProps {
@@ -426,54 +427,6 @@ export function ContextPanel({
     return displayPathInObjectsDir(absolutePath, objectsDirPath);
   };
 
-  const normalizePod2Value = (value: unknown): unknown => {
-    if (typeof value === "string") {
-      return value
-        .trim()
-        .replace(/^Raw\((.*)\)$/, "$1")
-        .trim();
-    }
-    if (
-      typeof value === "number" ||
-      typeof value === "boolean" ||
-      typeof value === "bigint" ||
-      value == null
-    ) {
-      return value;
-    }
-    if (Array.isArray(value)) {
-      return value.map((entry) => normalizePod2Value(entry));
-    }
-    if (typeof value === "object") {
-      const record = value as Record<string, unknown>;
-      const keys = Object.keys(record);
-      if (keys.length === 1) {
-        const key = keys[0];
-        const inner = record[key];
-        if (
-          key === "Raw" ||
-          key === "Int" ||
-          key === "PublicKey" ||
-          key === "SecretKey" ||
-          key === "Predicate" ||
-          key === "Root" ||
-          key === "kvs" ||
-          key === "set" ||
-          key === "array"
-        ) {
-          return normalizePod2Value(inner);
-        }
-      }
-      return Object.fromEntries(
-        Object.entries(record).map(([key, entry]) => [
-          key,
-          normalizePod2Value(entry),
-        ]),
-      );
-    }
-    return value;
-  };
-
   const objectValueString = (value: unknown) => {
     const normalized = normalizePod2Value(value);
     if (typeof normalized === "string") return normalized;
@@ -521,16 +474,12 @@ export function ContextPanel({
   };
 
   const renderObjectData = (object: InventoryObject) => {
-    const topLevelEntries = Object.entries(object.obj);
-    const entries = (() => {
-      if (topLevelEntries.length === 1 && topLevelEntries[0][0] === "kvs") {
-        const kvs = topLevelEntries[0][1];
-        if (typeof kvs === "object" && kvs !== null) {
-          return Object.entries(kvs as Record<string, unknown>);
-        }
-      }
-      return topLevelEntries;
-    })().sort(([left], [right]) => left.localeCompare(right));
+    const normalizedObject = normalizePod2Value(object.obj);
+    const entries = isRecord(normalizedObject)
+      ? Object.entries(normalizedObject).sort(([left], [right]) =>
+          left.localeCompare(right),
+        )
+      : [["value", normalizedObject] as const];
 
     if (entries.length === 0) return null;
 
