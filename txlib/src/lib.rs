@@ -22,74 +22,13 @@ use pod2utils::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StateRoot {
     pub block_number: i64,
     pub transactions_root: Hash,
     pub nullifiers_root: Hash,
     pub gsrs_root: Hash,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CompactStateRootSerde {
-    block_number: i64,
-    transactions_root: Hash,
-    nullifiers_root: Hash,
-    gsrs_root: Hash,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LegacyStateRootSerde {
-    block_number: i64,
-    transactions: Set,
-    nullifiers: Set,
-    gsrs: Array,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(untagged)]
-enum StateRootSerde {
-    Compact(CompactStateRootSerde),
-    Legacy(LegacyStateRootSerde),
-}
-
-impl Serialize for StateRoot {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        CompactStateRootSerde {
-            block_number: self.block_number,
-            transactions_root: self.transactions_root,
-            nullifiers_root: self.nullifiers_root,
-            gsrs_root: self.gsrs_root,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for StateRoot {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        match StateRootSerde::deserialize(deserializer)? {
-            StateRootSerde::Compact(compact) => Ok(Self {
-                block_number: compact.block_number,
-                transactions_root: compact.transactions_root,
-                nullifiers_root: compact.nullifiers_root,
-                gsrs_root: compact.gsrs_root,
-            }),
-            StateRootSerde::Legacy(legacy) => Ok(Self {
-                block_number: legacy.block_number,
-                transactions_root: legacy.transactions.commitment(),
-                nullifiers_root: legacy.nullifiers.commitment(),
-                gsrs_root: legacy.gsrs.commitment(),
-            }),
-        }
-    }
 }
 
 impl StateRoot {
@@ -614,21 +553,25 @@ mod tests {
     }
 
     #[test]
-    fn state_root_deserializes_legacy_container_shape() {
-        let txs = Set::new([Value::from(test_hash(1))].into_iter().collect());
-        let nullifiers = Set::new([Value::from(test_hash(2))].into_iter().collect());
-        let gsrs = Array::new(vec![Value::from(test_hash(3))]);
-        let legacy = serde_json::json!({
-            "blockNumber": 9,
-            "transactions": txs,
-            "nullifiers": nullifiers,
-            "gsrs": gsrs,
-        });
-        let decoded: StateRoot = serde_json::from_value(legacy).unwrap();
-        assert_eq!(decoded.block_number, 9);
-        assert_eq!(decoded.transactions_root, txs.commitment());
-        assert_eq!(decoded.nullifiers_root, nullifiers.commitment());
-        assert_eq!(decoded.gsrs_root, gsrs.commitment());
+    fn state_root_serializes_and_deserializes_compact_shape() {
+        let original = StateRoot::from_roots(9, test_hash(1), test_hash(2), test_hash(3));
+        let encoded = serde_json::to_value(&original).unwrap();
+        assert_eq!(encoded["blockNumber"], serde_json::json!(9));
+        assert_eq!(
+            encoded["transactionsRoot"],
+            serde_json::json!(hex::encode([1_u8; 32]))
+        );
+        assert_eq!(
+            encoded["nullifiersRoot"],
+            serde_json::json!(hex::encode([2_u8; 32]))
+        );
+        assert_eq!(
+            encoded["gsrsRoot"],
+            serde_json::json!(hex::encode([3_u8; 32]))
+        );
+
+        let decoded: StateRoot = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, original);
     }
 
     fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {

@@ -29,17 +29,31 @@ fn value_key(raw: RawValue) -> Vec<u8> {
     k
 }
 
+/// Compact committed app-state snapshot stored in RocksDB under `meta/head`.
+///
+/// The actual transaction/nullifier/GSR contents live in persistent POD2 containers;
+/// `AppHead` stores the roots and counts needed to reopen those containers and serve
+/// state/proof queries without materializing the full sets in memory.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppHead {
+    /// Root of the persistent transactions set.
     pub transactions_root: Hash,
+    /// Root of the persistent spent-nullifiers set.
     pub nullifiers_root: Hash,
+    /// Root of the prior-GSR array committed inside `txlib::StateRoot`.
     pub state_root_gsrs_root: Hash,
+    /// Root of the full GSR history array after appending `current_gsr`.
     pub gsr_history_root: Hash,
+    /// Current canonical global state root for this head, if one exists.
     pub current_gsr: Option<Hash>,
+    /// Execution block number associated with `current_gsr`.
     pub current_block_number: Option<u32>,
+    /// Number of accepted transactions in the canonical state.
     pub tx_count: u64,
+    /// Number of spent nullifiers in the canonical state.
     pub nullifier_count: u64,
+    /// Number of GSR entries in the persistent history array.
     pub gsr_count: u64,
 }
 
