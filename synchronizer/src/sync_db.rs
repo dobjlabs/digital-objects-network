@@ -56,7 +56,15 @@ pub struct SyncDb {
 }
 
 impl SyncDb {
-    /// Connect to Postgres, ensure database exists, and bootstrap schema/indexes.
+    /// Connect to the synchronizer's Postgres control-plane database.
+    ///
+    /// This database does not store Merkle nodes or app-state container contents. It stores:
+    /// - the single-row sync cursor used to resume from the last canonical slot
+    /// - canonical slot metadata used for reorg detection and recent-GSR lookup
+    /// - per-slot `{ old_head, new_head }` journals used to replay apply/rollback into RocksDB
+    ///
+    /// `connect` also creates the database on first run in local/dev environments and ensures the
+    /// required schema and indexes exist before returning the handle.
     pub async fn connect(database_url: &str) -> Result<Self> {
         ensure_database_exists(database_url).await?;
         let pool = PgPoolOptions::new()
@@ -69,7 +77,15 @@ impl SyncDb {
         Ok(store)
     }
 
-    /// Create schema objects used by the sync control plane.
+    /// Create the Postgres schema used by the sync control plane.
+    ///
+    /// The schema is intentionally small:
+    /// - `sync_cursor` tracks the last canonical slot/block fully committed
+    /// - `canonical_slots` records the canonical chain view and each slot's derived `current_gsr`
+    /// - `slot_apply_journal` stores the head transition needed to replay apply/rollback safely
+    ///
+    /// RocksDB remains the source of truth for live app state. Postgres exists to make head
+    /// advancement, crash recovery, and reorg rollback idempotent.
     async fn bootstrap(&self) -> Result<()> {
         let statements = [
             r#"
@@ -131,9 +147,15 @@ impl SyncDb {
         Ok(())
     }
 
-    /// Ensure cursor row exists and return the next slot to process.
+    /// Ensure the single sync-cursor row exists and return the next slot the node should process.
     ///
-    /// On first run, starts from `initial_start` when provided, otherwise current head.
+    /// Behavior:
+    /// - if the cursor already has a `last_processed_slot`, return that slot plus one
+    /// - on first run, initialize the cursor row and start from `initial_start` when provided
+    /// - otherwise start from the current beacon head slot passed in by the caller
+    ///
+    /// This method does not inspect RocksDB. It is purely about where the Postgres-backed sync
+    /// control plane believes canonical processing should resume.
     pub async fn ensure_cursor_and_get_start_slot(
         &self,
         head_slot: u32,
@@ -159,6 +181,12 @@ impl SyncDb {
             .unwrap_or(bootstrap_start_slot))
     }
 
+    /// Return the last canonical slot fully committed by the synchronizer.
+    ///
+    /// A slot is considered committed only after:
+    /// 1. its journal and slot metadata were staged as `pending`
+    /// 2. RocksDB head state was advanced
+    /// 3. Postgres was finalized via `finalize_slot_applied`
     pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
         let row = sqlx::query("SELECT last_processed_slot FROM sync_cursor WHERE id = 1")
             .fetch_optional(&self.pool)
@@ -169,6 +197,11 @@ impl SyncDb {
         }))
     }
 
+    /// Return the synchronizer's last fully committed slot plus auxiliary execution progress.
+    ///
+    /// `last_processed_slot` is the canonical consensus progress marker.
+    /// `last_processed_block_number` is cached execution-layer metadata used by callers that need
+    /// to reason about recent GSR age without re-reading the latest slot row separately.
     pub async fn last_progress(&self) -> Result<Option<SyncProgress>> {
         let row = sqlx::query(
             "SELECT last_processed_slot, last_processed_block_number FROM sync_cursor WHERE id = 1",
@@ -192,6 +225,10 @@ impl SyncDb {
         }))
     }
 
+    /// Return the canonical beacon block root for an already-applied slot.
+    ///
+    /// This is used for parent-root continuity checks when deciding whether a new slot extends the
+    /// canonical chain or whether rollback/reorg handling is required.
     pub async fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
         let row = sqlx::query(
             "SELECT block_root FROM canonical_slots WHERE slot = $1 AND status = 'applied'",
@@ -216,9 +253,19 @@ impl SyncDb {
         }
     }
 
-    /// Stage canonical slot metadata and journal atomically as `pending`.
+    /// Stage a slot's canonical metadata and head-transition journal atomically as `pending`.
     ///
-    /// RocksDB writes occur in a later step.
+    /// This is phase 1 of the apply pipeline:
+    /// 1. persist the slot row in `canonical_slots` as `pending`
+    /// 2. persist the corresponding `{ old_head, new_head }` journal with `op='apply'`
+    /// 3. leave `kv_applied=false` until RocksDB head storage is updated
+    ///
+    /// Only Postgres is touched here. The caller performs the actual RocksDB write in a later
+    /// step, after which `finalize_slot_applied` marks this staged transition as durable.
+    ///
+    /// Because the slot row and journal row are written in one SQL transaction, recovery can
+    /// always reconstruct whether a partially-applied slot needs its `old_head` or `new_head`
+    /// replayed into RocksDB.
     pub async fn save_pending_slot(
         &self,
         slot: u32,
@@ -278,7 +325,15 @@ impl SyncDb {
         Ok(())
     }
 
-    /// Mark slot journal/metadata as applied and advance the single-row cursor atomically.
+    /// Finalize a slot after RocksDB head storage was updated successfully.
+    ///
+    /// This is phase 3 of the apply pipeline:
+    /// 1. mark the journal's KV step as applied
+    /// 2. flip the canonical slot row from `pending` to `applied`
+    /// 3. advance the single sync cursor to this slot/block number
+    ///
+    /// All three updates happen in one SQL transaction so the cursor never points past a slot that
+    /// is still `pending`, and recovery never treats a fully-committed slot as incomplete.
     pub async fn finalize_slot_applied(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -316,9 +371,19 @@ impl SyncDb {
         Ok(())
     }
 
-    /// Return all slots that need startup recovery.
+    /// Return every slot whose staged apply/rollback must be replayed on startup.
     ///
-    /// A slot is recoverable when metadata is still `pending` or journal has `kv_applied=false`.
+    /// A slot is recoverable when either:
+    /// - `canonical_slots.status = 'pending'`, meaning Postgres staging happened but finalization
+    ///   did not complete
+    /// - `slot_apply_journal.kv_applied = false`, meaning the recorded head transition still needs
+    ///   to be replayed into RocksDB
+    ///
+    /// The returned `PendingRecovery` includes the journal op:
+    /// - `Apply` means RocksDB should be moved to `new_head`
+    /// - `Rollback` means RocksDB should be rewound to `old_head`
+    ///
+    /// Recovery code can therefore be completely driven from Postgres without scanning RocksDB.
     pub async fn pending_recoveries(&self) -> Result<Vec<PendingRecovery>> {
         let rows = sqlx::query(
             r#"
@@ -355,7 +420,17 @@ impl SyncDb {
         Ok(recoveries)
     }
 
-    /// Stage rollback in Postgres and return affected journals for head rewind replay.
+    /// Stage a reorg rollback in Postgres and return the affected head-transition journals.
+    ///
+    /// `keep_slot` is the last slot that remains canonical. Every later slot is converted into a
+    /// pending rollback by:
+    /// - switching its journal op from `apply` to `rollback`
+    /// - resetting `kv_applied=false` so RocksDB rewind is still required
+    /// - flipping the slot row back to `pending`
+    /// - rewinding the sync cursor to `keep_slot`
+    ///
+    /// The returned journals are ordered from newest to oldest so callers can replay RocksDB head
+    /// rewinds in reverse application order.
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<Vec<SlotJournal>> {
         let rows = sqlx::query(
             r#"
@@ -415,7 +490,13 @@ impl SyncDb {
         Ok(journals)
     }
 
-    /// Finalize rollback by deleting pending canonical rows for the provided slots.
+    /// Finalize rollback after RocksDB has already been rewound to the surviving head.
+    ///
+    /// This removes the now-orphaned `canonical_slots` rows for the rolled-back suffix. The paired
+    /// `slot_apply_journal` rows are deleted automatically via `ON DELETE CASCADE`.
+    ///
+    /// Only rows still marked `pending` with `op='rollback'` are removed, so calling this method is
+    /// idempotent and will not delete still-canonical applied slots.
     pub async fn complete_rollback(&self, slots: &[u32]) -> Result<()> {
         if slots.is_empty() {
             return Ok(());
@@ -443,6 +524,13 @@ impl SyncDb {
         Ok(())
     }
 
+    /// Return the recent canonical GSRs at or above the given execution block number.
+    ///
+    /// This is used to rebuild the in-memory recent-GSR cache on startup and after rollback. The
+    /// synchronizer uses that cache to validate that incoming blob proofs are grounded in a known,
+    /// recent canonical state root before accepting their transactions.
+    ///
+    /// `None` means "no recent window requested" and returns an empty list.
     pub async fn recent_gsrs(&self, min_block_number: Option<u32>) -> Result<Vec<(Hash, i64)>> {
         let Some(min_block_number) = min_block_number else {
             return Ok(Vec::new());

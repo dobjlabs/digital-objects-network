@@ -22,39 +22,67 @@ use txlib::StateRoot;
 pub const MAX_GSR_AGE_BLOCKS: i64 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Head transition derived for a single canonical slot.
+///
+/// This is the unit persisted in Postgres journals and later replayed into RocksDB or memory.
 pub struct SlotDelta {
+    /// Head snapshot before processing the slot.
     pub old_head: AppHead,
+    /// Head snapshot after processing the slot.
     pub new_head: AppHead,
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Minimal state snapshot returned by the synchronizer API.
 pub struct ApiStateSnapshot {
+    /// Current committed application head.
     pub head: AppHead,
 }
 
 #[derive(Debug, Clone)]
+/// Membership proof for a source transaction against the current transactions set root.
 pub struct TxMembershipProof {
+    /// Source transaction hash the client asked about.
     pub tx_hash: Hash,
+    /// Whether the transaction is present in the committed transactions set.
     pub present: bool,
+    /// Merkle proof against the current transactions set root.
     pub proof: MerkleProof,
 }
 
 #[derive(Debug, Clone)]
+/// Proof-bearing snapshot used by txlib to ground action execution.
 pub struct GroundingWitnessSnapshot {
+    /// Head whose roots all returned proofs are anchored to.
     pub head: AppHead,
+    /// Per-source transaction membership proofs under `head.transactions_root`.
     pub source_tx_proofs: Vec<TxMembershipProof>,
 }
 
+/// In-memory synchronizer state that must stay resident between slots.
+///
+/// This stays compact on purpose: only the current head and recent grounding roots are cached.
 struct InnerState {
+    /// Current committed application head mirrored from RocksDB.
     head: AppHead,
+    /// Recent canonical GSRs keyed by hash for grounding validation.
     recent_gsrs: HashMap<Hash, i64>,
 }
 
+/// Ephemeral mutable view used while deriving one slot.
+///
+/// Unlike `InnerState`, this opens the persistent POD2 containers so validation can query and
+/// mutate them without materializing the full state into memory.
 struct WorkingState {
+    /// Head snapshot the slot derivation started from.
     head: AppHead,
+    /// Persistent transactions set opened from `head.transactions_root`.
     transactions: Set,
+    /// Persistent nullifiers set opened from `head.nullifiers_root`.
     nullifiers: Set,
+    /// Persistent full GSR history array opened from `head.gsr_history_root`.
     gsr_history: Array,
+    /// Mutable recent-GSR cache cloned from the resident state for this derivation.
     recent_gsrs: HashMap<Hash, i64>,
 }
 
@@ -64,8 +92,11 @@ struct WorkingState {
 /// raw byte slices and block numbers, making it straightforward to unit-test without a
 /// live beacon node.
 pub struct StateMachine {
+    /// RocksDB-backed app-state store used to open persistent containers and persist new heads.
     app_db: AppDb,
+    /// Resident in-memory state protected by a read/write lock for API and sync-loop access.
     state: RwLock<InnerState>,
+    /// Blob parser/verifier used to decode TxFinalized payloads from blob bytes.
     proof_parser: Arc<dyn BlobParser>,
 }
 
