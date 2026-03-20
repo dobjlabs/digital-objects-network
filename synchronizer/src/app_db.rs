@@ -77,17 +77,26 @@ impl AppHead {
 }
 
 #[derive(Clone)]
-struct PersistentDb {
+pub struct AppDb {
     db: Arc<TransactionDB>,
 }
 
-impl fmt::Debug for PersistentDb {
+impl fmt::Debug for AppDb {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "PersistentDb(path: {:?})", self.db.path())
+        writeln!(f, "AppDb(path: {:?})", self.db.path())
     }
 }
 
-impl PersistentDb {
+impl AppDb {
+    pub fn connect(db_path: &str) -> Result<Self> {
+        let db = Self::open(db_path)
+            .with_context(|| format!("Failed to open RocksDB at path {db_path}"))?;
+        if db.load_head_meta()?.is_none() {
+            db.store_head_meta(&AppHead::empty())?;
+        }
+        Ok(db)
+    }
+
     fn open(path: impl AsRef<Path>) -> Result<Self> {
         let mut options = Options::default();
         options.create_if_missing(true);
@@ -111,89 +120,21 @@ impl PersistentDb {
         self.db.put(key, bytes).map_err(|err| anyhow!("{err}"))
     }
 
-    fn load_head(&self) -> Result<Option<AppHead>> {
+    fn load_head_meta(&self) -> Result<Option<AppHead>> {
         self.load_meta_json(META_HEAD_KEY)
     }
 
-    fn store_head(&self, head: &AppHead) -> Result<()> {
+    fn store_head_meta(&self, head: &AppHead) -> Result<()> {
         self.store_meta_json(META_HEAD_KEY, head)
-    }
-}
-
-impl merkletree::db::DB for PersistentDb {
-    fn load_node(&self, hash: Hash) -> Result<Option<merkletree::Node>> {
-        if hash == EMPTY_HASH {
-            return Ok(Some(merkletree::Node::Intermediate(
-                merkletree::Intermediate::new(EMPTY_HASH, EMPTY_HASH),
-            )));
-        }
-
-        match self.db.get(node_key(hash))? {
-            None => Ok(None),
-            Some(bytes) => Ok(Some(merkletree::Node::decode(bytes.as_ref())?)),
-        }
-    }
-
-    fn store_node(&mut self, node: merkletree::Node) -> Result<()> {
-        self.db
-            .put(node_key(node.hash()), node.encode()?)
-            .map_err(|err| anyhow!("rocksdb transaction put failed: {err}"))
-    }
-}
-
-impl PodDb for PersistentDb {
-    fn load_value(&self, raw: RawValue) -> anyhow::Result<Option<Value>> {
-        match self.db.get(value_key(raw))? {
-            None => Ok(None),
-            Some(bytes) => Ok(Some(serde_json::from_slice(bytes.as_ref())?)),
-        }
-    }
-
-    fn store_value(&mut self, value: Value) -> anyhow::Result<()> {
-        let value_key = value_key(value.raw());
-        let tx = self.db.transaction();
-        if let Some(old_value_bytes) = tx.get_for_update(&value_key, true)? {
-            let old_value: Value = serde_json::from_slice(&old_value_bytes)?;
-            if !old_value.is_raw() && value.is_raw() {
-                return Ok(());
-            }
-        }
-        let value_bytes = serde_json::to_vec(&value)?;
-        tx.put(value_key, value_bytes)?;
-        Ok(tx.commit()?)
-    }
-
-    fn is_persistent(&self) -> bool {
-        true
-    }
-
-    fn clone_box(&self) -> Box<dyn PodDb> {
-        Box::new(self.clone())
-    }
-}
-
-pub struct AppDb {
-    db: PersistentDb,
-}
-
-impl AppDb {
-    pub fn connect(db_path: &str) -> Result<Self> {
-        let db = PersistentDb::open(db_path)
-            .with_context(|| format!("Failed to open RocksDB at path {db_path}"))?;
-        if db.load_head()?.is_none() {
-            db.store_head(&AppHead::empty())?;
-        }
-        Ok(Self { db })
     }
 
     pub fn load_head(&self) -> Result<AppHead> {
-        self.db
-            .load_head()?
+        self.load_head_meta()?
             .context("app state missing meta/head after initialization")
     }
 
     pub fn store_head(&self, head: &AppHead) -> Result<()> {
-        self.db.store_head(head)
+        self.store_head_meta(head)
     }
 
     pub fn open_transactions(&self, root: Hash) -> Result<Set> {
@@ -241,7 +182,59 @@ impl AppDb {
     }
 
     fn db_box(&self) -> Box<dyn PodDb> {
-        Box::new(self.db.clone())
+        Box::new(self.clone())
+    }
+}
+
+impl merkletree::db::DB for AppDb {
+    fn load_node(&self, hash: Hash) -> Result<Option<merkletree::Node>> {
+        if hash == EMPTY_HASH {
+            return Ok(Some(merkletree::Node::Intermediate(
+                merkletree::Intermediate::new(EMPTY_HASH, EMPTY_HASH),
+            )));
+        }
+
+        match self.db.get(node_key(hash))? {
+            None => Ok(None),
+            Some(bytes) => Ok(Some(merkletree::Node::decode(bytes.as_ref())?)),
+        }
+    }
+
+    fn store_node(&mut self, node: merkletree::Node) -> Result<()> {
+        self.db
+            .put(node_key(node.hash()), node.encode()?)
+            .map_err(|err| anyhow!("rocksdb transaction put failed: {err}"))
+    }
+}
+
+impl PodDb for AppDb {
+    fn load_value(&self, raw: RawValue) -> anyhow::Result<Option<Value>> {
+        match self.db.get(value_key(raw))? {
+            None => Ok(None),
+            Some(bytes) => Ok(Some(serde_json::from_slice(bytes.as_ref())?)),
+        }
+    }
+
+    fn store_value(&mut self, value: Value) -> anyhow::Result<()> {
+        let value_key = value_key(value.raw());
+        let tx = self.db.transaction();
+        if let Some(old_value_bytes) = tx.get_for_update(&value_key, true)? {
+            let old_value: Value = serde_json::from_slice(&old_value_bytes)?;
+            if !old_value.is_raw() && value.is_raw() {
+                return Ok(());
+            }
+        }
+        let value_bytes = serde_json::to_vec(&value)?;
+        tx.put(value_key, value_bytes)?;
+        Ok(tx.commit()?)
+    }
+
+    fn is_persistent(&self) -> bool {
+        true
+    }
+
+    fn clone_box(&self) -> Box<dyn PodDb> {
+        Box::new(self.clone())
     }
 }
 
