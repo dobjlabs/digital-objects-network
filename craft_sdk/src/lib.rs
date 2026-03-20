@@ -1103,7 +1103,7 @@ mod tests {
     use lt_eq_u256_pod::LtEqU256Pod;
     use pod2::{
         frontend::{MainPod, Operation},
-        middleware::{F, Hash, Key, Pod, RawValue, Statement, Value, containers::Set},
+        middleware::{F, Hash, Key, Pod, RawValue, Statement, Value, containers::{Array, Set}},
     };
     use pod2utils::rand_raw_value;
     use txlib::{GroundingWitness, StateRoot, Tx};
@@ -1123,11 +1123,19 @@ mod tests {
 
     impl TestState {
         fn state_root(&self) -> StateRoot {
+            let transactions_root =
+                Set::new(self.transactions.iter().map(|hash| Value::from(*hash)).collect())
+                    .commitment();
+            let nullifiers_root =
+                Set::new(self.nullifiers.iter().map(|hash| Value::from(*hash)).collect())
+                    .commitment();
+            let gsrs_root =
+                Array::new(self.gsrs.iter().map(|hash| Value::from(*hash)).collect()).commitment();
             StateRoot::new(
                 self.block_number,
-                &self.transactions,
-                &self.nullifiers,
-                &self.gsrs,
+                transactions_root,
+                nullifiers_root,
+                gsrs_root,
             )
         }
 

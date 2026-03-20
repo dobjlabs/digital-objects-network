@@ -330,7 +330,7 @@ impl StateMachine {
         }
 
         let prior_gsrs_root = old_head.gsr_history_root;
-        let new_gsr = StateRoot::from_roots(
+        let new_gsr = StateRoot::new(
             i64::from(block_number),
             working.transactions.commitment(),
             working.nullifiers.commitment(),

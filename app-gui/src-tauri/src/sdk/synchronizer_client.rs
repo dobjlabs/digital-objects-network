@@ -77,7 +77,7 @@ pub(crate) fn fetch_grounding_witness(
         anyhow!("failed to decode synchronizer grounding witness response: {err}")
     })?;
 
-    let state_root = StateRoot::from_roots(
+    let state_root = StateRoot::new(
         payload.block_number,
         parse_hash_hex(&payload.transactions_root)?,
         parse_hash_hex(&payload.nullifiers_root)?,

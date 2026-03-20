@@ -1,7 +1,7 @@
 // pub mod examples;
 pub mod predicates;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::Arc,
 };
 
@@ -11,7 +11,7 @@ use pod2::{
     frontend::Operation,
     middleware::{
         EMPTY_VALUE, Hash, Key, NativeOperation, OperationAux, OperationType, Statement, Value,
-        containers::{Array, Dictionary, Set},
+        containers::{Dictionary, Set},
         hash_values,
     },
 };
@@ -32,8 +32,8 @@ pub struct StateRoot {
 }
 
 impl StateRoot {
-    /// Construct a `StateRoot` from root commitments.
-    pub fn from_roots(
+    /// Construct a `StateRoot` from committed root values.
+    pub fn new(
         block_number: i64,
         transactions_root: Hash,
         nullifiers_root: Hash,
@@ -45,27 +45,6 @@ impl StateRoot {
             nullifiers_root,
             gsrs_root,
         }
-    }
-
-    /// Construct a `StateRoot` from raw accumulated sets, a block number, and prior GSR history.
-    ///
-    /// `txns` and `nullifiers` are sets of hashes; `prior_gsrs` is the ordered array of all
-    /// GSRs computed before this one. Calling `.hash()` on the result gives the canonical GSR.
-    pub fn new(
-        block_number: i64,
-        txns: &HashSet<Hash>,
-        nullifiers: &HashSet<Hash>,
-        prior_gsrs: &[Hash],
-    ) -> Self {
-        let transactions = Set::new(txns.iter().map(|h| Value::from(*h)).collect());
-        let nullifiers = Set::new(nullifiers.iter().map(|h| Value::from(*h)).collect());
-        let gsrs = Array::new(prior_gsrs.iter().map(|h| Value::from(*h)).collect());
-        Self::from_roots(
-            block_number,
-            transactions.commitment(),
-            nullifiers.commitment(),
-            gsrs.commitment(),
-        )
     }
 
     pub fn hash(&self) -> Hash {
@@ -453,7 +432,7 @@ mod tests {
             basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver,
         },
         frontend::{MainPod, MultiPodBuilder},
-        middleware::{MainPodProver, Params, VDSet},
+        middleware::{containers::Array, MainPodProver, Params, VDSet},
     };
     use pod2utils::macros::BuildContext;
 
@@ -473,11 +452,19 @@ mod tests {
 
     impl TestState {
         fn state_root(&self) -> StateRoot {
+            let transactions_root =
+                Set::new(self.transactions.iter().map(|hash| Value::from(*hash)).collect())
+                    .commitment();
+            let nullifiers_root =
+                Set::new(self.nullifiers.iter().map(|hash| Value::from(*hash)).collect())
+                    .commitment();
+            let gsrs_root =
+                Array::new(self.gsrs.iter().map(|hash| Value::from(*hash)).collect()).commitment();
             StateRoot::new(
                 self.block_number,
-                &self.transactions,
-                &self.nullifiers,
-                &self.gsrs,
+                transactions_root,
+                nullifiers_root,
+                gsrs_root,
             )
         }
 
@@ -534,11 +521,16 @@ mod tests {
         let nullifiers = [test_hash(3)].into_iter().collect::<HashSet<_>>();
         let prior_gsrs = vec![test_hash(4), test_hash(5)];
 
-        let compact = StateRoot::new(7, &txns, &nullifiers, &prior_gsrs);
         let legacy_txs = Set::new(txns.iter().map(|hash| Value::from(*hash)).collect());
         let legacy_nullifiers =
             Set::new(nullifiers.iter().map(|hash| Value::from(*hash)).collect());
         let legacy_gsrs = Array::new(prior_gsrs.iter().map(|hash| Value::from(*hash)).collect());
+        let compact = StateRoot::new(
+            7,
+            legacy_txs.commitment(),
+            legacy_nullifiers.commitment(),
+            legacy_gsrs.commitment(),
+        );
         let legacy_hash = hash_values(&[
             Value::from(hash_values(&[
                 Value::from(legacy_txs.commitment()),
@@ -554,7 +546,7 @@ mod tests {
 
     #[test]
     fn state_root_serializes_and_deserializes_compact_shape() {
-        let original = StateRoot::from_roots(9, test_hash(1), test_hash(2), test_hash(3));
+        let original = StateRoot::new(9, test_hash(1), test_hash(2), test_hash(3));
         let encoded = serde_json::to_value(&original).unwrap();
         assert_eq!(encoded["blockNumber"], serde_json::json!(9));
         assert_eq!(

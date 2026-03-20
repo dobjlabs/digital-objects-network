@@ -80,7 +80,7 @@ impl AppHead {
 
     pub fn current_state_root(&self) -> Option<StateRoot> {
         self.current_block_number.map(|block_number| {
-            StateRoot::from_roots(
+            StateRoot::new(
                 block_number as i64,
                 self.transactions_root,
                 self.nullifiers_root,
