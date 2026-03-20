@@ -4,9 +4,9 @@ use anyhow::{anyhow, Context, Result};
 use pod2::{
     backends::plonky2::primitives::merkletree::{self, MerkleProof},
     middleware::{
-        containers::{Array, Dictionary, Set},
+        containers::{Array, Set},
         db::DB as PodDb,
-        Hash, Predicate, PublicKey, RawValue, SecretKey, Value, EMPTY_HASH, F,
+        Hash, RawValue, Value, EMPTY_HASH, F,
     },
 };
 use rocksdb::{Options, TransactionDB, TransactionDBOptions};
@@ -200,51 +200,6 @@ impl AppDb {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-enum ValueAux {
-    Raw(RawValue),
-    Int(i64),
-    PublicKey(PublicKey),
-    SecretKey(SecretKey),
-    Predicate(Predicate),
-    Set(Hash),
-    Dictionary(Hash),
-    Array(Hash),
-    String(String),
-}
-
-impl From<Value> for ValueAux {
-    fn from(v: Value) -> Self {
-        match v.typed {
-            TypedValue::Int(v) => ValueAux::Int(v),
-            TypedValue::Raw(v) => ValueAux::Raw(v),
-            TypedValue::PublicKey(v) => ValueAux::PublicKey(v),
-            TypedValue::SecretKey(v) => ValueAux::SecretKey(v),
-            TypedValue::Predicate(v) => ValueAux::Predicate(v),
-            TypedValue::Set(v) => ValueAux::Set(v.commitment()),
-            TypedValue::Dictionary(v) => ValueAux::Dictionary(v.commitment()),
-            TypedValue::Array(v) => ValueAux::Array(v.commitment()),
-            TypedValue::String(v) => ValueAux::String(v),
-        }
-    }
-}
-
-impl ValueAux {
-    fn into_value(self, db: &AppDb) -> Result<Value> {
-        Ok(match self {
-            ValueAux::Int(v) => Value::from(v),
-            ValueAux::Raw(v) => Value::from(v),
-            ValueAux::PublicKey(v) => Value::from(v),
-            ValueAux::SecretKey(v) => Value::from(v),
-            ValueAux::Predicate(v) => Value::from(v),
-            ValueAux::Set(v) => Value::from(Set::from_db(v, Box::new(db.clone()))?),
-            ValueAux::Dictionary(v) => Value::from(Dictionary::from_db(v, Box::new(db.clone()))?),
-            ValueAux::Array(v) => Value::from(Array::from_db(v, Box::new(db.clone()))?),
-            ValueAux::String(v) => Value::from(v),
-        })
-    }
-}
-
 impl merkletree::db::DB for AppDb {
     fn load_node(&self, hash: Hash) -> Result<Option<merkletree::Node>> {
         if hash == EMPTY_HASH {
@@ -266,16 +221,11 @@ impl merkletree::db::DB for AppDb {
     }
 }
 
-// NOTE: serialization is using json.  Using a byte-native serialization would improve performance
-// and storage usage.
 impl PodDb for AppDb {
     fn load_value(&self, raw: RawValue) -> anyhow::Result<Option<Value>> {
         match self.db.get(value_key(raw))? {
             None => Ok(None),
-            Some(bytes) => {
-                let value_aux: ValueAux = serde_json::from_slice(bytes.as_ref())?;
-                Ok(Some(value_aux.into_value(self)?))
-            }
+            Some(bytes) => Ok(Some(serde_json::from_slice(bytes.as_ref())?)),
         }
     }
 
@@ -283,14 +233,12 @@ impl PodDb for AppDb {
         let value_key = value_key(value.raw());
         let tx = self.db.transaction();
         if let Some(old_value_bytes) = tx.get_for_update(&value_key, true)? {
-            // NOTE: If we could peek instead of doing a full decode this would improve performance
-            let old_value: ValueAux = serde_json::from_slice(&old_value_bytes)?;
-            // If we had a non-raw value stored never overwrite it with a raw value
-            if !matches!(old_value, ValueAux::Raw(_)) && value.is_raw() {
+            let old_value: Value = serde_json::from_slice(&old_value_bytes)?;
+            if !old_value.is_raw() && value.is_raw() {
                 return Ok(());
             }
         }
-        let value_bytes = serde_json::to_vec(&ValueAux::try_from_value(&value)?)?;
+        let value_bytes = serde_json::to_vec(&value)?;
         tx.put(value_key, value_bytes)?;
         Ok(tx.commit()?)
     }
@@ -326,7 +274,6 @@ pub fn db_bytes_to_hash(bytes: &[u8]) -> Result<Hash> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hex::FromHex;
     use pod2::middleware::{Value, EMPTY_HASH};
     use tempfile::TempDir;
 
