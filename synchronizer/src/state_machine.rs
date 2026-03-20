@@ -205,6 +205,28 @@ impl StateMachine {
         })
     }
 
+    /// Parse and validate one blob payload against the in-progress slot state.
+    ///
+    /// This is the core per-blob derivation step used by `derive_slot_delta`.
+    /// The method is intentionally fail-soft for invalid blob contents: malformed payloads,
+    /// proofs grounded in unknown/too-old GSRs, duplicate transactions, and duplicate
+    /// nullifiers are logged and skipped rather than aborting the whole slot.
+    ///
+    /// Validation order:
+    /// 1. Parse and verify the blob as a `TxFinalized` payload via `proof_parser`
+    /// 2. Check that `payload.state_root_hash` exists in the recent canonical GSR cache
+    /// 3. Enforce the maximum grounding age window (`MAX_GSR_AGE_BLOCKS`)
+    /// 4. Reject duplicate `tx_final` values already present in the transactions set
+    /// 5. Reject duplicate nullifiers both within the payload and against the canonical
+    ///    nullifiers set
+    ///
+    /// If all checks pass, the method mutates the slot-local `WorkingState` by:
+    /// - inserting `tx_final` into the persistent transactions set handle
+    /// - inserting each nullifier into the persistent nullifiers set handle
+    /// - incrementing the corresponding counts in `state.head`
+    ///
+    /// No global state is committed here. The caller later turns the final `WorkingState` into
+    /// a new `AppHead`, persists that head to RocksDB, and only then updates the in-memory head.
     fn process_blob(
         &self,
         state: &mut WorkingState,
