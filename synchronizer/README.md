@@ -1,6 +1,6 @@
 # Synchronizer
 
-Service that tracks Digital Object blob transactions on Ethereum and exposes current derived state over HTTP.
+Service that tracks Digital Object blob transactions on Ethereum, derives canonical app state, persists that state in RocksDB/Postgres, and serves proof-backed query APIs over HTTP.
 
 ## What it does
 
@@ -8,37 +8,123 @@ Service that tracks Digital Object blob transactions on Ethereum and exposes cur
 2. Starts:
    - a sync loop that processes beacon slots in order
    - an HTTP API server
-3. For each slot, it:
+3. For each canonical slot, it:
    - reads the beacon block header/block
    - finds blob txs sent to `TO_ADDRESS`
    - fetches matching blob sidecars
-   - decodes payload bytes and derives new state
-4. Persists app state in RocksDB and sync metadata in Postgres, and serves sync/state query APIs over HTTP.
+   - parses and verifies `TxFinalized` payloads
+   - derives the next app-state head
+4. Persists the new head crash-safely and serves state/proof APIs for clients like `app-gui`.
+
+## State model
+
+The synchronizer no longer materializes all accepted txs/nullifiers in memory.
+
+It keeps:
+
+- in RocksDB:
+  - persistent POD2 Merkle container data
+  - a compact `meta/head` snapshot (`AppHead`)
+- in Postgres:
+  - sync cursor
+  - canonical slot metadata
+  - apply/rollback journals
+- in memory:
+  - the current `AppHead`
+  - a recent-GSR cache used to validate grounding roots
+
+### `AppHead`
+
+`AppHead` is the committed app-state snapshot:
+
+- `transactions_root`
+- `nullifiers_root`
+- `state_root_gsrs_root`
+- `gsr_history_root`
+- `current_gsr`
+- `current_block_number`
+- `tx_count`
+- `nullifier_count`
+- `gsr_count`
+
+`state_root_gsrs_root` is the prior-GSR array root used inside `txlib::StateRoot`.
+`gsr_history_root` is the array root after appending the current GSR.
 
 ## Storage model
 
+### RocksDB (`APP_STATE_DB_PATH`) — app state
+
+RocksDB stores:
+
+- `meta/head`
+  - JSON-serialized `AppHead`
+- `n/...`
+  - persistent Merkle nodes
+- `v/...`
+  - persistent POD2 values
+
+The Merkle-backed containers are:
+
+- transactions: persistent `Set`
+- nullifiers: persistent `Set`
+- GSR history: persistent `Array`
+
+The synchronizer reopens those containers from the roots stored in `AppHead`.
+
 ### Postgres (`SYNC_METADATA_DB_URL`) — sync control plane
 
-Postgres stores synchronizer metadata and slot-level apply/rollback journaling:
+Postgres stores synchronizer metadata and slot-level journaling:
 
 - `sync_cursor`
   - single-row progress cursor (`last_processed_slot`, `last_processed_block_number`)
 - `canonical_slots`
-  - canonical beacon/execution metadata per slot (`slot`, `block_root`, `parent_root`, `execution_block_number`, `is_empty`, `status`)
+  - canonical slot metadata
+  - includes `block_root`, `parent_root`, `execution_block_number`, `current_gsr`, `is_empty`, `status`
 - `slot_apply_journal`
-  - per-slot KV delta and lifecycle (`tx_hashes`, `nullifiers`, `gsr_block_numbers`, `gsr_hashes`, `op`, `kv_applied`)
+  - per-slot `{ old_head, new_head }` journal
+  - includes `op` (`apply` or `rollback`) and `kv_applied`
 
-This is used for deterministic reorg handling and crash-safe recovery.
+This is the source of truth for crash recovery and reorg handling.
 
-### RocksDB (`APP_STATE_DB_PATH`) — app-derived state store
+## Slot derivation rules
 
-RocksDB stores only app-derived state:
+For each decoded blob payload, the synchronizer:
 
-- accepted transaction hashes
-- spent nullifiers
-- global state roots (GSRs)
+- skips blobs that do not decode into a valid `TxFinalized` proof
+- rejects payloads whose `state_root_hash` is not in recent canonical GSR history
+- rejects payloads whose grounding GSR is older than `MAX_GSR_AGE_BLOCKS` (currently 300)
+- rejects duplicate `tx_final`
+- rejects duplicate/spent nullifiers
+- inserts accepted txs/nullifiers into the persistent sets
 
-RocksDB is updated from Postgres journaled slot deltas and rolled back using the same journal data.
+After processing all blobs in the slot, it computes the next GSR from:
+
+- current execution block number
+- transactions set root
+- nullifiers set root
+- prior GSR-array root
+
+Then it appends that new GSR to the persistent GSR history array and stores a new `AppHead`.
+
+Important: the current implementation advances GSR history for each canonical processed slot, even if that slot accepted zero app transactions.
+
+## Recovery and reorgs
+
+Writes are two-phase:
+
+1. Save canonical slot metadata and `{ old_head, new_head }` journal in Postgres as `pending`
+2. Apply `new_head` to RocksDB
+3. Mark the journal/slot `applied` and advance `sync_cursor`
+4. Update in-memory head/cache
+
+On startup, the synchronizer replays any unfinished apply/rollback work from Postgres.
+
+On reorg:
+
+- later slots are staged as rollback entries in Postgres
+- RocksDB is rewound by restoring the appropriate `old_head`
+- canonical slot rows past the keep-point are removed
+- recent GSR cache is rebuilt from canonical Postgres rows
 
 ## API
 
@@ -55,13 +141,6 @@ RocksDB is updated from Postgres journaled slot deltas and rolled back using the
     - `tx_count`
     - `nullifier_count`
     - `gsr_count`
-- `GET /v1/state/full`
-  - returns:
-    - `block_number`
-    - `current_gsr`
-    - `transactions` (array of tx hashes)
-    - `nullifiers` (array of nullifier hashes)
-    - `gsrs` (array of prior GSR hashes)
 - `POST /v1/state/tx/contains`
   - request body:
     - `tx_hashes` (array of hash strings)
@@ -69,12 +148,31 @@ RocksDB is updated from Postgres journaled slot deltas and rolled back using the
     - `last_processed_slot`
     - `current_gsr`
     - `results` (array of `{ tx_hash, present }`)
+- `POST /v1/state/nullifier/contains`
+  - request body:
+    - `nullifiers` (array of hash strings)
+  - returns:
+    - `last_processed_slot`
+    - `current_gsr`
+    - `results` (array of `{ nullifier, present }`)
 - `GET /v1/state/tx/{tx_hash}`
   - returns:
     - `tx_hash`
     - `present`
     - `last_processed_slot`
     - `current_gsr`
+- `POST /v1/txlib/grounding-witness`
+  - request body:
+    - `sourceTxHashes` (array of hash strings)
+  - returns:
+    - `stateRootHash`
+    - `blockNumber`
+    - `transactionsRoot`
+    - `nullifiersRoot`
+    - `gsrsRoot`
+    - `sourceTxProofs` (array of `{ txHash, present, proof }`)
+
+There is no `/v1/state/full` endpoint.
 
 Hash parsing accepts `0x`-prefixed or raw hex input; responses are normalized to lowercase `0x...`.
 

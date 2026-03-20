@@ -1,7 +1,6 @@
 use std::{fmt, path::Path, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
-use hex::FromHex;
 use pod2::{
     backends::plonky2::primitives::merkletree::{self, MerkleProof},
     middleware::{
