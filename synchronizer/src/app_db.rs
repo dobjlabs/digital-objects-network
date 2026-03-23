@@ -152,15 +152,15 @@ impl AppDb {
     }
 
     pub fn open_transactions(&self, root: Hash) -> Result<Set> {
-        Set::from_db(root, self.db_box()).map_err(|err| anyhow!("{err}"))
+        Ok(Set::from_db(root, self.db_box())?)
     }
 
     pub fn open_nullifiers(&self, root: Hash) -> Result<Set> {
-        Set::from_db(root, self.db_box()).map_err(|err| anyhow!("{err}"))
+        Ok(Set::from_db(root, self.db_box())?)
     }
 
     pub fn open_gsr_history(&self, root: Hash) -> Result<Array> {
-        Array::from_db(root, self.db_box()).map_err(|err| anyhow!("{err}"))
+        Ok(Array::from_db(root, self.db_box())?)
     }
 
     pub fn prove_tx(&self, head: &AppHead, tx_hash: Hash) -> Result<(bool, MerkleProof)> {
@@ -225,7 +225,13 @@ impl PodDb for AppDb {
     fn load_value(&self, raw: RawValue) -> anyhow::Result<Option<Value>> {
         match self.db.get(value_key(raw))? {
             None => Ok(None),
-            Some(bytes) => Ok(Some(serde_json::from_slice(bytes.as_ref())?)),
+            Some(bytes) => Ok(Some({
+                if bytes.is_empty() {
+                    Value::from(raw)
+                } else {
+                    Value::from_bytes(bytes.as_ref(), self.clone_box())?
+                }
+            })),
         }
     }
 
@@ -233,12 +239,20 @@ impl PodDb for AppDb {
         let value_key = value_key(value.raw());
         let tx = self.db.transaction();
         if let Some(old_value_bytes) = tx.get_for_update(&value_key, true)? {
-            let old_value: Value = serde_json::from_slice(&old_value_bytes)?;
-            if !old_value.is_raw() && value.is_raw() {
+            let is_raw = old_value_bytes.is_empty();
+            // If we had a non-RawValue stored don't overwrite it (specially not with a
+            // RawValue).   Also skip redundant RawValue overwrite.
+            if !is_raw || (is_raw && value.is_raw()) {
                 return Ok(());
             }
         }
-        let value_bytes = serde_json::to_vec(&value)?;
+        let value_bytes = if value.is_raw() {
+            // For RawValue we store an empty vector because it's a duplicate of the key.
+            // This way we can easily check for RawValue without decoding.
+            vec![]
+        } else {
+            Value::to_bytes(&value)
+        };
         tx.put(value_key, value_bytes)?;
         Ok(tx.commit()?)
     }
@@ -274,6 +288,7 @@ pub fn db_bytes_to_hash(bytes: &[u8]) -> Result<Hash> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex::FromHex;
     use pod2::middleware::{Value, EMPTY_HASH};
     use tempfile::TempDir;
 
