@@ -138,8 +138,8 @@ impl Node {
         self.sync_db.slot_root(slot).await
     }
 
-    /// Rewind to `keep_slot` by staging rollback in Postgres, deleting affected keys in RocksDB,
-    /// and finalizing rollback metadata.
+    /// Rewind to `keep_slot` by staging rollback in Postgres, restoring the surviving `old_head`
+    /// in RocksDB, and finalizing rollback metadata.
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
         let journals = self.sync_db.rollback_to_slot(keep_slot).await?;
         self.state_machine.rollback_journals(&journals)?;

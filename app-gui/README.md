@@ -46,15 +46,21 @@ Events:
 
 ## Runtime flow
 
+Inventory loading (`load_gui_inventory`) does:
+
+1. Read local `.dobj` files.
+2. Query synchronizer tx/nullifier membership against a consistent head snapshot.
+3. Mark grounded objects and auto-nullify locally-live files already spent on-chain.
+
 Action execution (`run_sdk_action`) does:
 
-1. Read synchronizer state.
-2. Validate input objects and grounding.
-3. Execute action in `craft_sdk`.
-4. Submit proof payload to relayer.
-5. Wait for synchronizer commit.
+1. Resolve and validate local input objects.
+2. Request a proof-bearing grounding witness from the synchronizer for the inputs' source txs.
+3. Execute the action in `craft_sdk` using that grounding witness.
+4. Submit the proof payload to the relayer.
+5. Wait for relayer confirmation, then wait for the synchronizer to index the new tx.
 6. Write outputs to `~/.objects` and move consumed inputs to `~/.objects/.nullified`.
-7. Emit progress events to UI.
+7. Emit progress events to the UI.
 
 In addition to action runs, UI polling does:
 

@@ -110,7 +110,7 @@ Important: the current implementation advances GSR history for each canonical pr
 
 ## Recovery and reorgs
 
-Writes are two-phase:
+Canonical head advancement uses a staged head-swap pipeline:
 
 1. Save canonical slot metadata and `{ old_head, new_head }` journal in Postgres as `pending`
 2. Apply `new_head` to RocksDB

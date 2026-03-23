@@ -225,8 +225,9 @@ impl StateMachine {
     /// - inserting each nullifier into the persistent nullifiers set handle
     /// - incrementing the corresponding counts in `state.head`
     ///
-    /// No global state is committed here. The caller later turns the final `WorkingState` into
-    /// a new `AppHead`, persists that head to RocksDB, and only then updates the in-memory head.
+    /// No new canonical head is committed here. Mutating the persistent container handles may
+    /// materialize Merkle nodes/values in RocksDB, but the app's committed state changes only when
+    /// the caller stores the resulting `AppHead` and later swaps in-memory state to that head.
     fn process_blob(
         &self,
         state: &mut WorkingState,
