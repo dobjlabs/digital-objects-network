@@ -125,6 +125,17 @@ mod tests {
         }
     }
 
+    fn prematerialize_object_key(
+        ctx: &mut BuildContext,
+        obj: &pod2::middleware::containers::Dictionary,
+    ) {
+        let key = obj.get(&Key::from("key")).unwrap().unwrap();
+        let _ = ctx
+            .builder
+            .priv_op(op!(DictContains(obj.clone(), "key", key)))
+            .unwrap();
+    }
+
     #[test]
     fn test_time_example_predicates_exist() {
         let module = module().unwrap();
@@ -186,6 +197,7 @@ mod tests {
                 tx_builder.insert(&mut ctx, unlocked_obj.clone());
                 let locked_obj =
                     tx_utils::lock_object(&mut ctx, unlocked_obj.clone(), duration).unwrap();
+                prematerialize_object_key(&mut ctx, &unlocked_obj);
                 tx_builder.mutate(&mut ctx, locked_obj.clone(), unlocked_obj.clone());
                 let (st_finalized, tx_lock) = tx_builder.finalize(&mut ctx);
                 ctx.builder.reveal(&st_finalized).unwrap();
@@ -239,6 +251,7 @@ mod tests {
                     },
                 )
                 .unwrap();
+                prematerialize_object_key(&mut ctx, &locked_obj);
                 tx_builder.mutate(&mut ctx, unlocked, locked_obj.clone());
                 let (st_finalized, _) = tx_builder.finalize(&mut ctx);
                 ctx.builder.reveal(&st_finalized).unwrap();
@@ -301,11 +314,7 @@ mod tests {
                 )
                 .unwrap();
                 // Pre-materialise key for TxObjectStateNullified inside mutate.
-                let key = obj.get(&Key::from("key")).unwrap().unwrap();
-                let _ = ctx
-                    .builder
-                    .priv_op(op!(DictContains(obj, "key", key)))
-                    .unwrap();
+                prematerialize_object_key(&mut ctx, &obj);
                 tx_builder.mutate(&mut ctx, obj_with_expiry.clone(), obj.clone());
                 let (st_finalized, tx_set) = tx_builder.finalize(&mut ctx);
                 ctx.builder.reveal(&st_finalized).unwrap();
