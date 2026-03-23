@@ -141,6 +141,15 @@ On reorg:
     - `tx_count`
     - `nullifier_count`
     - `gsr_count`
+- `POST /v1/state/membership`
+  - request body:
+    - `tx_hashes` (array of hash strings)
+    - `nullifiers` (array of hash strings)
+  - returns membership for both sets from one captured application head:
+    - `last_processed_slot`
+    - `current_gsr`
+    - `tx_results` (array of `{ tx_hash, present }`)
+    - `nullifier_results` (array of `{ nullifier, present }`)
 - `POST /v1/state/tx/contains`
   - request body:
     - `tx_hashes` (array of hash strings)

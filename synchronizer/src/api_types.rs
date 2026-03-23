@@ -60,6 +60,20 @@ pub struct NullifierContainsResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MembershipRequest {
+    pub tx_hashes: Vec<String>,
+    pub nullifiers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MembershipResponse {
+    pub last_processed_slot: Option<u32>,
+    pub current_gsr: Option<String>,
+    pub tx_results: Vec<TxContainsEntry>,
+    pub nullifier_results: Vec<NullifierContainsEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TxStatusResponse {
     pub tx_hash: String,
     pub present: bool,

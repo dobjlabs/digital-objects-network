@@ -7,9 +7,8 @@ use anyhow::{anyhow, Result};
 use hex::FromHex;
 use pod2::middleware::Hash;
 use synchronizer::api_types::{
-    GroundingWitnessRequest, GroundingWitnessResponse, NullifierContainsRequest,
-    NullifierContainsResponse, StateHeadResponse, TxContainsRequest, TxContainsResponse,
-    TxStatusResponse,
+    GroundingWitnessRequest, GroundingWitnessResponse, MembershipRequest, MembershipResponse,
+    StateHeadResponse, TxStatusResponse,
 };
 use txlib::{GroundingWitness, StateRoot};
 
@@ -19,6 +18,11 @@ pub(crate) use common::encode_hash_hex;
 
 pub(crate) struct SynchronizerHead {
     pub(crate) current_gsr: Hash,
+}
+
+pub(crate) struct SynchronizerMembership {
+    pub(crate) grounded_txs: HashSet<Hash>,
+    pub(crate) on_chain_nullifiers: HashSet<Hash>,
 }
 
 fn parse_hash_hex(value: &str) -> Result<Hash> {
@@ -118,60 +122,14 @@ pub(crate) fn fetch_grounding_witness(
     Ok(GroundingWitness::new(state_root, source_tx_proofs))
 }
 
-pub(crate) fn fetch_synchronizer_tx_contains(
+pub(crate) fn fetch_synchronizer_membership_with_nullifiers(
     sync_api_url: &str,
     tx_hashes: &[Hash],
-) -> Result<HashSet<Hash>> {
-    if tx_hashes.is_empty() {
-        return Ok(HashSet::new());
-    }
-
-    let endpoint = format!(
-        "{}/v1/state/tx/contains",
-        sync_api_url.trim_end_matches('/')
-    );
-    let request = TxContainsRequest {
-        tx_hashes: tx_hashes.iter().map(encode_hash_hex).collect(),
-    };
-    let client = reqwest::blocking::Client::new();
-    let response = client
-        .post(&endpoint)
-        .json(&request)
-        .send()
-        .map_err(|err| anyhow!("failed to query synchronizer at {endpoint}: {err}"))?;
-    if !response.status().is_success() {
-        return Err(anyhow!(
-            "synchronizer request failed: {} {}",
-            response.status().as_u16(),
-            response.status()
-        ));
-    }
-
-    let payload: TxContainsResponse = response
-        .json()
-        .map_err(|err| anyhow!("failed to decode synchronizer tx/contains response: {err}"))?;
-    let mut present = HashSet::new();
-    for entry in payload.results {
-        if entry.present {
-            present.insert(parse_hash_hex(&entry.tx_hash)?);
-        }
-    }
-    Ok(present)
-}
-
-pub(crate) fn fetch_synchronizer_nullifier_contains(
-    sync_api_url: &str,
     nullifiers: &[Hash],
-) -> Result<HashSet<Hash>> {
-    if nullifiers.is_empty() {
-        return Ok(HashSet::new());
-    }
-
-    let endpoint = format!(
-        "{}/v1/state/nullifier/contains",
-        sync_api_url.trim_end_matches('/')
-    );
-    let request = NullifierContainsRequest {
+) -> Result<SynchronizerMembership> {
+    let endpoint = format!("{}/v1/state/membership", sync_api_url.trim_end_matches('/'));
+    let request = MembershipRequest {
+        tx_hashes: tx_hashes.iter().map(encode_hash_hex).collect(),
         nullifiers: nullifiers.iter().map(encode_hash_hex).collect(),
     };
     let client = reqwest::blocking::Client::new();
@@ -188,16 +146,28 @@ pub(crate) fn fetch_synchronizer_nullifier_contains(
         ));
     }
 
-    let payload: NullifierContainsResponse = response.json().map_err(|err| {
-        anyhow!("failed to decode synchronizer nullifier/contains response: {err}")
-    })?;
-    let mut present = HashSet::new();
-    for entry in payload.results {
+    let payload: MembershipResponse = response
+        .json()
+        .map_err(|err| anyhow!("failed to decode synchronizer membership response: {err}"))?;
+
+    let mut grounded_txs = HashSet::new();
+    for entry in payload.tx_results {
         if entry.present {
-            present.insert(parse_hash_hex(&entry.nullifier)?);
+            grounded_txs.insert(parse_hash_hex(&entry.tx_hash)?);
         }
     }
-    Ok(present)
+
+    let mut on_chain_nullifiers = HashSet::new();
+    for entry in payload.nullifier_results {
+        if entry.present {
+            on_chain_nullifiers.insert(parse_hash_hex(&entry.nullifier)?);
+        }
+    }
+
+    Ok(SynchronizerMembership {
+        grounded_txs,
+        on_chain_nullifiers,
+    })
 }
 
 fn fetch_synchronizer_tx_status(sync_api_url: &str, tx_hash: &Hash) -> Result<TxStatusResponse> {

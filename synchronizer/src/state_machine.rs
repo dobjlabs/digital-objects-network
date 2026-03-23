@@ -59,6 +59,17 @@ pub struct GroundingWitnessSnapshot {
     pub source_tx_proofs: Vec<TxMembershipProof>,
 }
 
+#[derive(Debug, Clone)]
+/// Membership snapshot anchored to one committed head.
+pub struct MembershipSnapshot {
+    /// Head whose roots all returned membership results are anchored to.
+    pub head: AppHead,
+    /// Per-request transaction membership bits under `head.transactions_root`.
+    pub tx_present: Vec<bool>,
+    /// Per-request nullifier membership bits under `head.nullifiers_root`.
+    pub nullifier_present: Vec<bool>,
+}
+
 /// In-memory synchronizer state that must stay resident between slots.
 ///
 /// This stays compact on purpose: only the current head and recent grounding roots are cached.
@@ -172,18 +183,32 @@ impl StateMachine {
         })
     }
 
+    #[cfg(test)]
     pub fn tx_exists(&self, tx_hash: &Hash) -> Result<bool> {
         Ok(self.tx_exists_batch(std::slice::from_ref(tx_hash))?[0])
     }
 
+    #[cfg(test)]
     pub fn tx_exists_batch(&self, tx_hashes: &[Hash]) -> Result<Vec<bool>> {
-        let head = self.head_snapshot()?;
-        self.app_db.tx_exists_batch(&head, tx_hashes)
+        Ok(self.membership_snapshot(tx_hashes, &[])?.tx_present)
     }
 
+    #[cfg(test)]
     pub fn nullifier_exists_batch(&self, nullifiers: &[Hash]) -> Result<Vec<bool>> {
+        Ok(self.membership_snapshot(&[], nullifiers)?.nullifier_present)
+    }
+
+    pub fn membership_snapshot(
+        &self,
+        tx_hashes: &[Hash],
+        nullifiers: &[Hash],
+    ) -> Result<MembershipSnapshot> {
         let head = self.head_snapshot()?;
-        self.app_db.nullifier_exists_batch(&head, nullifiers)
+        Ok(MembershipSnapshot {
+            tx_present: self.app_db.tx_exists_batch(&head, tx_hashes)?,
+            nullifier_present: self.app_db.nullifier_exists_batch(&head, nullifiers)?,
+            head,
+        })
     }
 
     pub fn grounding_witness(&self, source_tx_hashes: &[Hash]) -> Result<GroundingWitnessSnapshot> {

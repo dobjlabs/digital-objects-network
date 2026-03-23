@@ -10,14 +10,15 @@ use axum::{
 use hex::FromHex;
 use pod2::middleware::Hash;
 use synchronizer::api_types::{
-    GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, NullifierContainsEntry,
-    NullifierContainsRequest, NullifierContainsResponse, SourceTxProofResponse, StateHeadResponse,
-    SyncProgressResponse, TxContainsEntry, TxContainsRequest, TxContainsResponse, TxStatusResponse,
+    GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, MembershipRequest,
+    MembershipResponse, NullifierContainsEntry, NullifierContainsRequest,
+    NullifierContainsResponse, SourceTxProofResponse, StateHeadResponse, SyncProgressResponse,
+    TxContainsEntry, TxContainsRequest, TxContainsResponse, TxStatusResponse,
 };
 use tokio::sync::watch;
 use tracing::info;
 
-use crate::{state_machine::StateMachine, sync_db::SyncDb};
+use crate::{app_db::AppHead, state_machine::StateMachine, sync_db::SyncDb};
 use common::encode_hash_hex;
 
 #[derive(Clone)]
@@ -46,6 +47,7 @@ pub async fn run_api_server(
         .route("/healthz", get(healthz))
         .route("/sync-progress", get(get_sync_progress))
         .route("/v1/state/head", get(get_state_head))
+        .route("/v1/state/membership", post(post_state_membership))
         .route("/v1/state/tx/contains", post(post_state_tx_contains))
         .route(
             "/v1/state/nullifier/contains",
@@ -118,15 +120,15 @@ async fn post_state_tx_contains(
         .iter()
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
-    let present = app_state
+    let membership = app_state
         .state_machine
-        .tx_exists_batch(&hashes)
+        .membership_snapshot(&hashes, &[])
         .map_err(internal_error)?;
-    let head = build_head_snapshot(&app_state).await?;
+    let head = build_head_snapshot_from_head(&app_state, membership.head).await?;
 
     let results = hashes
         .iter()
-        .zip(present.into_iter())
+        .zip(membership.tx_present.into_iter())
         .map(|(hash, present)| TxContainsEntry {
             tx_hash: encode_hash_hex(hash),
             present,
@@ -149,15 +151,15 @@ async fn post_state_nullifier_contains(
         .iter()
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
-    let present = app_state
+    let membership = app_state
         .state_machine
-        .nullifier_exists_batch(&hashes)
+        .membership_snapshot(&[], &hashes)
         .map_err(internal_error)?;
-    let head = build_head_snapshot(&app_state).await?;
+    let head = build_head_snapshot_from_head(&app_state, membership.head).await?;
 
     let results = hashes
         .iter()
-        .zip(present.into_iter())
+        .zip(membership.nullifier_present.into_iter())
         .map(|(hash, present)| NullifierContainsEntry {
             nullifier: encode_hash_hex(hash),
             present,
@@ -171,19 +173,64 @@ async fn post_state_nullifier_contains(
     }))
 }
 
+async fn post_state_membership(
+    State(app_state): State<AppState>,
+    Json(body): Json<MembershipRequest>,
+) -> Result<Json<MembershipResponse>, (StatusCode, String)> {
+    let tx_hashes = body
+        .tx_hashes
+        .iter()
+        .map(|raw| parse_hash_hex(raw))
+        .collect::<Result<Vec<_>, _>>()?;
+    let nullifiers = body
+        .nullifiers
+        .iter()
+        .map(|raw| parse_hash_hex(raw))
+        .collect::<Result<Vec<_>, _>>()?;
+    let membership = app_state
+        .state_machine
+        .membership_snapshot(&tx_hashes, &nullifiers)
+        .map_err(internal_error)?;
+    let head = build_head_snapshot_from_head(&app_state, membership.head).await?;
+
+    let tx_results = tx_hashes
+        .iter()
+        .zip(membership.tx_present.into_iter())
+        .map(|(hash, present)| TxContainsEntry {
+            tx_hash: encode_hash_hex(hash),
+            present,
+        })
+        .collect();
+    let nullifier_results = nullifiers
+        .iter()
+        .zip(membership.nullifier_present.into_iter())
+        .map(|(hash, present)| NullifierContainsEntry {
+            nullifier: encode_hash_hex(hash),
+            present,
+        })
+        .collect();
+
+    Ok(Json(MembershipResponse {
+        last_processed_slot: head.last_processed_slot,
+        current_gsr: head.current_gsr,
+        tx_results,
+        nullifier_results,
+    }))
+}
+
 async fn get_state_tx(
     State(app_state): State<AppState>,
     Path(tx_hash): Path<String>,
 ) -> Result<Json<TxStatusResponse>, (StatusCode, String)> {
     let hash = parse_hash_hex(&tx_hash)?;
-    let present = app_state
+    let membership = app_state
         .state_machine
-        .tx_exists(&hash)
+        .membership_snapshot(std::slice::from_ref(&hash), &[])
         .map_err(internal_error)?;
-    let head = build_head_snapshot(&app_state).await?;
+    let head = build_head_snapshot_from_head(&app_state, membership.head).await?;
     Ok(Json(TxStatusResponse {
         tx_hash: encode_hash_hex(&hash),
-        present,
+        present: membership.tx_present[0],
         last_processed_slot: head.last_processed_slot,
         current_gsr: head.current_gsr,
     }))
@@ -230,6 +277,18 @@ async fn post_grounding_witness(
 }
 
 async fn build_head_snapshot(app_state: &AppState) -> Result<HeadSnapshot, (StatusCode, String)> {
+    let head = app_state
+        .state_machine
+        .api_state_snapshot()
+        .map_err(internal_error)?
+        .head;
+    build_head_snapshot_from_head(app_state, head).await
+}
+
+async fn build_head_snapshot_from_head(
+    app_state: &AppState,
+    head: AppHead,
+) -> Result<HeadSnapshot, (StatusCode, String)> {
     let progress = app_state
         .sync_db
         .last_progress()
@@ -242,12 +301,6 @@ async fn build_head_snapshot(app_state: &AppState) -> Result<HeadSnapshot, (Stat
         ),
         None => (None, None),
     };
-
-    let snapshot = app_state
-        .state_machine
-        .api_state_snapshot()
-        .map_err(internal_error)?;
-    let head = snapshot.head;
 
     Ok(HeadSnapshot {
         last_processed_slot,

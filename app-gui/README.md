@@ -49,7 +49,7 @@ Events:
 Inventory loading (`load_gui_inventory`) does:
 
 1. Read local `.dobj` files.
-2. Query synchronizer tx/nullifier membership against a consistent head snapshot.
+2. Query synchronizer membership for source txs and live nullifiers in a single request anchored to one head.
 3. Mark grounded objects and auto-nullify locally-live files already spent on-chain.
 
 Action execution (`run_sdk_action`) does:
