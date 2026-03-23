@@ -632,24 +632,30 @@ mod tests {
 
     fn test_urls() -> (String, String, String) {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let pid = std::process::id();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let ctr = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let db_name = format!("syncdb_test_{}_{}_{}", pid, nanos, ctr);
         let admin_url = std::env::var("TEST_PG_ADMIN_URL")
             .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/postgres".into());
-        let base = admin_url.trim_end_matches("/postgres");
-        let db_url = format!("{}/{}", base, db_name);
-        (db_name, db_url, admin_url)
+        let mut url = Url::parse(&admin_url).expect("valid admin url");
+        let db_name = format!(
+            "syncdb_test_{}_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        url.set_path(&format!("/{db_name}"));
+        (db_name, url.to_string(), admin_url)
     }
 
-    async fn fresh_sync_db() -> Result<(SyncDb, String, String)> {
-        static DB_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-        let _guard = DB_TEST_MUTEX.get_or_init(|| Mutex::new(())).lock().await;
+    fn test_db_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    async fn setup_db() -> Result<(SyncDb, String, String)> {
         let (db_name, db_url, admin_url) = test_urls();
+        drop_db(&db_name, &admin_url).await?;
         let sync_db = SyncDb::connect(&db_url).await?;
         Ok((sync_db, db_name, admin_url))
     }
@@ -659,10 +665,12 @@ mod tests {
             .max_connections(1)
             .connect(admin_url)
             .await?;
-        sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1")
-            .bind(db_name)
-            .execute(&pool)
-            .await?;
+        sqlx::query(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+        )
+        .bind(db_name)
+        .execute(&pool)
+        .await?;
         let escaped = db_name.replace('"', "\"\"");
         sqlx::query(&format!("DROP DATABASE IF EXISTS \"{escaped}\""))
             .execute(&pool)
@@ -671,8 +679,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn test_pending_recovery_roundtrip() -> Result<()> {
-        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let _guard = test_db_lock().lock().await;
+        let (sync_db, db_name, admin_url) = setup_db().await?;
         let journal = SlotJournal {
             slot: 10,
             old_head: AppHead::empty(),
@@ -701,8 +711,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn test_recent_gsrs_query() -> Result<()> {
-        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let _guard = test_db_lock().lock().await;
+        let (sync_db, db_name, admin_url) = setup_db().await?;
         let j1 = SlotJournal {
             slot: 1,
             old_head: AppHead::empty(),
@@ -752,8 +764,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn test_rollback_staging_replays_old_head() -> Result<()> {
-        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let _guard = test_db_lock().lock().await;
+        let (sync_db, db_name, admin_url) = setup_db().await?;
         let dir = TempDir::new()?;
         let app_db = AppDb::connect(dir.path().to_str().unwrap())?;
         let state_machine = StateMachine::new(app_db, Arc::new(MockBlobParser))?;
