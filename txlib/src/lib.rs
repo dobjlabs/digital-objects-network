@@ -1,9 +1,6 @@
 // pub mod examples;
 pub mod predicates;
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Result, anyhow};
 use pod2::{
@@ -446,7 +443,7 @@ mod tests {
             basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver,
         },
         frontend::{MainPod, MultiPodBuilder},
-        middleware::{containers::Array, MainPodProver, Params, VDSet},
+        middleware::{MainPodProver, Params, VDSet, containers::Array},
     };
     use pod2utils::macros::BuildContext;
 
@@ -466,12 +463,20 @@ mod tests {
 
     impl TestState {
         fn state_root(&self) -> StateRoot {
-            let transactions_root =
-                Set::new(self.transactions.iter().map(|hash| Value::from(*hash)).collect())
-                    .commitment();
-            let nullifiers_root =
-                Set::new(self.nullifiers.iter().map(|hash| Value::from(*hash)).collect())
-                    .commitment();
+            let transactions_root = Set::new(
+                self.transactions
+                    .iter()
+                    .map(|hash| Value::from(*hash))
+                    .collect(),
+            )
+            .commitment();
+            let nullifiers_root = Set::new(
+                self.nullifiers
+                    .iter()
+                    .map(|hash| Value::from(*hash))
+                    .collect(),
+            )
+            .commitment();
             let gsrs_root =
                 Array::new(self.gsrs.iter().map(|hash| Value::from(*hash)).collect()).commitment();
             StateRoot::new(
