@@ -77,18 +77,7 @@ async fn healthz() -> Json<HealthResponse> {
 async fn get_sync_progress(
     State(app_state): State<AppState>,
 ) -> Result<Json<SyncProgressResponse>, (StatusCode, String)> {
-    let progress = app_state
-        .sync_db
-        .last_progress()
-        .await
-        .map_err(internal_error)?;
-    let (last_processed_slot, last_processed_block_number) = match progress {
-        Some(progress) => (
-            Some(progress.last_processed_slot),
-            progress.last_processed_block_number,
-        ),
-        None => (None, None),
-    };
+    let (last_processed_slot, last_processed_block_number) = load_sync_progress(&app_state).await?;
 
     Ok(Json(SyncProgressResponse {
         last_processed_slot,
@@ -279,9 +268,8 @@ async fn post_grounding_witness(
 async fn build_head_snapshot(app_state: &AppState) -> Result<HeadSnapshot, (StatusCode, String)> {
     let head = app_state
         .state_machine
-        .api_state_snapshot()
-        .map_err(internal_error)?
-        .head;
+        .head_snapshot()
+        .map_err(internal_error)?;
     build_head_snapshot_from_head(app_state, head).await
 }
 
@@ -289,18 +277,7 @@ async fn build_head_snapshot_from_head(
     app_state: &AppState,
     head: AppHead,
 ) -> Result<HeadSnapshot, (StatusCode, String)> {
-    let progress = app_state
-        .sync_db
-        .last_progress()
-        .await
-        .map_err(internal_error)?;
-    let (last_processed_slot, last_processed_block_number) = match progress {
-        Some(progress) => (
-            Some(progress.last_processed_slot),
-            progress.last_processed_block_number,
-        ),
-        None => (None, None),
-    };
+    let (last_processed_slot, last_processed_block_number) = load_sync_progress(app_state).await?;
 
     Ok(HeadSnapshot {
         last_processed_slot,
@@ -310,6 +287,23 @@ async fn build_head_snapshot_from_head(
         tx_count: head.tx_count as usize,
         nullifier_count: head.nullifier_count as usize,
         gsr_count: head.gsr_count as usize,
+    })
+}
+
+async fn load_sync_progress(
+    app_state: &AppState,
+) -> Result<(Option<u32>, Option<u32>), (StatusCode, String)> {
+    let progress = app_state
+        .sync_db
+        .last_progress()
+        .await
+        .map_err(internal_error)?;
+    Ok(match progress {
+        Some(progress) => (
+            Some(progress.last_processed_slot),
+            progress.last_processed_block_number,
+        ),
+        None => (None, None),
     })
 }
 

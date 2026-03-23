@@ -32,13 +32,6 @@ pub struct SlotDelta {
     pub new_head: AppHead,
 }
 
-#[derive(Debug, Clone, Copy)]
-/// Minimal state snapshot returned by the synchronizer API.
-pub struct ApiStateSnapshot {
-    /// Current committed application head.
-    pub head: AppHead,
-}
-
 #[derive(Debug, Clone)]
 /// Membership proof for a source transaction against the current transactions set root.
 pub struct TxMembershipProof {
@@ -174,12 +167,6 @@ impl StateMachine {
             nullifiers: self.app_db.open_nullifiers(state.head.nullifiers_root)?,
             gsr_history: self.app_db.open_gsr_history(state.head.gsr_history_root)?,
             recent_gsrs: state.recent_gsrs.clone(),
-        })
-    }
-
-    pub fn api_state_snapshot(&self) -> Result<ApiStateSnapshot> {
-        Ok(ApiStateSnapshot {
-            head: self.head_snapshot()?,
         })
     }
 
