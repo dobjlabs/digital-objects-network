@@ -65,7 +65,7 @@ pub struct MembershipSnapshot {
 
 /// In-memory synchronizer state that must stay resident between slots.
 ///
-/// This stays compact on purpose: only the current head and recent grounding roots are cached.
+/// This resident state contains the current head and the recent grounding-root cache.
 struct InnerState {
     /// Current committed application head mirrored from RocksDB.
     head: AppHead,
@@ -75,8 +75,8 @@ struct InnerState {
 
 /// Ephemeral mutable view used while deriving one slot.
 ///
-/// Unlike `InnerState`, this opens the persistent POD2 containers so validation can query and
-/// mutate them without materializing the full state into memory.
+/// This view opens the persistent POD2 containers used during slot derivation so validation can
+/// query and mutate transactions, nullifiers, and GSR history for one slot.
 struct WorkingState {
     /// Head snapshot the slot derivation started from.
     head: AppHead,

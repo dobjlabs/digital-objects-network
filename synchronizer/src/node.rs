@@ -257,7 +257,7 @@ impl Node {
         }))
     }
 
-    /// Derive the full per-slot update from beacon/execution data without mutating live memory.
+    /// Derive the full per-slot update from beacon/execution data and return it for staged apply.
     pub async fn derive_slot_update(
         &self,
         beacon_block_header: &BlockHeader,

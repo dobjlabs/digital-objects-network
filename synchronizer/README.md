@@ -18,9 +18,7 @@ Service that tracks Digital Object blob transactions on Ethereum, derives canoni
 
 ## State model
 
-The synchronizer no longer materializes all accepted txs/nullifiers in memory.
-
-It keeps:
+The synchronizer keeps canonical app state across RocksDB, Postgres, and memory:
 
 - in RocksDB:
   - persistent POD2 Merkle container data
@@ -106,7 +104,7 @@ After processing all blobs in the slot, it computes the next GSR from:
 
 Then it appends that new GSR to the persistent GSR history array and stores a new `AppHead`.
 
-Important: the current implementation advances GSR history for each canonical processed slot, even if that slot accepted zero app transactions.
+Important: GSR history advances for each canonical processed slot, even if that slot accepted zero app transactions.
 
 ## Recovery and reorgs
 
@@ -180,8 +178,6 @@ On reorg:
     - `nullifiersRoot`
     - `gsrsRoot`
     - `sourceTxProofs` (array of `{ txHash, present, proof }`)
-
-There is no `/v1/state/full` endpoint.
 
 Hash parsing accepts `0x`-prefixed or raw hex input; responses are normalized to lowercase `0x...`.
 

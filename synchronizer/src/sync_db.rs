@@ -69,7 +69,7 @@ pub struct SyncDb {
 impl SyncDb {
     /// Connect to the synchronizer's Postgres control-plane database.
     ///
-    /// This database does not store Merkle nodes or app-state container contents. It stores:
+    /// This database stores:
     /// - the single-row sync cursor used to resume from the last canonical slot
     /// - canonical slot metadata used for reorg detection and recent-GSR lookup
     /// - per-slot `{ old_head, new_head }` journals used to replay apply/rollback into RocksDB

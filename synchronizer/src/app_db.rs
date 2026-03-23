@@ -32,8 +32,8 @@ fn value_key(raw: RawValue) -> Vec<u8> {
 /// Compact committed app-state snapshot stored in RocksDB under `meta/head`.
 ///
 /// The actual transaction/nullifier/GSR contents live in persistent POD2 containers;
-/// `AppHead` stores the roots and counts needed to reopen those containers and serve
-/// state/proof queries without materializing the full sets in memory.
+/// `AppHead` stores the roots and counts used to reopen those containers and serve
+/// state/proof queries.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppHead {
