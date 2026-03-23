@@ -242,7 +242,7 @@ impl PodDb for AppDb {
             let is_raw = old_value_bytes.is_empty();
             // If we had a non-RawValue stored don't overwrite it (specially not with a
             // RawValue).   Also skip redundant RawValue overwrite.
-            if !is_raw || (is_raw && value.is_raw()) {
+            if !is_raw || value.is_raw() {
                 return Ok(());
             }
         }

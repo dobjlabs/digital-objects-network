@@ -24,7 +24,7 @@ use tracing::{debug, info, trace};
 
 use crate::config::AppConfig;
 use crate::state_machine::{SlotDelta, StateMachine, MAX_GSR_AGE_BLOCKS};
-use crate::sync_db::{JournalOp, SlotJournal, SyncDb};
+use crate::sync_db::{JournalOp, PendingSlotRecord, SlotJournal, SyncDb};
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
 /// pure state derivation (`StateMachine`), and sync metadata (`SyncDb`).
@@ -429,18 +429,16 @@ impl Node {
             old_head: processed.delta.old_head,
             new_head: processed.delta.new_head,
         };
+        let pending = PendingSlotRecord {
+            slot: processed.slot,
+            block_root: processed.canonical_block_root(),
+            parent_root: processed.canonical_parent_root(),
+            block_number: processed.block_number,
+            current_gsr: processed.canonical_current_gsr(),
+            is_empty: processed.is_empty,
+        };
 
-        self.sync_db
-            .save_pending_slot(
-                processed.slot,
-                processed.canonical_block_root(),
-                processed.canonical_parent_root(),
-                processed.block_number,
-                processed.canonical_current_gsr(),
-                processed.is_empty,
-                &journal,
-            )
-            .await
+        self.sync_db.save_pending_slot(&pending, &journal).await
     }
 
     /// Mark a pending slot applied and advance the sync cursor in Postgres.

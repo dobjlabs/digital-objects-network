@@ -24,6 +24,17 @@ pub struct SlotJournal {
     pub new_head: AppHead,
 }
 
+/// Canonical slot metadata staged in Postgres before the corresponding RocksDB head swap.
+#[derive(Debug, Clone, Copy)]
+pub struct PendingSlotRecord {
+    pub slot: u32,
+    pub block_root: Option<B256>,
+    pub parent_root: Option<B256>,
+    pub block_number: Option<u32>,
+    pub current_gsr: Option<Hash>,
+    pub is_empty: bool,
+}
+
 /// Startup recovery task derived from rows that are pending or not fully applied.
 #[derive(Debug, Clone)]
 pub struct PendingRecovery {
@@ -268,12 +279,7 @@ impl SyncDb {
     /// replayed into RocksDB.
     pub async fn save_pending_slot(
         &self,
-        slot: u32,
-        block_root: Option<B256>,
-        parent_root: Option<B256>,
-        block_number: Option<u32>,
-        current_gsr: Option<Hash>,
-        is_empty: bool,
+        pending: &PendingSlotRecord,
         journal: &SlotJournal,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
@@ -292,12 +298,12 @@ impl SyncDb {
                 updated_at = now()
             "#,
         )
-        .bind(slot as i32)
-        .bind(block_root.map(|v| v.as_slice().to_vec()))
-        .bind(parent_root.map(|v| v.as_slice().to_vec()))
-        .bind(block_number.map(|v| v as i32))
-        .bind(current_gsr.map(hash_to_db_bytes))
-        .bind(is_empty)
+        .bind(pending.slot as i32)
+        .bind(pending.block_root.map(|v| v.as_slice().to_vec()))
+        .bind(pending.parent_root.map(|v| v.as_slice().to_vec()))
+        .bind(pending.block_number.map(|v| v as i32))
+        .bind(pending.current_gsr.map(hash_to_db_bytes))
+        .bind(pending.is_empty)
         .execute(&mut *tx)
         .await?;
 
@@ -314,8 +320,8 @@ impl SyncDb {
                 kv_applied_at = NULL
             "#,
         )
-        .bind(slot as i32)
-        .bind(block_root.map(|v| v.as_slice().to_vec()))
+        .bind(pending.slot as i32)
+        .bind(pending.block_root.map(|v| v.as_slice().to_vec()))
         .bind(Json(journal.old_head))
         .bind(Json(journal.new_head))
         .execute(&mut *tx)
@@ -674,12 +680,14 @@ mod tests {
         };
         sync_db
             .save_pending_slot(
-                10,
-                None,
-                None,
-                Some(7),
-                journal.new_head.current_gsr,
-                false,
+                &PendingSlotRecord {
+                    slot: 10,
+                    block_root: None,
+                    parent_root: None,
+                    block_number: Some(7),
+                    current_gsr: journal.new_head.current_gsr,
+                    is_empty: false,
+                },
                 &journal,
             )
             .await?;
@@ -701,7 +709,17 @@ mod tests {
             new_head: unique_head(5, 10),
         };
         sync_db
-            .save_pending_slot(1, None, None, Some(5), j1.new_head.current_gsr, false, &j1)
+            .save_pending_slot(
+                &PendingSlotRecord {
+                    slot: 1,
+                    block_root: None,
+                    parent_root: None,
+                    block_number: Some(5),
+                    current_gsr: j1.new_head.current_gsr,
+                    is_empty: false,
+                },
+                &j1,
+            )
             .await?;
         sync_db.finalize_slot_applied(1, Some(5)).await?;
 
@@ -711,7 +729,17 @@ mod tests {
             new_head: unique_head(9, 20),
         };
         sync_db
-            .save_pending_slot(2, None, None, Some(9), j2.new_head.current_gsr, false, &j2)
+            .save_pending_slot(
+                &PendingSlotRecord {
+                    slot: 2,
+                    block_root: None,
+                    parent_root: None,
+                    block_number: Some(9),
+                    current_gsr: j2.new_head.current_gsr,
+                    is_empty: false,
+                },
+                &j2,
+            )
             .await?;
         sync_db.finalize_slot_applied(2, Some(9)).await?;
 
@@ -737,7 +765,17 @@ mod tests {
         };
         state_machine.apply_journal(&j1)?;
         sync_db
-            .save_pending_slot(1, None, None, Some(1), j1.new_head.current_gsr, false, &j1)
+            .save_pending_slot(
+                &PendingSlotRecord {
+                    slot: 1,
+                    block_root: None,
+                    parent_root: None,
+                    block_number: Some(1),
+                    current_gsr: j1.new_head.current_gsr,
+                    is_empty: false,
+                },
+                &j1,
+            )
             .await?;
         sync_db.finalize_slot_applied(1, Some(1)).await?;
         state_machine.apply_delta_to_memory(&crate::state_machine::SlotDelta {
@@ -752,7 +790,17 @@ mod tests {
         };
         state_machine.apply_journal(&j2)?;
         sync_db
-            .save_pending_slot(2, None, None, Some(2), j2.new_head.current_gsr, false, &j2)
+            .save_pending_slot(
+                &PendingSlotRecord {
+                    slot: 2,
+                    block_root: None,
+                    parent_root: None,
+                    block_number: Some(2),
+                    current_gsr: j2.new_head.current_gsr,
+                    is_empty: false,
+                },
+                &j2,
+            )
             .await?;
         sync_db.finalize_slot_applied(2, Some(2)).await?;
 
