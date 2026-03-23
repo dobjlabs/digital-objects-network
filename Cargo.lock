@@ -1521,15 +1521,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230c5f1ca6a325a32553f8640d31ac9b49f2411e901e427570154868b46da4f7"
 
 [[package]]
-name = "bincode"
-version = "1.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1949,46 +1940,6 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
 ]
-
-[[package]]
-name = "clap"
-version = "4.5.60"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2797f34da339ce31042b27d23607e051786132987f595b02ba4f6a6dffb7030a"
-dependencies = [
- "clap_builder",
- "clap_derive",
-]
-
-[[package]]
-name = "clap_builder"
-version = "4.5.60"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24a241312cea5059b13574bb9b3861cabf758b879c15190b37b6d6fd63ab6876"
-dependencies = [
- "anstream",
- "anstyle",
- "clap_lex",
- "strsim",
-]
-
-[[package]]
-name = "clap_derive"
-version = "4.5.55"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a92793da1a46a5f2a02a6f4c46c6496b28c43638adea8306fcb0caa1634f24e5"
-dependencies = [
- "heck 0.5.0",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "clap_lex"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
 name = "cmake"
@@ -2733,12 +2684,6 @@ dependencies = [
  "selectors 0.35.0",
  "tendril",
 ]
-
-[[package]]
-name = "dotenv"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
 
 [[package]]
 name = "dotenvy"
@@ -4829,12 +4774,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "minicbor"
-version = "2.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e70eae6d4f18f7d76877fe7b13f0bc21f7c2b7239d2041c338335f7b388d0dd7"
-
-[[package]]
 name = "minicbor-derive"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4851,17 +4790,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a05d783cc8c3cdbde9f7ee9eeeef417810278e81fb6289634fdbc952d462fc23"
 dependencies = [
- "minicbor 1.1.0",
- "serde",
-]
-
-[[package]]
-name = "minicbor-serde"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80047f75e28e3b38f6ab2ec3c2c7669f6b411fa6f8424e1a90a3fd784b19a3f4"
-dependencies = [
- "minicbor 2.2.1",
+ "minicbor",
  "serde",
 ]
 
@@ -6027,7 +5956,7 @@ dependencies = [
  "itertools 0.14.0",
  "lazy_static",
  "log",
- "minicbor-serde 0.5.0",
+ "minicbor-serde",
  "num",
  "num-bigint 0.4.6",
  "pest",
@@ -6065,7 +5994,7 @@ dependencies = [
  "itertools 0.14.0",
  "lazy_static",
  "log",
- "minicbor-serde 0.5.0",
+ "minicbor-serde",
  "num",
  "num-bigint 0.4.6",
  "pest",
@@ -8108,25 +8037,19 @@ dependencies = [
  "anyhow",
  "axum",
  "backoff",
- "bincode",
  "chrono",
- "clap",
  "common",
- "dotenv",
  "dotenvy",
  "futures-util",
  "hex",
- "minicbor-serde 0.6.2",
  "plonky2",
  "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=d616bc9029df8f8c7125002555536da4f4c5f8f8)",
  "pod2utils",
- "rand 0.8.5",
  "reqwest 0.12.28",
  "reqwest-eventsource",
  "rocksdb",
  "serde",
  "serde_json",
- "sha2",
  "sqlx",
  "tempfile",
  "thiserror 1.0.69",
