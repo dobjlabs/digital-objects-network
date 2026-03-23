@@ -15,15 +15,115 @@ pub fn module() -> Result<lang::Module, lang::LangError> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
     use pod2::{
         backends::plonky2::mock::mainpod::MockProver,
         frontend::MultiPodBuilder,
-        middleware::{Key, Params, VDSet, Value, containers::Array},
+        middleware::{
+            Key, Params, VDSet, Value,
+            containers::{Array, Set},
+        },
     };
-    use pod2utils::{macros::BuildContext, op, set};
+    use pod2utils::{macros::BuildContext, op};
+    use txlib::{GroundingWitness, StateRoot as TxStateRoot, Tx, TxBuilder, new_obj};
 
     use super::*;
-    use crate::tx_utils;
+    use crate::tx_utils::{self, UnlockRequest, UnlockWitness};
+
+    struct TestCommittedState {
+        state_root: Arc<TxStateRoot>,
+        transactions: Set,
+        gsrs: Array,
+    }
+
+    impl TestCommittedState {
+        fn new(block_number: i64, txs: &[&Tx], prior_state_roots: &[&TxStateRoot]) -> Self {
+            let transactions = Set::new(
+                txs.iter()
+                    .map(|tx| Value::from(tx.dict().commitment()))
+                    .collect::<HashSet<_>>(),
+            );
+            let nullifiers = Set::new(
+                txs.iter()
+                    .flat_map(|tx| tx.nullifiers.iter().map(Result::unwrap))
+                    .collect::<HashSet<_>>(),
+            );
+            let gsrs = Array::new(
+                prior_state_roots
+                    .iter()
+                    .map(|state_root| Value::from(state_root.hash()))
+                    .collect(),
+            );
+            let state_root = Arc::new(TxStateRoot::new(
+                block_number,
+                transactions.commitment(),
+                nullifiers.commitment(),
+                gsrs.commitment(),
+            ));
+            Self {
+                state_root,
+                transactions,
+                gsrs,
+            }
+        }
+
+        fn empty(block_number: i64) -> Self {
+            Self::new(block_number, &[], &[])
+        }
+
+        fn grounding_witness(&self, source_txs: &[Tx]) -> Arc<GroundingWitness> {
+            let source_tx_proofs = source_txs
+                .iter()
+                .map(|tx| {
+                    let tx_hash = tx.dict().commitment();
+                    let proof = self.transactions.prove(&Value::from(tx_hash)).unwrap();
+                    (tx_hash, proof)
+                })
+                .collect::<HashMap<_, _>>();
+            Arc::new(GroundingWitness::new(
+                (*self.state_root).clone(),
+                source_tx_proofs,
+            ))
+        }
+
+        fn prior_state_root_membership(
+            &self,
+            prior_state_root: &TxStateRoot,
+        ) -> (
+            usize,
+            pod2::backends::plonky2::primitives::merkletree::MerkleProof,
+        ) {
+            let prior_hash = Value::from(prior_state_root.hash());
+            for entry in self.gsrs.iter() {
+                let (index, value) = entry.unwrap();
+                if value == prior_hash {
+                    let (_, proof) = self.gsrs.prove(index).unwrap();
+                    return (index, proof);
+                }
+            }
+            panic!("prior state root missing from grounding state");
+        }
+    }
+
+    fn unlock_witness(
+        grounding_state: &TestCommittedState,
+        prior_state: &TestCommittedState,
+        tx_when_locked: &Tx,
+    ) -> UnlockWitness {
+        let tx_hash = tx_when_locked.dict().commitment();
+        let tx_membership_proof = prior_state
+            .transactions
+            .prove(&Value::from(tx_hash))
+            .unwrap();
+        let (prior_state_root_index, prior_state_root_proof) =
+            grounding_state.prior_state_root_membership(prior_state.state_root.as_ref());
+        UnlockWitness {
+            tx_membership_proof,
+            prior_state_root_index,
+            prior_state_root_proof,
+        }
+    }
 
     #[test]
     fn test_time_example_predicates_exist() {
@@ -61,8 +161,6 @@ mod tests {
     /// GSR₂ (when the lock was established). The transaction is finalized.
     #[test]
     fn prove_lock_and_unlock() {
-        use txlib::{StateRoot as TxStateRoot, TxBuilder, new_obj};
-
         let txlib_module = Arc::new(txlib::predicates::module());
         let time_module = Arc::new(module().unwrap());
 
@@ -76,12 +174,7 @@ mod tests {
         let unlocked_obj = new_obj();
 
         // GSR₁: block 0, empty state.
-        let gsr1_sr = Arc::new(TxStateRoot {
-            block_number: 0,
-            transactions: set!(),
-            nullifiers: set!(),
-            gsrs: Array::new(vec![]),
-        });
+        let gsr1 = TestCommittedState::empty(0);
 
         // === POD 1: Lock transaction, grounded in GSR₁ ===
         let (lock_pod, tx_lock, locked_obj) = {
@@ -89,7 +182,7 @@ mod tests {
             let mods = vec![Arc::clone(&txlib_module), Arc::clone(&time_module)];
             let mut ctx = BuildContext::new(builder, mods);
             let (tx_lock, locked_obj) = {
-                let mut tx_builder = TxBuilder::new(&mut ctx, &[], gsr1_sr.clone());
+                let mut tx_builder = TxBuilder::new(&mut ctx, &[], gsr1.grounding_witness(&[]));
                 tx_builder.insert(&mut ctx, unlocked_obj.clone());
                 let locked_obj =
                     tx_utils::lock_object(&mut ctx, unlocked_obj.clone(), duration).unwrap();
@@ -110,26 +203,14 @@ mod tests {
         };
 
         // GSR₂: block 5, contains the lock transaction.
-        let mut gsr2_txs = set!();
-        gsr2_txs.insert(&Value::from(tx_lock.dict())).unwrap();
-        let gsr2_nullifiers = tx_lock.nullifiers.clone();
-        let gsr2_sr = Arc::new(TxStateRoot {
-            block_number: gsr2_block,
-            transactions: gsr2_txs.clone(),
-            nullifiers: gsr2_nullifiers.clone(),
-            gsrs: Array::new(vec![Value::from(gsr1_sr.hash())]),
-        });
+        let gsr2 = TestCommittedState::new(gsr2_block, &[&tx_lock], &[gsr1.state_root.as_ref()]);
 
         // GSR₃: block 16, same transactions/nullifiers, gsrs array extended with GSR₂.
-        let gsr3_sr = Arc::new(TxStateRoot {
-            block_number: gsr3_block,
-            transactions: gsr2_txs,
-            nullifiers: gsr2_nullifiers,
-            gsrs: Array::new(vec![
-                Value::from(gsr1_sr.hash()),
-                Value::from(gsr2_sr.hash()),
-            ]),
-        });
+        let gsr3 = TestCommittedState::new(
+            gsr3_block,
+            &[&tx_lock],
+            &[gsr1.state_root.as_ref(), gsr2.state_root.as_ref()],
+        );
 
         // === POD 2: Unlock transaction, grounded in GSR₃ ===
         let unlock_pod = {
@@ -138,16 +219,24 @@ mod tests {
             let mut ctx = BuildContext::new(builder, mods);
             {
                 let inputs = [(locked_obj.clone(), tx_lock.clone())];
-                let mut tx_builder = TxBuilder::new(&mut ctx, &inputs, gsr3_sr.clone());
+                let mut tx_builder = TxBuilder::new(
+                    &mut ctx,
+                    &inputs,
+                    gsr3.grounding_witness(std::slice::from_ref(&tx_lock)),
+                );
                 let tx_before_unlock = tx_builder.tx.dict();
+                let unlock_witness = unlock_witness(&gsr3, &gsr2, &tx_lock);
                 let unlocked = tx_utils::unlock_object(
                     &mut ctx,
-                    &time_module,
-                    &gsr3_sr,
-                    tx_before_unlock,
-                    locked_obj.clone(),
-                    &tx_lock,
-                    &gsr2_sr,
+                    UnlockRequest {
+                        time_module: &time_module,
+                        grounding_gsr: gsr3.state_root.as_ref(),
+                        tx_before: tx_before_unlock,
+                        locked_obj: locked_obj.clone(),
+                        tx_when_locked: &tx_lock,
+                        gsr_when_locked: gsr2.state_root.as_ref(),
+                        witness: &unlock_witness,
+                    },
                 )
                 .unwrap();
                 tx_builder.mutate(&mut ctx, unlocked, locked_obj.clone());
@@ -179,8 +268,6 @@ mod tests {
     /// takes the expiry-bearing object as an input and proves `NotExpired`.
     #[test]
     fn prove_set_expiry_and_not_expired() {
-        use txlib::{StateRoot as TxStateRoot, TxBuilder, new_obj};
-
         let txlib_module = Arc::new(txlib::predicates::module());
         let time_module = Arc::new(module().unwrap());
 
@@ -194,12 +281,7 @@ mod tests {
         let obj = new_obj();
 
         // GSR₁: block 100, empty.
-        let gsr1_sr = Arc::new(TxStateRoot {
-            block_number: gsr1_block,
-            transactions: set!(),
-            nullifiers: set!(),
-            gsrs: Array::new(vec![]),
-        });
+        let gsr1 = TestCommittedState::empty(gsr1_block);
 
         // === POD 1: Insert object and set its expiry ===
         let (set_pod, tx_set, obj_with_expiry) = {
@@ -207,12 +289,12 @@ mod tests {
             let mods = vec![Arc::clone(&txlib_module), Arc::clone(&time_module)];
             let mut ctx = BuildContext::new(builder, mods);
             let (tx_set, obj_with_expiry) = {
-                let mut tx_builder = TxBuilder::new(&mut ctx, &[], gsr1_sr.clone());
+                let mut tx_builder = TxBuilder::new(&mut ctx, &[], gsr1.grounding_witness(&[]));
                 tx_builder.insert(&mut ctx, obj.clone());
                 let tx_before_set = tx_builder.tx.dict();
                 let obj_with_expiry = tx_utils::set_expiry(
                     &mut ctx,
-                    &gsr1_sr,
+                    gsr1.state_root.as_ref(),
                     tx_before_set,
                     obj.clone(),
                     timeout_block,
@@ -241,15 +323,7 @@ mod tests {
         };
 
         // GSR₂: block 200, carries tx_set.
-        let mut gsr2_txs = set!();
-        gsr2_txs.insert(&Value::from(tx_set.dict())).unwrap();
-        let gsr2_nullifiers = tx_set.nullifiers.clone();
-        let gsr2_sr = Arc::new(TxStateRoot {
-            block_number: gsr2_block,
-            transactions: gsr2_txs,
-            nullifiers: gsr2_nullifiers,
-            gsrs: Array::new(vec![Value::from(gsr1_sr.hash())]),
-        });
+        let gsr2 = TestCommittedState::new(gsr2_block, &[&tx_set], &[gsr1.state_root.as_ref()]);
 
         // === POD 2: Prove the object is not expired at block 200 ≤ 400 ===
         let check_pod = {
@@ -258,10 +332,19 @@ mod tests {
             let mut ctx = BuildContext::new(builder, mods);
             {
                 let inputs = [(obj_with_expiry.clone(), tx_set.clone())];
-                let tx_builder = TxBuilder::new(&mut ctx, &inputs, gsr2_sr.clone());
+                let tx_builder = TxBuilder::new(
+                    &mut ctx,
+                    &inputs,
+                    gsr2.grounding_witness(std::slice::from_ref(&tx_set)),
+                );
                 let tx_before = tx_builder.tx.dict();
-                let _ =
-                    tx_utils::not_expired(&mut ctx, &gsr2_sr, tx_before, obj_with_expiry).unwrap();
+                let _ = tx_utils::not_expired(
+                    &mut ctx,
+                    gsr2.state_root.as_ref(),
+                    tx_before,
+                    obj_with_expiry,
+                )
+                .unwrap();
                 let (st_finalized, _) = tx_builder.finalize(&mut ctx);
                 ctx.builder.reveal(&st_finalized).unwrap();
             }
