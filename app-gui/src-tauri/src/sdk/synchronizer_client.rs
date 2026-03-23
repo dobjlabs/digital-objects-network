@@ -6,6 +6,7 @@ use std::{
 use anyhow::{anyhow, Result};
 use hex::FromHex;
 use pod2::middleware::Hash;
+use serde::de::DeserializeOwned;
 use synchronizer::api_types::{
     GroundingWitnessRequest, GroundingWitnessResponse, MembershipRequest, MembershipResponse,
     StateHeadResponse, TxStatusResponse,
@@ -30,9 +31,13 @@ fn parse_hash_hex(value: &str) -> Result<Hash> {
     Hash::from_hex(trimmed).map_err(|err| anyhow!("invalid hash {value}: {err}"))
 }
 
-pub(crate) fn fetch_synchronizer_head(sync_api_url: &str) -> Result<SynchronizerHead> {
-    let endpoint = format!("{}/v1/state/head", sync_api_url.trim_end_matches('/'));
-    let response = reqwest::blocking::get(&endpoint)
+fn send_json_request<T: DeserializeOwned>(
+    request: reqwest::blocking::RequestBuilder,
+    endpoint: &str,
+    decode_context: &str,
+) -> Result<T> {
+    let response = request
+        .send()
         .map_err(|err| anyhow!("failed to query synchronizer at {endpoint}: {err}"))?;
     if !response.status().is_success() {
         return Err(anyhow!(
@@ -41,9 +46,20 @@ pub(crate) fn fetch_synchronizer_head(sync_api_url: &str) -> Result<Synchronizer
             response.status()
         ));
     }
-    let payload: StateHeadResponse = response
+
+    response
         .json()
-        .map_err(|err| anyhow!("failed to decode synchronizer head response: {err}"))?;
+        .map_err(|err| anyhow!("failed to decode {decode_context}: {err}"))
+}
+
+pub(crate) fn fetch_synchronizer_head(sync_api_url: &str) -> Result<SynchronizerHead> {
+    let endpoint = format!("{}/v1/state/head", sync_api_url.trim_end_matches('/'));
+    let client = reqwest::blocking::Client::new();
+    let payload: StateHeadResponse = send_json_request(
+        client.get(&endpoint),
+        &endpoint,
+        "synchronizer head response",
+    )?;
     let current_gsr = payload
         .current_gsr
         .as_deref()
@@ -64,22 +80,11 @@ pub(crate) fn fetch_grounding_witness(
         source_tx_hashes: source_tx_hashes.iter().map(encode_hash_hex).collect(),
     };
     let client = reqwest::blocking::Client::new();
-    let response = client
-        .post(&endpoint)
-        .json(&request)
-        .send()
-        .map_err(|err| anyhow!("failed to query synchronizer at {endpoint}: {err}"))?;
-    if !response.status().is_success() {
-        return Err(anyhow!(
-            "synchronizer request failed: {} {}",
-            response.status().as_u16(),
-            response.status()
-        ));
-    }
-
-    let payload: GroundingWitnessResponse = response.json().map_err(|err| {
-        anyhow!("failed to decode synchronizer grounding witness response: {err}")
-    })?;
+    let payload: GroundingWitnessResponse = send_json_request(
+        client.post(&endpoint).json(&request),
+        &endpoint,
+        "synchronizer grounding witness response",
+    )?;
 
     let state_root = StateRoot::new(
         payload.block_number,
@@ -133,22 +138,11 @@ pub(crate) fn fetch_synchronizer_membership_with_nullifiers(
         nullifiers: nullifiers.iter().map(encode_hash_hex).collect(),
     };
     let client = reqwest::blocking::Client::new();
-    let response = client
-        .post(&endpoint)
-        .json(&request)
-        .send()
-        .map_err(|err| anyhow!("failed to query synchronizer at {endpoint}: {err}"))?;
-    if !response.status().is_success() {
-        return Err(anyhow!(
-            "synchronizer request failed: {} {}",
-            response.status().as_u16(),
-            response.status()
-        ));
-    }
-
-    let payload: MembershipResponse = response
-        .json()
-        .map_err(|err| anyhow!("failed to decode synchronizer membership response: {err}"))?;
+    let payload: MembershipResponse = send_json_request(
+        client.post(&endpoint).json(&request),
+        &endpoint,
+        "synchronizer membership response",
+    )?;
 
     let mut grounded_txs = HashSet::new();
     for entry in payload.tx_results {
@@ -176,19 +170,12 @@ fn fetch_synchronizer_tx_status(sync_api_url: &str, tx_hash: &Hash) -> Result<Tx
         sync_api_url.trim_end_matches('/'),
         encode_hash_hex(tx_hash)
     );
-    let response = reqwest::blocking::get(&endpoint)
-        .map_err(|err| anyhow!("failed to query synchronizer at {endpoint}: {err}"))?;
-    if !response.status().is_success() {
-        return Err(anyhow!(
-            "synchronizer request failed: {} {}",
-            response.status().as_u16(),
-            response.status()
-        ));
-    }
-
-    response
-        .json::<TxStatusResponse>()
-        .map_err(|err| anyhow!("failed to decode synchronizer tx status response: {err}"))
+    let client = reqwest::blocking::Client::new();
+    send_json_request(
+        client.get(&endpoint),
+        &endpoint,
+        "synchronizer tx status response",
+    )
 }
 
 pub(crate) fn wait_for_synchronizer_tx(
