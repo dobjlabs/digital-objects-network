@@ -125,14 +125,12 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
     }
 
     // Empty slots are valid on beacon; commit an empty processed slot so cursor stays contiguous.
-    let processed = ProcessedSlot {
+    let processed = ProcessedSlot::empty(
         slot,
-        block_root: Default::default(),
-        parent_root: Default::default(),
-        block_number: None,
-        is_empty: true,
-        delta: node.state_machine.noop_delta()?,
-    };
+        Default::default(),
+        Default::default(),
+        node.state_machine.noop_delta()?,
+    );
 
     info!(slot, "No block produced for slot");
     persist_processed_slot(node, &processed).await?;

@@ -19,6 +19,7 @@ use alloy_provider::{Provider, RootProvider};
 use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
+use pod2::middleware::Hash;
 use tracing::{debug, info, trace};
 
 use crate::config::AppConfig;
@@ -53,6 +54,52 @@ pub struct ProcessedSlot {
     pub block_number: Option<u32>,
     pub is_empty: bool,
     pub delta: SlotDelta,
+}
+
+impl ProcessedSlot {
+    pub(crate) fn empty(slot: u32, block_root: B256, parent_root: B256, delta: SlotDelta) -> Self {
+        Self {
+            slot,
+            block_root,
+            parent_root,
+            block_number: None,
+            is_empty: true,
+            delta,
+        }
+    }
+
+    fn present(
+        slot: u32,
+        block_root: B256,
+        parent_root: B256,
+        block_number: u32,
+        delta: SlotDelta,
+    ) -> Self {
+        Self {
+            slot,
+            block_root,
+            parent_root,
+            block_number: Some(block_number),
+            is_empty: false,
+            delta,
+        }
+    }
+
+    fn canonical_block_root(&self) -> Option<B256> {
+        (!self.is_empty).then_some(self.block_root)
+    }
+
+    fn canonical_parent_root(&self) -> Option<B256> {
+        (!self.is_empty).then_some(self.parent_root)
+    }
+
+    fn canonical_current_gsr(&self) -> Option<Hash> {
+        if self.is_empty {
+            None
+        } else {
+            self.delta.new_head.current_gsr
+        }
+    }
 }
 
 impl Node {
@@ -216,14 +263,12 @@ impl Node {
         beacon_block_header: &BlockHeader,
     ) -> Result<ProcessedSlot> {
         let Some(slot_ctx) = self.build_slot_context(beacon_block_header).await? else {
-            return Ok(ProcessedSlot {
-                slot: beacon_block_header.slot,
-                block_root: beacon_block_header.root,
-                parent_root: beacon_block_header.parent_root,
-                block_number: None,
-                is_empty: true,
-                delta: self.state_machine.noop_delta()?,
-            });
+            return Ok(ProcessedSlot::empty(
+                beacon_block_header.slot,
+                beacon_block_header.root,
+                beacon_block_header.parent_root,
+                self.state_machine.noop_delta()?,
+            ));
         };
 
         debug!(
@@ -247,14 +292,13 @@ impl Node {
             let delta = self
                 .state_machine
                 .derive_slot_delta(slot_ctx.slot, block_number, &[])?;
-            return Ok(ProcessedSlot {
-                slot: slot_ctx.slot,
-                block_root: slot_ctx.beacon_block_root,
-                parent_root: slot_ctx.parent_root,
-                block_number: Some(block_number),
-                is_empty: false,
+            return Ok(ProcessedSlot::present(
+                slot_ctx.slot,
+                slot_ctx.beacon_block_root,
+                slot_ctx.parent_root,
+                block_number,
                 delta,
-            });
+            ));
         }
 
         let mut blob_payloads = Vec::new();
@@ -300,14 +344,13 @@ impl Node {
             let delta = self
                 .state_machine
                 .derive_slot_delta(slot_ctx.slot, block_number, &[])?;
-            return Ok(ProcessedSlot {
-                slot: slot_ctx.slot,
-                block_root: slot_ctx.beacon_block_root,
-                parent_root: slot_ctx.parent_root,
-                block_number: Some(block_number),
-                is_empty: false,
+            return Ok(ProcessedSlot::present(
+                slot_ctx.slot,
+                slot_ctx.beacon_block_root,
+                slot_ctx.parent_root,
+                block_number,
                 delta,
-            });
+            ));
         }
 
         let blob_versioned_hashes: Vec<B256> = indexed_do_blob_txs
@@ -358,14 +401,13 @@ impl Node {
             self.state_machine
                 .derive_slot_delta(slot_ctx.slot, block_number, &blob_payloads)?;
 
-        Ok(ProcessedSlot {
-            slot: slot_ctx.slot,
-            block_root: slot_ctx.beacon_block_root,
-            parent_root: slot_ctx.parent_root,
-            block_number: Some(block_number),
-            is_empty: false,
+        Ok(ProcessedSlot::present(
+            slot_ctx.slot,
+            slot_ctx.beacon_block_root,
+            slot_ctx.parent_root,
+            block_number,
             delta,
-        })
+        ))
     }
 
     /// Apply a derived slot delta to RocksDB.
@@ -391,22 +433,10 @@ impl Node {
         self.sync_db
             .save_pending_slot(
                 processed.slot,
-                if processed.is_empty {
-                    None
-                } else {
-                    Some(processed.block_root)
-                },
-                if processed.is_empty {
-                    None
-                } else {
-                    Some(processed.parent_root)
-                },
+                processed.canonical_block_root(),
+                processed.canonical_parent_root(),
                 processed.block_number,
-                if processed.is_empty {
-                    None
-                } else {
-                    processed.delta.new_head.current_gsr
-                },
+                processed.canonical_current_gsr(),
                 processed.is_empty,
                 &journal,
             )
