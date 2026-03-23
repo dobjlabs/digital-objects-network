@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use common::proof::BlobParser;
+use common::{encode_hash_hex, proof::BlobParser};
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     middleware::{containers::Array, containers::Set, Hash, Value},
@@ -418,11 +418,16 @@ impl StateMachine {
 
     pub fn log_current_state(&self) -> Result<()> {
         let head = self.head_snapshot()?;
+        let current_gsr = head
+            .current_gsr
+            .as_ref()
+            .map(encode_hash_hex)
+            .unwrap_or_else(|| "none".to_string());
         info!(
             transaction_count = head.tx_count,
             nullifier_count = head.nullifier_count,
             gsr_count = head.gsr_count,
-            current_gsr = ?head.current_gsr,
+            current_gsr = %current_gsr,
             "Current state"
         );
         Ok(())
