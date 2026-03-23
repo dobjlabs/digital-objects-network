@@ -22,12 +22,20 @@ use pod2utils::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// Compact committed view of canonical app state used for grounding transactions.
+///
+/// This struct does not carry full containers. It stores only the root commitments needed to
+/// recompute the canonical global state root hash and to verify synchronizer-supplied proofs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateRoot {
+    /// Execution block number this state root is anchored to.
     pub block_number: i64,
+    /// Root of the canonical transactions set.
     pub transactions_root: Hash,
+    /// Root of the canonical spent-nullifiers set.
     pub nullifiers_root: Hash,
+    /// Root of the prior-GSR history array committed into this state root.
     pub gsrs_root: Hash,
 }
 
@@ -61,9 +69,15 @@ impl StateRoot {
     }
 }
 
+/// Proof-bearing grounding data required to build a new transaction.
+///
+/// Callers use `state_root` as the committed global context and `source_tx_proofs` to prove that
+/// each consumed source transaction is present in `state_root.transactions_root`.
 #[derive(Clone, Debug)]
 pub struct GroundingWitness {
+    /// Canonical state root the new transaction is grounded against.
     pub state_root: StateRoot,
+    /// Merkle proofs for source transaction inclusion keyed by source tx hash.
     pub source_tx_proofs: HashMap<Hash, MerkleProof>,
 }
 
