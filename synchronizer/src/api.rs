@@ -19,7 +19,7 @@ use tokio::sync::watch;
 use tracing::info;
 
 use crate::{
-    state_machine::StateMachine,
+    state_reader::StateReader,
     sync_db::{CurrentSnapshot, SyncDb},
 };
 use common::encode_hash_hex;
@@ -27,7 +27,7 @@ use common::encode_hash_hex;
 #[derive(Clone)]
 struct AppState {
     sync_db: Arc<SyncDb>,
-    state_machine: Arc<StateMachine>,
+    state_reader: Arc<StateReader>,
 }
 
 struct HeadSnapshot {
@@ -42,7 +42,7 @@ struct HeadSnapshot {
 
 pub async fn run_api_server(
     sync_db: Arc<SyncDb>,
-    state_machine: Arc<StateMachine>,
+    state_reader: Arc<StateReader>,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
@@ -60,7 +60,7 @@ pub async fn run_api_server(
         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
         .with_state(AppState {
             sync_db,
-            state_machine,
+            state_reader,
         });
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
@@ -115,7 +115,7 @@ async fn post_state_tx_contains(
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
     let membership = app_state
-        .state_machine
+        .state_reader
         .membership_snapshot(&snapshot.head.roots, &hashes, &[])
         .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
@@ -147,7 +147,7 @@ async fn post_state_nullifier_contains(
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
     let membership = app_state
-        .state_machine
+        .state_reader
         .membership_snapshot(&snapshot.head.roots, &[], &hashes)
         .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
@@ -184,7 +184,7 @@ async fn post_state_membership(
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
     let membership = app_state
-        .state_machine
+        .state_reader
         .membership_snapshot(&snapshot.head.roots, &tx_hashes, &nullifiers)
         .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
@@ -221,7 +221,7 @@ async fn get_state_tx(
     let snapshot = load_current_snapshot(&app_state).await?;
     let hash = parse_hash_hex(&tx_hash)?;
     let membership = app_state
-        .state_machine
+        .state_reader
         .membership_snapshot(&snapshot.head.roots, std::slice::from_ref(&hash), &[])
         .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
@@ -244,7 +244,7 @@ async fn post_grounding_witness(
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
     let witness = app_state
-        .state_machine
+        .state_reader
         .grounding_witness(&snapshot.head.roots, &source_tx_hashes)
         .map_err(internal_error)?;
     let head = snapshot.head;

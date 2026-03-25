@@ -5,10 +5,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use common::{encode_hash_hex, proof::BlobParser};
-use pod2::{
-    backends::plonky2::primitives::merkletree::MerkleProof,
-    middleware::{containers::Array, containers::Set, Hash, Value},
-};
+use pod2::middleware::{containers::Array, containers::Set, Hash, Value};
 use tracing::{info, warn};
 
 use crate::{
@@ -20,33 +17,6 @@ use txlib::StateRoot;
 /// The maximum age of a GSR used as grounding for a transaction.
 /// At one block per 12 seconds, this is one hour.
 pub const MAX_GSR_AGE_BLOCKS: i64 = 300;
-
-#[derive(Debug, Clone)]
-/// Membership proof for a source transaction against the current transactions set root.
-pub struct TxMembershipProof {
-    /// Source transaction hash the client asked about.
-    pub tx_hash: Hash,
-    /// Whether the transaction is present in the committed transactions set.
-    pub present: bool,
-    /// Merkle proof against the current transactions set root.
-    pub proof: MerkleProof,
-}
-
-#[derive(Debug, Clone)]
-/// Proof-bearing result used by txlib to ground action execution.
-pub struct GroundingWitnessSnapshot {
-    /// Per-source transaction membership proofs under the provided head.
-    pub source_tx_proofs: Vec<TxMembershipProof>,
-}
-
-#[derive(Debug, Clone)]
-/// Membership result anchored to one caller-provided head.
-pub struct MembershipSnapshot {
-    /// Per-request transaction membership bits under `roots.transactions`.
-    pub tx_present: Vec<bool>,
-    /// Per-request nullifier membership bits under `roots.nullifiers`.
-    pub nullifier_present: Vec<bool>,
-}
 
 /// Ephemeral mutable view used while deriving one slot.
 ///
@@ -87,55 +57,6 @@ impl StateMachine {
 
     pub fn noop_head(&self, base_head: CanonicalHead) -> CanonicalHead {
         base_head
-    }
-
-    #[cfg(test)]
-    pub fn tx_exists(&self, roots: &CanonicalRoots, tx_hash: &Hash) -> Result<bool> {
-        Ok(self
-            .membership_snapshot(roots, std::slice::from_ref(tx_hash), &[])?
-            .tx_present[0])
-    }
-
-    #[cfg(test)]
-    pub fn nullifier_exists_batch(
-        &self,
-        roots: &CanonicalRoots,
-        nullifiers: &[Hash],
-    ) -> Result<Vec<bool>> {
-        Ok(self
-            .membership_snapshot(roots, &[], nullifiers)?
-            .nullifier_present)
-    }
-
-    pub fn membership_snapshot(
-        &self,
-        roots: &CanonicalRoots,
-        tx_hashes: &[Hash],
-        nullifiers: &[Hash],
-    ) -> Result<MembershipSnapshot> {
-        Ok(MembershipSnapshot {
-            tx_present: self.app_db.tx_exists_batch(roots, tx_hashes)?,
-            nullifier_present: self.app_db.nullifier_exists_batch(roots, nullifiers)?,
-        })
-    }
-
-    pub fn grounding_witness(
-        &self,
-        roots: &CanonicalRoots,
-        source_tx_hashes: &[Hash],
-    ) -> Result<GroundingWitnessSnapshot> {
-        let source_tx_proofs = source_tx_hashes
-            .iter()
-            .map(|tx_hash| {
-                let (present, proof) = self.app_db.prove_tx(roots, *tx_hash)?;
-                Ok(TxMembershipProof {
-                    tx_hash: *tx_hash,
-                    present,
-                    proof,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(GroundingWitnessSnapshot { source_tx_proofs })
     }
 
     /// Parse and validate one blob payload against the in-progress slot state.
@@ -338,15 +259,17 @@ impl StateMachine {
 mod tests {
     use super::*;
     use crate::app_db::AppDb;
+    use crate::state_reader::StateReader;
     use common::proof::MockBlobParser;
     use pod2::middleware::hash_values;
     use tempfile::TempDir;
 
-    fn make_sm() -> (StateMachine, TempDir) {
+    fn make_sm() -> (StateMachine, StateReader, TempDir) {
         let dir = TempDir::new().unwrap();
         let app_db = AppDb::connect(dir.path().to_str().unwrap()).unwrap();
+        let reader = StateReader::new(app_db.clone());
         let sm = StateMachine::new(app_db, Arc::new(MockBlobParser));
-        (sm, dir)
+        (sm, reader, dir)
     }
 
     fn unique_hash(n: i64) -> Hash {
@@ -373,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_empty_slot_produces_new_head() {
-        let (sm, _dir) = make_sm();
+        let (sm, _reader, _dir) = make_sm();
         let head = sm
             .derive_slot_head(CanonicalHead::empty(), [], 1, 7, &[])
             .unwrap();
@@ -383,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_accepts_valid_blob_and_updates_counts() {
-        let (sm, _dir) = make_sm();
+        let (sm, reader, _dir) = make_sm();
         let head0 = seed_gsr0(&sm);
         let gsr0 = head0.metadata.current_gsr.unwrap();
 
@@ -397,9 +320,10 @@ mod tests {
         assert_eq!(head1.metadata.tx_count, 1);
         assert_eq!(head1.metadata.nullifier_count, 1);
         assert_eq!(head1.metadata.gsr_count, 2);
-        assert!(sm.tx_exists(&head1.roots, &tx_final).unwrap());
+        assert!(reader.tx_exists(&head1.roots, &tx_final).unwrap());
         assert_eq!(
-            sm.nullifier_exists_batch(&head1.roots, &[nullifier])
+            reader
+                .nullifier_exists_batch(&head1.roots, &[nullifier])
                 .unwrap(),
             vec![true]
         );
@@ -407,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_rejects_unknown_grounding_gsr() {
-        let (sm, _dir) = make_sm();
+        let (sm, _reader, _dir) = make_sm();
         let head0 = seed_gsr0(&sm);
 
         let tx_final = unique_hash(21);
@@ -418,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_uncommitted_derived_nodes_do_not_affect_old_head() {
-        let (sm, _dir) = make_sm();
+        let (sm, reader, _dir) = make_sm();
         let head0 = seed_gsr0(&sm);
         let gsr0 = head0.metadata.current_gsr.unwrap();
 
@@ -428,7 +352,7 @@ mod tests {
             .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
             .unwrap();
 
-        assert_eq!(sm.tx_exists(&head0.roots, &tx_final).unwrap(), false);
-        assert_eq!(sm.tx_exists(&head1.roots, &tx_final).unwrap(), true);
+        assert_eq!(reader.tx_exists(&head0.roots, &tx_final).unwrap(), false);
+        assert_eq!(reader.tx_exists(&head1.roots, &tx_final).unwrap(), true);
     }
 }
