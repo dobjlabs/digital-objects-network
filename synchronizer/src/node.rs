@@ -178,42 +178,41 @@ impl Node {
         Ok(blobs)
     }
 
-    /// Resolve consensus+execution context required to derive this slot.
+    /// Resolve the full consensus+execution context required to derive a present slot.
     ///
-    /// Returns `None` for slots without an execution payload.
+    /// The caller already has a canonical beacon header for this slot, so failure to load the
+    /// corresponding full beacon block or execution payload is treated as an error rather than as
+    /// an empty slot. This forces the sync loop to retry instead of silently advancing past a real
+    /// slot when the beacon provider is temporarily inconsistent.
     async fn build_slot_context(
         &self,
         beacon_block_header: &BlockHeader,
-    ) -> Result<Option<SlotContext>> {
+    ) -> Result<SlotContext> {
         let beacon_block_root = beacon_block_header.root;
         let slot = beacon_block_header.slot;
 
-        let beacon_block = match self
+        let beacon_block = self
             .beacon_cli
             .get_block(BlockId::Hash(beacon_block_root))
             .await?
-        {
-            Some(block) => block,
-            None => {
-                debug!(slot, "No consensus block for slot");
-                return Ok(None);
-            }
-        };
+            .ok_or_else(|| {
+                anyhow!(
+                    "Beacon header exists for slot {slot}, but full beacon block {beacon_block_root} was not found"
+                )
+            })?;
 
-        let execution_payload = match beacon_block.execution_payload.as_ref() {
-            Some(payload) => payload,
-            None => {
-                debug!(slot, "Consensus block has no execution payload");
-                return Ok(None);
-            }
-        };
+        let execution_payload = beacon_block.execution_payload.as_ref().ok_or_else(|| {
+            anyhow!(
+                "Beacon block {beacon_block_root} for slot {slot} had no execution payload"
+            )
+        })?;
 
         let has_blob_commitments = beacon_block
             .blob_kzg_commitments
             .as_ref()
             .is_some_and(|commitments| !commitments.is_empty());
 
-        Ok(Some(SlotContext {
+        Ok(SlotContext {
             slot,
             beacon_block_root,
             parent_root: beacon_block.parent_root,
@@ -221,7 +220,7 @@ impl Node {
             execution_block_number: execution_payload.block_number,
             execution_timestamp: execution_payload.timestamp,
             has_blob_commitments,
-        }))
+        })
     }
 
     /// Derive the full per-slot update from beacon/execution data and return it for commit.
@@ -230,14 +229,7 @@ impl Node {
         beacon_block_header: &BlockHeader,
     ) -> Result<ProcessedSlot> {
         let base_head = self.sync_db.current_head().await?;
-        let Some(slot_ctx) = self.build_slot_context(beacon_block_header).await? else {
-            return Ok(ProcessedSlot::empty(
-                beacon_block_header.slot,
-                beacon_block_header.root,
-                beacon_block_header.parent_root,
-                self.state_machine.noop_head(base_head),
-            ));
-        };
+        let slot_ctx = self.build_slot_context(beacon_block_header).await?;
 
         debug!(
             slot = slot_ctx.slot,
