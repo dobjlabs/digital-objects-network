@@ -21,13 +21,6 @@ use txlib::StateRoot;
 /// At one block per 12 seconds, this is one hour.
 pub const MAX_GSR_AGE_BLOCKS: i64 = 300;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Head transition derived for a single canonical slot.
-pub struct SlotDelta {
-    /// Head snapshot after processing the slot.
-    pub new_head: CanonicalHead,
-}
-
 #[derive(Debug, Clone)]
 /// Membership proof for a source transaction against the current transactions set root.
 pub struct TxMembershipProof {
@@ -92,10 +85,8 @@ impl StateMachine {
         }
     }
 
-    pub fn noop_delta(&self, base_head: CanonicalHead) -> SlotDelta {
-        SlotDelta {
-            new_head: base_head,
-        }
+    pub fn noop_head(&self, base_head: CanonicalHead) -> CanonicalHead {
+        base_head
     }
 
     #[cfg(test)]
@@ -149,7 +140,7 @@ impl StateMachine {
 
     /// Parse and validate one blob payload against the in-progress slot state.
     ///
-    /// This is the core per-blob derivation step used by `derive_slot_delta`.
+    /// This is the core per-blob derivation step used by `derive_slot_head`.
     /// The method is intentionally fail-soft for invalid blob contents: malformed payloads,
     /// proofs grounded in unknown/too-old GSRs, duplicate transactions, and duplicate
     /// nullifiers are logged and skipped rather than aborting the whole slot.
@@ -253,14 +244,14 @@ impl StateMachine {
         Ok(())
     }
 
-    pub fn derive_slot_delta(
+    pub fn derive_slot_head(
         &self,
         base_head: CanonicalHead,
         recent_gsrs: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
         block_number: u32,
         blob_payloads: &[(u32, Vec<u8>)],
-    ) -> Result<SlotDelta> {
+    ) -> Result<CanonicalHead> {
         let mut working = WorkingState {
             metadata: base_head.metadata,
             transactions: self.app_db.open_transactions(base_head.roots.transactions)?,
@@ -321,7 +312,7 @@ impl StateMachine {
             "Slot data"
         );
 
-        Ok(SlotDelta { new_head })
+        Ok(new_head)
     }
 
     pub fn log_current_state(&self, head: CanonicalHead) {
@@ -374,18 +365,16 @@ mod tests {
     }
 
     fn seed_gsr0(sm: &StateMachine) -> CanonicalHead {
-        sm.derive_slot_delta(CanonicalHead::empty(), [], 0, 0, &[])
+        sm.derive_slot_head(CanonicalHead::empty(), [], 0, 0, &[])
             .unwrap()
-            .new_head
     }
 
     #[test]
     fn test_empty_slot_produces_new_head() {
         let (sm, _dir) = make_sm();
         let head = sm
-            .derive_slot_delta(CanonicalHead::empty(), [], 1, 7, &[])
-            .unwrap()
-            .new_head;
+            .derive_slot_head(CanonicalHead::empty(), [], 1, 7, &[])
+            .unwrap();
         assert_eq!(head.metadata.current_block_number, Some(7));
         assert_eq!(head.metadata.gsr_count, 1);
     }
@@ -400,9 +389,8 @@ mod tests {
         let nullifier = unique_hash(11);
         let blob = mock_txn_bytes(tx_final, &[nullifier], gsr0);
         let head1 = sm
-            .derive_slot_delta(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
-            .unwrap()
-            .new_head;
+            .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
+            .unwrap();
 
         assert_eq!(head1.metadata.tx_count, 1);
         assert_eq!(head1.metadata.nullifier_count, 1);
@@ -423,9 +411,8 @@ mod tests {
         let tx_final = unique_hash(21);
         let blob = mock_txn_bytes(tx_final, &[], unique_hash(99));
         let head1 = sm
-            .derive_slot_delta(head0, [], 2, 2, &[(0, blob)])
-            .unwrap()
-            .new_head;
+            .derive_slot_head(head0, [], 2, 2, &[(0, blob)])
+            .unwrap();
         assert_eq!(head1.metadata.tx_count, head0.metadata.tx_count);
     }
 
@@ -438,9 +425,8 @@ mod tests {
         let tx_final = unique_hash(31);
         let blob = mock_txn_bytes(tx_final, &[], gsr0);
         let head1 = sm
-            .derive_slot_delta(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
-            .unwrap()
-            .new_head;
+            .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
+            .unwrap();
 
         assert_eq!(sm.tx_exists(&head0.roots, &tx_final).unwrap(), false);
         assert_eq!(sm.tx_exists(&head1.roots, &tx_final).unwrap(), true);

@@ -24,7 +24,7 @@ use tracing::{debug, info, trace};
 
 use crate::config::AppConfig;
 use crate::head::CanonicalHead;
-use crate::state_machine::{SlotDelta, StateMachine, MAX_GSR_AGE_BLOCKS};
+use crate::state_machine::{StateMachine, MAX_GSR_AGE_BLOCKS};
 use crate::sync_db::{CommittedSlotRecord, SyncDb};
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
@@ -54,18 +54,23 @@ pub struct ProcessedSlot {
     pub parent_root: B256,
     pub block_number: Option<u32>,
     pub is_empty: bool,
-    pub delta: SlotDelta,
+    pub new_head: CanonicalHead,
 }
 
 impl ProcessedSlot {
-    pub(crate) fn empty(slot: u32, block_root: B256, parent_root: B256, delta: SlotDelta) -> Self {
+    pub(crate) fn empty(
+        slot: u32,
+        block_root: B256,
+        parent_root: B256,
+        new_head: CanonicalHead,
+    ) -> Self {
         Self {
             slot,
             block_root,
             parent_root,
             block_number: None,
             is_empty: true,
-            delta,
+            new_head,
         }
     }
 
@@ -74,7 +79,7 @@ impl ProcessedSlot {
         block_root: B256,
         parent_root: B256,
         block_number: u32,
-        delta: SlotDelta,
+        new_head: CanonicalHead,
     ) -> Self {
         Self {
             slot,
@@ -82,7 +87,7 @@ impl ProcessedSlot {
             parent_root,
             block_number: Some(block_number),
             is_empty: false,
-            delta,
+            new_head,
         }
     }
 
@@ -98,7 +103,7 @@ impl ProcessedSlot {
         if self.is_empty {
             None
         } else {
-            self.delta.new_head.metadata.current_gsr
+            self.new_head.metadata.current_gsr
         }
     }
 }
@@ -230,7 +235,7 @@ impl Node {
                 beacon_block_header.slot,
                 beacon_block_header.root,
                 beacon_block_header.parent_root,
-                self.state_machine.noop_delta(base_head),
+                self.state_machine.noop_head(base_head),
             ));
         };
 
@@ -257,7 +262,7 @@ impl Node {
 
         if !slot_ctx.has_blob_commitments {
             debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
-            let delta = self.state_machine.derive_slot_delta(
+            let new_head = self.state_machine.derive_slot_head(
                 base_head,
                 recent_gsrs,
                 slot_ctx.slot,
@@ -269,7 +274,7 @@ impl Node {
                 slot_ctx.beacon_block_root,
                 slot_ctx.parent_root,
                 block_number,
-                delta,
+                new_head,
             ));
         }
 
@@ -313,7 +318,7 @@ impl Node {
                 to_address = ?self.config.to_address,
                 "No matching target blob transactions in execution block"
             );
-            let delta = self.state_machine.derive_slot_delta(
+            let new_head = self.state_machine.derive_slot_head(
                 base_head,
                 recent_gsrs,
                 slot_ctx.slot,
@@ -325,7 +330,7 @@ impl Node {
                 slot_ctx.beacon_block_root,
                 slot_ctx.parent_root,
                 block_number,
-                delta,
+                new_head,
             ));
         }
 
@@ -373,7 +378,7 @@ impl Node {
             }
         }
 
-        let delta = self.state_machine.derive_slot_delta(
+        let new_head = self.state_machine.derive_slot_head(
             base_head,
             recent_gsrs,
             slot_ctx.slot,
@@ -386,7 +391,7 @@ impl Node {
             slot_ctx.beacon_block_root,
             slot_ctx.parent_root,
             block_number,
-            delta,
+            new_head,
         ))
     }
 
@@ -401,8 +406,6 @@ impl Node {
             is_empty: processed.is_empty,
         };
 
-        self.sync_db
-            .commit_slot(&slot, &processed.delta.new_head)
-            .await
+        self.sync_db.commit_slot(&slot, &processed.new_head).await
     }
 }

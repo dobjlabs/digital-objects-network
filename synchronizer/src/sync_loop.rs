@@ -98,7 +98,7 @@ pub async fn run_sync_loop(
         }
 
         let processed = node.derive_slot_update(&beacon_block_header).await?;
-        persist_processed_slot(&node, &processed).await?;
+        node.commit_slot(&processed).await?;
 
         if wait_or_shutdown(sync_delay, &mut shutdown_rx).await {
             info!("Sync loop shutting down");
@@ -130,11 +130,11 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
         slot,
         Default::default(),
         Default::default(),
-        node.state_machine.noop_delta(head),
+        node.state_machine.noop_head(head),
     );
 
     info!(slot, "No block produced for slot");
-    persist_processed_slot(node, &processed).await?;
+    node.commit_slot(&processed).await?;
     Ok(MissingSlotAction::Applied)
 }
 
@@ -188,15 +188,6 @@ async fn handle_reorgs_for_present_slot(
     }
 
     Ok(None)
-}
-
-/// Publish one processed slot as canonical.
-///
-/// The Merkle node/value mutations have already been materialized in RocksDB during slot
-/// derivation. Canonical publication is therefore just the Postgres commit of the slot row and
-/// its canonical head columns, which atomically advances the sync cursor.
-async fn persist_processed_slot(node: &Node, processed: &ProcessedSlot) -> Result<()> {
-    node.commit_slot(processed).await
 }
 
 /// Rewind to the first slot after the last common ancestor and resume from there.
