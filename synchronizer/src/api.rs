@@ -78,6 +78,13 @@ struct GroundingWitnessSnapshot {
     source_tx_proofs: Vec<TxMembershipProof>,
 }
 
+struct MembershipContext {
+    head: HeadSnapshot,
+    tx_hashes: Vec<Hash>,
+    nullifiers: Vec<Hash>,
+    membership: MembershipSnapshot,
+}
+
 pub async fn run_api_server(
     sync_db: Arc<SyncDb>,
     app_db: AppDb,
@@ -143,29 +150,18 @@ async fn post_state_tx_contains(
     State(app_state): State<AppState>,
     Json(body): Json<TxContainsRequest>,
 ) -> Result<Json<TxContainsResponse>, (StatusCode, String)> {
-    let snapshot = load_current_snapshot(&app_state).await?;
-    let hashes = body
-        .tx_hashes
-        .iter()
-        .map(|raw| parse_hash_hex(raw))
-        .collect::<Result<Vec<_>, _>>()?;
-    let membership = membership_snapshot(&app_state.app_db, &snapshot.head.roots, &hashes, &[])
-        .map_err(internal_error)?;
-    let head = build_head_snapshot(&snapshot);
-
-    let results = hashes
-        .iter()
-        .zip(membership.tx_present.into_iter())
-        .map(|(hash, present)| TxContainsEntry {
-            tx_hash: encode_hash_hex(hash),
-            present,
-        })
-        .collect();
+    let no_nullifiers: &[String] = &[];
+    let MembershipContext {
+        head,
+        tx_hashes,
+        membership,
+        ..
+    } = load_membership_context(&app_state, &body.tx_hashes, no_nullifiers).await?;
 
     Ok(Json(TxContainsResponse {
         last_processed_slot: head.last_processed_slot,
         current_gsr: head.current_gsr,
-        results,
+        results: tx_contains_entries(tx_hashes, membership.tx_present),
     }))
 }
 
@@ -173,29 +169,18 @@ async fn post_state_nullifier_contains(
     State(app_state): State<AppState>,
     Json(body): Json<NullifierContainsRequest>,
 ) -> Result<Json<NullifierContainsResponse>, (StatusCode, String)> {
-    let snapshot = load_current_snapshot(&app_state).await?;
-    let hashes = body
-        .nullifiers
-        .iter()
-        .map(|raw| parse_hash_hex(raw))
-        .collect::<Result<Vec<_>, _>>()?;
-    let membership = membership_snapshot(&app_state.app_db, &snapshot.head.roots, &[], &hashes)
-        .map_err(internal_error)?;
-    let head = build_head_snapshot(&snapshot);
-
-    let results = hashes
-        .iter()
-        .zip(membership.nullifier_present.into_iter())
-        .map(|(hash, present)| NullifierContainsEntry {
-            nullifier: encode_hash_hex(hash),
-            present,
-        })
-        .collect();
+    let no_tx_hashes: &[String] = &[];
+    let MembershipContext {
+        head,
+        nullifiers,
+        membership,
+        ..
+    } = load_membership_context(&app_state, no_tx_hashes, &body.nullifiers).await?;
 
     Ok(Json(NullifierContainsResponse {
         last_processed_slot: head.last_processed_slot,
         current_gsr: head.current_gsr,
-        results,
+        results: nullifier_contains_entries(nullifiers, membership.nullifier_present),
     }))
 }
 
@@ -203,48 +188,18 @@ async fn post_state_membership(
     State(app_state): State<AppState>,
     Json(body): Json<MembershipRequest>,
 ) -> Result<Json<MembershipResponse>, (StatusCode, String)> {
-    let snapshot = load_current_snapshot(&app_state).await?;
-    let tx_hashes = body
-        .tx_hashes
-        .iter()
-        .map(|raw| parse_hash_hex(raw))
-        .collect::<Result<Vec<_>, _>>()?;
-    let nullifiers = body
-        .nullifiers
-        .iter()
-        .map(|raw| parse_hash_hex(raw))
-        .collect::<Result<Vec<_>, _>>()?;
-    let membership = membership_snapshot(
-        &app_state.app_db,
-        &snapshot.head.roots,
-        &tx_hashes,
-        &nullifiers,
-    )
-    .map_err(internal_error)?;
-    let head = build_head_snapshot(&snapshot);
-
-    let tx_results = tx_hashes
-        .iter()
-        .zip(membership.tx_present.into_iter())
-        .map(|(hash, present)| TxContainsEntry {
-            tx_hash: encode_hash_hex(hash),
-            present,
-        })
-        .collect();
-    let nullifier_results = nullifiers
-        .iter()
-        .zip(membership.nullifier_present.into_iter())
-        .map(|(hash, present)| NullifierContainsEntry {
-            nullifier: encode_hash_hex(hash),
-            present,
-        })
-        .collect();
+    let MembershipContext {
+        head,
+        tx_hashes,
+        nullifiers,
+        membership,
+    } = load_membership_context(&app_state, &body.tx_hashes, &body.nullifiers).await?;
 
     Ok(Json(MembershipResponse {
         last_processed_slot: head.last_processed_slot,
         current_gsr: head.current_gsr,
-        tx_results,
-        nullifier_results,
+        tx_results: tx_contains_entries(tx_hashes, membership.tx_present),
+        nullifier_results: nullifier_contains_entries(nullifiers, membership.nullifier_present),
     }))
 }
 
@@ -360,6 +315,30 @@ fn grounding_witness(
     Ok(GroundingWitnessSnapshot { source_tx_proofs })
 }
 
+async fn load_membership_context(
+    app_state: &AppState,
+    tx_hashes: &[String],
+    nullifiers: &[String],
+) -> Result<MembershipContext, (StatusCode, String)> {
+    let snapshot = load_current_snapshot(app_state).await?;
+    let tx_hashes = parse_hashes(tx_hashes)?;
+    let nullifiers = parse_hashes(nullifiers)?;
+    let membership = membership_snapshot(
+        &app_state.app_db,
+        &snapshot.head.roots,
+        &tx_hashes,
+        &nullifiers,
+    )
+    .map_err(internal_error)?;
+
+    Ok(MembershipContext {
+        head: build_head_snapshot(&snapshot),
+        tx_hashes,
+        nullifiers,
+        membership,
+    })
+}
+
 async fn load_current_snapshot(
     app_state: &AppState,
 ) -> Result<CurrentSnapshot, (StatusCode, String)> {
@@ -378,6 +357,35 @@ async fn load_sync_progress(
         snapshot.last_processed_slot,
         snapshot.last_processed_block_number,
     ))
+}
+
+fn parse_hashes(values: &[String]) -> Result<Vec<Hash>, (StatusCode, String)> {
+    values.iter().map(|value| parse_hash_hex(value)).collect()
+}
+
+fn tx_contains_entries(tx_hashes: Vec<Hash>, tx_present: Vec<bool>) -> Vec<TxContainsEntry> {
+    tx_hashes
+        .into_iter()
+        .zip(tx_present)
+        .map(|(hash, present)| TxContainsEntry {
+            tx_hash: encode_hash_hex(&hash),
+            present,
+        })
+        .collect()
+}
+
+fn nullifier_contains_entries(
+    nullifiers: Vec<Hash>,
+    nullifier_present: Vec<bool>,
+) -> Vec<NullifierContainsEntry> {
+    nullifiers
+        .into_iter()
+        .zip(nullifier_present)
+        .map(|(hash, present)| NullifierContainsEntry {
+            nullifier: encode_hash_hex(&hash),
+            present,
+        })
+        .collect()
 }
 
 fn parse_hash_hex(value: &str) -> Result<Hash, (StatusCode, String)> {
