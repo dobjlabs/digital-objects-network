@@ -527,6 +527,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn test_current_snapshot_defaults_to_empty_head() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let snapshot = sync_db.current_snapshot().await?;
@@ -538,6 +539,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn test_commit_slot_persists_head_and_cursor() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let head = unique_head(7, 100);
@@ -563,6 +565,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn test_recent_gsrs_query() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let h1 = unique_head(5, 10);
@@ -603,6 +606,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires local postgres"]
     async fn test_rollback_rewinds_cursor_and_head() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let h1 = unique_head(1, 10);
