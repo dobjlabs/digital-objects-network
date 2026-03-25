@@ -122,8 +122,6 @@ Because the Merkle nodes were already materialized during derivation, there is n
 - If the process crashes before the Postgres commit, the old canonical head remains in force and any newly written RocksDB nodes are just orphaned.
 - If the process crashes after the Postgres commit, the published `CanonicalHead` is already durable and sufficient to reopen the canonical containers.
 
-There is no apply/rollback journal anymore.
-
 ### Reorg handling
 
 On reorg:
@@ -134,10 +132,6 @@ On reorg:
 - resumes syncing from the first divergent slot
 
 Reorg rollback does not modify RocksDB. The surviving Postgres `CanonicalHead` determines which Merkle roots are canonical after rewind.
-
-### Recent GSR validation
-
-The synchronizer validates grounding roots against recent canonical GSRs loaded from Postgres `canonical_slots`, not from an in-memory cache.
 
 ## API
 

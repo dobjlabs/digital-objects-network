@@ -70,13 +70,13 @@ impl StateMachine {
     /// 1. Parse and verify the blob as a `TxFinalized` payload via `proof_parser`
     /// 2. Check that `payload.state_root_hash` exists in the recent canonical GSR cache
     /// 3. Enforce the maximum grounding age window (`MAX_GSR_AGE_BLOCKS`)
-    /// 4. Reject duplicate `tx_final` values already present in the transactions set
-    /// 5. Reject duplicate nullifiers both within the payload and against the canonical
-    ///    nullifiers set
+    /// 4. Reject duplicate `tx_final` values already present in the in-progress transactions set
+    /// 5. Reject duplicate nullifiers both within the payload and against the in-progress
+    ///    nullifiers set, which starts from canonical state and includes earlier accepted blobs
     ///
     /// If all checks pass, the method mutates the slot-local `WorkingState` by:
-    /// - inserting `tx_final` into the persistent transactions set handle
-    /// - inserting each nullifier into the persistent nullifiers set handle
+    /// - inserting `tx_final` into the persistent in-progress transactions set handle
+    /// - inserting each nullifier into the persistent in-progress nullifiers set handle
     /// - incrementing the corresponding counts in `state.metadata`
     ///
     /// No new canonical head is committed here. Mutating the persistent container handles may
@@ -165,6 +165,26 @@ impl StateMachine {
         Ok(())
     }
 
+    /// Derive the next canonical head for one execution slot from a caller-provided base head.
+    ///
+    /// This method is the slot-level orchestration layer around `process_blob`.
+    /// It:
+    /// - reopens the persistent transactions, nullifiers, and GSR-history containers from
+    ///   `base_head.roots`
+    /// - seeds the per-slot `WorkingState` with the caller-provided recent-GSR window
+    /// - feeds every decoded blob payload through `process_blob`, accumulating accepted updates
+    ///   in the in-progress container handles
+    /// - computes the next GSR from the updated transactions/nullifiers roots and the prior
+    ///   GSR-history root committed into the resulting `StateRoot`
+    /// - appends that new GSR to the full history array and returns the resulting `CanonicalHead`
+    ///
+    /// The returned head is only a candidate next canonical state. By the time this method
+    /// returns, RocksDB may already contain Merkle nodes for the derived containers, but the
+    /// head does not become canonical until the caller persists it in Postgres.
+    ///
+    /// Empty or fully rejected slots still produce a new head with the same transactions and
+    /// nullifiers roots as `base_head`, but with a newly derived `current_gsr` and an appended
+    /// GSR-history entry for the slot's execution block.
     pub fn derive_slot_head(
         &self,
         base_head: CanonicalHead,
@@ -315,7 +335,9 @@ mod tests {
             .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
             .unwrap();
         let tx_present = app_db.tx_exists_batch(&head1.roots, &[tx_final]).unwrap();
-        let nullifier_present = app_db.nullifier_exists_batch(&head1.roots, &[nullifier]).unwrap();
+        let nullifier_present = app_db
+            .nullifier_exists_batch(&head1.roots, &[nullifier])
+            .unwrap();
 
         assert_eq!(head1.metadata.tx_count, 1);
         assert_eq!(head1.metadata.nullifier_count, 1);
