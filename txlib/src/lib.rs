@@ -424,8 +424,9 @@ pub fn new_obj() -> Dictionary {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
 
+    use common::test_state::TestState;
     use hex::FromHex;
     use pod2::{
         backends::plonky2::{
@@ -438,70 +439,39 @@ mod tests {
 
     use super::*;
 
-    #[derive(Default)]
-    struct TestState {
-        block_number: i64,
-        transactions: HashSet<Hash>,
-        nullifiers: HashSet<Hash>,
-        gsrs: Vec<Hash>,
+    fn tx_hash(tx: &Tx) -> Hash {
+        tx.dict().commitment()
+    }
+
+    fn tx_nullifiers(tx: &Tx) -> Vec<Hash> {
+        tx.nullifiers
+            .iter()
+            .map(|nullifier| {
+                let nullifier = nullifier.expect("tx nullifier should decode");
+                Hash(nullifier.raw().0)
+            })
+            .collect()
+    }
+
+    fn apply_tx(state: &mut TestState, tx: &Tx) {
+        state.apply_tx(tx_hash(tx), tx_nullifiers(tx));
     }
 
     fn test_hash(byte: u8) -> Hash {
         Hash::from_hex(hex::encode([byte; 32])).expect("valid test hash")
     }
 
-    impl TestState {
-        fn state_root(&self) -> StateRoot {
-            let transactions_root = Set::new(
-                self.transactions
-                    .iter()
-                    .map(|hash| Value::from(*hash))
-                    .collect(),
-            )
-            .commitment();
-            let nullifiers_root = Set::new(
-                self.nullifiers
-                    .iter()
-                    .map(|hash| Value::from(*hash))
-                    .collect(),
-            )
-            .commitment();
-            let gsrs_root =
-                Array::new(self.gsrs.iter().map(|hash| Value::from(*hash)).collect()).commitment();
-            StateRoot::new(
-                self.block_number,
-                transactions_root,
-                nullifiers_root,
-                gsrs_root,
-            )
-        }
-
-        fn grounding_witness(&self, inputs: &[Tx]) -> GroundingWitness {
-            let tx_set = Set::new(
-                self.transactions
-                    .iter()
-                    .map(|hash| Value::from(*hash))
-                    .collect(),
-            );
-            let source_tx_proofs = inputs
-                .iter()
-                .map(|tx| {
-                    let tx_hash = tx.dict().commitment();
-                    let proof = tx_set.prove(&Value::from(tx_hash)).unwrap();
-                    (tx_hash, proof)
-                })
-                .collect::<HashMap<_, _>>();
-            GroundingWitness::new(self.state_root(), source_tx_proofs)
-        }
-
-        fn apply_tx(&mut self, tx: &Tx) {
-            self.transactions.insert(tx.dict().commitment());
-            for nullifier in tx.nullifiers.iter() {
-                let nullifier = nullifier.unwrap();
-                self.nullifiers.insert(Hash(nullifier.raw().0));
-            }
-            self.block_number += 1;
-        }
+    fn grounding_witness(state: &TestState, inputs: &[Tx]) -> Arc<GroundingWitness> {
+        state.build_grounding_witness(
+            inputs,
+            tx_hash,
+            |block_number, transactions_root, nullifiers_root, gsrs_root, source_tx_proofs| {
+                Arc::new(GroundingWitness::new(
+                    StateRoot::new(block_number, transactions_root, nullifiers_root, gsrs_root),
+                    source_tx_proofs,
+                ))
+            },
+        )
     }
 
     #[test]
@@ -604,7 +574,7 @@ mod tests {
             modules: modules.clone(),
         };
 
-        let mut tx_builder = TxBuilder::new(&mut ctx, &[], Arc::new(state.grounding_witness(&[])));
+        let mut tx_builder = TxBuilder::new(&mut ctx, &[], grounding_witness(&state, &[]));
         let obj0 = new_obj();
         tx_builder.insert(&mut ctx, obj0.clone());
         let (st, tx0) = tx_builder.finalize(&mut ctx);
@@ -612,7 +582,7 @@ mod tests {
 
         let tx_pod = prove(ctx.builder, prover);
         tx_pod.pod.verify().unwrap();
-        state.apply_tx(&tx0);
+        apply_tx(&mut state, &tx0);
 
         // Mutate
         let builder = MultiPodBuilder::new(&params, vd_set);
@@ -625,7 +595,7 @@ mod tests {
         let mut tx_builder = TxBuilder::new(
             &mut ctx,
             &inputs,
-            Arc::new(state.grounding_witness(&[inputs[0].1.clone()])),
+            grounding_witness(&state, &[inputs[0].1.clone()]),
         );
         let mut obj1 = obj0.clone();
         obj1.insert(&Key::from("foo"), &Value::from("bar")).unwrap();
@@ -635,7 +605,7 @@ mod tests {
 
         let tx_pod = prove(ctx.builder, prover);
         tx_pod.pod.verify().unwrap();
-        state.apply_tx(&tx1);
+        apply_tx(&mut state, &tx1);
 
         // Delete
         let builder = MultiPodBuilder::new(&params, vd_set);
@@ -648,7 +618,7 @@ mod tests {
         let mut tx_builder = TxBuilder::new(
             &mut ctx,
             &inputs,
-            Arc::new(state.grounding_witness(&[inputs[0].1.clone()])),
+            grounding_witness(&state, &[inputs[0].1.clone()]),
         );
         tx_builder.delete(&mut ctx, obj1);
         let (st, tx2) = tx_builder.finalize(&mut ctx);
@@ -656,6 +626,6 @@ mod tests {
 
         let tx_pod = prove(ctx.builder, prover);
         tx_pod.pod.verify().unwrap();
-        state.apply_tx(&tx2);
+        apply_tx(&mut state, &tx2);
     }
 }

@@ -2176,6 +2176,7 @@ name = "craft_sdk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "common",
  "env_logger",
  "hex",
  "log",
@@ -8564,6 +8565,7 @@ name = "timelib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "common",
  "env_logger",
  "hex",
  "log",
@@ -8975,6 +8977,7 @@ name = "txlib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "common",
  "hex",
  "log",
  "plonky2",

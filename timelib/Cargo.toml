@@ -15,3 +15,6 @@ rand = { workspace = true }
 plonky2 = { workspace = true }
 pod2utils = { path = "../pod2utils" }
 txlib = { path = "../txlib" }
+
+[dev-dependencies]
+common = { path = "../common", features = ["test-utils"] }
