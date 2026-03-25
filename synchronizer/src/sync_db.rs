@@ -1,15 +1,21 @@
 use alloy::primitives::B256;
 use anyhow::{anyhow, Context, Result};
 use pod2::middleware::Hash;
-use sqlx::{postgres::PgPoolOptions, types::Json, Executor, PgPool, Row};
+use sqlx::{
+    postgres::{PgPoolOptions, PgRow},
+    Executor, PgPool, Row,
+};
 use url::Url;
 
-use crate::app_db::{db_bytes_to_hash, hash_to_db_bytes, AppHead};
+use crate::{
+    app_db::{db_bytes_to_hash, hash_to_db_bytes},
+    head::{CanonicalHead, CanonicalRoots, HeadMetadata},
+};
 
 /// Current canonical head plus cursor metadata loaded from Postgres.
 #[derive(Debug, Clone, Copy)]
 pub struct CurrentSnapshot {
-    pub head: AppHead,
+    pub head: CanonicalHead,
     pub last_processed_slot: Option<u32>,
     pub last_processed_block_number: Option<u32>,
 }
@@ -33,7 +39,8 @@ pub struct SyncDb {
 impl SyncDb {
     /// Connect to the synchronizer's Postgres metadata database.
     ///
-    /// Postgres is the sole source of canonical heads. Each committed slot stores its `AppHead`,
+    /// Postgres is the sole source of canonical heads. Each committed slot stores its
+    /// `CanonicalHead`,
     /// while RocksDB only stores the content-addressed Merkle node/value backing store.
     pub async fn connect(database_url: &str) -> Result<Self> {
         ensure_database_exists(database_url).await?;
@@ -49,7 +56,8 @@ impl SyncDb {
 
     /// Create the Postgres schema used by the synchronizer control plane.
     ///
-    /// `canonical_slots` stores per-slot metadata plus the committed `AppHead`.
+    /// `canonical_slots` stores per-slot metadata plus the committed canonical roots and metadata
+    /// as regular SQL columns.
     /// `sync_cursor` points at the latest canonical slot that should be treated as current.
     async fn bootstrap(&self) -> Result<()> {
         let statements = [
@@ -69,7 +77,15 @@ impl SyncDb {
                 execution_block_number INTEGER NULL,
                 current_gsr BYTEA NULL,
                 is_empty BOOLEAN NOT NULL,
-                app_head JSONB NOT NULL,
+                head_transactions_root BYTEA NOT NULL,
+                head_nullifiers_root BYTEA NOT NULL,
+                head_state_root_gsrs_root BYTEA NOT NULL,
+                head_gsr_history_root BYTEA NOT NULL,
+                head_current_gsr BYTEA NULL,
+                head_current_block_number INTEGER NULL,
+                head_tx_count BIGINT NOT NULL,
+                head_nullifier_count BIGINT NOT NULL,
+                head_gsr_count BIGINT NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
             "#,
@@ -137,7 +153,15 @@ impl SyncDb {
             r#"
             SELECT c.last_processed_slot,
                    c.last_processed_block_number,
-                   s.app_head
+                   s.head_transactions_root,
+                   s.head_nullifiers_root,
+                   s.head_state_root_gsrs_root,
+                   s.head_gsr_history_root,
+                   s.head_current_gsr,
+                   s.head_current_block_number,
+                   s.head_tx_count,
+                   s.head_nullifier_count,
+                   s.head_gsr_count
             FROM sync_cursor c
             LEFT JOIN canonical_slots s ON s.slot = c.last_processed_slot
             WHERE c.id = 1
@@ -148,7 +172,7 @@ impl SyncDb {
 
         let Some(row) = row else {
             return Ok(CurrentSnapshot {
-                head: AppHead::empty(),
+                head: CanonicalHead::empty(),
                 last_processed_slot: None,
                 last_processed_block_number: None,
             });
@@ -161,17 +185,11 @@ impl SyncDb {
             .get::<Option<i32>, _>("last_processed_block_number")
             .map(|block_number| block_number as u32);
 
-        let head = match (
-            last_processed_slot,
-            row.get::<Option<Json<AppHead>>, _>("app_head"),
-        ) {
-            (None, _) => AppHead::empty(),
-            (Some(_), Some(head)) => head.0,
-            (Some(slot), None) => {
-                return Err(anyhow!(
-                    "sync_cursor points at slot {slot}, but canonical_slots has no app_head"
-                ));
-            }
+        let head = match last_processed_slot {
+            None => CanonicalHead::empty(),
+            Some(slot) => decode_head_row(&row).with_context(|| {
+                format!("sync_cursor points at slot {slot}, but canonical_slots has no head data")
+            })?,
         };
 
         Ok(CurrentSnapshot {
@@ -181,14 +199,28 @@ impl SyncDb {
         })
     }
 
-    /// Return the committed `AppHead` for one canonical slot, if present.
+    /// Return the committed canonical head for one slot, if present.
     #[cfg(test)]
-    pub async fn head_for_slot(&self, slot: u32) -> Result<Option<AppHead>> {
-        let row = sqlx::query("SELECT app_head FROM canonical_slots WHERE slot = $1")
-            .bind(slot as i32)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.map(|row| row.get::<Json<AppHead>, _>("app_head").0))
+    pub async fn head_for_slot(&self, slot: u32) -> Result<Option<CanonicalHead>> {
+        let row = sqlx::query(
+            r#"
+            SELECT head_transactions_root,
+                   head_nullifiers_root,
+                   head_state_root_gsrs_root,
+                   head_gsr_history_root,
+                   head_current_gsr,
+                   head_current_block_number,
+                   head_tx_count,
+                   head_nullifier_count,
+                   head_gsr_count
+            FROM canonical_slots
+            WHERE slot = $1
+            "#,
+        )
+        .bind(slot as i32)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| decode_head_row(&row)).transpose()
     }
 
     /// Return the canonical beacon block root for a committed slot.
@@ -215,7 +247,11 @@ impl SyncDb {
     }
 
     /// Commit one canonical slot and advance the sync cursor in the same Postgres transaction.
-    pub async fn commit_slot(&self, slot: &CommittedSlotRecord, head: &AppHead) -> Result<()> {
+    pub async fn commit_slot(
+        &self,
+        slot: &CommittedSlotRecord,
+        head: &CanonicalHead,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
@@ -227,16 +263,32 @@ impl SyncDb {
                 execution_block_number,
                 current_gsr,
                 is_empty,
-                app_head
+                head_transactions_root,
+                head_nullifiers_root,
+                head_state_root_gsrs_root,
+                head_gsr_history_root,
+                head_current_gsr,
+                head_current_block_number,
+                head_tx_count,
+                head_nullifier_count,
+                head_gsr_count
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT (slot) DO UPDATE
             SET block_root = EXCLUDED.block_root,
                 parent_root = EXCLUDED.parent_root,
                 execution_block_number = EXCLUDED.execution_block_number,
                 current_gsr = EXCLUDED.current_gsr,
                 is_empty = EXCLUDED.is_empty,
-                app_head = EXCLUDED.app_head,
+                head_transactions_root = EXCLUDED.head_transactions_root,
+                head_nullifiers_root = EXCLUDED.head_nullifiers_root,
+                head_state_root_gsrs_root = EXCLUDED.head_state_root_gsrs_root,
+                head_gsr_history_root = EXCLUDED.head_gsr_history_root,
+                head_current_gsr = EXCLUDED.head_current_gsr,
+                head_current_block_number = EXCLUDED.head_current_block_number,
+                head_tx_count = EXCLUDED.head_tx_count,
+                head_nullifier_count = EXCLUDED.head_nullifier_count,
+                head_gsr_count = EXCLUDED.head_gsr_count,
                 updated_at = now()
             "#,
         )
@@ -246,7 +298,15 @@ impl SyncDb {
         .bind(slot.block_number.map(|v| v as i32))
         .bind(slot.current_gsr.map(hash_to_db_bytes))
         .bind(slot.is_empty)
-        .bind(Json(*head))
+        .bind(hash_to_db_bytes(head.roots.transactions))
+        .bind(hash_to_db_bytes(head.roots.nullifiers))
+        .bind(hash_to_db_bytes(head.roots.state_root_gsrs))
+        .bind(hash_to_db_bytes(head.roots.gsr_history))
+        .bind(head.metadata.current_gsr.map(hash_to_db_bytes))
+        .bind(head.metadata.current_block_number.map(|v| v as i32))
+        .bind(head.metadata.tx_count as i64)
+        .bind(head.metadata.nullifier_count as i64)
+        .bind(head.metadata.gsr_count as i64)
         .execute(&mut *tx)
         .await?;
 
@@ -337,6 +397,30 @@ impl SyncDb {
     }
 }
 
+fn decode_head_row(row: &PgRow) -> Result<CanonicalHead> {
+    Ok(CanonicalHead {
+        roots: CanonicalRoots {
+            transactions: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_transactions_root"))?,
+            nullifiers: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_nullifiers_root"))?,
+            state_root_gsrs: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_state_root_gsrs_root"))?,
+            gsr_history: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_gsr_history_root"))?,
+        },
+        metadata: HeadMetadata {
+            current_gsr: row
+                .get::<Option<Vec<u8>>, _>("head_current_gsr")
+                .as_deref()
+                .map(db_bytes_to_hash)
+                .transpose()?,
+            current_block_number: row
+                .get::<Option<i32>, _>("head_current_block_number")
+                .map(|value| value as u32),
+            tx_count: row.get::<i64, _>("head_tx_count") as u64,
+            nullifier_count: row.get::<i64, _>("head_nullifier_count") as u64,
+            gsr_count: row.get::<i64, _>("head_gsr_count") as u64,
+        },
+    })
+}
+
 /// Ensure target Postgres database exists (local/dev convenience).
 async fn ensure_database_exists(database_url: &str) -> Result<()> {
     let parsed = Url::parse(database_url).with_context(|| "Invalid SYNC_METADATA_DB_URL value")?;
@@ -381,17 +465,21 @@ mod tests {
         hash_values(&[Value::from(n)])
     }
 
-    fn unique_head(block_number: u32, marker: i64) -> AppHead {
-        AppHead {
-            transactions_root: unique_hash(marker),
-            nullifiers_root: unique_hash(marker + 1),
-            state_root_gsrs_root: unique_hash(marker + 2),
-            gsr_history_root: unique_hash(marker + 3),
-            current_gsr: Some(unique_hash(marker + 4)),
-            current_block_number: Some(block_number),
-            tx_count: block_number as u64,
-            nullifier_count: block_number as u64 + 1,
-            gsr_count: block_number as u64 + 2,
+    fn unique_head(block_number: u32, marker: i64) -> CanonicalHead {
+        CanonicalHead {
+            roots: CanonicalRoots {
+                transactions: unique_hash(marker),
+                nullifiers: unique_hash(marker + 1),
+                state_root_gsrs: unique_hash(marker + 2),
+                gsr_history: unique_hash(marker + 3),
+            },
+            metadata: HeadMetadata {
+                current_gsr: Some(unique_hash(marker + 4)),
+                current_block_number: Some(block_number),
+                tx_count: block_number as u64,
+                nullifier_count: block_number as u64 + 1,
+                gsr_count: block_number as u64 + 2,
+            },
         }
     }
 
@@ -437,7 +525,7 @@ mod tests {
     async fn test_current_snapshot_defaults_to_empty_head() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let snapshot = sync_db.current_snapshot().await?;
-        assert_eq!(snapshot.head, AppHead::empty());
+        assert_eq!(snapshot.head, CanonicalHead::empty());
         assert_eq!(snapshot.last_processed_slot, None);
         assert_eq!(snapshot.last_processed_block_number, None);
         drop_db(&db_name, &admin_url).await?;
@@ -453,7 +541,7 @@ mod tests {
             block_root: None,
             parent_root: None,
             block_number: Some(7),
-            current_gsr: head.current_gsr,
+            current_gsr: head.metadata.current_gsr,
             is_empty: false,
         };
 
@@ -480,7 +568,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(5),
-                    current_gsr: h1.current_gsr,
+                    current_gsr: h1.metadata.current_gsr,
                     is_empty: false,
                 },
                 &h1,
@@ -495,7 +583,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(9),
-                    current_gsr: h2.current_gsr,
+                    current_gsr: h2.metadata.current_gsr,
                     is_empty: false,
                 },
                 &h2,
@@ -503,7 +591,7 @@ mod tests {
             .await?;
 
         let recent = sync_db.recent_gsrs(Some(6)).await?;
-        assert_eq!(recent, vec![(h2.current_gsr.unwrap(), 9)]);
+        assert_eq!(recent, vec![(h2.metadata.current_gsr.unwrap(), 9)]);
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -520,7 +608,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(1),
-                    current_gsr: h1.current_gsr,
+                    current_gsr: h1.metadata.current_gsr,
                     is_empty: false,
                 },
                 &h1,
@@ -535,7 +623,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(2),
-                    current_gsr: h2.current_gsr,
+                    current_gsr: h2.metadata.current_gsr,
                     is_empty: false,
                 },
                 &h2,

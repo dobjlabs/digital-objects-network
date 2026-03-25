@@ -194,7 +194,7 @@ async fn handle_reorgs_for_present_slot(
 ///
 /// The Merkle node/value mutations have already been materialized in RocksDB during slot
 /// derivation. Canonical publication is therefore just the Postgres commit of the slot row and
-/// its `AppHead`, which atomically advances the sync cursor.
+/// its canonical head columns, which atomically advances the sync cursor.
 async fn persist_processed_slot(node: &Node, processed: &ProcessedSlot) -> Result<()> {
     node.commit_slot(processed).await
 }

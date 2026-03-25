@@ -11,7 +11,10 @@ use pod2::{
 };
 use tracing::{info, warn};
 
-use crate::app_db::{AppDb, AppHead};
+use crate::{
+    app_db::AppDb,
+    head::{CanonicalHead, CanonicalRoots, HeadMetadata},
+};
 use txlib::StateRoot;
 
 /// The maximum age of a GSR used as grounding for a transaction.
@@ -22,7 +25,7 @@ pub const MAX_GSR_AGE_BLOCKS: i64 = 300;
 /// Head transition derived for a single canonical slot.
 pub struct SlotDelta {
     /// Head snapshot after processing the slot.
-    pub new_head: AppHead,
+    pub new_head: CanonicalHead,
 }
 
 #[derive(Debug, Clone)]
@@ -46,9 +49,9 @@ pub struct GroundingWitnessSnapshot {
 #[derive(Debug, Clone)]
 /// Membership result anchored to one caller-provided head.
 pub struct MembershipSnapshot {
-    /// Per-request transaction membership bits under `head.transactions_root`.
+    /// Per-request transaction membership bits under `roots.transactions`.
     pub tx_present: Vec<bool>,
-    /// Per-request nullifier membership bits under `head.nullifiers_root`.
+    /// Per-request nullifier membership bits under `roots.nullifiers`.
     pub nullifier_present: Vec<bool>,
 }
 
@@ -58,12 +61,12 @@ pub struct MembershipSnapshot {
 /// query and mutate transactions, nullifiers, and GSR history for one slot.
 struct WorkingState {
     /// Head snapshot the slot derivation started from.
-    head: AppHead,
-    /// Persistent transactions set opened from `head.transactions_root`.
+    head: CanonicalHead,
+    /// Persistent transactions set opened from `head.roots.transactions`.
     transactions: Set,
-    /// Persistent nullifiers set opened from `head.nullifiers_root`.
+    /// Persistent nullifiers set opened from `head.roots.nullifiers`.
     nullifiers: Set,
-    /// Persistent full GSR history array opened from `head.gsr_history_root`.
+    /// Persistent full GSR history array opened from `head.roots.gsr_history`.
     gsr_history: Array,
     /// Recent canonical GSRs keyed by hash for grounding validation.
     recent_gsrs: HashMap<Hash, i64>,
@@ -72,8 +75,8 @@ struct WorkingState {
 /// Domain logic for the synchronizer: proof verification, state validation, and Merkle storage.
 ///
 /// `StateMachine` is intentionally decoupled from networking and canonical-head ownership.
-/// Callers supply the `AppHead` they want to operate against, and Postgres remains the sole source
-/// of truth for which head is canonical.
+/// Callers supply the `CanonicalHead` they want to operate against, and Postgres remains the sole
+/// source of truth for which head is canonical.
 pub struct StateMachine {
     /// RocksDB-backed app-state store used to open persistent containers and prove membership.
     app_db: AppDb,
@@ -89,7 +92,7 @@ impl StateMachine {
         }
     }
 
-    pub fn noop_delta(&self, base_head: AppHead) -> SlotDelta {
+    pub fn noop_delta(&self, base_head: CanonicalHead) -> SlotDelta {
         SlotDelta {
             new_head: base_head,
         }
@@ -97,53 +100,59 @@ impl StateMachine {
 
     fn snapshot_working_state(
         &self,
-        base_head: AppHead,
+        base_head: CanonicalHead,
         recent_gsrs: HashMap<Hash, i64>,
     ) -> Result<WorkingState> {
         Ok(WorkingState {
             head: base_head,
-            transactions: self.app_db.open_transactions(base_head.transactions_root)?,
-            nullifiers: self.app_db.open_nullifiers(base_head.nullifiers_root)?,
-            gsr_history: self.app_db.open_gsr_history(base_head.gsr_history_root)?,
+            transactions: self
+                .app_db
+                .open_transactions(base_head.roots.transactions)?,
+            nullifiers: self.app_db.open_nullifiers(base_head.roots.nullifiers)?,
+            gsr_history: self.app_db.open_gsr_history(base_head.roots.gsr_history)?,
             recent_gsrs,
         })
     }
 
     #[cfg(test)]
-    pub fn tx_exists(&self, head: AppHead, tx_hash: &Hash) -> Result<bool> {
+    pub fn tx_exists(&self, roots: &CanonicalRoots, tx_hash: &Hash) -> Result<bool> {
         Ok(self
-            .membership_snapshot(head, std::slice::from_ref(tx_hash), &[])?
+            .membership_snapshot(roots, std::slice::from_ref(tx_hash), &[])?
             .tx_present[0])
     }
 
     #[cfg(test)]
-    pub fn nullifier_exists_batch(&self, head: AppHead, nullifiers: &[Hash]) -> Result<Vec<bool>> {
+    pub fn nullifier_exists_batch(
+        &self,
+        roots: &CanonicalRoots,
+        nullifiers: &[Hash],
+    ) -> Result<Vec<bool>> {
         Ok(self
-            .membership_snapshot(head, &[], nullifiers)?
+            .membership_snapshot(roots, &[], nullifiers)?
             .nullifier_present)
     }
 
     pub fn membership_snapshot(
         &self,
-        head: AppHead,
+        roots: &CanonicalRoots,
         tx_hashes: &[Hash],
         nullifiers: &[Hash],
     ) -> Result<MembershipSnapshot> {
         Ok(MembershipSnapshot {
-            tx_present: self.app_db.tx_exists_batch(&head, tx_hashes)?,
-            nullifier_present: self.app_db.nullifier_exists_batch(&head, nullifiers)?,
+            tx_present: self.app_db.tx_exists_batch(roots, tx_hashes)?,
+            nullifier_present: self.app_db.nullifier_exists_batch(roots, nullifiers)?,
         })
     }
 
     pub fn grounding_witness(
         &self,
-        head: AppHead,
+        roots: &CanonicalRoots,
         source_tx_hashes: &[Hash],
     ) -> Result<GroundingWitnessSnapshot> {
         let source_tx_proofs = source_tx_hashes
             .iter()
             .map(|tx_hash| {
-                let (present, proof) = self.app_db.prove_tx(&head, *tx_hash)?;
+                let (present, proof) = self.app_db.prove_tx(roots, *tx_hash)?;
                 Ok(TxMembershipProof {
                     tx_hash: *tx_hash,
                     present,
@@ -176,7 +185,7 @@ impl StateMachine {
     ///
     /// No new canonical head is committed here. Mutating the persistent container handles may
     /// materialize Merkle nodes/values in RocksDB, but the canonical state changes only if the
-    /// caller later publishes the resulting `AppHead` in Postgres.
+    /// caller later publishes the resulting `CanonicalHead` in Postgres.
     fn process_blob(
         &self,
         state: &mut WorkingState,
@@ -244,17 +253,17 @@ impl StateMachine {
         }
 
         state.transactions.insert(&tx_value)?;
-        state.head.tx_count += 1;
+        state.head.metadata.tx_count += 1;
         for nullifier in &payload.nullifiers {
             state.nullifiers.insert(&Value::from(*nullifier))?;
-            state.head.nullifier_count += 1;
+            state.head.metadata.nullifier_count += 1;
         }
 
         info!(
             slot,
             block_number,
-            transaction_count = state.head.tx_count,
-            nullifier_count = state.head.nullifier_count,
+            transaction_count = state.head.metadata.tx_count,
+            nullifier_count = state.head.metadata.nullifier_count,
             "Validated blob state update in slot derivation"
         );
         Ok(())
@@ -262,7 +271,7 @@ impl StateMachine {
 
     pub fn derive_slot_delta(
         &self,
-        base_head: AppHead,
+        base_head: CanonicalHead,
         recent_gsrs: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
         block_number: u32,
@@ -281,7 +290,7 @@ impl StateMachine {
                 })?;
         }
 
-        let prior_gsrs_root = base_head.gsr_history_root;
+        let prior_gsrs_root = base_head.roots.gsr_history;
         let new_gsr = StateRoot::new(
             i64::from(block_number),
             working.transactions.commitment(),
@@ -292,7 +301,7 @@ impl StateMachine {
 
         working
             .gsr_history
-            .insert(base_head.gsr_count as usize, Value::from(new_gsr))?;
+            .insert(base_head.metadata.gsr_count as usize, Value::from(new_gsr))?;
         working.recent_gsrs.insert(new_gsr, i64::from(block_number));
 
         let min_block = i64::from(block_number) - MAX_GSR_AGE_BLOCKS;
@@ -300,38 +309,43 @@ impl StateMachine {
             .recent_gsrs
             .retain(|_, seen_block| *seen_block >= min_block);
 
-        let new_head = AppHead {
-            transactions_root: working.transactions.commitment(),
-            nullifiers_root: working.nullifiers.commitment(),
-            state_root_gsrs_root: prior_gsrs_root,
-            gsr_history_root: working.gsr_history.commitment(),
-            current_gsr: Some(new_gsr),
-            current_block_number: Some(block_number),
-            tx_count: working.head.tx_count,
-            nullifier_count: working.head.nullifier_count,
-            gsr_count: base_head.gsr_count + 1,
+        let new_head = CanonicalHead {
+            roots: CanonicalRoots {
+                transactions: working.transactions.commitment(),
+                nullifiers: working.nullifiers.commitment(),
+                state_root_gsrs: prior_gsrs_root,
+                gsr_history: working.gsr_history.commitment(),
+            },
+            metadata: HeadMetadata {
+                current_gsr: Some(new_gsr),
+                current_block_number: Some(block_number),
+                tx_count: working.head.metadata.tx_count,
+                nullifier_count: working.head.metadata.nullifier_count,
+                gsr_count: base_head.metadata.gsr_count + 1,
+            },
         };
 
         info!(
             slot,
             block_number,
-            gsr_count = new_head.gsr_count,
+            gsr_count = new_head.metadata.gsr_count,
             "Slot data"
         );
 
         Ok(SlotDelta { new_head })
     }
 
-    pub fn log_current_state(&self, head: AppHead) {
+    pub fn log_current_state(&self, head: CanonicalHead) {
         let current_gsr = head
+            .metadata
             .current_gsr
             .as_ref()
             .map(encode_hash_hex)
             .unwrap_or_else(|| "none".to_string());
         info!(
-            transaction_count = head.tx_count,
-            nullifier_count = head.nullifier_count,
-            gsr_count = head.gsr_count,
+            transaction_count = head.metadata.tx_count,
+            nullifier_count = head.metadata.nullifier_count,
+            gsr_count = head.metadata.gsr_count,
             current_gsr = %current_gsr,
             "Current state"
         );
@@ -370,8 +384,8 @@ mod tests {
         .into_bytes()
     }
 
-    fn seed_gsr0(sm: &StateMachine) -> AppHead {
-        sm.derive_slot_delta(AppHead::empty(), [], 0, 0, &[])
+    fn seed_gsr0(sm: &StateMachine) -> CanonicalHead {
+        sm.derive_slot_delta(CanonicalHead::empty(), [], 0, 0, &[])
             .unwrap()
             .new_head
     }
@@ -380,18 +394,18 @@ mod tests {
     fn test_empty_slot_produces_new_head() {
         let (sm, _dir) = make_sm();
         let head = sm
-            .derive_slot_delta(AppHead::empty(), [], 1, 7, &[])
+            .derive_slot_delta(CanonicalHead::empty(), [], 1, 7, &[])
             .unwrap()
             .new_head;
-        assert_eq!(head.current_block_number, Some(7));
-        assert_eq!(head.gsr_count, 1);
+        assert_eq!(head.metadata.current_block_number, Some(7));
+        assert_eq!(head.metadata.gsr_count, 1);
     }
 
     #[test]
     fn test_accepts_valid_blob_and_updates_counts() {
         let (sm, _dir) = make_sm();
         let head0 = seed_gsr0(&sm);
-        let gsr0 = head0.current_gsr.unwrap();
+        let gsr0 = head0.metadata.current_gsr.unwrap();
 
         let tx_final = unique_hash(10);
         let nullifier = unique_hash(11);
@@ -401,12 +415,13 @@ mod tests {
             .unwrap()
             .new_head;
 
-        assert_eq!(head1.tx_count, 1);
-        assert_eq!(head1.nullifier_count, 1);
-        assert_eq!(head1.gsr_count, 2);
-        assert!(sm.tx_exists(head1, &tx_final).unwrap());
+        assert_eq!(head1.metadata.tx_count, 1);
+        assert_eq!(head1.metadata.nullifier_count, 1);
+        assert_eq!(head1.metadata.gsr_count, 2);
+        assert!(sm.tx_exists(&head1.roots, &tx_final).unwrap());
         assert_eq!(
-            sm.nullifier_exists_batch(head1, &[nullifier]).unwrap(),
+            sm.nullifier_exists_batch(&head1.roots, &[nullifier])
+                .unwrap(),
             vec![true]
         );
     }
@@ -422,14 +437,14 @@ mod tests {
             .derive_slot_delta(head0, [], 2, 2, &[(0, blob)])
             .unwrap()
             .new_head;
-        assert_eq!(head1.tx_count, head0.tx_count);
+        assert_eq!(head1.metadata.tx_count, head0.metadata.tx_count);
     }
 
     #[test]
     fn test_uncommitted_derived_nodes_do_not_affect_old_head() {
         let (sm, _dir) = make_sm();
         let head0 = seed_gsr0(&sm);
-        let gsr0 = head0.current_gsr.unwrap();
+        let gsr0 = head0.metadata.current_gsr.unwrap();
 
         let tx_final = unique_hash(31);
         let blob = mock_txn_bytes(tx_final, &[], gsr0);
@@ -438,7 +453,7 @@ mod tests {
             .unwrap()
             .new_head;
 
-        assert_eq!(sm.tx_exists(head0, &tx_final).unwrap(), false);
-        assert_eq!(sm.tx_exists(head1, &tx_final).unwrap(), true);
+        assert_eq!(sm.tx_exists(&head0.roots, &tx_final).unwrap(), false);
+        assert_eq!(sm.tx_exists(&head1.roots, &tx_final).unwrap(), true);
     }
 }

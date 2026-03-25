@@ -10,8 +10,8 @@ use pod2::{
     },
 };
 use rocksdb::{Options, TransactionDB, TransactionDBOptions};
-use serde::{Deserialize, Serialize};
-use txlib::StateRoot;
+
+use crate::head::CanonicalRoots;
 
 fn node_key(hash: Hash) -> Vec<u8> {
     let mut k = Vec::with_capacity(34);
@@ -25,67 +25,6 @@ fn value_key(raw: RawValue) -> Vec<u8> {
     k.extend_from_slice(b"v/");
     k.extend_from_slice(&raw.to_bytes());
     k
-}
-
-/// Compact committed app-state snapshot stored in Postgres on canonical slot rows.
-///
-/// The actual transaction/nullifier/GSR contents live in persistent POD2 containers;
-/// `AppHead` stores the roots and counts used to reopen those containers and serve state/proof
-/// queries.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AppHead {
-    /// Root of the persistent transactions set.
-    pub transactions_root: Hash,
-    /// Root of the persistent spent-nullifiers set.
-    pub nullifiers_root: Hash,
-    /// Root of the prior-GSR array committed inside `txlib::StateRoot`.
-    pub state_root_gsrs_root: Hash,
-    /// Root of the full GSR history array after appending `current_gsr`.
-    pub gsr_history_root: Hash,
-    /// Current canonical global state root for this head, if one exists.
-    pub current_gsr: Option<Hash>,
-    /// Execution block number associated with `current_gsr`.
-    pub current_block_number: Option<u32>,
-    /// Number of accepted transactions in the canonical state.
-    pub tx_count: u64,
-    /// Number of spent nullifiers in the canonical state.
-    pub nullifier_count: u64,
-    /// Number of GSR entries in the persistent history array.
-    pub gsr_count: u64,
-}
-
-impl Default for AppHead {
-    fn default() -> Self {
-        Self::empty()
-    }
-}
-
-impl AppHead {
-    pub fn empty() -> Self {
-        Self {
-            transactions_root: EMPTY_HASH,
-            nullifiers_root: EMPTY_HASH,
-            state_root_gsrs_root: EMPTY_HASH,
-            gsr_history_root: EMPTY_HASH,
-            current_gsr: None,
-            current_block_number: None,
-            tx_count: 0,
-            nullifier_count: 0,
-            gsr_count: 0,
-        }
-    }
-
-    pub fn current_state_root(&self) -> Option<StateRoot> {
-        self.current_block_number.map(|block_number| {
-            StateRoot::new(
-                block_number as i64,
-                self.transactions_root,
-                self.nullifiers_root,
-                self.state_root_gsrs_root,
-            )
-        })
-    }
 }
 
 #[derive(Clone)]
@@ -127,8 +66,8 @@ impl AppDb {
         Ok(Array::from_db(root, self.db_box())?)
     }
 
-    pub fn prove_tx(&self, head: &AppHead, tx_hash: Hash) -> Result<(bool, MerkleProof)> {
-        let txs = self.open_transactions(head.transactions_root)?;
+    pub fn prove_tx(&self, roots: &CanonicalRoots, tx_hash: Hash) -> Result<(bool, MerkleProof)> {
+        let txs = self.open_transactions(roots.transactions)?;
         let value = Value::from(tx_hash);
         match txs.prove(&value) {
             Ok(proof) => Ok((true, proof)),
@@ -136,8 +75,8 @@ impl AppDb {
         }
     }
 
-    pub fn tx_exists_batch(&self, head: &AppHead, tx_hashes: &[Hash]) -> Result<Vec<bool>> {
-        let txs = self.open_transactions(head.transactions_root)?;
+    pub fn tx_exists_batch(&self, roots: &CanonicalRoots, tx_hashes: &[Hash]) -> Result<Vec<bool>> {
+        let txs = self.open_transactions(roots.transactions)?;
         tx_hashes
             .iter()
             .map(|hash| {
@@ -147,8 +86,12 @@ impl AppDb {
             .collect()
     }
 
-    pub fn nullifier_exists_batch(&self, head: &AppHead, nullifiers: &[Hash]) -> Result<Vec<bool>> {
-        let nullifier_set = self.open_nullifiers(head.nullifiers_root)?;
+    pub fn nullifier_exists_batch(
+        &self,
+        roots: &CanonicalRoots,
+        nullifiers: &[Hash],
+    ) -> Result<Vec<bool>> {
+        let nullifier_set = self.open_nullifiers(roots.nullifiers)?;
         nullifiers
             .iter()
             .map(|hash| {
@@ -273,16 +216,16 @@ mod tests {
         let tx_hash = test_hash(9);
         txs.insert(&Value::from(tx_hash)).unwrap();
 
-        let head = AppHead {
-            transactions_root: txs.commitment(),
-            ..AppHead::empty()
+        let roots = CanonicalRoots {
+            transactions: txs.commitment(),
+            ..CanonicalRoots::empty()
         };
 
         assert_eq!(
-            app_db.tx_exists_batch(&head, &[tx_hash]).unwrap(),
+            app_db.tx_exists_batch(&roots, &[tx_hash]).unwrap(),
             vec![true]
         );
-        let (present, _proof) = app_db.prove_tx(&head, tx_hash).unwrap();
+        let (present, _proof) = app_db.prove_tx(&roots, tx_hash).unwrap();
         assert!(present);
     }
 }

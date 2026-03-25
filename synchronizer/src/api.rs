@@ -116,7 +116,7 @@ async fn post_state_tx_contains(
         .collect::<Result<Vec<_>, _>>()?;
     let membership = app_state
         .state_machine
-        .membership_snapshot(snapshot.head, &hashes, &[])
+        .membership_snapshot(&snapshot.head.roots, &hashes, &[])
         .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
 
@@ -148,7 +148,7 @@ async fn post_state_nullifier_contains(
         .collect::<Result<Vec<_>, _>>()?;
     let membership = app_state
         .state_machine
-        .membership_snapshot(snapshot.head, &[], &hashes)
+        .membership_snapshot(&snapshot.head.roots, &[], &hashes)
         .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
 
@@ -185,7 +185,7 @@ async fn post_state_membership(
         .collect::<Result<Vec<_>, _>>()?;
     let membership = app_state
         .state_machine
-        .membership_snapshot(snapshot.head, &tx_hashes, &nullifiers)
+        .membership_snapshot(&snapshot.head.roots, &tx_hashes, &nullifiers)
         .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
 
@@ -222,7 +222,7 @@ async fn get_state_tx(
     let hash = parse_hash_hex(&tx_hash)?;
     let membership = app_state
         .state_machine
-        .membership_snapshot(snapshot.head, std::slice::from_ref(&hash), &[])
+        .membership_snapshot(&snapshot.head.roots, std::slice::from_ref(&hash), &[])
         .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
     Ok(Json(TxStatusResponse {
@@ -245,7 +245,7 @@ async fn post_grounding_witness(
         .collect::<Result<Vec<_>, _>>()?;
     let witness = app_state
         .state_machine
-        .grounding_witness(snapshot.head, &source_tx_hashes)
+        .grounding_witness(&snapshot.head.roots, &source_tx_hashes)
         .map_err(internal_error)?;
     let head = snapshot.head;
     let state_root = head.current_state_root().ok_or_else(|| {
@@ -254,7 +254,10 @@ async fn post_grounding_witness(
             "synchronizer has no canonical grounded state yet".to_string(),
         )
     })?;
-    let state_root_hash = head.current_gsr.unwrap_or_else(|| state_root.hash());
+    let state_root_hash = head
+        .metadata
+        .current_gsr
+        .unwrap_or_else(|| state_root.hash());
 
     Ok(Json(GroundingWitnessResponse {
         state_root_hash: encode_hash_hex(&state_root_hash),
@@ -278,11 +281,16 @@ fn build_head_snapshot(snapshot: &CurrentSnapshot) -> HeadSnapshot {
     HeadSnapshot {
         last_processed_slot: snapshot.last_processed_slot,
         last_processed_block_number: snapshot.last_processed_block_number,
-        current_gsr: snapshot.head.current_gsr.as_ref().map(encode_hash_hex),
-        current_block_number: snapshot.head.current_block_number.map(i64::from),
-        tx_count: snapshot.head.tx_count as usize,
-        nullifier_count: snapshot.head.nullifier_count as usize,
-        gsr_count: snapshot.head.gsr_count as usize,
+        current_gsr: snapshot
+            .head
+            .metadata
+            .current_gsr
+            .as_ref()
+            .map(encode_hash_hex),
+        current_block_number: snapshot.head.metadata.current_block_number.map(i64::from),
+        tx_count: snapshot.head.metadata.tx_count as usize,
+        nullifier_count: snapshot.head.metadata.nullifier_count as usize,
+        gsr_count: snapshot.head.metadata.gsr_count as usize,
     }
 }
 

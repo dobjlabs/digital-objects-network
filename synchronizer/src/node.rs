@@ -22,8 +22,8 @@ use chrono::{DateTime, Utc};
 use pod2::middleware::Hash;
 use tracing::{debug, info, trace};
 
-use crate::app_db::AppHead;
 use crate::config::AppConfig;
+use crate::head::CanonicalHead;
 use crate::state_machine::{SlotDelta, StateMachine, MAX_GSR_AGE_BLOCKS};
 use crate::sync_db::{CommittedSlotRecord, SyncDb};
 
@@ -98,7 +98,7 @@ impl ProcessedSlot {
         if self.is_empty {
             None
         } else {
-            self.delta.new_head.current_gsr
+            self.delta.new_head.metadata.current_gsr
         }
     }
 }
@@ -139,7 +139,7 @@ impl Node {
         self.sync_db.slot_root(slot).await
     }
 
-    pub async fn current_head(&self) -> Result<AppHead> {
+    pub async fn current_head(&self) -> Result<CanonicalHead> {
         Ok(self.sync_db.current_snapshot().await?.head)
     }
 
@@ -250,6 +250,7 @@ impl Node {
 
         let block_number = slot_ctx.execution_block_number;
         let min_block_number = base_head
+            .metadata
             .current_block_number
             .map(|n| n.saturating_sub(MAX_GSR_AGE_BLOCKS as u32));
         let recent_gsrs = self.sync_db.recent_gsrs(min_block_number).await?;

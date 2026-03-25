@@ -1,6 +1,6 @@
 # Synchronizer
 
-Service that tracks Digital Object blob transactions on Ethereum, derives canonical app state, persists that state in RocksDB/Postgres, and serves proof-backed query APIs over HTTP.
+Service that tracks Digital Object blob transactions on Ethereum, derives canonical app state, persists persistent-container data in RocksDB, stores canonical heads in Postgres, and serves proof-backed query APIs over HTTP.
 
 ## What it does
 
@@ -13,49 +13,49 @@ Service that tracks Digital Object blob transactions on Ethereum, derives canoni
    - finds blob txs sent to `TO_ADDRESS`
    - fetches matching blob sidecars
    - parses and verifies `TxFinalized` payloads
-   - derives the next app-state head
-4. Persists the new head crash-safely and serves state/proof APIs for clients like `app-gui`.
+   - opens the current Merkle containers from the canonical `CanonicalHead`
+   - derives the next `CanonicalHead`
+4. Publishes the new canonical slot/head in Postgres and serves state/proof APIs for clients like `app-gui`.
 
 ## State model
 
-The synchronizer keeps canonical app state across RocksDB, Postgres, and memory:
+The synchronizer splits state into two layers:
 
-- in RocksDB:
-  - persistent POD2 Merkle container data
-  - a compact `meta/head` snapshot (`AppHead`)
-- in Postgres:
-  - sync cursor
+- RocksDB stores the content-addressed POD2 Merkle backing store
+  - persistent Merkle nodes
+  - persistent POD2 values
+- Postgres stores the canonical control plane
+  - the sync cursor
   - canonical slot metadata
-  - apply/rollback journals
-- in memory:
-  - the current `AppHead`
-  - a recent-GSR cache used to validate grounding roots
+  - the canonical `CanonicalHead` for each slot
 
-### `AppHead`
+There is no canonical head stored in RocksDB, and no resident in-memory head/cache. Every slot derivation and API read loads the current canonical head from Postgres, then reopens the needed persistent containers from RocksDB by root.
 
-`AppHead` is the committed app-state snapshot:
+### `CanonicalHead`
 
-- `transactions_root`
-- `nullifiers_root`
-- `state_root_gsrs_root`
-- `gsr_history_root`
-- `current_gsr`
-- `current_block_number`
-- `tx_count`
-- `nullifier_count`
-- `gsr_count`
+`CanonicalHead` is the compact committed app-state snapshot stored on canonical slot rows. It is split into:
 
-`state_root_gsrs_root` is the prior-GSR array root used inside `txlib::StateRoot`.
-`gsr_history_root` is the array root after appending the current GSR.
+- `CanonicalRoots`
+  - `transactions`
+  - `nullifiers`
+  - `state_root_gsrs`
+  - `gsr_history`
+- `HeadMetadata`
+  - `current_gsr`
+  - `current_block_number`
+  - `tx_count`
+  - `nullifier_count`
+  - `gsr_count`
+
+`CanonicalRoots.state_root_gsrs` is the prior-GSR array root committed inside `txlib::StateRoot`.
+`CanonicalRoots.gsr_history` is the full GSR-history root after appending `HeadMetadata.current_gsr`.
 
 ## Storage model
 
-### RocksDB (`APP_STATE_DB_PATH`) — app state
+### RocksDB (`APP_STATE_DB_PATH`) — persistent Merkle backing store
 
 RocksDB stores:
 
-- `meta/head`
-  - JSON-serialized `AppHead`
 - `n/...`
   - persistent Merkle nodes
 - `v/...`
@@ -67,22 +67,22 @@ The Merkle-backed containers are:
 - nullifiers: persistent `Set`
 - GSR history: persistent `Array`
 
-The synchronizer reopens those containers from the roots stored in `AppHead`.
+The synchronizer reopens those containers from the roots stored in `CanonicalRoots`.
 
-### Postgres (`SYNC_METADATA_DB_URL`) — sync control plane
+Important: RocksDB is not the source of canonical truth. It is an append-only backing store for Merkle data. Derivation may materialize nodes that never become canonical; those orphaned nodes are harmless and are ignored unless a future `CanonicalHead` points at them.
 
-Postgres stores synchronizer metadata and slot-level journaling:
+### Postgres (`SYNC_METADATA_DB_URL`) — canonical heads and sync metadata
+
+Postgres stores the canonical synchronization state:
 
 - `sync_cursor`
   - single-row progress cursor (`last_processed_slot`, `last_processed_block_number`)
 - `canonical_slots`
-  - canonical slot metadata
-  - includes `block_root`, `parent_root`, `execution_block_number`, `current_gsr`, `is_empty`, `status`
-- `slot_apply_journal`
-  - per-slot `{ old_head, new_head }` journal
-  - includes `op` (`apply` or `rollback`) and `kv_applied`
+  - one row per canonical slot
+  - includes `block_root`, `parent_root`, `execution_block_number`, `current_gsr`, `is_empty`
+  - includes normalized `head_*` columns for the canonical `CanonicalHead` at that slot
 
-This is the source of truth for crash recovery and reorg handling.
+Postgres is the sole source of canonical `CanonicalHead`.
 
 ## Slot derivation rules
 
@@ -102,27 +102,42 @@ After processing all blobs in the slot, it computes the next GSR from:
 - nullifiers set root
 - prior GSR-array root
 
-Then it appends that new GSR to the persistent GSR history array and stores a new `AppHead`.
+Then it appends that new GSR to the persistent GSR history array and derives a new `CanonicalHead`.
 
 Important: GSR history advances for each canonical processed slot, even if that slot accepted zero app transactions.
 
-## Recovery and reorgs
+## Publish, recovery, and reorgs
 
-Canonical head advancement uses a staged head-swap pipeline:
+### Canonical publish
 
-1. Save canonical slot metadata and `{ old_head, new_head }` journal in Postgres as `pending`
-2. Apply `new_head` to RocksDB
-3. Mark the journal/slot `applied` and advance `sync_cursor`
-4. Update in-memory head/cache
+The synchronizer derives candidate state by mutating persistent containers in RocksDB. Once derivation succeeds, canonical publication is a single Postgres transaction:
 
-On startup, the synchronizer replays any unfinished apply/rollback work from Postgres.
+1. Insert or update the canonical slot row, including the normalized `head_*` columns
+2. Advance `sync_cursor` to that slot
+
+Because the Merkle nodes were already materialized during derivation, there is no second canonical write to RocksDB.
+
+### Crash semantics
+
+- If the process crashes before the Postgres commit, the old canonical head remains in force and any newly written RocksDB nodes are just orphaned.
+- If the process crashes after the Postgres commit, the published `CanonicalHead` is already durable and sufficient to reopen the canonical containers.
+
+There is no apply/rollback journal anymore.
+
+### Reorg handling
 
 On reorg:
 
-- later slots are staged as rollback entries in Postgres
-- RocksDB is rewound by restoring the appropriate `old_head`
-- canonical slot rows past the keep-point are removed
-- recent GSR cache is rebuilt from canonical Postgres rows
+- the synchronizer finds the last common ancestor slot
+- deletes `canonical_slots` rows after the keep-point
+- rewinds `sync_cursor` in the same Postgres transaction
+- resumes syncing from the first divergent slot
+
+Reorg rollback does not modify RocksDB. The surviving Postgres `CanonicalHead` determines which Merkle roots are canonical after rewind.
+
+### Recent GSR validation
+
+The synchronizer validates grounding roots against recent canonical GSRs loaded from Postgres `canonical_slots`, not from an in-memory cache.
 
 ## API
 
@@ -143,7 +158,7 @@ On reorg:
   - request body:
     - `tx_hashes` (array of hash strings)
     - `nullifiers` (array of hash strings)
-  - returns membership for both sets from one captured application head:
+  - returns membership for both sets from one captured canonical head:
     - `last_processed_slot`
     - `current_gsr`
     - `tx_results` (array of `{ tx_hash, present }`)
@@ -178,6 +193,8 @@ On reorg:
     - `nullifiersRoot`
     - `gsrsRoot`
     - `sourceTxProofs` (array of `{ txHash, present, proof }`)
+
+Each request captures one current Postgres snapshot, then uses that exact `CanonicalHead` for all RocksDB membership/proof reads in the response.
 
 Hash parsing accepts `0x`-prefixed or raw hex input; responses are normalized to lowercase `0x...`.
 

@@ -9,6 +9,7 @@ mod api;
 mod app_db;
 mod clients;
 mod config;
+mod head;
 mod node;
 mod state_machine;
 mod sync_db;
