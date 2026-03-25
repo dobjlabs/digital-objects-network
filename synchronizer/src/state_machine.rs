@@ -254,7 +254,9 @@ impl StateMachine {
     ) -> Result<CanonicalHead> {
         let mut working = WorkingState {
             metadata: base_head.metadata,
-            transactions: self.app_db.open_transactions(base_head.roots.transactions)?,
+            transactions: self
+                .app_db
+                .open_transactions(base_head.roots.transactions)?,
             nullifiers: self.app_db.open_nullifiers(base_head.roots.nullifiers)?,
             gsr_history: self.app_db.open_gsr_history(base_head.roots.gsr_history)?,
             recent_gsrs: recent_gsrs.into_iter().collect(),
@@ -410,9 +412,7 @@ mod tests {
 
         let tx_final = unique_hash(21);
         let blob = mock_txn_bytes(tx_final, &[], unique_hash(99));
-        let head1 = sm
-            .derive_slot_head(head0, [], 2, 2, &[(0, blob)])
-            .unwrap();
+        let head1 = sm.derive_slot_head(head0, [], 2, 2, &[(0, blob)]).unwrap();
         assert_eq!(head1.metadata.tx_count, head0.metadata.tx_count);
     }
 
