@@ -60,8 +60,8 @@ pub struct MembershipSnapshot {
 /// This view opens the persistent POD2 containers used during slot derivation so validation can
 /// query and mutate transactions, nullifiers, and GSR history for one slot.
 struct WorkingState {
-    /// Head snapshot the slot derivation started from.
-    head: CanonicalHead,
+    /// Mutable non-root metadata accumulated while deriving the slot.
+    metadata: HeadMetadata,
     /// Persistent transactions set opened from `head.roots.transactions`.
     transactions: Set,
     /// Persistent nullifiers set opened from `head.roots.nullifiers`.
@@ -96,22 +96,6 @@ impl StateMachine {
         SlotDelta {
             new_head: base_head,
         }
-    }
-
-    fn snapshot_working_state(
-        &self,
-        base_head: CanonicalHead,
-        recent_gsrs: HashMap<Hash, i64>,
-    ) -> Result<WorkingState> {
-        Ok(WorkingState {
-            head: base_head,
-            transactions: self
-                .app_db
-                .open_transactions(base_head.roots.transactions)?,
-            nullifiers: self.app_db.open_nullifiers(base_head.roots.nullifiers)?,
-            gsr_history: self.app_db.open_gsr_history(base_head.roots.gsr_history)?,
-            recent_gsrs,
-        })
     }
 
     #[cfg(test)]
@@ -181,7 +165,7 @@ impl StateMachine {
     /// If all checks pass, the method mutates the slot-local `WorkingState` by:
     /// - inserting `tx_final` into the persistent transactions set handle
     /// - inserting each nullifier into the persistent nullifiers set handle
-    /// - incrementing the corresponding counts in `state.head`
+    /// - incrementing the corresponding counts in `state.metadata`
     ///
     /// No new canonical head is committed here. Mutating the persistent container handles may
     /// materialize Merkle nodes/values in RocksDB, but the canonical state changes only if the
@@ -253,17 +237,17 @@ impl StateMachine {
         }
 
         state.transactions.insert(&tx_value)?;
-        state.head.metadata.tx_count += 1;
+        state.metadata.tx_count += 1;
         for nullifier in &payload.nullifiers {
             state.nullifiers.insert(&Value::from(*nullifier))?;
-            state.head.metadata.nullifier_count += 1;
+            state.metadata.nullifier_count += 1;
         }
 
         info!(
             slot,
             block_number,
-            transaction_count = state.head.metadata.tx_count,
-            nullifier_count = state.head.metadata.nullifier_count,
+            transaction_count = state.metadata.tx_count,
+            nullifier_count = state.metadata.nullifier_count,
             "Validated blob state update in slot derivation"
         );
         Ok(())
@@ -277,8 +261,13 @@ impl StateMachine {
         block_number: u32,
         blob_payloads: &[(u32, Vec<u8>)],
     ) -> Result<SlotDelta> {
-        let mut working =
-            self.snapshot_working_state(base_head, recent_gsrs.into_iter().collect())?;
+        let mut working = WorkingState {
+            metadata: base_head.metadata,
+            transactions: self.app_db.open_transactions(base_head.roots.transactions)?,
+            nullifiers: self.app_db.open_nullifiers(base_head.roots.nullifiers)?,
+            gsr_history: self.app_db.open_gsr_history(base_head.roots.gsr_history)?,
+            recent_gsrs: recent_gsrs.into_iter().collect(),
+        };
 
         for (blob_index, bytes) in blob_payloads {
             self.process_blob(&mut working, bytes, slot, block_number)
@@ -319,8 +308,8 @@ impl StateMachine {
             metadata: HeadMetadata {
                 current_gsr: Some(new_gsr),
                 current_block_number: Some(block_number),
-                tx_count: working.head.metadata.tx_count,
-                nullifier_count: working.head.metadata.nullifier_count,
+                tx_count: working.metadata.tx_count,
+                nullifier_count: working.metadata.nullifier_count,
                 gsr_count: base_head.metadata.gsr_count + 1,
             },
         };

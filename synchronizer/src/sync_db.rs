@@ -147,6 +147,11 @@ impl SyncDb {
         }))
     }
 
+    /// Return the current canonical head without sync-progress metadata.
+    pub async fn current_head(&self) -> Result<CanonicalHead> {
+        Ok(self.current_snapshot().await?.head)
+    }
+
     /// Return the current canonical head plus sync progress from one Postgres snapshot.
     pub async fn current_snapshot(&self) -> Result<CurrentSnapshot> {
         let row = sqlx::query(

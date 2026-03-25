@@ -140,7 +140,7 @@ impl Node {
     }
 
     pub async fn current_head(&self) -> Result<CanonicalHead> {
-        Ok(self.sync_db.current_snapshot().await?.head)
+        self.sync_db.current_head().await
     }
 
     /// Rewind to `keep_slot` by deleting later canonical slot rows and rewinding the cursor.
@@ -224,7 +224,7 @@ impl Node {
         &self,
         beacon_block_header: &BlockHeader,
     ) -> Result<ProcessedSlot> {
-        let base_head = self.sync_db.current_snapshot().await?.head;
+        let base_head = self.sync_db.current_head().await?;
         let Some(slot_ctx) = self.build_slot_context(beacon_block_header).await? else {
             return Ok(ProcessedSlot::empty(
                 beacon_block_header.slot,
