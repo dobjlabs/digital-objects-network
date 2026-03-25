@@ -10,10 +10,8 @@ use pod2::{
     },
 };
 use rocksdb::{Options, TransactionDB, TransactionDBOptions};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use txlib::StateRoot;
-
-const META_HEAD_KEY: &[u8] = b"meta/head";
 
 fn node_key(hash: Hash) -> Vec<u8> {
     let mut k = Vec::with_capacity(34);
@@ -29,11 +27,11 @@ fn value_key(raw: RawValue) -> Vec<u8> {
     k
 }
 
-/// Compact committed app-state snapshot stored in RocksDB under `meta/head`.
+/// Compact committed app-state snapshot stored in Postgres on canonical slot rows.
 ///
 /// The actual transaction/nullifier/GSR contents live in persistent POD2 containers;
-/// `AppHead` stores the roots and counts used to reopen those containers and serve
-/// state/proof queries.
+/// `AppHead` stores the roots and counts used to reopen those containers and serve state/proof
+/// queries.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppHead {
@@ -103,12 +101,7 @@ impl fmt::Debug for AppDb {
 
 impl AppDb {
     pub fn connect(db_path: &str) -> Result<Self> {
-        let db = Self::open(db_path)
-            .with_context(|| format!("Failed to open RocksDB at path {db_path}"))?;
-        if db.load_head_meta()?.is_none() {
-            db.store_head_meta(&AppHead::empty())?;
-        }
-        Ok(db)
+        Self::open(db_path).with_context(|| format!("Failed to open RocksDB at path {db_path}"))
     }
 
     fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -120,35 +113,6 @@ impl AppDb {
         Ok(Self {
             db: Arc::new(inner),
         })
-    }
-
-    fn load_meta_json<T: DeserializeOwned>(&self, key: &[u8]) -> Result<Option<T>> {
-        match self.db.get(key)? {
-            None => Ok(None),
-            Some(bytes) => Ok(Some(serde_json::from_slice(bytes.as_ref())?)),
-        }
-    }
-
-    fn store_meta_json<T: Serialize>(&self, key: &[u8], value: &T) -> Result<()> {
-        let bytes = serde_json::to_vec(value)?;
-        self.db.put(key, bytes).map_err(|err| anyhow!("{err}"))
-    }
-
-    fn load_head_meta(&self) -> Result<Option<AppHead>> {
-        self.load_meta_json(META_HEAD_KEY)
-    }
-
-    fn store_head_meta(&self, head: &AppHead) -> Result<()> {
-        self.store_meta_json(META_HEAD_KEY, head)
-    }
-
-    pub fn load_head(&self) -> Result<AppHead> {
-        self.load_head_meta()?
-            .context("app state missing meta/head after initialization")
-    }
-
-    pub fn store_head(&self, head: &AppHead) -> Result<()> {
-        self.store_head_meta(head)
     }
 
     pub fn open_transactions(&self, root: Hash) -> Result<Set> {
@@ -300,30 +264,6 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let app_db = AppDb::connect(dir.path().to_str().unwrap()).expect("connect");
         (app_db, dir)
-    }
-
-    #[test]
-    fn test_bootstraps_empty_head() {
-        let (app_db, _dir) = open_test_db();
-        assert_eq!(app_db.load_head().unwrap(), AppHead::empty());
-    }
-
-    #[test]
-    fn test_store_and_reload_head() {
-        let (app_db, _dir) = open_test_db();
-        let head = AppHead {
-            transactions_root: test_hash(1),
-            nullifiers_root: test_hash(2),
-            state_root_gsrs_root: test_hash(3),
-            gsr_history_root: test_hash(4),
-            current_gsr: Some(test_hash(5)),
-            current_block_number: Some(7),
-            tx_count: 9,
-            nullifier_count: 11,
-            gsr_count: 13,
-        };
-        app_db.store_head(&head).unwrap();
-        assert_eq!(app_db.load_head().unwrap(), head);
     }
 
     #[test]

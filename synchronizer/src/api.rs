@@ -18,8 +18,8 @@ use synchronizer::api_types::{
 use tokio::sync::watch;
 use tracing::info;
 
-use crate::{app_db::AppHead, state_machine::StateMachine, sync_db::SyncDb};
 use common::encode_hash_hex;
+use crate::{state_machine::StateMachine, sync_db::{CurrentSnapshot, SyncDb}};
 
 #[derive(Clone)]
 struct AppState {
@@ -88,7 +88,8 @@ async fn get_sync_progress(
 async fn get_state_head(
     State(app_state): State<AppState>,
 ) -> Result<Json<StateHeadResponse>, (StatusCode, String)> {
-    let head = build_head_snapshot(&app_state).await?;
+    let snapshot = load_current_snapshot(&app_state).await?;
+    let head = build_head_snapshot(&snapshot);
     Ok(Json(StateHeadResponse {
         last_processed_slot: head.last_processed_slot,
         last_processed_block_number: head.last_processed_block_number,
@@ -104,6 +105,7 @@ async fn post_state_tx_contains(
     State(app_state): State<AppState>,
     Json(body): Json<TxContainsRequest>,
 ) -> Result<Json<TxContainsResponse>, (StatusCode, String)> {
+    let snapshot = load_current_snapshot(&app_state).await?;
     let hashes = body
         .tx_hashes
         .iter()
@@ -111,9 +113,9 @@ async fn post_state_tx_contains(
         .collect::<Result<Vec<_>, _>>()?;
     let membership = app_state
         .state_machine
-        .membership_snapshot(&hashes, &[])
+        .membership_snapshot(snapshot.head, &hashes, &[])
         .map_err(internal_error)?;
-    let head = build_head_snapshot_from_head(&app_state, membership.head).await?;
+    let head = build_head_snapshot(&snapshot);
 
     let results = hashes
         .iter()
@@ -135,6 +137,7 @@ async fn post_state_nullifier_contains(
     State(app_state): State<AppState>,
     Json(body): Json<NullifierContainsRequest>,
 ) -> Result<Json<NullifierContainsResponse>, (StatusCode, String)> {
+    let snapshot = load_current_snapshot(&app_state).await?;
     let hashes = body
         .nullifiers
         .iter()
@@ -142,9 +145,9 @@ async fn post_state_nullifier_contains(
         .collect::<Result<Vec<_>, _>>()?;
     let membership = app_state
         .state_machine
-        .membership_snapshot(&[], &hashes)
+        .membership_snapshot(snapshot.head, &[], &hashes)
         .map_err(internal_error)?;
-    let head = build_head_snapshot_from_head(&app_state, membership.head).await?;
+    let head = build_head_snapshot(&snapshot);
 
     let results = hashes
         .iter()
@@ -166,6 +169,7 @@ async fn post_state_membership(
     State(app_state): State<AppState>,
     Json(body): Json<MembershipRequest>,
 ) -> Result<Json<MembershipResponse>, (StatusCode, String)> {
+    let snapshot = load_current_snapshot(&app_state).await?;
     let tx_hashes = body
         .tx_hashes
         .iter()
@@ -178,9 +182,9 @@ async fn post_state_membership(
         .collect::<Result<Vec<_>, _>>()?;
     let membership = app_state
         .state_machine
-        .membership_snapshot(&tx_hashes, &nullifiers)
+        .membership_snapshot(snapshot.head, &tx_hashes, &nullifiers)
         .map_err(internal_error)?;
-    let head = build_head_snapshot_from_head(&app_state, membership.head).await?;
+    let head = build_head_snapshot(&snapshot);
 
     let tx_results = tx_hashes
         .iter()
@@ -211,12 +215,13 @@ async fn get_state_tx(
     State(app_state): State<AppState>,
     Path(tx_hash): Path<String>,
 ) -> Result<Json<TxStatusResponse>, (StatusCode, String)> {
+    let snapshot = load_current_snapshot(&app_state).await?;
     let hash = parse_hash_hex(&tx_hash)?;
     let membership = app_state
         .state_machine
-        .membership_snapshot(std::slice::from_ref(&hash), &[])
+        .membership_snapshot(snapshot.head, std::slice::from_ref(&hash), &[])
         .map_err(internal_error)?;
-    let head = build_head_snapshot_from_head(&app_state, membership.head).await?;
+    let head = build_head_snapshot(&snapshot);
     Ok(Json(TxStatusResponse {
         tx_hash: encode_hash_hex(&hash),
         present: membership.tx_present[0],
@@ -229,14 +234,15 @@ async fn post_grounding_witness(
     State(app_state): State<AppState>,
     Json(body): Json<GroundingWitnessRequest>,
 ) -> Result<Json<GroundingWitnessResponse>, (StatusCode, String)> {
+    let snapshot = load_current_snapshot(&app_state).await?;
     let source_tx_hashes = body
         .source_tx_hashes
         .iter()
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
-    let snapshot = app_state
+    let witness = app_state
         .state_machine
-        .grounding_witness(&source_tx_hashes)
+        .grounding_witness(snapshot.head, &source_tx_hashes)
         .map_err(internal_error)?;
     let head = snapshot.head;
     let state_root = head.current_state_root().ok_or_else(|| {
@@ -253,7 +259,7 @@ async fn post_grounding_witness(
         transactions_root: encode_hash_hex(&state_root.transactions_root),
         nullifiers_root: encode_hash_hex(&state_root.nullifiers_root),
         gsrs_root: encode_hash_hex(&state_root.gsrs_root),
-        source_tx_proofs: snapshot
+        source_tx_proofs: witness
             .source_tx_proofs
             .into_iter()
             .map(|entry| SourceTxProofResponse {
@@ -265,46 +271,33 @@ async fn post_grounding_witness(
     }))
 }
 
-async fn build_head_snapshot(app_state: &AppState) -> Result<HeadSnapshot, (StatusCode, String)> {
-    let head = app_state
-        .state_machine
-        .head_snapshot()
-        .map_err(internal_error)?;
-    build_head_snapshot_from_head(app_state, head).await
+fn build_head_snapshot(snapshot: &CurrentSnapshot) -> HeadSnapshot {
+    HeadSnapshot {
+        last_processed_slot: snapshot.last_processed_slot,
+        last_processed_block_number: snapshot.last_processed_block_number,
+        current_gsr: snapshot.head.current_gsr.as_ref().map(encode_hash_hex),
+        current_block_number: snapshot.head.current_block_number.map(i64::from),
+        tx_count: snapshot.head.tx_count as usize,
+        nullifier_count: snapshot.head.nullifier_count as usize,
+        gsr_count: snapshot.head.gsr_count as usize,
+    }
 }
 
-async fn build_head_snapshot_from_head(
+async fn load_current_snapshot(
     app_state: &AppState,
-    head: AppHead,
-) -> Result<HeadSnapshot, (StatusCode, String)> {
-    let (last_processed_slot, last_processed_block_number) = load_sync_progress(app_state).await?;
-
-    Ok(HeadSnapshot {
-        last_processed_slot,
-        last_processed_block_number,
-        current_gsr: head.current_gsr.as_ref().map(encode_hash_hex),
-        current_block_number: head.current_block_number.map(i64::from),
-        tx_count: head.tx_count as usize,
-        nullifier_count: head.nullifier_count as usize,
-        gsr_count: head.gsr_count as usize,
-    })
+) -> Result<CurrentSnapshot, (StatusCode, String)> {
+    app_state
+        .sync_db
+        .current_snapshot()
+        .await
+        .map_err(internal_error)
 }
 
 async fn load_sync_progress(
     app_state: &AppState,
 ) -> Result<(Option<u32>, Option<u32>), (StatusCode, String)> {
-    let progress = app_state
-        .sync_db
-        .last_progress()
-        .await
-        .map_err(internal_error)?;
-    Ok(match progress {
-        Some(progress) => (
-            Some(progress.last_processed_slot),
-            progress.last_processed_block_number,
-        ),
-        None => (None, None),
-    })
+    let snapshot = load_current_snapshot(app_state).await?;
+    Ok((snapshot.last_processed_slot, snapshot.last_processed_block_number))
 }
 
 fn parse_hash_hex(value: &str) -> Result<Hash, (StatusCode, String)> {

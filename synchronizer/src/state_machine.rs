@@ -1,9 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use common::{encode_hash_hex, proof::BlobParser};
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
@@ -11,10 +11,7 @@ use pod2::{
 };
 use tracing::{info, warn};
 
-use crate::{
-    app_db::{AppDb, AppHead},
-    sync_db::SlotJournal,
-};
+use crate::app_db::{AppDb, AppHead};
 use txlib::StateRoot;
 
 /// The maximum age of a GSR used as grounding for a transaction.
@@ -23,11 +20,7 @@ pub const MAX_GSR_AGE_BLOCKS: i64 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Head transition derived for a single canonical slot.
-///
-/// This is the unit persisted in Postgres journals and later replayed into RocksDB or memory.
 pub struct SlotDelta {
-    /// Head snapshot before processing the slot.
-    pub old_head: AppHead,
     /// Head snapshot after processing the slot.
     pub new_head: AppHead,
 }
@@ -44,33 +37,19 @@ pub struct TxMembershipProof {
 }
 
 #[derive(Debug, Clone)]
-/// Proof-bearing snapshot used by txlib to ground action execution.
+/// Proof-bearing result used by txlib to ground action execution.
 pub struct GroundingWitnessSnapshot {
-    /// Head whose roots all returned proofs are anchored to.
-    pub head: AppHead,
-    /// Per-source transaction membership proofs under `head.transactions_root`.
+    /// Per-source transaction membership proofs under the provided head.
     pub source_tx_proofs: Vec<TxMembershipProof>,
 }
 
 #[derive(Debug, Clone)]
-/// Membership snapshot anchored to one committed head.
+/// Membership result anchored to one caller-provided head.
 pub struct MembershipSnapshot {
-    /// Head whose roots all returned membership results are anchored to.
-    pub head: AppHead,
     /// Per-request transaction membership bits under `head.transactions_root`.
     pub tx_present: Vec<bool>,
     /// Per-request nullifier membership bits under `head.nullifiers_root`.
     pub nullifier_present: Vec<bool>,
-}
-
-/// In-memory synchronizer state that must stay resident between slots.
-///
-/// This resident state contains the current head and the recent grounding-root cache.
-struct InnerState {
-    /// Current committed application head mirrored from RocksDB.
-    head: AppHead,
-    /// Recent canonical GSRs keyed by hash for grounding validation.
-    recent_gsrs: HashMap<Hash, i64>,
 }
 
 /// Ephemeral mutable view used while deriving one slot.
@@ -86,120 +65,81 @@ struct WorkingState {
     nullifiers: Set,
     /// Persistent full GSR history array opened from `head.gsr_history_root`.
     gsr_history: Array,
-    /// Mutable recent-GSR cache cloned from the resident state for this derivation.
+    /// Recent canonical GSRs keyed by hash for grounding validation.
     recent_gsrs: HashMap<Hash, i64>,
 }
 
-/// Domain logic for the synchronizer: proof verification, state validation, and persistence.
+/// Domain logic for the synchronizer: proof verification, state validation, and Merkle storage.
 ///
-/// `StateMachine` is intentionally decoupled from networking — it operates entirely on
-/// raw byte slices and block numbers, making it straightforward to unit-test without a
-/// live beacon node.
+/// `StateMachine` is intentionally decoupled from networking and canonical-head ownership.
+/// Callers supply the `AppHead` they want to operate against, and Postgres remains the sole source
+/// of truth for which head is canonical.
 pub struct StateMachine {
-    /// RocksDB-backed app-state store used to open persistent containers and persist new heads.
+    /// RocksDB-backed app-state store used to open persistent containers and prove membership.
     app_db: AppDb,
-    /// Resident in-memory state protected by a read/write lock for API and sync-loop access.
-    state: RwLock<InnerState>,
     /// Blob parser/verifier used to decode TxFinalized payloads from blob bytes.
     proof_parser: Arc<dyn BlobParser>,
 }
 
 impl StateMachine {
-    fn read_state(&self) -> Result<std::sync::RwLockReadGuard<'_, InnerState>> {
-        self.state
-            .read()
-            .map_err(|e| anyhow!("state read lock poisoned: {e}"))
-    }
-
-    fn write_state(&self) -> Result<std::sync::RwLockWriteGuard<'_, InnerState>> {
-        self.state
-            .write()
-            .map_err(|e| anyhow!("state write lock poisoned: {e}"))
-    }
-
-    pub fn new(app_db: AppDb, proof_parser: Arc<dyn BlobParser>) -> Result<Self> {
-        let head = app_db.load_head()?;
-        Ok(Self {
-            state: RwLock::new(InnerState {
-                head,
-                recent_gsrs: HashMap::new(),
-            }),
+    pub fn new(app_db: AppDb, proof_parser: Arc<dyn BlobParser>) -> Self {
+        Self {
             app_db,
             proof_parser,
-        })
+        }
     }
 
-    pub fn reload_from_db(&self) -> Result<()> {
-        let head = self.app_db.load_head()?;
-        let mut state = self.write_state()?;
-        state.head = head;
-        Ok(())
+    pub fn noop_delta(&self, base_head: AppHead) -> SlotDelta {
+        SlotDelta {
+            new_head: base_head,
+        }
     }
 
-    pub fn replace_recent_gsrs(
+    fn snapshot_working_state(
         &self,
-        recent_gsrs: impl IntoIterator<Item = (Hash, i64)>,
-    ) -> Result<()> {
-        let mut state = self.write_state()?;
-        state.recent_gsrs = recent_gsrs.into_iter().collect();
-        Ok(())
-    }
-
-    pub fn head_snapshot(&self) -> Result<AppHead> {
-        Ok(self.read_state()?.head)
-    }
-
-    pub fn noop_delta(&self) -> Result<SlotDelta> {
-        let head = self.head_snapshot()?;
-        Ok(SlotDelta {
-            old_head: head,
-            new_head: head,
-        })
-    }
-
-    fn snapshot_working_state(&self) -> Result<WorkingState> {
-        let state = self.read_state()?;
+        base_head: AppHead,
+        recent_gsrs: HashMap<Hash, i64>,
+    ) -> Result<WorkingState> {
         Ok(WorkingState {
-            head: state.head,
-            transactions: self
-                .app_db
-                .open_transactions(state.head.transactions_root)?,
-            nullifiers: self.app_db.open_nullifiers(state.head.nullifiers_root)?,
-            gsr_history: self.app_db.open_gsr_history(state.head.gsr_history_root)?,
-            recent_gsrs: state.recent_gsrs.clone(),
+            head: base_head,
+            transactions: self.app_db.open_transactions(base_head.transactions_root)?,
+            nullifiers: self.app_db.open_nullifiers(base_head.nullifiers_root)?,
+            gsr_history: self.app_db.open_gsr_history(base_head.gsr_history_root)?,
+            recent_gsrs,
         })
     }
 
     #[cfg(test)]
-    pub fn tx_exists(&self, tx_hash: &Hash) -> Result<bool> {
-        Ok(self.tx_exists_batch(std::slice::from_ref(tx_hash))?[0])
+    pub fn tx_exists(&self, head: AppHead, tx_hash: &Hash) -> Result<bool> {
+        Ok(self
+            .membership_snapshot(head, std::slice::from_ref(tx_hash), &[])?
+            .tx_present[0])
     }
 
     #[cfg(test)]
-    pub fn tx_exists_batch(&self, tx_hashes: &[Hash]) -> Result<Vec<bool>> {
-        Ok(self.membership_snapshot(tx_hashes, &[])?.tx_present)
-    }
-
-    #[cfg(test)]
-    pub fn nullifier_exists_batch(&self, nullifiers: &[Hash]) -> Result<Vec<bool>> {
-        Ok(self.membership_snapshot(&[], nullifiers)?.nullifier_present)
+    pub fn nullifier_exists_batch(&self, head: AppHead, nullifiers: &[Hash]) -> Result<Vec<bool>> {
+        Ok(self
+            .membership_snapshot(head, &[], nullifiers)?
+            .nullifier_present)
     }
 
     pub fn membership_snapshot(
         &self,
+        head: AppHead,
         tx_hashes: &[Hash],
         nullifiers: &[Hash],
     ) -> Result<MembershipSnapshot> {
-        let head = self.head_snapshot()?;
         Ok(MembershipSnapshot {
             tx_present: self.app_db.tx_exists_batch(&head, tx_hashes)?,
             nullifier_present: self.app_db.nullifier_exists_batch(&head, nullifiers)?,
-            head,
         })
     }
 
-    pub fn grounding_witness(&self, source_tx_hashes: &[Hash]) -> Result<GroundingWitnessSnapshot> {
-        let head = self.head_snapshot()?;
+    pub fn grounding_witness(
+        &self,
+        head: AppHead,
+        source_tx_hashes: &[Hash],
+    ) -> Result<GroundingWitnessSnapshot> {
         let source_tx_proofs = source_tx_hashes
             .iter()
             .map(|tx_hash| {
@@ -211,10 +151,7 @@ impl StateMachine {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(GroundingWitnessSnapshot {
-            head,
-            source_tx_proofs,
-        })
+        Ok(GroundingWitnessSnapshot { source_tx_proofs })
     }
 
     /// Parse and validate one blob payload against the in-progress slot state.
@@ -238,8 +175,8 @@ impl StateMachine {
     /// - incrementing the corresponding counts in `state.head`
     ///
     /// No new canonical head is committed here. Mutating the persistent container handles may
-    /// materialize Merkle nodes/values in RocksDB, but the app's committed state changes only when
-    /// the caller stores the resulting `AppHead` and later swaps in-memory state to that head.
+    /// materialize Merkle nodes/values in RocksDB, but the canonical state changes only if the
+    /// caller later publishes the resulting `AppHead` in Postgres.
     fn process_blob(
         &self,
         state: &mut WorkingState,
@@ -325,12 +262,14 @@ impl StateMachine {
 
     pub fn derive_slot_delta(
         &self,
+        base_head: AppHead,
+        recent_gsrs: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
         block_number: u32,
         blob_payloads: &[(u32, Vec<u8>)],
     ) -> Result<SlotDelta> {
-        let mut working = self.snapshot_working_state()?;
-        let old_head = working.head;
+        let mut working =
+            self.snapshot_working_state(base_head, recent_gsrs.into_iter().collect())?;
 
         for (blob_index, bytes) in blob_payloads {
             self.process_blob(&mut working, bytes, slot, block_number)
@@ -342,7 +281,7 @@ impl StateMachine {
                 })?;
         }
 
-        let prior_gsrs_root = old_head.gsr_history_root;
+        let prior_gsrs_root = base_head.gsr_history_root;
         let new_gsr = StateRoot::new(
             i64::from(block_number),
             working.transactions.commitment(),
@@ -353,7 +292,7 @@ impl StateMachine {
 
         working
             .gsr_history
-            .insert(old_head.gsr_count as usize, Value::from(new_gsr))?;
+            .insert(base_head.gsr_count as usize, Value::from(new_gsr))?;
         working.recent_gsrs.insert(new_gsr, i64::from(block_number));
 
         let min_block = i64::from(block_number) - MAX_GSR_AGE_BLOCKS;
@@ -370,7 +309,7 @@ impl StateMachine {
             current_block_number: Some(block_number),
             tx_count: working.head.tx_count,
             nullifier_count: working.head.nullifier_count,
-            gsr_count: old_head.gsr_count + 1,
+            gsr_count: base_head.gsr_count + 1,
         };
 
         info!(
@@ -380,44 +319,10 @@ impl StateMachine {
             "Slot data"
         );
 
-        Ok(SlotDelta { old_head, new_head })
+        Ok(SlotDelta { new_head })
     }
 
-    pub fn apply_delta_to_memory(&self, delta: &SlotDelta) -> Result<()> {
-        let mut state = self.write_state()?;
-        state.head = delta.new_head;
-        if let (Some(current_gsr), Some(current_block_number)) = (
-            delta.new_head.current_gsr,
-            delta.new_head.current_block_number,
-        ) {
-            state
-                .recent_gsrs
-                .insert(current_gsr, i64::from(current_block_number));
-            let min_block = i64::from(current_block_number) - MAX_GSR_AGE_BLOCKS;
-            state
-                .recent_gsrs
-                .retain(|_, seen_block| *seen_block >= min_block);
-        }
-        Ok(())
-    }
-
-    pub fn apply_delta_to_db(&self, delta: &SlotDelta) -> Result<()> {
-        self.app_db.store_head(&delta.new_head)
-    }
-
-    pub fn apply_journal(&self, journal: &SlotJournal) -> Result<()> {
-        self.app_db.store_head(&journal.new_head)
-    }
-
-    pub fn rollback_journals(&self, journals: &[SlotJournal]) -> Result<()> {
-        if let Some(final_journal) = journals.last() {
-            self.app_db.store_head(&final_journal.old_head)?;
-        }
-        self.reload_from_db()
-    }
-
-    pub fn log_current_state(&self) -> Result<()> {
-        let head = self.head_snapshot()?;
+    pub fn log_current_state(&self, head: AppHead) {
         let current_gsr = head
             .current_gsr
             .as_ref()
@@ -430,7 +335,6 @@ impl StateMachine {
             current_gsr = %current_gsr,
             "Current state"
         );
-        Ok(())
     }
 }
 
@@ -445,7 +349,7 @@ mod tests {
     fn make_sm() -> (StateMachine, TempDir) {
         let dir = TempDir::new().unwrap();
         let app_db = AppDb::connect(dir.path().to_str().unwrap()).unwrap();
-        let sm = StateMachine::new(app_db, Arc::new(MockBlobParser)).unwrap();
+        let sm = StateMachine::new(app_db, Arc::new(MockBlobParser));
         (sm, dir)
     }
 
@@ -466,20 +370,19 @@ mod tests {
         .into_bytes()
     }
 
-    fn seed_gsr0(sm: &StateMachine) -> Hash {
-        let d = sm.derive_slot_delta(0, 0, &[]).unwrap();
-        sm.apply_delta_to_db(&d).unwrap();
-        sm.apply_delta_to_memory(&d).unwrap();
-        sm.head_snapshot().unwrap().current_gsr.unwrap()
+    fn seed_gsr0(sm: &StateMachine) -> AppHead {
+        sm.derive_slot_delta(AppHead::empty(), [], 0, 0, &[])
+            .unwrap()
+            .new_head
     }
 
     #[test]
-    fn test_persistent_head_roundtrip() {
+    fn test_empty_slot_produces_new_head() {
         let (sm, _dir) = make_sm();
-        let delta = sm.derive_slot_delta(1, 7, &[]).unwrap();
-        sm.apply_delta_to_db(&delta).unwrap();
-        sm.reload_from_db().unwrap();
-        let head = sm.head_snapshot().unwrap();
+        let head = sm
+            .derive_slot_delta(AppHead::empty(), [], 1, 7, &[])
+            .unwrap()
+            .new_head;
         assert_eq!(head.current_block_number, Some(7));
         assert_eq!(head.gsr_count, 1);
     }
@@ -487,54 +390,55 @@ mod tests {
     #[test]
     fn test_accepts_valid_blob_and_updates_counts() {
         let (sm, _dir) = make_sm();
-        let gsr0 = seed_gsr0(&sm);
-        sm.replace_recent_gsrs([(gsr0, 0)]).unwrap();
+        let head0 = seed_gsr0(&sm);
+        let gsr0 = head0.current_gsr.unwrap();
 
         let tx_final = unique_hash(10);
         let nullifier = unique_hash(11);
         let blob = mock_txn_bytes(tx_final, &[nullifier], gsr0);
-        let delta = sm.derive_slot_delta(1, 1, &[(0, blob)]).unwrap();
-        sm.apply_delta_to_db(&delta).unwrap();
-        sm.apply_delta_to_memory(&delta).unwrap();
+        let head1 = sm
+            .derive_slot_delta(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
+            .unwrap()
+            .new_head;
 
-        let head = sm.head_snapshot().unwrap();
-        assert_eq!(head.tx_count, 1);
-        assert_eq!(head.nullifier_count, 1);
-        assert_eq!(head.gsr_count, 2);
-        assert!(sm.tx_exists(&tx_final).unwrap());
-        assert_eq!(sm.nullifier_exists_batch(&[nullifier]).unwrap(), vec![true]);
+        assert_eq!(head1.tx_count, 1);
+        assert_eq!(head1.nullifier_count, 1);
+        assert_eq!(head1.gsr_count, 2);
+        assert!(sm.tx_exists(head1, &tx_final).unwrap());
+        assert_eq!(
+            sm.nullifier_exists_batch(head1, &[nullifier]).unwrap(),
+            vec![true]
+        );
     }
 
     #[test]
     fn test_rejects_unknown_grounding_gsr() {
         let (sm, _dir) = make_sm();
-        seed_gsr0(&sm);
-        sm.replace_recent_gsrs([]).unwrap();
+        let head0 = seed_gsr0(&sm);
 
         let tx_final = unique_hash(21);
         let blob = mock_txn_bytes(tx_final, &[], unique_hash(99));
-        let delta = sm.derive_slot_delta(2, 2, &[(0, blob)]).unwrap();
-        assert_eq!(delta.new_head.tx_count, delta.old_head.tx_count);
+        let head1 = sm
+            .derive_slot_delta(head0, [], 2, 2, &[(0, blob)])
+            .unwrap()
+            .new_head;
+        assert_eq!(head1.tx_count, head0.tx_count);
     }
 
     #[test]
-    fn test_rollbacks_restore_previous_head() {
+    fn test_uncommitted_derived_nodes_do_not_affect_old_head() {
         let (sm, _dir) = make_sm();
-        let d0 = sm.derive_slot_delta(0, 0, &[]).unwrap();
-        sm.apply_delta_to_db(&d0).unwrap();
-        sm.apply_delta_to_memory(&d0).unwrap();
-        let h0 = sm.head_snapshot().unwrap();
+        let head0 = seed_gsr0(&sm);
+        let gsr0 = head0.current_gsr.unwrap();
 
-        let d1 = sm.derive_slot_delta(1, 1, &[]).unwrap();
-        sm.apply_delta_to_db(&d1).unwrap();
-        sm.apply_delta_to_memory(&d1).unwrap();
+        let tx_final = unique_hash(31);
+        let blob = mock_txn_bytes(tx_final, &[], gsr0);
+        let head1 = sm
+            .derive_slot_delta(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
+            .unwrap()
+            .new_head;
 
-        sm.rollback_journals(&[SlotJournal {
-            slot: 1,
-            old_head: h0,
-            new_head: d1.new_head,
-        }])
-        .unwrap();
-        assert_eq!(sm.head_snapshot().unwrap(), h0);
+        assert_eq!(sm.tx_exists(head0, &tx_final).unwrap(), false);
+        assert_eq!(sm.tx_exists(head1, &tx_final).unwrap(), true);
     }
 }

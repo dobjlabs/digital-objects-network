@@ -22,9 +22,10 @@ use chrono::{DateTime, Utc};
 use pod2::middleware::Hash;
 use tracing::{debug, info, trace};
 
+use crate::app_db::AppHead;
 use crate::config::AppConfig;
 use crate::state_machine::{SlotDelta, StateMachine, MAX_GSR_AGE_BLOCKS};
-use crate::sync_db::{JournalOp, PendingSlotRecord, SlotJournal, SyncDb};
+use crate::sync_db::{CommittedSlotRecord, SyncDb};
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
 /// pure state derivation (`StateMachine`), and sync metadata (`SyncDb`).
@@ -46,7 +47,7 @@ struct SlotContext {
     has_blob_commitments: bool,
 }
 
-/// Fully-derived result for one slot, ready to be journaled/applied/finalized.
+/// Fully-derived result for one slot, ready to be committed.
 pub struct ProcessedSlot {
     pub slot: u32,
     pub block_root: B256,
@@ -138,52 +139,13 @@ impl Node {
         self.sync_db.slot_root(slot).await
     }
 
-    /// Rewind to `keep_slot` by staging rollback in Postgres, restoring the surviving `old_head`
-    /// in RocksDB, and finalizing rollback metadata.
-    pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
-        let journals = self.sync_db.rollback_to_slot(keep_slot).await?;
-        self.state_machine.rollback_journals(&journals)?;
-        let rollback_slots: Vec<u32> = journals.iter().map(|j| j.slot).collect();
-        self.sync_db.complete_rollback(&rollback_slots).await?;
-        self.refresh_recent_gsr_cache().await?;
-        Ok(())
+    pub async fn current_head(&self) -> Result<AppHead> {
+        Ok(self.sync_db.current_snapshot().await?.head)
     }
 
-    /// Recover incomplete apply/rollback operations after crash or shutdown.
-    ///
-    /// Recovery source of truth is Postgres journal state (`pending_recoveries`).
-    pub async fn recover_pending(&self) -> Result<()> {
-        let recoveries = self.sync_db.pending_recoveries().await?;
-        if recoveries.is_empty() {
-            self.refresh_recent_gsr_cache().await?;
-            return Ok(());
-        }
-
-        let mut rollback_journals = Vec::new();
-        let mut rollback_slots = Vec::new();
-
-        for recovery in recoveries {
-            match recovery.op {
-                JournalOp::Apply => {
-                    self.state_machine.apply_journal(&recovery.journal)?;
-                    self.sync_db
-                        .finalize_slot_applied(recovery.slot, recovery.block_number)
-                        .await?;
-                }
-                JournalOp::Rollback => {
-                    rollback_slots.push(recovery.slot);
-                    rollback_journals.push(recovery.journal);
-                }
-            }
-        }
-        if !rollback_journals.is_empty() {
-            rollback_journals.sort_by_key(|journal| std::cmp::Reverse(journal.slot));
-            self.state_machine.rollback_journals(&rollback_journals)?;
-            self.sync_db.complete_rollback(&rollback_slots).await?;
-        }
-        self.state_machine.reload_from_db()?;
-        self.refresh_recent_gsr_cache().await?;
-        Ok(())
+    /// Rewind to `keep_slot` by deleting later canonical slot rows and rewinding the cursor.
+    pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
+        self.sync_db.rollback_to_slot(keep_slot).await
     }
 
     /// Fetch beacon blob sidecars for a slot and retain only requested versioned hashes.
@@ -257,17 +219,18 @@ impl Node {
         }))
     }
 
-    /// Derive the full per-slot update from beacon/execution data and return it for staged apply.
+    /// Derive the full per-slot update from beacon/execution data and return it for commit.
     pub async fn derive_slot_update(
         &self,
         beacon_block_header: &BlockHeader,
     ) -> Result<ProcessedSlot> {
+        let base_head = self.sync_db.current_snapshot().await?.head;
         let Some(slot_ctx) = self.build_slot_context(beacon_block_header).await? else {
             return Ok(ProcessedSlot::empty(
                 beacon_block_header.slot,
                 beacon_block_header.root,
                 beacon_block_header.parent_root,
-                self.state_machine.noop_delta()?,
+                self.state_machine.noop_delta(base_head),
             ));
         };
 
@@ -283,15 +246,23 @@ impl Node {
             DateTime::<Utc>::from_timestamp_secs(slot_ctx.execution_timestamp as i64)
                 .unwrap_or_default(),
         );
-        self.state_machine.log_current_state()?;
+        self.state_machine.log_current_state(base_head);
 
         let block_number = slot_ctx.execution_block_number;
+        let min_block_number = base_head
+            .current_block_number
+            .map(|n| n.saturating_sub(MAX_GSR_AGE_BLOCKS as u32));
+        let recent_gsrs = self.sync_db.recent_gsrs(min_block_number).await?;
 
         if !slot_ctx.has_blob_commitments {
             debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
-            let delta = self
-                .state_machine
-                .derive_slot_delta(slot_ctx.slot, block_number, &[])?;
+            let delta = self.state_machine.derive_slot_delta(
+                base_head,
+                recent_gsrs,
+                slot_ctx.slot,
+                block_number,
+                &[],
+            )?;
             return Ok(ProcessedSlot::present(
                 slot_ctx.slot,
                 slot_ctx.beacon_block_root,
@@ -341,9 +312,13 @@ impl Node {
                 to_address = ?self.config.to_address,
                 "No matching target blob transactions in execution block"
             );
-            let delta = self
-                .state_machine
-                .derive_slot_delta(slot_ctx.slot, block_number, &[])?;
+            let delta = self.state_machine.derive_slot_delta(
+                base_head,
+                recent_gsrs,
+                slot_ctx.slot,
+                block_number,
+                &[],
+            )?;
             return Ok(ProcessedSlot::present(
                 slot_ctx.slot,
                 slot_ctx.beacon_block_root,
@@ -397,9 +372,13 @@ impl Node {
             }
         }
 
-        let delta =
-            self.state_machine
-                .derive_slot_delta(slot_ctx.slot, block_number, &blob_payloads)?;
+        let delta = self.state_machine.derive_slot_delta(
+            base_head,
+            recent_gsrs,
+            slot_ctx.slot,
+            block_number,
+            &blob_payloads,
+        )?;
 
         Ok(ProcessedSlot::present(
             slot_ctx.slot,
@@ -410,26 +389,9 @@ impl Node {
         ))
     }
 
-    /// Apply a derived slot delta to RocksDB.
-    pub fn apply_delta_to_db(&self, delta: &SlotDelta) -> Result<()> {
-        self.state_machine.apply_delta_to_db(delta)
-    }
-
-    /// Apply a derived slot delta to in-memory state.
-    ///
-    /// Called only after finalize in the sync loop.
-    pub fn apply_delta_to_memory(&self, delta: &SlotDelta) -> Result<()> {
-        self.state_machine.apply_delta_to_memory(delta)
-    }
-
-    /// Stage canonical slot metadata and slot journal in Postgres as `pending`.
-    pub async fn save_pending_slot(&self, processed: &ProcessedSlot) -> Result<()> {
-        let journal = SlotJournal {
-            slot: processed.slot,
-            old_head: processed.delta.old_head,
-            new_head: processed.delta.new_head,
-        };
-        let pending = PendingSlotRecord {
+    /// Commit one derived slot to Postgres as the new canonical head.
+    pub async fn commit_slot(&self, processed: &ProcessedSlot) -> Result<()> {
+        let slot = CommittedSlotRecord {
             slot: processed.slot,
             block_root: processed.canonical_block_root(),
             parent_root: processed.canonical_parent_root(),
@@ -438,26 +400,8 @@ impl Node {
             is_empty: processed.is_empty,
         };
 
-        self.sync_db.save_pending_slot(&pending, &journal).await
-    }
-
-    /// Mark a pending slot applied and advance the sync cursor in Postgres.
-    pub async fn finalize_slot_applied(&self, slot: u32, block_number: Option<u32>) -> Result<()> {
-        self.sync_db.finalize_slot_applied(slot, block_number).await
-    }
-
-    /// Reload in-memory state from the persisted app database.
-    pub fn reload_from_db(&self) -> Result<()> {
-        self.state_machine.reload_from_db()
-    }
-
-    async fn refresh_recent_gsr_cache(&self) -> Result<()> {
-        let head = self.state_machine.head_snapshot()?;
-        let min_block_number = head
-            .current_block_number
-            .map(|block_number| block_number.saturating_sub(MAX_GSR_AGE_BLOCKS as u32));
-        let recent_gsrs = self.sync_db.recent_gsrs(min_block_number).await?;
-        self.state_machine.replace_recent_gsrs(recent_gsrs)?;
-        Ok(())
+        self.sync_db
+            .commit_slot(&slot, &processed.delta.new_head)
+            .await
     }
 }

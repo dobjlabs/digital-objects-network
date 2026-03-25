@@ -125,11 +125,12 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
     }
 
     // Empty slots are valid on beacon; commit an empty processed slot so cursor stays contiguous.
+    let head = node.current_head().await?;
     let processed = ProcessedSlot::empty(
         slot,
         Default::default(),
         Default::default(),
-        node.state_machine.noop_delta()?,
+        node.state_machine.noop_delta(head),
     );
 
     info!(slot, "No block produced for slot");
@@ -189,29 +190,13 @@ async fn handle_reorgs_for_present_slot(
     Ok(None)
 }
 
-/// Persist and apply one processed slot.
+/// Publish one processed slot as canonical.
 ///
-/// Write/apply ordering:
-/// 1. Stage metadata+journal in Postgres as `pending`.
-/// 2. Apply app delta in RocksDB.
-/// 3. Finalize cursor+status in Postgres as `applied`.
-/// 4. Apply the same delta to in-memory state (only after finalize).
+/// The Merkle node/value mutations have already been materialized in RocksDB during slot
+/// derivation. Canonical publication is therefore just the Postgres commit of the slot row and
+/// its `AppHead`, which atomically advances the sync cursor.
 async fn persist_processed_slot(node: &Node, processed: &ProcessedSlot) -> Result<()> {
-    node.save_pending_slot(processed).await?;
-
-    if let Err(err) = node.apply_delta_to_db(&processed.delta) {
-        node.reload_from_db()?;
-        return Err(err);
-    }
-
-    node.finalize_slot_applied(processed.slot, processed.block_number)
-        .await?;
-    if let Err(err) = node.apply_delta_to_memory(&processed.delta) {
-        node.reload_from_db()?;
-        return Err(err);
-    }
-
-    Ok(())
+    node.commit_slot(processed).await
 }
 
 /// Rewind to the first slot after the last common ancestor and resume from there.
