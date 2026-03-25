@@ -12,7 +12,6 @@ mod config;
 mod head;
 mod node;
 mod state_machine;
-mod state_reader;
 mod sync_db;
 mod sync_loop;
 
@@ -22,7 +21,6 @@ use common::proof::ProofParser;
 use config::load_config;
 use node::Node;
 use state_machine::StateMachine;
-use state_reader::StateReader;
 use sync_db::SyncDb;
 use sync_loop::run_sync_loop;
 
@@ -33,15 +31,15 @@ async fn main() -> Result<()> {
     let cfg = load_config()?;
 
     let app_db = AppDb::connect(&cfg.app_state_db_path)?;
+    let api_app_db = app_db.clone();
     let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db_url).await?);
-    let state_reader = Arc::new(StateReader::new(app_db.clone()));
     let state_machine = Arc::new(StateMachine::new(app_db, Arc::new(ProofParser::new()?)));
     let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine), Arc::clone(&sync_db)).await?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let server_task = tokio::spawn(run_api_server(
         Arc::clone(&sync_db),
-        Arc::clone(&state_reader),
+        api_app_db,
         node.config.http_bind,
         shutdown_rx.clone(),
     ));

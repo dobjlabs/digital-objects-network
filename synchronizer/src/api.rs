@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
 };
 use hex::FromHex;
-use pod2::middleware::Hash;
+use pod2::{backends::plonky2::primitives::merkletree::MerkleProof, middleware::Hash};
 use synchronizer::api_types::{
     GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, MembershipRequest,
     MembershipResponse, NullifierContainsEntry, NullifierContainsRequest,
@@ -19,30 +19,68 @@ use tokio::sync::watch;
 use tracing::info;
 
 use crate::{
-    state_reader::StateReader,
+    app_db::AppDb,
+    head::CanonicalRoots,
     sync_db::{CurrentSnapshot, SyncDb},
 };
 use common::encode_hash_hex;
 
 #[derive(Clone)]
 struct AppState {
+    /// RocksDB-backed read path used for membership checks and Merkle proofs.
+    app_db: AppDb,
+    /// Postgres-backed canonical head and sync-progress store.
     sync_db: Arc<SyncDb>,
-    state_reader: Arc<StateReader>,
 }
 
+/// Internal view of head/progress fields shaped for HTTP responses.
 struct HeadSnapshot {
+    /// Last canonical slot fully committed by the synchronizer.
     last_processed_slot: Option<u32>,
+    /// Execution block number associated with the last processed slot, if any.
     last_processed_block_number: Option<u32>,
+    /// Current canonical global state root encoded as hex, if one exists.
     current_gsr: Option<String>,
+    /// Execution block number committed inside the current state root, if any.
     current_block_number: Option<i64>,
+    /// Number of accepted transactions in canonical state.
     tx_count: usize,
+    /// Number of spent nullifiers in canonical state.
     nullifier_count: usize,
+    /// Number of GSR entries in canonical history.
     gsr_count: usize,
+}
+
+#[derive(Debug, Clone)]
+/// Membership result anchored to one caller-provided root set.
+struct MembershipSnapshot {
+    /// Per-request transaction membership bits under `roots.transactions`.
+    tx_present: Vec<bool>,
+    /// Per-request nullifier membership bits under `roots.nullifiers`.
+    nullifier_present: Vec<bool>,
+}
+
+#[derive(Debug, Clone)]
+/// Membership proof for a source transaction against the current transactions set root.
+struct TxMembershipProof {
+    /// Source transaction hash the client asked about.
+    tx_hash: Hash,
+    /// Whether the transaction is present in the committed transactions set.
+    present: bool,
+    /// Merkle proof against the current transactions set root.
+    proof: MerkleProof,
+}
+
+#[derive(Debug, Clone)]
+/// Proof-bearing result used by txlib to ground action execution.
+struct GroundingWitnessSnapshot {
+    /// Per-source transaction membership proofs under the provided roots.
+    source_tx_proofs: Vec<TxMembershipProof>,
 }
 
 pub async fn run_api_server(
     sync_db: Arc<SyncDb>,
-    state_reader: Arc<StateReader>,
+    app_db: AppDb,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
@@ -58,10 +96,7 @@ pub async fn run_api_server(
         )
         .route("/v1/state/tx/{tx_hash}", get(get_state_tx))
         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
-        .with_state(AppState {
-            sync_db,
-            state_reader,
-        });
+        .with_state(AppState { app_db, sync_db });
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     info!(%bind_addr, "API server listening");
@@ -114,9 +149,7 @@ async fn post_state_tx_contains(
         .iter()
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
-    let membership = app_state
-        .state_reader
-        .membership_snapshot(&snapshot.head.roots, &hashes, &[])
+    let membership = membership_snapshot(&app_state.app_db, &snapshot.head.roots, &hashes, &[])
         .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
 
@@ -146,9 +179,7 @@ async fn post_state_nullifier_contains(
         .iter()
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
-    let membership = app_state
-        .state_reader
-        .membership_snapshot(&snapshot.head.roots, &[], &hashes)
+    let membership = membership_snapshot(&app_state.app_db, &snapshot.head.roots, &[], &hashes)
         .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
 
@@ -183,10 +214,13 @@ async fn post_state_membership(
         .iter()
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
-    let membership = app_state
-        .state_reader
-        .membership_snapshot(&snapshot.head.roots, &tx_hashes, &nullifiers)
-        .map_err(internal_error)?;
+    let membership = membership_snapshot(
+        &app_state.app_db,
+        &snapshot.head.roots,
+        &tx_hashes,
+        &nullifiers,
+    )
+    .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
 
     let tx_results = tx_hashes
@@ -220,10 +254,13 @@ async fn get_state_tx(
 ) -> Result<Json<TxStatusResponse>, (StatusCode, String)> {
     let snapshot = load_current_snapshot(&app_state).await?;
     let hash = parse_hash_hex(&tx_hash)?;
-    let membership = app_state
-        .state_reader
-        .membership_snapshot(&snapshot.head.roots, std::slice::from_ref(&hash), &[])
-        .map_err(internal_error)?;
+    let membership = membership_snapshot(
+        &app_state.app_db,
+        &snapshot.head.roots,
+        std::slice::from_ref(&hash),
+        &[],
+    )
+    .map_err(internal_error)?;
     let head = build_head_snapshot(&snapshot);
     Ok(Json(TxStatusResponse {
         tx_hash: encode_hash_hex(&hash),
@@ -243,9 +280,7 @@ async fn post_grounding_witness(
         .iter()
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
-    let witness = app_state
-        .state_reader
-        .grounding_witness(&snapshot.head.roots, &source_tx_hashes)
+    let witness = grounding_witness(&app_state.app_db, &snapshot.head.roots, &source_tx_hashes)
         .map_err(internal_error)?;
     let head = snapshot.head;
     let state_root = head.current_state_root().ok_or_else(|| {
@@ -292,6 +327,37 @@ fn build_head_snapshot(snapshot: &CurrentSnapshot) -> HeadSnapshot {
         nullifier_count: snapshot.head.metadata.nullifier_count as usize,
         gsr_count: snapshot.head.metadata.gsr_count as usize,
     }
+}
+
+fn membership_snapshot(
+    app_db: &AppDb,
+    roots: &CanonicalRoots,
+    tx_hashes: &[Hash],
+    nullifiers: &[Hash],
+) -> anyhow::Result<MembershipSnapshot> {
+    Ok(MembershipSnapshot {
+        tx_present: app_db.tx_exists_batch(roots, tx_hashes)?,
+        nullifier_present: app_db.nullifier_exists_batch(roots, nullifiers)?,
+    })
+}
+
+fn grounding_witness(
+    app_db: &AppDb,
+    roots: &CanonicalRoots,
+    source_tx_hashes: &[Hash],
+) -> anyhow::Result<GroundingWitnessSnapshot> {
+    let source_tx_proofs = source_tx_hashes
+        .iter()
+        .map(|tx_hash| {
+            let (present, proof) = app_db.prove_tx(roots, *tx_hash)?;
+            Ok(TxMembershipProof {
+                tx_hash: *tx_hash,
+                present,
+                proof,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(GroundingWitnessSnapshot { source_tx_proofs })
 }
 
 async fn load_current_snapshot(

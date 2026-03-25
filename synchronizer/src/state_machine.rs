@@ -259,17 +259,15 @@ impl StateMachine {
 mod tests {
     use super::*;
     use crate::app_db::AppDb;
-    use crate::state_reader::StateReader;
     use common::proof::MockBlobParser;
     use pod2::middleware::hash_values;
     use tempfile::TempDir;
 
-    fn make_sm() -> (StateMachine, StateReader, TempDir) {
+    fn make_sm() -> (StateMachine, AppDb, TempDir) {
         let dir = TempDir::new().unwrap();
         let app_db = AppDb::connect(dir.path().to_str().unwrap()).unwrap();
-        let reader = StateReader::new(app_db.clone());
-        let sm = StateMachine::new(app_db, Arc::new(MockBlobParser));
-        (sm, reader, dir)
+        let sm = StateMachine::new(app_db.clone(), Arc::new(MockBlobParser));
+        (sm, app_db, dir)
     }
 
     fn unique_hash(n: i64) -> Hash {
@@ -296,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_empty_slot_produces_new_head() {
-        let (sm, _reader, _dir) = make_sm();
+        let (sm, _app_db, _dir) = make_sm();
         let head = sm
             .derive_slot_head(CanonicalHead::empty(), [], 1, 7, &[])
             .unwrap();
@@ -306,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_accepts_valid_blob_and_updates_counts() {
-        let (sm, reader, _dir) = make_sm();
+        let (sm, app_db, _dir) = make_sm();
         let head0 = seed_gsr0(&sm);
         let gsr0 = head0.metadata.current_gsr.unwrap();
 
@@ -316,22 +314,19 @@ mod tests {
         let head1 = sm
             .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
             .unwrap();
+        let tx_present = app_db.tx_exists_batch(&head1.roots, &[tx_final]).unwrap();
+        let nullifier_present = app_db.nullifier_exists_batch(&head1.roots, &[nullifier]).unwrap();
 
         assert_eq!(head1.metadata.tx_count, 1);
         assert_eq!(head1.metadata.nullifier_count, 1);
         assert_eq!(head1.metadata.gsr_count, 2);
-        assert!(reader.tx_exists(&head1.roots, &tx_final).unwrap());
-        assert_eq!(
-            reader
-                .nullifier_exists_batch(&head1.roots, &[nullifier])
-                .unwrap(),
-            vec![true]
-        );
+        assert_eq!(tx_present, vec![true]);
+        assert_eq!(nullifier_present, vec![true]);
     }
 
     #[test]
     fn test_rejects_unknown_grounding_gsr() {
-        let (sm, _reader, _dir) = make_sm();
+        let (sm, _app_db, _dir) = make_sm();
         let head0 = seed_gsr0(&sm);
 
         let tx_final = unique_hash(21);
@@ -342,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_uncommitted_derived_nodes_do_not_affect_old_head() {
-        let (sm, reader, _dir) = make_sm();
+        let (sm, app_db, _dir) = make_sm();
         let head0 = seed_gsr0(&sm);
         let gsr0 = head0.metadata.current_gsr.unwrap();
 
@@ -351,8 +346,10 @@ mod tests {
         let head1 = sm
             .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
             .unwrap();
+        let old_membership = app_db.tx_exists_batch(&head0.roots, &[tx_final]).unwrap();
+        let new_membership = app_db.tx_exists_batch(&head1.roots, &[tx_final]).unwrap();
 
-        assert_eq!(reader.tx_exists(&head0.roots, &tx_final).unwrap(), false);
-        assert_eq!(reader.tx_exists(&head1.roots, &tx_final).unwrap(), true);
+        assert_eq!(old_membership, vec![false]);
+        assert_eq!(new_membership, vec![true]);
     }
 }
