@@ -18,8 +18,11 @@ use synchronizer::api_types::{
 use tokio::sync::watch;
 use tracing::info;
 
+use crate::{
+    state_machine::StateMachine,
+    sync_db::{CurrentSnapshot, SyncDb},
+};
 use common::encode_hash_hex;
-use crate::{state_machine::StateMachine, sync_db::{CurrentSnapshot, SyncDb}};
 
 #[derive(Clone)]
 struct AppState {
@@ -297,7 +300,10 @@ async fn load_sync_progress(
     app_state: &AppState,
 ) -> Result<(Option<u32>, Option<u32>), (StatusCode, String)> {
     let snapshot = load_current_snapshot(app_state).await?;
-    Ok((snapshot.last_processed_slot, snapshot.last_processed_block_number))
+    Ok((
+        snapshot.last_processed_slot,
+        snapshot.last_processed_block_number,
+    ))
 }
 
 fn parse_hash_hex(value: &str) -> Result<Hash, (StatusCode, String)> {
