@@ -184,10 +184,7 @@ impl Node {
     /// corresponding full beacon block or execution payload is treated as an error rather than as
     /// an empty slot. This forces the sync loop to retry instead of silently advancing past a real
     /// slot when the beacon provider is temporarily inconsistent.
-    async fn build_slot_context(
-        &self,
-        beacon_block_header: &BlockHeader,
-    ) -> Result<SlotContext> {
+    async fn build_slot_context(&self, beacon_block_header: &BlockHeader) -> Result<SlotContext> {
         let beacon_block_root = beacon_block_header.root;
         let slot = beacon_block_header.slot;
 
@@ -202,9 +199,7 @@ impl Node {
             })?;
 
         let execution_payload = beacon_block.execution_payload.as_ref().ok_or_else(|| {
-            anyhow!(
-                "Beacon block {beacon_block_root} for slot {slot} had no execution payload"
-            )
+            anyhow!("Beacon block {beacon_block_root} for slot {slot} had no execution payload")
         })?;
 
         let has_blob_commitments = beacon_block
