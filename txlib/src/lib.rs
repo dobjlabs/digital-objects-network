@@ -12,11 +12,7 @@ use pod2::{
         hash_values,
     },
 };
-use pod2utils::{
-    dict, dict_define,
-    macros::{BuildContext, find_custom_pred_by_name},
-    rand_raw_value, set, st_custom,
-};
+use pod2utils::{dict, dict_define, macros::BuildContext, rand_raw_value, set, st_custom};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Compact committed view of canonical app state used for grounding transactions.
@@ -240,8 +236,6 @@ impl TxBuilder {
         let txn_nullifiers_hash =
             hash_values(&[Value::from(transactions), Value::from(nullifiers)]);
         let block_number_gsrs_hash = hash_values(&[Value::from(block_number), Value::from(gsrs)]);
-        let tx_in_state_root_pred =
-            find_custom_pred_by_name(&ctx.modules, "TxInStateRoot").expect("TxInStateRoot exists");
         let mut st = st_custom!(
             ctx,
             InputsGrounded(state_root_hash = state_root_hash) =
@@ -275,13 +269,8 @@ impl TxBuilder {
                     OperationAux::MerkleProof(source_tx_proof),
                 ))
                 .unwrap();
-            let st_tx_in_state_root = ctx
-                .builder
-                .priv_op(Operation::custom(
-                    tx_in_state_root_pred.clone(),
-                    [st_state_root, st_tx_membership],
-                ))
-                .unwrap();
+            let st_tx_in_state_root =
+                st_custom!(ctx, TxInStateRoot() = (st_state_root, st_tx_membership)).unwrap();
             let st_rec = st_custom!(
                 ctx,
                 InputsGroundedRecursive() = (
