@@ -25,6 +25,8 @@ use crate::{
 };
 use common::encode_hash_hex;
 
+const MAX_HASH_QUERY_ITEMS: usize = 256;
+
 #[derive(Clone)]
 struct AppState {
     /// RocksDB-backed read path used for membership checks and Merkle proofs.
@@ -229,6 +231,7 @@ async fn post_grounding_witness(
     State(app_state): State<AppState>,
     Json(body): Json<GroundingWitnessRequest>,
 ) -> Result<Json<GroundingWitnessResponse>, (StatusCode, String)> {
+    ensure_hash_query_limit("sourceTxHashes", body.source_tx_hashes.len())?;
     let snapshot = load_current_snapshot(&app_state).await?;
     let source_tx_hashes = body
         .source_tx_hashes
@@ -320,6 +323,7 @@ async fn load_membership_context(
     tx_hashes: &[String],
     nullifiers: &[String],
 ) -> Result<MembershipContext, (StatusCode, String)> {
+    ensure_membership_query_limit(tx_hashes.len(), nullifiers.len())?;
     let snapshot = load_current_snapshot(app_state).await?;
     let tx_hashes = parse_hashes(tx_hashes)?;
     let nullifiers = parse_hashes(nullifiers)?;
@@ -361,6 +365,34 @@ async fn load_sync_progress(
 
 fn parse_hashes(values: &[String]) -> Result<Vec<Hash>, (StatusCode, String)> {
     values.iter().map(|value| parse_hash_hex(value)).collect()
+}
+
+fn ensure_hash_query_limit(field_name: &str, count: usize) -> Result<(), (StatusCode, String)> {
+    if count > MAX_HASH_QUERY_ITEMS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("{field_name} exceeds maximum item count: {count} > {MAX_HASH_QUERY_ITEMS}"),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_membership_query_limit(
+    tx_hash_count: usize,
+    nullifier_count: usize,
+) -> Result<(), (StatusCode, String)> {
+    let total = tx_hash_count
+        .checked_add(nullifier_count)
+        .unwrap_or(usize::MAX);
+    if total > MAX_HASH_QUERY_ITEMS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "membership query exceeds maximum total item count: {total} > {MAX_HASH_QUERY_ITEMS} across tx_hashes and nullifiers"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn tx_contains_entries(tx_hashes: Vec<Hash>, tx_present: Vec<bool>) -> Vec<TxContainsEntry> {
@@ -410,5 +442,38 @@ async fn wait_for_shutdown(shutdown_rx: &mut watch::Receiver<bool>) {
         if shutdown_rx.changed().await.is_err() {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_hash_query_limit_rejects_oversized_batch() {
+        let err = ensure_hash_query_limit("sourceTxHashes", MAX_HASH_QUERY_ITEMS + 1)
+            .expect_err("expected oversized batch to fail");
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1.contains("sourceTxHashes"));
+        assert!(err.1.contains(&MAX_HASH_QUERY_ITEMS.to_string()));
+    }
+
+    #[test]
+    fn ensure_membership_query_limit_rejects_oversized_total() {
+        let err = ensure_membership_query_limit(MAX_HASH_QUERY_ITEMS / 2, MAX_HASH_QUERY_ITEMS)
+            .expect_err("expected oversized total to fail");
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1.contains("tx_hashes"));
+        assert!(err.1.contains("nullifiers"));
+    }
+
+    #[test]
+    fn ensure_membership_query_limit_allows_exact_budget() {
+        ensure_membership_query_limit(MAX_HASH_QUERY_ITEMS, 0).expect("exact budget should pass");
+        ensure_membership_query_limit(0, MAX_HASH_QUERY_ITEMS).expect("exact budget should pass");
+        ensure_membership_query_limit(MAX_HASH_QUERY_ITEMS / 2, MAX_HASH_QUERY_ITEMS / 2)
+            .expect("split exact budget should pass");
     }
 }
