@@ -102,29 +102,88 @@ pub(crate) fn fetch_grounding_witness(
         ));
     }
 
+    let source_tx_proofs = collect_source_tx_proofs(
+        source_tx_hashes,
+        payload
+            .source_tx_proofs
+            .into_iter()
+            .map(|entry| (entry.tx_hash, entry.present, entry.proof)),
+    )?;
+
+    Ok(GroundingWitness::new(state_root, source_tx_proofs))
+}
+
+fn collect_source_tx_proofs<P>(
+    requested_source_tx_hashes: &[Hash],
+    entries: impl IntoIterator<Item = (String, bool, P)>,
+) -> Result<HashMap<Hash, P>> {
+    let expected_hashes = requested_source_tx_hashes
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    let mut response_presence = HashMap::new();
     let mut source_tx_proofs = HashMap::new();
-    let mut missing = Vec::new();
-    for entry in payload.source_tx_proofs {
-        let tx_hash = parse_hash_hex(&entry.tx_hash)?;
-        if entry.present {
-            source_tx_proofs.insert(tx_hash, entry.proof);
-        } else {
-            missing.push(tx_hash);
+
+    for (tx_hash_raw, present, proof) in entries {
+        let tx_hash = parse_hash_hex(&tx_hash_raw)?;
+        if !expected_hashes.contains(&tx_hash) {
+            return Err(anyhow!(
+                "synchronizer grounding witness response contained unexpected source tx proof: {}",
+                encode_hash_hex(&tx_hash)
+            ));
+        }
+
+        if let Some(previous_present) = response_presence.insert(tx_hash, present) {
+            if previous_present != present {
+                return Err(anyhow!(
+                    "synchronizer grounding witness response contained conflicting entries for source tx {}",
+                    encode_hash_hex(&tx_hash)
+                ));
+            }
+        }
+
+        if present {
+            source_tx_proofs.insert(tx_hash, proof);
         }
     }
-    if !missing.is_empty() {
-        let rendered = missing
-            .iter()
-            .map(encode_hash_hex)
-            .collect::<Vec<_>>()
-            .join(", ");
+
+    let omitted = render_requested_hashes(requested_source_tx_hashes, |tx_hash| {
+        !response_presence.contains_key(tx_hash)
+    });
+    if !omitted.is_empty() {
         return Err(anyhow!(
-            "input not yet synchronized; wait and retry: {}",
-            rendered
+            "synchronizer grounding witness response omitted requested source tx proofs: {}",
+            omitted.join(", ")
         ));
     }
 
-    Ok(GroundingWitness::new(state_root, source_tx_proofs))
+    let unavailable = render_requested_hashes(requested_source_tx_hashes, |tx_hash| {
+        response_presence
+            .get(tx_hash)
+            .is_some_and(|present| !*present)
+    });
+    if !unavailable.is_empty() {
+        return Err(anyhow!(
+            "input not yet synchronized; wait and retry: {}",
+            unavailable.join(", ")
+        ));
+    }
+
+    Ok(source_tx_proofs)
+}
+
+fn render_requested_hashes(
+    requested_source_tx_hashes: &[Hash],
+    include: impl Fn(&Hash) -> bool,
+) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut rendered = Vec::new();
+    for tx_hash in requested_source_tx_hashes {
+        if seen.insert(*tx_hash) && include(tx_hash) {
+            rendered.push(encode_hash_hex(tx_hash));
+        }
+    }
+    rendered
 }
 
 pub(crate) fn fetch_synchronizer_membership_with_nullifiers(
@@ -200,5 +259,72 @@ pub(crate) fn wait_for_synchronizer_tx(
             ));
         }
         std::thread::sleep(poll_interval);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_hash(byte: u8) -> Hash {
+        Hash::from_hex(hex::encode([byte; 32])).expect("valid test hash")
+    }
+
+    #[test]
+    fn collect_source_tx_proofs_rejects_omitted_requested_hash() {
+        let requested = [test_hash(1), test_hash(2)];
+        let proofs = vec![(encode_hash_hex(&requested[0]), true, "proof-1")];
+
+        let err = collect_source_tx_proofs(&requested, proofs).expect_err("should fail");
+
+        assert!(
+            err.to_string().contains(&encode_hash_hex(&requested[1])),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn collect_source_tx_proofs_rejects_unexpected_hash() {
+        let requested = [test_hash(1)];
+        let unexpected = test_hash(9);
+        let proofs = vec![(encode_hash_hex(&unexpected), true, "proof-9")];
+
+        let err = collect_source_tx_proofs(&requested, proofs).expect_err("should fail");
+
+        assert!(
+            err.to_string().contains(&encode_hash_hex(&unexpected)),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn collect_source_tx_proofs_rejects_conflicting_duplicate_status() {
+        let requested = [test_hash(1)];
+        let proofs = vec![
+            (encode_hash_hex(&requested[0]), true, "proof-1a"),
+            (encode_hash_hex(&requested[0]), false, "proof-1b"),
+        ];
+
+        let err = collect_source_tx_proofs(&requested, proofs).expect_err("should fail");
+
+        assert!(
+            err.to_string().contains("conflicting entries"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn collect_source_tx_proofs_allows_duplicate_requested_hashes() {
+        let requested = [test_hash(1), test_hash(1), test_hash(2)];
+        let proofs = vec![
+            (encode_hash_hex(&requested[0]), true, "proof-1"),
+            (encode_hash_hex(&requested[2]), true, "proof-2"),
+        ];
+
+        let result = collect_source_tx_proofs(&requested, proofs).expect("should succeed");
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get(&requested[0]), Some(&"proof-1"));
+        assert_eq!(result.get(&requested[2]), Some(&"proof-2"));
     }
 }

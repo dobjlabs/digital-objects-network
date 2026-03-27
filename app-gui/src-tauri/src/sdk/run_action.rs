@@ -365,8 +365,15 @@ pub(crate) async fn run_sdk_action_core(
         .iter()
         .map(|input| input.record.spendable().tx.dict().commitment())
         .collect::<Vec<_>>();
-    let grounding_witness =
-        fetch_grounding_witness(&app_settings.synchronizer_api_url, &source_tx_hashes)?;
+    let synchronizer_api_url = app_settings.synchronizer_api_url.clone();
+    let grounding_witness = match tauri::async_runtime::spawn_blocking(move || {
+        fetch_grounding_witness(&synchronizer_api_url, &source_tx_hashes)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => Err(anyhow!("failed while fetching grounding witness: {err}")),
+    }?;
     let old_root_hash = grounding_witness.state_root.hash();
     let old_root = encode_hash_hex(&old_root_hash);
 
@@ -423,12 +430,22 @@ pub(crate) async fn run_sdk_action_core(
             "Waiting for synchronizer to observe commit",
             &old_root,
         )?;
-        wait_for_synchronizer_commit(
-            &app_settings.synchronizer_api_url,
-            expected_tx_final,
-            SYNCHRONIZER_POLL_TIMEOUT_SECS,
-            SYNCHRONIZER_POLL_INTERVAL_MS,
-        )
+        let synchronizer_api_url = app_settings.synchronizer_api_url.clone();
+        match tauri::async_runtime::spawn_blocking(move || {
+            wait_for_synchronizer_commit(
+                &synchronizer_api_url,
+                expected_tx_final,
+                SYNCHRONIZER_POLL_TIMEOUT_SECS,
+                SYNCHRONIZER_POLL_INTERVAL_MS,
+            )
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(err) => Err(anyhow!(
+                "failed while waiting for synchronizer to observe commit: {err}"
+            )),
+        }
     }
     .await;
 
