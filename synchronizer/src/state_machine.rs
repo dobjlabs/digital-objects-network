@@ -55,10 +55,6 @@ impl StateMachine {
         }
     }
 
-    pub fn noop_head(&self, base_head: CanonicalHead) -> CanonicalHead {
-        base_head
-    }
-
     /// Parse and validate one blob payload against the in-progress slot state.
     ///
     /// This is the core per-blob derivation step used by `derive_slot_head`.
@@ -225,12 +221,6 @@ impl StateMachine {
         working
             .gsr_history
             .insert(base_head.metadata.gsr_count as usize, Value::from(new_gsr))?;
-        working.recent_gsrs.insert(new_gsr, i64::from(block_number));
-
-        let min_block = i64::from(block_number) - MAX_GSR_AGE_BLOCKS;
-        working
-            .recent_gsrs
-            .retain(|_, seen_block| *seen_block >= min_block);
 
         let new_head = CanonicalHead {
             roots: CanonicalRoots {

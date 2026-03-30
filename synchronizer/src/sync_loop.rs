@@ -133,7 +133,7 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
         slot,
         Default::default(),
         Default::default(),
-        node.state_machine.noop_head(head),
+        head,
     );
 
     info!(slot, "No block produced for slot");
