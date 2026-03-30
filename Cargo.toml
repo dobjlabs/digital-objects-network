@@ -15,10 +15,9 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-# Branch `next/2026-03-23`: Includes:
+# Branch `next/2026-03-30.a`: Includes:
 # - bump params wildcards to 9
-# - Support persistent storage in Containers https://github.com/0xPARC/pod2/pull/493
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "d616bc9029df8f8c7125002555536da4f4c5f8f8", default-features = false, features = [
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "364088d316925f59693ed172ead383e4996de410", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
