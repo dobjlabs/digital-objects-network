@@ -16,9 +16,13 @@
 
 use anyhow::ensure;
 use pod2::{
-    frontend::MultiPodError,
+    backends::plonky2::primitives::merkletree::MerkleProof,
+    frontend::{MultiPodError, Operation},
     lang::{Module, MultiOperationError},
-    middleware::{Key, Statement, Value, containers::Dictionary, hash_values},
+    middleware::{
+        Key, NativeOperation, OperationAux, OperationType, Statement, Value,
+        containers::Dictionary, hash_values,
+    },
 };
 use pod2utils::{macros::BuildContext, op, st_custom};
 use txlib::{StateRoot, Tx};
@@ -27,21 +31,69 @@ use txlib::{StateRoot, Tx};
 /// need to supply a StateRoot statement as input to another predicate.
 pub fn prove_state_root(ctx: &mut BuildContext, sr: &StateRoot) -> Statement {
     let tx_nullifiers_hash = hash_values(&[
-        Value::from(sr.transactions.clone()),
-        Value::from(sr.nullifiers.clone()),
+        Value::from(sr.transactions_root),
+        Value::from(sr.nullifiers_root),
     ]);
     let block_number_gsrs_hash =
-        hash_values(&[Value::from(sr.block_number), Value::from(sr.gsrs.clone())]);
+        hash_values(&[Value::from(sr.block_number), Value::from(sr.gsrs_root)]);
     let hash = sr.hash();
     st_custom!(
         ctx,
         StateRoot() = (
-            HashOf(tx_nullifiers_hash, sr.transactions, sr.nullifiers),
-            HashOf(block_number_gsrs_hash, sr.block_number, sr.gsrs),
+            HashOf(tx_nullifiers_hash, sr.transactions_root, sr.nullifiers_root),
+            HashOf(block_number_gsrs_hash, sr.block_number, sr.gsrs_root),
             HashOf(hash, tx_nullifiers_hash, block_number_gsrs_hash)
         )
     )
     .unwrap()
+}
+
+fn prove_set_membership(
+    ctx: &mut BuildContext,
+    root: pod2::middleware::Hash,
+    value: Value,
+    proof: MerkleProof,
+) -> Statement {
+    ctx.builder
+        .priv_op(Operation(
+            OperationType::Native(NativeOperation::SetContainsFromEntries),
+            vec![root.into(), value.into()],
+            OperationAux::MerkleProof(proof),
+        ))
+        .unwrap()
+}
+
+fn prove_array_membership(
+    ctx: &mut BuildContext,
+    root: pod2::middleware::Hash,
+    index: usize,
+    value: Value,
+    proof: MerkleProof,
+) -> Statement {
+    ctx.builder
+        .priv_op(Operation(
+            OperationType::Native(NativeOperation::ArrayContainsFromEntries),
+            vec![root.into(), Value::from(index as i64).into(), value.into()],
+            OperationAux::MerkleProof(proof),
+        ))
+        .unwrap()
+}
+
+#[derive(Clone, Debug)]
+pub struct UnlockWitness {
+    pub tx_membership_proof: MerkleProof,
+    pub prior_state_root_index: usize,
+    pub prior_state_root_proof: MerkleProof,
+}
+
+pub struct UnlockRequest<'a> {
+    pub time_module: &'a Module,
+    pub grounding_gsr: &'a StateRoot,
+    pub tx_before: Dictionary,
+    pub locked_obj: Dictionary,
+    pub tx_when_locked: &'a Tx,
+    pub gsr_when_locked: &'a StateRoot,
+    pub witness: &'a UnlockWitness,
 }
 
 /// Proves `NotExpired(state, grounding_gsr.block_number, tx_before)`:
@@ -201,32 +253,23 @@ pub fn lock_object(
 /// `tx_builder.mutate(ctx, unlocked, locked_obj)` afterwards.
 pub fn unlock_object(
     ctx: &mut BuildContext,
-    time_module: &Module,
-    grounding_gsr: &StateRoot,
-    tx_before: Dictionary,
-    locked_obj: Dictionary,
-    tx_when_locked: &Tx,
-    gsr_when_locked: &StateRoot,
+    request: UnlockRequest<'_>,
 ) -> anyhow::Result<Dictionary> {
+    let UnlockRequest {
+        time_module,
+        grounding_gsr,
+        tx_before,
+        locked_obj,
+        tx_when_locked,
+        gsr_when_locked,
+        witness,
+    } = request;
     let lock_duration = locked_obj
         .get(&Key::from("locked"))?
         .ok_or_else(|| anyhow::anyhow!("locked_obj missing 'locked' field"))?;
     let lock_duration = lock_duration
         .as_int()
         .ok_or_else(|| anyhow::anyhow!("'locked' field is not an integer"))?;
-
-    // Find where gsr_when_locked sits in the current state root's gsrs array.
-    let target = Value::from(gsr_when_locked.hash());
-    let mut idx = None;
-    for entry in grounding_gsr.gsrs.iter() {
-        let (i, v) = entry?;
-        if v == target {
-            idx = Some(i);
-            break;
-        }
-    }
-    let idx =
-        idx.ok_or_else(|| anyhow::anyhow!("gsr_when_locked not found in grounding_gsr.gsrs"))?;
 
     let distance = grounding_gsr.block_number - gsr_when_locked.block_number;
     ensure!(
@@ -241,28 +284,27 @@ pub fn unlock_object(
 
     let st_gsr_when_locked_root = prove_state_root(ctx, gsr_when_locked);
     let st_grounding_gsr_root = prove_state_root(ctx, grounding_gsr);
+    let tx_when_locked_dict = tx_when_locked.dict();
 
-    let st_gsr_has_tx = ctx
-        .builder
-        .priv_op(op!(SetContains(
-            gsr_when_locked.transactions,
-            tx_when_locked.dict()
-        )))
-        .unwrap();
+    let st_gsr_has_tx = prove_set_membership(
+        ctx,
+        gsr_when_locked.transactions_root,
+        Value::from(tx_when_locked_dict.clone()),
+        witness.tx_membership_proof.clone(),
+    );
     let st_tx_in_gsr = st_custom!(
         ctx,
         TxInStateRoot() = (st_gsr_when_locked_root.clone(), st_gsr_has_tx)
     )
     .unwrap();
 
-    let st_gsr_has_prior = ctx
-        .builder
-        .priv_op(op!(ArrayContains(
-            grounding_gsr.gsrs,
-            idx as i64,
-            gsr_when_locked.hash()
-        )))
-        .unwrap();
+    let st_gsr_has_prior = prove_array_membership(
+        ctx,
+        grounding_gsr.gsrs_root,
+        witness.prior_state_root_index,
+        Value::from(gsr_when_locked.hash()),
+        witness.prior_state_root_proof.clone(),
+    );
     let st_prior_gsr = st_custom!(
         ctx,
         PriorStateRootInStateRoot() = (st_grounding_gsr_root.clone(), st_gsr_has_prior)
@@ -305,10 +347,7 @@ pub fn unlock_object(
         .unwrap();
     let st_locked_in_tx = ctx
         .builder
-        .priv_op(op!(SetContains(
-            (&tx_when_locked.dict(), "live"),
-            locked_obj
-        )))
+        .priv_op(op!(SetContains((&tx_when_locked_dict, "live"), locked_obj)))
         .unwrap();
     let st_gt_eq = ctx
         .builder

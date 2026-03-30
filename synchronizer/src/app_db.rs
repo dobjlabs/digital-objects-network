@@ -1,167 +1,204 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
+use std::{fmt, sync::Arc};
+
+use anyhow::{anyhow, Context, Result};
+use pod2::{
+    backends::plonky2::primitives::merkletree::{self, MerkleProof},
+    middleware::{
+        containers::{Array, Set},
+        db::DB as PodDb,
+        Hash, RawValue, Value, EMPTY_HASH, F,
+    },
 };
+use rocksdb::{Options, TransactionDB, TransactionDBOptions};
 
-use anyhow::{Context, Result};
-use hex::{FromHex, ToHex};
-use pod2::middleware::Hash;
-use rocksdb::{IteratorMode, Options, WriteBatch, DB};
+use crate::head::CanonicalRoots;
 
-const TX_PREFIX: &[u8] = b"tx:";
-const NULLIFIER_PREFIX: &[u8] = b"nullifier:";
-const GSR_PREFIX: &[u8] = b"global_state_root:";
-
-#[derive(Debug)]
-pub struct DerivedState {
-    pub transactions: HashSet<Hash>,
-    pub nullifiers: HashSet<Hash>,
-    pub global_state_roots: Vec<Hash>,
-    pub gsr_block_numbers: HashMap<Hash, i64>,
+fn node_key(hash: Hash) -> Vec<u8> {
+    let mut k = Vec::with_capacity(34);
+    k.extend_from_slice(b"n/");
+    k.extend_from_slice(&RawValue::from(hash).to_bytes());
+    k
 }
 
-const PRESENT_VALUE: &[u8] = &[1];
+fn value_key(raw: RawValue) -> Vec<u8> {
+    let mut k = Vec::with_capacity(34);
+    k.extend_from_slice(b"v/");
+    k.extend_from_slice(&raw.to_bytes());
+    k
+}
 
+#[derive(Clone)]
 pub struct AppDb {
-    db: Arc<DB>,
+    db: Arc<TransactionDB>,
+}
+
+impl fmt::Debug for AppDb {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "AppDb(path: {:?})", self.db.path())
+    }
 }
 
 impl AppDb {
     pub fn connect(db_path: &str) -> Result<Self> {
-        let mut opts = Options::default();
-        opts.create_if_missing(true);
-        let db = DB::open(&opts, db_path)
+        let mut options = Options::default();
+        options.create_if_missing(true);
+        let txn_options = TransactionDBOptions::default();
+        let inner = TransactionDB::open(&options, &txn_options, db_path)
+            .map_err(|err| anyhow!("{err}"))
             .with_context(|| format!("Failed to open RocksDB at path {db_path}"))?;
-        Ok(Self { db: Arc::new(db) })
-    }
-
-    pub fn load_state(&self) -> Result<DerivedState> {
-        let mut transactions = HashSet::new();
-        let mut nullifiers = HashSet::new();
-        let mut gsr_entries: Vec<(u32, Hash)> = Vec::new();
-
-        for entry in self.db.iterator(IteratorMode::Start) {
-            let (key, value) = entry?;
-            if key.starts_with(TX_PREFIX) {
-                let hash_bytes = &key[TX_PREFIX.len()..];
-                if let Ok(hash) = db_bytes_to_hash(hash_bytes) {
-                    transactions.insert(hash);
-                }
-            } else if key.starts_with(NULLIFIER_PREFIX) {
-                let hash_bytes = &key[NULLIFIER_PREFIX.len()..];
-                if let Ok(hash) = db_bytes_to_hash(hash_bytes) {
-                    nullifiers.insert(hash);
-                }
-            } else if key.starts_with(GSR_PREFIX) {
-                if let (Some(block_number), Some(hash)) =
-                    (gsr_key_block(&key), decode_gsr_value(&value))
-                {
-                    gsr_entries.push((block_number, hash));
-                }
-            }
-        }
-
-        gsr_entries.sort_by_key(|(block, _)| *block);
-        let gsr_block_numbers = gsr_entries.iter().map(|&(b, h)| (h, b as i64)).collect();
-        let global_state_roots = gsr_entries.into_iter().map(|(_, h)| h).collect();
-
-        Ok(DerivedState {
-            transactions,
-            nullifiers,
-            global_state_roots,
-            gsr_block_numbers,
+        Ok(Self {
+            db: Arc::new(inner),
         })
     }
 
-    pub fn delete_slot_delta(
+    pub fn open_transactions(&self, root: Hash) -> Result<Set> {
+        Ok(Set::from_db(root, self.db_box())?)
+    }
+
+    pub fn open_nullifiers(&self, root: Hash) -> Result<Set> {
+        Ok(Set::from_db(root, self.db_box())?)
+    }
+
+    pub fn open_gsr_history(&self, root: Hash) -> Result<Array> {
+        Ok(Array::from_db(root, self.db_box())?)
+    }
+
+    pub fn prove_tx(&self, roots: &CanonicalRoots, tx_hash: Hash) -> Result<(bool, MerkleProof)> {
+        let txs = self.open_transactions(roots.transactions)?;
+        let value = Value::from(tx_hash);
+        match txs.prove(&value) {
+            Ok(proof) => Ok((true, proof)),
+            Err(_) => Ok((false, txs.prove_nonexistence(&value)?)),
+        }
+    }
+
+    pub fn tx_exists_batch(&self, roots: &CanonicalRoots, tx_hashes: &[Hash]) -> Result<Vec<bool>> {
+        let txs = self.open_transactions(roots.transactions)?;
+        tx_hashes
+            .iter()
+            .map(|hash| {
+                txs.contains(&Value::from(*hash))
+                    .map_err(|err| anyhow!("{err}"))
+            })
+            .collect()
+    }
+
+    pub fn nullifier_exists_batch(
         &self,
-        tx_hashes: &[Hash],
+        roots: &CanonicalRoots,
         nullifiers: &[Hash],
-        gsr_block_numbers: &[u32],
-    ) -> Result<()> {
-        let mut batch = WriteBatch::default();
-        for tx in tx_hashes {
-            batch.delete(tx_key(*tx));
-        }
-        for nullifier in nullifiers {
-            batch.delete(nullifier_key(*nullifier));
-        }
-        for block_number in gsr_block_numbers {
-            batch.delete(gsr_key(*block_number));
-        }
-        self.db.write(batch)?;
-        Ok(())
+    ) -> Result<Vec<bool>> {
+        let nullifier_set = self.open_nullifiers(roots.nullifiers)?;
+        nullifiers
+            .iter()
+            .map(|hash| {
+                nullifier_set
+                    .contains(&Value::from(*hash))
+                    .map_err(|err| anyhow!("{err}"))
+            })
+            .collect()
     }
 
-    pub fn apply_delta(
-        &self,
-        tx_hashes: &[Hash],
-        nullifiers: &[Hash],
-        gsr_block_numbers: &[u32],
-        gsr_hashes: &[Hash],
-    ) -> Result<()> {
-        let mut batch = WriteBatch::default();
-
-        for tx in tx_hashes {
-            batch.put(tx_key(*tx), PRESENT_VALUE);
-        }
-
-        for nullifier in nullifiers {
-            batch.put(nullifier_key(*nullifier), PRESENT_VALUE);
-        }
-
-        for (block_number, gsr) in gsr_block_numbers.iter().zip(gsr_hashes.iter()) {
-            batch.put(gsr_key(*block_number), encode_gsr_value(*gsr));
-        }
-
-        self.db.write(batch)?;
-        Ok(())
+    fn db_box(&self) -> Box<dyn PodDb> {
+        Box::new(self.clone())
     }
 }
 
-fn tx_key(hash: Hash) -> Vec<u8> {
-    [TX_PREFIX, &hash_to_db_bytes(hash)].concat()
-}
+impl merkletree::db::DB for AppDb {
+    fn load_node(&self, hash: Hash) -> Result<Option<merkletree::Node>> {
+        if hash == EMPTY_HASH {
+            return Ok(Some(merkletree::Node::Intermediate(
+                merkletree::Intermediate::new(EMPTY_HASH, EMPTY_HASH),
+            )));
+        }
 
-fn nullifier_key(hash: Hash) -> Vec<u8> {
-    [NULLIFIER_PREFIX, &hash_to_db_bytes(hash)].concat()
-}
-
-fn gsr_key(block_number: u32) -> Vec<u8> {
-    [GSR_PREFIX, &block_number.to_be_bytes()].concat()
-}
-
-fn gsr_key_block(key: &[u8]) -> Option<u32> {
-    let raw = key.strip_prefix(GSR_PREFIX)?;
-    let arr: [u8; 4] = raw.try_into().ok()?;
-    Some(u32::from_be_bytes(arr))
-}
-
-fn encode_gsr_value(hash: Hash) -> Vec<u8> {
-    hash_to_db_bytes(hash)
-}
-
-fn decode_gsr_value(bytes: &[u8]) -> Option<Hash> {
-    if bytes.len() != 32 {
-        return None;
+        match self.db.get(node_key(hash))? {
+            None => Ok(None),
+            Some(bytes) => Ok(Some(merkletree::Node::decode(bytes.as_ref())?)),
+        }
     }
-    db_bytes_to_hash(bytes).ok()
+
+    fn store_node(&mut self, node: merkletree::Node) -> Result<()> {
+        self.db
+            .put(node_key(node.hash()), node.encode()?)
+            .map_err(|err| anyhow!("rocksdb transaction put failed: {err}"))
+    }
+}
+
+impl PodDb for AppDb {
+    fn load_value(&self, raw: RawValue) -> anyhow::Result<Option<Value>> {
+        match self.db.get(value_key(raw))? {
+            None => Ok(None),
+            Some(bytes) => Ok(Some({
+                if bytes.is_empty() {
+                    Value::from(raw)
+                } else {
+                    Value::from_bytes(bytes.as_ref(), self.clone_box())?
+                }
+            })),
+        }
+    }
+
+    fn store_value(&mut self, value: Value) -> anyhow::Result<()> {
+        let value_key = value_key(value.raw());
+        let tx = self.db.transaction();
+        if let Some(old_value_bytes) = tx.get_for_update(&value_key, true)? {
+            let is_raw = old_value_bytes.is_empty();
+            // If we had a non-RawValue stored don't overwrite it (specially not with a
+            // RawValue).   Also skip redundant RawValue overwrite.
+            if !is_raw || value.is_raw() {
+                return Ok(());
+            }
+        }
+        let value_bytes = if value.is_raw() {
+            // For RawValue we store an empty vector because it's a duplicate of the key.
+            // This way we can easily check for RawValue without decoding.
+            vec![]
+        } else {
+            Value::to_bytes(&value)
+        };
+        tx.put(value_key, value_bytes)?;
+        Ok(tx.commit()?)
+    }
+
+    fn is_persistent(&self) -> bool {
+        true
+    }
+
+    fn clone_box(&self) -> Box<dyn PodDb> {
+        Box::new(self.clone())
+    }
 }
 
 pub fn hash_to_db_bytes(hash: Hash) -> Vec<u8> {
-    let hex_str: String = hash.encode_hex();
-    hex::decode(hex_str).expect("ToHex output is always valid hex")
+    RawValue::from(hash).to_bytes().to_vec()
 }
 
 pub fn db_bytes_to_hash(bytes: &[u8]) -> Result<Hash> {
-    Hash::from_hex(hex::encode(bytes)).context("Failed to deserialize Hash from db bytes")
+    let limbs: [[u8; 8]; 4] = bytes
+        .chunks_exact(8)
+        .map(|chunk| {
+            chunk
+                .try_into()
+                .map_err(|_| anyhow!("invalid hash limb length"))
+        })
+        .collect::<Result<Vec<[u8; 8]>>>()?
+        .try_into()
+        .map_err(|_| anyhow!("invalid hash byte length"))?;
+
+    Ok(Hash(limbs.map(|limb| F(u64::from_le_bytes(limb)))))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pod2::middleware::{hash_values, Value, EMPTY_HASH};
+    use hex::FromHex;
+    use pod2::middleware::{Value, EMPTY_HASH};
     use tempfile::TempDir;
+
+    fn test_hash(byte: u8) -> Hash {
+        Hash::from_hex(hex::encode([byte; 32])).expect("valid test hash")
+    }
 
     fn open_test_db() -> (AppDb, TempDir) {
         let dir = TempDir::new().expect("tempdir");
@@ -170,62 +207,22 @@ mod tests {
     }
 
     #[test]
-    fn test_persist_and_load_transaction() {
+    fn test_persistent_tx_membership() {
         let (app_db, _dir) = open_test_db();
-        let hash = EMPTY_HASH;
-        app_db.apply_delta(&[hash], &[], &[], &[]).unwrap();
+        let mut txs = app_db.open_transactions(EMPTY_HASH).unwrap();
+        let tx_hash = test_hash(9);
+        txs.insert(&Value::from(tx_hash)).unwrap();
 
-        let state = app_db.load_state().unwrap();
-        assert!(state.transactions.contains(&hash));
-    }
+        let roots = CanonicalRoots {
+            transactions: txs.commitment(),
+            ..CanonicalRoots::empty()
+        };
 
-    #[test]
-    fn test_persist_and_load_nullifier() {
-        let (app_db, _dir) = open_test_db();
-        let hash = EMPTY_HASH;
-        app_db.apply_delta(&[], &[hash], &[], &[]).unwrap();
-
-        let state = app_db.load_state().unwrap();
-        assert!(state.nullifiers.contains(&hash));
-    }
-
-    #[test]
-    fn test_persist_and_load_global_state_roots_ordered() {
-        let (app_db, _dir) = open_test_db();
-
-        let h0 = hash_values(&[Value::from(0)]);
-        let h1 = hash_values(&[Value::from(1)]);
-        let h2 = hash_values(&[Value::from(2)]);
-
-        app_db.apply_delta(&[], &[], &[10], &[h0]).unwrap();
-        app_db.apply_delta(&[], &[], &[5], &[h1]).unwrap();
-        app_db.apply_delta(&[], &[], &[20], &[h2]).unwrap();
-
-        let state = app_db.load_state().unwrap();
-        assert_eq!(state.global_state_roots, vec![h1, h0, h2]);
-    }
-
-    #[test]
-    fn test_delete_slot_delta_removes_all_slot_keys() {
-        let (app_db, _dir) = open_test_db();
-        let tx = hash_values(&[Value::from(10)]);
-        let nullifier = hash_values(&[Value::from(11)]);
-        let gsr = hash_values(&[Value::from(12)]);
-
-        app_db
-            .apply_delta(&[tx], &[nullifier], &[700], &[gsr])
-            .unwrap();
-        let before = app_db.load_state().unwrap();
-        assert!(before.transactions.contains(&tx));
-        assert!(before.nullifiers.contains(&nullifier));
-        assert!(before.global_state_roots.contains(&gsr));
-
-        app_db
-            .delete_slot_delta(&[tx], &[nullifier], &[700])
-            .unwrap();
-        let after = app_db.load_state().unwrap();
-        assert!(!after.transactions.contains(&tx));
-        assert!(!after.nullifiers.contains(&nullifier));
-        assert!(!after.global_state_roots.contains(&gsr));
+        assert_eq!(
+            app_db.tx_exists_batch(&roots, &[tx_hash]).unwrap(),
+            vec![true]
+        );
+        let (present, _proof) = app_db.prove_tx(&roots, tx_hash).unwrap();
+        assert!(present);
     }
 }
