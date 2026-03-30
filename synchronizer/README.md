@@ -75,14 +75,13 @@ Important: RocksDB is not the source of canonical truth. It is an append-only ba
 
 Postgres stores the canonical synchronization state:
 
-- `sync_cursor`
-  - single-row progress cursor (`last_processed_slot`, `last_processed_block_number`)
 - `canonical_slots`
   - one row per canonical slot
   - includes `block_root`, `parent_root`, `execution_block_number`, `current_gsr`, `is_empty`
   - includes normalized `head_*` columns for the canonical `CanonicalHead` at that slot
 
-Postgres is the sole source of canonical `CanonicalHead`.
+Postgres is the sole source of canonical `CanonicalHead`. The highest committed
+`canonical_slots.slot` is the current canonical head.
 
 ## Slot derivation rules
 
@@ -113,7 +112,6 @@ Important: GSR history advances for each canonical processed slot, even if that 
 The synchronizer derives candidate state by mutating persistent containers in RocksDB. Once derivation succeeds, canonical publication is a single Postgres transaction:
 
 1. Insert or update the canonical slot row, including the normalized `head_*` columns
-2. Advance `sync_cursor` to that slot
 
 Because the Merkle nodes were already materialized during derivation, there is no second canonical write to RocksDB.
 
@@ -128,7 +126,6 @@ On reorg:
 
 - the synchronizer finds the last common ancestor slot
 - deletes `canonical_slots` rows after the keep-point
-- rewinds `sync_cursor` in the same Postgres transaction
 - resumes syncing from the first divergent slot
 
 Reorg rollback does not modify RocksDB. The surviving Postgres `CanonicalHead` determines which Merkle roots are canonical after rewind.

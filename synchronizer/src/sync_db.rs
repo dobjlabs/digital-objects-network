@@ -12,7 +12,7 @@ use crate::{
     head::{CanonicalHead, CanonicalRoots, HeadMetadata},
 };
 
-/// Current canonical head plus cursor metadata loaded from Postgres.
+/// Current canonical head plus progress metadata loaded from Postgres.
 #[derive(Debug, Clone, Copy)]
 pub struct CurrentSnapshot {
     pub head: CanonicalHead,
@@ -57,18 +57,9 @@ impl SyncDb {
     /// Create the Postgres schema used by the synchronizer control plane.
     ///
     /// `canonical_slots` stores per-slot metadata plus the committed canonical roots and metadata
-    /// as regular SQL columns.
-    /// `sync_cursor` points at the latest canonical slot that should be treated as current.
+    /// as regular SQL columns. The highest committed slot is the current canonical head.
     async fn bootstrap(&self) -> Result<()> {
         let statements = [
-            r#"
-            CREATE TABLE IF NOT EXISTS sync_cursor (
-                id SMALLINT PRIMARY KEY CHECK (id = 1),
-                last_processed_slot INTEGER NULL,
-                last_processed_block_number INTEGER NULL,
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-            )
-            "#,
             r#"
             CREATE TABLE IF NOT EXISTS canonical_slots (
                 slot INTEGER PRIMARY KEY,
@@ -108,29 +99,18 @@ impl SyncDb {
         Ok(())
     }
 
-    /// Ensure the single sync-cursor row exists and return the next slot the node should process.
+    /// Return the next slot the node should process.
     ///
-    /// On first run, starts from `initial_start` when provided, otherwise current head slot.
+    /// On first run, starts from `initial_start` when provided, otherwise current beacon head
+    /// slot. Once slots have been committed, processing resumes from the highest committed slot
+    /// plus one.
     pub async fn ensure_cursor_and_get_start_slot(
         &self,
         head_slot: u32,
         initial_start: Option<u32>,
     ) -> Result<u32> {
         let bootstrap_start_slot = initial_start.unwrap_or(head_slot);
-        sqlx::query(
-            r#"
-            INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number)
-            VALUES (1, NULL, NULL)
-            ON CONFLICT (id) DO NOTHING
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        let row = sqlx::query("SELECT last_processed_slot FROM sync_cursor WHERE id = 1")
-            .fetch_one(&self.pool)
-            .await?;
-        let stored_last: Option<i32> = row.get("last_processed_slot");
+        let stored_last = self.last_processed_slot().await?;
         Ok(stored_last
             .map(|slot| slot as u32 + 1)
             .unwrap_or(bootstrap_start_slot))
@@ -138,13 +118,17 @@ impl SyncDb {
 
     /// Return the last canonical slot fully committed by the synchronizer.
     pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
-        let row = sqlx::query("SELECT last_processed_slot FROM sync_cursor WHERE id = 1")
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.and_then(|r| {
-            r.get::<Option<i32>, _>("last_processed_slot")
-                .map(|s| s as u32)
-        }))
+        let row = sqlx::query(
+            r#"
+            SELECT slot
+            FROM canonical_slots
+            ORDER BY slot DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.get::<i32, _>("slot") as u32))
     }
 
     /// Return the current canonical head without sync-progress metadata.
@@ -156,20 +140,20 @@ impl SyncDb {
     pub async fn current_snapshot(&self) -> Result<CurrentSnapshot> {
         let row = sqlx::query(
             r#"
-            SELECT c.last_processed_slot,
-                   c.last_processed_block_number,
-                   s.head_transactions_root,
-                   s.head_nullifiers_root,
-                   s.head_state_root_gsrs_root,
-                   s.head_gsr_history_root,
-                   s.head_current_gsr,
-                   s.head_current_block_number,
-                   s.head_tx_count,
-                   s.head_nullifier_count,
-                   s.head_gsr_count
-            FROM sync_cursor c
-            LEFT JOIN canonical_slots s ON s.slot = c.last_processed_slot
-            WHERE c.id = 1
+            SELECT slot,
+                   execution_block_number,
+                   head_transactions_root,
+                   head_nullifiers_root,
+                   head_state_root_gsrs_root,
+                   head_gsr_history_root,
+                   head_current_gsr,
+                   head_current_block_number,
+                   head_tx_count,
+                   head_nullifier_count,
+                   head_gsr_count
+            FROM canonical_slots
+            ORDER BY slot DESC
+            LIMIT 1
             "#,
         )
         .fetch_optional(&self.pool)
@@ -183,19 +167,15 @@ impl SyncDb {
             });
         };
 
-        let last_processed_slot = row
-            .get::<Option<i32>, _>("last_processed_slot")
-            .map(|slot| slot as u32);
+        let last_processed_slot = Some(row.get::<i32, _>("slot") as u32);
         let last_processed_block_number = row
-            .get::<Option<i32>, _>("last_processed_block_number")
+            .get::<Option<i32>, _>("execution_block_number")
             .map(|block_number| block_number as u32);
 
-        let head = match last_processed_slot {
-            None => CanonicalHead::empty(),
-            Some(slot) => decode_head_row(&row).with_context(|| {
-                format!("sync_cursor points at slot {slot}, but canonical_slots has no head data")
-            })?,
-        };
+        let slot = last_processed_slot.expect("row implies slot exists");
+        let head = decode_head_row(&row).with_context(|| {
+            format!("canonical_slots row for slot {slot} had invalid head data")
+        })?;
 
         Ok(CurrentSnapshot {
             head,
@@ -251,7 +231,7 @@ impl SyncDb {
         }
     }
 
-    /// Commit one canonical slot and advance the sync cursor in the same Postgres transaction.
+    /// Commit one canonical slot as the new highest canonical slot.
     pub async fn commit_slot(
         &self,
         slot: &CommittedSlotRecord,
@@ -315,26 +295,11 @@ impl SyncDb {
         .execute(&mut *tx)
         .await?;
 
-        sqlx::query(
-            r#"
-            INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number)
-            VALUES (1, $1, $2)
-            ON CONFLICT (id) DO UPDATE
-            SET last_processed_slot = EXCLUDED.last_processed_slot,
-                last_processed_block_number = EXCLUDED.last_processed_block_number,
-                updated_at = now()
-            "#,
-        )
-        .bind(slot.slot as i32)
-        .bind(slot.block_number.map(|v| v as i32))
-        .execute(&mut *tx)
-        .await?;
-
         tx.commit().await?;
         Ok(())
     }
 
-    /// Delete canonical slots after `keep_slot` and rewind the sync cursor in one transaction.
+    /// Delete canonical slots after `keep_slot`, leaving the highest remaining row as current.
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -342,31 +307,6 @@ impl SyncDb {
             .bind(keep_slot as i32)
             .execute(&mut *tx)
             .await?;
-
-        sqlx::query(
-            r#"
-            WITH cursor_target AS (
-                SELECT slot, execution_block_number
-                FROM canonical_slots
-                WHERE slot <= $1
-                ORDER BY slot DESC
-                LIMIT 1
-            )
-            INSERT INTO sync_cursor (id, last_processed_slot, last_processed_block_number)
-            VALUES (
-                1,
-                (SELECT slot FROM cursor_target),
-                (SELECT execution_block_number FROM cursor_target)
-            )
-            ON CONFLICT (id) DO UPDATE
-            SET last_processed_slot = EXCLUDED.last_processed_slot,
-                last_processed_block_number = EXCLUDED.last_processed_block_number,
-                updated_at = now()
-            "#,
-        )
-        .bind(keep_slot as i32)
-        .execute(&mut *tx)
-        .await?;
 
         tx.commit().await?;
         Ok(())
@@ -540,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires local postgres"]
-    async fn test_commit_slot_persists_head_and_cursor() -> Result<()> {
+    async fn test_commit_slot_persists_head_and_latest_slot() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let head = unique_head(7, 100);
         let slot = CommittedSlotRecord {
@@ -607,7 +547,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires local postgres"]
-    async fn test_rollback_rewinds_cursor_and_head() -> Result<()> {
+    async fn test_rollback_rewinds_latest_slot_and_head() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let h1 = unique_head(1, 10);
         sync_db
