@@ -9,10 +9,10 @@ pub struct HealthResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Cursor progress returned by the synchronizer API.
+/// Synchronization progress returned by the synchronizer API.
 pub struct SyncProgressResponse {
     /// Last canonical slot fully committed by the synchronizer.
-    pub last_processed_slot: Option<u32>,
+    pub last_processed_slot: u32,
     /// Execution block number associated with the last processed slot, if any.
     pub last_processed_block_number: Option<u32>,
 }
@@ -21,7 +21,7 @@ pub struct SyncProgressResponse {
 /// Summary of the current canonical head exposed to clients.
 pub struct StateHeadResponse {
     /// Last canonical slot fully committed by the synchronizer.
-    pub last_processed_slot: Option<u32>,
+    pub last_processed_slot: u32,
     /// Execution block number associated with the last processed slot, if any.
     pub last_processed_block_number: Option<u32>,
     /// Current canonical global state root encoded as hex, if one exists.
@@ -56,7 +56,7 @@ pub struct TxContainsEntry {
 /// Batch transaction-membership response.
 pub struct TxContainsResponse {
     /// Last canonical slot fully committed by the synchronizer.
-    pub last_processed_slot: Option<u32>,
+    pub last_processed_slot: u32,
     /// Current canonical global state root encoded as hex, if one exists.
     pub current_gsr: Option<String>,
     /// Per-hash membership results.
@@ -83,7 +83,7 @@ pub struct NullifierContainsEntry {
 /// Batch nullifier-membership response.
 pub struct NullifierContainsResponse {
     /// Last canonical slot fully committed by the synchronizer.
-    pub last_processed_slot: Option<u32>,
+    pub last_processed_slot: u32,
     /// Current canonical global state root encoded as hex, if one exists.
     pub current_gsr: Option<String>,
     /// Per-hash membership results.
@@ -103,7 +103,7 @@ pub struct MembershipRequest {
 /// Combined batch membership response anchored to one canonical head.
 pub struct MembershipResponse {
     /// Last canonical slot fully committed by the synchronizer.
-    pub last_processed_slot: Option<u32>,
+    pub last_processed_slot: u32,
     /// Current canonical global state root encoded as hex, if one exists.
     pub current_gsr: Option<String>,
     /// Per-transaction membership results.
@@ -120,7 +120,7 @@ pub struct TxStatusResponse {
     /// Whether the hash is present in the canonical transactions set.
     pub present: bool,
     /// Last canonical slot fully committed by the synchronizer.
-    pub last_processed_slot: Option<u32>,
+    pub last_processed_slot: u32,
     /// Current canonical global state root encoded as hex, if one exists.
     pub current_gsr: Option<String>,
 }

@@ -16,7 +16,7 @@ use crate::{
 #[derive(Debug, Clone, Copy)]
 pub struct CurrentSnapshot {
     pub head: CanonicalHead,
-    pub last_processed_slot: Option<u32>,
+    pub last_processed_slot: u32,
     pub last_processed_block_number: Option<u32>,
 }
 
@@ -101,23 +101,38 @@ impl SyncDb {
 
     /// Return the next slot the node should process.
     ///
-    /// On first run, starts from `initial_start` when provided, otherwise current beacon head
-    /// slot. Once slots have been committed, processing resumes from the highest committed slot
-    /// plus one.
+    /// On first initialization, inserts the provided bootstrap canonical row and returns the slot
+    /// immediately after it.
     pub async fn ensure_cursor_and_get_start_slot(
         &self,
-        head_slot: u32,
-        initial_start: Option<u32>,
+        bootstrap_slot: CommittedSlotRecord,
     ) -> Result<u32> {
-        let bootstrap_start_slot = initial_start.unwrap_or(head_slot);
-        let stored_last = self.last_processed_slot().await?;
-        Ok(stored_last
-            .map(|slot| slot as u32 + 1)
-            .unwrap_or(bootstrap_start_slot))
+        let latest_slot = sqlx::query(
+            r#"
+            SELECT slot
+            FROM canonical_slots
+            ORDER BY slot DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|row| row.get::<i32, _>("slot") as u32);
+
+        if let Some(stored_last) = latest_slot {
+            return Ok(stored_last + 1);
+        }
+
+        self.commit_slot(&bootstrap_slot, &CanonicalHead::empty())
+            .await?;
+        bootstrap_slot
+            .slot
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("bootstrap slot overflow"))
     }
 
     /// Return the last canonical slot fully committed by the synchronizer.
-    pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
+    pub async fn last_processed_slot(&self) -> Result<u32> {
         let row = sqlx::query(
             r#"
             SELECT slot
@@ -128,7 +143,8 @@ impl SyncDb {
         )
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|r| r.get::<i32, _>("slot") as u32))
+        row.map(|r| r.get::<i32, _>("slot") as u32)
+            .ok_or_else(|| anyhow!("sync metadata not initialized"))
     }
 
     /// Return the current canonical head without sync-progress metadata.
@@ -159,22 +175,15 @@ impl SyncDb {
         .fetch_optional(&self.pool)
         .await?;
 
-        let Some(row) = row else {
-            return Ok(CurrentSnapshot {
-                head: CanonicalHead::empty(),
-                last_processed_slot: None,
-                last_processed_block_number: None,
-            });
-        };
+        let row = row.ok_or_else(|| anyhow!("sync metadata not initialized"))?;
 
-        let last_processed_slot = Some(row.get::<i32, _>("slot") as u32);
+        let last_processed_slot = row.get::<i32, _>("slot") as u32;
         let last_processed_block_number = row
             .get::<Option<i32>, _>("execution_block_number")
             .map(|block_number| block_number as u32);
 
-        let slot = last_processed_slot.expect("row implies slot exists");
         let head = decode_head_row(&row).with_context(|| {
-            format!("canonical_slots row for slot {slot} had invalid head data")
+            format!("canonical_slots row for slot {last_processed_slot} had invalid head data")
         })?;
 
         Ok(CurrentSnapshot {
@@ -454,11 +463,23 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires local postgres"]
-    async fn test_current_snapshot_defaults_to_empty_head() -> Result<()> {
+    async fn test_bootstrap_inserts_bootstrap_row() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let bootstrap_slot = CommittedSlotRecord {
+            slot: 4,
+            block_root: None,
+            parent_root: None,
+            block_number: None,
+            current_gsr: None,
+            is_empty: true,
+        };
+        let start_slot = sync_db
+            .ensure_cursor_and_get_start_slot(bootstrap_slot)
+            .await?;
+        assert_eq!(start_slot, 5);
         let snapshot = sync_db.current_snapshot().await?;
         assert_eq!(snapshot.head, CanonicalHead::empty());
-        assert_eq!(snapshot.last_processed_slot, None);
+        assert_eq!(snapshot.last_processed_slot, 4);
         assert_eq!(snapshot.last_processed_block_number, None);
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -482,7 +503,7 @@ mod tests {
 
         let snapshot = sync_db.current_snapshot().await?;
         assert_eq!(snapshot.head, head);
-        assert_eq!(snapshot.last_processed_slot, Some(10));
+        assert_eq!(snapshot.last_processed_slot, 10);
         assert_eq!(snapshot.last_processed_block_number, Some(7));
         assert_eq!(sync_db.head_for_slot(10).await?, Some(head));
 
@@ -597,7 +618,7 @@ mod tests {
 
         let snapshot = sync_db.current_snapshot().await?;
         assert_eq!(snapshot.head, h1);
-        assert_eq!(snapshot.last_processed_slot, Some(1));
+        assert_eq!(snapshot.last_processed_slot, 1);
         assert_eq!(sync_db.head_for_slot(2).await?, None);
 
         drop_db(&db_name, &admin_url).await?;

@@ -136,7 +136,7 @@ impl Node {
         })
     }
 
-    pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
+    pub async fn last_processed_slot(&self) -> Result<u32> {
         self.sync_db.last_processed_slot().await
     }
 
@@ -148,7 +148,7 @@ impl Node {
         self.sync_db.current_head().await
     }
 
-    /// Rewind to `keep_slot` by deleting later canonical slot rows and rewinding the cursor.
+    /// Rewind to `keep_slot` by deleting later canonical slot rows.
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
         self.sync_db.rollback_to_slot(keep_slot).await
     }

@@ -8,6 +8,7 @@ use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::node::{Node, ProcessedSlot};
+use crate::sync_db::CommittedSlotRecord;
 
 const HEAD_CHECK_INTERVAL: Duration = Duration::from_secs(12);
 
@@ -33,9 +34,9 @@ struct HeadTracker {
     events: Option<EventSource>,
 }
 
-struct SyncStart {
-    next_slot: u32,
-    head_tracker: HeadTracker,
+pub(crate) struct SyncStart {
+    pub(crate) next_slot: u32,
+    pub(crate) head: BlockHeader,
 }
 
 enum MissingSlotAction {
@@ -48,12 +49,13 @@ pub async fn run_sync_loop(
     node: Arc<Node>,
     mut shutdown_rx: watch::Receiver<bool>,
     sync_delay: Duration,
-    initial_start_slot: Option<u32>,
+    sync_start: SyncStart,
 ) -> Result<()> {
-    let SyncStart {
-        mut next_slot,
-        mut head_tracker,
-    } = initialize_sync(&node, initial_start_slot).await?;
+    let mut next_slot = sync_start.next_slot;
+    let mut head_tracker = HeadTracker {
+        head: sync_start.head,
+        events: None,
+    };
 
     loop {
         if *shutdown_rx.borrow() {
@@ -124,7 +126,8 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
         ));
     }
 
-    // Empty slots are valid on beacon; commit an empty processed slot so cursor stays contiguous.
+    // Empty slots are valid on beacon; commit an empty processed slot so canonical slot history
+    // stays contiguous.
     let head = node.current_head().await?;
     let processed = ProcessedSlot::empty(
         slot,
@@ -148,9 +151,7 @@ async fn handle_reorgs_for_present_slot(
 ) -> Result<Option<u32>> {
     let last_processed_slot = node.last_processed_slot().await?;
     let stored_root_for_slot = node.slot_root(slot).await?;
-    if last_processed_slot.is_some_and(|last_slot| last_slot >= slot)
-        && stored_root_for_slot.is_none()
-    {
+    if last_processed_slot >= slot && stored_root_for_slot.is_none() {
         // A previously empty canonical slot becoming non-empty implies canonical history changed.
         warn!(
             slot,
@@ -222,7 +223,10 @@ async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
     ))
 }
 
-async fn initialize_sync(node: &Node, initial_start_slot: Option<u32>) -> Result<SyncStart> {
+pub(crate) async fn initialize_sync(
+    node: &Node,
+    initial_start_slot: Option<u32>,
+) -> Result<SyncStart> {
     let spec = node.beacon_cli.get_spec().await?;
     info!(?spec, "Loaded beacon spec");
 
@@ -233,16 +237,83 @@ async fn initialize_sync(node: &Node, initial_start_slot: Option<u32>) -> Result
         .expect("head is not None");
     info!(head_slot = head.slot, head_root = ?head.root, "Fetched initial beacon head");
 
+    let bootstrap_start_slot = initial_start_slot.unwrap_or(head.slot);
+    let bootstrap_slot = load_bootstrap_slot_record(node, &head, bootstrap_start_slot).await?;
+
     let start_slot = node
         .sync_db
-        .ensure_cursor_and_get_start_slot(head.slot, initial_start_slot)
+        .ensure_cursor_and_get_start_slot(bootstrap_slot)
         .await?;
 
-    info!(start_slot, head_slot = head.slot, "Initialized sync cursor");
+    info!(
+        start_slot,
+        head_slot = head.slot,
+        "Initialized sync start slot"
+    );
 
     Ok(SyncStart {
         next_slot: start_slot,
-        head_tracker: HeadTracker { head, events: None },
+        head,
+    })
+}
+
+async fn load_bootstrap_slot_record(
+    node: &Node,
+    current_head: &BlockHeader,
+    start_slot: u32,
+) -> Result<CommittedSlotRecord> {
+    let bootstrap_slot = start_slot.checked_sub(1).ok_or_else(|| {
+        anyhow!("bootstrap start slot must be > 0 to insert initial canonical row")
+    })?;
+
+    if bootstrap_slot > current_head.slot {
+        return Err(anyhow!(
+            "INITIAL_START_SLOT {start_slot} is ahead of current beacon head {}; cannot bootstrap slot {}",
+            current_head.slot,
+            bootstrap_slot
+        ));
+    }
+
+    let Some(header) = node
+        .beacon_cli
+        .get_block_header(BlockId::Slot(bootstrap_slot))
+        .await?
+    else {
+        return Ok(CommittedSlotRecord {
+            slot: bootstrap_slot,
+            block_root: None,
+            parent_root: None,
+            block_number: None,
+            current_gsr: None,
+            is_empty: true,
+        });
+    };
+
+    let block = node
+        .beacon_cli
+        .get_block(BlockId::Hash(header.root))
+        .await?
+        .ok_or_else(|| {
+            anyhow!(
+                "Beacon header exists for bootstrap slot {bootstrap_slot}, but full beacon block {} was not found",
+                header.root
+            )
+        })?;
+
+    let execution_payload = block.execution_payload.as_ref().ok_or_else(|| {
+        anyhow!(
+            "Beacon block {} for bootstrap slot {bootstrap_slot} had no execution payload",
+            header.root
+        )
+    })?;
+
+    Ok(CommittedSlotRecord {
+        slot: bootstrap_slot,
+        block_root: Some(header.root),
+        parent_root: Some(block.parent_root),
+        block_number: Some(execution_payload.block_number),
+        current_gsr: None,
+        is_empty: false,
     })
 }
 

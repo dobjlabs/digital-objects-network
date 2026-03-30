@@ -38,7 +38,7 @@ struct AppState {
 /// Internal view of head/progress fields shaped for HTTP responses.
 struct HeadSnapshot {
     /// Last canonical slot fully committed by the synchronizer.
-    last_processed_slot: Option<u32>,
+    last_processed_slot: u32,
     /// Execution block number associated with the last processed slot, if any.
     last_processed_block_number: Option<u32>,
     /// Current canonical global state root encoded as hex, if one exists.
@@ -355,7 +355,7 @@ async fn load_current_snapshot(
 
 async fn load_sync_progress(
     app_state: &AppState,
-) -> Result<(Option<u32>, Option<u32>), (StatusCode, String)> {
+) -> Result<(u32, Option<u32>), (StatusCode, String)> {
     let snapshot = load_current_snapshot(app_state).await?;
     Ok((
         snapshot.last_processed_slot,

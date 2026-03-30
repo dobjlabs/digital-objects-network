@@ -25,7 +25,6 @@ The synchronizer splits state into two layers:
   - persistent Merkle nodes
   - persistent POD2 values
 - Postgres stores the canonical control plane
-  - the sync cursor
   - canonical slot metadata
   - the canonical `CanonicalHead` for each slot
 
@@ -77,6 +76,9 @@ Postgres stores the canonical synchronization state:
 
 - `canonical_slots`
   - one row per canonical slot
+  - on first initialization, the first row is a bootstrap row at `start_slot - 1`
+  - that bootstrap row uses the real beacon/execution metadata when `start_slot - 1` had a block
+  - if `start_slot - 1` was an empty beacon slot, its block fields remain `NULL`
   - includes `block_root`, `parent_root`, `execution_block_number`, `current_gsr`, `is_empty`
   - includes normalized `head_*` columns for the canonical `CanonicalHead` at that slot
 
