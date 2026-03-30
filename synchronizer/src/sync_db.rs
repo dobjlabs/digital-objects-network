@@ -231,7 +231,9 @@ impl SyncDb {
         }
     }
 
-    /// Commit one canonical slot as the new highest canonical slot.
+    /// Commit one new canonical slot as the new highest canonical slot.
+    ///
+    /// Duplicate slot inserts are treated as logic bugs and must fail loudly.
     pub async fn commit_slot(
         &self,
         slot: &CommittedSlotRecord,
@@ -259,22 +261,6 @@ impl SyncDb {
                 head_gsr_count
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-            ON CONFLICT (slot) DO UPDATE
-            SET block_root = EXCLUDED.block_root,
-                parent_root = EXCLUDED.parent_root,
-                execution_block_number = EXCLUDED.execution_block_number,
-                current_gsr = EXCLUDED.current_gsr,
-                is_empty = EXCLUDED.is_empty,
-                head_transactions_root = EXCLUDED.head_transactions_root,
-                head_nullifiers_root = EXCLUDED.head_nullifiers_root,
-                head_state_root_gsrs_root = EXCLUDED.head_state_root_gsrs_root,
-                head_gsr_history_root = EXCLUDED.head_gsr_history_root,
-                head_current_gsr = EXCLUDED.head_current_gsr,
-                head_current_block_number = EXCLUDED.head_current_block_number,
-                head_tx_count = EXCLUDED.head_tx_count,
-                head_nullifier_count = EXCLUDED.head_nullifier_count,
-                head_gsr_count = EXCLUDED.head_gsr_count,
-                updated_at = now()
             "#,
         )
         .bind(slot.slot as i32)
@@ -499,6 +485,34 @@ mod tests {
         assert_eq!(snapshot.last_processed_slot, Some(10));
         assert_eq!(snapshot.last_processed_block_number, Some(7));
         assert_eq!(sync_db.head_for_slot(10).await?, Some(head));
+
+        drop_db(&db_name, &admin_url).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn test_commit_slot_duplicate_slot_fails() -> Result<()> {
+        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let head1 = unique_head(7, 100);
+        let head2 = unique_head(8, 200);
+        let slot = CommittedSlotRecord {
+            slot: 10,
+            block_root: None,
+            parent_root: None,
+            block_number: Some(7),
+            current_gsr: head1.metadata.current_gsr,
+            is_empty: false,
+        };
+
+        sync_db.commit_slot(&slot, &head1).await?;
+
+        let err = sync_db.commit_slot(&slot, &head2).await.unwrap_err();
+        assert!(
+            err.to_string().contains("duplicate key")
+                || err.to_string().contains("unique constraint"),
+            "unexpected duplicate-slot error: {err}"
+        );
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())

@@ -111,7 +111,7 @@ Important: GSR history advances for each canonical processed slot, even if that 
 
 The synchronizer derives candidate state by mutating persistent containers in RocksDB. Once derivation succeeds, canonical publication is a single Postgres transaction:
 
-1. Insert or update the canonical slot row, including the normalized `head_*` columns
+1. Insert the canonical slot row, including the normalized `head_*` columns
 
 Because the Merkle nodes were already materialized during derivation, there is no second canonical write to RocksDB.
 
