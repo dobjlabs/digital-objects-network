@@ -272,6 +272,41 @@ impl Node {
         .await
     }
 
+    pub(crate) async fn load_committed_slot_record(
+        &self,
+        slot: u32,
+    ) -> Result<CommittedSlotRecord> {
+        let Some(header) = self.get_beacon_slot_header_with_retry(slot).await? else {
+            return Ok(CommittedSlotRecord {
+                slot,
+                block_root: None,
+                parent_root: None,
+                block_number: None,
+                current_gsr: None,
+                is_empty: true,
+            });
+        };
+
+        let block = self
+            .get_beacon_block_by_hash_with_retry(slot, header.root)
+            .await?;
+        let execution_payload = block.execution_payload.as_ref().ok_or_else(|| {
+            anyhow!(
+                "Beacon block {} for slot {slot} had no execution payload",
+                header.root
+            )
+        })?;
+
+        Ok(CommittedSlotRecord {
+            slot,
+            block_root: Some(header.root),
+            parent_root: Some(block.parent_root),
+            block_number: Some(execution_payload.block_number),
+            current_gsr: None,
+            is_empty: false,
+        })
+    }
+
     /// Resolve the full consensus+execution context required to derive a present slot.
     ///
     /// The caller already has a canonical beacon header for this slot, so failure to load the
