@@ -854,7 +854,7 @@ mod tests {
         let mut main_pod_builder = frontend::MainPodBuilder::new(&params, vd_set);
         main_pod_builder.add_pod(main_vdf_pod.clone())?;
 
-        main_pod_builder.reveal(&main_vdf_pod.public_statements[0]);
+        let _ = main_pod_builder.reveal(&main_vdf_pod.public_statements[0]);
 
         let prover = pod2::backends::plonky2::mock::mainpod::MockProver {};
         let pod = main_pod_builder.prove(&prover)?;
