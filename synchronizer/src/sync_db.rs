@@ -99,40 +99,7 @@ impl SyncDb {
         Ok(())
     }
 
-    /// Return the next slot the node should process.
-    ///
-    /// On first initialization, inserts the provided bootstrap canonical row and returns the slot
-    /// immediately after it.
-    pub async fn ensure_cursor_and_get_start_slot(
-        &self,
-        bootstrap_slot: CommittedSlotRecord,
-    ) -> Result<u32> {
-        let latest_slot = sqlx::query(
-            r#"
-            SELECT slot
-            FROM canonical_slots
-            ORDER BY slot DESC
-            LIMIT 1
-            "#,
-        )
-        .fetch_optional(&self.pool)
-        .await?
-        .map(|row| row.get::<i32, _>("slot") as u32);
-
-        if let Some(stored_last) = latest_slot {
-            return Ok(stored_last + 1);
-        }
-
-        self.commit_slot(&bootstrap_slot, &CanonicalHead::empty())
-            .await?;
-        bootstrap_slot
-            .slot
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("bootstrap slot overflow"))
-    }
-
-    /// Return the last canonical slot fully committed by the synchronizer.
-    pub async fn last_processed_slot(&self) -> Result<u32> {
+    async fn latest_committed_slot(&self) -> Result<Option<u32>> {
         let row = sqlx::query(
             r#"
             SELECT slot
@@ -143,7 +110,26 @@ impl SyncDb {
         )
         .fetch_optional(&self.pool)
         .await?;
-        row.map(|r| r.get::<i32, _>("slot") as u32)
+
+        Ok(row.map(|row| row.get::<i32, _>("slot") as u32))
+    }
+
+    /// Insert the bootstrap canonical row when the database is still empty, and return the
+    /// highest committed canonical slot afterward.
+    pub async fn ensure_bootstrap_row(&self, bootstrap_slot: CommittedSlotRecord) -> Result<u32> {
+        if let Some(stored_last) = self.latest_committed_slot().await? {
+            return Ok(stored_last);
+        }
+
+        self.commit_slot(&bootstrap_slot, &CanonicalHead::empty())
+            .await?;
+        Ok(bootstrap_slot.slot)
+    }
+
+    /// Return the last canonical slot fully committed by the synchronizer.
+    pub async fn last_processed_slot(&self) -> Result<u32> {
+        self.latest_committed_slot()
+            .await?
             .ok_or_else(|| anyhow!("sync metadata not initialized"))
     }
 
@@ -474,8 +460,10 @@ mod tests {
             is_empty: true,
         };
         let start_slot = sync_db
-            .ensure_cursor_and_get_start_slot(bootstrap_slot)
-            .await?;
+            .ensure_bootstrap_row(bootstrap_slot)
+            .await?
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("last processed slot overflow"))?;
         assert_eq!(start_slot, 5);
         let snapshot = sync_db.current_snapshot().await?;
         assert_eq!(snapshot.head, CanonicalHead::empty());

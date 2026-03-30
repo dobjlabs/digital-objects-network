@@ -242,8 +242,10 @@ pub(crate) async fn initialize_sync(
 
     let start_slot = node
         .sync_db
-        .ensure_cursor_and_get_start_slot(bootstrap_slot)
-        .await?;
+        .ensure_bootstrap_row(bootstrap_slot)
+        .await?
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("last processed slot overflow"))?;
 
     info!(
         start_slot,
