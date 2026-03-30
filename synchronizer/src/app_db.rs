@@ -1,4 +1,4 @@
-use std::{fmt, path::Path, sync::Arc};
+use std::{fmt, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
 use pod2::{
@@ -40,15 +40,12 @@ impl fmt::Debug for AppDb {
 
 impl AppDb {
     pub fn connect(db_path: &str) -> Result<Self> {
-        Self::open(db_path).with_context(|| format!("Failed to open RocksDB at path {db_path}"))
-    }
-
-    fn open(path: impl AsRef<Path>) -> Result<Self> {
         let mut options = Options::default();
         options.create_if_missing(true);
         let txn_options = TransactionDBOptions::default();
-        let inner =
-            TransactionDB::open(&options, &txn_options, path).map_err(|err| anyhow!("{err}"))?;
+        let inner = TransactionDB::open(&options, &txn_options, db_path)
+            .map_err(|err| anyhow!("{err}"))
+            .with_context(|| format!("Failed to open RocksDB at path {db_path}"))?;
         Ok(Self {
             db: Arc::new(inner),
         })
