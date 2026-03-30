@@ -203,6 +203,8 @@ Hash parsing accepts `0x`-prefixed or raw hex input; responses are normalized to
 - `SYNC_METADATA_DB_URL` (default: `postgres://postgres@localhost:5432/synchronizer`)
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
 - `SYNC_DELAY_MS` (default: `333`)
+- `RPC_RETRIES` (default: `6`)
+- `RPC_RETRY_MS` (default: `1000`)
 - `INITIAL_START_SLOT` (default: unset, meaning start from current head on first run)
 
 ## Run
