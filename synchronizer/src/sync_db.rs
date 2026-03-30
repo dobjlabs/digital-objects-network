@@ -179,30 +179,6 @@ impl SyncDb {
         })
     }
 
-    /// Return the committed canonical head for one slot, if present.
-    #[cfg(test)]
-    pub async fn head_for_slot(&self, slot: u32) -> Result<Option<CanonicalHead>> {
-        let row = sqlx::query(
-            r#"
-            SELECT head_transactions_root,
-                   head_nullifiers_root,
-                   head_state_root_gsrs_root,
-                   head_gsr_history_root,
-                   head_current_gsr,
-                   head_current_block_number,
-                   head_tx_count,
-                   head_nullifier_count,
-                   head_gsr_count
-            FROM canonical_slots
-            WHERE slot = $1
-            "#,
-        )
-        .bind(slot as i32)
-        .fetch_optional(&self.pool)
-        .await?;
-        row.map(|row| decode_head_row(&row)).transpose()
-    }
-
     /// Return the canonical beacon block root for a committed slot.
     pub async fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
         let row = sqlx::query("SELECT block_root FROM canonical_slots WHERE slot = $1")
@@ -493,7 +469,6 @@ mod tests {
         assert_eq!(snapshot.head, head);
         assert_eq!(snapshot.last_processed_slot, 10);
         assert_eq!(snapshot.last_processed_block_number, Some(7));
-        assert_eq!(sync_db.head_for_slot(10).await?, Some(head));
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -607,7 +582,6 @@ mod tests {
         let snapshot = sync_db.current_snapshot().await?;
         assert_eq!(snapshot.head, h1);
         assert_eq!(snapshot.last_processed_slot, 1);
-        assert_eq!(sync_db.head_for_slot(2).await?, None);
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
