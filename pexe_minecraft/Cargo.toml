@@ -1,13 +1,17 @@
 [package]
 name = "pexe_minecraft"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
 
 [dependencies]
+extism-pdk = "1.4"
 plugin_api = { path = "../plugin_api" }
-craft_sdk = { path = "../craft_sdk" }
-pod2 = { workspace = true }
-pod2utils = { path = "../pod2utils" }
-vdfpod = { path = "../intro_pods/vdfpod" }
-lt_eq_u256_pod = { path = "../intro_pods/lt_eq_u256_pod" }
-hex = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true

@@ -13,7 +13,9 @@ members = [
     "mcp",
     "plugin_api",
     "plugin_host",
-    "pexe_minecraft",
+]
+exclude = [
+    "pexe_minecraft",  # compiled separately to wasm32-unknown-unknown
 ]
 resolver = "2"
 

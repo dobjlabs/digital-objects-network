@@ -1,11 +1,11 @@
 //! Thin adapter that delegates all spec queries to the plugin host.
 //!
-//! This module preserves the same `pub(crate)` API surface that the rest of the
-//! app-gui crate expects (`actions()`, `dependencies()`, `action_descriptors()`,
-//! etc.), but the actual definitions now live in the `pexe_minecraft` plugin
-//! crate, loaded through `plugin_host`.
+//! This module preserves the same `pub(crate)` API surface that the rest of
+//! the app-gui crate expects (`actions()`, `dependencies()`, etc.), but the
+//! actual definitions now live in a `.pexe` WASM module loaded by `plugin_host`
+//! via Extism.
 //!
-//! In Phase 2 the host will be extended to load `.pexe` WASM modules at runtime.
+//! In Phase 2 the host will support loading user-provided `.pexe` files.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -17,8 +17,9 @@ use plugin_host::PluginHost;
 pub(crate) use plugin_api::{ActionDescriptor, ClassUiMeta};
 
 /// The singleton plugin host, initialized once with the built-in minecraft plugin.
-static HOST: LazyLock<PluginHost> =
-    LazyLock::new(|| PluginHost::from_builtin(pexe_minecraft::MinecraftPlugin));
+static HOST: LazyLock<PluginHost> = LazyLock::new(|| {
+    PluginHost::builtin().expect("failed to load built-in pexe plugin")
+});
 
 // ---------------------------------------------------------------------------
 // Public (crate) API — matches the original spec.rs signatures exactly.

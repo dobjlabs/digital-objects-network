@@ -1,7 +1,6 @@
 use std::{collections::BTreeSet, error::Error, fs, path::PathBuf};
 
-use pexe_minecraft::MinecraftPlugin;
-use plugin_api::{self, PluginSpec};
+use plugin_host::PluginHost;
 
 fn render_union_type(name: &str, values: impl IntoIterator<Item = String>) -> String {
     let mut uniq = BTreeSet::new();
@@ -20,12 +19,9 @@ fn render_union_type(name: &str, values: impl IntoIterator<Item = String>) -> St
 }
 
 fn render_typescript_ids() -> String {
-    let plugin = MinecraftPlugin;
-    let action_ids: Vec<String> = plugin_api::action_descriptors(&plugin)
-        .into_iter()
-        .map(|d| d.name)
-        .collect();
-    let class_names = plugin_api::class_names(&plugin);
+    let host = PluginHost::builtin().expect("failed to load built-in plugin");
+    let action_ids: Vec<String> = host.action_descriptors().into_iter().map(|d| d.name).collect();
+    let class_names = host.class_names();
 
     let action_union = render_union_type("ActionId", action_ids);
     let class_union = render_union_type("ClassName", class_names);
