@@ -9,6 +9,7 @@ const DEFAULT_HTTP_BIND: &str = "127.0.0.1:3000";
 const DEFAULT_SYNC_DELAY_MS: u64 = 333;
 const DEFAULT_RPC_RETRIES: u32 = 6;
 const DEFAULT_RPC_RETRY_MS: u64 = 1_000;
+const DEFAULT_CATCHUP_BATCH_SIZE: usize = 16;
 
 #[derive(Debug)]
 pub struct AppConfig {
@@ -18,6 +19,7 @@ pub struct AppConfig {
     pub sync_delay: Duration,
     pub rpc_retries: u32,
     pub rpc_retry_delay: Duration,
+    pub catchup_batch_size: usize,
     pub initial_start_slot: Option<u32>,
     pub rpc_url: String,
     pub beacon_url: String,
@@ -45,6 +47,10 @@ pub fn load_config() -> Result<AppConfig> {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_RPC_RETRY_MS);
+    let catchup_batch_size = dotenvy::var("CATCHUP_BATCH_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_CATCHUP_BATCH_SIZE);
     let initial_start_slot = dotenvy::var("INITIAL_START_SLOT")
         .ok()
         .and_then(|v| v.parse::<u32>().ok());
@@ -60,6 +66,7 @@ pub fn load_config() -> Result<AppConfig> {
         sync_delay: Duration::from_millis(sync_delay_ms),
         rpc_retries,
         rpc_retry_delay: Duration::from_millis(rpc_retry_ms),
+        catchup_batch_size,
         initial_start_slot,
         rpc_url,
         beacon_url,

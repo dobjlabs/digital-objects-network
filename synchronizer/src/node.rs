@@ -341,13 +341,57 @@ impl Node {
         })
     }
 
+    /// Build a `SlotContext` from a pre-fetched beacon block without any network calls.
+    fn slot_context_from_block(
+        beacon_block_header: &BlockHeader,
+        beacon_block: &Block,
+    ) -> Result<SlotContext> {
+        let slot = beacon_block_header.slot;
+        let beacon_block_root = beacon_block_header.root;
+
+        let execution_payload = beacon_block.execution_payload.as_ref().ok_or_else(|| {
+            anyhow!("Beacon block {beacon_block_root} for slot {slot} had no execution payload")
+        })?;
+
+        let has_blob_commitments = beacon_block
+            .blob_kzg_commitments
+            .as_ref()
+            .is_some_and(|commitments| !commitments.is_empty());
+
+        Ok(SlotContext {
+            slot,
+            beacon_block_root,
+            parent_root: beacon_block.parent_root,
+            execution_block_hash: execution_payload.block_hash,
+            execution_block_number: execution_payload.block_number,
+            execution_timestamp: execution_payload.timestamp,
+            has_blob_commitments,
+        })
+    }
+
     /// Derive the full per-slot update from beacon/execution data and return it for commit.
     pub async fn derive_slot_update(
         &self,
         beacon_block_header: &BlockHeader,
     ) -> Result<ProcessedSlot> {
-        let base_head = self.sync_db.current_head().await?;
         let slot_ctx = self.build_slot_context(beacon_block_header).await?;
+        self.derive_from_context(slot_ctx).await
+    }
+
+    /// Like `derive_slot_update`, but uses a pre-fetched beacon block instead of fetching it.
+    pub async fn derive_slot_update_with_block(
+        &self,
+        beacon_block_header: &BlockHeader,
+        beacon_block: &Block,
+    ) -> Result<ProcessedSlot> {
+        let slot_ctx = Self::slot_context_from_block(beacon_block_header, beacon_block)?;
+        self.derive_from_context(slot_ctx).await
+    }
+
+    /// Shared derivation logic: given an already-resolved `SlotContext`, fetch execution data
+    /// as needed, run the state machine, and return the processed slot.
+    async fn derive_from_context(&self, slot_ctx: SlotContext) -> Result<ProcessedSlot> {
+        let base_head = self.sync_db.current_head().await?;
 
         debug!(
             slot = slot_ctx.slot,
