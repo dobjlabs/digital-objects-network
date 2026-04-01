@@ -36,12 +36,6 @@ test-ignored:
 test-e2e:
     cargo test -p synchronizer test_e2e_real_proof --release -- --ignored --nocapture
 
-# Build the pexe_minecraft WASM plugin
-build-plugins:
-    cd pexe_minecraft && cargo build --release --target wasm32-unknown-unknown
-    mkdir -p data/plugins
-    cp pexe_minecraft/target/wasm32-unknown-unknown/release/pexe_minecraft.wasm data/plugins/minecraft-basics.pexe
-
-# Build all workspace crates (builds plugins first)
-build: build-plugins
+# Build all workspace crates
+build:
     cargo build --workspace

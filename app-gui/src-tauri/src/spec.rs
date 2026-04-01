@@ -2,10 +2,7 @@
 //!
 //! This module preserves the same `pub(crate)` API surface that the rest of
 //! the app-gui crate expects (`actions()`, `dependencies()`, etc.), but the
-//! actual definitions now live in a `.pexe` WASM module loaded by `plugin_host`
-//! via Extism.
-//!
-//! In Phase 2 the host will support loading user-provided `.pexe` files.
+//! actual definitions now live in a `.pexe` Rhai script loaded by `plugin_host`.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;

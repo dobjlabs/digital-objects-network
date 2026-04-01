@@ -1,41 +1,37 @@
-//! Plugin host: loads `.pexe` WASM modules via Extism and provides
+//! Plugin host: loads `.pexe` Rhai scripts and provides
 //! action/class metadata and proof-generation closures to the app.
 
+mod recorder;
 mod recipes;
 
 use std::collections::HashMap;
 
 use anyhow::Result;
 use craft_sdk::api;
-use extism::{Manifest, Plugin, Wasm};
 use hex::FromHex;
 use plugin_api::*;
 use pod2::middleware::Hash;
 
 /// Hosts a loaded `.pexe` plugin and provides query + execution APIs.
-///
-/// In Phase 1 the built-in plugin WASM is embedded via `include_bytes!`.
-/// In Phase 2 this will support loading external `.pexe` files at runtime.
 pub struct PluginHost {
     metadata: PluginMetadata,
 }
 
-/// The built-in minecraft plugin WASM module, compiled from `pexe_minecraft/`.
-const BUILTIN_WASM: &[u8] =
-    include_bytes!("../../data/plugins/minecraft-basics.pexe");
+/// The built-in minecraft plugin script, embedded at compile time.
+const BUILTIN_RHAI: &str =
+    include_str!("../../data/plugins/minecraft-basics.rhai");
 
 impl PluginHost {
     /// Load the built-in plugin.
     pub fn builtin() -> Result<Self> {
-        Self::from_wasm(BUILTIN_WASM)
+        Self::from_rhai(BUILTIN_RHAI)
     }
 
-    /// Load a plugin from raw WASM bytes.
-    pub fn from_wasm(wasm_bytes: &[u8]) -> Result<Self> {
-        let manifest = Manifest::new([Wasm::data(wasm_bytes)]);
-        let mut plugin = Plugin::new(&manifest, [], true)?;
-        let metadata_json = plugin.call::<&[u8], &[u8]>("get_metadata", &[])?;
-        let metadata: PluginMetadata = serde_json::from_slice(metadata_json)?;
+    /// Load a plugin from a Rhai script string.
+    pub fn from_rhai(script: &str) -> Result<Self> {
+        let engine = recorder::create_engine();
+        let ast = engine.compile(script)?;
+        let metadata = recorder::record_plugin(&engine, &ast)?;
         Ok(Self { metadata })
     }
 

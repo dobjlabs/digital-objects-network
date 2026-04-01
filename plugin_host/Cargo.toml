@@ -11,6 +11,6 @@ pod2utils = { path = "../pod2utils" }
 vdfpod = { path = "../intro_pods/vdfpod" }
 lt_eq_u256_pod = { path = "../intro_pods/lt_eq_u256_pod" }
 hex = { workspace = true }
-extism = "1.4"
+rhai = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
