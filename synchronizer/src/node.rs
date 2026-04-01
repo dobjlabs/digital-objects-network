@@ -307,41 +307,7 @@ impl Node {
         })
     }
 
-    /// Resolve the full consensus+execution context required to derive a present slot.
-    ///
-    /// The caller already has a canonical beacon header for this slot, so failure to load the
-    /// corresponding full beacon block or execution payload is treated as an error rather than as
-    /// an empty slot. This forces the sync loop to retry instead of silently advancing past a real
-    /// slot when the beacon provider is temporarily inconsistent.
-    async fn build_slot_context(&self, beacon_block_header: &BlockHeader) -> Result<SlotContext> {
-        let beacon_block_root = beacon_block_header.root;
-        let slot = beacon_block_header.slot;
-
-        let beacon_block = self
-            .get_beacon_block_by_hash_with_retry(slot, beacon_block_root)
-            .await?;
-
-        let execution_payload = beacon_block.execution_payload.as_ref().ok_or_else(|| {
-            anyhow!("Beacon block {beacon_block_root} for slot {slot} had no execution payload")
-        })?;
-
-        let has_blob_commitments = beacon_block
-            .blob_kzg_commitments
-            .as_ref()
-            .is_some_and(|commitments| !commitments.is_empty());
-
-        Ok(SlotContext {
-            slot,
-            beacon_block_root,
-            parent_root: beacon_block.parent_root,
-            execution_block_hash: execution_payload.block_hash,
-            execution_block_number: execution_payload.block_number,
-            execution_timestamp: execution_payload.timestamp,
-            has_blob_commitments,
-        })
-    }
-
-    /// Build a `SlotContext` from a pre-fetched beacon block without any network calls.
+    /// Build a `SlotContext` from a beacon header and its full block.
     fn slot_context_from_block(
         beacon_block_header: &BlockHeader,
         beacon_block: &Block,
@@ -369,12 +335,23 @@ impl Node {
         })
     }
 
+    /// Fetch the full beacon block for a header, then build the `SlotContext`.
+    async fn fetch_slot_context(&self, beacon_block_header: &BlockHeader) -> Result<SlotContext> {
+        let beacon_block = self
+            .get_beacon_block_by_hash_with_retry(
+                beacon_block_header.slot,
+                beacon_block_header.root,
+            )
+            .await?;
+        Self::slot_context_from_block(beacon_block_header, &beacon_block)
+    }
+
     /// Derive the full per-slot update from beacon/execution data and return it for commit.
     pub async fn derive_slot_update(
         &self,
         beacon_block_header: &BlockHeader,
     ) -> Result<ProcessedSlot> {
-        let slot_ctx = self.build_slot_context(beacon_block_header).await?;
+        let slot_ctx = self.fetch_slot_context(beacon_block_header).await?;
         self.derive_from_context(slot_ctx).await
     }
 
