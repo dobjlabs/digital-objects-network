@@ -1,0 +1,8 @@
+[package]
+name = "plugin_api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+craft_sdk = { path = "../craft_sdk" }
+pod2 = { workspace = true }

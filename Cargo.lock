@@ -950,8 +950,10 @@ dependencies = [
  "craft-mcp",
  "craft_sdk",
  "hex",
- "lt_eq_u256_pod",
  "notify",
+ "pexe_minecraft",
+ "plugin_api",
+ "plugin_host",
  "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=364088d316925f59693ed172ead383e4996de410)",
  "pod2utils",
  "relayer",
@@ -967,7 +969,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "txlib",
- "vdfpod",
 ]
 
 [[package]]
@@ -5576,6 +5577,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pexe_minecraft"
+version = "0.1.0"
+dependencies = [
+ "craft_sdk",
+ "hex",
+ "lt_eq_u256_pod",
+ "plugin_api",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=364088d316925f59693ed172ead383e4996de410)",
+ "pod2utils",
+ "vdfpod",
+]
+
+[[package]]
 name = "pharos"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5925,6 +5939,22 @@ dependencies = [
 name = "plonky2_util"
 version = "1.0.0"
 source = "git+https://github.com/0xPARC/plonky2.git?rev=109d517d09c210ae4c2cee381d3e3fbc04aa3812#109d517d09c210ae4c2cee381d3e3fbc04aa3812"
+
+[[package]]
+name = "plugin_api"
+version = "0.1.0"
+dependencies = [
+ "craft_sdk",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=364088d316925f59693ed172ead383e4996de410)",
+]
+
+[[package]]
+name = "plugin_host"
+version = "0.1.0"
+dependencies = [
+ "craft_sdk",
+ "plugin_api",
+]
 
 [[package]]
 name = "png"

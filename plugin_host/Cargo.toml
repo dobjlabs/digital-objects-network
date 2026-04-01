@@ -1,0 +1,8 @@
+[package]
+name = "plugin_host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+plugin_api = { path = "../plugin_api" }
+craft_sdk = { path = "../craft_sdk" }
