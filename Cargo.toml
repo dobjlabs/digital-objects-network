@@ -14,9 +14,7 @@ members = [
     "plugin_api",
     "plugin_host",
 ]
-exclude = [
-    "pexe_minecraft",  # compiled separately to wasm32-unknown-unknown
-]
+exclude = []
 resolver = "2"
 
 [workspace.dependencies]
