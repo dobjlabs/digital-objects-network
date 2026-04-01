@@ -223,7 +223,8 @@ pub(crate) async fn json_get<ExpectedResponse: DeserializeOwned>(
             tracing::warn!(
                 method = "GET",
                 url = %url,
-                // response = format!("{:?}", text.map(|t| t.as_str())),
+                status = status.as_u16(),
+                body = %text,
                 "Unexpected response from server"
             );
 
