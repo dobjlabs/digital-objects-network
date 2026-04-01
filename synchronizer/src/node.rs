@@ -338,10 +338,7 @@ impl Node {
     /// Fetch the full beacon block for a header, then build the `SlotContext`.
     async fn fetch_slot_context(&self, beacon_block_header: &BlockHeader) -> Result<SlotContext> {
         let beacon_block = self
-            .get_beacon_block_by_hash_with_retry(
-                beacon_block_header.slot,
-                beacon_block_header.root,
-            )
+            .get_beacon_block_by_hash_with_retry(beacon_block_header.slot, beacon_block_header.root)
             .await?;
         Self::slot_context_from_block(beacon_block_header, &beacon_block)
     }
