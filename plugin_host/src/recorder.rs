@@ -201,9 +201,12 @@ fn create_recording_engine(state: Rc<RefCell<RecorderState>>) -> Engine {
     let s = Rc::clone(&state);
     engine.register_fn("lt_eq_u256", move |handle: i64, difficulty: i64| {
         let diff_u64 = difficulty as u64;
+        // Format as 256-bit big-endian: u64 occupies the most-significant 8 bytes,
+        // followed by 48 zero hex chars for the remaining 24 bytes.
         let pred = format!(
-            "LtEqU256({{state}}, Raw(0x{:0>64}))",
-            format!("{:x}", diff_u64)
+            "LtEqU256({{state}}, Raw(0x{:016x}{}))",
+            diff_u64,
+            "0".repeat(48),
         );
         s.borrow_mut().add_detail(handle, DetailMeta::Condition {
             pred,
