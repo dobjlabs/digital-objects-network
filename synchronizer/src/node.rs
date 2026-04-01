@@ -308,6 +308,10 @@ impl Node {
     }
 
     /// Build a `SlotContext` from a beacon header and its full block.
+    ///
+    /// Failure to extract the execution payload is treated as an error rather than as an empty
+    /// slot. This forces the sync loop to retry instead of silently advancing past a real slot
+    /// when the beacon provider is temporarily inconsistent.
     fn slot_context_from_block(
         beacon_block_header: &BlockHeader,
         beacon_block: &Block,

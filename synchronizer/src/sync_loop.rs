@@ -130,6 +130,10 @@ pub async fn run_sync_loop(
 
         // ── Single-slot path (at or near head) ──────────────────────────
         debug!(slot = next_slot, "Checking slot");
+        // Resolve the target slot against beacon head; may return:
+        // - Missing: canonical empty slot
+        // - Present: canonical block header for this slot
+        // - Shutdown: graceful stop
         let beacon_block_header = match head_tracker
             .next_slot_header(&node, next_slot, &mut shutdown_rx)
             .await?
@@ -152,6 +156,8 @@ pub async fn run_sync_loop(
             SlotHeaderState::Present(header) => header,
         };
 
+        // For present slots, centralize all "did canonical history diverge?" checks
+        // before any write side effects.
         if let Some(rewind_slot) =
             handle_reorgs_for_present_slot(&node, next_slot, &beacon_block_header).await?
         {
