@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use crate::clients::beacon::types::{BlockHeader, BlockId, HeadEventData, Topic};
+use crate::clients::beacon::types::{BlockHeader, HeadEventData, Topic};
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
@@ -8,8 +8,6 @@ use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::node::{Node, ProcessedSlot};
-use crate::sync_db::CommittedSlotRecord;
-
 const HEAD_CHECK_INTERVAL: Duration = Duration::from_secs(12);
 
 enum SlotHeaderState {
@@ -204,8 +202,7 @@ async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
         // Walk backward until stored and live roots match (last common ancestor).
         let stored_root = node.slot_root(prev_slot).await?;
         let live_root = node
-            .beacon_cli
-            .get_block_header(BlockId::Slot(prev_slot))
+            .get_beacon_slot_header_with_retry(prev_slot)
             .await?
             .map(|header| header.root);
         if stored_root == live_root {
@@ -222,22 +219,30 @@ pub(crate) async fn initialize_sync(
     node: &Node,
     initial_start_slot: Option<u32>,
 ) -> Result<SyncStart> {
-    let spec = node.beacon_cli.get_spec().await?;
+    let spec = node.get_beacon_spec_with_retry().await?;
     info!(?spec, "Loaded beacon spec");
 
-    let head = node
-        .beacon_cli
-        .get_block_header(BlockId::Head)
-        .await?
-        .expect("head is not None");
+    let head = node.get_beacon_head_header_with_retry().await?;
     info!(head_slot = head.slot, head_root = ?head.root, "Fetched initial beacon head");
 
     let bootstrap_start_slot = initial_start_slot.unwrap_or(head.slot);
-    let bootstrap_slot = load_bootstrap_slot_record(node, &head, bootstrap_start_slot).await?;
+    let bootstrap_slot = bootstrap_start_slot.checked_sub(1).ok_or_else(|| {
+        anyhow!("bootstrap start slot must be > 0 to insert initial canonical row")
+    })?;
+
+    if bootstrap_slot > head.slot {
+        return Err(anyhow!(
+            "INITIAL_START_SLOT {bootstrap_start_slot} is ahead of current beacon head {}; cannot bootstrap slot {}",
+            head.slot,
+            bootstrap_slot
+        ));
+    }
+
+    let bootstrap_record = node.load_committed_slot_record(bootstrap_slot).await?;
 
     let start_slot = node
         .sync_db
-        .ensure_bootstrap_row(bootstrap_slot)
+        .ensure_bootstrap_row(bootstrap_record)
         .await?
         .checked_add(1)
         .ok_or_else(|| anyhow!("last processed slot overflow"))?;
@@ -251,66 +256,6 @@ pub(crate) async fn initialize_sync(
     Ok(SyncStart {
         next_slot: start_slot,
         head,
-    })
-}
-
-async fn load_bootstrap_slot_record(
-    node: &Node,
-    current_head: &BlockHeader,
-    start_slot: u32,
-) -> Result<CommittedSlotRecord> {
-    let bootstrap_slot = start_slot.checked_sub(1).ok_or_else(|| {
-        anyhow!("bootstrap start slot must be > 0 to insert initial canonical row")
-    })?;
-
-    if bootstrap_slot > current_head.slot {
-        return Err(anyhow!(
-            "INITIAL_START_SLOT {start_slot} is ahead of current beacon head {}; cannot bootstrap slot {}",
-            current_head.slot,
-            bootstrap_slot
-        ));
-    }
-
-    let Some(header) = node
-        .beacon_cli
-        .get_block_header(BlockId::Slot(bootstrap_slot))
-        .await?
-    else {
-        return Ok(CommittedSlotRecord {
-            slot: bootstrap_slot,
-            block_root: None,
-            parent_root: None,
-            block_number: None,
-            current_gsr: None,
-            is_empty: true,
-        });
-    };
-
-    let block = node
-        .beacon_cli
-        .get_block(BlockId::Hash(header.root))
-        .await?
-        .ok_or_else(|| {
-            anyhow!(
-                "Beacon header exists for bootstrap slot {bootstrap_slot}, but full beacon block {} was not found",
-                header.root
-            )
-        })?;
-
-    let execution_payload = block.execution_payload.as_ref().ok_or_else(|| {
-        anyhow!(
-            "Beacon block {} for bootstrap slot {bootstrap_slot} had no execution payload",
-            header.root
-        )
-    })?;
-
-    Ok(CommittedSlotRecord {
-        slot: bootstrap_slot,
-        block_root: Some(header.root),
-        parent_root: Some(block.parent_root),
-        block_number: Some(execution_payload.block_number),
-        current_gsr: None,
-        is_empty: false,
     })
 }
 
@@ -340,16 +285,10 @@ impl HeadTracker {
                 slots_behind = self.head.slot - slot,
                 "Catching up to beacon head"
             );
-            return Ok(
-                match node
-                    .beacon_cli
-                    .get_block_header(BlockId::Slot(slot))
-                    .await?
-                {
-                    Some(header) => SlotHeaderState::Present(header),
-                    None => SlotHeaderState::Missing,
-                },
-            );
+            return Ok(match node.get_beacon_slot_header_with_retry(slot).await? {
+                Some(header) => SlotHeaderState::Present(header),
+                None => SlotHeaderState::Missing,
+            });
         }
 
         loop {
@@ -431,11 +370,7 @@ impl HeadTracker {
     }
 
     async fn resolve_slot_from_head(&mut self, node: &Node, slot: u32) -> Result<HeadCheckResult> {
-        self.head = node
-            .beacon_cli
-            .get_block_header(BlockId::Head)
-            .await?
-            .expect("head is not None");
+        self.head = node.get_beacon_head_header_with_retry().await?;
 
         if self.head.slot < slot {
             return Ok(HeadCheckResult::BehindTarget);
@@ -450,16 +385,10 @@ impl HeadTracker {
             target_slot = slot,
             "Target slot behind head; fetching explicit slot header"
         );
-        Ok(
-            match node
-                .beacon_cli
-                .get_block_header(BlockId::Slot(slot))
-                .await?
-            {
-                Some(header) => HeadCheckResult::Present(header),
-                None => HeadCheckResult::Missing,
-            },
-        )
+        Ok(match node.get_beacon_slot_header_with_retry(slot).await? {
+            Some(header) => HeadCheckResult::Present(header),
+            None => HeadCheckResult::Missing,
+        })
     }
 
     fn decide_after_head_check(result: HeadCheckResult) -> AdvanceDecision {
