@@ -67,6 +67,7 @@ pub fn load_config() -> Result<AppConfig> {
     let catchup_batch_size = match dotenvy::var("CATCHUP_BATCH_SIZE") {
         Ok(v) => {
             let size: usize = v.parse()?;
+            anyhow::ensure!(size > 0, "CATCHUP_BATCH_SIZE must be greater than 0");
             warn!(
                 catchup_batch_size = size,
                 rpc_rate_limit = RPC_RATE_LIMIT_PER_SEC,
