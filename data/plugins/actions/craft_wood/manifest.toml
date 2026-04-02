@@ -1,0 +1,63 @@
+[plugin]
+name = "craft-wood"
+version = "0.1.0"
+
+imports = ["find-log"]
+
+[[dependencies]]
+dep_type = "Intro"
+pred = "LtEqU256(lhs, rhs)"
+hash = "2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529"
+
+[[classes]]
+name = "Wood"
+emoji = "🪵"
+description = "Refined wood used for sticks and basic tools."
+
+[[actions]]
+name = "CraftWood"
+fn_name = "CraftWood"
+emoji = "🪵"
+description = "Refine one log into a wood object with PoW quality checks."
+cpu_cost = "15-30s"
+reads_block = false
+hidden = false
+
+[[actions.steps]]
+kind = "Input"
+name = "log"
+class = "Log"
+
+[[actions.steps]]
+kind = "Output"
+name = "wood"
+class = "Wood"
+
+[[actions.steps.details]]
+type = "Set"
+key = "blueprint"
+value = "Wood"
+
+[[actions.steps.details]]
+type = "Var"
+name = "key"
+[actions.steps.details.recipe]
+type = "PowGrind"
+difficulty = 9007199254740992
+
+[[actions.steps.details]]
+type = "Update"
+key = "key"
+source = "key"
+
+[[actions.steps.details]]
+type = "Update"
+key = "key"
+source = "key"
+
+[[actions.steps.details]]
+type = "Condition"
+pred = "LtEqU256({state}, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))"
+[actions.steps.details.recipe]
+type = "LtEqU256"
+difficulty = 9007199254740992

@@ -1,0 +1,82 @@
+[plugin]
+name = "use-wood-pick"
+version = "0.1.0"
+
+imports = ["craft-wood-pick"]
+
+[[dependencies]]
+dep_type = "Intro"
+pred = "Vdf(count, input, output)"
+hash = "b77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06"
+
+[[actions]]
+name = "UseWoodPick"
+fn_name = "UseWoodPick"
+emoji = "⛏️"
+description = "Internal durability/work update for wood pick usage."
+cpu_cost = "10-30s"
+reads_block = false
+hidden = true
+
+[[actions.steps]]
+kind = "Mutate"
+name = "wood_pick"
+class = "WoodPick"
+
+[[actions.steps.details]]
+type = "Condition"
+pred = "Gt({state}.durability, 0)"
+[actions.steps.details.recipe]
+type = "Gt"
+key = "durability"
+value = 0
+
+[[actions.steps.details]]
+type = "Var"
+name = "durability"
+[actions.steps.details.recipe]
+type = "DecrementField"
+key = "durability"
+
+[[actions.steps.details]]
+type = "Condition"
+pred = "SumOf({state}.durability, durability, 1)"
+[actions.steps.details.recipe]
+type = "SumOf"
+key = "durability"
+stored_var = "durability"
+b = 1
+
+[[actions.steps.details]]
+type = "Update"
+key = "durability"
+source = "durability"
+
+[[actions.steps.details]]
+type = "Var"
+name = "key"
+[actions.steps.details.recipe]
+type = "RandomKey"
+
+[[actions.steps.details]]
+type = "Update"
+key = "key"
+source = "key"
+
+[[actions.steps.details]]
+type = "Var"
+name = "work"
+[actions.steps.details.recipe]
+type = "Vdf"
+iters = 10
+
+[[actions.steps.details]]
+type = "Condition"
+pred = "Vdf(10, {state}, work)"
+[actions.steps.details.recipe]
+type = "StoredVdfPod"
+
+[[actions.steps.details]]
+type = "Update"
+key = "work"
+source = "work"

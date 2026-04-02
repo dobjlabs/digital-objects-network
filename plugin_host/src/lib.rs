@@ -1,7 +1,9 @@
-//! Plugin host: loads `.pexe` Rhai scripts and provides
+//! Plugin host: loads `.pexe` plugins (manifest.toml + plugin.rhai) and provides
 //! action/class metadata and proof-generation closures to the app.
+//!
+//! The manifest declares the static proof structure (podlang predicates).
+//! The Rhai script contains runtime proof logic (executed at proof time).
 
-mod recorder;
 mod recipes;
 
 use std::collections::HashMap;
@@ -12,18 +14,41 @@ use hex::FromHex;
 use plugin_api::*;
 use pod2::middleware::Hash;
 
+/// Create a Rhai engine with sandbox limits.
+fn create_engine() -> rhai::Engine {
+    let mut engine = rhai::Engine::new();
+    engine.set_max_operations(1_000_000);
+    engine.set_max_call_levels(64);
+    engine.set_max_string_size(10_000);
+    engine.set_max_array_size(1_000);
+    engine.set_max_map_size(100);
+    engine
+}
+
 /// Hosts a loaded `.pexe` plugin and provides query + execution APIs.
 pub struct PluginHost {
     metadata: PluginMetadata,
+    /// Raw Rhai script source, stored for proof-time execution (Phase 2).
+    /// Compiled to AST on demand since rhai::AST is not Sync.
+    #[allow(dead_code)]
+    script_source: String,
 }
 
 impl PluginHost {
-    /// Load a plugin from a Rhai script string.
-    pub fn from_rhai(script: &str) -> Result<Self> {
-        let engine = recorder::create_engine();
-        let ast = engine.compile(script)?;
-        let metadata = recorder::record_plugin(&engine, &ast)?;
-        Ok(Self { metadata })
+    /// Load a plugin from a manifest TOML string and a Rhai script string.
+    pub fn from_manifest_and_script(manifest_toml: &str, script_rhai: &str) -> Result<Self> {
+        let manifest = Manifest::from_toml(manifest_toml)
+            .map_err(|e| anyhow::anyhow!("failed to parse manifest: {e}"))?;
+        let metadata: PluginMetadata = manifest.into();
+        // Verify the script compiles (catch syntax errors at load time)
+        let engine = create_engine();
+        engine
+            .compile(script_rhai)
+            .map_err(|e| anyhow::anyhow!("failed to compile script: {e}"))?;
+        Ok(Self {
+            metadata,
+            script_source: script_rhai.to_string(),
+        })
     }
 
     /// Plugin name.
@@ -97,17 +122,35 @@ impl PluginHost {
 // Multi-module orchestrator
 // ---------------------------------------------------------------------------
 
-/// The built-in action scripts, embedded at compile time.
-const BUILTIN_ACTIONS: &[&str] = &[
-    include_str!("../../data/plugins/actions/find_log.rhai"),
-    include_str!("../../data/plugins/actions/craft_wood.rhai"),
-    include_str!("../../data/plugins/actions/craft_sticks.rhai"),
-    include_str!("../../data/plugins/actions/craft_wood_pick.rhai"),
-    include_str!("../../data/plugins/actions/use_wood_pick.rhai"),
-    include_str!("../../data/plugins/actions/stone_tools.rhai"),
+/// The built-in action plugins, embedded at compile time as (manifest, script) pairs.
+const BUILTIN_PLUGINS: &[(&str, &str)] = &[
+    (
+        include_str!("../../data/plugins/actions/find_log/manifest.toml"),
+        include_str!("../../data/plugins/actions/find_log/plugin.rhai"),
+    ),
+    (
+        include_str!("../../data/plugins/actions/craft_wood/manifest.toml"),
+        include_str!("../../data/plugins/actions/craft_wood/plugin.rhai"),
+    ),
+    (
+        include_str!("../../data/plugins/actions/craft_sticks/manifest.toml"),
+        include_str!("../../data/plugins/actions/craft_sticks/plugin.rhai"),
+    ),
+    (
+        include_str!("../../data/plugins/actions/craft_wood_pick/manifest.toml"),
+        include_str!("../../data/plugins/actions/craft_wood_pick/plugin.rhai"),
+    ),
+    (
+        include_str!("../../data/plugins/actions/use_wood_pick/manifest.toml"),
+        include_str!("../../data/plugins/actions/use_wood_pick/plugin.rhai"),
+    ),
+    (
+        include_str!("../../data/plugins/actions/stone_tools/manifest.toml"),
+        include_str!("../../data/plugins/actions/stone_tools/plugin.rhai"),
+    ),
 ];
 
-/// Orchestrates multiple `.rhai` action scripts, each compiled to its own
+/// Orchestrates multiple `.pexe` action plugins, each compiled to its own
 /// pod2 module with cross-module references.
 pub struct PluginOrchestrator {
     hosts: Vec<PluginHost>,
@@ -116,16 +159,16 @@ pub struct PluginOrchestrator {
 }
 
 impl PluginOrchestrator {
-    /// Load the built-in action scripts.
+    /// Load the built-in action plugins.
     pub fn builtin() -> Result<Self> {
-        Self::from_rhai_files(BUILTIN_ACTIONS)
+        Self::from_manifest_script_pairs(BUILTIN_PLUGINS)
     }
 
-    /// Load multiple Rhai scripts, each defining one action group.
-    pub fn from_rhai_files(scripts: &[&str]) -> Result<Self> {
+    /// Load multiple plugins from (manifest, script) pairs.
+    pub fn from_manifest_script_pairs(pairs: &[(&str, &str)]) -> Result<Self> {
         let mut hosts = Vec::new();
-        for script in scripts {
-            hosts.push(PluginHost::from_rhai(script)?);
+        for (manifest, script) in pairs {
+            hosts.push(PluginHost::from_manifest_and_script(manifest, script)?);
         }
 
         // Build merged metadata
@@ -243,9 +286,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_load_single_script() {
-        let script = include_str!("../../data/plugins/actions/find_log.rhai");
-        let host = PluginHost::from_rhai(script).expect("failed to load script");
+    fn test_load_single_plugin() {
+        let manifest = include_str!("../../data/plugins/actions/find_log/manifest.toml");
+        let script = include_str!("../../data/plugins/actions/find_log/plugin.rhai");
+        let host =
+            PluginHost::from_manifest_and_script(manifest, script).expect("failed to load plugin");
         assert_eq!(host.name(), "find-log");
     }
 
@@ -287,8 +332,11 @@ mod tests {
         let visible = orch.visible_action_descriptors();
         let hidden_names = ["UseWoodPick", "UseStonePick"];
         for d in &visible {
-            assert!(!hidden_names.contains(&d.name.as_str()),
-                "hidden action {} should not be visible", d.name);
+            assert!(
+                !hidden_names.contains(&d.name.as_str()),
+                "hidden action {} should not be visible",
+                d.name
+            );
         }
         assert_eq!(visible.len(), 7);
     }

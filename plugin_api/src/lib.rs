@@ -45,6 +45,10 @@ pub struct ClassMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionMeta {
     pub name: String,
+    /// Name of the Rhai function that implements this action.
+    /// Defaults to `name` if not specified.
+    #[serde(default)]
+    pub fn_name: String,
     pub emoji: String,
     pub description: String,
     pub cpu_cost: String,
@@ -283,6 +287,62 @@ pub fn class_names(meta: &PluginMetadata) -> Vec<String> {
         classes.insert(c.name.clone());
     }
     classes.into_iter().collect()
+}
+
+// ---------------------------------------------------------------------------
+// Manifest (TOML) — the static structure of a .pexe plugin
+// ---------------------------------------------------------------------------
+
+/// Top-level manifest structure, deserialized from `manifest.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Manifest {
+    pub plugin: ManifestPlugin,
+    #[serde(default)]
+    pub imports: Vec<String>,
+    #[serde(default)]
+    pub dependencies: Vec<DependencyMeta>,
+    #[serde(default)]
+    pub classes: Vec<ClassMeta>,
+    #[serde(default)]
+    pub actions: Vec<ActionMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestPlugin {
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub imports: Vec<String>,
+}
+
+impl Manifest {
+    /// Parse a `manifest.toml` string.
+    pub fn from_toml(s: &str) -> Result<Self, toml::de::Error> {
+        toml::from_str(s)
+    }
+}
+
+impl From<Manifest> for PluginMetadata {
+    fn from(m: Manifest) -> Self {
+        let mut actions = m.actions;
+        // Default fn_name to name if not set
+        for action in &mut actions {
+            if action.fn_name.is_empty() {
+                action.fn_name = action.name.clone();
+            }
+        }
+        // imports can come from either the [plugin] table or the root
+        let mut imports = m.plugin.imports;
+        imports.extend(m.imports);
+        Self {
+            name: m.plugin.name,
+            version: m.plugin.version,
+            dependencies: m.dependencies,
+            classes: m.classes,
+            actions,
+            imports,
+        }
+    }
 }
 
 /// Look up class UI metadata by name.

@@ -1,0 +1,182 @@
+[plugin]
+name = "stone-tools"
+version = "0.1.0"
+
+imports = ["use-wood-pick", "craft-sticks"]
+
+[[dependencies]]
+dep_type = "Intro"
+pred = "Vdf(count, input, output)"
+hash = "b77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06"
+
+[[classes]]
+name = "Stone"
+emoji = "🪨"
+description = "Mined stone used to craft stronger tools."
+
+[[classes]]
+name = "StonePick"
+emoji = "⛏️"
+description = "A sturdier pick with higher starting durability."
+
+# --- MineStoneWithWoodPick ---
+
+[[actions]]
+name = "MineStoneWithWoodPick"
+fn_name = "MineStoneWithWoodPick"
+emoji = "🪨"
+description = "Mine stone using a wood pick (consumes durability)."
+cpu_cost = "25-45s"
+reads_block = false
+hidden = false
+
+[[actions.steps]]
+kind = "Depends"
+name = "pick"
+action = "UseWoodPick"
+
+[[actions.steps]]
+kind = "Output"
+name = "stone"
+class = "Stone"
+
+[[actions.steps.details]]
+type = "Set"
+key = "blueprint"
+value = "Stone"
+
+# --- CraftStonePick ---
+
+[[actions]]
+name = "CraftStonePick"
+fn_name = "CraftStonePick"
+emoji = "⛏️"
+description = "Combine stone and a stick to craft a stronger stone pick."
+cpu_cost = "10-20s"
+reads_block = false
+hidden = false
+
+[[actions.steps]]
+kind = "Input"
+name = "stone"
+class = "Stone"
+
+[[actions.steps]]
+kind = "Input"
+name = "stick"
+class = "Stick"
+
+[[actions.steps]]
+kind = "Output"
+name = "stone_pick"
+class = "StonePick"
+
+[[actions.steps.details]]
+type = "Set"
+key = "blueprint"
+value = "StonePick"
+
+[[actions.steps.details]]
+type = "Set"
+key = "durability"
+value = 200
+
+# --- UseStonePick ---
+
+[[actions]]
+name = "UseStonePick"
+fn_name = "UseStonePick"
+emoji = "⛏️"
+description = "Internal durability/work update for stone pick usage."
+cpu_cost = "5-20s"
+reads_block = false
+hidden = true
+
+[[actions.steps]]
+kind = "Mutate"
+name = "stone_pick"
+class = "StonePick"
+
+[[actions.steps.details]]
+type = "Condition"
+pred = "Gt({state}.durability, 0)"
+[actions.steps.details.recipe]
+type = "Gt"
+key = "durability"
+value = 0
+
+[[actions.steps.details]]
+type = "Var"
+name = "durability"
+[actions.steps.details.recipe]
+type = "DecrementField"
+key = "durability"
+
+[[actions.steps.details]]
+type = "Condition"
+pred = "SumOf({state}.durability, durability, 1)"
+[actions.steps.details.recipe]
+type = "SumOf"
+key = "durability"
+stored_var = "durability"
+b = 1
+
+[[actions.steps.details]]
+type = "Update"
+key = "durability"
+source = "durability"
+
+[[actions.steps.details]]
+type = "Var"
+name = "key"
+[actions.steps.details.recipe]
+type = "RandomKey"
+
+[[actions.steps.details]]
+type = "Update"
+key = "key"
+source = "key"
+
+[[actions.steps.details]]
+type = "Var"
+name = "work"
+[actions.steps.details.recipe]
+type = "Vdf"
+iters = 5
+
+[[actions.steps.details]]
+type = "Condition"
+pred = "Vdf(5, {state}, work)"
+[actions.steps.details.recipe]
+type = "StoredVdfPod"
+
+[[actions.steps.details]]
+type = "Update"
+key = "work"
+source = "work"
+
+# --- MineStoneWithStonePick ---
+
+[[actions]]
+name = "MineStoneWithStonePick"
+fn_name = "MineStoneWithStonePick"
+emoji = "🪨"
+description = "Mine stone using a stone pick (consumes durability)."
+cpu_cost = "15-35s"
+reads_block = false
+hidden = false
+
+[[actions.steps]]
+kind = "Depends"
+name = "pick"
+action = "UseStonePick"
+
+[[actions.steps]]
+kind = "Output"
+name = "stone"
+class = "Stone"
+
+[[actions.steps.details]]
+type = "Set"
+key = "blueprint"
+value = "Stone"
