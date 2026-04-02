@@ -202,10 +202,13 @@ Hash parsing accepts `0x`-prefixed or raw hex input; responses are normalized to
 - `APP_STATE_DB_PATH` (default: `data/synchronizer-db`)
 - `SYNC_METADATA_DB_URL` (default: `postgres://postgres@localhost:5432/synchronizer`)
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
-- `SYNC_DELAY_MS` (default: `333`)
 - `RPC_RETRIES` (default: `6`)
 - `RPC_RETRY_MS` (default: `1000`)
 - `INITIAL_START_SLOT` (default: unset, meaning start from current head on first run)
+- `SYNC_DELAY_MS` (default: derived from RPC rate limit, currently `173`) — delay in ms between slots when at head. Override with caution to avoid exceeding the RPC rate limit.
+- `CATCHUP_BATCH_SIZE` (default: derived from RPC rate limit, currently `7`) — number of slots fetched concurrently during catch-up. Override with caution to avoid exceeding the RPC rate limit.
+
+The defaults for `SYNC_DELAY_MS` and `CATCHUP_BATCH_SIZE` are computed from the known RPC rate limit (15 req/s) to stay safely under the limit. If either is set via env, a warning is logged as a reminder to check rate limit compliance.
 
 ## Run
 
