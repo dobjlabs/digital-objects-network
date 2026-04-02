@@ -24,6 +24,7 @@ export interface ActionPayload {
   cpuCost: string;
   readsBlock: boolean;
   inputClasses: ClassName[];
+  podlang: string;
 }
 
 export interface LoadGuiInventoryResult {

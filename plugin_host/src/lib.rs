@@ -390,4 +390,15 @@ mod tests {
         let class_hashes = helper.class_hashes();
         assert_eq!(class_hashes.len(), 6);
     }
+
+    #[test]
+    fn test_print_podlang() {
+        let orch = PluginOrchestrator::builtin().unwrap();
+        let groups = orch.action_groups();
+        let helper = craft_sdk::Helper::new_multi_module(groups);
+        // podlang_src contains all modules separated by "// ---"
+        for (i, src) in helper.podlang_src.split("\n// ---\n").enumerate() {
+            println!("=== Module {} ===\n{}", i, src);
+        }
+    }
 }

@@ -40,11 +40,13 @@ pub struct Action {
     pub cpu_cost: String,
     pub reads_block: bool,
     pub input_classes: Vec<String>,
+    pub podlang: String,
 }
 
 pub(super) fn build_action_catalog(
     action_hashes: &HashMap<String, Hash>,
     class_hashes: &HashMap<String, Hash>,
+    action_podlang: &HashMap<String, String>,
 ) -> Vec<Action> {
     spec::visible_action_descriptors()
         .into_iter()
@@ -69,6 +71,10 @@ pub(super) fn build_action_catalog(
             cpu_cost: descriptor.ui.cpu_cost.to_string(),
             reads_block: descriptor.ui.reads_block,
             input_classes: descriptor.input_classes,
+            podlang: action_podlang
+                .get(&descriptor.name)
+                .cloned()
+                .unwrap_or_default(),
         })
         .collect()
 }
@@ -153,7 +159,7 @@ pub async fn load_gui_inventory(
     let helper = Helper::new_multi_module(spec::action_groups());
     let action_hashes = helper.action_hashes();
     let class_hashes = helper.class_hashes();
-    let actions = build_action_catalog(&action_hashes, &class_hashes);
+    let actions = build_action_catalog(&action_hashes, &class_hashes, &helper.action_podlang);
 
     let app_settings = get_app_settings(app)?;
     let source_tx_hashes = objects

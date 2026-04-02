@@ -253,6 +253,8 @@ pub struct Helper {
     params: Params,
     data: Data,
     pub podlang_src: String,
+    /// Per-action podlang source (action name → podlang for its module).
+    pub action_podlang: HashMap<String, String>,
     modules: Vec<Arc<Module>>,
     pub module: Arc<Module>,
 }
@@ -293,11 +295,18 @@ impl Helper {
             )
             .expect("compiles"),
         );
+        // In single-module mode, all actions share the same podlang
+        let action_podlang: HashMap<String, String> = data
+            .actions
+            .iter()
+            .map(|a| (a.name.clone(), podlang_src.clone()))
+            .collect();
         let modules = vec![txlib_mod, module.clone()];
         Self {
             params,
             data,
             podlang_src,
+            action_podlang,
             modules,
             module,
         }
@@ -376,6 +385,7 @@ impl Helper {
         let mut all_modules: Vec<Arc<Module>> = vec![txlib_mod.clone()];
         let mut all_internal_actions: Vec<Action> = Vec::new();
         let mut all_podlang_srcs = Vec::new();
+        let mut action_podlang: HashMap<String, String> = HashMap::new();
         let mut last_module = txlib_mod.clone();
 
         // Consume groups in topological order
@@ -541,6 +551,11 @@ impl Helper {
             compiled_modules.insert(info.name.clone(), module.clone());
             all_modules.push(module.clone());
             last_module = module;
+
+            // Map each action in this group to its module's podlang source
+            for action_name in &info.action_names {
+                action_podlang.insert(action_name.clone(), podlang_src.clone());
+            }
             all_podlang_srcs.push(podlang_src);
 
             // Consume group's api::Actions → internal Actions for unified runtime Data
@@ -580,6 +595,7 @@ impl Helper {
             params,
             data: unified_data,
             podlang_src: all_podlang_srcs.join("\n// ---\n\n"),
+            action_podlang,
             modules: all_modules,
             module: last_module,
         }

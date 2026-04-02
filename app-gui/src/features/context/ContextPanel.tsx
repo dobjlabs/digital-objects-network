@@ -609,6 +609,13 @@ export function ContextPanel({
 
       <div className="context-desc">{action.description}</div>
 
+      {action.podlang && (
+        <details className="podlang-details">
+          <summary className="podlang-summary">podlang</summary>
+          <pre className="podlang-source">{action.podlang}</pre>
+        </details>
+      )}
+
       {renderMethodCard({
         methodId: action.id,
         methodName: action.id,

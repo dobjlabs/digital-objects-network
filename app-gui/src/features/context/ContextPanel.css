@@ -115,6 +115,38 @@
   margin-top: 12px;
 }
 
+.podlang-details {
+  margin-bottom: 12px;
+}
+
+.podlang-summary {
+  font-size: 10px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 4px 0;
+}
+
+.podlang-summary:hover {
+  color: var(--text-bright);
+}
+
+.podlang-source {
+  font-size: 9px;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  padding: 10px;
+  margin: 6px 0 0 0;
+  overflow-x: auto;
+  white-space: pre;
+  line-height: 1.6;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
 .object-data {
   margin-bottom: 12px;
 }
