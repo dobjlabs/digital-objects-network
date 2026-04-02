@@ -95,12 +95,21 @@ pub(crate) fn record_plugin(engine: &Engine, ast: &AST) -> Result<PluginMetadata
         });
     }
 
+    // Step 4: read optional imports
+    let imports = scope
+        .get_value::<rhai::Array>("imports")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| v.into_string().unwrap_or_default().into())
+        .collect();
+
     Ok(PluginMetadata {
         name,
         version,
         dependencies,
         classes,
         actions,
+        imports,
     })
 }
 

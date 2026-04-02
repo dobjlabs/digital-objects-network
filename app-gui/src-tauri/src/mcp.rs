@@ -26,7 +26,7 @@ pub(crate) struct AppCraftOps {
 
 impl AppCraftOps {
     pub(crate) fn new(objects_dir: PathBuf, app: tauri::AppHandle, settings: AppSettings) -> Self {
-        let helper = craft_sdk::Helper::new(spec::dependencies(), spec::actions());
+        let helper = craft_sdk::Helper::new_multi_module(spec::action_groups());
         let podlang_src = helper.podlang_src.clone();
         Self {
             objects_dir,

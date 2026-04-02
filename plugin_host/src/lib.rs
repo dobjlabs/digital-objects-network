@@ -7,7 +7,7 @@ mod recipes;
 use std::collections::HashMap;
 
 use anyhow::Result;
-use craft_sdk::api;
+use craft_sdk::{ActionGroup, api};
 use hex::FromHex;
 use plugin_api::*;
 use pod2::middleware::Hash;
@@ -17,16 +17,7 @@ pub struct PluginHost {
     metadata: PluginMetadata,
 }
 
-/// The built-in minecraft plugin script, embedded at compile time.
-const BUILTIN_RHAI: &str =
-    include_str!("../../data/plugins/minecraft-basics.rhai");
-
 impl PluginHost {
-    /// Load the built-in plugin.
-    pub fn builtin() -> Result<Self> {
-        Self::from_rhai(BUILTIN_RHAI)
-    }
-
     /// Load a plugin from a Rhai script string.
     pub fn from_rhai(script: &str) -> Result<Self> {
         let engine = recorder::create_engine();
@@ -102,20 +93,175 @@ impl PluginHost {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Multi-module orchestrator
+// ---------------------------------------------------------------------------
+
+/// The built-in action scripts, embedded at compile time.
+const BUILTIN_ACTIONS: &[&str] = &[
+    include_str!("../../data/plugins/actions/find_log.rhai"),
+    include_str!("../../data/plugins/actions/craft_wood.rhai"),
+    include_str!("../../data/plugins/actions/craft_sticks.rhai"),
+    include_str!("../../data/plugins/actions/craft_wood_pick.rhai"),
+    include_str!("../../data/plugins/actions/use_wood_pick.rhai"),
+    include_str!("../../data/plugins/actions/mine_stone_with_wood_pick.rhai"),
+    include_str!("../../data/plugins/actions/craft_stone_pick.rhai"),
+    include_str!("../../data/plugins/actions/use_stone_pick.rhai"),
+    include_str!("../../data/plugins/actions/mine_stone_with_stone_pick.rhai"),
+];
+
+/// Orchestrates multiple `.rhai` action scripts, each compiled to its own
+/// pod2 module with cross-module references.
+pub struct PluginOrchestrator {
+    hosts: Vec<PluginHost>,
+    /// Merged metadata across all plugins (for unified queries).
+    merged_metadata: PluginMetadata,
+}
+
+impl PluginOrchestrator {
+    /// Load the built-in action scripts.
+    pub fn builtin() -> Result<Self> {
+        Self::from_rhai_files(BUILTIN_ACTIONS)
+    }
+
+    /// Load multiple Rhai scripts, each defining one action group.
+    pub fn from_rhai_files(scripts: &[&str]) -> Result<Self> {
+        let mut hosts = Vec::new();
+        for script in scripts {
+            hosts.push(PluginHost::from_rhai(script)?);
+        }
+
+        // Build merged metadata
+        let merged_metadata = Self::merge_metadata(&hosts);
+
+        Ok(Self {
+            hosts,
+            merged_metadata,
+        })
+    }
+
+    fn merge_metadata(hosts: &[PluginHost]) -> PluginMetadata {
+        let mut all_deps = Vec::new();
+        let mut all_classes = Vec::new();
+        let mut all_actions = Vec::new();
+        let mut seen_dep_hashes = std::collections::HashSet::new();
+        let mut seen_class_names = std::collections::HashSet::new();
+
+        for host in hosts {
+            let meta = host.metadata();
+            for dep in &meta.dependencies {
+                if seen_dep_hashes.insert(dep.hash.clone()) {
+                    all_deps.push(dep.clone());
+                }
+            }
+            for class in &meta.classes {
+                if seen_class_names.insert(class.name.clone()) {
+                    all_classes.push(class.clone());
+                }
+            }
+            all_actions.extend(meta.actions.clone());
+        }
+
+        PluginMetadata {
+            name: "minecraft-basics".to_string(),
+            version: "0.1.0".to_string(),
+            dependencies: all_deps,
+            classes: all_classes,
+            actions: all_actions,
+            imports: Vec::new(),
+        }
+    }
+
+    /// Build `ActionGroup`s for `Helper::new_multi_module()`.
+    pub fn action_groups(&self) -> Vec<ActionGroup> {
+        self.hosts
+            .iter()
+            .map(|host| {
+                let meta = host.metadata();
+                let alias = meta.name.replace('-', "_");
+                ActionGroup {
+                    name: meta.name.clone(),
+                    alias,
+                    dependencies: host.dependencies(),
+                    actions: recipes::metadata_to_actions(meta),
+                    class_names: meta.classes.iter().map(|c| c.name.clone()).collect(),
+                    imports: meta.imports.clone(),
+                }
+            })
+            .collect()
+    }
+
+    // -----------------------------------------------------------------------
+    // Metadata queries (same API surface as PluginHost)
+    // -----------------------------------------------------------------------
+
+    pub fn action_descriptors(&self) -> Vec<ActionDescriptor> {
+        action_descriptors(&self.merged_metadata)
+    }
+
+    pub fn visible_action_descriptors(&self) -> Vec<ActionDescriptor> {
+        visible_action_descriptors(&self.merged_metadata)
+    }
+
+    pub fn action_descriptors_by_name(&self) -> HashMap<String, ActionDescriptor> {
+        action_descriptors_by_name(&self.merged_metadata)
+    }
+
+    pub fn class_names(&self) -> Vec<String> {
+        class_names(&self.merged_metadata)
+    }
+
+    pub fn class_ui_meta(&self, class_name: &str) -> ClassUiMeta {
+        class_ui_meta(&self.merged_metadata, class_name)
+    }
+
+    /// Build fresh `Vec<api::Action>` with proof-generation closures.
+    pub fn actions(&self) -> Vec<api::Action> {
+        recipes::metadata_to_actions(&self.merged_metadata)
+    }
+
+    /// Convert plugin dependency metadata into `craft_sdk::api::Dependency` values.
+    pub fn dependencies(&self) -> Vec<api::Dependency> {
+        self.merged_metadata
+            .dependencies
+            .iter()
+            .map(|dep| match dep.dep_type {
+                DependencyType::Intro => api::Dependency::Intro {
+                    pred: dep.pred.clone().leak(),
+                    hash: Hash::from_hex(&dep.hash)
+                        .unwrap_or_else(|_| panic!("invalid intro pod hash: {}", dep.hash)),
+                },
+                DependencyType::Module => api::Dependency::Module {
+                    name: dep.pred.clone().leak(),
+                    hash: Hash::from_hex(&dep.hash)
+                        .unwrap_or_else(|_| panic!("invalid module hash: {}", dep.hash)),
+                },
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_load_builtin_plugin() {
-        let host = PluginHost::builtin().expect("failed to load builtin plugin");
-        assert_eq!(host.name(), "minecraft-basics");
+    fn test_load_single_script() {
+        let script = include_str!("../../data/plugins/actions/find_log.rhai");
+        let host = PluginHost::from_rhai(script).expect("failed to load script");
+        assert_eq!(host.name(), "find-log");
     }
 
     #[test]
-    fn test_plugin_classes() {
-        let host = PluginHost::builtin().unwrap();
-        let classes = host.class_names();
+    fn test_orchestrator_load() {
+        let orch = PluginOrchestrator::builtin().expect("failed to load orchestrator");
+        assert_eq!(orch.hosts.len(), 9);
+    }
+
+    #[test]
+    fn test_orchestrator_classes() {
+        let orch = PluginOrchestrator::builtin().unwrap();
+        let classes = orch.class_names();
         assert!(classes.contains(&"Log".to_string()));
         assert!(classes.contains(&"Wood".to_string()));
         assert!(classes.contains(&"Stone".to_string()));
@@ -126,9 +272,9 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_actions() {
-        let host = PluginHost::builtin().unwrap();
-        let descriptors = host.action_descriptors();
+    fn test_orchestrator_actions() {
+        let orch = PluginOrchestrator::builtin().unwrap();
+        let descriptors = orch.action_descriptors();
         let names: Vec<&str> = descriptors.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"FindLog"));
         assert!(names.contains(&"CraftWood"));
@@ -140,8 +286,8 @@ mod tests {
 
     #[test]
     fn test_visible_actions_excludes_hidden() {
-        let host = PluginHost::builtin().unwrap();
-        let visible = host.visible_action_descriptors();
+        let orch = PluginOrchestrator::builtin().unwrap();
+        let visible = orch.visible_action_descriptors();
         let hidden_names = ["UseWoodPick", "UseStonePick"];
         for d in &visible {
             assert!(!hidden_names.contains(&d.name.as_str()),
@@ -151,35 +297,34 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_dependencies() {
-        let host = PluginHost::builtin().unwrap();
-        let deps = host.dependencies();
+    fn test_orchestrator_dependencies() {
+        let orch = PluginOrchestrator::builtin().unwrap();
+        let deps = orch.dependencies();
         assert_eq!(deps.len(), 2);
     }
 
     #[test]
-    fn test_actions_generate_closures() {
-        let host = PluginHost::builtin().unwrap();
-        let actions = host.actions();
+    fn test_orchestrator_closures() {
+        let orch = PluginOrchestrator::builtin().unwrap();
+        let actions = orch.actions();
         assert_eq!(actions.len(), 9);
-        // Verify action names match
         assert_eq!(actions[0].name, "FindLog");
         assert_eq!(actions[1].name, "CraftWood");
     }
 
     #[test]
     fn test_class_ui_meta() {
-        let host = PluginHost::builtin().unwrap();
-        let wood = host.class_ui_meta("Wood");
+        let orch = PluginOrchestrator::builtin().unwrap();
+        let wood = orch.class_ui_meta("Wood");
         assert_eq!(wood.emoji, "🪵");
-        let unknown = host.class_ui_meta("Nonexistent");
+        let unknown = orch.class_ui_meta("Nonexistent");
         assert_eq!(unknown.emoji, "📦");
     }
 
     #[test]
     fn test_action_io_signatures() {
-        let host = PluginHost::builtin().unwrap();
-        let by_name = host.action_descriptors_by_name();
+        let orch = PluginOrchestrator::builtin().unwrap();
+        let by_name = orch.action_descriptors_by_name();
 
         let find_log = &by_name["FindLog"];
         assert!(find_log.input_classes.is_empty());
@@ -197,5 +342,52 @@ mod tests {
         let mine = &by_name["MineStoneWithWoodPick"];
         assert_eq!(mine.input_classes, vec!["WoodPick"]);
         assert_eq!(mine.output_classes, vec!["WoodPick", "Stone"]);
+    }
+
+    #[test]
+    fn test_orchestrator_imports() {
+        let orch = PluginOrchestrator::builtin().unwrap();
+        // find-log has no imports
+        assert!(orch.hosts[0].metadata().imports.is_empty());
+        // craft-wood imports find-log
+        assert_eq!(orch.hosts[1].metadata().imports, vec!["find-log"]);
+        // craft-wood-pick imports craft-wood and craft-sticks
+        assert_eq!(
+            orch.hosts[3].metadata().imports,
+            vec!["craft-wood", "craft-sticks"]
+        );
+    }
+
+    #[test]
+    fn test_orchestrator_action_groups() {
+        let orch = PluginOrchestrator::builtin().unwrap();
+        let groups = orch.action_groups();
+        assert_eq!(groups.len(), 9);
+        assert_eq!(groups[0].name, "find-log");
+        assert_eq!(groups[0].alias, "find_log");
+        assert!(groups[0].imports.is_empty());
+        assert_eq!(groups[1].name, "craft-wood");
+        assert_eq!(groups[1].imports, vec!["find-log"]);
+    }
+
+    #[test]
+    fn test_multi_module_compilation() {
+        use craft_sdk::Helper;
+
+        let orch = PluginOrchestrator::builtin().unwrap();
+        let groups = orch.action_groups();
+        let helper = Helper::new_multi_module(groups);
+
+        // Should have 10 modules: txlib + 9 action modules
+        // (modules field is private, but we can check via podlang_src)
+        assert!(!helper.podlang_src.is_empty());
+
+        // Each action should have a unique hash
+        let hashes = helper.action_hashes();
+        assert_eq!(hashes.len(), 9);
+
+        // Each class should have a hash
+        let class_hashes = helper.class_hashes();
+        assert_eq!(class_hashes.len(), 6);
     }
 }

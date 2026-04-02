@@ -1,4 +1,9 @@
-use std::{any::Any, collections::HashMap, fmt, mem, slice, sync::Arc};
+use std::{
+    any::Any,
+    collections::{HashMap, HashSet},
+    fmt, mem, slice,
+    sync::Arc,
+};
 
 use anyhow::Result;
 use fmt::Write;
@@ -220,6 +225,23 @@ pub mod api {
     }
 }
 
+/// A group of actions that compile into a single pod2 module.
+/// Used by `Helper::new_multi_module()` for multi-module builds.
+pub struct ActionGroup {
+    /// Plugin name (e.g., "find-log").
+    pub name: String,
+    /// Podlang alias (e.g., "find_log") — must be a valid identifier.
+    pub alias: String,
+    /// Intro pod dependencies for this group.
+    pub dependencies: Vec<api::Dependency>,
+    /// Actions in this group (typically 1).
+    pub actions: Vec<api::Action>,
+    /// Class names defined by this group's outputs.
+    pub class_names: Vec<String>,
+    /// Names of other groups this one imports.
+    pub imports: Vec<String>,
+}
+
 struct Class {
     name: String,
     // Actions that define the class with the index within the Action arguments that correspond to
@@ -255,6 +277,9 @@ impl Helper {
             actions,
             classes,
             output_index_class_st_index,
+            local_action_names: HashSet::new(),
+            imported_class_module: HashMap::new(),
+            imported_action_module: HashMap::new(),
         };
 
         let mut podlang_src = String::new();
@@ -275,6 +300,288 @@ impl Helper {
             podlang_src,
             modules,
             module,
+        }
+    }
+
+
+    /// Build a multi-module Helper where each ActionGroup gets its own pod2 module.
+    ///
+    /// Groups are topologically sorted by their `imports` field. Each group's
+    /// podlang uses qualified names (`alias::IsClass`, `alias::Action`) for
+    /// imported predicates, and `use module 0x{hash} as alias` directives.
+    pub fn new_multi_module(groups: Vec<ActionGroup>) -> Self {
+        let params = Params::default();
+        let txlib_mod = Arc::new(txlib::predicates::module());
+
+        // Save structural metadata and action stubs before consuming groups
+        struct GroupInfo {
+            name: String,
+            alias: String,
+            class_names: Vec<String>,
+            action_names: Vec<String>,
+            imports: Vec<String>,
+        }
+        let group_infos: Vec<GroupInfo> = groups
+            .iter()
+            .map(|g| GroupInfo {
+                name: g.name.clone(),
+                alias: g.alias.clone(),
+                class_names: g.class_names.clone(),
+                action_names: g.actions.iter().map(|a| a.name.to_string()).collect(),
+                imports: g.imports.clone(),
+            })
+            .collect();
+
+        let info_name_to_idx: HashMap<&str, usize> = group_infos
+            .iter()
+            .enumerate()
+            .map(|(i, g)| (g.name.as_str(), i))
+            .collect();
+
+        // Create podlang-compatible structural clones before consuming
+        let action_stubs: Vec<Vec<Action>> = groups
+            .iter()
+            .map(|g| g.actions.iter().map(Data::new_action_from_ref).collect())
+            .collect();
+
+        // Topological sort via DFS
+        let sorted_indices = {
+            let mut visited = vec![false; groups.len()];
+            let mut order = Vec::with_capacity(groups.len());
+            fn topo_visit(
+                idx: usize,
+                infos: &[GroupInfo],
+                name_to_idx: &HashMap<&str, usize>,
+                visited: &mut Vec<bool>,
+                order: &mut Vec<usize>,
+            ) {
+                if visited[idx] {
+                    return;
+                }
+                visited[idx] = true;
+                for imp in &infos[idx].imports {
+                    if let Some(&dep_idx) = name_to_idx.get(imp.as_str()) {
+                        topo_visit(dep_idx, infos, name_to_idx, visited, order);
+                    }
+                }
+                order.push(idx);
+            }
+            for i in 0..groups.len() {
+                topo_visit(i, &group_infos, &info_name_to_idx, &mut visited, &mut order);
+            }
+            order
+        };
+
+        let mut compiled_modules: HashMap<String, Arc<Module>> = HashMap::new();
+        let mut all_modules: Vec<Arc<Module>> = vec![txlib_mod.clone()];
+        let mut all_internal_actions: Vec<Action> = Vec::new();
+        let mut all_podlang_srcs = Vec::new();
+        let mut last_module = txlib_mod.clone();
+
+        // Consume groups in topological order
+        let mut groups: Vec<Option<ActionGroup>> = groups.into_iter().map(Some).collect();
+
+        for &idx in &sorted_indices {
+            let group = groups[idx].take().unwrap();
+            let info = &group_infos[idx];
+
+            // Build imported class/action → alias maps (transitive)
+            let mut imported_class_module: HashMap<String, String> = HashMap::new();
+            let mut imported_action_module: HashMap<String, String> = HashMap::new();
+            {
+                fn collect_imports(
+                    group_name: &str,
+                    infos: &[GroupInfo],
+                    name_to_idx: &HashMap<&str, usize>,
+                    icm: &mut HashMap<String, String>,
+                    iam: &mut HashMap<String, String>,
+                    visited: &mut HashSet<String>,
+                ) {
+                    if !visited.insert(group_name.to_string()) {
+                        return;
+                    }
+                    if let Some(&idx) = name_to_idx.get(group_name) {
+                        let info = &infos[idx];
+                        for c in &info.class_names {
+                            icm.insert(c.clone(), info.alias.clone());
+                        }
+                        for a in &info.action_names {
+                            iam.insert(a.clone(), info.alias.clone());
+                        }
+                        for imp in &info.imports {
+                            collect_imports(imp, infos, name_to_idx, icm, iam, visited);
+                        }
+                    }
+                }
+                for imp in &info.imports {
+                    let mut visited = HashSet::new();
+                    collect_imports(
+                        imp,
+                        &group_infos,
+                        &info_name_to_idx,
+                        &mut imported_class_module,
+                        &mut imported_action_module,
+                        &mut visited,
+                    );
+                }
+            }
+
+            // Collect imported modules (transitive, in dependency order)
+            let mut import_mods: Vec<(String, Arc<Module>)> = Vec::new();
+            {
+                fn collect_mods(
+                    group_name: &str,
+                    infos: &[GroupInfo],
+                    name_to_idx: &HashMap<&str, usize>,
+                    compiled: &HashMap<String, Arc<Module>>,
+                    out: &mut Vec<(String, Arc<Module>)>,
+                    seen: &mut HashSet<String>,
+                ) {
+                    if !seen.insert(group_name.to_string()) {
+                        return;
+                    }
+                    if let Some(&idx) = name_to_idx.get(group_name) {
+                        for imp in &infos[idx].imports {
+                            collect_mods(imp, infos, name_to_idx, compiled, out, seen);
+                        }
+                        if let Some(m) = compiled.get(group_name) {
+                            out.push((infos[idx].alias.clone(), m.clone()));
+                        }
+                    }
+                }
+                let mut seen = HashSet::new();
+                for imp in &info.imports {
+                    collect_mods(
+                        imp,
+                        &group_infos,
+                        &info_name_to_idx,
+                        &compiled_modules,
+                        &mut import_mods,
+                        &mut seen,
+                    );
+                }
+            }
+
+            // Build dependencies for this group's podlang
+            let mut group_deps: Vec<api::Dependency> = Vec::new();
+            group_deps.push(api::Dependency::Module {
+                name: "tx",
+                hash: txlib_mod.id(),
+            });
+            for dep in &group.dependencies {
+                match dep {
+                    api::Dependency::Intro { pred, hash } => {
+                        group_deps.push(api::Dependency::Intro { pred, hash: *hash });
+                    }
+                    api::Dependency::Module { name, hash } => {
+                        group_deps.push(api::Dependency::Module { name, hash: *hash });
+                    }
+                }
+            }
+            for (alias, module) in &import_mods {
+                group_deps.push(api::Dependency::Module {
+                    name: alias.clone().leak(),
+                    hash: module.id(),
+                });
+            }
+
+            // Build podlang Data from stubs (all actions seen so far + current group)
+            let local_action_names: HashSet<String> =
+                info.action_names.iter().cloned().collect();
+
+            let mut podlang_actions: Vec<Action> = Vec::new();
+            // Add stubs for previously processed groups
+            for &prev_idx in sorted_indices.iter().take_while(|&&i| i != idx) {
+                for stub in &action_stubs[prev_idx] {
+                    podlang_actions.push(stub_clone_action(stub));
+                }
+            }
+            // Add current group's stubs (these have full detail data for podlang)
+            for stub in &action_stubs[idx] {
+                podlang_actions.push(stub_clone_action(stub));
+            }
+
+            let classes = Data::classes(&podlang_actions);
+            let output_index_class_st_index =
+                Data::output_index_class_st_index(&podlang_actions);
+
+            let podlang_data = Data {
+                dependencies: group_deps,
+                actions: podlang_actions,
+                classes,
+                output_index_class_st_index,
+                local_action_names,
+                imported_class_module,
+                imported_action_module,
+            };
+
+            let mut podlang_src = String::new();
+            podlang_data.format_podlang(&mut podlang_src).unwrap();
+            info!(
+                "Multi-module podlang for '{}' ({}):\n{}",
+                info.name, info.alias, podlang_src
+            );
+
+            // Compile module
+            let mut dep_modules: Vec<Arc<Module>> = vec![txlib_mod.clone()];
+            for (_, m) in &import_mods {
+                dep_modules.push(m.clone());
+            }
+
+            let module = Arc::new(
+                load_module(&podlang_src, &info.alias, &params, &dep_modules)
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "failed to compile module '{}': {e}\npodlang:\n{podlang_src}",
+                            info.name
+                        )
+                    }),
+            );
+
+            compiled_modules.insert(info.name.clone(), module.clone());
+            all_modules.push(module.clone());
+            last_module = module;
+            all_podlang_srcs.push(podlang_src);
+
+            // Consume group's api::Actions → internal Actions for unified runtime Data
+            for api_action in group.actions {
+                all_internal_actions.push(Data::new_action(api_action));
+            }
+        }
+
+        // Build unified Data with ALL actions
+        let unified_classes = Data::classes(&all_internal_actions);
+        let unified_output_index = Data::output_index_class_st_index(&all_internal_actions);
+        let mut all_deps: Vec<api::Dependency> = Vec::new();
+        all_deps.push(api::Dependency::Module {
+            name: "tx",
+            hash: txlib_mod.id(),
+        });
+        for info in &group_infos {
+            if let Some(module) = compiled_modules.get(&info.name) {
+                all_deps.push(api::Dependency::Module {
+                    name: info.alias.clone().leak(),
+                    hash: module.id(),
+                });
+            }
+        }
+
+        let unified_data = Data {
+            dependencies: all_deps,
+            actions: all_internal_actions,
+            classes: unified_classes,
+            output_index_class_st_index: unified_output_index,
+            local_action_names: HashSet::new(),
+            imported_class_module: HashMap::new(),
+            imported_action_module: HashMap::new(),
+        };
+
+        Self {
+            params,
+            data: unified_data,
+            podlang_src: all_podlang_srcs.join("\n// ---\n\n"),
+            modules: all_modules,
+            module: last_module,
         }
     }
     pub fn builder(
@@ -307,7 +614,12 @@ impl Helper {
             .actions
             .iter()
             .find(|action| action.name == action_name)
-            .and_then(|action| action.hash(&self.module))
+            .and_then(|action| {
+                // Search all modules for this action's predicate
+                self.modules
+                    .iter()
+                    .find_map(|m| action.hash(m))
+            })
     }
 
     pub fn action_hashes(&self) -> HashMap<String, Hash> {
@@ -315,8 +627,9 @@ impl Helper {
             .actions
             .iter()
             .filter_map(|action| {
-                action
-                    .hash(&self.module)
+                self.modules
+                    .iter()
+                    .find_map(|m| action.hash(m))
                     .map(|hash| (action.name.clone(), hash))
             })
             .collect()
@@ -324,8 +637,10 @@ impl Helper {
 
     pub fn class_hash(&self, class_name: &str) -> Option<Hash> {
         let predicate_name = format!("Is{class_name}");
-        self.module
-            .predicate_ref_by_name(predicate_name.as_str())
+        // Search all modules for this class predicate
+        self.modules
+            .iter()
+            .find_map(|m| m.predicate_ref_by_name(predicate_name.as_str()))
             .map(Predicate::Custom)
             .map(|predicate| predicate.hash())
     }
@@ -848,6 +1163,13 @@ struct Data {
     dependencies: Vec<api::Dependency>,
     // Maps from output index in the Action to statement index in the Class predicate
     output_index_class_st_index: HashMap<(String, usize), usize>,
+    // --- Multi-module fields (empty for single-module builds) ---
+    /// Only these action names emit podlang predicates (empty = all).
+    local_action_names: HashSet<String>,
+    /// Maps imported class name → podlang alias (e.g., "Log" → "find_log").
+    imported_class_module: HashMap<String, String>,
+    /// Maps imported action name → podlang alias (e.g., "UseWoodPick" → "use_wood_pick").
+    imported_action_module: HashMap<String, String>,
 }
 
 fn details_set_len(details: &[api::Detail]) -> usize {
@@ -857,7 +1179,84 @@ fn details_set_len(details: &[api::Detail]) -> usize {
         .count()
 }
 
+/// Clone an `api::Arg` (Value is Clone, but Arg doesn't derive it).
+fn clone_arg(arg: &api::Arg) -> api::Arg {
+    match arg {
+        api::Arg::Literal(v) => api::Arg::Literal(v.clone()),
+        api::Arg::Var(s) => api::Arg::Var(s.clone()),
+    }
+}
+
+/// Create a podlang-compatible clone of a Detail, replacing closures with stubs.
+fn stub_detail(detail: &api::Detail) -> api::Detail {
+    match detail {
+        api::Detail::Set { key, value } => api::Detail::Set {
+            key: key.clone(),
+            value: clone_arg(value),
+        },
+        api::Detail::Update { key, value } => api::Detail::Update {
+            key: key.clone(),
+            value: clone_arg(value),
+        },
+        api::Detail::Var { name, .. } => api::Detail::Var {
+            name: name.clone(),
+            f: Box::new(|_| panic!("podlang stub")),
+        },
+        api::Detail::Condition { pred, .. } => api::Detail::Condition {
+            pred: pred.clone(),
+            f: Box::new(|_| panic!("podlang stub")),
+        },
+    }
+}
+
+/// Create a podlang-compatible clone of a Step.
+fn stub_step(step: &Step) -> Step {
+    Step {
+        kind: step.kind,
+        name: step.name.clone(),
+        class: step.class.clone(),
+        action: step.action.clone(),
+        details: step.details.iter().map(stub_detail).collect(),
+    }
+}
+
+/// Create a structural clone of an Action for podlang generation.
+fn stub_clone_action(action: &Action) -> Action {
+    Action {
+        name: action.name.clone(),
+        depends: action.depends.iter().map(stub_step).collect(),
+        inputs: action.inputs.iter().map(stub_step).collect(),
+        mutates: action.mutates.iter().map(stub_step).collect(),
+        outputs: action.outputs.iter().map(stub_step).collect(),
+    }
+}
+
 impl Data {
+    /// Create an internal Action from a reference to an api::Action (structural clone).
+    /// Used for podlang generation where closures are not needed.
+    fn new_action_from_ref(api_action: &api::Action) -> Action {
+        let mut depends = Vec::new();
+        let mut inputs = Vec::new();
+        let mut mutates = Vec::new();
+        let mut outputs = Vec::new();
+        for step in &api_action.steps {
+            let cloned = stub_step(step);
+            match step.kind {
+                StepKind::Depends => depends.push(cloned),
+                StepKind::Input => inputs.push(cloned),
+                StepKind::Mutate => mutates.push(cloned),
+                StepKind::Output => outputs.push(cloned),
+            }
+        }
+        Action {
+            name: api_action.name.to_string(),
+            depends,
+            inputs,
+            mutates,
+            outputs,
+        }
+    }
+
     fn new_action(api_action: api::Action) -> Action {
         let mut depends = Vec::new();
         let mut inputs = Vec::new();
@@ -943,13 +1342,45 @@ impl Data {
         writeln!(w)?;
         writeln!(w, "// Actions\n")?;
         for action in &self.actions {
-            Self::format_action(w, action)?;
+            if self.is_local_action(&action.name) {
+                self.format_action(w, action)?;
+            }
         }
         writeln!(w, "// Classes\n")?;
         for class in &self.classes {
-            self.format_class(w, class)?;
+            if self.is_local_class(&class.name) {
+                self.format_class(w, class)?;
+            }
         }
         Ok(())
+    }
+
+    /// Check if an action should emit podlang in this module.
+    fn is_local_action(&self, name: &str) -> bool {
+        self.local_action_names.is_empty() || self.local_action_names.contains(name)
+    }
+
+    /// Check if a class should emit podlang in this module.
+    fn is_local_class(&self, name: &str) -> bool {
+        !self.imported_class_module.contains_key(name)
+    }
+
+    /// Get the qualified predicate name for a class (with alias prefix if imported).
+    fn qualified_class_pred(&self, class: &str) -> String {
+        if let Some(alias) = self.imported_class_module.get(class) {
+            format!("{alias}::Is{class}")
+        } else {
+            format!("Is{class}")
+        }
+    }
+
+    /// Get the qualified action name (with alias prefix if imported).
+    fn qualified_action(&self, action: &str) -> String {
+        if let Some(alias) = self.imported_action_module.get(action) {
+            format!("{alias}::{action}")
+        } else {
+            action.to_string()
+        }
     }
 
     fn format_dependency(w: &mut dyn fmt::Write, dependency: &api::Dependency) -> Result<()> {
@@ -964,7 +1395,7 @@ impl Data {
         Ok(())
     }
 
-    fn format_action(w: &mut dyn fmt::Write, action: &Action) -> Result<()> {
+    fn format_action(&self, w: &mut dyn fmt::Write, action: &Action) -> Result<()> {
         write!(w, "{}(", action.name)?;
         for public_var in &action.public_vars() {
             write!(w, "{}, ", public_var)?;
@@ -995,11 +1426,11 @@ impl Data {
             match step.kind {
                 StepKind::Input => {
                     writeln!(w, "  // Input")?;
-                    writeln!(w, "  Is{}({})", step.class, state)?
+                    writeln!(w, "  {}({})", self.qualified_class_pred(&step.class), state)?
                 }
                 StepKind::Mutate => {
                     writeln!(w, "  // Mutate")?;
-                    writeln!(w, "  Is{}({})", step.class, state)?
+                    writeln!(w, "  {}({})", self.qualified_class_pred(&step.class), state)?
                 }
                 StepKind::Output => {
                     writeln!(w, "  // Output")?;
@@ -1036,7 +1467,7 @@ impl Data {
                 StepKind::Depends => writeln!(
                     w,
                     "  {action}({state}, {tx_next}, {tx})",
-                    action = step.action
+                    action = self.qualified_action(&step.action)
                 )?,
                 StepKind::Input => writeln!(w, "  tx::TxDeleted({tx_next}, {tx}, {state})")?,
                 StepKind::Mutate => {
@@ -1072,7 +1503,8 @@ impl Data {
         }
         writeln!(w, ") = OR(")?;
         for (action_name, index) in &class.actions {
-            write!(w, "  {action_name}(")?;
+            let qualified = self.qualified_action(action_name);
+            write!(w, "  {qualified}(")?;
             let action = self.action_by_name(action_name);
             let mut count = 0;
             for i in 0..action.public_vars_len() {

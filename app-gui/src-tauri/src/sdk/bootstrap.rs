@@ -150,7 +150,7 @@ pub async fn load_gui_inventory(
     let objects_dir = objects_dir(&app)?;
     ensure_objects_dirs(&objects_dir)?;
     let mut objects = load_object_files(&objects_dir)?;
-    let helper = Helper::new(spec::dependencies(), spec::actions());
+    let helper = Helper::new_multi_module(spec::action_groups());
     let action_hashes = helper.action_hashes();
     let class_hashes = helper.class_hashes();
     let actions = build_action_catalog(&action_hashes, &class_hashes);

@@ -16,7 +16,7 @@ pub(crate) fn execute_action(
     grounding_witness: GroundingWitness,
     inputs: Vec<SpendableObject>,
 ) -> Result<SpendableObjects> {
-    let helper = Helper::new(spec::dependencies(), spec::actions());
+    let helper = Helper::new_multi_module(spec::action_groups());
     // Relayed payloads are recursively verified/compressed, which is incompatible with MockMainPod.
     let builder = helper.builder(false, Arc::new(grounding_witness));
     Ok(builder.action(&action_id, inputs))

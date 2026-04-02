@@ -17,6 +17,9 @@ pub struct PluginMetadata {
     pub dependencies: Vec<DependencyMeta>,
     pub classes: Vec<ClassMeta>,
     pub actions: Vec<ActionMeta>,
+    /// Names of other plugins this one imports (for multi-module builds).
+    #[serde(default)]
+    pub imports: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
