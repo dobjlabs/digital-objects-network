@@ -104,10 +104,7 @@ const BUILTIN_ACTIONS: &[&str] = &[
     include_str!("../../data/plugins/actions/craft_sticks.rhai"),
     include_str!("../../data/plugins/actions/craft_wood_pick.rhai"),
     include_str!("../../data/plugins/actions/use_wood_pick.rhai"),
-    include_str!("../../data/plugins/actions/mine_stone_with_wood_pick.rhai"),
-    include_str!("../../data/plugins/actions/craft_stone_pick.rhai"),
-    include_str!("../../data/plugins/actions/use_stone_pick.rhai"),
-    include_str!("../../data/plugins/actions/mine_stone_with_stone_pick.rhai"),
+    include_str!("../../data/plugins/actions/stone_tools.rhai"),
 ];
 
 /// Orchestrates multiple `.rhai` action scripts, each compiled to its own
@@ -255,7 +252,7 @@ mod tests {
     #[test]
     fn test_orchestrator_load() {
         let orch = PluginOrchestrator::builtin().expect("failed to load orchestrator");
-        assert_eq!(orch.hosts.len(), 9);
+        assert_eq!(orch.hosts.len(), 6);
     }
 
     #[test]
@@ -362,12 +359,16 @@ mod tests {
     fn test_orchestrator_action_groups() {
         let orch = PluginOrchestrator::builtin().unwrap();
         let groups = orch.action_groups();
-        assert_eq!(groups.len(), 9);
+        assert_eq!(groups.len(), 6);
         assert_eq!(groups[0].name, "find-log");
         assert_eq!(groups[0].alias, "find_log");
         assert!(groups[0].imports.is_empty());
         assert_eq!(groups[1].name, "craft-wood");
         assert_eq!(groups[1].imports, vec!["find-log"]);
+        // stone-tools is the merged module with 4 actions
+        let stone = groups.iter().find(|g| g.name == "stone-tools").unwrap();
+        assert_eq!(stone.actions.len(), 4);
+        assert_eq!(stone.imports, vec!["use-wood-pick", "craft-sticks"]);
     }
 
     #[test]
@@ -378,7 +379,7 @@ mod tests {
         let groups = orch.action_groups();
         let helper = Helper::new_multi_module(groups);
 
-        // Should have 10 modules: txlib + 9 action modules
+        // Should have 7 modules: txlib + 6 action modules
         // (modules field is private, but we can check via podlang_src)
         assert!(!helper.podlang_src.is_empty());
 
