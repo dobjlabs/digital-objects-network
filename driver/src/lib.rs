@@ -719,13 +719,11 @@ mod tests {
         let settings_path = settings_dir.join("settings.json");
         let objects_dir = root.join(".objects");
         let nullified_objects_dir = objects_dir.join(".nullified");
-        let pexes_dir = settings_dir.join("pexes");
         DriverPaths {
             settings_dir,
             settings_path,
             objects_dir,
             nullified_objects_dir,
-            pexes_dir,
         }
     }
 

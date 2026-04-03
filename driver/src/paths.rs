@@ -13,13 +13,11 @@ pub fn default_paths() -> Result<DriverPaths> {
         .ok_or_else(|| anyhow!("failed to resolve home directory"))?
         .join(".objects");
     let nullified_objects_dir = objects_dir.join(".nullified");
-    let pexes_dir = settings_dir.join("pexes");
     Ok(DriverPaths {
         settings_dir,
         settings_path,
         objects_dir,
         nullified_objects_dir,
-        pexes_dir,
     })
 }
 
@@ -33,6 +31,5 @@ mod tests {
         assert!(paths.settings_path.ends_with("com.dobjlabs.zk-craft/settings.json"));
         assert!(paths.objects_dir.ends_with(".objects"));
         assert!(paths.nullified_objects_dir.ends_with(".objects/.nullified"));
-        assert!(paths.pexes_dir.ends_with("com.dobjlabs.zk-craft/pexes"));
     }
 }
