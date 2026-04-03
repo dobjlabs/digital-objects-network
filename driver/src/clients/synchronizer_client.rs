@@ -4,7 +4,6 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use hex::FromHex;
 use pod2::middleware::Hash;
 use serde::de::DeserializeOwned;
@@ -14,11 +13,8 @@ use synchronizer::api_types::{
 };
 use txlib::{GroundingWitness, StateRoot};
 
-use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, encode_hash_hex};
-use relayer::api_types::{JobStatus, JobStatusResponse, SubmitProofRequest, SubmitProofResponse};
+use common::encode_hash_hex;
 
-pub const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
-pub const RELAYER_POLL_INTERVAL_MS: u64 = 1500;
 pub const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
 pub const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
 
@@ -31,13 +27,6 @@ pub struct SynchronizerHead {
 pub struct SynchronizerMembership {
     pub grounded_txs: HashSet<Hash>,
     pub on_chain_nullifiers: HashSet<Hash>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RelayerConfirmation {
-    pub job_id: String,
-    pub tx_hash: Option<String>,
-    pub block_number: Option<i64>,
 }
 
 pub trait SynchronizerClient: Send + Sync {
@@ -62,53 +51,8 @@ pub trait SynchronizerClient: Send + Sync {
     ) -> Result<SynchronizerHead>;
 }
 
-pub trait RelayerClient: Send + Sync {
-    fn submit_proof(
-        &self,
-        relayer_api_url: &str,
-        payload_bytes: &[u8],
-        client_ref: Option<String>,
-    ) -> Result<SubmitProofResponse>;
-    fn wait_for_confirmation(
-        &self,
-        relayer_api_url: &str,
-        job_id: &str,
-        timeout_secs: u64,
-        poll_interval_ms: u64,
-    ) -> Result<RelayerConfirmation>;
-}
-
 #[derive(Debug, Default)]
 pub struct HttpSynchronizerClient;
-
-#[derive(Debug, Default)]
-pub struct HttpRelayerClient;
-
-fn parse_hash_hex(value: &str) -> Result<Hash> {
-    let trimmed = value.trim().strip_prefix("0x").unwrap_or(value.trim());
-    Hash::from_hex(trimmed).map_err(|err| anyhow!("invalid hash {value}: {err}"))
-}
-
-fn send_json_request<T: DeserializeOwned>(
-    request: reqwest::blocking::RequestBuilder,
-    endpoint: &str,
-    decode_context: &str,
-) -> Result<T> {
-    let response = request
-        .send()
-        .map_err(|err| anyhow!("failed to query endpoint at {endpoint}: {err}"))?;
-    if !response.status().is_success() {
-        return Err(anyhow!(
-            "request failed with {} {}",
-            response.status().as_u16(),
-            response.status()
-        ));
-    }
-
-    response
-        .json()
-        .map_err(|err| anyhow!("failed to decode {decode_context}: {err}"))
-}
 
 impl SynchronizerClient for HttpSynchronizerClient {
     fn fetch_head(&self, sync_api_url: &str) -> Result<SynchronizerHead> {
@@ -235,94 +179,30 @@ impl SynchronizerClient for HttpSynchronizerClient {
     }
 }
 
-impl RelayerClient for HttpRelayerClient {
-    fn submit_proof(
-        &self,
-        relayer_api_url: &str,
-        payload_bytes: &[u8],
-        client_ref: Option<String>,
-    ) -> Result<SubmitProofResponse> {
-        if payload_bytes.len() > MAX_SIMPLE_BLOB_PAYLOAD_BYTES {
-            return Err(anyhow!(
-                "payload exceeds single-blob limit: {} > {}",
-                payload_bytes.len(),
-                MAX_SIMPLE_BLOB_PAYLOAD_BYTES
-            ));
-        }
+fn parse_hash_hex(value: &str) -> Result<Hash> {
+    let trimmed = value.trim().strip_prefix("0x").unwrap_or(value.trim());
+    Hash::from_hex(trimmed).map_err(|err| anyhow!("invalid hash {value}: {err}"))
+}
 
-        let endpoint = format!("{}/api/v1/proofs", relayer_api_url.trim_end_matches('/'));
-        let request = SubmitProofRequest {
-            payload_base64: STANDARD.encode(payload_bytes),
-            client_ref,
-        };
-
-        let client = reqwest::blocking::Client::new();
-        let response = client
-            .post(&endpoint)
-            .json(&request)
-            .send()
-            .map_err(|err| anyhow!("failed to submit proof to relayer at {endpoint}: {err}"))?;
-
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "relayer submit failed with {} {}: {}",
-                status.as_u16(),
-                status,
-                body
-            ));
-        }
-
-        serde_json::from_str::<SubmitProofResponse>(&body).map_err(|err| {
-            anyhow!("failed to decode relayer submit response: {err}; body={body}")
-        })
+fn send_json_request<T: DeserializeOwned>(
+    request: reqwest::blocking::RequestBuilder,
+    endpoint: &str,
+    decode_context: &str,
+) -> Result<T> {
+    let response = request
+        .send()
+        .map_err(|err| anyhow!("failed to query endpoint at {endpoint}: {err}"))?;
+    if !response.status().is_success() {
+        return Err(anyhow!(
+            "request failed with {} {}",
+            response.status().as_u16(),
+            response.status()
+        ));
     }
 
-    fn wait_for_confirmation(
-        &self,
-        relayer_api_url: &str,
-        job_id: &str,
-        timeout_secs: u64,
-        poll_interval_ms: u64,
-    ) -> Result<RelayerConfirmation> {
-        let timeout = Duration::from_secs(timeout_secs);
-        let poll_interval = Duration::from_millis(poll_interval_ms);
-        let start = Instant::now();
-
-        loop {
-            let status = fetch_relayer_job_status(relayer_api_url, job_id)?;
-            match status.status {
-                JobStatus::Confirmed => {
-                    return Ok(RelayerConfirmation {
-                        job_id: status.job_id,
-                        tx_hash: status.tx_hash,
-                        block_number: status.block_number.map(|block_number| block_number as i64),
-                    });
-                }
-                JobStatus::Failed => {
-                    return Err(anyhow!(
-                        "relayer job {} failed: {}",
-                        status.job_id,
-                        status
-                            .last_error
-                            .clone()
-                            .unwrap_or_else(|| "unknown error".to_string())
-                    ));
-                }
-                JobStatus::Queued | JobStatus::Sending | JobStatus::Submitted => {}
-            }
-
-            if start.elapsed() >= timeout {
-                return Err(anyhow!(
-                    "timed out waiting for relayer job {} after {}s",
-                    job_id,
-                    timeout_secs
-                ));
-            }
-            std::thread::sleep(poll_interval);
-        }
-    }
+    response
+        .json()
+        .map_err(|err| anyhow!("failed to decode {decode_context}: {err}"))
 }
 
 fn collect_source_tx_proofs<P>(
@@ -410,30 +290,4 @@ fn fetch_synchronizer_tx_status(sync_api_url: &str, tx_hash: &Hash) -> Result<Tx
         &endpoint,
         "synchronizer tx status response",
     )
-}
-
-fn fetch_relayer_job_status(relayer_api_url: &str, job_id: &str) -> Result<JobStatusResponse> {
-    let endpoint = format!(
-        "{}/api/v1/proofs/{job_id}",
-        relayer_api_url.trim_end_matches('/')
-    );
-    let client = reqwest::blocking::Client::new();
-    let response = client
-        .get(&endpoint)
-        .send()
-        .map_err(|err| anyhow!("failed to query relayer job at {endpoint}: {err}"))?;
-
-    let status = response.status();
-    let body = response.text().unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!(
-            "relayer status failed with {} {}: {}",
-            status.as_u16(),
-            status,
-            body
-        ));
-    }
-
-    serde_json::from_str::<JobStatusResponse>(&body)
-        .map_err(|err| anyhow!("failed to decode relayer status response: {err}; body={body}"))
 }
