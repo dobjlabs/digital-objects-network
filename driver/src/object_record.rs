@@ -13,11 +13,17 @@ use txlib::Tx;
 #[derive(Debug, Clone)]
 pub struct ObjectRecord {
     pub id: String,
+    /// Object class/type name
     pub class_name: String,
+    /// Action that produced this object.
     pub source_action: String,
+    /// Nullifier value once object is consumed.
     pub nullifier: Option<String>,
+    /// Pod proof for this object
     pub pod: MainPod,
+    /// Object payload dictionary
     pub obj: Dictionary,
+    /// Source transaction witness for this object
     pub tx: Tx,
 }
 
