@@ -31,15 +31,28 @@ pub trait ActionCatalog: Send + Sync {
     }
 }
 
+/// Extract a named predicate definition from podlang source.
+///
+/// Podlang definitions have the form:
+///   Name(args) = AND/OR(\n  ...\n)\n
+///
+/// We find `name(` at a line start, then scan forward to find the
+/// `= AND(` or `= OR(` combiner, and track paren depth from there
+/// to find the closing `)`.
 pub(crate) fn extract_predicate(podlang_src: &str, name: &str) -> Option<String> {
     let prefix = format!("{name}(");
     let start = podlang_src.find(&prefix)?;
     let after_prefix = &podlang_src[start..];
+
+    // Find the combiner `= AND(` or `= OR(`
     let combiner_pos = after_prefix
         .find("= AND(")
         .or_else(|| after_prefix.find("= OR("))?;
+
+    // Find the opening `(` of the combiner
     let open = start + combiner_pos + after_prefix[combiner_pos..].find('(')?;
 
+    // Track depth from the combiner's `(`
     let mut depth = 0;
     for (i, ch) in podlang_src[open..].char_indices() {
         match ch {
