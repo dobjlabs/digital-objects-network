@@ -1,12 +1,13 @@
 //! Rhai "recording mode" interpreter.
 //!
 //! Runs each action function with stub host functions that only record calls,
-//! building up `Vec<StepMeta>` for podlang generation and proof-time recipe
-//! dispatch.
+//! building up `Vec<StepMeta>` for podlang generation and proof-time runtime
+//! validation.
 //!
 //! The manifest provides all static metadata (name, version, imports, deps,
 //! classes, action UI). The recorder only extracts the _step structure_ from
-//! the Rhai script so that `recipes.rs` can build proof-generation closures.
+//! the Rhai script so that `runtime.rs` can validate and replay the same
+//! structure against the live proof-building context.
 //!
 //! ## Host function conventions in recording mode
 //!
@@ -14,7 +15,7 @@
 //! - `vdf`, `pow_grind`, `random_key` return the var name (`ImmutableString`)
 //!   so `update(obj, key, var_name)` can record `source = var_name`
 //! - `get_int` returns a dummy integer (100) so Rhai arithmetic works;
-//!   it records `VarRecipe::DecrementField` which reads + decrements at proof time
+//!   it records the `Var` detail shape while the real value is produced at proof time
 //! - `sum_of(obj, key, int_val, b)` ignores the int and records
 //!   `SumOf { stored_var: key }` (convention: `get_int` stores under `key`)
 //! - `update_int(obj, key, int_val)` records `Update { source: key }`

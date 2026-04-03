@@ -5,7 +5,7 @@
 //! The Rhai script contains runtime proof logic (executed at proof time).
 
 mod recorder;
-mod recipes;
+mod runtime;
 
 use std::collections::HashMap;
 
@@ -16,7 +16,7 @@ use plugin_api::*;
 use pod2::middleware::Hash;
 
 /// Create a Rhai engine with sandbox limits.
-fn create_engine() -> rhai::Engine {
+pub(crate) fn create_engine() -> rhai::Engine {
     let mut engine = rhai::Engine::new();
     engine.set_max_operations(1_000_000);
     engine.set_max_call_levels(64);
@@ -29,7 +29,7 @@ fn create_engine() -> rhai::Engine {
 /// Hosts a loaded `.pexe` plugin and provides query + execution APIs.
 pub struct PluginHost {
     metadata: PluginMetadata,
-    /// Raw Rhai script source, stored for proof-time execution (Phase 2).
+    /// Raw Rhai script source, re-executed by the proof-time Rhai runtime.
     /// Compiled to AST on demand since rhai::AST is not Sync.
     #[allow(dead_code)]
     script_source: String,
@@ -41,7 +41,7 @@ impl PluginHost {
     /// The manifest provides static metadata (name, imports, deps, classes,
     /// action UI).  The recorder runs each action function with stub host
     /// functions to extract the step structure (inputs, outputs, conditions,
-    /// etc.) needed for podlang generation and proof-time recipe dispatch.
+    /// etc.) needed for podlang generation and proof-time runtime validation.
     pub fn from_manifest_and_script(manifest_toml: &str, script_rhai: &str) -> Result<Self> {
         let manifest = Manifest::from_toml(manifest_toml)
             .map_err(|e| anyhow::anyhow!("failed to parse manifest: {e}"))?;
@@ -56,12 +56,9 @@ impl PluginHost {
         // Run recording mode on each action to extract steps from the script
         for action in &mut metadata.actions {
             if action.steps.is_empty() {
-                action.steps = recorder::record_action_steps(&ast, &action.fn_name)
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "failed to record steps for action '{}': {e}",
-                            action.name
-                        )
+                action.steps =
+                    recorder::record_action_steps(&ast, &action.fn_name).map_err(|e| {
+                        anyhow::anyhow!("failed to record steps for action '{}': {e}", action.name)
                     })?;
             }
         }
@@ -130,12 +127,12 @@ impl PluginHost {
             .collect()
     }
 
-    /// Build fresh `Vec<api::Action>` with proof-generation closures from metadata.
+    /// Build fresh `Vec<api::Action>` with proof-generation closures from the Rhai runtime.
     ///
     /// Must be called fresh each time proof generation is needed because the
     /// closures inside `Detail` are not `Clone`.
     pub fn actions(&self) -> Vec<api::Action> {
-        recipes::metadata_to_actions(&self.metadata)
+        runtime::script_to_actions(&self.metadata, &self.script_source)
     }
 }
 
@@ -244,7 +241,7 @@ impl PluginOrchestrator {
                     name: meta.name.clone(),
                     alias,
                     dependencies: host.dependencies(),
-                    actions: recipes::metadata_to_actions(meta),
+                    actions: host.actions(),
                     class_names: meta.classes.iter().map(|c| c.name.clone()).collect(),
                     imports: meta.imports.clone(),
                 }
@@ -278,7 +275,7 @@ impl PluginOrchestrator {
 
     /// Build fresh `Vec<api::Action>` with proof-generation closures.
     pub fn actions(&self) -> Vec<api::Action> {
-        recipes::metadata_to_actions(&self.merged_metadata)
+        self.hosts.iter().flat_map(|host| host.actions()).collect()
     }
 
     /// Convert plugin dependency metadata into `craft_sdk::api::Dependency` values.
@@ -304,7 +301,43 @@ impl PluginOrchestrator {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use common::test_state::TestState;
+    use craft_sdk::Helper;
+    use txlib::{GroundingWitness, StateRoot};
+
+    fn tx_hash(tx: &txlib::Tx) -> Hash {
+        tx.dict().commitment()
+    }
+
+    fn tx_nullifiers(tx: &txlib::Tx) -> Vec<Hash> {
+        tx.nullifiers
+            .iter()
+            .map(|nullifier| {
+                let nullifier = nullifier.expect("tx nullifier should decode");
+                Hash(nullifier.raw().0)
+            })
+            .collect()
+    }
+
+    fn apply_tx(state: &mut TestState, tx: &txlib::Tx) {
+        state.apply_tx(tx_hash(tx), tx_nullifiers(tx));
+    }
+
+    fn grounding_witness(state: &TestState, inputs: &[txlib::Tx]) -> Arc<GroundingWitness> {
+        state.build_grounding_witness(
+            inputs,
+            tx_hash,
+            |block_number, transactions_root, nullifiers_root, gsrs_root, source_tx_proofs| {
+                Arc::new(GroundingWitness::new(
+                    StateRoot::new(block_number, transactions_root, nullifiers_root, gsrs_root),
+                    source_tx_proofs,
+                ))
+            },
+        )
+    }
 
     #[test]
     fn test_load_single_plugin() {
@@ -470,5 +503,75 @@ mod tests {
         for (i, src) in helper.podlang_src.split("\n// ---\n").enumerate() {
             println!("=== Module {} ===\n{}", i, src);
         }
+    }
+
+    #[test]
+    fn test_rhai_runtime_executes_full_action_chain() {
+        let orch = PluginOrchestrator::builtin().unwrap();
+        let helper = Helper::new(orch.dependencies(), orch.actions());
+        let mut state = TestState::empty(0);
+
+        let empty_inputs: Vec<txlib::Tx> = Vec::new();
+
+        let log_a = helper
+            .builder(true, grounding_witness(&state, &empty_inputs))
+            .action("FindLog", vec![]);
+        apply_tx(&mut state, &log_a.tx);
+
+        let wood_a = helper
+            .builder(true, grounding_witness(&state, &[log_a.tx.clone()]))
+            .action("CraftWood", vec![log_a.obj(0)]);
+        apply_tx(&mut state, &wood_a.tx);
+
+        let sticks = helper
+            .builder(true, grounding_witness(&state, &[wood_a.tx.clone()]))
+            .action("CraftSticks", vec![wood_a.obj(0)]);
+        apply_tx(&mut state, &sticks.tx);
+
+        let log_b = helper
+            .builder(true, grounding_witness(&state, &empty_inputs))
+            .action("FindLog", vec![]);
+        apply_tx(&mut state, &log_b.tx);
+
+        let wood_b = helper
+            .builder(true, grounding_witness(&state, &[log_b.tx.clone()]))
+            .action("CraftWood", vec![log_b.obj(0)]);
+        apply_tx(&mut state, &wood_b.tx);
+
+        let wood_pick = helper
+            .builder(
+                true,
+                grounding_witness(&state, &[wood_b.tx.clone(), sticks.tx.clone()]),
+            )
+            .action("CraftWoodPick", vec![wood_b.obj(0), sticks.obj(0)]);
+        apply_tx(&mut state, &wood_pick.tx);
+
+        let used_pick = helper
+            .builder(true, grounding_witness(&state, &[wood_pick.tx.clone()]))
+            .action("UseWoodPick", vec![wood_pick.obj(0)]);
+
+        let blueprint = used_pick.objs[0]
+            .get(&pod2::middleware::Key::from("blueprint"))
+            .unwrap()
+            .unwrap()
+            .as_string()
+            .unwrap();
+        let durability = used_pick.objs[0]
+            .get(&pod2::middleware::Key::from("durability"))
+            .unwrap()
+            .unwrap()
+            .as_int()
+            .unwrap();
+        let work = used_pick.objs[0]
+            .get(&pod2::middleware::Key::from("work"))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(blueprint, "WoodPick");
+        assert_eq!(durability, 99);
+        assert_ne!(
+            work,
+            pod2::middleware::Value::from(pod2::middleware::EMPTY_VALUE)
+        );
     }
 }

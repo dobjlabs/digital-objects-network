@@ -207,6 +207,7 @@ pub mod api {
     pub struct Action {
         pub name: &'static str,
         pub steps: Vec<Step>,
+        pub prepare: Option<Box<dyn Fn(&mut super::Context<'_>)>>,
     }
 
     impl Action {
@@ -311,7 +312,6 @@ impl Helper {
             module,
         }
     }
-
 
     /// Build a multi-module Helper where each ActionGroup gets its own pod2 module.
     ///
@@ -496,8 +496,7 @@ impl Helper {
             }
 
             // Build podlang Data from stubs (all actions seen so far + current group)
-            let local_action_names: HashSet<String> =
-                info.action_names.iter().cloned().collect();
+            let local_action_names: HashSet<String> = info.action_names.iter().cloned().collect();
 
             let mut podlang_actions: Vec<Action> = Vec::new();
             // Add stubs for previously processed groups
@@ -512,8 +511,7 @@ impl Helper {
             }
 
             let classes = Data::classes(&podlang_actions);
-            let output_index_class_st_index =
-                Data::output_index_class_st_index(&podlang_actions);
+            let output_index_class_st_index = Data::output_index_class_st_index(&podlang_actions);
 
             let podlang_data = Data {
                 dependencies: group_deps,
@@ -539,13 +537,12 @@ impl Helper {
             }
 
             let module = Arc::new(
-                load_module(&podlang_src, &info.alias, &params, &dep_modules)
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "failed to compile module '{}': {e}\npodlang:\n{podlang_src}",
-                            info.name
-                        )
-                    }),
+                load_module(&podlang_src, &info.alias, &params, &dep_modules).unwrap_or_else(|e| {
+                    panic!(
+                        "failed to compile module '{}': {e}\npodlang:\n{podlang_src}",
+                        info.name
+                    )
+                }),
             );
 
             compiled_modules.insert(info.name.clone(), module.clone());
@@ -632,9 +629,7 @@ impl Helper {
             .find(|action| action.name == action_name)
             .and_then(|action| {
                 // Search all modules for this action's predicate
-                self.modules
-                    .iter()
-                    .find_map(|m| action.hash(m))
+                self.modules.iter().find_map(|m| action.hash(m))
             })
     }
 
@@ -736,6 +731,9 @@ impl<'a> Context<'a> {
     pub fn store(&mut self, key: &'static str, value: Box<dyn Any>) {
         self.storage.insert(key, value);
     }
+    pub fn contains(&self, key: &'static str) -> bool {
+        self.storage.contains_key(key)
+    }
     pub fn load<T: 'static>(&self, key: &'static str) -> &T {
         let value = self.storage.get(key).unwrap();
         value.downcast_ref::<T>().unwrap()
@@ -743,6 +741,28 @@ impl<'a> Context<'a> {
     pub fn take<T: 'static>(&mut self, key: &'static str) -> Box<T> {
         let value = self.storage.remove(key).unwrap();
         value.downcast::<T>().unwrap()
+    }
+    pub fn stage_output(&mut self, name: String, value: Dictionary) {
+        const STAGED_OUTPUTS_KEY: &str = "__staged_outputs";
+        let mut staged = if self.contains(STAGED_OUTPUTS_KEY) {
+            *self.take::<HashMap<String, Dictionary>>(STAGED_OUTPUTS_KEY)
+        } else {
+            HashMap::new()
+        };
+        staged.insert(name, value);
+        self.store(STAGED_OUTPUTS_KEY, Box::new(staged));
+    }
+    pub fn take_staged_output(&mut self, name: &str) -> Option<Dictionary> {
+        const STAGED_OUTPUTS_KEY: &str = "__staged_outputs";
+        if !self.contains(STAGED_OUTPUTS_KEY) {
+            return None;
+        }
+        let mut staged = *self.take::<HashMap<String, Dictionary>>(STAGED_OUTPUTS_KEY);
+        let output = staged.remove(name);
+        if !staged.is_empty() {
+            self.store(STAGED_OUTPUTS_KEY, Box::new(staged));
+        }
+        output
     }
 }
 
@@ -780,6 +800,10 @@ impl<'a> ObjectBuilder<'a> {
         }
         info!("action {}: {io_info}", action.name);
 
+        if let Some(prepare) = &action.prepare {
+            prepare(ctx);
+        }
+
         // Statements used to build the Action custom statement
         let mut sts = Vec::new();
         // Copies of objects before Updates for Mutate cases
@@ -797,10 +821,14 @@ impl<'a> ObjectBuilder<'a> {
         for step in action.steps() {
             match step.kind {
                 StepKind::Output => {
-                    ctx.vars.insert(
-                        step.name.as_str(),
-                        dict!({"work" => EMPTY_VALUE, "key" => Value::from(rand_raw_value())}),
-                    );
+                    if let Some(staged) = ctx.take_staged_output(step.name.as_str()) {
+                        ctx.vars.insert(step.name.as_str(), staged);
+                    } else if !ctx.vars.contains(step.name.as_str()) {
+                        ctx.vars.insert(
+                            step.name.as_str(),
+                            dict!({"work" => EMPTY_VALUE, "key" => Value::from(rand_raw_value())}),
+                        );
+                    }
                 }
                 StepKind::Input | StepKind::Mutate => {
                     let input = &inputs[input_index];
@@ -1020,8 +1048,11 @@ pub struct Vars<'a> {
 }
 
 impl<'a> Vars<'a> {
-    pub(crate) fn insert(&mut self, name: &'a str, value: impl Into<Value>) {
+    pub fn insert(&mut self, name: &'a str, value: impl Into<Value>) {
         self.vars.insert(name, value.into());
+    }
+    pub fn contains(&self, name: &'a str) -> bool {
+        self.vars.contains_key(name)
     }
     pub fn get(&self, name: &'a str) -> &Value {
         self.vars.get(name).unwrap()
@@ -1052,6 +1083,7 @@ struct Action {
     inputs: Vec<Step>,
     mutates: Vec<Step>,
     outputs: Vec<Step>,
+    prepare: Option<Box<dyn Fn(&mut Context<'_>)>>,
 }
 
 impl Action {
@@ -1244,6 +1276,7 @@ fn stub_clone_action(action: &Action) -> Action {
         inputs: action.inputs.iter().map(stub_step).collect(),
         mutates: action.mutates.iter().map(stub_step).collect(),
         outputs: action.outputs.iter().map(stub_step).collect(),
+        prepare: None,
     }
 }
 
@@ -1270,15 +1303,21 @@ impl Data {
             inputs,
             mutates,
             outputs,
+            prepare: None,
         }
     }
 
     fn new_action(api_action: api::Action) -> Action {
+        let api::Action {
+            name,
+            steps,
+            prepare,
+        } = api_action;
         let mut depends = Vec::new();
         let mut inputs = Vec::new();
         let mut mutates = Vec::new();
         let mut outputs = Vec::new();
-        for api_step in api_action.steps {
+        for api_step in steps {
             use api::StepKind::*;
             match api_step.kind {
                 Depends => depends.push(api_step),
@@ -1289,11 +1328,12 @@ impl Data {
         }
 
         Action {
-            name: api_action.name.to_string(),
+            name: name.to_string(),
             depends,
             inputs,
             mutates,
             outputs,
+            prepare,
         }
     }
 
@@ -1658,6 +1698,7 @@ mod tests {
                     )
                     .update("work", Arg::var("work")),
             ],
+            prepare: None,
         };
 
         let craft_wood = Action {
@@ -1698,7 +1739,8 @@ mod tests {
                             st_lt_eq_u256
                         }),
                     )
-                ]
+                ],
+            prepare: None,
         };
 
         let craft_sticks = Action {
@@ -1708,6 +1750,7 @@ mod tests {
                 Step::output("stick_a", "Stick").set("blueprint", Arg::literal("Stick")),
                 Step::output("stick_b", "Stick").set("blueprint", Arg::literal("Stick")),
             ],
+            prepare: None,
         };
 
         let craft_wood_pick = Action {
@@ -1719,6 +1762,7 @@ mod tests {
                     .set("blueprint", Arg::literal("WoodPick"))
                     .set("durability", Arg::literal(100i64)),
             ],
+            prepare: None,
         };
 
         let craft_stone_pick = Action {
@@ -1730,6 +1774,7 @@ mod tests {
                     .set("blueprint", Arg::literal("StonePick"))
                     .set("durability", Arg::literal(200i64)),
             ],
+            prepare: None,
         };
 
         fn use_pick_details(step: Step, name: &'static str, vdf_iters: usize) -> Step {
@@ -1801,6 +1846,7 @@ mod tests {
                 Step::mutate("wood_pick", "WoodPick")
                     .snippet(|step| use_pick_details(step, "wood_pick", 10)),
             ],
+            prepare: None,
         };
 
         let mine_stone_with_wood_pick = Action {
@@ -1809,6 +1855,7 @@ mod tests {
                 Step::depends("pick", "UseWoodPick"),
                 Step::output("stone", "Stone").set("blueprint", Arg::literal("Stone")),
             ],
+            prepare: None,
         };
 
         let use_stone_pick = Action {
@@ -1817,6 +1864,7 @@ mod tests {
                 Step::mutate("stone_pick", "StonePick")
                     .snippet(|step| use_pick_details(step, "stone_pick", 5)),
             ],
+            prepare: None,
         };
 
         let mine_stone_with_stone_pick = Action {
@@ -1825,6 +1873,7 @@ mod tests {
                 Step::depends("pick", "UseStonePick"),
                 Step::output("stone", "Stone").set("blueprint", Arg::literal("Stone")),
             ],
+            prepare: None,
         };
 
         let dependencies = vec![

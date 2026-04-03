@@ -5944,6 +5944,7 @@ name = "plugin_host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "common",
  "craft_sdk",
  "hex",
  "lt_eq_u256_pod",
@@ -5952,6 +5953,7 @@ dependencies = [
  "pod2utils",
  "rhai",
  "serde_json",
+ "txlib",
  "vdfpod",
 ]
 

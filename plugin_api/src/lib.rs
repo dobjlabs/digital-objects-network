@@ -72,7 +72,7 @@ pub struct StepMeta {
     pub details: Vec<DetailMeta>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StepKindMeta {
     Input,
     Output,
