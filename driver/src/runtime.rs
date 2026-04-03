@@ -35,7 +35,10 @@ impl ActionRunGate {
 fn lock_runtime_state<'a>(state_lock: &'a Mutex<ActionRunState>) -> MutexGuard<'a, ActionRunState> {
     match state_lock.lock() {
         Ok(inner) => inner,
-        Err(poisoned) => poisoned.into_inner(),
+        Err(poisoned) => {
+            eprintln!("zk-craft: runtime lock poisoned, recovering state");
+            poisoned.into_inner()
+        }
     }
 }
 

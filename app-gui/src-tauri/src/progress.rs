@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tauri::Emitter;
 
-use ::driver::{ExecuteActionResult, ExecutionPhase, ExecutionReporter};
+use ::driver::{ExecuteActionResult, ExecutionPhase, ExecutionReporter, ExecutionStepContext};
 use anyhow::{anyhow, Result};
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +94,7 @@ impl TauriProgressReporter {
 }
 
 impl ExecutionReporter for TauriProgressReporter {
-    fn on_step(&self, phase: ExecutionPhase, message: &str) {
+    fn on_step(&self, phase: ExecutionPhase, message: &str, ctx: &ExecutionStepContext) {
         let _ = match phase {
             ExecutionPhase::GenerateProof => {
                 emit_generate_proof_step(&self.app, &self.run_id, message)
@@ -105,7 +105,7 @@ impl ExecutionReporter for TauriProgressReporter {
                     phase: ProofPhase::Commit,
                     status: ProofProgressStatus::Running,
                     message: message.to_string(),
-                    old_root: None,
+                    old_root: ctx.old_root.clone(),
                     new_root: None,
                     output_files: None,
                 };

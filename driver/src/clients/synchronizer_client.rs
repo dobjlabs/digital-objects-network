@@ -294,3 +294,70 @@ fn fetch_synchronizer_tx_status(sync_api_url: &str, tx_hash: &Hash) -> Result<Tx
         "synchronizer tx status response",
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_hash(byte: u8) -> Hash {
+        Hash::from_hex(hex::encode([byte; 32])).expect("valid test hash")
+    }
+
+    #[test]
+    fn collect_source_tx_proofs_rejects_omitted_requested_hash() {
+        let requested = [test_hash(1), test_hash(2)];
+        let proofs = vec![(encode_hash_hex(&requested[0]), true, "proof-1")];
+
+        let err = collect_source_tx_proofs(&requested, proofs).expect_err("should fail");
+
+        assert!(
+            err.to_string().contains(&encode_hash_hex(&requested[1])),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn collect_source_tx_proofs_rejects_unexpected_hash() {
+        let requested = [test_hash(1)];
+        let unexpected = test_hash(9);
+        let proofs = vec![(encode_hash_hex(&unexpected), true, "proof-9")];
+
+        let err = collect_source_tx_proofs(&requested, proofs).expect_err("should fail");
+
+        assert!(
+            err.to_string().contains(&encode_hash_hex(&unexpected)),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn collect_source_tx_proofs_rejects_conflicting_duplicate_status() {
+        let requested = [test_hash(1)];
+        let proofs = vec![
+            (encode_hash_hex(&requested[0]), true, "proof-1a"),
+            (encode_hash_hex(&requested[0]), false, "proof-1b"),
+        ];
+
+        let err = collect_source_tx_proofs(&requested, proofs).expect_err("should fail");
+
+        assert!(
+            err.to_string().contains("conflicting entries"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn collect_source_tx_proofs_allows_duplicate_requested_hashes() {
+        let requested = [test_hash(1), test_hash(1), test_hash(2)];
+        let proofs = vec![
+            (encode_hash_hex(&requested[0]), true, "proof-1"),
+            (encode_hash_hex(&requested[2]), true, "proof-2"),
+        ];
+
+        let result = collect_source_tx_proofs(&requested, proofs).expect("should succeed");
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get(&requested[0]), Some(&"proof-1"));
+        assert_eq!(result.get(&requested[2]), Some(&"proof-2"));
+    }
+}

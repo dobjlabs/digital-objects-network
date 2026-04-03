@@ -136,8 +136,15 @@ pub enum ExecutionPhase {
     Commit,
 }
 
+/// Optional context passed alongside execution progress steps.
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionStepContext {
+    /// The state root hash before this execution (available during Commit phase).
+    pub old_root: Option<String>,
+}
+
 pub trait ExecutionReporter {
-    fn on_step(&self, _phase: ExecutionPhase, _message: &str) {}
+    fn on_step(&self, _phase: ExecutionPhase, _message: &str, _ctx: &ExecutionStepContext) {}
     fn on_done(&self, _phase: ExecutionPhase, _result: Option<&ExecuteActionResult>) {}
 }
 

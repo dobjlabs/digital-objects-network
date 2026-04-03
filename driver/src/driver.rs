@@ -13,7 +13,7 @@ use crate::catalog::{ActionCatalog, CatalogClass};
 use crate::clients::{
     HttpRelayerClient, HttpSynchronizerClient, RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
     RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS,
-    SynchronizerClient,
+    SynchronizerClient, SynchronizerMembership,
 };
 use crate::execute::{
     build_relayer_payload, reconcile_objects, resolve_inputs, rollback_results, save_results,
@@ -28,7 +28,8 @@ use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
     ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
     DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
-    NoopExecutionReporter, ObjectDetail, ObjectQuery, ObjectSelector, ObjectSummary,
+    ExecutionStepContext, NoopExecutionReporter, ObjectDetail, ObjectQuery, ObjectSelector,
+    ObjectSummary,
 };
 
 pub trait PayloadBuilder: Send + Sync {
@@ -148,11 +149,21 @@ impl Driver {
             .filter_map(|entry| object_nullifier_hash(&entry.record.obj).ok())
             .collect::<HashSet<_>>();
 
-        let membership = self.deps.synchronizer.fetch_membership_with_nullifiers(
-            &settings.synchronizer_api_url,
-            &source_tx_hashes.iter().copied().collect::<Vec<_>>(),
-            &live_nullifiers.iter().copied().collect::<Vec<_>>(),
-        )?;
+        let membership = self
+            .deps
+            .synchronizer
+            .fetch_membership_with_nullifiers(
+                &settings.synchronizer_api_url,
+                &source_tx_hashes.iter().copied().collect::<Vec<_>>(),
+                &live_nullifiers.iter().copied().collect::<Vec<_>>(),
+            )
+            .unwrap_or_else(|err| {
+                eprintln!("zk-craft: failed to load synchronizer inventory membership: {err}");
+                SynchronizerMembership {
+                    grounded_txs: HashSet::new(),
+                    on_chain_nullifiers: HashSet::new(),
+                }
+            });
 
         reconcile_objects(&self.paths, &mut entries, &membership.on_chain_nullifiers);
 
@@ -291,7 +302,8 @@ impl Driver {
 
         validate_execute_request(&input, &action)?;
 
-        reporter.on_step(ExecutionPhase::GenerateProof, "Verifying Inputs");
+        let no_ctx = ExecutionStepContext::default();
+        reporter.on_step(ExecutionPhase::GenerateProof, "Verifying Inputs", &no_ctx);
         let entries = load_object_files(&self.paths)?;
         let resolved_inputs = resolve_inputs(&entries, &input, &action)?;
         let source_tx_hashes = resolved_inputs
@@ -305,7 +317,7 @@ impl Driver {
         let old_root_hash = grounding_witness.state_root.hash();
         let old_root = encode_hash_hex(&old_root_hash);
 
-        reporter.on_step(ExecutionPhase::GenerateProof, "Generating proof");
+        reporter.on_step(ExecutionPhase::GenerateProof, "Generating proof", &no_ctx);
         let execution_inputs = resolved_inputs
             .iter()
             .map(|input| input.record.spendable())
@@ -317,14 +329,17 @@ impl Driver {
         )?;
         reporter.on_done(ExecutionPhase::GenerateProof, None);
 
-        reporter.on_step(ExecutionPhase::Commit, "Shrinking proof");
+        let commit_ctx = ExecutionStepContext {
+            old_root: Some(old_root.clone()),
+        };
+        reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &commit_ctx);
         let payload_bytes = self
             .deps
             .payload_builder
             .build_payload(&old_root_hash, &spendable_outputs)?;
         let expected_tx_final = spendable_outputs.tx.dict().commitment();
 
-        reporter.on_step(ExecutionPhase::Commit, "Creating files");
+        reporter.on_step(ExecutionPhase::Commit, "Creating files", &commit_ctx);
         let saved = save_results(
             &self.paths,
             &action,
@@ -334,7 +349,7 @@ impl Driver {
         )?;
 
         let commit_result: Result<ExecuteActionResult> = (|| {
-            reporter.on_step(ExecutionPhase::Commit, "Submitting proof to relayer");
+            reporter.on_step(ExecutionPhase::Commit, "Submitting proof to relayer", &commit_ctx);
             let submit_response = self.deps.relayer.submit_proof(
                 &settings.relayer_api_url,
                 &payload_bytes,
@@ -348,7 +363,7 @@ impl Driver {
             }
 
             let waiting_label = format!("Waiting for relayer job {}", submit_response.job_id);
-            reporter.on_step(ExecutionPhase::Commit, &waiting_label);
+            reporter.on_step(ExecutionPhase::Commit, &waiting_label, &commit_ctx);
             let confirmation = self.deps.relayer.wait_for_confirmation(
                 &settings.relayer_api_url,
                 &submit_response.job_id,
@@ -359,6 +374,7 @@ impl Driver {
             reporter.on_step(
                 ExecutionPhase::Commit,
                 "Waiting for synchronizer to observe commit",
+                &commit_ctx,
             );
             let sync_head = self.deps.synchronizer.wait_for_tx(
                 &settings.synchronizer_api_url,
