@@ -50,7 +50,11 @@ pub async fn load_gui_inventory(
             .map(|class_info| (class_info.name.clone(), class_info))
             .collect::<HashMap<_, _>>();
         let inventory = driver
-            .sync_inventory(None)?
+            .sync_inventory(None)
+            .unwrap_or_else(|err| {
+                eprintln!("zk-craft: failed to sync inventory, falling back to local: {err}");
+                driver.list_objects(None).unwrap_or_default()
+            })
             .into_iter()
             .map(|object| {
                 let class_info = classes.get(&object.class_name);

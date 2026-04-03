@@ -13,7 +13,7 @@ use crate::catalog::{ActionCatalog, CatalogClass};
 use crate::clients::{
     HttpRelayerClient, HttpSynchronizerClient, RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
     RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS,
-    SynchronizerClient, SynchronizerMembership,
+    SynchronizerClient,
 };
 use crate::execute::{
     build_relayer_payload, reconcile_objects, resolve_inputs, rollback_results, save_results,
@@ -149,21 +149,11 @@ impl Driver {
             .filter_map(|entry| object_nullifier_hash(&entry.record.obj).ok())
             .collect::<HashSet<_>>();
 
-        let membership = self
-            .deps
-            .synchronizer
-            .fetch_membership_with_nullifiers(
-                &settings.synchronizer_api_url,
-                &source_tx_hashes.iter().copied().collect::<Vec<_>>(),
-                &live_nullifiers.iter().copied().collect::<Vec<_>>(),
-            )
-            .unwrap_or_else(|err| {
-                eprintln!("zk-craft: failed to load synchronizer inventory membership: {err}");
-                SynchronizerMembership {
-                    grounded_txs: HashSet::new(),
-                    on_chain_nullifiers: HashSet::new(),
-                }
-            });
+        let membership = self.deps.synchronizer.fetch_membership_with_nullifiers(
+            &settings.synchronizer_api_url,
+            &source_tx_hashes.iter().copied().collect::<Vec<_>>(),
+            &live_nullifiers.iter().copied().collect::<Vec<_>>(),
+        )?;
 
         reconcile_objects(&self.paths, &mut entries, &membership.on_chain_nullifiers);
 
