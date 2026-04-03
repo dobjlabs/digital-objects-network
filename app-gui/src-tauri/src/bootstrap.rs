@@ -40,7 +40,7 @@ pub struct LoadGuiInventoryResult {
 
 #[tauri::command]
 pub async fn load_gui_inventory(
-    driver: tauri::State<'_, Arc<driver::Driver>>,
+    driver: tauri::State<'_, Arc<::driver::Driver>>,
 ) -> Result<LoadGuiInventoryResult, CommandError> {
     let driver = driver.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -94,7 +94,7 @@ pub async fn load_gui_inventory(
 
 #[tauri::command]
 pub async fn get_global_state_root(
-    driver: tauri::State<'_, Arc<driver::Driver>>,
+    driver: tauri::State<'_, Arc<::driver::Driver>>,
 ) -> Result<String, CommandError> {
     let driver = driver.inner().clone();
     tauri::async_runtime::spawn_blocking(move || driver.get_state_root())

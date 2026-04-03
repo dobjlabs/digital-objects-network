@@ -7,7 +7,7 @@ use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
 pub fn get_objects_dir(
-    driver: tauri::State<'_, Arc<driver::Driver>>,
+    driver: tauri::State<'_, Arc<::driver::Driver>>,
 ) -> Result<String, CommandError> {
     let path = driver.paths().objects_dir.clone();
     Ok(path.to_string_lossy().to_string())
@@ -16,7 +16,7 @@ pub fn get_objects_dir(
 #[tauri::command]
 pub fn open_objects_dir(
     app: tauri::AppHandle,
-    driver: tauri::State<'_, Arc<driver::Driver>>,
+    driver: tauri::State<'_, Arc<::driver::Driver>>,
 ) -> Result<String, CommandError> {
     let path: PathBuf = driver.paths().objects_dir.clone();
     fs::create_dir_all(&path)
@@ -39,10 +39,10 @@ pub fn pick_dobj_file_path() -> Result<String, CommandError> {
 }
 
 #[tauri::command]
-pub fn read_dobj_file(path: String) -> Result<driver::ObjectRecord, CommandError> {
+pub fn read_dobj_file(path: String) -> Result<::driver::ObjectRecord, CommandError> {
     let path = PathBuf::from(path.trim());
     if !path.exists() {
         return Err(anyhow!("selected file does not exist: {}", path.display()).into());
     }
-    Ok(driver::parse_object_record_file(&path)?)
+    Ok(::driver::parse_object_record_file(&path)?)
 }

@@ -5,15 +5,15 @@ use craft_mcp::ops::CraftOps;
 use craft_mcp::types as mcp;
 use tauri::Emitter;
 
-use crate::sdk::progress::TauriProgressReporter;
+use crate::progress::TauriProgressReporter;
 
 pub(crate) struct AppCraftOps {
     app: tauri::AppHandle,
-    driver: Arc<driver::Driver>,
+    driver: Arc<::driver::Driver>,
 }
 
 impl AppCraftOps {
-    pub(crate) fn new(app: tauri::AppHandle, driver: Arc<driver::Driver>) -> Self {
+    pub(crate) fn new(app: tauri::AppHandle, driver: Arc<::driver::Driver>) -> Self {
         Self { app, driver }
     }
 }
@@ -64,7 +64,7 @@ impl CraftOps for AppCraftOps {
     fn inspect_object(&self, object_id: &str) -> anyhow::Result<mcp::ObjectDetail> {
         let object = self
             .driver
-            .read_object(&driver::ObjectSelector::ObjectId(object_id.to_string()))?;
+            .read_object(&::driver::ObjectSelector::ObjectId(object_id.to_string()))?;
         Ok(mcp::ObjectDetail {
             id: object.id,
             class_name: object.class_name,
@@ -99,7 +99,7 @@ impl CraftOps for AppCraftOps {
                 } else {
                     path.to_string()
                 };
-                Ok(driver::ObjectSelector::FileName(selector))
+                Ok(::driver::ObjectSelector::FileName(selector))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
@@ -120,7 +120,7 @@ impl CraftOps for AppCraftOps {
 
         let reporter = TauriProgressReporter::new(self.app.clone(), input.action_id.clone());
         let result = self.driver.execute_with_reporter(
-            driver::ExecuteActionInput {
+            ::driver::ExecuteActionInput {
                 action_id: input.action_id.clone(),
                 input_objects,
             },
@@ -133,7 +133,7 @@ impl CraftOps for AppCraftOps {
             .map(|file_name| {
                 let detail = self
                     .driver
-                    .read_object(&driver::ObjectSelector::FileName(file_name.clone()))?;
+                    .read_object(&::driver::ObjectSelector::FileName(file_name.clone()))?;
                 Ok(mcp::InventoryObject {
                     id: detail.id,
                     class_name: detail.class_name,
@@ -178,7 +178,7 @@ impl CraftOps for AppCraftOps {
     }
 }
 
-fn to_mcp_inventory_object(object: driver::ObjectSummary) -> mcp::InventoryObject {
+fn to_mcp_inventory_object(object: ::driver::ObjectSummary) -> mcp::InventoryObject {
     mcp::InventoryObject {
         id: object.id,
         class_name: object.class_name,

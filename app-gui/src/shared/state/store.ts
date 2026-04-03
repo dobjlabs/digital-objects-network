@@ -1,11 +1,11 @@
 import { create } from "zustand";
 import {
   loadGuiInventory,
-  runSdkAction,
+  runAction,
   type ActionId,
   type ActionPayload as Action,
   type InventoryObjectPayload as InventoryObject,
-  type RunSdkActionProgress,
+  type RunActionProgress,
 } from "../api/tauriClient";
 import { normalizeErrorMessage } from "../error";
 
@@ -64,7 +64,7 @@ export interface AppState {
   toggleNullified: () => void;
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   setGlobalStateRoot: (hash: string | null) => void;
-  applyRunSdkActionProgress: (event: RunSdkActionProgress) => void;
+  applyRunActionProgress: (event: RunActionProgress) => void;
   initProofPanel: (input: {
     actionId: string;
     cpuCost: string;
@@ -206,7 +206,7 @@ export const useStore = create<AppState>((set, get) => ({
         },
       };
     }),
-  applyRunSdkActionProgress: (event) =>
+  applyRunActionProgress: (event) =>
     set((prev) => {
       if (prev.proof.runActionId !== event.runId) return prev;
 
@@ -265,7 +265,7 @@ export const useStore = create<AppState>((set, get) => ({
           status: "generating",
           cpuCost,
           args,
-          messages: ["Running SDK action..."],
+          messages: ["Running action..."],
           steps: [
             {
               id: "generate-proof",
@@ -298,7 +298,7 @@ export const useStore = create<AppState>((set, get) => ({
     get().initProofPanel({ actionId, cpuCost, args: verifyTargets });
 
     try {
-      const result = await runSdkAction({
+      const result = await runAction({
         actionId,
         inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
       });

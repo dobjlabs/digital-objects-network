@@ -152,28 +152,3 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
-
-## Testing
-
-The crate has tests for:
-
-- default path resolution
-- settings round-trips
-- object file round-trips
-- built-in catalog visibility and listing
-- execute rollback behavior
-
-Tests use injected `DriverDeps` rather than real network services.
-
-## Current Non-Goals
-
-This crate does not currently provide:
-
-- user accounts or identity abstraction
-- key management
-- a CLI
-- a background worker/daemon
-- `.pexe` loading
-- a general query language
-
-Those can be added later on top of the current seams without rewriting the headless backend split.

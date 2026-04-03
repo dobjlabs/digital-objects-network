@@ -68,15 +68,15 @@ fn append_settings_to_named_submenu<R: Runtime>(
 
 #[tauri::command]
 pub fn get_app_settings(
-    driver: tauri::State<'_, Arc<driver::Driver>>,
-) -> Result<driver::DriverSettings, CommandError> {
+    driver: tauri::State<'_, Arc<::driver::Driver>>,
+) -> Result<::driver::DriverSettings, CommandError> {
     driver.load_settings().map_err(Into::into)
 }
 
 #[tauri::command]
 pub fn save_app_settings(
-    driver: tauri::State<'_, Arc<driver::Driver>>,
-    input: driver::DriverSettings,
-) -> Result<driver::DriverSettings, CommandError> {
+    driver: tauri::State<'_, Arc<::driver::Driver>>,
+    input: ::driver::DriverSettings,
+) -> Result<::driver::DriverSettings, CommandError> {
     driver.save_settings(&input).map_err(Into::into)
 }

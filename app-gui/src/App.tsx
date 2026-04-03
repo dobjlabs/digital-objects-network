@@ -9,7 +9,7 @@ import {
   getObjectsDir,
   listenOpenSettings,
   listenObjectsChanged,
-  listenRunSdkActionProgress,
+  listenRunActionProgress,
   listenMcpActionStarted,
   openObjectsDir,
   sampleAppCpu,
@@ -42,8 +42,8 @@ function App() {
   const toggleNullified = useStore((state) => state.toggleNullified);
   const recordCpuSample = useStore((state) => state.recordCpuSample);
   const setGlobalStateRoot = useStore((state) => state.setGlobalStateRoot);
-  const applyRunSdkActionProgress = useStore(
-    (state) => state.applyRunSdkActionProgress,
+  const applyRunActionProgress = useStore(
+    (state) => state.applyRunActionProgress,
   );
   const initProofPanel = useStore((state) => state.initProofPanel);
   const runProof = useStore((state) => state.runProof);
@@ -88,9 +88,9 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    listenRunSdkActionProgress((event) => {
+    listenRunActionProgress((event) => {
       if (!cancelled) {
-        applyRunSdkActionProgress(event);
+        applyRunActionProgress(event);
       }
     })
       .then((dispose) => {
@@ -101,14 +101,14 @@ function App() {
         unlisten = dispose;
       })
       .catch((error) => {
-        console.error("Failed to subscribe to run-sdk-action progress:", error);
+        console.error("Failed to subscribe to run-action progress:", error);
       });
 
     return () => {
       cancelled = true;
       if (unlisten) unlisten();
     };
-  }, [applyRunSdkActionProgress]);
+  }, [applyRunActionProgress]);
 
   // Listen for MCP-initiated actions so the proof panel shows progress
   useEffect(() => {

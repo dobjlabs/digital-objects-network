@@ -2,7 +2,7 @@ use serde::Serialize;
 use tauri::Emitter;
 
 use anyhow::{anyhow, Result};
-use driver::{ExecuteActionResult, ExecutionPhase, ExecutionReporter};
+use ::driver::{ExecuteActionResult, ExecutionPhase, ExecutionReporter};
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -20,7 +20,7 @@ pub(super) enum ProofProgressStatus {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RunSdkActionProgress {
+pub(super) struct RunActionProgress {
     pub(super) run_id: String,
     pub(super) phase: ProofPhase,
     pub(super) status: ProofProgressStatus,
@@ -30,8 +30,8 @@ pub(super) struct RunSdkActionProgress {
     pub(super) output_files: Option<Vec<String>>,
 }
 
-fn emit_progress(app: &tauri::AppHandle, payload: &RunSdkActionProgress) -> Result<()> {
-    app.emit("run-sdk-action-progress", payload)
+fn emit_progress(app: &tauri::AppHandle, payload: &RunActionProgress) -> Result<()> {
+    app.emit("run-action-progress", payload)
         .map_err(|err| anyhow!("failed to emit run progress: {err}"))
 }
 
@@ -40,7 +40,7 @@ pub(super) fn emit_generate_proof_step(
     run_id: &str,
     step_label: &str,
 ) -> Result<()> {
-    let payload = RunSdkActionProgress {
+    let payload = RunActionProgress {
         run_id: run_id.to_string(),
         phase: ProofPhase::GenerateProof,
         status: ProofProgressStatus::Running,
@@ -53,7 +53,7 @@ pub(super) fn emit_generate_proof_step(
 }
 
 pub(super) fn emit_generate_proof_done(app: &tauri::AppHandle, run_id: &str) -> Result<()> {
-    let payload = RunSdkActionProgress {
+    let payload = RunActionProgress {
         run_id: run_id.to_string(),
         phase: ProofPhase::GenerateProof,
         status: ProofProgressStatus::Done,
@@ -70,7 +70,7 @@ pub(super) fn emit_commit_done(
     run_id: &str,
     result: &ExecuteActionResult,
 ) -> Result<()> {
-    let payload = RunSdkActionProgress {
+    let payload = RunActionProgress {
         run_id: run_id.to_string(),
         phase: ProofPhase::Commit,
         status: ProofProgressStatus::Done,
@@ -100,7 +100,7 @@ impl ExecutionReporter for TauriProgressReporter {
                 emit_generate_proof_step(&self.app, &self.run_id, message)
             }
             ExecutionPhase::Commit => {
-                let payload = RunSdkActionProgress {
+                let payload = RunActionProgress {
                     run_id: self.run_id.clone(),
                     phase: ProofPhase::Commit,
                     status: ProofProgressStatus::Running,

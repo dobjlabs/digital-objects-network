@@ -31,12 +31,12 @@ export interface LoadGuiInventoryResult {
   actions: ActionPayload[];
 }
 
-export interface RunSdkActionInput {
+export interface RunActionInput {
   actionId: ActionId;
   inputObjectPaths: string[];
 }
 
-export interface RunSdkActionResult {
+export interface RunActionResult {
   ok: boolean;
   oldRoot: string;
   newRoot: string;
@@ -54,7 +54,7 @@ export interface ObjectRecordPayload {
   tx: unknown;
 }
 
-export interface RunSdkActionProgress {
+export interface RunActionProgress {
   runId: string;
   phase: ProofPhase;
   status: ProofProgressStatus;

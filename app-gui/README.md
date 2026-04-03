@@ -28,7 +28,7 @@ Inventory/actions come from backend via `load_gui_inventory`.
 From `src-tauri/src/lib.rs` invoke handler:
 
 - `load_gui_inventory`
-- `run_sdk_action`
+- `run_action`
 - `get_global_state_root`
 - `sample_app_cpu`
 - `get_objects_dir`
@@ -40,7 +40,7 @@ From `src-tauri/src/lib.rs` invoke handler:
 
 Events:
 
-- `run-sdk-action-progress`
+- `run-action-progress`
 - `objects-changed`
 - `open-settings`
 
@@ -52,7 +52,7 @@ Inventory loading (`load_gui_inventory`) does:
 2. Query synchronizer membership for source txs and live nullifiers in a single request anchored to one head.
 3. Mark grounded objects and auto-nullify locally-live files already spent on-chain.
 
-Action execution (`run_sdk_action`) does:
+Action execution (`run_action`) does:
 
 1. Resolve and validate local input objects.
 2. Request a proof-bearing grounding witness from the synchronizer for the inputs' source txs.
