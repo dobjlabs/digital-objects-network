@@ -34,6 +34,34 @@ pub trait RelayerClient: Send + Sync {
 #[derive(Debug, Default)]
 pub struct HttpRelayerClient;
 
+impl HttpRelayerClient {
+    fn fetch_job_status(&self, relayer_api_url: &str, job_id: &str) -> Result<JobStatusResponse> {
+        let endpoint = format!(
+            "{}/api/v1/proofs/{job_id}",
+            relayer_api_url.trim_end_matches('/')
+        );
+        let client = reqwest::blocking::Client::new();
+        let response = client
+            .get(&endpoint)
+            .send()
+            .map_err(|err| anyhow!("failed to query relayer job at {endpoint}: {err}"))?;
+
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(anyhow!(
+                "relayer status failed with {} {}: {}",
+                status.as_u16(),
+                status,
+                body
+            ));
+        }
+
+        serde_json::from_str::<JobStatusResponse>(&body)
+            .map_err(|err| anyhow!("failed to decode relayer status response: {err}; body={body}"))
+    }
+}
+
 impl RelayerClient for HttpRelayerClient {
     fn submit_proof(
         &self,
@@ -89,7 +117,7 @@ impl RelayerClient for HttpRelayerClient {
         let start = Instant::now();
 
         loop {
-            let status = fetch_relayer_job_status(relayer_api_url, job_id)?;
+            let status = self.fetch_job_status(relayer_api_url, job_id)?;
             match status.status {
                 JobStatus::Confirmed => {
                     return Ok(RelayerConfirmation {
@@ -121,30 +149,4 @@ impl RelayerClient for HttpRelayerClient {
             std::thread::sleep(poll_interval);
         }
     }
-}
-
-fn fetch_relayer_job_status(relayer_api_url: &str, job_id: &str) -> Result<JobStatusResponse> {
-    let endpoint = format!(
-        "{}/api/v1/proofs/{job_id}",
-        relayer_api_url.trim_end_matches('/')
-    );
-    let client = reqwest::blocking::Client::new();
-    let response = client
-        .get(&endpoint)
-        .send()
-        .map_err(|err| anyhow!("failed to query relayer job at {endpoint}: {err}"))?;
-
-    let status = response.status();
-    let body = response.text().unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!(
-            "relayer status failed with {} {}: {}",
-            status.as_u16(),
-            status,
-            body
-        ));
-    }
-
-    serde_json::from_str::<JobStatusResponse>(&body)
-        .map_err(|err| anyhow!("failed to decode relayer status response: {err}; body={body}"))
 }

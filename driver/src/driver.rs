@@ -19,9 +19,9 @@ use crate::execute::{
     build_relayer_payload, reconcile_objects, resolve_inputs, rollback_results, save_results,
     validate_execute_request,
 };
+use crate::object_record::parse_object_record_file;
 use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query,
-    parse_object_file_from_path, select_object,
+    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, select_object,
 };
 use crate::runtime::ActionRunGate;
 use crate::settings::{default_settings, read_settings, write_settings};
@@ -132,7 +132,7 @@ impl Driver {
             .and_then(|name| name.to_str())
             .ok_or_else(|| anyhow!("invalid input path (missing file name): {}", path.display()))?
             .to_string();
-        let record = parse_object_file_from_path(path)?;
+        let record = parse_object_record_file(path)?;
         Ok(self.object_detail(&ObjectFileEntry { file_name, record }, None))
     }
 
@@ -349,7 +349,11 @@ impl Driver {
         )?;
 
         let commit_result: Result<ExecuteActionResult> = (|| {
-            reporter.on_step(ExecutionPhase::Commit, "Submitting proof to relayer", &commit_ctx);
+            reporter.on_step(
+                ExecutionPhase::Commit,
+                "Submitting proof to relayer",
+                &commit_ctx,
+            );
             let submit_response = self.deps.relayer.submit_proof(
                 &settings.relayer_api_url,
                 &payload_bytes,

@@ -16,10 +16,8 @@ mod tests;
 pub use crate::builtin::BuiltinActionCatalog;
 pub use crate::catalog::ActionCatalog as DriverActionCatalog;
 pub use crate::clients::{
-    RELAYER_POLL_INTERVAL_MS as DEFAULT_RELAYER_POLL_INTERVAL_MS,
-    RELAYER_POLL_TIMEOUT_SECS as DEFAULT_RELAYER_POLL_TIMEOUT_SECS,
-    SYNCHRONIZER_POLL_INTERVAL_MS as DEFAULT_SYNCHRONIZER_POLL_INTERVAL_MS,
-    SYNCHRONIZER_POLL_TIMEOUT_SECS as DEFAULT_SYNCHRONIZER_POLL_TIMEOUT_SECS,
+    RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS, SYNCHRONIZER_POLL_INTERVAL_MS,
+    SYNCHRONIZER_POLL_TIMEOUT_SECS,
 };
 pub use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 pub use crate::object_record::ObjectRecord;

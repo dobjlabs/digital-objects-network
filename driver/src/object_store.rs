@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use std::{collections::HashMap, fs, path::Path};
 
-use crate::object_record::{ObjectRecord, parse_object_record_file};
+use crate::object_record::ObjectRecord;
 use crate::types::{DriverPaths, ObjectQuery, ObjectSelector};
 
 #[derive(Debug, Clone)]
@@ -29,10 +29,6 @@ pub(crate) fn ensure_store_dirs(paths: &DriverPaths) -> Result<()> {
 fn parse_object_file(contents: &str, file_name: &str) -> Result<ObjectRecord> {
     serde_json::from_str::<ObjectRecord>(contents)
         .map_err(|err| anyhow!("failed to parse {file_name} as object file: {err}"))
-}
-
-pub fn parse_object_file_from_path(path: &Path) -> Result<ObjectRecord> {
-    parse_object_record_file(path)
 }
 
 pub(crate) fn write_object_file(
@@ -211,8 +207,10 @@ mod tests {
     use crate::paths::default_paths;
     use crate::types::DriverPaths;
 
-    use super::{load_object_files, parse_object_file_from_path, write_object_file};
-    use crate::object_record::{ObjectRecord, ensure_extra_pod_deserializers_registered};
+    use super::{load_object_files, write_object_file};
+    use crate::object_record::{
+        ObjectRecord, ensure_extra_pod_deserializers_registered, parse_object_record_file,
+    };
 
     fn temp_paths() -> DriverPaths {
         let dir = tempdir().unwrap();
@@ -268,11 +266,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_object_file_from_path_round_trip() {
+    fn test_parse_object_record_file_round_trip() {
         let paths = temp_paths();
         let record = make_record();
         write_object_file(&paths, &record, "log_test.dobj").unwrap();
-        let loaded = parse_object_file_from_path(&paths.objects_dir.join("log_test.dobj")).unwrap();
+        let loaded = parse_object_record_file(&paths.objects_dir.join("log_test.dobj")).unwrap();
         assert_eq!(loaded.id, record.id);
     }
 
