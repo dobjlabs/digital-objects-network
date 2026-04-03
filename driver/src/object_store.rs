@@ -212,7 +212,7 @@ mod tests {
     use crate::types::DriverPaths;
 
     use super::{load_object_files, parse_object_file_from_path, write_object_file};
-    use crate::object_record::ObjectRecord;
+    use crate::object_record::{ObjectRecord, ensure_extra_pod_deserializers_registered};
 
     fn temp_paths() -> DriverPaths {
         let dir = tempdir().unwrap();
@@ -240,6 +240,7 @@ mod tests {
     }
 
     fn make_record() -> ObjectRecord {
+        ensure_extra_pod_deserializers_registered();
         let helper = Helper::new(dependencies(), actions());
         let builder = helper.builder(true, Arc::new(dummy_grounding_witness()));
         let outputs = builder.action("FindLog", vec![]);

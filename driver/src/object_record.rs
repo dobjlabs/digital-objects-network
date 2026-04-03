@@ -1,13 +1,10 @@
 use craft_sdk::SpendableObject;
-use pod2::{
-    frontend::MainPod,
-    middleware::{self, BackendError, Hash, Params, Pod, VDSet, containers::Dictionary},
-};
+use pod2::{frontend::MainPod, middleware::containers::Dictionary};
 use serde::de::{DeserializeOwned, Error as _};
 use serde::ser::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use std::{fs, path::Path, sync::Once};
+use std::{fs, path::Path};
 use txlib::Tx;
 
 #[derive(Debug, Clone)]
@@ -121,7 +118,6 @@ impl ObjectRecord {
         let class_name = parse_required_field::<String>(fields, "className", "className")?;
         let source_action = parse_required_field::<String>(fields, "sourceAction", "sourceAction")?;
         let nullifier = parse_optional_field::<String>(fields, "nullifier", "nullifier")?;
-        ensure_extra_pod_deserializers_registered();
         let pod = parse_required_field::<MainPod>(fields, "pod", "spendable.pod")?;
         let obj = parse_required_field::<Dictionary>(fields, "obj", "spendable.obj")?;
         let tx = parse_required_field::<Tx>(fields, "tx", "spendable.tx")?;
@@ -151,7 +147,12 @@ pub fn parse_object_record_file(path: &Path) -> anyhow::Result<ObjectRecord> {
         .map_err(|err| anyhow::anyhow!("failed to parse {file_name} as object file: {err}"))
 }
 
-fn ensure_extra_pod_deserializers_registered() {
+#[cfg(test)]
+pub(crate) fn ensure_extra_pod_deserializers_registered() {
+    use std::sync::Once;
+
+    use pod2::middleware::{self, BackendError, Hash, Params, Pod, VDSet};
+
     static REGISTER_EXTRA_DESERIALIZERS: Once = Once::new();
 
     REGISTER_EXTRA_DESERIALIZERS.call_once(|| {
