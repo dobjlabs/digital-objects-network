@@ -25,12 +25,16 @@ pub struct RunSdkActionResult {
 }
 
 #[tauri::command]
-pub fn run_sdk_action(
+pub async fn run_sdk_action(
     app: tauri::AppHandle,
     driver: tauri::State<'_, Arc<driver::Driver>>,
     input: RunSdkActionInput,
 ) -> Result<RunSdkActionResult, CommandError> {
-    run_sdk_action_core(app, driver.inner().clone(), input).map_err(Into::into)
+    let driver = driver.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || run_sdk_action_core(app, driver, input))
+        .await
+        .map_err(|err| anyhow!("failed to run action task: {err}"))?
+        .map_err(Into::into)
 }
 
 pub(crate) fn run_sdk_action_core(
