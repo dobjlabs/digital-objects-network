@@ -7,18 +7,18 @@ use serde::de::{DeserializeOwned, Error as _};
 use serde::ser::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use std::sync::Once;
+use std::{fs, path::Path, sync::Once};
 use txlib::Tx;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ObjectRecord {
-    pub(crate) id: String,
-    pub(crate) class_name: String,
-    pub(crate) source_action: String,
-    pub(crate) nullifier: Option<String>,
-    pub(crate) pod: MainPod,
-    pub(crate) obj: Dictionary,
-    pub(crate) tx: Tx,
+pub struct ObjectRecord {
+    pub id: String,
+    pub class_name: String,
+    pub source_action: String,
+    pub nullifier: Option<String>,
+    pub pod: MainPod,
+    pub obj: Dictionary,
+    pub tx: Tx,
 }
 
 fn parse_required_field<T: DeserializeOwned>(
@@ -127,6 +127,17 @@ impl ObjectRecord {
             tx,
         })
     }
+}
+
+pub fn parse_object_record_file(path: &Path) -> anyhow::Result<ObjectRecord> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid input path (missing file name): {}", path.display()))?;
+    let contents = fs::read_to_string(path)
+        .map_err(|err| anyhow::anyhow!("failed to read input file {}: {err}", path.display()))?;
+    serde_json::from_str::<ObjectRecord>(&contents)
+        .map_err(|err| anyhow::anyhow!("failed to parse {file_name} as object file: {err}"))
 }
 
 fn ensure_extra_pod_deserializers_registered() {

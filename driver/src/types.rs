@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverPaths {
-    pub settings_dir: PathBuf,
     pub settings_path: PathBuf,
     pub objects_dir: PathBuf,
     pub nullified_objects_dir: PathBuf,

@@ -1,7 +1,6 @@
 use std::{fs, path::PathBuf, sync::Arc};
 
 use crate::error::CommandError;
-use crate::objects::{ObjectRecord, parse_object_file_from_path};
 use anyhow::{anyhow, Result};
 use rfd::FileDialog;
 use tauri_plugin_opener::OpenerExt;
@@ -40,10 +39,10 @@ pub fn pick_dobj_file_path() -> Result<String, CommandError> {
 }
 
 #[tauri::command]
-pub fn read_dobj_file(path: String) -> Result<ObjectRecord, CommandError> {
+pub fn read_dobj_file(path: String) -> Result<driver::ObjectRecord, CommandError> {
     let path = PathBuf::from(path.trim());
     if !path.exists() {
         return Err(anyhow!("selected file does not exist: {}", path.display()).into());
     }
-    Ok(parse_object_file_from_path(&path)?)
+    Ok(driver::parse_object_record_file(&path)?)
 }

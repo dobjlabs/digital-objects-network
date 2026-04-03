@@ -84,8 +84,7 @@ Important public types are defined in [`src/types.rs`](src/types.rs):
 
 Default paths are defined in [`src/paths.rs`](src/paths.rs).
 
-- settings dir: `dirs::config_dir()/com.dobjlabs.zk-craft`
-- settings file: `.../settings.json`
+- settings file: `dirs::config_dir()/com.dobjlabs.zk-craft/settings.json`
 - objects dir: `~/.objects`
 - nullified dir: `~/.objects/.nullified`
 

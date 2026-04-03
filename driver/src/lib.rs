@@ -28,7 +28,7 @@ use crate::clients::{
     RELAYER_POLL_TIMEOUT_SECS, RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS,
     SYNCHRONIZER_POLL_TIMEOUT_SECS, SynchronizerClient,
 };
-use crate::object_record::ObjectRecord;
+use crate::object_record::ObjectRecord as StoredObjectRecord;
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, parse_object_file_from_path,
     select_object, write_object_file,
@@ -44,6 +44,8 @@ pub use crate::types::{
 
 pub use crate::builtin::BuiltinActionCatalog;
 pub use crate::catalog::ActionCatalog as DriverActionCatalog;
+pub use crate::object_record::ObjectRecord;
+pub use crate::object_record::parse_object_record_file;
 pub use crate::clients::{
     RELAYER_POLL_INTERVAL_MS as DEFAULT_RELAYER_POLL_INTERVAL_MS,
     RELAYER_POLL_TIMEOUT_SECS as DEFAULT_RELAYER_POLL_TIMEOUT_SECS,
@@ -490,7 +492,7 @@ fn reconcile_objects(
         if !on_chain_nullifiers.contains(&nullifier_hash) {
             continue;
         }
-        let nullified_record = ObjectRecord {
+        let nullified_record = StoredObjectRecord {
             id: entry.record.id.clone(),
             class_name: entry.record.class_name.clone(),
             source_action: entry.record.source_action.clone(),
@@ -537,7 +539,7 @@ fn validate_execute_request(input: &ExecuteActionInput, action: &ActionSummary) 
 #[derive(Debug, Clone)]
 struct ResolvedInput {
     file_name: String,
-    record: ObjectRecord,
+    record: StoredObjectRecord,
 }
 
 fn resolve_inputs(
@@ -593,7 +595,7 @@ fn save_results(
         })?;
         let input_nullifier = encode_hash_hex(&nullifier_hash);
 
-        let nullified_record = ObjectRecord {
+        let nullified_record = StoredObjectRecord {
             id: input_record.id.clone(),
             class_name: input_record.class_name.clone(),
             source_action: input_record.source_action.clone(),
@@ -626,7 +628,7 @@ fn save_results(
         );
         output_files.push(file_name.clone());
 
-        let live_record = ObjectRecord {
+        let live_record = StoredObjectRecord {
             id: object_id,
             class_name: class_name.clone(),
             source_action: action_id.to_string(),
@@ -646,7 +648,7 @@ fn save_results(
 
 fn rollback_results(paths: &DriverPaths, resolved_inputs: &[ResolvedInput], saved: &SavedFiles) {
     for input in resolved_inputs {
-        let live_record = ObjectRecord {
+        let live_record = StoredObjectRecord {
             id: input.record.id.clone(),
             class_name: input.record.class_name.clone(),
             source_action: input.record.source_action.clone(),
@@ -715,12 +717,10 @@ mod tests {
     fn temp_paths() -> DriverPaths {
         let dir = tempdir().unwrap();
         let root = dir.keep();
-        let settings_dir = root.join("config/com.dobjlabs.zk-craft");
-        let settings_path = settings_dir.join("settings.json");
+        let settings_path = root.join("config/com.dobjlabs.zk-craft/settings.json");
         let objects_dir = root.join(".objects");
         let nullified_objects_dir = objects_dir.join(".nullified");
         DriverPaths {
-            settings_dir,
             settings_path,
             objects_dir,
             nullified_objects_dir,
@@ -781,7 +781,7 @@ mod tests {
             .unwrap();
         let spendable = outputs.obj(0);
         let id = format!("{:#}", spendable.obj.commitment());
-        let record = ObjectRecord {
+        let record = StoredObjectRecord {
             id,
             class_name: "Log".to_string(),
             source_action: "FindLog".to_string(),

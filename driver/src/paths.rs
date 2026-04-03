@@ -5,16 +5,15 @@ use crate::types::DriverPaths;
 const APP_IDENTIFIER: &str = "com.dobjlabs.zk-craft";
 
 pub fn default_paths() -> Result<DriverPaths> {
-    let settings_dir = dirs::config_dir()
+    let settings_path = dirs::config_dir()
         .ok_or_else(|| anyhow!("failed to resolve config directory"))?
-        .join(APP_IDENTIFIER);
-    let settings_path = settings_dir.join("settings.json");
+        .join(APP_IDENTIFIER)
+        .join("settings.json");
     let objects_dir = dirs::home_dir()
         .ok_or_else(|| anyhow!("failed to resolve home directory"))?
         .join(".objects");
     let nullified_objects_dir = objects_dir.join(".nullified");
     Ok(DriverPaths {
-        settings_dir,
         settings_path,
         objects_dir,
         nullified_objects_dir,

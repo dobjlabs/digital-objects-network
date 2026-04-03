@@ -38,12 +38,14 @@ pub fn read_settings(paths: &DriverPaths) -> Result<Option<DriverSettings>> {
 }
 
 pub fn write_settings(paths: &DriverPaths, settings: &DriverSettings) -> Result<()> {
-    fs::create_dir_all(&paths.settings_dir).map_err(|err| {
+    let settings_dir = paths.settings_path.parent().ok_or_else(|| {
         anyhow!(
-            "failed to create settings directory {}: {err}",
-            paths.settings_dir.display()
+            "settings path has no parent directory: {}",
+            paths.settings_path.display()
         )
     })?;
+    fs::create_dir_all(settings_dir)
+        .map_err(|err| anyhow!("failed to create settings directory {}: {err}", settings_dir.display()))?;
     let serialized =
         serde_json::to_string(settings).map_err(|err| anyhow!("failed to serialize settings: {err}"))?;
     fs::write(&paths.settings_path, serialized).map_err(|err| {
@@ -64,12 +66,10 @@ mod tests {
     fn temp_paths() -> DriverPaths {
         let dir = tempdir().unwrap();
         let root = dir.keep();
-        let settings_dir = root.join("config/com.dobjlabs.zk-craft");
-        let settings_path = settings_dir.join("settings.json");
+        let settings_path = root.join("config/com.dobjlabs.zk-craft/settings.json");
         let objects_dir = root.join(".objects");
         let nullified_objects_dir = objects_dir.join(".nullified");
         DriverPaths {
-            settings_dir,
             settings_path,
             objects_dir,
             nullified_objects_dir,

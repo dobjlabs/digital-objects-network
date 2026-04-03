@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use std::{collections::HashMap, fs, path::Path};
 
-use crate::object_record::ObjectRecord;
+use crate::object_record::{ObjectRecord, parse_object_record_file};
 use crate::types::{DriverPaths, ObjectQuery, ObjectSelector};
 
 #[derive(Debug, Clone)]
@@ -31,14 +31,8 @@ fn parse_object_file(contents: &str, file_name: &str) -> Result<ObjectRecord> {
         .map_err(|err| anyhow!("failed to parse {file_name} as object file: {err}"))
 }
 
-pub(crate) fn parse_object_file_from_path(path: &Path) -> Result<ObjectRecord> {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| anyhow!("invalid input path (missing file name): {}", path.display()))?;
-    let contents = fs::read_to_string(path)
-        .map_err(|err| anyhow!("failed to read input file {}: {err}", path.display()))?;
-    parse_object_file(&contents, file_name)
+pub fn parse_object_file_from_path(path: &Path) -> Result<ObjectRecord> {
+    parse_object_record_file(path)
 }
 
 pub(crate) fn write_object_file(
@@ -223,12 +217,10 @@ mod tests {
     fn temp_paths() -> DriverPaths {
         let dir = tempdir().unwrap();
         let root = dir.keep();
-        let settings_dir = root.join("config/com.dobjlabs.zk-craft");
-        let settings_path = settings_dir.join("settings.json");
+        let settings_path = root.join("config/com.dobjlabs.zk-craft/settings.json");
         let objects_dir = root.join(".objects");
         let nullified_objects_dir = objects_dir.join(".nullified");
         DriverPaths {
-            settings_dir,
             settings_path,
             objects_dir,
             nullified_objects_dir,

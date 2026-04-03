@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::error::CommandError;
-use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem, MenuItemBuilder},
     AppHandle, Emitter, Runtime,
@@ -9,31 +8,6 @@ use tauri::{
 
 const MENU_OPEN_SETTINGS_ID: &str = "app.open-settings";
 const OPEN_SETTINGS_EVENT: &str = "open-settings";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppSettings {
-    pub synchronizer_api_url: String,
-    pub relayer_api_url: String,
-}
-
-impl From<driver::DriverSettings> for AppSettings {
-    fn from(value: driver::DriverSettings) -> Self {
-        Self {
-            synchronizer_api_url: value.synchronizer_api_url,
-            relayer_api_url: value.relayer_api_url,
-        }
-    }
-}
-
-impl From<AppSettings> for driver::DriverSettings {
-    fn from(value: AppSettings) -> Self {
-        Self {
-            synchronizer_api_url: value.synchronizer_api_url,
-            relayer_api_url: value.relayer_api_url,
-        }
-    }
-}
 
 pub(crate) fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let menu = Menu::default(app)?;
@@ -95,14 +69,14 @@ fn append_settings_to_named_submenu<R: Runtime>(
 #[tauri::command]
 pub fn get_app_settings(
     driver: tauri::State<'_, Arc<driver::Driver>>,
-) -> Result<AppSettings, CommandError> {
-    Ok(driver.load_settings()?.into())
+) -> Result<driver::DriverSettings, CommandError> {
+    driver.load_settings().map_err(Into::into)
 }
 
 #[tauri::command]
 pub fn save_app_settings(
     driver: tauri::State<'_, Arc<driver::Driver>>,
-    input: AppSettings,
-) -> Result<AppSettings, CommandError> {
-    Ok(driver.save_settings(&input.clone().into())?.into())
+    input: driver::DriverSettings,
+) -> Result<driver::DriverSettings, CommandError> {
+    driver.save_settings(&input).map_err(Into::into)
 }
