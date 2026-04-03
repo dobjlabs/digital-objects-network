@@ -1,4 +1,9 @@
-use std::{fs, path::{Path, PathBuf}, sync::mpsc, thread};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::mpsc,
+    thread,
+};
 
 use anyhow::{anyhow, Result};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};

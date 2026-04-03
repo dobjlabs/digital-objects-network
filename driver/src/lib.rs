@@ -25,8 +25,7 @@ pub use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 pub use crate::object_record::ObjectRecord;
 pub use crate::object_record::parse_object_record_file;
 pub use crate::types::{
-    ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary,
-    DriverPaths, DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase,
-    ExecutionReporter, NoopExecutionReporter, ObjectDetail, ObjectQuery, ObjectSelector,
-    ObjectSummary,
+    ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
+    DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
+    NoopExecutionReporter, ObjectDetail, ObjectQuery, ObjectSelector, ObjectSummary,
 };

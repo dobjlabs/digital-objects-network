@@ -229,7 +229,12 @@ mod tests {
 
     fn dummy_grounding_witness() -> GroundingWitness {
         GroundingWitness::new(
-            StateRoot::new(1, pod2::middleware::EMPTY_HASH, pod2::middleware::EMPTY_HASH, pod2::middleware::EMPTY_HASH),
+            StateRoot::new(
+                1,
+                pod2::middleware::EMPTY_HASH,
+                pod2::middleware::EMPTY_HASH,
+                pod2::middleware::EMPTY_HASH,
+            ),
             HashMap::new(),
         )
     }

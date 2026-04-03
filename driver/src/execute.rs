@@ -70,7 +70,9 @@ pub(crate) fn validate_execute_request(
             ObjectSelector::ObjectId(object_id) => format!("id:{object_id}"),
         };
         if !seen.insert(key.clone()) {
-            return Err(anyhow!("duplicate input object selector is not allowed: {key}"));
+            return Err(anyhow!(
+                "duplicate input object selector is not allowed: {key}"
+            ));
         }
     }
 

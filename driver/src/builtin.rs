@@ -399,7 +399,10 @@ fn use_pick_details(step: Step, name: &'static str, vdf_iters: usize) -> Step {
         }),
     )
     .update("durability", Arg::var("durability"))
-    .var("key", Box::new(|_ctx| Value::from(pod2utils::rand_raw_value())))
+    .var(
+        "key",
+        Box::new(|_ctx| Value::from(pod2utils::rand_raw_value())),
+    )
     .update("key", Arg::var("key"))
     .var(
         "work",

@@ -44,10 +44,14 @@ pub fn write_settings(paths: &DriverPaths, settings: &DriverSettings) -> Result<
             paths.settings_path.display()
         )
     })?;
-    fs::create_dir_all(settings_dir)
-        .map_err(|err| anyhow!("failed to create settings directory {}: {err}", settings_dir.display()))?;
-    let serialized =
-        serde_json::to_string(settings).map_err(|err| anyhow!("failed to serialize settings: {err}"))?;
+    fs::create_dir_all(settings_dir).map_err(|err| {
+        anyhow!(
+            "failed to create settings directory {}: {err}",
+            settings_dir.display()
+        )
+    })?;
+    let serialized = serde_json::to_string(settings)
+        .map_err(|err| anyhow!("failed to serialize settings: {err}"))?;
     fs::write(&paths.settings_path, serialized).map_err(|err| {
         anyhow!(
             "failed to write settings file {}: {err}",

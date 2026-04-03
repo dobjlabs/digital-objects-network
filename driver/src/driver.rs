@@ -11,25 +11,24 @@ use txlib::object_nullifier_hash;
 use crate::builtin::BuiltinActionCatalog;
 use crate::catalog::{ActionCatalog, CatalogClass};
 use crate::clients::{
-    HttpRelayerClient, HttpSynchronizerClient, RELAYER_POLL_INTERVAL_MS,
-    RELAYER_POLL_TIMEOUT_SECS, RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS,
-    SYNCHRONIZER_POLL_TIMEOUT_SECS, SynchronizerClient,
+    HttpRelayerClient, HttpSynchronizerClient, RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
+    RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS,
+    SynchronizerClient,
 };
 use crate::execute::{
     build_relayer_payload, reconcile_objects, resolve_inputs, rollback_results, save_results,
     validate_execute_request,
 };
 use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, parse_object_file_from_path,
-    select_object,
+    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query,
+    parse_object_file_from_path, select_object,
 };
 use crate::runtime::ActionRunGate;
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
-    ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary,
-    DriverPaths, DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase,
-    ExecutionReporter, NoopExecutionReporter, ObjectDetail, ObjectQuery, ObjectSelector,
-    ObjectSummary,
+    ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
+    DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
+    NoopExecutionReporter, ObjectDetail, ObjectQuery, ObjectSelector, ObjectSummary,
 };
 
 pub trait PayloadBuilder: Send + Sync {
@@ -133,10 +132,7 @@ impl Driver {
             .ok_or_else(|| anyhow!("invalid input path (missing file name): {}", path.display()))?
             .to_string();
         let record = parse_object_file_from_path(path)?;
-        Ok(self.object_detail(
-            &ObjectFileEntry { file_name, record },
-            None,
-        ))
+        Ok(self.object_detail(&ObjectFileEntry { file_name, record }, None))
     }
 
     pub fn sync_inventory(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
@@ -158,11 +154,7 @@ impl Driver {
             &live_nullifiers.iter().copied().collect::<Vec<_>>(),
         )?;
 
-        reconcile_objects(
-            &self.paths,
-            &mut entries,
-            &membership.on_chain_nullifiers,
-        );
+        reconcile_objects(&self.paths, &mut entries, &membership.on_chain_nullifiers);
 
         Ok(entries
             .iter()
@@ -182,9 +174,7 @@ impl Driver {
             .into_iter()
             .filter(|action| {
                 query.is_none_or(|query| {
-                    query.name
-                        .as_ref()
-                        .is_none_or(|name| &action.id == name)
+                    query.name.as_ref().is_none_or(|name| &action.id == name)
                         && query
                             .input_class
                             .as_ref()
@@ -308,10 +298,10 @@ impl Driver {
             .iter()
             .map(|entry| entry.record.spendable().tx.dict().commitment())
             .collect::<Vec<_>>();
-        let grounding_witness = self.deps.synchronizer.fetch_grounding_witness(
-            &settings.synchronizer_api_url,
-            &source_tx_hashes,
-        )?;
+        let grounding_witness = self
+            .deps
+            .synchronizer
+            .fetch_grounding_witness(&settings.synchronizer_api_url, &source_tx_hashes)?;
         let old_root_hash = grounding_witness.state_root.hash();
         let old_root = encode_hash_hex(&old_root_hash);
 

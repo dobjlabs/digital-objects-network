@@ -1,8 +1,8 @@
 use serde::Serialize;
 use tauri::Emitter;
 
-use anyhow::{anyhow, Result};
 use ::driver::{ExecuteActionResult, ExecutionPhase, ExecutionReporter};
+use anyhow::{anyhow, Result};
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

@@ -73,9 +73,8 @@ impl RelayerClient for HttpRelayerClient {
             ));
         }
 
-        serde_json::from_str::<SubmitProofResponse>(&body).map_err(|err| {
-            anyhow!("failed to decode relayer submit response: {err}; body={body}")
-        })
+        serde_json::from_str::<SubmitProofResponse>(&body)
+            .map_err(|err| anyhow!("failed to decode relayer submit response: {err}; body={body}"))
     }
 
     fn wait_for_confirmation(

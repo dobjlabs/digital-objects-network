@@ -27,7 +27,11 @@ mod tests {
     #[test]
     fn test_default_paths_shape() {
         let paths = default_paths().unwrap();
-        assert!(paths.settings_path.ends_with("com.dobjlabs.zk-craft/settings.json"));
+        assert!(
+            paths
+                .settings_path
+                .ends_with("com.dobjlabs.zk-craft/settings.json")
+        );
         assert!(paths.objects_dir.ends_with(".objects"));
         assert!(paths.nullified_objects_dir.ends_with(".objects/.nullified"));
     }

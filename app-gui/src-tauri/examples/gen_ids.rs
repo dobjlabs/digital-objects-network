@@ -26,7 +26,10 @@ fn render_typescript_ids() -> String {
     );
     let class_union = render_union_type(
         "ClassName",
-        catalog.list_classes().into_iter().map(|class_info| class_info.name),
+        catalog
+            .list_classes()
+            .into_iter()
+            .map(|class_info| class_info.name),
     );
     format!(
         r#"/* eslint-disable */

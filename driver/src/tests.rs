@@ -10,10 +10,15 @@ use txlib::{GroundingWitness, StateRoot};
 
 use crate::builtin::{actions, dependencies};
 use crate::catalog::ActionCatalog;
-use crate::clients::{RelayerConfirmation, SynchronizerClient, SynchronizerHead, SynchronizerMembership, RelayerClient};
+use crate::clients::{
+    RelayerClient, RelayerConfirmation, SynchronizerClient, SynchronizerHead,
+    SynchronizerMembership,
+};
 use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 use crate::object_record::ObjectRecord;
-use crate::object_store::{ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file};
+use crate::object_store::{
+    ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
+};
 use crate::{ActionQuery, BuiltinActionCatalog, DriverPaths, ExecuteActionInput, ObjectSelector};
 
 fn temp_paths() -> DriverPaths {
@@ -267,9 +272,11 @@ fn test_list_actions_filters_by_input_class() {
             ..ActionQuery::default()
         }))
         .unwrap();
-    assert!(filtered
-        .iter()
-        .all(|action| action.input_classes.contains(&"Wood".to_string())));
+    assert!(
+        filtered
+            .iter()
+            .all(|action| action.input_classes.contains(&"Wood".to_string()))
+    );
 }
 
 #[test]

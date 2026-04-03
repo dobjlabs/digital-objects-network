@@ -58,8 +58,11 @@ impl SynchronizerClient for HttpSynchronizerClient {
     fn fetch_head(&self, sync_api_url: &str) -> Result<SynchronizerHead> {
         let endpoint = format!("{}/v1/state/head", sync_api_url.trim_end_matches('/'));
         let client = reqwest::blocking::Client::new();
-        let payload: StateHeadResponse =
-            send_json_request(client.get(&endpoint), &endpoint, "synchronizer head response")?;
+        let payload: StateHeadResponse = send_json_request(
+            client.get(&endpoint),
+            &endpoint,
+            "synchronizer head response",
+        )?;
         let current_gsr = payload
             .current_gsr
             .as_deref()

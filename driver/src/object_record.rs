@@ -74,7 +74,10 @@ impl ObjectRecord {
     fn to_file_value(&self) -> Result<Value, String> {
         let mut fields = serde_json::Map::new();
         fields.insert("id".to_string(), Value::String(self.id.clone()));
-        fields.insert("className".to_string(), Value::String(self.class_name.clone()));
+        fields.insert(
+            "className".to_string(),
+            Value::String(self.class_name.clone()),
+        );
         fields.insert(
             "sourceAction".to_string(),
             Value::String(self.source_action.clone()),
@@ -133,7 +136,9 @@ pub fn parse_object_record_file(path: &Path) -> anyhow::Result<ObjectRecord> {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid input path (missing file name): {}", path.display()))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("invalid input path (missing file name): {}", path.display())
+        })?;
     let contents = fs::read_to_string(path)
         .map_err(|err| anyhow::anyhow!("failed to read input file {}: {err}", path.display()))?;
     serde_json::from_str::<ObjectRecord>(&contents)
