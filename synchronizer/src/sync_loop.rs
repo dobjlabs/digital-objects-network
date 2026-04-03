@@ -7,6 +7,7 @@ use reqwest_eventsource::{Event, EventSource};
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
+use crate::catchup::{self, FetchedSlot};
 use crate::node::{Node, ProcessedSlot};
 const HEAD_CHECK_INTERVAL: Duration = Duration::from_secs(12);
 
@@ -55,12 +56,79 @@ pub async fn run_sync_loop(
         events: None,
     };
 
+    let batch_size = node.config.catchup_batch_size;
+
     loop {
         if *shutdown_rx.borrow() {
             info!("Sync loop shutting down");
             return Ok(());
         }
 
+        let slots_behind = head_tracker.head.slot.saturating_sub(next_slot);
+
+        // ── Batch catch-up path ──────────────────────────────────────────
+        if slots_behind >= batch_size as u32 {
+            let batch_end = next_slot + batch_size as u32;
+            let slots: Vec<u32> = (next_slot..batch_end).collect();
+            info!(
+                first_slot = next_slot,
+                last_slot = batch_end - 1,
+                slots_behind,
+                batch_size,
+                "Starting batch catch-up"
+            );
+
+            let fetched = catchup::fetch_batch(&node, &slots).await;
+
+            let mut reorg_detected = false;
+            for result in fetched {
+                if *shutdown_rx.borrow() {
+                    info!("Sync loop shutting down");
+                    return Ok(());
+                }
+
+                match result? {
+                    FetchedSlot::Missing { slot } => {
+                        match handle_missing_slot(&node, slot).await? {
+                            MissingSlotAction::Rewound(rewind_slot) => {
+                                next_slot = rewind_slot;
+                                reorg_detected = true;
+                                break;
+                            }
+                            MissingSlotAction::Applied => {
+                                next_slot = slot + 1;
+                            }
+                        }
+                    }
+                    FetchedSlot::Present {
+                        slot,
+                        header,
+                        block,
+                    } => {
+                        if let Some(rewind_slot) =
+                            handle_reorgs_for_present_slot(&node, slot, &header).await?
+                        {
+                            next_slot = rewind_slot;
+                            reorg_detected = true;
+                            break;
+                        }
+
+                        let processed = node.derive_slot_update_with_block(&header, &block).await?;
+                        node.commit_slot(&processed).await?;
+                        next_slot = slot + 1;
+                    }
+                }
+            }
+
+            if reorg_detected {
+                // Re-fetch beacon head before restarting — chain view may have changed.
+                head_tracker.head = node.get_beacon_head_header_with_retry().await?;
+            }
+
+            continue;
+        }
+
+        // ── Single-slot path (at or near head) ──────────────────────────
         debug!(slot = next_slot, "Checking slot");
         // Resolve the target slot against beacon head; may return:
         // - Missing: canonical empty slot
