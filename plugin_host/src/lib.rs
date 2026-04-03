@@ -159,10 +159,6 @@ const BUILTIN_PLUGINS: &[(&str, &str)] = &[
         include_str!("../../data/plugins/actions/craft_wood_pick/plugin.rhai"),
     ),
     (
-        include_str!("../../data/plugins/actions/use_wood_pick/manifest.toml"),
-        include_str!("../../data/plugins/actions/use_wood_pick/plugin.rhai"),
-    ),
-    (
         include_str!("../../data/plugins/actions/stone_tools/manifest.toml"),
         include_str!("../../data/plugins/actions/stone_tools/plugin.rhai"),
     ),
@@ -351,7 +347,7 @@ mod tests {
     #[test]
     fn test_orchestrator_load() {
         let orch = PluginOrchestrator::builtin().expect("failed to load orchestrator");
-        assert_eq!(orch.hosts.len(), 6);
+        assert_eq!(orch.hosts.len(), 5);
     }
 
     #[test]
@@ -455,22 +451,29 @@ mod tests {
             orch.hosts[3].metadata().imports,
             vec!["craft-wood", "craft-sticks"]
         );
+        // stone-tools imports craft-wood-pick and craft-sticks
+        assert_eq!(
+            orch.hosts[4].metadata().imports,
+            vec!["craft-wood-pick", "craft-sticks"]
+        );
     }
 
     #[test]
     fn test_orchestrator_action_groups() {
         let orch = PluginOrchestrator::builtin().unwrap();
         let groups = orch.action_groups();
-        assert_eq!(groups.len(), 6);
+        assert_eq!(groups.len(), 5);
         assert_eq!(groups[0].name, "find-log");
         assert_eq!(groups[0].alias, "find_log");
         assert!(groups[0].imports.is_empty());
         assert_eq!(groups[1].name, "craft-wood");
         assert_eq!(groups[1].imports, vec!["find-log"]);
+        let wood_pick = groups.iter().find(|g| g.name == "craft-wood-pick").unwrap();
+        assert_eq!(wood_pick.actions.len(), 2);
         // stone-tools is the merged module with 4 actions
         let stone = groups.iter().find(|g| g.name == "stone-tools").unwrap();
         assert_eq!(stone.actions.len(), 4);
-        assert_eq!(stone.imports, vec!["use-wood-pick", "craft-sticks"]);
+        assert_eq!(stone.imports, vec!["craft-wood-pick", "craft-sticks"]);
     }
 
     #[test]
@@ -481,7 +484,7 @@ mod tests {
         let groups = orch.action_groups();
         let helper = Helper::new_multi_module(groups);
 
-        // Should have 7 modules: txlib + 6 action modules
+        // Should have 6 modules: txlib + 5 action modules
         // (modules field is private, but we can check via podlang_src)
         assert!(!helper.podlang_src.is_empty());
 
@@ -508,7 +511,7 @@ mod tests {
     #[test]
     fn test_rhai_runtime_executes_full_action_chain() {
         let orch = PluginOrchestrator::builtin().unwrap();
-        let helper = Helper::new(orch.dependencies(), orch.actions());
+        let helper = Helper::new_multi_module(orch.action_groups());
         let mut state = TestState::empty(0);
 
         let empty_inputs: Vec<txlib::Tx> = Vec::new();

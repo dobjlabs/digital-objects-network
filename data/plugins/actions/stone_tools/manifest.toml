@@ -1,7 +1,7 @@
 [plugin]
 name = "stone-tools"
 version = "0.1.0"
-imports = ["use-wood-pick", "craft-sticks"]
+imports = ["craft-wood-pick", "craft-sticks"]
 
 [[dependencies]]
 dep_type = "Intro"
