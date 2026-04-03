@@ -1,8 +1,7 @@
 use std::{fs, path::PathBuf, sync::Arc};
 
 use crate::error::CommandError;
-use crate::objects::ObjectRecord;
-use crate::sdk::parse_object_file_from_path;
+use crate::objects::{ObjectRecord, parse_object_file_from_path};
 use anyhow::{anyhow, Result};
 use rfd::FileDialog;
 use tauri_plugin_opener::OpenerExt;

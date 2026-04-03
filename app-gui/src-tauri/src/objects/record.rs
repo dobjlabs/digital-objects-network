@@ -3,6 +3,7 @@ use serde::de::{DeserializeOwned, Error as _};
 use serde::ser::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use std::{fs, path::Path};
 use txlib::Tx;
 
 #[derive(Debug)]
@@ -45,6 +46,21 @@ fn parse_optional_field<T: DeserializeOwned>(
             .map(Some)
             .map_err(|err| format!("failed to deserialize {context}: {err}")),
     }
+}
+
+fn parse_object_file(contents: &str, file_name: &str) -> Result<ObjectRecord, String> {
+    serde_json::from_str::<ObjectRecord>(contents)
+        .map_err(|err| format!("failed to parse {file_name} as object file: {err}"))
+}
+
+pub(crate) fn parse_object_file_from_path(path: &Path) -> anyhow::Result<ObjectRecord> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid input path (missing file name): {}", path.display()))?;
+    let contents = fs::read_to_string(path)
+        .map_err(|err| anyhow::anyhow!("failed to read input file {}: {err}", path.display()))?;
+    parse_object_file(&contents, file_name).map_err(anyhow::Error::msg)
 }
 
 impl ObjectRecord {

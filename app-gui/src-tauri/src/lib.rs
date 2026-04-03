@@ -4,7 +4,6 @@ mod mcp;
 mod objects;
 mod sdk;
 mod settings;
-mod spec;
 
 use std::sync::Arc;
 

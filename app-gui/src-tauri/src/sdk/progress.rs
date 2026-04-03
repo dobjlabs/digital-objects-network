@@ -65,24 +65,6 @@ pub(super) fn emit_generate_proof_done(app: &tauri::AppHandle, run_id: &str) -> 
     emit_progress(app, &payload)
 }
 
-pub(super) fn emit_commit_step(
-    app: &tauri::AppHandle,
-    run_id: &str,
-    step_label: &str,
-    old_root: &str,
-) -> Result<()> {
-    let payload = RunSdkActionProgress {
-        run_id: run_id.to_string(),
-        phase: ProofPhase::Commit,
-        status: ProofProgressStatus::Running,
-        message: step_label.to_string(),
-        old_root: Some(old_root.to_string()),
-        new_root: None,
-        output_files: None,
-    };
-    emit_progress(app, &payload)
-}
-
 pub(super) fn emit_commit_done(
     app: &tauri::AppHandle,
     run_id: &str,
