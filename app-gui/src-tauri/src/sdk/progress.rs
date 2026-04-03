@@ -1,8 +1,8 @@
 use serde::Serialize;
 use tauri::Emitter;
 
-use super::run_action::RunSdkActionResult;
 use anyhow::{anyhow, Result};
+use driver::{ExecuteActionResult, ExecutionPhase, ExecutionReporter};
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -86,7 +86,7 @@ pub(super) fn emit_commit_step(
 pub(super) fn emit_commit_done(
     app: &tauri::AppHandle,
     run_id: &str,
-    result: &RunSdkActionResult,
+    result: &ExecuteActionResult,
 ) -> Result<()> {
     let payload = RunSdkActionProgress {
         run_id: run_id.to_string(),
@@ -98,4 +98,46 @@ pub(super) fn emit_commit_done(
         output_files: Some(result.output_files.clone()),
     };
     emit_progress(app, &payload)
+}
+
+pub(crate) struct TauriProgressReporter {
+    app: tauri::AppHandle,
+    run_id: String,
+}
+
+impl TauriProgressReporter {
+    pub(crate) fn new(app: tauri::AppHandle, run_id: String) -> Self {
+        Self { app, run_id }
+    }
+}
+
+impl ExecutionReporter for TauriProgressReporter {
+    fn on_step(&self, phase: ExecutionPhase, message: &str) {
+        let _ = match phase {
+            ExecutionPhase::GenerateProof => {
+                emit_generate_proof_step(&self.app, &self.run_id, message)
+            }
+            ExecutionPhase::Commit => {
+                let payload = RunSdkActionProgress {
+                    run_id: self.run_id.clone(),
+                    phase: ProofPhase::Commit,
+                    status: ProofProgressStatus::Running,
+                    message: message.to_string(),
+                    old_root: None,
+                    new_root: None,
+                    output_files: None,
+                };
+                emit_progress(&self.app, &payload)
+            }
+        };
+    }
+
+    fn on_done(&self, phase: ExecutionPhase, result: Option<&ExecuteActionResult>) {
+        let _ = match phase {
+            ExecutionPhase::GenerateProof => emit_generate_proof_done(&self.app, &self.run_id),
+            ExecutionPhase::Commit => result
+                .map(|result| emit_commit_done(&self.app, &self.run_id, result))
+                .unwrap_or(Ok(())),
+        };
+    }
 }

@@ -1,24 +1,23 @@
-use pod2::{frontend::MainPod, middleware::containers::Dictionary};
+use craft_sdk::SpendableObject;
+use pod2::{
+    frontend::MainPod,
+    middleware::{self, BackendError, Hash, Params, Pod, VDSet, containers::Dictionary},
+};
 use serde::de::{DeserializeOwned, Error as _};
 use serde::ser::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use std::sync::Once;
 use txlib::Tx;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ObjectRecord {
     pub(crate) id: String,
-    /// Object class/type name
     pub(crate) class_name: String,
-    /// Action that produced this object.
     pub(crate) source_action: String,
-    /// Nullifier value once object is consumed.
     pub(crate) nullifier: Option<String>,
-    /// Pod proof for this object
     pub(crate) pod: MainPod,
-    /// Object payload dictionary
     pub(crate) obj: Dictionary,
-    /// Source transaction witness for this object
     pub(crate) tx: Tx,
 }
 
@@ -48,13 +47,34 @@ fn parse_optional_field<T: DeserializeOwned>(
 }
 
 impl ObjectRecord {
+    pub(crate) fn is_nullified(&self) -> bool {
+        self.nullifier.is_some()
+    }
+
+    pub(crate) fn spendable(&self) -> SpendableObject {
+        SpendableObject {
+            pod: self.pod.clone(),
+            obj: self.obj.clone(),
+            tx: self.tx.clone(),
+        }
+    }
+
+    pub(crate) fn fields_map(&self) -> std::collections::HashMap<String, serde_json::Value> {
+        match serde_json::to_value(&self.obj) {
+            Ok(serde_json::Value::Object(map)) => map.into_iter().collect(),
+            Ok(value) => {
+                let mut fields = std::collections::HashMap::new();
+                fields.insert("_raw".to_string(), value);
+                fields
+            }
+            Err(_) => std::collections::HashMap::new(),
+        }
+    }
+
     fn to_file_value(&self) -> Result<Value, String> {
         let mut fields = serde_json::Map::new();
         fields.insert("id".to_string(), Value::String(self.id.clone()));
-        fields.insert(
-            "className".to_string(),
-            Value::String(self.class_name.clone()),
-        );
+        fields.insert("className".to_string(), Value::String(self.class_name.clone()));
         fields.insert(
             "sourceAction".to_string(),
             Value::String(self.source_action.clone()),
@@ -92,6 +112,7 @@ impl ObjectRecord {
         let class_name = parse_required_field::<String>(fields, "className", "className")?;
         let source_action = parse_required_field::<String>(fields, "sourceAction", "sourceAction")?;
         let nullifier = parse_optional_field::<String>(fields, "nullifier", "nullifier")?;
+        ensure_extra_pod_deserializers_registered();
         let pod = parse_required_field::<MainPod>(fields, "pod", "spendable.pod")?;
         let obj = parse_required_field::<Dictionary>(fields, "obj", "spendable.obj")?;
         let tx = parse_required_field::<Tx>(fields, "tx", "spendable.tx")?;
@@ -106,6 +127,27 @@ impl ObjectRecord {
             tx,
         })
     }
+}
+
+fn ensure_extra_pod_deserializers_registered() {
+    static REGISTER_EXTRA_DESERIALIZERS: Once = Once::new();
+
+    REGISTER_EXTRA_DESERIALIZERS.call_once(|| {
+        fn deserialize_mock_intro(
+            params: Params,
+            data: Value,
+            vd_set: VDSet,
+            sts_hash: Hash,
+        ) -> Result<Box<dyn Pod>, BackendError> {
+            Ok(Box::new(
+                <pod2utils::mockintro::MockIntroPod as Pod>::deserialize_data(
+                    params, data, vd_set, sts_hash,
+                )?,
+            ))
+        }
+
+        middleware::register_pod_deserializer(999, deserialize_mock_intro);
+    });
 }
 
 impl Serialize for ObjectRecord {

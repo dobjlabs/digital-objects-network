@@ -1,7 +1,6 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc};
 
 use crate::error::CommandError;
-use crate::objects::objects_dir;
 use crate::objects::ObjectRecord;
 use crate::sdk::parse_object_file_from_path;
 use anyhow::{anyhow, Result};
@@ -9,14 +8,19 @@ use rfd::FileDialog;
 use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
-pub fn get_objects_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
-    let path = objects_dir(&app)?;
+pub fn get_objects_dir(
+    driver: tauri::State<'_, Arc<driver::Driver>>,
+) -> Result<String, CommandError> {
+    let path = driver.paths().objects_dir.clone();
     Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-pub fn open_objects_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
-    let path: PathBuf = objects_dir(&app)?;
+pub fn open_objects_dir(
+    app: tauri::AppHandle,
+    driver: tauri::State<'_, Arc<driver::Driver>>,
+) -> Result<String, CommandError> {
+    let path: PathBuf = driver.paths().objects_dir.clone();
     fs::create_dir_all(&path)
         .map_err(|err| anyhow!("failed to create objects directory: {err}"))?;
     app.opener()

@@ -2,6 +2,7 @@
 members = [
     "app-gui/src-tauri",
     "common",
+    "driver",
     "pod2utils",
     "synchronizer",
     "relayer",
