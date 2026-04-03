@@ -1,7 +1,6 @@
 [plugin]
 name = "find-log"
 version = "0.1.0"
-
 imports = []
 
 [[dependencies]]
@@ -22,31 +21,3 @@ description = "Discover a log object by proving a short VDF."
 cpu_cost = "20-40s"
 reads_block = false
 hidden = false
-
-[[actions.steps]]
-kind = "Output"
-name = "log"
-class = "Log"
-
-[[actions.steps.details]]
-type = "Set"
-key = "blueprint"
-value = "Log"
-
-[[actions.steps.details]]
-type = "Var"
-name = "work"
-[actions.steps.details.recipe]
-type = "Vdf"
-iters = 3
-
-[[actions.steps.details]]
-type = "Condition"
-pred = "Vdf(3, {state}, work)"
-[actions.steps.details.recipe]
-type = "StoredVdfPod"
-
-[[actions.steps.details]]
-type = "Update"
-key = "work"
-source = "work"

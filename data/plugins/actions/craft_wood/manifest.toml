@@ -1,7 +1,6 @@
 [plugin]
 name = "craft-wood"
 version = "0.1.0"
-
 imports = ["find-log"]
 
 [[dependencies]]
@@ -22,42 +21,3 @@ description = "Refine one log into a wood object with PoW quality checks."
 cpu_cost = "15-30s"
 reads_block = false
 hidden = false
-
-[[actions.steps]]
-kind = "Input"
-name = "log"
-class = "Log"
-
-[[actions.steps]]
-kind = "Output"
-name = "wood"
-class = "Wood"
-
-[[actions.steps.details]]
-type = "Set"
-key = "blueprint"
-value = "Wood"
-
-[[actions.steps.details]]
-type = "Var"
-name = "key"
-[actions.steps.details.recipe]
-type = "PowGrind"
-difficulty = 9007199254740992
-
-[[actions.steps.details]]
-type = "Update"
-key = "key"
-source = "key"
-
-[[actions.steps.details]]
-type = "Update"
-key = "key"
-source = "key"
-
-[[actions.steps.details]]
-type = "Condition"
-pred = "LtEqU256({state}, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))"
-[actions.steps.details.recipe]
-type = "LtEqU256"
-difficulty = 9007199254740992

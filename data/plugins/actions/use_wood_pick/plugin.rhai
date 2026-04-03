@@ -1,8 +1,9 @@
 fn use_pick(pick, vdf_iters) {
+    let dur = get_int(pick, "durability");
     gt(pick, "durability", 0);
-    let dur = decrement(pick, "durability");
+    dur -= 1;
     sum_of(pick, "durability", dur, 1);
-    update(pick, "durability", dur);
+    update_int(pick, "durability", dur);
     let key = random_key(pick);
     update(pick, "key", key);
     let work = vdf(vdf_iters, obj_raw(pick));

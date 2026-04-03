@@ -54,6 +54,7 @@ pub struct ActionMeta {
     pub cpu_cost: String,
     pub reads_block: bool,
     pub hidden: bool,
+    #[serde(default)]
     pub steps: Vec<StepMeta>,
 }
 

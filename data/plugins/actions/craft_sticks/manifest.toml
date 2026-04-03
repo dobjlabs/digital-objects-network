@@ -1,7 +1,6 @@
 [plugin]
 name = "craft-sticks"
 version = "0.1.0"
-
 imports = ["craft-wood"]
 
 [[classes]]
@@ -17,28 +16,3 @@ description = "Split one wood object into two stick objects."
 cpu_cost = "5-10s"
 reads_block = false
 hidden = false
-
-[[actions.steps]]
-kind = "Input"
-name = "wood"
-class = "Wood"
-
-[[actions.steps]]
-kind = "Output"
-name = "stick_a"
-class = "Stick"
-
-[[actions.steps.details]]
-type = "Set"
-key = "blueprint"
-value = "Stick"
-
-[[actions.steps]]
-kind = "Output"
-name = "stick_b"
-class = "Stick"
-
-[[actions.steps.details]]
-type = "Set"
-key = "blueprint"
-value = "Stick"

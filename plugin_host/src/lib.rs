@@ -4,6 +4,7 @@
 //! The manifest declares the static proof structure (podlang predicates).
 //! The Rhai script contains runtime proof logic (executed at proof time).
 
+mod recorder;
 mod recipes;
 
 use std::collections::HashMap;
@@ -36,15 +37,35 @@ pub struct PluginHost {
 
 impl PluginHost {
     /// Load a plugin from a manifest TOML string and a Rhai script string.
+    ///
+    /// The manifest provides static metadata (name, imports, deps, classes,
+    /// action UI).  The recorder runs each action function with stub host
+    /// functions to extract the step structure (inputs, outputs, conditions,
+    /// etc.) needed for podlang generation and proof-time recipe dispatch.
     pub fn from_manifest_and_script(manifest_toml: &str, script_rhai: &str) -> Result<Self> {
         let manifest = Manifest::from_toml(manifest_toml)
             .map_err(|e| anyhow::anyhow!("failed to parse manifest: {e}"))?;
-        let metadata: PluginMetadata = manifest.into();
-        // Verify the script compiles (catch syntax errors at load time)
+        let mut metadata: PluginMetadata = manifest.into();
+
+        // Compile the script (catches syntax errors at load time)
         let engine = create_engine();
-        engine
+        let ast = engine
             .compile(script_rhai)
             .map_err(|e| anyhow::anyhow!("failed to compile script: {e}"))?;
+
+        // Run recording mode on each action to extract steps from the script
+        for action in &mut metadata.actions {
+            if action.steps.is_empty() {
+                action.steps = recorder::record_action_steps(&ast, &action.fn_name)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to record steps for action '{}': {e}",
+                            action.name
+                        )
+                    })?;
+            }
+        }
+
         Ok(Self {
             metadata,
             script_source: script_rhai.to_string(),

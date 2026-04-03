@@ -1,7 +1,6 @@
 [plugin]
 name = "craft-wood-pick"
 version = "0.1.0"
-
 imports = ["craft-wood", "craft-sticks"]
 
 [[classes]]
@@ -17,28 +16,3 @@ description = "Combine wood and a stick to craft a wood pick."
 cpu_cost = "10-20s"
 reads_block = false
 hidden = false
-
-[[actions.steps]]
-kind = "Input"
-name = "wood"
-class = "Wood"
-
-[[actions.steps]]
-kind = "Input"
-name = "stick"
-class = "Stick"
-
-[[actions.steps]]
-kind = "Output"
-name = "wood_pick"
-class = "WoodPick"
-
-[[actions.steps.details]]
-type = "Set"
-key = "blueprint"
-value = "WoodPick"
-
-[[actions.steps.details]]
-type = "Set"
-key = "durability"
-value = 100
