@@ -228,13 +228,13 @@ fn collect_source_tx_proofs<P>(
             ));
         }
 
-        if let Some(previous_present) = response_presence.insert(tx_hash, present) {
-            if previous_present != present {
-                return Err(anyhow!(
-                    "synchronizer grounding witness response contained conflicting entries for source tx {}",
-                    encode_hash_hex(&tx_hash)
-                ));
-            }
+        if let Some(previous_present) = response_presence.insert(tx_hash, present)
+            && previous_present != present
+        {
+            return Err(anyhow!(
+                "synchronizer grounding witness response contained conflicting entries for source tx {}",
+                encode_hash_hex(&tx_hash)
+            ));
         }
 
         if present {

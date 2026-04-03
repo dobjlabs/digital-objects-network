@@ -170,30 +170,30 @@ pub(crate) fn select_object<'a>(
 }
 
 pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> bool {
-    if let Some(class_name) = &query.class_name {
-        if &entry.record.class_name != class_name {
-            return false;
-        }
+    if let Some(class_name) = &query.class_name
+        && &entry.record.class_name != class_name
+    {
+        return false;
     }
-    if let Some(live) = query.live {
-        if live == entry.record.is_nullified() {
-            return false;
-        }
+    if let Some(live) = query.live
+        && live == entry.record.is_nullified()
+    {
+        return false;
     }
-    if let Some(source_action) = &query.source_action {
-        if &entry.record.source_action != source_action {
-            return false;
-        }
+    if let Some(source_action) = &query.source_action
+        && &entry.record.source_action != source_action
+    {
+        return false;
     }
-    if let Some(id) = &query.id {
-        if &entry.record.id != id {
-            return false;
-        }
+    if let Some(id) = &query.id
+        && &entry.record.id != id
+    {
+        return false;
     }
-    if let Some(file_name) = &query.file_name {
-        if &entry.file_name != file_name {
-            return false;
-        }
+    if let Some(file_name) = &query.file_name
+        && &entry.file_name != file_name
+    {
+        return false;
     }
     true
 }
