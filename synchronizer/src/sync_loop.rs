@@ -273,8 +273,13 @@ async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
             .get_beacon_slot_header_with_retry(prev_slot)
             .await?
             .map(|header| header.root);
-        if stored_root == live_root {
-            return Ok(prev_slot + 1);
+        match (stored_root, live_root) {
+            // Both sides agree on an actual block root: true common ancestor.
+            (Some(s), Some(l)) if s == l => return Ok(prev_slot + 1),
+            // Both empty: not a real anchor, keep walking.
+            (None, None) => {}
+            // Otherwise: diverged (roots differ, or one side has a block the other doesn't).
+            _ => {}
         }
         slot = prev_slot;
     }
