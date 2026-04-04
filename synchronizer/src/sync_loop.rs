@@ -346,7 +346,7 @@ impl HeadTracker {
         slot: u32,
         shutdown_rx: &mut watch::Receiver<bool>,
     ) -> Result<SlotHeaderState> {
-        if slot <= self.head.slot {
+        if slot < self.head.slot {
             info!(
                 next_slot = slot,
                 head_slot = self.head.slot,
