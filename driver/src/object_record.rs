@@ -43,7 +43,6 @@ fn parse_required_field<T: DeserializeOwned>(
     serde_json::from_value(value).map_err(|err| format!("failed to deserialize {context}: {err}"))
 }
 
-
 impl ObjectRecord {
     pub(crate) fn is_nullified(&self) -> bool {
         self.status == ObjectStatus::Nullified
@@ -78,7 +77,7 @@ impl ObjectRecord {
         );
         fields.insert(
             "status".to_string(),
-            serde_json::to_value(&self.status)
+            serde_json::to_value(self.status)
                 .map_err(|err| format!("failed to serialize status: {err}"))?,
         );
         fields.insert(

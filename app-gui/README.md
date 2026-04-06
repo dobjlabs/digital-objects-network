@@ -6,7 +6,7 @@ The app is a Tauri shell around:
 
 - React frontend (`src/`)
 - Rust command layer (`src-tauri/`)
-- local object store (`~/.objects`)
+- local object store (`~/.dobj/objects`)
 
 ## Current architecture
 
@@ -59,7 +59,7 @@ Action execution (`run_action`) does:
 3. Execute the action in `craft_sdk` using that grounding witness.
 4. Submit the proof payload to the relayer.
 5. Wait for relayer confirmation, then wait for the synchronizer to index the new tx.
-6. Write outputs to `~/.objects` and move consumed inputs to `~/.objects/.nullified`.
+6. Write outputs to `~/.dobj/objects` and move consumed inputs to `~/.dobj/objects/.nullified`.
 7. Emit progress events to the UI.
 
 In addition to action runs, UI polling does:
