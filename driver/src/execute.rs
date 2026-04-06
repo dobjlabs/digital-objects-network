@@ -114,8 +114,12 @@ pub(crate) fn resolve_inputs(
     for (slot, selector) in input.input_objects.iter().enumerate() {
         let expected_class = action.input_classes[slot].as_str();
         let entry = select_object(entries, selector)?;
-        if entry.record.is_nullified() {
-            return Err(anyhow!("input object is not live: {}", entry.record.id));
+        if entry.record.status != ObjectStatus::Live {
+            return Err(anyhow!(
+                "input object is not live (status: {:?}): {}",
+                entry.record.status,
+                entry.record.id
+            ));
         }
         if entry.record.class_name != expected_class {
             return Err(anyhow!(

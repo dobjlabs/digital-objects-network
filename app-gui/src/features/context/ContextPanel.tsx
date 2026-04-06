@@ -14,6 +14,7 @@ import {
   displayPathInObjectsDir,
   displayObjectFileName,
   isLiveObject,
+  isNullifiedObject,
   joinObjectsDirPath,
 } from "../../shared/objectUtils";
 import { isRecord, normalizePod2Value } from "../../shared/pod2utils";
@@ -230,7 +231,7 @@ export function ContextPanel({
     }
 
     const className = parsed.className.trim();
-    const objectIsLive = parsed.status !== "nullified";
+    const objectIsLive = parsed.status === "live";
     const fileLabel = displayObjectFileName(className);
 
     if (!className) {
@@ -422,7 +423,7 @@ export function ContextPanel({
   const displayThingPath = (object: InventoryObject) => {
     const displayName = displayObjectFileName(object.className);
     const absolutePath = joinObjectsDirPath(objectsDirPath, displayName, {
-      nullified: !isLiveObject(object),
+      nullified: isNullifiedObject(object),
     });
     return displayPathInObjectsDir(absolutePath, objectsDirPath);
   };
@@ -523,7 +524,7 @@ export function ContextPanel({
       return <section className="context-panel">Object not found.</section>;
 
     const titleName = object.className;
-    const liveValueRaw = isLiveObject(object)
+    const liveValueRaw = object.status === "live"
       ? object.id
       : object.status;
     const liveValue = truncateDisplayHash(liveValueRaw);
@@ -548,7 +549,7 @@ export function ContextPanel({
           {renderMetaRow(
             "Live",
             <span
-              className={`context-inline-hash ${isLiveObject(object) ? "live" : "nullified"}`}
+              className={`context-inline-hash ${object.status}`}
               title={liveValueRaw}
             >
               {liveValue}

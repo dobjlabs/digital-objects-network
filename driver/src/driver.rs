@@ -198,7 +198,7 @@ impl Driver {
     pub fn list_classes(&self) -> Result<Vec<ClassSummary>> {
         let live_objects = load_object_files(&self.paths)?
             .into_iter()
-            .filter(|entry| !entry.record.is_nullified())
+            .filter(|entry| entry.record.status == ObjectStatus::Live)
             .collect::<Vec<_>>();
         Ok(self
             .deps
@@ -223,7 +223,9 @@ impl Driver {
             .ok_or_else(|| anyhow!("unknown class: {class_name}"))?;
         let live_count = load_object_files(&self.paths)?
             .into_iter()
-            .filter(|entry| !entry.record.is_nullified() && entry.record.class_name == class_name)
+            .filter(|entry| {
+                entry.record.status == ObjectStatus::Live && entry.record.class_name == class_name
+            })
             .count();
         Ok(ClassSummary {
             live_count,
@@ -240,7 +242,7 @@ impl Driver {
         let entries = load_object_files(&self.paths)?;
         let live_objects = entries
             .iter()
-            .filter(|entry| !entry.record.is_nullified())
+            .filter(|entry| entry.record.status == ObjectStatus::Live)
             .collect::<Vec<_>>();
 
         let mut available = Vec::new();
