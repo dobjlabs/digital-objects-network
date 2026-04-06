@@ -949,6 +949,7 @@ dependencies = [
  "common",
  "craft-mcp",
  "craft_sdk",
+ "driver",
  "hex",
  "lt_eq_u256_pod",
  "notify",
@@ -2699,6 +2700,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "driver"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "common",
+ "craft_sdk",
+ "dirs",
+ "env_logger",
+ "hex",
+ "log",
+ "lt_eq_u256_pod",
+ "plonky2",
+ "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=364088d316925f59693ed172ead383e4996de410)",
+ "pod2utils",
+ "rand 0.9.2",
+ "relayer",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "synchronizer",
+ "tempfile",
+ "timelib",
+ "txlib",
+ "vdfpod",
 ]
 
 [[package]]

@@ -5,9 +5,9 @@ import type {
   CpuSample,
   LoadGuiInventoryResult,
   ObjectRecordPayload,
-  RunSdkActionInput,
-  RunSdkActionProgress,
-  RunSdkActionResult,
+  RunActionInput,
+  RunActionProgress,
+  RunActionResult,
 } from "./wireTypes";
 
 export type { ActionId, ClassName } from "../generated/ids";
@@ -19,9 +19,9 @@ export type {
   InventoryObjectPayload,
   LoadGuiInventoryResult,
   ObjectRecordPayload,
-  RunSdkActionInput,
-  RunSdkActionProgress,
-  RunSdkActionResult,
+  RunActionInput,
+  RunActionProgress,
+  RunActionResult,
 } from "./wireTypes";
 
 export function getObjectsDir(): Promise<string> {
@@ -36,10 +36,8 @@ export function loadGuiInventory(): Promise<LoadGuiInventoryResult> {
   return invoke<LoadGuiInventoryResult>("load_gui_inventory");
 }
 
-export function runSdkAction(
-  input: RunSdkActionInput,
-): Promise<RunSdkActionResult> {
-  return invoke<RunSdkActionResult>("run_sdk_action", { input });
+export function runAction(input: RunActionInput): Promise<RunActionResult> {
+  return invoke<RunActionResult>("run_action", { input });
 }
 
 export function pickDobjFilePath(): Promise<string> {
@@ -50,10 +48,10 @@ export function readDobjFile(path: string): Promise<ObjectRecordPayload> {
   return invoke<ObjectRecordPayload>("read_dobj_file", { path });
 }
 
-export function listenRunSdkActionProgress(
-  handler: (event: RunSdkActionProgress) => void,
+export function listenRunActionProgress(
+  handler: (event: RunActionProgress) => void,
 ): Promise<UnlistenFn> {
-  return listen<RunSdkActionProgress>("run-sdk-action-progress", (event) => {
+  return listen<RunActionProgress>("run-action-progress", (event) => {
     handler(event.payload);
   });
 }

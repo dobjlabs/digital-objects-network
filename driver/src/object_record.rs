@@ -4,23 +4,24 @@ use serde::de::{DeserializeOwned, Error as _};
 use serde::ser::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use std::{fs, path::Path};
 use txlib::Tx;
 
-#[derive(Debug)]
-pub(crate) struct ObjectRecord {
-    pub(crate) id: String,
+#[derive(Debug, Clone)]
+pub struct ObjectRecord {
+    pub id: String,
     /// Object class/type name
-    pub(crate) class_name: String,
+    pub class_name: String,
     /// Action that produced this object.
-    pub(crate) source_action: String,
+    pub source_action: String,
     /// Nullifier value once object is consumed.
-    pub(crate) nullifier: Option<String>,
+    pub nullifier: Option<String>,
     /// Pod proof for this object
-    pub(crate) pod: MainPod,
+    pub pod: MainPod,
     /// Object payload dictionary
-    pub(crate) obj: Dictionary,
+    pub obj: Dictionary,
     /// Source transaction witness for this object
-    pub(crate) tx: Tx,
+    pub tx: Tx,
 }
 
 fn parse_required_field<T: DeserializeOwned>(
@@ -58,6 +59,18 @@ impl ObjectRecord {
             pod: self.pod.clone(),
             obj: self.obj.clone(),
             tx: self.tx.clone(),
+        }
+    }
+
+    pub(crate) fn fields_map(&self) -> std::collections::HashMap<String, serde_json::Value> {
+        match serde_json::to_value(&self.obj) {
+            Ok(serde_json::Value::Object(map)) => map.into_iter().collect(),
+            Ok(value) => {
+                let mut fields = std::collections::HashMap::new();
+                fields.insert("_raw".to_string(), value);
+                fields
+            }
+            Err(_) => std::collections::HashMap::new(),
         }
     }
 
@@ -119,6 +132,45 @@ impl ObjectRecord {
             tx,
         })
     }
+}
+
+pub fn parse_object_record_file(path: &Path) -> anyhow::Result<ObjectRecord> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!("invalid input path (missing file name): {}", path.display())
+        })?;
+    let contents = fs::read_to_string(path)
+        .map_err(|err| anyhow::anyhow!("failed to read input file {}: {err}", path.display()))?;
+    serde_json::from_str::<ObjectRecord>(&contents)
+        .map_err(|err| anyhow::anyhow!("failed to parse {file_name} as object file: {err}"))
+}
+
+#[cfg(test)]
+pub(crate) fn ensure_extra_pod_deserializers_registered() {
+    use std::sync::Once;
+
+    use pod2::middleware::{self, BackendError, Hash, Params, Pod, VDSet};
+
+    static REGISTER_EXTRA_DESERIALIZERS: Once = Once::new();
+
+    REGISTER_EXTRA_DESERIALIZERS.call_once(|| {
+        fn deserialize_mock_intro(
+            params: Params,
+            data: Value,
+            vd_set: VDSet,
+            sts_hash: Hash,
+        ) -> Result<Box<dyn Pod>, BackendError> {
+            Ok(Box::new(
+                <pod2utils::mockintro::MockIntroPod as Pod>::deserialize_data(
+                    params, data, vd_set, sts_hash,
+                )?,
+            ))
+        }
+
+        middleware::register_pod_deserializer(999, deserialize_mock_intro);
+    });
 }
 
 impl Serialize for ObjectRecord {

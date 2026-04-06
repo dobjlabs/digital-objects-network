@@ -1,54 +1,38 @@
-#![allow(dead_code)]
-
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
+use anyhow::Result;
 use craft_sdk::{
+    Context, Helper, SpendableObject, SpendableObjects,
     api::{self, Arg, Step, StepKind},
-    Context,
 };
 use hex::FromHex;
 use lt_eq_u256_pod::LtEqU256Pod;
 use pod2::{
     frontend::{MainPod, Operation},
-    middleware::{Hash, Key, Pod, RawValue, Statement, Value, F},
+    middleware::{F, Hash, Key, Pod, RawValue, Statement, Value},
 };
-use pod2utils::rand_raw_value;
+use txlib::GroundingWitness;
 use vdfpod::VdfPod;
+
+use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
+use crate::types::ActionSummary;
 
 const WOOD_POW_DIFFICULTY: u64 = 0x0020_0000_0000_0000;
 
-#[derive(Debug, Clone)]
-pub(crate) struct ActionUiMeta {
-    pub(crate) emoji: &'static str,
-    pub(crate) description: &'static str,
-    pub(crate) cpu_cost: &'static str,
-    pub(crate) reads_block: bool,
-    pub(crate) hidden: bool,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ClassUiMeta {
-    pub(crate) emoji: &'static str,
-    pub(crate) description: &'static str,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ActionDescriptor {
-    pub(crate) name: String,
-    pub(crate) input_classes: Vec<String>,
-    pub(crate) output_classes: Vec<String>,
-    pub(crate) ui: ActionUiMeta,
-    pub(crate) hidden: bool,
-}
-
-struct ActionMetaSpec {
+struct ActionMeta {
     name: &'static str,
-    ui: ActionUiMeta,
+    emoji: &'static str,
+    description: &'static str,
+    cpu_cost: &'static str,
+    reads_block: bool,
+    hidden: bool,
 }
 
-struct ClassMetaSpec {
+struct ClassMeta {
     name: &'static str,
-    ui: ClassUiMeta,
+    emoji: &'static str,
+    description: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -57,143 +41,269 @@ struct ActionSignature {
     outputs: Vec<String>,
 }
 
-const ACTION_META: &[ActionMetaSpec] = &[
-    ActionMetaSpec {
+const ACTION_META: &[ActionMeta] = &[
+    ActionMeta {
         name: "FindLog",
-        ui: ActionUiMeta {
-            emoji: "🌲",
-            description: "Discover a log object by proving a short VDF.",
-            cpu_cost: "20-40s",
-            reads_block: false,
-            hidden: false,
-        },
+        emoji: "🌲",
+        description: "Discover a log object by proving a short VDF.",
+        cpu_cost: "20-40s",
+        reads_block: false,
+        hidden: false,
     },
-    ActionMetaSpec {
+    ActionMeta {
         name: "CraftWood",
-        ui: ActionUiMeta {
-            emoji: "🪵",
-            description: "Refine one log into a wood object with PoW quality checks.",
-            cpu_cost: "15-30s",
-            reads_block: false,
-            hidden: false,
-        },
+        emoji: "🪵",
+        description: "Refine one log into a wood object with PoW quality checks.",
+        cpu_cost: "15-30s",
+        reads_block: false,
+        hidden: false,
     },
-    ActionMetaSpec {
+    ActionMeta {
         name: "CraftSticks",
-        ui: ActionUiMeta {
-            emoji: "🥢",
-            description: "Split one wood object into two stick objects.",
-            cpu_cost: "5-10s",
-            reads_block: false,
-            hidden: false,
-        },
+        emoji: "🥢",
+        description: "Split one wood object into two stick objects.",
+        cpu_cost: "5-10s",
+        reads_block: false,
+        hidden: false,
     },
-    ActionMetaSpec {
+    ActionMeta {
         name: "CraftWoodPick",
-        ui: ActionUiMeta {
-            emoji: "⛏️",
-            description: "Combine wood and a stick to craft a wood pick.",
-            cpu_cost: "10-20s",
-            reads_block: false,
-            hidden: false,
-        },
+        emoji: "⛏️",
+        description: "Combine wood and a stick to craft a wood pick.",
+        cpu_cost: "10-20s",
+        reads_block: false,
+        hidden: false,
     },
-    ActionMetaSpec {
+    ActionMeta {
         name: "CraftStonePick",
-        ui: ActionUiMeta {
-            emoji: "⛏️",
-            description: "Combine stone and a stick to craft a stronger stone pick.",
-            cpu_cost: "10-20s",
-            reads_block: false,
-            hidden: false,
-        },
+        emoji: "⛏️",
+        description: "Combine stone and a stick to craft a stronger stone pick.",
+        cpu_cost: "10-20s",
+        reads_block: false,
+        hidden: false,
     },
-    ActionMetaSpec {
+    ActionMeta {
         name: "UseWoodPick",
-        ui: ActionUiMeta {
-            emoji: "⛏️",
-            description: "Internal durability/work update for wood pick usage.",
-            cpu_cost: "10-30s",
-            reads_block: false,
-            hidden: true,
-        },
+        emoji: "⛏️",
+        description: "Internal durability/work update for wood pick usage.",
+        cpu_cost: "10-30s",
+        reads_block: false,
+        hidden: true,
     },
-    ActionMetaSpec {
+    ActionMeta {
         name: "MineStoneWithWoodPick",
-        ui: ActionUiMeta {
-            emoji: "🪨",
-            description: "Mine stone using a wood pick (consumes durability).",
-            cpu_cost: "25-45s",
-            reads_block: false,
-            hidden: false,
-        },
+        emoji: "🪨",
+        description: "Mine stone using a wood pick (consumes durability).",
+        cpu_cost: "25-45s",
+        reads_block: false,
+        hidden: false,
     },
-    ActionMetaSpec {
+    ActionMeta {
         name: "UseStonePick",
-        ui: ActionUiMeta {
-            emoji: "⛏️",
-            description: "Internal durability/work update for stone pick usage.",
-            cpu_cost: "5-20s",
-            reads_block: false,
-            hidden: true,
-        },
+        emoji: "⛏️",
+        description: "Internal durability/work update for stone pick usage.",
+        cpu_cost: "5-20s",
+        reads_block: false,
+        hidden: true,
     },
-    ActionMetaSpec {
+    ActionMeta {
         name: "MineStoneWithStonePick",
-        ui: ActionUiMeta {
-            emoji: "🪨",
-            description: "Mine stone using a stone pick (consumes durability).",
-            cpu_cost: "15-35s",
-            reads_block: false,
-            hidden: false,
-        },
+        emoji: "🪨",
+        description: "Mine stone using a stone pick (consumes durability).",
+        cpu_cost: "15-35s",
+        reads_block: false,
+        hidden: false,
     },
 ];
 
-const CLASS_META: &[ClassMetaSpec] = &[
-    ClassMetaSpec {
+const CLASS_META: &[ClassMeta] = &[
+    ClassMeta {
         name: "Log",
-        ui: ClassUiMeta {
-            emoji: "🌲",
-            description: "A discovered log that can be refined into wood.",
-        },
+        emoji: "🌲",
+        description: "A discovered log that can be refined into wood.",
     },
-    ClassMetaSpec {
+    ClassMeta {
         name: "Wood",
-        ui: ClassUiMeta {
-            emoji: "🪵",
-            description: "Refined wood used for sticks and basic tools.",
-        },
+        emoji: "🪵",
+        description: "Refined wood used for sticks and basic tools.",
     },
-    ClassMetaSpec {
+    ClassMeta {
         name: "Stick",
-        ui: ClassUiMeta {
-            emoji: "🥢",
-            description: "A stick used as a handle in tool crafting.",
-        },
+        emoji: "🥢",
+        description: "A stick used as a handle in tool crafting.",
     },
-    ClassMetaSpec {
+    ClassMeta {
         name: "WoodPick",
-        ui: ClassUiMeta {
-            emoji: "⛏️",
-            description: "A wood pick that can mine stone while durability remains.",
-        },
+        emoji: "⛏️",
+        description: "A wood pick that can mine stone while durability remains.",
     },
-    ClassMetaSpec {
+    ClassMeta {
         name: "Stone",
-        ui: ClassUiMeta {
-            emoji: "🪨",
-            description: "Mined stone used to craft stronger tools.",
-        },
+        emoji: "🪨",
+        description: "Mined stone used to craft stronger tools.",
     },
-    ClassMetaSpec {
+    ClassMeta {
         name: "StonePick",
-        ui: ClassUiMeta {
-            emoji: "⛏️",
-            description: "A sturdier pick with higher starting durability.",
-        },
+        emoji: "⛏️",
+        description: "A sturdier pick with higher starting durability.",
     },
 ];
+
+pub struct BuiltinActionCatalog {
+    actions: Vec<ActionSummary>,
+    actions_by_name: HashMap<String, ActionSummary>,
+    classes: Vec<CatalogClass>,
+    classes_by_name: HashMap<String, CatalogClass>,
+    podlang_src: String,
+}
+
+impl BuiltinActionCatalog {
+    pub fn new() -> Self {
+        let helper = Helper::new(dependencies(), actions());
+        let action_hashes = helper.action_hashes();
+        let class_hashes = helper.class_hashes();
+        let podlang_src = helper.podlang_src.clone();
+
+        let action_defs = actions();
+        let signatures = action_signatures(&action_defs);
+        let meta_by_name: HashMap<&str, &ActionMeta> =
+            ACTION_META.iter().map(|m| (m.name, m)).collect();
+
+        let actions: Vec<ActionSummary> = action_defs
+            .iter()
+            .filter_map(|action| {
+                let name = action.name();
+                let meta = meta_by_name.get(name);
+                if meta.is_some_and(|m| m.hidden) {
+                    return None;
+                }
+                let signature = signatures.get(name)?;
+                Some(ActionSummary {
+                    id: name.to_string(),
+                    emoji: meta.map_or("⚙️", |m| m.emoji).to_string(),
+                    hash: action_hashes
+                        .get(name)
+                        .map(|hash| format!("{:#}", hash))
+                        .unwrap_or_default(),
+                    input_class_hashes: signature
+                        .inputs
+                        .iter()
+                        .map(|class_name| {
+                            class_hashes
+                                .get(class_name.as_str())
+                                .map(|hash| format!("{:#}", hash))
+                                .unwrap_or_default()
+                        })
+                        .collect(),
+                    description: meta.map_or("SDK action", |m| m.description).to_string(),
+                    cpu_cost: meta.map_or("unknown", |m| m.cpu_cost).to_string(),
+                    reads_block: meta.is_some_and(|m| m.reads_block),
+                    input_classes: signature.inputs.clone(),
+                    output_classes: signature.outputs.clone(),
+                })
+            })
+            .collect();
+        let actions_by_name: HashMap<String, ActionSummary> = actions
+            .iter()
+            .map(|action| (action.id.clone(), action.clone()))
+            .collect();
+
+        let class_meta_by_name: HashMap<&str, &ClassMeta> =
+            CLASS_META.iter().map(|m| (m.name, m)).collect();
+        let mut class_name_set = BTreeSet::<String>::new();
+        for sig in signatures.values() {
+            class_name_set.extend(sig.inputs.iter().cloned());
+            class_name_set.extend(sig.outputs.iter().cloned());
+        }
+        for cm in CLASS_META {
+            class_name_set.insert(cm.name.to_string());
+        }
+
+        let classes: Vec<CatalogClass> = class_name_set
+            .into_iter()
+            .map(|class_name| {
+                let cm = class_meta_by_name.get(class_name.as_str());
+                let produced_by = actions
+                    .iter()
+                    .filter(|a| a.output_classes.contains(&class_name))
+                    .map(|a| a.id.clone())
+                    .collect();
+                let consumed_by = actions
+                    .iter()
+                    .filter(|a| a.input_classes.contains(&class_name))
+                    .map(|a| a.id.clone())
+                    .collect();
+                let predicate_source = extract_predicate(&podlang_src, &format!("Is{class_name}"))
+                    .unwrap_or_else(|| format!("Is{class_name}(state) = OR(...)"));
+                CatalogClass {
+                    name: class_name.clone(),
+                    emoji: cm.map_or("📦", |m| m.emoji).to_string(),
+                    hash: class_hashes
+                        .get(&class_name)
+                        .map(|hash| format!("{:#}", hash))
+                        .unwrap_or_default(),
+                    description: cm
+                        .map_or("Unknown class object", |m| m.description)
+                        .to_string(),
+                    produced_by,
+                    consumed_by,
+                    predicate_source,
+                }
+            })
+            .collect();
+        let classes_by_name: HashMap<String, CatalogClass> = classes
+            .iter()
+            .map(|c| (c.name.clone(), c.clone()))
+            .collect();
+
+        Self {
+            actions,
+            actions_by_name,
+            classes,
+            classes_by_name,
+            podlang_src,
+        }
+    }
+}
+
+impl Default for BuiltinActionCatalog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActionCatalog for BuiltinActionCatalog {
+    fn list_actions(&self) -> Vec<ActionSummary> {
+        self.actions.clone()
+    }
+
+    fn get_action(&self, action_id: &str) -> Option<ActionSummary> {
+        self.actions_by_name.get(action_id).cloned()
+    }
+
+    fn list_classes(&self) -> Vec<CatalogClass> {
+        self.classes.clone()
+    }
+
+    fn get_class(&self, class_name: &str) -> Option<CatalogClass> {
+        self.classes_by_name.get(class_name).cloned()
+    }
+
+    fn execute_action(
+        &self,
+        action_id: String,
+        grounding_witness: GroundingWitness,
+        inputs: Vec<SpendableObject>,
+    ) -> Result<SpendableObjects> {
+        let helper = Helper::new(dependencies(), actions());
+        let builder = helper.builder(false, Arc::new(grounding_witness));
+        Ok(builder.action(&action_id, inputs))
+    }
+
+    fn generated_podlang(&self) -> Option<String> {
+        Some(self.podlang_src.clone())
+    }
+}
 
 fn main_pod(ctx: &Context<'_>, pod: Box<dyn Pod>) -> MainPod {
     let pub_statements = pod.pub_statements();
@@ -204,7 +314,6 @@ fn main_pod(ctx: &Context<'_>, pod: Box<dyn Pod>) -> MainPod {
     }
 }
 
-// Returns VdfPod, Vdf statement, work.
 fn vdf(ctx: &mut Context<'_>, n_iters: usize, input: RawValue) -> (MainPod, Statement, Value) {
     let vdf_pod = if ctx.mock {
         VdfPod::new_boxed_mock(&ctx.params, ctx.vd_set.clone(), n_iters, input)
@@ -217,7 +326,6 @@ fn vdf(ctx: &mut Context<'_>, n_iters: usize, input: RawValue) -> (MainPod, Stat
     (main_pod(ctx, vdf_pod), st_vdf, work)
 }
 
-// Returns LtEqU256Pod and LtEqU256 statement used to verify PoW.
 fn lt_eq_u256(ctx: &mut Context<'_>, lhs: RawValue, rhs: RawValue) -> (MainPod, Statement) {
     let lt_eq_u256_pod = if ctx.mock {
         LtEqU256Pod::new_boxed_mock(&ctx.params, ctx.vd_set.clone(), lhs, rhs)
@@ -267,7 +375,10 @@ fn use_pick_details(step: Step, name: &'static str, vdf_iters: usize) -> Step {
         }),
     )
     .update("durability", Arg::var("durability"))
-    .var("key", Box::new(|_ctx| Value::from(rand_raw_value())))
+    .var(
+        "key",
+        Box::new(|_ctx| Value::from(pod2utils::rand_raw_value())),
+    )
     .update("key", Arg::var("key"))
     .var(
         "work",
@@ -351,11 +462,11 @@ pub(crate) fn actions() -> Vec<api::Action> {
                         "key",
                         Box::new(|ctx| {
                             let mut wood = ctx.vars.get("wood").as_dictionary().unwrap();
-                            let mut key = Value::from(rand_raw_value());
+                            let mut key = Value::from(pod2utils::rand_raw_value());
                             if !ctx.mock {
                                 while RawValue::from(wood.commitment()).0[3].0 > WOOD_POW_DIFFICULTY
                                 {
-                                    key = Value::from(rand_raw_value());
+                                    key = Value::from(pod2utils::rand_raw_value());
                                     wood.update(&Key::from("key"), &key).unwrap();
                                 }
                             }
@@ -438,24 +549,6 @@ pub(crate) fn actions() -> Vec<api::Action> {
     ]
 }
 
-fn default_action_ui() -> ActionUiMeta {
-    ActionUiMeta {
-        emoji: "⚙️",
-        description: "SDK action",
-        cpu_cost: "unknown",
-        reads_block: false,
-        hidden: false,
-    }
-}
-
-fn action_meta_by_name(name: &str) -> ActionUiMeta {
-    ACTION_META
-        .iter()
-        .find(|entry| entry.name == name)
-        .map(|entry| entry.ui.clone())
-        .unwrap_or_else(default_action_ui)
-}
-
 fn action_signatures(actions: &[api::Action]) -> HashMap<String, ActionSignature> {
     let by_name = actions
         .iter()
@@ -525,68 +618,32 @@ fn derive_signature<'a>(
     signature
 }
 
-pub(crate) fn action_descriptors() -> Vec<ActionDescriptor> {
-    let defs = actions();
-    let signatures = action_signatures(&defs);
-    defs.into_iter()
-        .map(|action| {
-            let name = action.name().to_string();
-            let signature = signatures
-                .get(&name)
-                .unwrap_or_else(|| panic!("missing signature for action {name}"))
-                .clone();
-            let ui = action_meta_by_name(&name);
-            ActionDescriptor {
-                name,
-                input_classes: signature.inputs,
-                output_classes: signature.outputs,
-                hidden: ui.hidden,
-                ui,
-            }
-        })
-        .collect()
-}
+#[cfg(test)]
+mod tests {
+    use super::BuiltinActionCatalog;
+    use crate::catalog::ActionCatalog;
 
-pub(crate) fn visible_action_descriptors() -> Vec<ActionDescriptor> {
-    action_descriptors()
-        .into_iter()
-        .filter(|descriptor| !descriptor.hidden)
-        .collect()
-}
-
-pub(crate) fn action_descriptors_by_name() -> HashMap<String, ActionDescriptor> {
-    action_descriptors()
-        .into_iter()
-        .map(|descriptor| (descriptor.name.clone(), descriptor))
-        .collect()
-}
-
-pub(crate) fn action_ids() -> Vec<String> {
-    action_descriptors()
-        .into_iter()
-        .map(|descriptor| descriptor.name)
-        .collect()
-}
-
-pub(crate) fn class_names() -> Vec<String> {
-    let mut classes = BTreeSet::<String>::new();
-    for descriptor in action_descriptors() {
-        classes.extend(descriptor.input_classes);
-        classes.extend(descriptor.output_classes);
+    #[test]
+    fn test_builtin_catalog_hides_internal_actions() {
+        let catalog = BuiltinActionCatalog::new();
+        let action_ids = catalog
+            .list_actions()
+            .into_iter()
+            .map(|action| action.id)
+            .collect::<Vec<_>>();
+        assert!(action_ids.contains(&"CraftWood".to_string()));
+        assert!(!action_ids.contains(&"UseWoodPick".to_string()));
     }
-    for class_meta in CLASS_META {
-        classes.insert(class_meta.name.to_string());
-    }
-    classes.into_iter().collect()
-}
 
-pub(crate) fn class_ui_meta(class_name: &str) -> ClassUiMeta {
-    CLASS_META
-        .iter()
-        .find(|entry| entry.name == class_name)
-        .map(|entry| entry.ui.clone())
-        .unwrap_or(ClassUiMeta {
-            emoji: "📦",
-            description: "Unknown class object",
-        })
+    #[test]
+    fn test_builtin_catalog_lists_classes() {
+        let catalog = BuiltinActionCatalog::new();
+        let class_names = catalog
+            .list_classes()
+            .into_iter()
+            .map(|class_info| class_info.name)
+            .collect::<Vec<_>>();
+        assert!(class_names.contains(&"Log".to_string()));
+        assert!(class_names.contains(&"StonePick".to_string()));
+    }
 }
