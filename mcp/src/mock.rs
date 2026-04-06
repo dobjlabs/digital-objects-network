@@ -61,7 +61,7 @@ impl CraftOps for MockCraftOps {
                 let live_count = self
                     .inventory
                     .iter()
-                    .filter(|o| o.class_name == name && o.live)
+                    .filter(|o| o.class_name == name && o.status == "live")
                     .count();
                 let produced_by = self
                     .actions
@@ -101,7 +101,7 @@ impl CraftOps for MockCraftOps {
         Ok(ObjectDetail {
             id: obj.id.clone(),
             class_name: obj.class_name.clone(),
-            live: obj.live,
+            status: obj.status.clone(),
             state: obj.fields.clone(),
             predicate_source: predicate_source_for(&obj.class_name),
         })
@@ -154,7 +154,7 @@ impl CraftOps for MockCraftOps {
                 id: "0xnew1234567890abcdef".to_string(),
                 class_name: "Wood".to_string(),
                 file_name: "Wood.dobj".to_string(),
-                live: true,
+                status: "live".to_string(),
                 fields: HashMap::from([
                     (
                         "blueprint".to_string(),
@@ -184,7 +184,7 @@ impl CraftOps for MockCraftOps {
             if let Some(obj) = self
                 .inventory
                 .iter()
-                .find(|o| &o.class_name == required_class && o.live)
+                .find(|o| &o.class_name == required_class && o.status == "live")
             {
                 available.push(FeasibilityInput {
                     class_name: obj.class_name.clone(),
@@ -211,7 +211,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             id: "0xabc1111111111111".to_string(),
             class_name: "Log".to_string(),
             file_name: "Log.dobj".to_string(),
-            live: true,
+            status: "live".to_string(),
             fields: HashMap::from([
                 (
                     "blueprint".to_string(),
@@ -227,7 +227,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             id: "0xabc2222222222222".to_string(),
             class_name: "Wood".to_string(),
             file_name: "Wood.dobj".to_string(),
-            live: true,
+            status: "live".to_string(),
             fields: HashMap::from([
                 (
                     "blueprint".to_string(),
@@ -243,7 +243,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             id: "0xabc3333333333333".to_string(),
             class_name: "Stick".to_string(),
             file_name: "Stick.dobj".to_string(),
-            live: true,
+            status: "live".to_string(),
             fields: HashMap::from([
                 (
                     "blueprint".to_string(),
@@ -259,7 +259,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             id: "0xabc4444444444444".to_string(),
             class_name: "WoodPick".to_string(),
             file_name: "WoodPick.dobj".to_string(),
-            live: true,
+            status: "live".to_string(),
             fields: HashMap::from([
                 (
                     "blueprint".to_string(),
@@ -279,7 +279,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             id: "0xabc5555555555555".to_string(),
             class_name: "Stone".to_string(),
             file_name: "Stone.dobj".to_string(),
-            live: true,
+            status: "live".to_string(),
             fields: HashMap::from([
                 (
                     "blueprint".to_string(),
@@ -296,7 +296,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             id: "0xdead000000000000".to_string(),
             class_name: "Log".to_string(),
             file_name: "Log_old.dobj".to_string(),
-            live: false,
+            status: "nullified".to_string(),
             fields: HashMap::from([(
                 "blueprint".to_string(),
                 serde_json::Value::String("Log".to_string()),
@@ -407,7 +407,7 @@ mod tests {
         let mock = MockCraftOps::new();
         let detail = mock.inspect_object("0xabc1111111111111").unwrap();
         assert_eq!(detail.class_name, "Log");
-        assert!(detail.live);
+        assert_eq!(detail.status, "live");
         assert!(detail.predicate_source.contains("FindLog"));
     }
 

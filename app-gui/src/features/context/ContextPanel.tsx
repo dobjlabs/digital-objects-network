@@ -217,7 +217,7 @@ export function ContextPanel({
 
     let parsed: {
       className: string;
-      nullifier: string | null;
+      status: string;
     };
     try {
       parsed = await readDobjFile(selectedPath);
@@ -230,7 +230,7 @@ export function ContextPanel({
     }
 
     const className = parsed.className.trim();
-    const objectIsLive = parsed.nullifier === null;
+    const objectIsLive = parsed.status !== "nullified";
     const fileLabel = displayObjectFileName(className);
 
     if (!className) {
@@ -525,7 +525,7 @@ export function ContextPanel({
     const titleName = object.className;
     const liveValueRaw = isLiveObject(object)
       ? object.id
-      : (object.nullifier ?? "nullified");
+      : object.status;
     const liveValue = truncateDisplayHash(liveValueRaw);
 
     return (

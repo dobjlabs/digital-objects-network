@@ -415,9 +415,7 @@ impl Driver {
             file_name: entry.file_name.clone(),
             class_name: entry.record.class_name.clone(),
             class_hash,
-            source_action: entry.record.source_action.clone(),
-            live: !entry.record.is_nullified(),
-            nullifier: entry.record.nullifier.clone(),
+            status: entry.record.status,
             grounded,
             fields: entry.record.fields_map(),
         }
@@ -433,9 +431,7 @@ impl Driver {
                 .as_ref()
                 .map(|class_info| class_info.hash.clone())
                 .unwrap_or_default(),
-            source_action: entry.record.source_action.clone(),
-            live: !entry.record.is_nullified(),
-            nullifier: entry.record.nullifier.clone(),
+            status: entry.record.status,
             grounded,
             fields: entry.record.fields_map(),
             predicate_source: class_info

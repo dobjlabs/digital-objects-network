@@ -7,15 +7,22 @@ use serde_json::Value;
 use std::{fs, path::Path};
 use txlib::Tx;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ObjectStatus {
+    Unknown,
+    Pending,
+    Live,
+    Nullified,
+}
+
 #[derive(Debug, Clone)]
 pub struct ObjectRecord {
     pub id: String,
     /// Object class/type name
     pub class_name: String,
-    /// Action that produced this object.
-    pub source_action: String,
-    /// Nullifier value once object is consumed.
-    pub nullifier: Option<String>,
+    /// Lifecycle status of this object.
+    pub status: ObjectStatus,
     /// Pod proof for this object
     pub pod: MainPod,
     /// Object payload dictionary
@@ -36,22 +43,10 @@ fn parse_required_field<T: DeserializeOwned>(
     serde_json::from_value(value).map_err(|err| format!("failed to deserialize {context}: {err}"))
 }
 
-fn parse_optional_field<T: DeserializeOwned>(
-    fields: &serde_json::Map<String, Value>,
-    key: &str,
-    context: &str,
-) -> Result<Option<T>, String> {
-    match fields.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => serde_json::from_value(value.clone())
-            .map(Some)
-            .map_err(|err| format!("failed to deserialize {context}: {err}")),
-    }
-}
 
 impl ObjectRecord {
     pub(crate) fn is_nullified(&self) -> bool {
-        self.nullifier.is_some()
+        self.status == ObjectStatus::Nullified
     }
 
     pub(crate) fn spendable(&self) -> SpendableObject {
@@ -82,15 +77,9 @@ impl ObjectRecord {
             Value::String(self.class_name.clone()),
         );
         fields.insert(
-            "sourceAction".to_string(),
-            Value::String(self.source_action.clone()),
-        );
-        fields.insert(
-            "nullifier".to_string(),
-            self.nullifier
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
+            "status".to_string(),
+            serde_json::to_value(&self.status)
+                .map_err(|err| format!("failed to serialize status: {err}"))?,
         );
         fields.insert(
             "pod".to_string(),
@@ -116,8 +105,7 @@ impl ObjectRecord {
             .ok_or_else(|| "invalid object file: expected JSON object".to_string())?;
         let id = parse_required_field::<String>(fields, "id", "id")?;
         let class_name = parse_required_field::<String>(fields, "className", "className")?;
-        let source_action = parse_required_field::<String>(fields, "sourceAction", "sourceAction")?;
-        let nullifier = parse_optional_field::<String>(fields, "nullifier", "nullifier")?;
+        let status = parse_required_field::<ObjectStatus>(fields, "status", "status")?;
         let pod = parse_required_field::<MainPod>(fields, "pod", "spendable.pod")?;
         let obj = parse_required_field::<Dictionary>(fields, "obj", "spendable.obj")?;
         let tx = parse_required_field::<Tx>(fields, "tx", "spendable.tx")?;
@@ -125,8 +113,7 @@ impl ObjectRecord {
         Ok(Self {
             id,
             class_name,
-            source_action,
-            nullifier,
+            status,
             pod,
             obj,
             tx,

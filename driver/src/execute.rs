@@ -2,7 +2,6 @@ use std::collections::HashSet;
 
 use anyhow::{Result, anyhow};
 use common::{
-    encode_hash_hex,
     payload::{Payload, PayloadProof},
     shrink::{ShrunkMainPodSetup, shrink_compress_pod},
 };
@@ -10,7 +9,7 @@ use craft_sdk::SpendableObjects;
 use pod2::middleware::{Hash, Params};
 use txlib::object_nullifier_hash;
 
-use crate::object_record::ObjectRecord as StoredObjectRecord;
+use crate::object_record::{ObjectRecord as StoredObjectRecord, ObjectStatus};
 use crate::object_store::{ObjectFileEntry, select_object, write_object_file};
 use crate::types::{ActionSummary, DriverPaths, ExecuteActionInput, ObjectSelector};
 
@@ -33,8 +32,7 @@ pub(crate) fn reconcile_objects(
         let nullified_record = StoredObjectRecord {
             id: entry.record.id.clone(),
             class_name: entry.record.class_name.clone(),
-            source_action: entry.record.source_action.clone(),
-            nullifier: Some(encode_hash_hex(&nullifier_hash)),
+            status: ObjectStatus::Nullified,
             pod: entry.record.pod.clone(),
             obj: entry.record.obj.clone(),
             tx: entry.record.tx.clone(),
@@ -129,20 +127,10 @@ pub(crate) fn save_results(
     let mut nullified_files = Vec::new();
     for input in resolved_inputs {
         let input_record = &input.record;
-        let spendable = input_record.spendable();
-        let nullifier_hash = object_nullifier_hash(&spendable.obj).map_err(|err| {
-            anyhow!(
-                "failed to compute input nullifier for {}: {err}",
-                input_record.id
-            )
-        })?;
-        let input_nullifier = encode_hash_hex(&nullifier_hash);
-
         let nullified_record = StoredObjectRecord {
             id: input_record.id.clone(),
             class_name: input_record.class_name.clone(),
-            source_action: input_record.source_action.clone(),
-            nullifier: Some(input_nullifier),
+            status: ObjectStatus::Nullified,
             pod: input_record.pod.clone(),
             obj: input_record.obj.clone(),
             tx: input_record.tx.clone(),
@@ -174,8 +162,7 @@ pub(crate) fn save_results(
         let live_record = StoredObjectRecord {
             id: object_id,
             class_name: class_name.clone(),
-            source_action: action_id.to_string(),
-            nullifier: None,
+            status: ObjectStatus::Pending,
             pod: spendable.pod,
             obj: spendable.obj,
             tx: spendable.tx,
@@ -198,8 +185,7 @@ pub(crate) fn rollback_results(
         let live_record = StoredObjectRecord {
             id: input.record.id.clone(),
             class_name: input.record.class_name.clone(),
-            source_action: input.record.source_action.clone(),
-            nullifier: None,
+            status: input.record.status,
             pod: input.record.pod.clone(),
             obj: input.record.obj.clone(),
             tx: input.record.tx.clone(),

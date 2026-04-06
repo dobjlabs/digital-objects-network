@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::object_record::ObjectStatus;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverPaths {
     pub settings_path: PathBuf,
@@ -27,7 +29,6 @@ pub enum ObjectSelector {
 pub struct ObjectQuery {
     pub class_name: Option<String>,
     pub live: Option<bool>,
-    pub source_action: Option<String>,
     pub id: Option<String>,
     pub file_name: Option<String>,
 }
@@ -46,9 +47,7 @@ pub struct ObjectSummary {
     pub file_name: String,
     pub class_name: String,
     pub class_hash: String,
-    pub source_action: String,
-    pub live: bool,
-    pub nullifier: Option<String>,
+    pub status: ObjectStatus,
     pub grounded: Option<bool>,
     pub fields: HashMap<String, serde_json::Value>,
 }
@@ -60,9 +59,7 @@ pub struct ObjectDetail {
     pub file_name: String,
     pub class_name: String,
     pub class_hash: String,
-    pub source_action: String,
-    pub live: bool,
-    pub nullifier: Option<String>,
+    pub status: ObjectStatus,
     pub grounded: Option<bool>,
     pub fields: HashMap<String, serde_json::Value>,
     pub predicate_source: String,

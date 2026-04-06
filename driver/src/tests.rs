@@ -15,7 +15,7 @@ use crate::clients::{
     SynchronizerMembership,
 };
 use crate::driver::{Driver, DriverDeps, PayloadBuilder};
-use crate::object_record::{ObjectRecord, ensure_extra_pod_deserializers_registered};
+use crate::object_record::{ObjectRecord, ObjectStatus, ensure_extra_pod_deserializers_registered};
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
 };
@@ -92,8 +92,7 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
     let record = ObjectRecord {
         id,
         class_name: "Log".to_string(),
-        source_action: "FindLog".to_string(),
-        nullifier: None,
+        status: ObjectStatus::Live,
         pod: spendable.pod,
         obj: spendable.obj,
         tx: spendable.tx,

@@ -3,13 +3,15 @@ import type { ActionId, ClassName } from "../generated/ids";
 export type ProofPhase = "generateProof" | "commit";
 export type ProofProgressStatus = "running" | "done";
 
+export type ObjectStatus = "unknown" | "pending" | "live" | "nullified";
+
 export interface InventoryObjectPayload {
   id: string;
   fileName: string;
   className: ClassName;
   classHash: string;
   emoji: string;
-  nullifier: string | null;
+  status: ObjectStatus;
   grounded: boolean;
   description?: string;
   obj: unknown;
@@ -47,8 +49,7 @@ export interface RunActionResult {
 export interface ObjectRecordPayload {
   id: string;
   className: ClassName;
-  sourceAction: ActionId;
-  nullifier: string | null;
+  status: ObjectStatus;
   pod: unknown;
   obj: unknown;
   tx: unknown;

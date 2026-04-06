@@ -176,11 +176,6 @@ pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> boo
     {
         return false;
     }
-    if let Some(source_action) = &query.source_action
-        && &entry.record.source_action != source_action
-    {
-        return false;
-    }
     if let Some(id) = &query.id
         && &entry.record.id != id
     {
@@ -209,7 +204,8 @@ mod tests {
 
     use super::{load_object_files, write_object_file};
     use crate::object_record::{
-        ObjectRecord, ensure_extra_pod_deserializers_registered, parse_object_record_file,
+        ObjectRecord, ObjectStatus, ensure_extra_pod_deserializers_registered,
+        parse_object_record_file,
     };
 
     fn temp_paths() -> DriverPaths {
@@ -246,8 +242,7 @@ mod tests {
         ObjectRecord {
             id: format!("{:#}", spendable.obj.commitment()),
             class_name: "Log".to_string(),
-            source_action: "FindLog".to_string(),
-            nullifier: None,
+            status: ObjectStatus::Live,
             pod: spendable.pod,
             obj: spendable.obj,
             tx: spendable.tx,
