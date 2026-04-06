@@ -45,7 +45,37 @@ pub(crate) fn reconcile_objects(
         entry.record = nullified_record;
     }
 
-    // Second pass: mark non-nullified objects as Live when their source tx
+    // Second pass: restore locally-nullified objects whose nullifiers are
+    // NOT in the on-chain set. This handles the case where a consuming
+    // action's proof failed and the nullifier never landed. The object
+    // is set to Unknown — it cannot be used as an action input until a
+    // subsequent sync promotes it back to Live.
+    for entry in objects.iter_mut() {
+        if !entry.record.is_nullified() {
+            continue;
+        }
+        let nullifier_hash = match object_nullifier_hash(&entry.record.obj) {
+            Ok(hash) => hash,
+            Err(_) => continue,
+        };
+        if on_chain_nullifiers.contains(&nullifier_hash) {
+            continue; // Confirmed nullified on-chain, keep as is.
+        }
+        let restored_record = StoredObjectRecord {
+            status: ObjectStatus::Unknown,
+            ..entry.record.clone()
+        };
+        if let Err(err) = write_object_file(paths, &restored_record, &entry.file_name) {
+            eprintln!(
+                "zk-craft: reconcile failed to restore {}: {err}",
+                entry.file_name
+            );
+            continue;
+        }
+        entry.record = restored_record;
+    }
+
+    // Third pass: mark non-nullified objects as Live when their source tx
     // is in the canonical grounded set.
     for entry in objects.iter_mut() {
         if entry.record.is_nullified() || entry.record.status == ObjectStatus::Live {
