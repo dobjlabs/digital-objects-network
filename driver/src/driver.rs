@@ -144,16 +144,15 @@ impl Driver {
             .iter()
             .map(|entry| entry.record.spendable().tx.dict().commitment())
             .collect::<HashSet<_>>();
-        let live_nullifiers = entries
+        let all_nullifiers = entries
             .iter()
-            .filter(|entry| !entry.record.is_nullified())
             .filter_map(|entry| object_nullifier_hash(&entry.record.obj).ok())
             .collect::<HashSet<_>>();
 
         let membership = self.deps.synchronizer.fetch_membership_with_nullifiers(
             &settings.synchronizer_api_url,
             &source_tx_hashes.iter().copied().collect::<Vec<_>>(),
-            &live_nullifiers.iter().copied().collect::<Vec<_>>(),
+            &all_nullifiers.iter().copied().collect::<Vec<_>>(),
         )?;
 
         reconcile_objects(
