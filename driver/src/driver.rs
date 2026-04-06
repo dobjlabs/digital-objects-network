@@ -16,8 +16,8 @@ use crate::clients::{
     SynchronizerClient,
 };
 use crate::execute::{
-    build_relayer_payload, reconcile_objects, resolve_inputs, rollback_results, save_results,
-    update_output_files, validate_execute_request,
+    build_relayer_payload, reconcile_objects, resolve_inputs, save_results, update_output_files,
+    validate_execute_request,
 };
 use crate::object_record::ObjectStatus;
 use crate::object_record::parse_object_record_file;
@@ -345,8 +345,8 @@ impl Driver {
             &spendable_outputs,
         )?;
 
-        // Submit to relayer. If submission fails before the relayer accepts the
-        // job, we can safely roll back — nothing was sent on-chain.
+        // Submit to relayer. Output files are kept as Unknown on failure so
+        // the user can retry submission later without regenerating proofs.
         reporter.on_step(
             ExecutionPhase::Commit,
             "Submitting proof to relayer",
@@ -358,18 +358,16 @@ impl Driver {
             Some(format!("driver:{}", input.action_id)),
         ) {
             Ok(resp) if resp.status == relayer::api_types::JobStatus::Failed => {
-                rollback_results(&self.paths, &resolved_inputs, &saved);
                 return Err(anyhow!("relayer rejected job {} immediately", resp.job_id));
             }
             Ok(resp) => resp,
             Err(err) => {
-                rollback_results(&self.paths, &resolved_inputs, &saved);
                 return Err(err);
             }
         };
 
         // Past this point the proof has been accepted by the relayer and may
-        // land on-chain at any moment. We must NOT roll back — the output
+        // land on-chain at any moment. The output
         // files stay as `unknown` and the inputs stay nullified. The next
         // `sync_inventory` call will reconcile once the tx is observed.
         let waiting_label = format!("Waiting for relayer job {}", submit_response.job_id);

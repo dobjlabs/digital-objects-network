@@ -180,15 +180,10 @@ pub(crate) fn save_results(
     resolved_inputs: &[ResolvedInput],
     spendable_outputs: &SpendableObjects,
 ) -> Result<SavedFiles> {
-    let mut nullified_files = Vec::new();
-    for input in resolved_inputs {
-        let nullified_record = StoredObjectRecord {
-            status: ObjectStatus::Nullified,
-            ..input.record.clone()
-        };
-        write_object_file(paths, &nullified_record, &input.file_name)?;
-        nullified_files.push(input.file_name.clone());
-    }
+    let nullified_files = resolved_inputs
+        .iter()
+        .map(|input| input.file_name.clone())
+        .collect();
 
     if spendable_outputs.objs.len() != action.output_classes.len() {
         return Err(anyhow!(
@@ -226,29 +221,6 @@ pub(crate) fn save_results(
         output_files,
         nullified_files,
     })
-}
-
-pub(crate) fn rollback_results(
-    paths: &DriverPaths,
-    resolved_inputs: &[ResolvedInput],
-    saved: &SavedFiles,
-) {
-    // Restore each input to its original state (preserves original status and tx_hash).
-    for input in resolved_inputs {
-        if let Err(err) = write_object_file(paths, &input.record, &input.file_name) {
-            eprintln!("zk-craft: rollback failed for {}: {err}", input.file_name);
-        }
-    }
-    for file_name in &saved.output_files {
-        let path = paths.objects_dir.join(file_name);
-        match std::fs::remove_file(&path) {
-            Ok(_) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => {
-                eprintln!("zk-craft: rollback failed to remove {file_name}: {err}");
-            }
-        }
-    }
 }
 
 /// Update the status and tx_hash of previously saved output files on disk.
