@@ -69,6 +69,7 @@ impl CraftOps for AppCraftOps {
             id: object.id,
             class_name: object.class_name,
             status: status_string(object.status),
+            tx_hash: object.tx_hash,
             state: object.fields,
             predicate_source: object.predicate_source,
         })
@@ -139,6 +140,7 @@ impl CraftOps for AppCraftOps {
                     class_name: detail.class_name,
                     file_name: detail.file_name,
                     status: status_string(detail.status),
+                    tx_hash: detail.tx_hash,
                     fields: detail.fields,
                 })
             })
@@ -194,6 +196,7 @@ fn to_mcp_inventory_object(object: ::driver::ObjectSummary) -> mcp::InventoryObj
         class_name: object.class_name,
         file_name: object.file_name,
         status: status_string(object.status),
+        tx_hash: object.tx_hash,
         fields: object.fields,
     }
 }

@@ -52,6 +52,8 @@ pub struct InventoryObject {
     pub file_name: String,
     /// Lifecycle status: "unknown", "pending", "live", or "nullified"
     pub status: String,
+    /// Transaction commitment hash (hex) if this object has been submitted
+    pub tx_hash: Option<String>,
     /// Application-layer fields as key-value pairs
     pub fields: HashMap<String, serde_json::Value>,
 }
@@ -89,6 +91,8 @@ pub struct ObjectDetail {
     pub class_name: String,
     /// Lifecycle status: "unknown", "pending", "live", or "nullified"
     pub status: String,
+    /// Transaction commitment hash (hex) if this object has been submitted
+    pub tx_hash: Option<String>,
     /// Application-layer state fields
     pub state: HashMap<String, serde_json::Value>,
     /// Podlang predicate source for this object's class

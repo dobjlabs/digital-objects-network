@@ -93,6 +93,7 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
         id,
         class_name: "Log".to_string(),
         status: ObjectStatus::Live,
+        tx_hash: None,
         pod: spendable.pod,
         obj: spendable.obj,
         tx: spendable.tx,
@@ -344,5 +345,8 @@ fn test_execute_keeps_files_after_relayer_accepts() {
         .iter()
         .find(|e| e.file_name != "log_1.dobj")
         .unwrap();
-    assert_eq!(output.record.status, ObjectStatus::Pending);
+    // Relayer accepted but confirmation timed out — no Ethereum tx hash yet,
+    // so the output stays Unknown (pending requires a tx hash).
+    assert_eq!(output.record.status, ObjectStatus::Unknown);
+    assert!(output.record.tx_hash.is_none());
 }

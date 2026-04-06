@@ -17,8 +17,9 @@ use crate::clients::{
 };
 use crate::execute::{
     build_relayer_payload, reconcile_objects, resolve_inputs, rollback_results, save_results,
-    validate_execute_request,
+    update_output_files, validate_execute_request,
 };
+use crate::object_record::ObjectStatus;
 use crate::object_record::parse_object_record_file;
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, select_object,
@@ -155,7 +156,12 @@ impl Driver {
             &live_nullifiers.iter().copied().collect::<Vec<_>>(),
         )?;
 
-        reconcile_objects(&self.paths, &mut entries, &membership.on_chain_nullifiers);
+        reconcile_objects(
+            &self.paths,
+            &mut entries,
+            &membership.grounded_txs,
+            &membership.on_chain_nullifiers,
+        );
 
         Ok(entries
             .iter()
@@ -363,7 +369,7 @@ impl Driver {
 
         // Past this point the proof has been accepted by the relayer and may
         // land on-chain at any moment. We must NOT roll back — the output
-        // files stay as `pending` and the inputs stay nullified. The next
+        // files stay as `unknown` and the inputs stay nullified. The next
         // `sync_inventory` call will reconcile once the tx is observed.
         let waiting_label = format!("Waiting for relayer job {}", submit_response.job_id);
         reporter.on_step(ExecutionPhase::Commit, &waiting_label, &commit_ctx);
@@ -374,17 +380,54 @@ impl Driver {
             RELAYER_POLL_INTERVAL_MS,
         )?;
 
+        // Confirmation returned an Ethereum tx hash — update outputs to Pending.
+        let eth_tx_hash = confirmation.tx_hash.as_deref();
+        if let Err(err) = update_output_files(
+            &self.paths,
+            &saved.output_files,
+            ObjectStatus::Pending,
+            eth_tx_hash,
+        ) {
+            eprintln!("zk-craft: failed to update output status to pending: {err}");
+        }
+
         reporter.on_step(
             ExecutionPhase::Commit,
             "Waiting for synchronizer to observe commit",
             &commit_ctx,
         );
-        let sync_head = self.deps.synchronizer.wait_for_tx(
+        let sync_head = match self.deps.synchronizer.wait_for_tx(
             &settings.synchronizer_api_url,
             expected_tx_final,
             SYNCHRONIZER_POLL_TIMEOUT_SECS,
             SYNCHRONIZER_POLL_INTERVAL_MS,
-        )?;
+        ) {
+            Ok(head) => head,
+            Err(err) => {
+                // Sync failed or timed out — revert outputs to Unknown but
+                // keep the txHash so the chain submission can be inspected.
+                // The next sync_inventory will reconcile if the tx lands later.
+                if let Err(update_err) = update_output_files(
+                    &self.paths,
+                    &saved.output_files,
+                    ObjectStatus::Unknown,
+                    eth_tx_hash,
+                ) {
+                    eprintln!("zk-craft: failed to revert output status to unknown: {update_err}");
+                }
+                return Err(err);
+            }
+        };
+
+        // Sync confirmed the tx — update output files to Live.
+        if let Err(err) = update_output_files(
+            &self.paths,
+            &saved.output_files,
+            ObjectStatus::Live,
+            eth_tx_hash,
+        ) {
+            eprintln!("zk-craft: failed to update output status to live: {err}");
+        }
 
         let result = ExecuteActionResult {
             old_root,
@@ -416,6 +459,7 @@ impl Driver {
             class_name: entry.record.class_name.clone(),
             class_hash,
             status: entry.record.status,
+            tx_hash: entry.record.tx_hash.clone(),
             grounded,
             fields: entry.record.fields_map(),
         }
@@ -432,6 +476,7 @@ impl Driver {
                 .map(|class_info| class_info.hash.clone())
                 .unwrap_or_default(),
             status: entry.record.status,
+            tx_hash: entry.record.tx_hash.clone(),
             grounded,
             fields: entry.record.fields_map(),
             predicate_source: class_info

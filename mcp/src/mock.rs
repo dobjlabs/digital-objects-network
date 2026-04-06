@@ -102,6 +102,7 @@ impl CraftOps for MockCraftOps {
             id: obj.id.clone(),
             class_name: obj.class_name.clone(),
             status: obj.status.clone(),
+            tx_hash: obj.tx_hash.clone(),
             state: obj.fields.clone(),
             predicate_source: predicate_source_for(&obj.class_name),
         })
@@ -155,6 +156,7 @@ impl CraftOps for MockCraftOps {
                 class_name: "Wood".to_string(),
                 file_name: "Wood.dobj".to_string(),
                 status: "live".to_string(),
+                tx_hash: Some("0xmocktxnew12345678".to_string()),
                 fields: HashMap::from([
                     (
                         "blueprint".to_string(),
@@ -212,6 +214,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             class_name: "Log".to_string(),
             file_name: "Log.dobj".to_string(),
             status: "live".to_string(),
+            tx_hash: Some("0xmocktx1111111111".to_string()),
             fields: HashMap::from([
                 (
                     "blueprint".to_string(),
@@ -228,6 +231,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             class_name: "Wood".to_string(),
             file_name: "Wood.dobj".to_string(),
             status: "live".to_string(),
+            tx_hash: Some("0xmocktx2222222222".to_string()),
             fields: HashMap::from([
                 (
                     "blueprint".to_string(),
@@ -244,6 +248,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             class_name: "Stick".to_string(),
             file_name: "Stick.dobj".to_string(),
             status: "live".to_string(),
+            tx_hash: Some("0xmocktx3333333333".to_string()),
             fields: HashMap::from([
                 (
                     "blueprint".to_string(),
@@ -260,6 +265,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             class_name: "WoodPick".to_string(),
             file_name: "WoodPick.dobj".to_string(),
             status: "live".to_string(),
+            tx_hash: Some("0xmocktx4444444444".to_string()),
             fields: HashMap::from([
                 (
                     "blueprint".to_string(),
@@ -280,6 +286,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             class_name: "Stone".to_string(),
             file_name: "Stone.dobj".to_string(),
             status: "live".to_string(),
+            tx_hash: Some("0xmocktx5555555555".to_string()),
             fields: HashMap::from([
                 (
                     "blueprint".to_string(),
@@ -297,6 +304,7 @@ fn default_inventory() -> Vec<InventoryObject> {
             class_name: "Log".to_string(),
             file_name: "Log_old.dobj".to_string(),
             status: "nullified".to_string(),
+            tx_hash: Some("0xmocktxdead000000".to_string()),
             fields: HashMap::from([(
                 "blueprint".to_string(),
                 serde_json::Value::String("Log".to_string()),

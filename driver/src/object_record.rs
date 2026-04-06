@@ -23,6 +23,9 @@ pub struct ObjectRecord {
     pub class_name: String,
     /// Lifecycle status of this object.
     pub status: ObjectStatus,
+    /// Optional Ethereum transaction hash for the blob that anchored this object.
+    /// Set once the relayer confirms on-chain inclusion.
+    pub tx_hash: Option<String>,
     /// Pod proof for this object
     pub pod: MainPod,
     /// Object payload dictionary
@@ -80,6 +83,9 @@ impl ObjectRecord {
             serde_json::to_value(self.status)
                 .map_err(|err| format!("failed to serialize status: {err}"))?,
         );
+        if let Some(ref hash) = self.tx_hash {
+            fields.insert("txHash".to_string(), Value::String(hash.clone()));
+        }
         fields.insert(
             "pod".to_string(),
             serde_json::to_value(&self.pod)
@@ -105,6 +111,10 @@ impl ObjectRecord {
         let id = parse_required_field::<String>(fields, "id", "id")?;
         let class_name = parse_required_field::<String>(fields, "className", "className")?;
         let status = parse_required_field::<ObjectStatus>(fields, "status", "status")?;
+        let tx_hash: Option<String> = match fields.get("txHash") {
+            Some(Value::String(s)) => Some(s.clone()),
+            _ => None,
+        };
         let pod = parse_required_field::<MainPod>(fields, "pod", "spendable.pod")?;
         let obj = parse_required_field::<Dictionary>(fields, "obj", "spendable.obj")?;
         let tx = parse_required_field::<Tx>(fields, "tx", "spendable.tx")?;
@@ -113,6 +123,7 @@ impl ObjectRecord {
             id,
             class_name,
             status,
+            tx_hash,
             pod,
             obj,
             tx,

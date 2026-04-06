@@ -13,6 +13,7 @@ pub struct InventoryObject {
     pub class_hash: String,
     pub emoji: String,
     pub status: driver::ObjectStatus,
+    pub tx_hash: Option<String>,
     pub grounded: bool,
     pub description: Option<String>,
     pub obj: serde_json::Value,
@@ -67,6 +68,7 @@ pub async fn load_gui_inventory(
                         .map(|class_info| class_info.emoji.clone())
                         .unwrap_or_else(|| "📦".to_string()),
                     status: object.status,
+                    tx_hash: object.tx_hash,
                     grounded: object.grounded.unwrap_or(false),
                     description: class_info.map(|class_info| class_info.description.clone()),
                     obj: serde_json::Value::Object(object.fields.into_iter().collect()),

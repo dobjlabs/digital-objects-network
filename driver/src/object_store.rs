@@ -243,6 +243,7 @@ mod tests {
             id: format!("{:#}", spendable.obj.commitment()),
             class_name: "Log".to_string(),
             status: ObjectStatus::Live,
+            tx_hash: None,
             pod: spendable.pod,
             obj: spendable.obj,
             tx: spendable.tx,

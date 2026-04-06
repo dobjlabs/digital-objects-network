@@ -48,6 +48,7 @@ pub struct ObjectSummary {
     pub class_name: String,
     pub class_hash: String,
     pub status: ObjectStatus,
+    pub tx_hash: Option<String>,
     pub grounded: Option<bool>,
     pub fields: HashMap<String, serde_json::Value>,
 }
@@ -60,6 +61,7 @@ pub struct ObjectDetail {
     pub class_name: String,
     pub class_hash: String,
     pub status: ObjectStatus,
+    pub tx_hash: Option<String>,
     pub grounded: Option<bool>,
     pub fields: HashMap<String, serde_json::Value>,
     pub predicate_source: String,

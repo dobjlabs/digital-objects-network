@@ -16,8 +16,10 @@ use crate::types::{ActionSummary, DriverPaths, ExecuteActionInput, ObjectSelecto
 pub(crate) fn reconcile_objects(
     paths: &DriverPaths,
     objects: &mut [ObjectFileEntry],
+    grounded_txs: &HashSet<Hash>,
     on_chain_nullifiers: &HashSet<Hash>,
 ) {
+    // First pass: nullify objects whose nullifiers appear on-chain.
     for entry in objects.iter_mut() {
         if entry.record.is_nullified() {
             continue;
@@ -30,12 +32,8 @@ pub(crate) fn reconcile_objects(
             continue;
         }
         let nullified_record = StoredObjectRecord {
-            id: entry.record.id.clone(),
-            class_name: entry.record.class_name.clone(),
             status: ObjectStatus::Nullified,
-            pod: entry.record.pod.clone(),
-            obj: entry.record.obj.clone(),
-            tx: entry.record.tx.clone(),
+            ..entry.record.clone()
         };
         if let Err(err) = write_object_file(paths, &nullified_record, &entry.file_name) {
             eprintln!(
@@ -45,6 +43,30 @@ pub(crate) fn reconcile_objects(
             continue;
         }
         entry.record = nullified_record;
+    }
+
+    // Second pass: mark non-nullified objects as Live when their source tx
+    // is in the canonical grounded set.
+    for entry in objects.iter_mut() {
+        if entry.record.is_nullified() || entry.record.status == ObjectStatus::Live {
+            continue;
+        }
+        let source_tx_hash = entry.record.tx.dict().commitment();
+        if !grounded_txs.contains(&source_tx_hash) {
+            continue;
+        }
+        let live_record = StoredObjectRecord {
+            status: ObjectStatus::Live,
+            ..entry.record.clone()
+        };
+        if let Err(err) = write_object_file(paths, &live_record, &entry.file_name) {
+            eprintln!(
+                "zk-craft: reconcile failed to mark {} as live: {err}",
+                entry.file_name
+            );
+            continue;
+        }
+        entry.record = live_record;
     }
 }
 
@@ -126,14 +148,9 @@ pub(crate) fn save_results(
 ) -> Result<SavedFiles> {
     let mut nullified_files = Vec::new();
     for input in resolved_inputs {
-        let input_record = &input.record;
         let nullified_record = StoredObjectRecord {
-            id: input_record.id.clone(),
-            class_name: input_record.class_name.clone(),
             status: ObjectStatus::Nullified,
-            pod: input_record.pod.clone(),
-            obj: input_record.obj.clone(),
-            tx: input_record.tx.clone(),
+            ..input.record.clone()
         };
         write_object_file(paths, &nullified_record, &input.file_name)?;
         nullified_files.push(input.file_name.clone());
@@ -162,7 +179,8 @@ pub(crate) fn save_results(
         let live_record = StoredObjectRecord {
             id: object_id,
             class_name: class_name.clone(),
-            status: ObjectStatus::Pending,
+            status: ObjectStatus::Unknown,
+            tx_hash: None,
             pod: spendable.pod,
             obj: spendable.obj,
             tx: spendable.tx,
@@ -181,16 +199,9 @@ pub(crate) fn rollback_results(
     resolved_inputs: &[ResolvedInput],
     saved: &SavedFiles,
 ) {
+    // Restore each input to its original state (preserves original status and tx_hash).
     for input in resolved_inputs {
-        let live_record = StoredObjectRecord {
-            id: input.record.id.clone(),
-            class_name: input.record.class_name.clone(),
-            status: input.record.status,
-            pod: input.record.pod.clone(),
-            obj: input.record.obj.clone(),
-            tx: input.record.tx.clone(),
-        };
-        if let Err(err) = write_object_file(paths, &live_record, &input.file_name) {
+        if let Err(err) = write_object_file(paths, &input.record, &input.file_name) {
             eprintln!("zk-craft: rollback failed for {}: {err}", input.file_name);
         }
     }
@@ -204,6 +215,26 @@ pub(crate) fn rollback_results(
             }
         }
     }
+}
+
+/// Update the status and tx_hash of previously saved output files on disk.
+pub(crate) fn update_output_files(
+    paths: &DriverPaths,
+    output_files: &[String],
+    status: ObjectStatus,
+    tx_hash: Option<&str>,
+) -> Result<()> {
+    for file_name in output_files {
+        let file_path = paths.objects_dir.join(file_name);
+        let contents = std::fs::read_to_string(&file_path)
+            .map_err(|err| anyhow!("failed to read {file_name} for status update: {err}"))?;
+        let mut record: StoredObjectRecord = serde_json::from_str(&contents)
+            .map_err(|err| anyhow!("failed to parse {file_name} for status update: {err}"))?;
+        record.status = status;
+        record.tx_hash = tx_hash.map(|s| s.to_string());
+        write_object_file(paths, &record, file_name)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn build_relayer_payload(

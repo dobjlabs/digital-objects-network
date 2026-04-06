@@ -12,6 +12,7 @@ export interface InventoryObjectPayload {
   classHash: string;
   emoji: string;
   status: ObjectStatus;
+  txHash: string | null;
   grounded: boolean;
   description?: string;
   obj: unknown;
@@ -50,6 +51,7 @@ export interface ObjectRecordPayload {
   id: string;
   className: ClassName;
   status: ObjectStatus;
+  txHash: string | null;
   pod: unknown;
   obj: unknown;
   tx: unknown;
