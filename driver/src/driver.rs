@@ -338,65 +338,65 @@ impl Driver {
             &spendable_outputs,
         )?;
 
-        let commit_result: Result<ExecuteActionResult> = (|| {
-            reporter.on_step(
-                ExecutionPhase::Commit,
-                "Submitting proof to relayer",
-                &commit_ctx,
-            );
-            let submit_response = self.deps.relayer.submit_proof(
-                &settings.relayer_api_url,
-                &payload_bytes,
-                Some(format!("driver:{}", input.action_id)),
-            )?;
-            if submit_response.status == relayer::api_types::JobStatus::Failed {
-                return Err(anyhow!(
-                    "relayer rejected job {} immediately",
-                    submit_response.job_id
-                ));
+        // Submit to relayer. If submission fails before the relayer accepts the
+        // job, we can safely roll back — nothing was sent on-chain.
+        reporter.on_step(
+            ExecutionPhase::Commit,
+            "Submitting proof to relayer",
+            &commit_ctx,
+        );
+        let submit_response = match self.deps.relayer.submit_proof(
+            &settings.relayer_api_url,
+            &payload_bytes,
+            Some(format!("driver:{}", input.action_id)),
+        ) {
+            Ok(resp) if resp.status == relayer::api_types::JobStatus::Failed => {
+                rollback_results(&self.paths, &resolved_inputs, &saved);
+                return Err(anyhow!("relayer rejected job {} immediately", resp.job_id));
             }
-
-            let waiting_label = format!("Waiting for relayer job {}", submit_response.job_id);
-            reporter.on_step(ExecutionPhase::Commit, &waiting_label, &commit_ctx);
-            let confirmation = self.deps.relayer.wait_for_confirmation(
-                &settings.relayer_api_url,
-                &submit_response.job_id,
-                RELAYER_POLL_TIMEOUT_SECS,
-                RELAYER_POLL_INTERVAL_MS,
-            )?;
-
-            reporter.on_step(
-                ExecutionPhase::Commit,
-                "Waiting for synchronizer to observe commit",
-                &commit_ctx,
-            );
-            let sync_head = self.deps.synchronizer.wait_for_tx(
-                &settings.synchronizer_api_url,
-                expected_tx_final,
-                SYNCHRONIZER_POLL_TIMEOUT_SECS,
-                SYNCHRONIZER_POLL_INTERVAL_MS,
-            )?;
-            Ok(ExecuteActionResult {
-                old_root,
-                new_root: encode_hash_hex(&sync_head.current_gsr),
-                output_files: saved.output_files.clone(),
-                nullified_files: saved.nullified_files.clone(),
-                relayer_job_id: confirmation.job_id,
-                tx_hash: confirmation.tx_hash,
-                block_number: confirmation.block_number,
-            })
-        })();
-
-        match commit_result {
-            Ok(result) => {
-                reporter.on_done(ExecutionPhase::Commit, Some(&result));
-                Ok(result)
-            }
+            Ok(resp) => resp,
             Err(err) => {
                 rollback_results(&self.paths, &resolved_inputs, &saved);
-                Err(err)
+                return Err(err);
             }
-        }
+        };
+
+        // Past this point the proof has been accepted by the relayer and may
+        // land on-chain at any moment. We must NOT roll back — the output
+        // files stay as `pending` and the inputs stay nullified. The next
+        // `sync_inventory` call will reconcile once the tx is observed.
+        let waiting_label = format!("Waiting for relayer job {}", submit_response.job_id);
+        reporter.on_step(ExecutionPhase::Commit, &waiting_label, &commit_ctx);
+        let confirmation = self.deps.relayer.wait_for_confirmation(
+            &settings.relayer_api_url,
+            &submit_response.job_id,
+            RELAYER_POLL_TIMEOUT_SECS,
+            RELAYER_POLL_INTERVAL_MS,
+        )?;
+
+        reporter.on_step(
+            ExecutionPhase::Commit,
+            "Waiting for synchronizer to observe commit",
+            &commit_ctx,
+        );
+        let sync_head = self.deps.synchronizer.wait_for_tx(
+            &settings.synchronizer_api_url,
+            expected_tx_final,
+            SYNCHRONIZER_POLL_TIMEOUT_SECS,
+            SYNCHRONIZER_POLL_INTERVAL_MS,
+        )?;
+
+        let result = ExecuteActionResult {
+            old_root,
+            new_root: encode_hash_hex(&sync_head.current_gsr),
+            output_files: saved.output_files.clone(),
+            nullified_files: saved.nullified_files.clone(),
+            relayer_job_id: confirmation.job_id,
+            tx_hash: confirmation.tx_hash,
+            block_number: confirmation.block_number,
+        };
+        reporter.on_done(ExecutionPhase::Commit, Some(&result));
+        Ok(result)
     }
 
     pub fn generated_podlang(&self) -> Option<String> {

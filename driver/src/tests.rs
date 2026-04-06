@@ -225,6 +225,7 @@ impl SynchronizerClient for MockSynchronizer {
 
 #[derive(Default)]
 struct MockRelayer {
+    fail_submit: bool,
     fail_wait: bool,
 }
 
@@ -235,6 +236,9 @@ impl RelayerClient for MockRelayer {
         _payload_bytes: &[u8],
         _client_ref: Option<String>,
     ) -> Result<relayer::api_types::SubmitProofResponse> {
+        if self.fail_submit {
+            return Err(anyhow!("relayer submit failed"));
+        }
         Ok(relayer::api_types::SubmitProofResponse {
             job_id: "job-1".to_string(),
             status: relayer::api_types::JobStatus::Queued,
@@ -280,9 +284,40 @@ fn test_list_actions_filters_by_input_class() {
 }
 
 #[test]
-fn test_execute_rolls_back_outputs_on_relayer_failure() {
+fn test_execute_rolls_back_on_relayer_submit_failure() {
     let (entry, mut deps) = make_input_record("log_1.dobj");
-    deps.relayer = Arc::new(MockRelayer { fail_wait: true });
+    deps.relayer = Arc::new(MockRelayer {
+        fail_submit: true,
+        ..MockRelayer::default()
+    });
+    let paths = temp_paths();
+    ensure_store_dirs(&paths).unwrap();
+    write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
+    let driver = Driver::open(paths.clone(), deps).unwrap();
+
+    let err = driver
+        .execute(ExecuteActionInput {
+            action_id: "CraftWood".to_string(),
+            input_objects: vec![ObjectSelector::FileName("log_1.dobj".to_string())],
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("relayer submit failed"));
+
+    // Submission never reached the relayer, so rollback restores the input
+    // and deletes the output.
+    let remaining = load_object_files(&paths).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].file_name, "log_1.dobj");
+    assert!(!remaining[0].record.is_nullified());
+}
+
+#[test]
+fn test_execute_keeps_files_after_relayer_accepts() {
+    let (entry, mut deps) = make_input_record("log_1.dobj");
+    deps.relayer = Arc::new(MockRelayer {
+        fail_wait: true,
+        ..MockRelayer::default()
+    });
     let paths = temp_paths();
     ensure_store_dirs(&paths).unwrap();
     write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
@@ -296,8 +331,18 @@ fn test_execute_rolls_back_outputs_on_relayer_failure() {
         .unwrap_err();
     assert!(err.to_string().contains("relayer timeout"));
 
+    // The relayer accepted the job, so files must NOT be rolled back.
+    // Input stays nullified, output stays as pending.
     let remaining = load_object_files(&paths).unwrap();
-    assert_eq!(remaining.len(), 1);
-    assert_eq!(remaining[0].file_name, "log_1.dobj");
-    assert!(!remaining[0].record.is_nullified());
+    assert_eq!(remaining.len(), 2);
+    let input = remaining
+        .iter()
+        .find(|e| e.file_name == "log_1.dobj")
+        .unwrap();
+    assert!(input.record.is_nullified());
+    let output = remaining
+        .iter()
+        .find(|e| e.file_name != "log_1.dobj")
+        .unwrap();
+    assert_eq!(output.record.status, ObjectStatus::Pending);
 }
