@@ -160,7 +160,7 @@ impl Driver {
             &mut entries,
             &membership.grounded_txs,
             &membership.on_chain_nullifiers,
-        );
+        )?;
 
         Ok(entries
             .iter()
@@ -381,14 +381,12 @@ impl Driver {
 
         // Confirmation returned an Ethereum tx hash — update outputs to Pending.
         let eth_tx_hash = confirmation.tx_hash.as_deref();
-        if let Err(err) = update_output_files(
+        update_output_files(
             &self.paths,
             &saved.output_files,
             ObjectStatus::Pending,
             eth_tx_hash,
-        ) {
-            eprintln!("zk-craft: failed to update output status to pending: {err}");
-        }
+        )?;
 
         reporter.on_step(
             ExecutionPhase::Commit,
@@ -406,27 +404,23 @@ impl Driver {
                 // Sync failed or timed out — revert outputs to Unknown but
                 // keep the txHash so the chain submission can be inspected.
                 // The next sync_inventory will reconcile if the tx lands later.
-                if let Err(update_err) = update_output_files(
+                update_output_files(
                     &self.paths,
                     &saved.output_files,
                     ObjectStatus::Unknown,
                     eth_tx_hash,
-                ) {
-                    eprintln!("zk-craft: failed to revert output status to unknown: {update_err}");
-                }
+                )?;
                 return Err(err);
             }
         };
 
         // Sync confirmed the tx — update output files to Live.
-        if let Err(err) = update_output_files(
+        update_output_files(
             &self.paths,
             &saved.output_files,
             ObjectStatus::Live,
             eth_tx_hash,
-        ) {
-            eprintln!("zk-craft: failed to update output status to live: {err}");
-        }
+        )?;
 
         let result = ExecuteActionResult {
             old_root,

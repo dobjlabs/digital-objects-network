@@ -18,7 +18,9 @@ pub(crate) fn reconcile_objects(
     objects: &mut [ObjectFileEntry],
     grounded_txs: &HashSet<Hash>,
     on_chain_nullifiers: &HashSet<Hash>,
-) {
+) -> Result<()> {
+    let mut errors: Vec<String> = Vec::new();
+
     // First pass: nullify objects whose nullifiers appear on-chain.
     for entry in objects.iter_mut() {
         if entry.record.is_nullified() {
@@ -36,10 +38,7 @@ pub(crate) fn reconcile_objects(
             ..entry.record.clone()
         };
         if let Err(err) = write_object_file(paths, &nullified_record, &entry.file_name) {
-            eprintln!(
-                "zk-craft: reconcile failed to nullify {}: {err}",
-                entry.file_name
-            );
+            errors.push(format!("failed to nullify {}: {err}", entry.file_name));
             continue;
         }
         entry.record = nullified_record;
@@ -66,10 +65,7 @@ pub(crate) fn reconcile_objects(
             ..entry.record.clone()
         };
         if let Err(err) = write_object_file(paths, &restored_record, &entry.file_name) {
-            eprintln!(
-                "zk-craft: reconcile failed to restore {}: {err}",
-                entry.file_name
-            );
+            errors.push(format!("failed to restore {}: {err}", entry.file_name));
             continue;
         }
         entry.record = restored_record;
@@ -90,13 +86,20 @@ pub(crate) fn reconcile_objects(
             ..entry.record.clone()
         };
         if let Err(err) = write_object_file(paths, &live_record, &entry.file_name) {
-            eprintln!(
-                "zk-craft: reconcile failed to mark {} as live: {err}",
-                entry.file_name
-            );
+            errors.push(format!("failed to mark {} as live: {err}", entry.file_name));
             continue;
         }
         entry.record = live_record;
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "reconcile encountered {} error(s): {}",
+            errors.len(),
+            errors.join("; ")
+        ))
     }
 }
 
