@@ -2,16 +2,12 @@ use anyhow::{Result, anyhow};
 
 use crate::types::DriverPaths;
 
-const APP_IDENTIFIER: &str = "com.dobjlabs.zk-craft";
-
 pub fn default_paths() -> Result<DriverPaths> {
-    let settings_path = dirs::config_dir()
-        .ok_or_else(|| anyhow!("failed to resolve config directory"))?
-        .join(APP_IDENTIFIER)
-        .join("settings.json");
-    let objects_dir = dirs::home_dir()
+    let root = dirs::home_dir()
         .ok_or_else(|| anyhow!("failed to resolve home directory"))?
-        .join(".objects");
+        .join(".dobj");
+    let settings_path = root.join("settings.json");
+    let objects_dir = root.join("objects");
     let nullified_objects_dir = objects_dir.join(".nullified");
     Ok(DriverPaths {
         settings_path,
@@ -27,12 +23,12 @@ mod tests {
     #[test]
     fn test_default_paths_shape() {
         let paths = default_paths().unwrap();
+        assert!(paths.settings_path.ends_with(".dobj/settings.json"));
+        assert!(paths.objects_dir.ends_with(".dobj/objects"));
         assert!(
             paths
-                .settings_path
-                .ends_with("com.dobjlabs.zk-craft/settings.json")
+                .nullified_objects_dir
+                .ends_with(".dobj/objects/.nullified")
         );
-        assert!(paths.objects_dir.ends_with(".objects"));
-        assert!(paths.nullified_objects_dir.ends_with(".objects/.nullified"));
     }
 }

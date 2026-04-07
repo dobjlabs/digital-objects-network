@@ -68,7 +68,8 @@ impl CraftOps for AppCraftOps {
         Ok(mcp::ObjectDetail {
             id: object.id,
             class_name: object.class_name,
-            live: object.live,
+            status: status_string(object.status),
+            tx_hash: object.tx_hash,
             state: object.fields,
             predicate_source: object.predicate_source,
         })
@@ -138,7 +139,8 @@ impl CraftOps for AppCraftOps {
                     id: detail.id,
                     class_name: detail.class_name,
                     file_name: detail.file_name,
-                    live: detail.live,
+                    status: status_string(detail.status),
+                    tx_hash: detail.tx_hash,
                     fields: detail.fields,
                 })
             })
@@ -178,12 +180,23 @@ impl CraftOps for AppCraftOps {
     }
 }
 
+fn status_string(status: ::driver::ObjectStatus) -> String {
+    match status {
+        ::driver::ObjectStatus::Unknown => "unknown",
+        ::driver::ObjectStatus::Pending => "pending",
+        ::driver::ObjectStatus::Live => "live",
+        ::driver::ObjectStatus::Nullified => "nullified",
+    }
+    .to_string()
+}
+
 fn to_mcp_inventory_object(object: ::driver::ObjectSummary) -> mcp::InventoryObject {
     mcp::InventoryObject {
         id: object.id,
         class_name: object.class_name,
         file_name: object.file_name,
-        live: object.live,
+        status: status_string(object.status),
+        tx_hash: object.tx_hash,
         fields: object.fields,
     }
 }

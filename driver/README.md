@@ -4,7 +4,7 @@ Headless Rust library for working with local digital objects.
 
 This crate is the non-Tauri backend used by `app-gui`. It owns:
 
-- local object storage under `~/.objects`
+- local object storage under `~/.dobj/objects`
 - settings loading/saving
 - the built-in action and class catalog
 - synchronizer and relayer HTTP integration
@@ -84,9 +84,9 @@ Important public types are defined in [`src/types.rs`](src/types.rs):
 
 Default paths are defined in [`src/paths.rs`](src/paths.rs).
 
-- settings file: `dirs::config_dir()/com.dobjlabs.zk-craft/settings.json`
-- objects dir: `~/.objects`
-- nullified dir: `~/.objects/.nullified`
+- settings file: `~/.dobj/settings.json`
+- objects dir: `~/.dobj/objects`
+- nullified dir: `~/.dobj/objects/.nullified`
 
 Current settings are intentionally small:
 
@@ -119,11 +119,11 @@ Object files stay backward-compatible with the existing `.dobj` JSON schema. The
 
 Live objects are stored in:
 
-- `~/.objects`
+- `~/.dobj/objects`
 
 Consumed objects are moved to:
 
-- `~/.objects/.nullified`
+- `~/.dobj/objects/.nullified`
 
 File names are preserved as:
 

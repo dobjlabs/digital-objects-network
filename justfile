@@ -20,7 +20,7 @@ dev:
 
 # Wipe local state (RocksDB + local Postgres DBs + objects)
 reset:
-    rm -rf data/ ~/.objects
+    rm -rf data/ ~/.dobj
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
 

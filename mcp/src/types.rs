@@ -50,8 +50,10 @@ pub struct InventoryObject {
     pub class_name: String,
     /// The .dobj filename, e.g. "WoodPick.dobj"
     pub file_name: String,
-    /// Whether this object is live (not nullified)
-    pub live: bool,
+    /// Lifecycle status: "unknown", "pending", "live", or "nullified"
+    pub status: String,
+    /// Transaction commitment hash (hex) if this object has been submitted
+    pub tx_hash: Option<String>,
     /// Application-layer fields as key-value pairs
     pub fields: HashMap<String, serde_json::Value>,
 }
@@ -87,8 +89,10 @@ pub struct ObjectDetail {
     pub id: String,
     /// Object class name
     pub class_name: String,
-    /// Whether this object is live (not nullified)
-    pub live: bool,
+    /// Lifecycle status: "unknown", "pending", "live", or "nullified"
+    pub status: String,
+    /// Transaction commitment hash (hex) if this object has been submitted
+    pub tx_hash: Option<String>,
     /// Application-layer state fields
     pub state: HashMap<String, serde_json::Value>,
     /// Podlang predicate source for this object's class

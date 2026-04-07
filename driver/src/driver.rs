@@ -16,9 +16,10 @@ use crate::clients::{
     SynchronizerClient,
 };
 use crate::execute::{
-    build_relayer_payload, reconcile_objects, resolve_inputs, rollback_results, save_results,
+    build_relayer_payload, reconcile_objects, resolve_inputs, save_results, update_output_files,
     validate_execute_request,
 };
+use crate::object_record::ObjectStatus;
 use crate::object_record::parse_object_record_file;
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, select_object,
@@ -143,19 +144,23 @@ impl Driver {
             .iter()
             .map(|entry| entry.record.spendable().tx.dict().commitment())
             .collect::<HashSet<_>>();
-        let live_nullifiers = entries
+        let all_nullifiers = entries
             .iter()
-            .filter(|entry| !entry.record.is_nullified())
             .filter_map(|entry| object_nullifier_hash(&entry.record.obj).ok())
             .collect::<HashSet<_>>();
 
         let membership = self.deps.synchronizer.fetch_membership_with_nullifiers(
             &settings.synchronizer_api_url,
             &source_tx_hashes.iter().copied().collect::<Vec<_>>(),
-            &live_nullifiers.iter().copied().collect::<Vec<_>>(),
+            &all_nullifiers.iter().copied().collect::<Vec<_>>(),
         )?;
 
-        reconcile_objects(&self.paths, &mut entries, &membership.on_chain_nullifiers);
+        reconcile_objects(
+            &self.paths,
+            &mut entries,
+            &membership.grounded_txs,
+            &membership.on_chain_nullifiers,
+        )?;
 
         Ok(entries
             .iter()
@@ -192,7 +197,7 @@ impl Driver {
     pub fn list_classes(&self) -> Result<Vec<ClassSummary>> {
         let live_objects = load_object_files(&self.paths)?
             .into_iter()
-            .filter(|entry| !entry.record.is_nullified())
+            .filter(|entry| entry.record.status == ObjectStatus::Live)
             .collect::<Vec<_>>();
         Ok(self
             .deps
@@ -217,7 +222,9 @@ impl Driver {
             .ok_or_else(|| anyhow!("unknown class: {class_name}"))?;
         let live_count = load_object_files(&self.paths)?
             .into_iter()
-            .filter(|entry| !entry.record.is_nullified() && entry.record.class_name == class_name)
+            .filter(|entry| {
+                entry.record.status == ObjectStatus::Live && entry.record.class_name == class_name
+            })
             .count();
         Ok(ClassSummary {
             live_count,
@@ -234,7 +241,7 @@ impl Driver {
         let entries = load_object_files(&self.paths)?;
         let live_objects = entries
             .iter()
-            .filter(|entry| !entry.record.is_nullified())
+            .filter(|entry| entry.record.status == ObjectStatus::Live)
             .collect::<Vec<_>>();
 
         let mut available = Vec::new();
@@ -338,65 +345,100 @@ impl Driver {
             &spendable_outputs,
         )?;
 
-        let commit_result: Result<ExecuteActionResult> = (|| {
-            reporter.on_step(
-                ExecutionPhase::Commit,
-                "Submitting proof to relayer",
-                &commit_ctx,
-            );
-            let submit_response = self.deps.relayer.submit_proof(
-                &settings.relayer_api_url,
-                &payload_bytes,
-                Some(format!("driver:{}", input.action_id)),
-            )?;
-            if submit_response.status == relayer::api_types::JobStatus::Failed {
-                return Err(anyhow!(
-                    "relayer rejected job {} immediately",
-                    submit_response.job_id
-                ));
+        // Submit to relayer. Output files are kept as Unknown on failure so
+        // the user can retry submission later without regenerating proofs.
+        reporter.on_step(
+            ExecutionPhase::Commit,
+            "Submitting proof to relayer",
+            &commit_ctx,
+        );
+        let submit_response = match self.deps.relayer.submit_proof(
+            &settings.relayer_api_url,
+            &payload_bytes,
+            Some(format!("driver:{}", input.action_id)),
+        ) {
+            Ok(resp) if resp.status == relayer::api_types::JobStatus::Failed => {
+                return Err(anyhow!("relayer rejected job {} immediately", resp.job_id));
             }
-
-            let waiting_label = format!("Waiting for relayer job {}", submit_response.job_id);
-            reporter.on_step(ExecutionPhase::Commit, &waiting_label, &commit_ctx);
-            let confirmation = self.deps.relayer.wait_for_confirmation(
-                &settings.relayer_api_url,
-                &submit_response.job_id,
-                RELAYER_POLL_TIMEOUT_SECS,
-                RELAYER_POLL_INTERVAL_MS,
-            )?;
-
-            reporter.on_step(
-                ExecutionPhase::Commit,
-                "Waiting for synchronizer to observe commit",
-                &commit_ctx,
-            );
-            let sync_head = self.deps.synchronizer.wait_for_tx(
-                &settings.synchronizer_api_url,
-                expected_tx_final,
-                SYNCHRONIZER_POLL_TIMEOUT_SECS,
-                SYNCHRONIZER_POLL_INTERVAL_MS,
-            )?;
-            Ok(ExecuteActionResult {
-                old_root,
-                new_root: encode_hash_hex(&sync_head.current_gsr),
-                output_files: saved.output_files.clone(),
-                nullified_files: saved.nullified_files.clone(),
-                relayer_job_id: confirmation.job_id,
-                tx_hash: confirmation.tx_hash,
-                block_number: confirmation.block_number,
-            })
-        })();
-
-        match commit_result {
-            Ok(result) => {
-                reporter.on_done(ExecutionPhase::Commit, Some(&result));
-                Ok(result)
-            }
+            Ok(resp) => resp,
             Err(err) => {
-                rollback_results(&self.paths, &resolved_inputs, &saved);
-                Err(err)
+                return Err(err);
             }
-        }
+        };
+
+        // Past this point the proof has been accepted by the relayer and may
+        // land on-chain at any moment. Output files stay as Unknown until the
+        // relayer broadcasts and we have a tx_hash.
+        let waiting_label = format!("Waiting for relayer job {}", submit_response.job_id);
+        reporter.on_step(ExecutionPhase::Commit, &waiting_label, &commit_ctx);
+
+        // Poll until the relayer has broadcast the tx and we have a tx_hash,
+        // then mark output files as Pending.
+        let eth_tx_hash = self.deps.relayer.wait_for_tx_hash(
+            &settings.relayer_api_url,
+            &submit_response.job_id,
+            RELAYER_POLL_TIMEOUT_SECS,
+            RELAYER_POLL_INTERVAL_MS,
+        )?;
+        update_output_files(
+            &self.paths,
+            &saved.output_files,
+            ObjectStatus::Pending,
+            Some(&eth_tx_hash),
+        )?;
+
+        let confirmation = self.deps.relayer.wait_for_confirmation(
+            &settings.relayer_api_url,
+            &submit_response.job_id,
+            RELAYER_POLL_TIMEOUT_SECS,
+            RELAYER_POLL_INTERVAL_MS,
+        )?;
+
+        reporter.on_step(
+            ExecutionPhase::Commit,
+            "Waiting for synchronizer to observe commit",
+            &commit_ctx,
+        );
+        let sync_head = match self.deps.synchronizer.wait_for_tx(
+            &settings.synchronizer_api_url,
+            expected_tx_final,
+            SYNCHRONIZER_POLL_TIMEOUT_SECS,
+            SYNCHRONIZER_POLL_INTERVAL_MS,
+        ) {
+            Ok(head) => head,
+            Err(err) => {
+                // Sync failed or timed out — revert outputs to Unknown but
+                // keep the txHash so the chain submission can be inspected.
+                // The next sync_inventory will reconcile if the tx lands later.
+                update_output_files(
+                    &self.paths,
+                    &saved.output_files,
+                    ObjectStatus::Unknown,
+                    Some(&eth_tx_hash),
+                )?;
+                return Err(err);
+            }
+        };
+
+        // Sync confirmed the tx — update output files to Live.
+        update_output_files(
+            &self.paths,
+            &saved.output_files,
+            ObjectStatus::Live,
+            Some(&eth_tx_hash),
+        )?;
+
+        let result = ExecuteActionResult {
+            old_root,
+            new_root: encode_hash_hex(&sync_head.current_gsr),
+            output_files: saved.output_files.clone(),
+            nullified_files: saved.nullified_files.clone(),
+            relayer_job_id: confirmation.job_id,
+            tx_hash: Some(eth_tx_hash),
+            block_number: confirmation.block_number,
+        };
+        reporter.on_done(ExecutionPhase::Commit, Some(&result));
+        Ok(result)
     }
 
     pub fn generated_podlang(&self) -> Option<String> {
@@ -415,9 +457,8 @@ impl Driver {
             file_name: entry.file_name.clone(),
             class_name: entry.record.class_name.clone(),
             class_hash,
-            source_action: entry.record.source_action.clone(),
-            live: !entry.record.is_nullified(),
-            nullifier: entry.record.nullifier.clone(),
+            status: entry.record.status,
+            tx_hash: entry.record.tx_hash.clone(),
             grounded,
             fields: entry.record.fields_map(),
         }
@@ -433,9 +474,8 @@ impl Driver {
                 .as_ref()
                 .map(|class_info| class_info.hash.clone())
                 .unwrap_or_default(),
-            source_action: entry.record.source_action.clone(),
-            live: !entry.record.is_nullified(),
-            nullifier: entry.record.nullifier.clone(),
+            status: entry.record.status,
+            tx_hash: entry.record.tx_hash.clone(),
             grounded,
             fields: entry.record.fields_map(),
             predicate_source: class_info

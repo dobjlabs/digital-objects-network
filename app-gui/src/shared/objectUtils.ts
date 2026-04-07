@@ -1,9 +1,13 @@
 interface ObjectLike {
-  nullifier: string | null;
+  status: string;
 }
 
 export function isLiveObject(object: ObjectLike): boolean {
-  return object.nullifier == null;
+  return object.status === "live";
+}
+
+export function isNullifiedObject(object: ObjectLike): boolean {
+  return object.status === "nullified";
 }
 
 export function displayObjectFileName(className: string): string {

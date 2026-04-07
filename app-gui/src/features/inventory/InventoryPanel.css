@@ -114,12 +114,16 @@
   flex-shrink: 0;
 }
 
-.inventory-dot.live {
-  background: var(--good);
+.inventory-dot.unknown {
+  background: var(--text-dim);
 }
 
 .inventory-dot.pending {
   background: var(--warn);
+}
+
+.inventory-dot.live {
+  background: var(--good);
 }
 
 .inventory-dot.nullified {

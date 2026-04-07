@@ -26,7 +26,7 @@ import "./features/actions/ActionGrid.css";
 import "./features/settings/SettingsModal.css";
 
 function App() {
-  const [objectsDirPath, setObjectsDirPath] = useState("~/.objects");
+  const [objectsDirPath, setObjectsDirPath] = useState("~/.dobj/objects");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [initialHydrationPending, setInitialHydrationPending] = useState(true);
   const inventory = useStore((state) => state.inventory);
@@ -78,7 +78,7 @@ function App() {
         if (!cancelled) setObjectsDirPath(path);
       })
       .catch(() => {
-        if (!cancelled) setObjectsDirPath("~/.objects");
+        if (!cancelled) setObjectsDirPath("~/.dobj/objects");
       });
     return () => {
       cancelled = true;

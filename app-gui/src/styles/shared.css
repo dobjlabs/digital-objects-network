@@ -26,7 +26,7 @@
 }
 
 .panel-header-button::after {
-  content: "open ~/.objects/";
+  content: "open ~/.dobj/objects/";
   position: absolute;
   left: 12px;
   top: calc(100% + 4px);

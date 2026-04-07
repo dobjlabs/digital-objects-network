@@ -87,6 +87,14 @@
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.context-inline-hash.unknown {
+  color: var(--text-dim);
+}
+
+.context-inline-hash.pending {
+  color: var(--warn);
+}
+
 .context-inline-hash.live {
   color: var(--good);
 }

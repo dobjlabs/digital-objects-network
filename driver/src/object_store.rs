@@ -176,11 +176,6 @@ pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> boo
     {
         return false;
     }
-    if let Some(source_action) = &query.source_action
-        && &entry.record.source_action != source_action
-    {
-        return false;
-    }
     if let Some(id) = &query.id
         && &entry.record.id != id
     {
@@ -209,14 +204,15 @@ mod tests {
 
     use super::{load_object_files, write_object_file};
     use crate::object_record::{
-        ObjectRecord, ensure_extra_pod_deserializers_registered, parse_object_record_file,
+        ObjectRecord, ObjectStatus, ensure_extra_pod_deserializers_registered,
+        parse_object_record_file,
     };
 
     fn temp_paths() -> DriverPaths {
         let dir = tempdir().unwrap();
         let root = dir.keep();
-        let settings_path = root.join("config/com.dobjlabs.zk-craft/settings.json");
-        let objects_dir = root.join(".objects");
+        let settings_path = root.join("settings.json");
+        let objects_dir = root.join("objects");
         let nullified_objects_dir = objects_dir.join(".nullified");
         DriverPaths {
             settings_path,
@@ -246,8 +242,8 @@ mod tests {
         ObjectRecord {
             id: format!("{:#}", spendable.obj.commitment()),
             class_name: "Log".to_string(),
-            source_action: "FindLog".to_string(),
-            nullifier: None,
+            status: ObjectStatus::Live,
+            tx_hash: None,
             pod: spendable.pod,
             obj: spendable.obj,
             tx: spendable.tx,

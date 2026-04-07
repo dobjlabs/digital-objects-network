@@ -6,6 +6,7 @@ import {
   displayPathInObjectsDir,
   displayObjectFileName,
   isLiveObject,
+  isNullifiedObject,
   joinObjectsDirPath,
 } from "../../shared/objectUtils";
 
@@ -30,8 +31,7 @@ export function InventoryPanel({
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
 
-  const isUsable = (object: InventoryObject) =>
-    isLiveObject(object) && object.grounded;
+  const isUsable = (object: InventoryObject) => isLiveObject(object);
 
   const handleDragStart = (
     event: DragEvent<HTMLButtonElement>,
@@ -65,14 +65,14 @@ export function InventoryPanel({
     onSelectObject(objectId);
   };
 
-  const liveObjects = inventory.filter((object) => isLiveObject(object));
-  const nullifiedObjects = inventory.filter((object) => !isLiveObject(object));
+  const activeObjects = inventory.filter((object) => !isNullifiedObject(object));
+  const nullifiedObjects = inventory.filter((object) => isNullifiedObject(object));
 
   const renderInventoryObject = (object: InventoryObject) => {
     const displayName = displayObjectFileName(object.className);
-    const hashLineRaw = isLiveObject(object)
+    const hashLineRaw = object.status === "live"
       ? object.id
-      : (object.nullifier ?? "nullified");
+      : object.status;
     const hashLine = truncateDisplayHash(hashLineRaw);
     return (
       <button
@@ -94,8 +94,8 @@ export function InventoryPanel({
           </span>
         </span>
         <span
-          className={`inventory-dot ${!isLiveObject(object) ? "nullified" : object.grounded ? "live" : "pending"}`}
-          title={isLiveObject(object) && !object.grounded ? "pending confirmation" : undefined}
+          className={`inventory-dot ${object.status}`}
+          title={object.status !== "live" && object.status !== "nullified" ? object.status : undefined}
         />
       </button>
     );
@@ -113,7 +113,7 @@ export function InventoryPanel({
       </button>
 
       <div className="inventory-list">
-        {liveObjects.map(renderInventoryObject)}
+        {activeObjects.map(renderInventoryObject)}
 
         {nullifiedObjects.length > 0 && (
           <div className="nullified-section">
