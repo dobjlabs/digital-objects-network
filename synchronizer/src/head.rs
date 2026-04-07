@@ -12,6 +12,8 @@ pub struct CanonicalRoots {
     pub state_root_gsrs: Hash,
     /// Root of the full GSR history array after appending the current GSR.
     pub gsr_history: Hash,
+    /// Root of the persistent public objects Merkle Dictionary.
+    pub public_objects: Hash,
 }
 
 impl Default for CanonicalRoots {
@@ -27,6 +29,7 @@ impl CanonicalRoots {
             nullifiers: EMPTY_HASH,
             state_root_gsrs: EMPTY_HASH,
             gsr_history: EMPTY_HASH,
+            public_objects: EMPTY_HASH,
         }
     }
 }
@@ -97,6 +100,7 @@ impl CanonicalHead {
                 self.roots.transactions,
                 self.roots.nullifiers,
                 self.roots.state_root_gsrs,
+                self.roots.public_objects,
             )
         })
     }

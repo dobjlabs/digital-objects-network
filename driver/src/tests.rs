@@ -48,6 +48,7 @@ fn dummy_grounding_witness() -> GroundingWitness {
             pod2::middleware::EMPTY_HASH,
             pod2::middleware::EMPTY_HASH,
             pod2::middleware::EMPTY_HASH,
+            pod2::middleware::EMPTY_HASH,
         ),
         HashMap::new(),
     )
@@ -72,12 +73,13 @@ fn apply_tx(state: &mut TestState, tx: &txlib::Tx) {
 }
 
 fn state_root(state: &TestState) -> StateRoot {
-    let (transactions_root, nullifiers_root, gsrs_root) = state.roots();
+    let (transactions_root, nullifiers_root, gsrs_root, public_objects_root) = state.roots();
     StateRoot::new(
         state.block_number,
         transactions_root,
         nullifiers_root,
         gsrs_root,
+        public_objects_root,
     )
 }
 

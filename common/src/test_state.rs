@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     middleware::{
-        Hash, Value,
-        containers::{Array, Set},
+        EMPTY_HASH, Hash, Value,
+        containers::{Array, Dictionary, Set},
     },
 };
 
@@ -15,6 +15,7 @@ pub struct TestState {
     transactions: Set,
     nullifiers: Set,
     gsrs: Array,
+    public_objects: Dictionary,
 }
 
 impl Default for TestState {
@@ -30,6 +31,7 @@ impl TestState {
             transactions: Set::new(HashSet::<Value>::new()),
             nullifiers: Set::new(HashSet::<Value>::new()),
             gsrs: Array::new(Vec::<Value>::new()),
+            public_objects: Dictionary::new(HashMap::new()),
         }
     }
 
@@ -67,14 +69,16 @@ impl TestState {
             transactions,
             nullifiers,
             gsrs,
+            public_objects: Dictionary::new(HashMap::new()),
         }
     }
 
-    pub fn roots(&self) -> (Hash, Hash, Hash) {
+    pub fn roots(&self) -> (Hash, Hash, Hash, Hash) {
         (
             self.transactions.commitment(),
             self.nullifiers.commitment(),
             self.gsrs.commitment(),
+            self.public_objects.commitment(),
         )
     }
 
@@ -82,7 +86,7 @@ impl TestState {
         &self,
         source_txs: &[T],
         tx_hash: FHash,
-        build: impl FnOnce(i64, Hash, Hash, Hash, HashMap<Hash, MerkleProof>) -> W,
+        build: impl FnOnce(i64, Hash, Hash, Hash, Hash, HashMap<Hash, MerkleProof>) -> W,
     ) -> W
     where
         FHash: Fn(&T) -> Hash,
@@ -98,12 +102,13 @@ impl TestState {
                 (tx_hash, proof)
             })
             .collect::<HashMap<_, _>>();
-        let (transactions_root, nullifiers_root, gsrs_root) = self.roots();
+        let (transactions_root, nullifiers_root, gsrs_root, public_objects_root) = self.roots();
         build(
             self.block_number,
             transactions_root,
             nullifiers_root,
             gsrs_root,
+            public_objects_root,
             source_tx_proofs,
         )
     }

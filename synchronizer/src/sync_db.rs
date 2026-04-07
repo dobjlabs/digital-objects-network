@@ -1,6 +1,6 @@
 use alloy::primitives::B256;
 use anyhow::{anyhow, Context, Result};
-use pod2::middleware::Hash;
+use pod2::middleware::{EMPTY_HASH, Hash};
 use sqlx::{
     postgres::{PgPoolOptions, PgRow},
     Executor, PgPool, Row,
@@ -306,6 +306,10 @@ fn decode_head_row(row: &PgRow) -> Result<CanonicalHead> {
             nullifiers: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_nullifiers_root"))?,
             state_root_gsrs: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_state_root_gsrs_root"))?,
             gsr_history: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_gsr_history_root"))?,
+            public_objects: db_bytes_to_hash(
+                &row.try_get::<Vec<u8>, _>("head_public_objects_root")
+                    .unwrap_or_else(|_| hash_to_db_bytes(EMPTY_HASH)),
+            )?,
         },
         metadata: HeadMetadata {
             current_gsr: row

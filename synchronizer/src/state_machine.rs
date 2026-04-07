@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use common::{encode_hash_hex, proof::BlobParser};
-use pod2::middleware::{containers::Array, containers::Set, Hash, Value};
+use pod2::middleware::{containers::Array, containers::Set, Hash, Value, EMPTY_HASH};
 use tracing::{info, warn};
 
 use crate::{
@@ -215,6 +215,7 @@ impl StateMachine {
             working.transactions.commitment(),
             working.nullifiers.commitment(),
             prior_gsrs_root,
+            EMPTY_HASH,
         )
         .hash();
 
@@ -228,6 +229,7 @@ impl StateMachine {
                 nullifiers: working.nullifiers.commitment(),
                 state_root_gsrs: prior_gsrs_root,
                 gsr_history: working.gsr_history.commitment(),
+                public_objects: EMPTY_HASH,
             },
             metadata: HeadMetadata {
                 current_gsr: Some(new_gsr),

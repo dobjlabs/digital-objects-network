@@ -2,21 +2,28 @@
   Tx = {
     live: set,
     nullifiers: set,
-    state_root_hash: hash
+    state_root_hash: hash,
+    public_outputs: set,
+    public_inputs: set
   }
 
   Object = {
-    key: value
+    key: value,
+    public: true | false,
     // ... other fields
   }
 */
 
 // Holds iff `state_root` is the hash of the given fields.
+// Hash structure: H(H(txns_root, nullifiers_root), H(H(block_number, gsrs_root), public_objects_root))
+// `public_objects_root` is private because pod2 limits predicates to 5 public args.
+// The hash chain uniquely determines it — the prover cannot substitute a different value.
 StateRoot(state_root, block_number, txns_root, nullifiers_root, gsrs_root,
-    private: txn_nullifiers_hash, block_number_gsrs_hash) = AND(
+    private: public_objects_root, txn_nullifiers_hash, block_number_gsrs_hash, block_gsrs_pubobj_hash) = AND(
   HashOf(txn_nullifiers_hash, txns_root, nullifiers_root)
   HashOf(block_number_gsrs_hash, block_number, gsrs_root)
-  HashOf(state_root, txn_nullifiers_hash, block_number_gsrs_hash)
+  HashOf(block_gsrs_pubobj_hash, block_number_gsrs_hash, public_objects_root)
+  HashOf(state_root, txn_nullifiers_hash, block_gsrs_pubobj_hash)
 )
 
 // Holds iff `source_txn` is recorded in the transactions set of `state_root_hash`.
@@ -43,13 +50,15 @@ InputsGroundedRecursive(inputs, state_root_hash,
 )
 
 // Holds iff `tx_after` is the initialized transaction over `inputs`,
-// with empty predecessor and empty nullifier set.
+// with empty predecessor, empty nullifier set, and empty public sets.
 TxInit(tx_after, tx_before, inputs, state_root_hash,
-    private: s1, s2) = AND(
+    private: s1, s2, s3, s4) = AND(
   Equal(tx_before, {})
   DictInsert(s1, tx_before, "live", inputs)
   DictInsert(s2, s1, "state_root_hash", state_root_hash)
-  DictInsert(tx_after, s2, "nullifiers", {})
+  DictInsert(s3, s2, "nullifiers", {})
+  DictInsert(s4, s3, "public_outputs", {})
+  DictInsert(tx_after, s4, "public_inputs", {})
   InputsGrounded(inputs, state_root_hash)
 )
 
@@ -62,53 +71,143 @@ TxObjectStateNullified(tx_after_nullified, tx_before, obj,
   DictUpdate(tx_after_nullified, tx_before, "nullifiers", nullifiers_after)
 )
 
-// Holds iff `tx_after` is a valid delete step from `tx_before`,
-// deleting one live object state and including its nullifier.
-TxDeleted(tx_after, tx_before, obj,
+// ---------------------------------------------------------------------------
+// Delete: private and public variants
+// ---------------------------------------------------------------------------
+
+// Private delete: object must have public = false.
+TxDeletedPrivate(tx_after, tx_before, obj,
     private: live_after, tx_after_nullified) = AND(
   Tx(tx_before)
+  DictContains(obj, "public", false)
   TxObjectStateNullified(tx_after_nullified, tx_before, obj)
   SetDelete(live_after, tx_after_nullified.live, obj)
   DictUpdate(tx_after, tx_after_nullified, "live", live_after)
 )
 
-// Holds iff `tx_after` is a valid mutation step from `tx_before`,
-// replacing `old` with `new` and including `old`'s nullifier.
-TxMutated(tx_after, tx_before, new, old,
+// Public delete: object must have public = true, and is added to public_inputs.
+TxDeletedPublic(tx_after, tx_before, obj,
+    private: live_after, tx_after_nullified, public_inputs_after, tx_mid) = AND(
+  Tx(tx_before)
+  DictContains(obj, "public", true)
+  TxObjectStateNullified(tx_after_nullified, tx_before, obj)
+  SetDelete(live_after, tx_after_nullified.live, obj)
+  DictUpdate(tx_mid, tx_after_nullified, "live", live_after)
+  SetInsert(public_inputs_after, tx_mid.public_inputs, obj)
+  DictUpdate(tx_after, tx_mid, "public_inputs", public_inputs_after)
+)
+
+// ---------------------------------------------------------------------------
+// Mutate: private and public variants
+// ---------------------------------------------------------------------------
+
+// Private mutate: both old and new must have public = false.
+TxMutatedPrivate(tx_after, tx_before, new, old,
     private: live_mid, live_after, tx_after_nullified) = AND(
   Tx(tx_before)
+  DictContains(old, "public", false)
+  DictContains(new, "public", false)
   TxObjectStateNullified(tx_after_nullified, tx_before, old)
   SetDelete(live_mid, tx_after_nullified.live, old)
   SetInsert(live_after, live_mid, new)
-  // There is a potential optimization here: if the state being nullified is the
-  // result of a mutation, we don't need to post a nullifier for it, since it will
-  // never "escape" the transaction. However, for the sake of simplicity, we can
-  // just post nullifiers for all states.
   DictUpdate(tx_after, tx_after_nullified, "live", live_after)
 )
 
-// Holds iff `tx_after` is a valid insert step from `tx_before`,
-// extending the live set with `new` while leaving nullifiers unchanged.
-TxInserted(tx_after, tx_before, new,
+// Public mutate: both old and new must have public = true.
+// old is added to public_inputs, new is added to public_outputs.
+// For mixed transitions (public->private or private->public), use separate
+// delete + insert operations in the same tx.
+TxMutatedPublic(tx_after, tx_before, new, old,
+    private: live_mid, live_after, tx_after_nullified,
+             public_inputs_after, public_outputs_after, tx_mid1, tx_mid2) = AND(
+  Tx(tx_before)
+  DictContains(old, "public", true)
+  DictContains(new, "public", true)
+  TxObjectStateNullified(tx_after_nullified, tx_before, old)
+  SetDelete(live_mid, tx_after_nullified.live, old)
+  SetInsert(live_after, live_mid, new)
+  DictUpdate(tx_mid1, tx_after_nullified, "live", live_after)
+  SetInsert(public_inputs_after, tx_mid1.public_inputs, old)
+  DictUpdate(tx_mid2, tx_mid1, "public_inputs", public_inputs_after)
+  SetInsert(public_outputs_after, tx_mid2.public_outputs, new)
+  DictUpdate(tx_after, tx_mid2, "public_outputs", public_outputs_after)
+)
+
+// ---------------------------------------------------------------------------
+// Insert: private and public variants
+// ---------------------------------------------------------------------------
+
+// Private insert: object must have public = false.
+TxInsertedPrivate(tx_after, tx_before, new,
     private: live_after) = AND(
   Tx(tx_before)
+  DictContains(new, "public", false)
   SetInsert(live_after, tx_before.live, new)
   DictUpdate(tx_after, tx_before, "live", live_after)
 )
 
-// Holds iff `tx_after` is either initialized from empty or obtained by one
-// admissible transition (delete, mutate, or insert) from a prior transaction.
-Tx(tx_after, private: tx_before, inputs, state_root_hash, old, new) = OR(
-  TxInit(tx_after, tx_before, inputs, state_root_hash)
-  TxDeleted(tx_after, tx_before, old)
-  TxMutated(tx_after, tx_before, new, old)
-  TxInserted(tx_after, tx_before, new)
+// Public insert: object must have public = true, and is added to public_outputs.
+TxInsertedPublic(tx_after, tx_before, new,
+    private: live_after, public_outputs_after, tx_mid) = AND(
+  Tx(tx_before)
+  DictContains(new, "public", true)
+  SetInsert(live_after, tx_before.live, new)
+  DictUpdate(tx_mid, tx_before, "live", live_after)
+  SetInsert(public_outputs_after, tx_mid.public_outputs, new)
+  DictUpdate(tx_after, tx_mid, "public_outputs", public_outputs_after)
 )
 
-// Holds iff `tx_final` is a valid transaction, `tx_nullifiers` equals
-// `tx_final.nullifiers`, and `state_root_hash` equals `tx_final.state_root_hash`.
-TxFinalized(tx_final, tx_nullifiers, state_root_hash) = AND(
+// ---------------------------------------------------------------------------
+// Tx: admissible transition (nested OR to stay within pod2's branch limit)
+// ---------------------------------------------------------------------------
+
+// Groups the three private operations into one OR.
+TxPrivateOp(tx_after, tx_before, new, old) = OR(
+  TxDeletedPrivate(tx_after, tx_before, old)
+  TxMutatedPrivate(tx_after, tx_before, new, old)
+  TxInsertedPrivate(tx_after, tx_before, new)
+)
+
+// Groups the three public operations into one OR.
+TxPublicOp(tx_after, tx_before, new, old) = OR(
+  TxDeletedPublic(tx_after, tx_before, old)
+  TxMutatedPublic(tx_after, tx_before, new, old)
+  TxInsertedPublic(tx_after, tx_before, new)
+)
+
+// Holds iff `tx_after` is either initialized from empty or obtained by one
+// admissible transition (private or public) from a prior transaction.
+Tx(tx_after, private: tx_before, inputs, state_root_hash, old, new) = OR(
+  TxInit(tx_after, tx_before, inputs, state_root_hash)
+  TxPrivateOp(tx_after, tx_before, new, old)
+  TxPublicOp(tx_after, tx_before, new, old)
+)
+
+// ---------------------------------------------------------------------------
+// TxFinalized: reveals nullifiers, state_root_hash, and public object sets
+// ---------------------------------------------------------------------------
+
+// Holds iff `tx_final` is a valid transaction and the revealed parameters
+// match the corresponding fields. `tx_public_outputs` and `tx_public_inputs`
+// are public parameters visible to the verifier.
+TxFinalized(tx_final, tx_nullifiers, state_root_hash, tx_public_outputs, tx_public_inputs) = AND(
   Tx(tx_final)
   DictContains(tx_final, "nullifiers", tx_nullifiers)
   DictContains(tx_final, "state_root_hash", state_root_hash)
+  DictContains(tx_final, "public_outputs", tx_public_outputs)
+  DictContains(tx_final, "public_inputs", tx_public_inputs)
+)
+
+// ---------------------------------------------------------------------------
+// PublicObjectInStateRoot: read-only reference to a public object
+// ---------------------------------------------------------------------------
+
+// Holds iff `obj` is in the canonical public objects tree committed in `state_root_hash`.
+// Used by ZK proofs that want to read a public object without consuming it.
+// `public_objects_root` is a private witness — StateRoot's hash chain verifies it.
+PublicObjectInStateRoot(state_root_hash, obj_id, obj,
+    private: public_objects_root, txns_root, nullifiers_root,
+             block_number, gsrs_root) = AND(
+  StateRoot(state_root_hash, block_number, txns_root, nullifiers_root, gsrs_root)
+  DictContains(public_objects_root, obj_id, obj)
 )

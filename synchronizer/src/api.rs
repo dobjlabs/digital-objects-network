@@ -258,6 +258,7 @@ async fn post_grounding_witness(
         transactions_root: encode_hash_hex(&state_root.transactions_root),
         nullifiers_root: encode_hash_hex(&state_root.nullifiers_root),
         gsrs_root: encode_hash_hex(&state_root.gsrs_root),
+        public_objects_root: encode_hash_hex(&state_root.public_objects_root),
         source_tx_proofs: witness
             .source_tx_proofs
             .into_iter()

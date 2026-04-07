@@ -159,6 +159,8 @@ pub struct GroundingWitnessResponse {
     pub nullifiers_root: String,
     /// Prior-GSR array root committed inside the state root.
     pub gsrs_root: String,
+    /// Public objects dictionary root committed inside the state root.
+    pub public_objects_root: String,
     /// Per-source transaction membership proofs.
     pub source_tx_proofs: Vec<SourceTxProofResponse>,
 }

@@ -30,6 +30,8 @@ pub struct StateRoot {
     pub nullifiers_root: Hash,
     /// Root of the prior-GSR history array committed into this state root.
     pub gsrs_root: Hash,
+    /// Root of the canonical public objects Merkle Dictionary.
+    pub public_objects_root: Hash,
 }
 
 impl StateRoot {
@@ -39,15 +41,18 @@ impl StateRoot {
         transactions_root: Hash,
         nullifiers_root: Hash,
         gsrs_root: Hash,
+        public_objects_root: Hash,
     ) -> Self {
         Self {
             block_number,
             transactions_root,
             nullifiers_root,
             gsrs_root,
+            public_objects_root,
         }
     }
 
+    /// Hash structure: H(H(txns_root, nullifiers_root), H(H(block_number, gsrs_root), public_objects_root))
     pub fn hash(&self) -> Hash {
         let txn_nullifiers_hash = hash_values(&[
             Value::from(self.transactions_root),
@@ -55,9 +60,13 @@ impl StateRoot {
         ]);
         let block_number_gsrs_hash =
             hash_values(&[Value::from(self.block_number), Value::from(self.gsrs_root)]);
+        let block_gsrs_pubobj_hash = hash_values(&[
+            Value::from(block_number_gsrs_hash),
+            Value::from(self.public_objects_root),
+        ]);
         hash_values(&[
             Value::from(txn_nullifiers_hash),
-            Value::from(block_number_gsrs_hash),
+            Value::from(block_gsrs_pubobj_hash),
         ])
     }
 }
@@ -88,6 +97,8 @@ pub struct Tx {
     pub live: Set,
     pub state_root: Arc<StateRoot>,
     pub nullifiers: Set,
+    pub public_outputs: Set,
+    pub public_inputs: Set,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -96,6 +107,8 @@ struct TxSerde {
     live: Set,
     state_root: StateRoot,
     nullifiers: Set,
+    public_outputs: Set,
+    public_inputs: Set,
 }
 
 impl Serialize for Tx {
@@ -107,6 +120,8 @@ impl Serialize for Tx {
             live: self.live.clone(),
             state_root: (*self.state_root).clone(),
             nullifiers: self.nullifiers.clone(),
+            public_outputs: self.public_outputs.clone(),
+            public_inputs: self.public_inputs.clone(),
         }
         .serialize(serializer)
     }
@@ -122,6 +137,8 @@ impl<'de> Deserialize<'de> for Tx {
             live: payload.live,
             state_root: Arc::new(payload.state_root),
             nullifiers: payload.nullifiers,
+            public_outputs: payload.public_outputs,
+            public_inputs: payload.public_inputs,
         })
     }
 }
@@ -131,7 +148,9 @@ impl Tx {
         dict!({
             "live" => self.live.clone(),
             "state_root_hash" => self.state_root.hash(),
-            "nullifiers" => self.nullifiers.clone()
+            "nullifiers" => self.nullifiers.clone(),
+            "public_outputs" => self.public_outputs.clone(),
+            "public_inputs" => self.public_inputs.clone()
         })
     }
 }
@@ -178,11 +197,19 @@ impl TxBuilder {
         let tx = Tx {
             live: inputs_set.clone(),
             nullifiers: set!(),
+            public_outputs: set!(),
+            public_inputs: set!(),
             state_root: Arc::new(grounding_witness.state_root.clone()),
         };
 
         let state_root_hash = grounding_witness.state_root.hash();
-        let [s0, s1, s2, tx_after] = dict_define!({"live" => &inputs_set, "state_root_hash" => &state_root_hash, "nullifiers" => set!()});
+        let [s0, s1, s2, s3, s4, tx_after] = dict_define!({
+            "live" => &inputs_set,
+            "state_root_hash" => &state_root_hash,
+            "nullifiers" => set!(),
+            "public_outputs" => set!(),
+            "public_inputs" => set!()
+        });
 
         let st_tx_init = st_custom!(
             ctx,
@@ -190,7 +217,9 @@ impl TxBuilder {
                 Equal(dict!(), dict!()),
                 DictInsert(s1, s0, "live", inputs_set),
                 DictInsert(s2, s1, "state_root_hash", state_root_hash),
-                DictInsert(tx_after, s2, "nullifiers", set!()),
+                DictInsert(s3, s2, "nullifiers", set!()),
+                DictInsert(s4, s3, "public_outputs", set!()),
+                DictInsert(tx_after, s4, "public_inputs", set!()),
                 st_inputs_grounded
             )
         )
@@ -199,7 +228,6 @@ impl TxBuilder {
             ctx,
             Tx() = (
                 st_tx_init,
-                Statement::None,
                 Statement::None,
                 Statement::None
             )
@@ -232,10 +260,15 @@ impl TxBuilder {
         let transactions = state_root.transactions_root;
         let nullifiers = state_root.nullifiers_root;
         let gsrs = state_root.gsrs_root;
+        let public_objects = state_root.public_objects_root;
         let block_number = state_root.block_number;
         let txn_nullifiers_hash =
             hash_values(&[Value::from(transactions), Value::from(nullifiers)]);
         let block_number_gsrs_hash = hash_values(&[Value::from(block_number), Value::from(gsrs)]);
+        let block_gsrs_pubobj_hash = hash_values(&[
+            Value::from(block_number_gsrs_hash),
+            Value::from(public_objects),
+        ]);
         let mut st = st_custom!(
             ctx,
             InputsGrounded(state_root_hash = state_root_hash) =
@@ -246,12 +279,16 @@ impl TxBuilder {
         for (obj, source_tx) in inputs {
             let mut inputs_set = prev_inputs_set.clone();
             inputs_set.insert(&Value::from(obj.clone())).unwrap();
+            // StateRoot has 5 public args; public_objects_root is private (hash-chain verified).
+            // The st_custom! call provides the 4 HashOf sub-statements that prove the hash tree.
+            // public_objects_root is implicitly provided as a private witness by the prover.
             let st_state_root = st_custom!(
                 ctx,
                 StateRoot() = (
                     HashOf(txn_nullifiers_hash, transactions, nullifiers),
                     HashOf(block_number_gsrs_hash, block_number, gsrs),
-                    HashOf(state_root_hash, txn_nullifiers_hash, block_number_gsrs_hash)
+                    HashOf(block_gsrs_pubobj_hash, block_number_gsrs_hash, public_objects),
+                    HashOf(state_root_hash, txn_nullifiers_hash, block_gsrs_pubobj_hash)
                 )
             )
             .unwrap();
@@ -288,32 +325,6 @@ impl TxBuilder {
         (st, prev_inputs_set)
     }
 
-    pub fn insert(&mut self, ctx: &mut BuildContext, new: Dictionary) -> Statement {
-        let new = Value::from(new);
-        let tx_before = self.tx.dict();
-        self.tx.live.insert(&new).unwrap();
-        let st_tx_inserted = st_custom!(
-            ctx,
-            TxInserted() = (
-                self.st_tx.clone(),
-                SetInsert(self.tx.live, (&tx_before, "live"), new),
-                DictUpdate(self.tx.dict(), tx_before, "live", self.tx.live)
-            )
-        )
-        .unwrap();
-        self.st_tx = st_custom!(
-            ctx,
-            Tx() = (
-                Statement::None,
-                Statement::None,
-                Statement::None,
-                st_tx_inserted.clone()
-            )
-        )
-        .unwrap();
-        st_tx_inserted
-    }
-
     fn st_tx_obj_nullified(&mut self, ctx: &mut BuildContext, obj: &Dictionary) -> Statement {
         let obj_key_hash = object_key_hash(obj).expect("tx object must include required key field");
         let obj_nullifier = object_nullifier_from_key_hash(obj_key_hash);
@@ -338,31 +349,63 @@ impl TxBuilder {
         .unwrap()
     }
 
+    // -----------------------------------------------------------------------
+    // Private insert / delete / mutate
+    // -----------------------------------------------------------------------
+
+    pub fn insert(&mut self, ctx: &mut BuildContext, new: Dictionary) -> Statement {
+        let new = Value::from(new);
+        let tx_before = self.tx.dict();
+        self.tx.live.insert(&new).unwrap();
+        let st = st_custom!(
+            ctx,
+            TxInsertedPrivate() = (
+                self.st_tx.clone(),
+                DictContains(new, "public", false),
+                SetInsert(self.tx.live, (&tx_before, "live"), new),
+                DictUpdate(self.tx.dict(), tx_before, "live", self.tx.live)
+            )
+        )
+        .unwrap();
+        let st_private_op = st_custom!(
+            ctx,
+            TxPrivateOp() = (Statement::None, Statement::None, st.clone())
+        )
+        .unwrap();
+        self.st_tx = st_custom!(
+            ctx,
+            Tx() = (Statement::None, st_private_op, Statement::None)
+        )
+        .unwrap();
+        st
+    }
+
     pub fn delete(&mut self, ctx: &mut BuildContext, obj: Dictionary) -> Statement {
         let st_tx_obj_nullified = self.st_tx_obj_nullified(ctx, &obj);
         let tx_after_nullified = self.tx.dict();
         self.tx.live.delete(&Value::from(obj.commitment())).unwrap();
-        let st_tx_deleted = st_custom!(
+        let st = st_custom!(
             ctx,
-            TxDeleted() = (
+            TxDeletedPrivate() = (
                 self.st_tx.clone(),
+                DictContains(obj, "public", false),
                 st_tx_obj_nullified,
                 SetDelete(self.tx.live, (&tx_after_nullified, "live"), obj),
                 DictUpdate(self.tx.dict(), tx_after_nullified, "live", self.tx.live)
             )
         )
         .unwrap();
-        self.st_tx = st_custom!(
+        let st_private_op = st_custom!(
             ctx,
-            Tx() = (
-                Statement::None,
-                st_tx_deleted.clone(),
-                Statement::None,
-                Statement::None
-            )
+            TxPrivateOp() = (st.clone(), Statement::None, Statement::None)
         )
         .unwrap();
-        st_tx_deleted
+        self.st_tx = st_custom!(
+            ctx,
+            Tx() = (Statement::None, st_private_op, Statement::None)
+        )
+        .unwrap();
+        st
     }
 
     pub fn mutate(
@@ -376,10 +419,12 @@ impl TxBuilder {
         self.tx.live.delete(&Value::from(old.commitment())).unwrap();
         let live_mid = self.tx.live.clone();
         self.tx.live.insert(&Value::from(new.clone())).unwrap();
-        let st_tx_mutated = st_custom!(
+        let st = st_custom!(
             ctx,
-            TxMutated() = (
+            TxMutatedPrivate() = (
                 self.st_tx.clone(),
+                DictContains(old, "public", false),
+                DictContains(new, "public", false),
                 st_tx_obj_nullified,
                 SetDelete(live_mid, (&tx_after_nullified, "live"), old),
                 SetInsert(self.tx.live, live_mid, new),
@@ -387,18 +432,143 @@ impl TxBuilder {
             )
         )
         .unwrap();
+        let st_private_op = st_custom!(
+            ctx,
+            TxPrivateOp() = (Statement::None, st.clone(), Statement::None)
+        )
+        .unwrap();
         self.st_tx = st_custom!(
             ctx,
-            Tx() = (
-                Statement::None,
-                Statement::None,
-                st_tx_mutated.clone(),
-                Statement::None
+            Tx() = (Statement::None, st_private_op, Statement::None)
+        )
+        .unwrap();
+        st
+    }
+
+    // -----------------------------------------------------------------------
+    // Public insert / delete / mutate
+    // -----------------------------------------------------------------------
+
+    pub fn insert_public(&mut self, ctx: &mut BuildContext, new: Dictionary) -> Statement {
+        let new_val = Value::from(new);
+        let tx_before = self.tx.dict();
+        self.tx.live.insert(&new_val).unwrap();
+        let tx_mid = self.tx.dict();
+        self.tx.public_outputs.insert(&new_val).unwrap();
+        let st = st_custom!(
+            ctx,
+            TxInsertedPublic() = (
+                self.st_tx.clone(),
+                DictContains(new_val, "public", true),
+                SetInsert(self.tx.live, (&tx_before, "live"), new_val),
+                DictUpdate(tx_mid, tx_before, "live", self.tx.live),
+                SetInsert(self.tx.public_outputs, (&tx_mid, "public_outputs"), new_val),
+                DictUpdate(self.tx.dict(), tx_mid, "public_outputs", self.tx.public_outputs)
             )
         )
         .unwrap();
-        st_tx_mutated
+        let st_public_op = st_custom!(
+            ctx,
+            TxPublicOp() = (Statement::None, Statement::None, st.clone())
+        )
+        .unwrap();
+        self.st_tx = st_custom!(
+            ctx,
+            Tx() = (Statement::None, Statement::None, st_public_op)
+        )
+        .unwrap();
+        st
     }
+
+    pub fn delete_public(&mut self, ctx: &mut BuildContext, obj: Dictionary) -> Statement {
+        let st_tx_obj_nullified = self.st_tx_obj_nullified(ctx, &obj);
+        let tx_after_nullified = self.tx.dict();
+        self.tx.live.delete(&Value::from(obj.commitment())).unwrap();
+        let tx_mid = self.tx.dict();
+        self.tx
+            .public_inputs
+            .insert(&Value::from(obj.clone()))
+            .unwrap();
+        let st = st_custom!(
+            ctx,
+            TxDeletedPublic() = (
+                self.st_tx.clone(),
+                DictContains(obj, "public", true),
+                st_tx_obj_nullified,
+                SetDelete(self.tx.live, (&tx_after_nullified, "live"), obj),
+                DictUpdate(tx_mid, tx_after_nullified, "live", self.tx.live),
+                SetInsert(self.tx.public_inputs, (&tx_mid, "public_inputs"), obj),
+                DictUpdate(self.tx.dict(), tx_mid, "public_inputs", self.tx.public_inputs)
+            )
+        )
+        .unwrap();
+        let st_public_op = st_custom!(
+            ctx,
+            TxPublicOp() = (st.clone(), Statement::None, Statement::None)
+        )
+        .unwrap();
+        self.st_tx = st_custom!(
+            ctx,
+            Tx() = (Statement::None, Statement::None, st_public_op)
+        )
+        .unwrap();
+        st
+    }
+
+    pub fn mutate_public(
+        &mut self,
+        ctx: &mut BuildContext,
+        new: Dictionary,
+        old: Dictionary,
+    ) -> Statement {
+        let st_tx_obj_nullified = self.st_tx_obj_nullified(ctx, &old);
+        let tx_after_nullified = self.tx.dict();
+        self.tx.live.delete(&Value::from(old.commitment())).unwrap();
+        let live_mid = self.tx.live.clone();
+        self.tx.live.insert(&Value::from(new.clone())).unwrap();
+        let tx_mid1 = self.tx.dict();
+        self.tx
+            .public_inputs
+            .insert(&Value::from(old.clone()))
+            .unwrap();
+        let tx_mid2 = self.tx.dict();
+        self.tx
+            .public_outputs
+            .insert(&Value::from(new.clone()))
+            .unwrap();
+        let st = st_custom!(
+            ctx,
+            TxMutatedPublic() = (
+                self.st_tx.clone(),
+                DictContains(old, "public", true),
+                DictContains(new, "public", true),
+                st_tx_obj_nullified,
+                SetDelete(live_mid, (&tx_after_nullified, "live"), old),
+                SetInsert(self.tx.live, live_mid, new),
+                DictUpdate(tx_mid1, tx_after_nullified, "live", self.tx.live),
+                SetInsert(self.tx.public_inputs, (&tx_mid1, "public_inputs"), old),
+                DictUpdate(tx_mid2, tx_mid1, "public_inputs", self.tx.public_inputs),
+                SetInsert(self.tx.public_outputs, (&tx_mid2, "public_outputs"), new),
+                DictUpdate(self.tx.dict(), tx_mid2, "public_outputs", self.tx.public_outputs)
+            )
+        )
+        .unwrap();
+        let st_public_op = st_custom!(
+            ctx,
+            TxPublicOp() = (Statement::None, st.clone(), Statement::None)
+        )
+        .unwrap();
+        self.st_tx = st_custom!(
+            ctx,
+            Tx() = (Statement::None, Statement::None, st_public_op)
+        )
+        .unwrap();
+        st
+    }
+
+    // -----------------------------------------------------------------------
+    // Finalize
+    // -----------------------------------------------------------------------
 
     pub fn finalize(self, ctx: &mut BuildContext) -> (Statement, Tx) {
         let tx_final = self.tx.dict();
@@ -407,7 +577,9 @@ impl TxBuilder {
             TxFinalized() = (
                 self.st_tx.clone(),
                 DictContains(tx_final, "nullifiers", self.tx.nullifiers),
-                DictContains(tx_final, "state_root_hash", self.tx.state_root.hash())
+                DictContains(tx_final, "state_root_hash", self.tx.state_root.hash()),
+                DictContains(tx_final, "public_outputs", self.tx.public_outputs),
+                DictContains(tx_final, "public_inputs", self.tx.public_inputs)
             )
         )
         .unwrap();
@@ -419,6 +591,7 @@ pub fn new_obj() -> Dictionary {
     let mut map = HashMap::new();
     map.insert(Key::from("key"), Value::from(rand_raw_value()));
     map.insert(Key::from("work"), Value::from(EMPTY_VALUE));
+    map.insert(Key::from("public"), Value::from(false));
     Dictionary::new(map)
 }
 
@@ -465,9 +638,20 @@ mod tests {
         state.build_grounding_witness(
             inputs,
             tx_hash,
-            |block_number, transactions_root, nullifiers_root, gsrs_root, source_tx_proofs| {
+            |block_number,
+             transactions_root,
+             nullifiers_root,
+             gsrs_root,
+             public_objects_root,
+             source_tx_proofs| {
                 Arc::new(GroundingWitness::new(
-                    StateRoot::new(block_number, transactions_root, nullifiers_root, gsrs_root),
+                    StateRoot::new(
+                        block_number,
+                        transactions_root,
+                        nullifiers_root,
+                        gsrs_root,
+                        public_objects_root,
+                    ),
                     source_tx_proofs,
                 ))
             },
@@ -492,39 +676,49 @@ mod tests {
     }
 
     #[test]
-    fn state_root_compact_hash_matches_legacy_commitments() {
+    fn state_root_compact_hash_matches_expected_structure() {
         let txns = [test_hash(1), test_hash(2)]
             .into_iter()
             .collect::<HashSet<_>>();
         let nullifiers = [test_hash(3)].into_iter().collect::<HashSet<_>>();
         let prior_gsrs = vec![test_hash(4), test_hash(5)];
+        let pub_objs_root = test_hash(6);
 
-        let legacy_txs = Set::new(txns.iter().map(|hash| Value::from(*hash)).collect());
-        let legacy_nullifiers =
+        let txs_set = Set::new(txns.iter().map(|hash| Value::from(*hash)).collect());
+        let nullifiers_set =
             Set::new(nullifiers.iter().map(|hash| Value::from(*hash)).collect());
-        let legacy_gsrs = Array::new(prior_gsrs.iter().map(|hash| Value::from(*hash)).collect());
+        let gsrs_array = Array::new(prior_gsrs.iter().map(|hash| Value::from(*hash)).collect());
         let compact = StateRoot::new(
             7,
-            legacy_txs.commitment(),
-            legacy_nullifiers.commitment(),
-            legacy_gsrs.commitment(),
+            txs_set.commitment(),
+            nullifiers_set.commitment(),
+            gsrs_array.commitment(),
+            pub_objs_root,
         );
-        let legacy_hash = hash_values(&[
-            Value::from(hash_values(&[
-                Value::from(legacy_txs.commitment()),
-                Value::from(legacy_nullifiers.commitment()),
-            ])),
-            Value::from(hash_values(&[
-                Value::from(7_i64),
-                Value::from(legacy_gsrs.commitment()),
-            ])),
+        // H(H(txns, nulls), H(H(block, gsrs), pub_objs))
+        let txn_nullifiers_hash = hash_values(&[
+            Value::from(txs_set.commitment()),
+            Value::from(nullifiers_set.commitment()),
         ]);
-        assert_eq!(compact.hash(), legacy_hash);
+        let block_number_gsrs_hash = hash_values(&[
+            Value::from(7_i64),
+            Value::from(gsrs_array.commitment()),
+        ]);
+        let block_gsrs_pubobj_hash = hash_values(&[
+            Value::from(block_number_gsrs_hash),
+            Value::from(pub_objs_root),
+        ]);
+        let expected_hash = hash_values(&[
+            Value::from(txn_nullifiers_hash),
+            Value::from(block_gsrs_pubobj_hash),
+        ]);
+        assert_eq!(compact.hash(), expected_hash);
     }
 
     #[test]
     fn state_root_serializes_and_deserializes_compact_shape() {
-        let original = StateRoot::new(9, test_hash(1), test_hash(2), test_hash(3));
+        let original =
+            StateRoot::new(9, test_hash(1), test_hash(2), test_hash(3), test_hash(4));
         let encoded = serde_json::to_value(&original).unwrap();
         assert_eq!(encoded["blockNumber"], serde_json::json!(9));
         assert_eq!(
@@ -538,6 +732,10 @@ mod tests {
         assert_eq!(
             encoded["gsrsRoot"],
             serde_json::json!(hex::encode([3_u8; 32]))
+        );
+        assert_eq!(
+            encoded["publicObjectsRoot"],
+            serde_json::json!(hex::encode([4_u8; 32]))
         );
 
         let decoded: StateRoot = serde_json::from_value(encoded).unwrap();

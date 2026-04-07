@@ -36,13 +36,18 @@ pub fn prove_state_root(ctx: &mut BuildContext, sr: &StateRoot) -> Statement {
     ]);
     let block_number_gsrs_hash =
         hash_values(&[Value::from(sr.block_number), Value::from(sr.gsrs_root)]);
+    let block_gsrs_pubobj_hash = hash_values(&[
+        Value::from(block_number_gsrs_hash),
+        Value::from(sr.public_objects_root),
+    ]);
     let hash = sr.hash();
     st_custom!(
         ctx,
         StateRoot() = (
             HashOf(tx_nullifiers_hash, sr.transactions_root, sr.nullifiers_root),
             HashOf(block_number_gsrs_hash, sr.block_number, sr.gsrs_root),
-            HashOf(hash, tx_nullifiers_hash, block_number_gsrs_hash)
+            HashOf(block_gsrs_pubobj_hash, block_number_gsrs_hash, sr.public_objects_root),
+            HashOf(hash, tx_nullifiers_hash, block_gsrs_pubobj_hash)
         )
     )
     .unwrap()

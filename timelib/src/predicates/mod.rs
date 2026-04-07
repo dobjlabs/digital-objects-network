@@ -44,12 +44,13 @@ mod tests {
     }
 
     fn state_root(state: &TestState) -> TxStateRoot {
-        let (transactions_root, nullifiers_root, gsrs_root) = state.roots();
+        let (transactions_root, nullifiers_root, gsrs_root, public_objects_root) = state.roots();
         TxStateRoot::new(
             state.block_number,
             transactions_root,
             nullifiers_root,
             gsrs_root,
+            public_objects_root,
         )
     }
 
@@ -57,9 +58,9 @@ mod tests {
         state.build_grounding_witness(
             inputs,
             tx_hash,
-            |block_number, transactions_root, nullifiers_root, gsrs_root, source_tx_proofs| {
+            |block_number, transactions_root, nullifiers_root, gsrs_root, public_objects_root, source_tx_proofs| {
                 Arc::new(GroundingWitness::new(
-                    TxStateRoot::new(block_number, transactions_root, nullifiers_root, gsrs_root),
+                    TxStateRoot::new(block_number, transactions_root, nullifiers_root, gsrs_root, public_objects_root),
                     source_tx_proofs,
                 ))
             },

@@ -228,6 +228,7 @@ mod tests {
                 pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,
+                pod2::middleware::EMPTY_HASH,
             ),
             HashMap::new(),
         )

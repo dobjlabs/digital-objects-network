@@ -95,6 +95,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
             parse_hash_hex(&payload.transactions_root)?,
             parse_hash_hex(&payload.nullifiers_root)?,
             parse_hash_hex(&payload.gsrs_root)?,
+            parse_hash_hex(&payload.public_objects_root)?,
         );
         let remote_state_root_hash = parse_hash_hex(&payload.state_root_hash)?;
         let derived_state_root_hash = state_root.hash();
