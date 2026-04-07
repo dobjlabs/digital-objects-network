@@ -1,14 +1,39 @@
 use crate::api;
+use hex::FromHex;
 use pod2::middleware::{
     containers::{Array, Dictionary, Set},
-    NativePredicate, RawValue, Value,
+    Hash, NativePredicate, Params, RawValue, Value,
 };
+
+use pod2::lang::load_module;
 use pod2utils::dict;
 use rhai::{Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
+use std::slice;
+use std::sync::Arc;
+
+#[derive(Debug)]
+pub enum Dependency {
+    Module { name: String, hash: Hash },
+    Intro { pred: String, hash: Hash },
+}
+
+impl Dependency {
+    fn fmt(&self, w: &mut dyn fmt::Write) -> fmt::Result {
+        match self {
+            Dependency::Module { name, hash } => {
+                writeln!(w, "use module {:#} as {name}", hash)?;
+            }
+            Dependency::Intro { pred, hash } => {
+                writeln!(w, "use intro {pred} from {:#}", hash)?;
+            }
+        }
+        Ok(())
+    }
+}
 
 fn placeholder() -> Value {
     Value::from(0xdeadbeef)
@@ -219,9 +244,9 @@ impl ContextInner {
             let tx = &vars["tx"];
             let tx_next = tx.next();
             match io {
-                ObjectIO::Input => writeln!(w, "  tx::Deleted({tx_next}, {tx}, {obj})")?,
-                ObjectIO::Output => writeln!(w, "  tx::Inserted({tx_next}, {tx}, {obj})")?,
-                ObjectIO::Mutate => writeln!(w, "  tx::Mutated({tx_next}, {tx}, {obj}, {obj}0)")?,
+                ObjectIO::Input => writeln!(w, "  tx::TxDeleted({tx_next}, {tx}, {obj})")?,
+                ObjectIO::Output => writeln!(w, "  tx::TxInserted({tx_next}, {tx}, {obj})")?,
+                ObjectIO::Mutate => writeln!(w, "  tx::TxMutated({tx_next}, {tx}, {obj}, {obj}0)")?,
             }
             vars.get_mut("tx").expect("tx exists").inc();
         }
@@ -692,25 +717,65 @@ fn test_pexe() {
     let src = find_log_src;
     let mut scope = Scope::new();
     let ast = engine.compile_with_scope(&mut scope, src).unwrap();
+    // TODO: Rewrite the AST to replace assignment to `ArgContext` types by `var_assign` function
+    // calls.  Otherwise we have to manually write `var_assign(foo, expr)` to assign a new value to
+    // an existing `var`.
+
+    let mut podlang_src = String::new();
+
+    let txlib_mod = Arc::new(txlib::predicates::module());
+    let dependencies = vec![
+        Dependency::Module {
+            name: "tx".to_string(),
+            hash: txlib_mod.id(),
+        },
+        Dependency::Intro {
+            pred: "Vdf(count, input, output)".to_string(),
+            hash: Hash::from_hex(
+                "b77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06",
+            )
+            .unwrap(),
+        },
+        Dependency::Intro {
+            pred: "LtEqU256(lhs, rhs)".to_string(),
+            hash: Hash::from_hex(
+                "2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529",
+            )
+            .unwrap(),
+        },
+    ];
+
+    for dep in &dependencies {
+        dep.fmt(&mut podlang_src).unwrap();
+    }
 
     for action in &[
-        // "FindLog",
-        // "CraftWood",
-        // "CraftSticks",
-        // "CraftWoodPick",
+        "FindLog",
+        "CraftWood",
+        "CraftSticks",
+        "CraftWoodPick",
         "UseWoodPick",
     ] {
         let ctx = Context::new();
         let _result = engine
             .call_fn::<Dynamic>(&mut scope, &ast, action, (ctx.clone(),))
             .unwrap();
-        println!("{action}:\n{ctx}\n");
-        let mut podlang_src = String::new();
+        // println!("{action}:\n{ctx}\n");
         ctx.0
             .borrow()
             .fmt_action(&mut podlang_src, action.to_string())
             .unwrap();
-        println!("{podlang_src}");
     }
+    println!("{podlang_src}");
+
+    let params = Params::default();
+    let module = Arc::new(
+        load_module(
+            podlang_src.as_str(),
+            "root",
+            &params,
+            slice::from_ref(&txlib_mod),
+        )
+        .expect("compiles"),
+    );
 }
-// TODO: Fix durability var
