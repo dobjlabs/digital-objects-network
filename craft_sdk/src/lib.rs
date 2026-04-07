@@ -366,6 +366,10 @@ pub struct SpendableObjects {
     pub obj_pods: Vec<MainPod>,
     pub objs: Vec<Dictionary>,
     pub tx: Tx,
+    /// Full Dictionaries of public objects created in this tx (for payload).
+    pub public_outputs: Vec<Dictionary>,
+    /// Full Dictionaries of public objects consumed in this tx (for payload).
+    pub public_inputs: Vec<Dictionary>,
 }
 
 impl SpendableObjects {
@@ -468,7 +472,7 @@ impl<'a> ObjectBuilder<'a> {
                 StepKind::Output => {
                     ctx.vars.insert(
                         step.name.as_str(),
-                        dict!({"work" => EMPTY_VALUE, "key" => Value::from(rand_raw_value())}),
+                        dict!({"work" => EMPTY_VALUE, "key" => Value::from(rand_raw_value()), "public" => false}),
                     );
                 }
                 StepKind::Input | StepKind::Mutate => {
@@ -674,11 +678,41 @@ impl<'a> ObjectBuilder<'a> {
             obj_pods.push(obj_pod);
         }
 
+        // Collect public objects for the payload.
+        // Public outputs: objects we created that have public = true.
+        let public_outputs = objs
+            .iter()
+            .filter(|obj| {
+                obj.get(&Key::from("public"))
+                    .ok()
+                    .flatten()
+                    .map_or(false, |v| v == Value::from(true))
+            })
+            .cloned()
+            .collect();
+        // Public inputs: tracked during _action when public objects are consumed.
+        // For now, collected from the tx.public_inputs set via the input objects.
+        // TODO: track consumed public input Dictionaries explicitly in _action.
+        let public_inputs = inputs
+            .iter()
+            .filter(|input| {
+                input
+                    .obj
+                    .get(&Key::from("public"))
+                    .ok()
+                    .flatten()
+                    .map_or(false, |v| v == Value::from(true))
+            })
+            .map(|input| input.obj.clone())
+            .collect();
+
         SpendableObjects {
             tx_pod,
             obj_pods,
             objs,
             tx,
+            public_outputs,
+            public_inputs,
         }
     }
 }
@@ -1038,11 +1072,18 @@ impl Data {
                     "  {action}({state}, {tx_next}, {tx})",
                     action = step.action
                 )?,
-                StepKind::Input => writeln!(w, "  tx::TxDeleted({tx_next}, {tx}, {state})")?,
-                StepKind::Mutate => {
-                    writeln!(w, "  tx::TxMutated({tx_next}, {tx}, {state}, {state}0)",)?
+                StepKind::Input => {
+                    writeln!(w, "  tx::TxDeletedPrivate({tx_next}, {tx}, {state})")?
                 }
-                StepKind::Output => writeln!(w, "  tx::TxInserted({tx_next}, {tx}, {state})")?,
+                StepKind::Mutate => {
+                    writeln!(
+                        w,
+                        "  tx::TxMutatedPrivate({tx_next}, {tx}, {state}, {state}0)",
+                    )?
+                }
+                StepKind::Output => {
+                    writeln!(w, "  tx::TxInsertedPrivate({tx_next}, {tx}, {state})")?
+                }
             }
         }
         writeln!(w, ")")?;

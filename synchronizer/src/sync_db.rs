@@ -378,6 +378,7 @@ mod tests {
                 nullifiers: unique_hash(marker + 1),
                 state_root_gsrs: unique_hash(marker + 2),
                 gsr_history: unique_hash(marker + 3),
+                public_objects: unique_hash(marker + 8),
             },
             metadata: HeadMetadata {
                 current_gsr: Some(unique_hash(marker + 4)),

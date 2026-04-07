@@ -70,6 +70,8 @@ impl BlobParser for MockBlobParser {
             tx_final,
             state_root_hash,
             nullifiers,
+            public_outputs: vec![],
+            public_inputs: vec![],
         }))
     }
 }

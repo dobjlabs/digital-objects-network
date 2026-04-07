@@ -264,11 +264,16 @@ pub(crate) fn build_relayer_payload(
         .iter()
         .map(|entry| Ok(Hash(entry?.raw().0)))
         .collect::<Result<Vec<_>>>()?;
+    // Public objects are populated by SpendableObjects (set by craft_sdk during action execution).
+    let public_outputs = action_output.public_outputs.clone();
+    let public_inputs = action_output.public_inputs.clone();
     let payload = Payload {
         proof: PayloadProof::Plonky2(Box::new(compressed)),
         tx_final,
         state_root_hash: *old_state_root_hash,
         nullifiers,
+        public_outputs,
+        public_inputs,
     };
 
     Ok(payload.to_bytes())

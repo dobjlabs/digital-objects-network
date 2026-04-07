@@ -6,7 +6,7 @@ use plonky2::{
     plonk::proof::CompressedProof,
     util::serialization::Buffer,
 };
-use pod2::middleware::{C, CommonCircuitData, D, F, Hash};
+use pod2::middleware::{C, CommonCircuitData, D, F, Hash, containers::Dictionary};
 
 use crate::ProofType;
 
@@ -33,17 +33,43 @@ pub fn read_elems<const N: usize>(bytes: &mut impl Read) -> Result<[F; N]> {
     Ok(elems)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub struct Payload {
     pub proof: PayloadProof,
-    /// Commitment of the finalized transaction dictionary `{live, nullifiers, state_root_hash}`.
+    /// Commitment of the finalized transaction dictionary.
     pub tx_final: Hash,
     pub state_root_hash: Hash,
     pub nullifiers: Vec<Hash>,
+    /// Full plaintext Dictionaries of public objects created in this tx.
+    pub public_outputs: Vec<Dictionary>,
+    /// Full plaintext Dictionaries of public objects consumed in this tx.
+    pub public_inputs: Vec<Dictionary>,
 }
 
 const PAYLOAD_MAGIC: u16 = 0xd10b;
+
+fn read_dict_vec(bytes: &mut &[u8]) -> Result<Vec<Dictionary>> {
+    let count = {
+        let mut buf = [0; 1];
+        bytes.read_exact(&mut buf)?;
+        u8::from_le_bytes(buf) as usize
+    };
+    let mut dicts = Vec::with_capacity(count);
+    for _ in 0..count {
+        let len = {
+            let mut buf = [0; 4];
+            bytes.read_exact(&mut buf)?;
+            u32::from_le_bytes(buf) as usize
+        };
+        let mut dict_bytes = vec![0u8; len];
+        bytes.read_exact(&mut dict_bytes)?;
+        let dict: Dictionary = serde_json::from_slice(&dict_bytes)
+            .map_err(|e| anyhow!("failed to deserialize Dictionary: {e}"))?;
+        dicts.push(dict);
+    }
+    Ok(dicts)
+}
 
 impl Payload {
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -60,6 +86,30 @@ impl Payload {
             .expect("vec write");
         for nullifier in &self.nullifiers {
             write_elems(&mut buffer, &nullifier.0);
+        }
+        // Public outputs: count (u8) + length-prefixed JSON-serialized Dictionaries
+        assert!(self.public_outputs.len() <= 255);
+        buffer
+            .write_all(&(self.public_outputs.len() as u8).to_le_bytes())
+            .expect("vec write");
+        for dict in &self.public_outputs {
+            let dict_bytes = serde_json::to_vec(dict).expect("dictionary serialization");
+            buffer
+                .write_all(&(dict_bytes.len() as u32).to_le_bytes())
+                .expect("vec write");
+            buffer.write_all(&dict_bytes).expect("vec write");
+        }
+        // Public inputs: count (u8) + length-prefixed JSON-serialized Dictionaries
+        assert!(self.public_inputs.len() <= 255);
+        buffer
+            .write_all(&(self.public_inputs.len() as u8).to_le_bytes())
+            .expect("vec write");
+        for dict in &self.public_inputs {
+            let dict_bytes = serde_json::to_vec(dict).expect("dictionary serialization");
+            buffer
+                .write_all(&(dict_bytes.len() as u32).to_le_bytes())
+                .expect("vec write");
+            buffer.write_all(&dict_bytes).expect("vec write");
         }
         buffer
     }
@@ -88,11 +138,17 @@ impl Payload {
         for _ in 0..nullifiers_len {
             nullifiers.push(Hash(read_elems(&mut bytes)?));
         }
+        // Public outputs
+        let public_outputs = read_dict_vec(&mut bytes)?;
+        // Public inputs
+        let public_inputs = read_dict_vec(&mut bytes)?;
         Ok(Self {
             proof,
             tx_final,
             state_root_hash,
             nullifiers,
+            public_outputs,
+            public_inputs,
         })
     }
 }
@@ -231,6 +287,8 @@ mod tests {
                 tx_final: Hash(tx_final.raw().0),
                 state_root_hash: Hash(state_root.raw().0),
                 nullifiers: nullifiers.clone(),
+                public_outputs: vec![],
+                public_inputs: vec![],
             }
         };
 
