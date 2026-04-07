@@ -20,6 +20,9 @@ use txlib::{GroundingWitness, Tx, TxBuilder};
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod pexe;
+
 pub mod api {
     use std::fmt;
 
