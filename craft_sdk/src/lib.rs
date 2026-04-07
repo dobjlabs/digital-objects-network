@@ -342,6 +342,13 @@ impl Helper {
     }
 }
 
+fn is_public_obj(obj: &Dictionary) -> bool {
+    obj.get(&Key::from("public"))
+        .ok()
+        .flatten()
+        .map_or(false, |v| v == Value::from(true))
+}
+
 fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
     let solution = builder.solve().unwrap();
     log::debug!("solution needs {} pods", solution.solution().pod_count);
@@ -574,11 +581,19 @@ impl<'a> ObjectBuilder<'a> {
                         class: &step.class,
                         obj: obj.clone(),
                     });
-                    sts.push(tx_builder.insert(&mut ctx.bld, obj));
+                    if is_public_obj(&obj) {
+                        sts.push(tx_builder.insert_public(&mut ctx.bld, obj));
+                    } else {
+                        sts.push(tx_builder.insert(&mut ctx.bld, obj));
+                    }
                 }
                 StepKind::Input => {
                     let obj = ctx.vars.get(step.name.as_str()).as_dictionary().unwrap();
-                    sts.push(tx_builder.delete(&mut ctx.bld, obj));
+                    if is_public_obj(&obj) {
+                        sts.push(tx_builder.delete_public(&mut ctx.bld, obj));
+                    } else {
+                        sts.push(tx_builder.delete(&mut ctx.bld, obj));
+                    }
                 }
                 StepKind::Mutate => {
                     let obj0 = objs0.get(step.name.as_str()).unwrap();
@@ -587,7 +602,11 @@ impl<'a> ObjectBuilder<'a> {
                         class: &step.class,
                         obj: obj.clone(),
                     });
-                    sts.push(tx_builder.mutate(&mut ctx.bld, obj, obj0.clone()));
+                    if is_public_obj(&obj) || is_public_obj(obj0) {
+                        sts.push(tx_builder.mutate_public(&mut ctx.bld, obj, obj0.clone()));
+                    } else {
+                        sts.push(tx_builder.mutate(&mut ctx.bld, obj, obj0.clone()));
+                    }
                 }
                 StepKind::Depends => {}
             }
@@ -1066,6 +1085,14 @@ impl Data {
                     api::Detail::Var { .. } => {}
                 }
             }
+            // Determine if this step's object is public by checking for a
+            // Detail::Set { key: "public", value: Literal(true) } in the step details.
+            let step_is_public = step.details.iter().any(|d| match d {
+                api::Detail::Set { key, value } => {
+                    key == "public" && matches!(value, api::Arg::Literal(v) if *v == Value::from(true))
+                }
+                _ => false,
+            });
             match step.kind {
                 StepKind::Depends => writeln!(
                     w,
@@ -1073,16 +1100,31 @@ impl Data {
                     action = step.action
                 )?,
                 StepKind::Input => {
-                    writeln!(w, "  tx::TxDeletedPrivate({tx_next}, {tx}, {state})")?
+                    if step_is_public {
+                        writeln!(w, "  tx::TxDeletedPublic({tx_next}, {tx}, {state})")?
+                    } else {
+                        writeln!(w, "  tx::TxDeletedPrivate({tx_next}, {tx}, {state})")?
+                    }
                 }
                 StepKind::Mutate => {
-                    writeln!(
-                        w,
-                        "  tx::TxMutatedPrivate({tx_next}, {tx}, {state}, {state}0)",
-                    )?
+                    if step_is_public {
+                        writeln!(
+                            w,
+                            "  tx::TxMutatedPublic({tx_next}, {tx}, {state}, {state}0)",
+                        )?
+                    } else {
+                        writeln!(
+                            w,
+                            "  tx::TxMutatedPrivate({tx_next}, {tx}, {state}, {state}0)",
+                        )?
+                    }
                 }
                 StepKind::Output => {
-                    writeln!(w, "  tx::TxInsertedPrivate({tx_next}, {tx}, {state})")?
+                    if step_is_public {
+                        writeln!(w, "  tx::TxInsertedPublic({tx_next}, {tx}, {state})")?
+                    } else {
+                        writeln!(w, "  tx::TxInsertedPrivate({tx_next}, {tx}, {state})")?
+                    }
                 }
             }
         }

@@ -546,6 +546,30 @@ pub(crate) fn actions() -> Vec<api::Action> {
                 Step::output("stone", "Stone").set("blueprint", Arg::literal("Stone")),
             ],
         },
+        // ---------------------------------------------------------------
+        // Public object example: Bounty
+        // ---------------------------------------------------------------
+        api::Action {
+            name: "CreateBounty",
+            steps: vec![
+                Step::input("reward", "WoodPick"),
+                Step::output("bounty", "Bounty")
+                    .set("blueprint", Arg::literal("Bounty"))
+                    .set("public", Arg::literal(true))
+                    .set("status", Arg::literal("open")),
+            ],
+        },
+        api::Action {
+            name: "FillBounty",
+            steps: vec![
+                Step::input("bounty", "Bounty"),
+                Step::input("log", "Log"),
+                Step::output("filled_bounty", "Bounty")
+                    .set("blueprint", Arg::literal("Bounty"))
+                    .set("public", Arg::literal(true))
+                    .set("status", Arg::literal("filled")),
+            ],
+        },
     ]
 }
 
