@@ -367,25 +367,31 @@ impl Driver {
         };
 
         // Past this point the proof has been accepted by the relayer and may
-        // land on-chain at any moment. The output
-        // files stay as `unknown` and the inputs stay nullified. The next
-        // `sync_inventory` call will reconcile once the tx is observed.
+        // land on-chain at any moment. Output files stay as Unknown until the
+        // relayer broadcasts and we have a tx_hash.
         let waiting_label = format!("Waiting for relayer job {}", submit_response.job_id);
         reporter.on_step(ExecutionPhase::Commit, &waiting_label, &commit_ctx);
-        let confirmation = self.deps.relayer.wait_for_confirmation(
+
+        // Poll until the relayer has broadcast the tx and we have a tx_hash,
+        // then mark output files as Pending.
+        let eth_tx_hash = self.deps.relayer.wait_for_tx_hash(
             &settings.relayer_api_url,
             &submit_response.job_id,
             RELAYER_POLL_TIMEOUT_SECS,
             RELAYER_POLL_INTERVAL_MS,
         )?;
-
-        // Confirmation returned an Ethereum tx hash — update outputs to Pending.
-        let eth_tx_hash = confirmation.tx_hash.as_deref();
         update_output_files(
             &self.paths,
             &saved.output_files,
             ObjectStatus::Pending,
-            eth_tx_hash,
+            Some(&eth_tx_hash),
+        )?;
+
+        let confirmation = self.deps.relayer.wait_for_confirmation(
+            &settings.relayer_api_url,
+            &submit_response.job_id,
+            RELAYER_POLL_TIMEOUT_SECS,
+            RELAYER_POLL_INTERVAL_MS,
         )?;
 
         reporter.on_step(
@@ -408,7 +414,7 @@ impl Driver {
                     &self.paths,
                     &saved.output_files,
                     ObjectStatus::Unknown,
-                    eth_tx_hash,
+                    Some(&eth_tx_hash),
                 )?;
                 return Err(err);
             }
@@ -419,7 +425,7 @@ impl Driver {
             &self.paths,
             &saved.output_files,
             ObjectStatus::Live,
-            eth_tx_hash,
+            Some(&eth_tx_hash),
         )?;
 
         let result = ExecuteActionResult {
@@ -428,7 +434,7 @@ impl Driver {
             output_files: saved.output_files.clone(),
             nullified_files: saved.nullified_files.clone(),
             relayer_job_id: confirmation.job_id,
-            tx_hash: confirmation.tx_hash,
+            tx_hash: Some(eth_tx_hash),
             block_number: confirmation.block_number,
         };
         reporter.on_done(ExecutionPhase::Commit, Some(&result));

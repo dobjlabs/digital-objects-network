@@ -22,6 +22,14 @@ pub trait RelayerClient: Send + Sync {
         payload_bytes: &[u8],
         client_ref: Option<String>,
     ) -> Result<SubmitProofResponse>;
+    /// Poll until the relayer has broadcast the transaction and a tx_hash is available.
+    fn wait_for_tx_hash(
+        &self,
+        relayer_api_url: &str,
+        job_id: &str,
+        timeout_secs: u64,
+        poll_interval_ms: u64,
+    ) -> Result<String>;
     fn wait_for_confirmation(
         &self,
         relayer_api_url: &str,
@@ -103,6 +111,42 @@ impl RelayerClient for HttpRelayerClient {
 
         serde_json::from_str::<SubmitProofResponse>(&body)
             .map_err(|err| anyhow!("failed to decode relayer submit response: {err}; body={body}"))
+    }
+
+    fn wait_for_tx_hash(
+        &self,
+        relayer_api_url: &str,
+        job_id: &str,
+        timeout_secs: u64,
+        poll_interval_ms: u64,
+    ) -> Result<String> {
+        let timeout = Duration::from_secs(timeout_secs);
+        let poll_interval = Duration::from_millis(poll_interval_ms);
+        let start = Instant::now();
+
+        loop {
+            let status = self.fetch_job_status(relayer_api_url, job_id)?;
+            if let Some(tx_hash) = status.tx_hash {
+                return Ok(tx_hash);
+            }
+            if status.status == JobStatus::Failed {
+                return Err(anyhow!(
+                    "relayer job {} failed before broadcast: {}",
+                    status.job_id,
+                    status
+                        .last_error
+                        .unwrap_or_else(|| "unknown error".to_string())
+                ));
+            }
+            if start.elapsed() >= timeout {
+                return Err(anyhow!(
+                    "timed out waiting for tx hash on relayer job {} after {}s",
+                    job_id,
+                    timeout_secs
+                ));
+            }
+            std::thread::sleep(poll_interval);
+        }
     }
 
     fn wait_for_confirmation(

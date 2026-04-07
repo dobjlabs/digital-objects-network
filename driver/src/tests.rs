@@ -250,6 +250,19 @@ impl RelayerClient for MockRelayer {
         })
     }
 
+    fn wait_for_tx_hash(
+        &self,
+        _relayer_api_url: &str,
+        _job_id: &str,
+        _timeout_secs: u64,
+        _poll_interval_ms: u64,
+    ) -> Result<String> {
+        if self.fail_wait {
+            return Err(anyhow!("relayer timeout"));
+        }
+        Ok("0xtx".to_string())
+    }
+
     fn wait_for_confirmation(
         &self,
         _relayer_api_url: &str,
@@ -340,8 +353,9 @@ fn test_execute_keeps_files_after_relayer_accepts() {
         .unwrap_err();
     assert!(err.to_string().contains("relayer timeout"));
 
-    // The relayer accepted the job, so files must NOT be rolled back.
-    // Input stays live (not nullified on disk), output stays as Unknown.
+    // The relayer accepted the job but wait_for_tx_hash failed, so outputs
+    // stay as Unknown (Pending requires a tx_hash). Files are kept so the
+    // next sync_inventory can reconcile.
     let remaining = load_object_files(&paths).unwrap();
     assert_eq!(remaining.len(), 2);
     let input = remaining
