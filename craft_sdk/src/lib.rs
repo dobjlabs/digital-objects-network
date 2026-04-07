@@ -479,7 +479,7 @@ impl<'a> ObjectBuilder<'a> {
                 StepKind::Output => {
                     ctx.vars.insert(
                         step.name.as_str(),
-                        dict!({"work" => EMPTY_VALUE, "key" => Value::from(rand_raw_value()), "public" => false}),
+                        dict!({"work" => EMPTY_VALUE, "key" => Value::from(rand_raw_value())}),
                     );
                 }
                 StepKind::Input | StepKind::Mutate => {

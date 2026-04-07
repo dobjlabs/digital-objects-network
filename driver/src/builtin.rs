@@ -429,6 +429,7 @@ pub(crate) fn actions() -> Vec<api::Action> {
             steps: vec![
                 Step::output("log", "Log")
                     .set("blueprint", Arg::literal("Log"))
+                    .set("public", Arg::literal(false))
                     .var(
                         "work",
                         Box::new(|ctx| {
@@ -458,6 +459,7 @@ pub(crate) fn actions() -> Vec<api::Action> {
                 Step::input("log", "Log"),
                 Step::output("wood", "Wood")
                     .set("blueprint", Arg::literal("Wood"))
+                    .set("public", Arg::literal(false))
                     .var(
                         "key",
                         Box::new(|ctx| {
@@ -494,8 +496,8 @@ pub(crate) fn actions() -> Vec<api::Action> {
             name: "CraftSticks",
             steps: vec![
                 Step::input("wood", "Wood"),
-                Step::output("stick_a", "Stick").set("blueprint", Arg::literal("Stick")),
-                Step::output("stick_b", "Stick").set("blueprint", Arg::literal("Stick")),
+                Step::output("stick_a", "Stick").set("blueprint", Arg::literal("Stick")).set("public", Arg::literal(false)),
+                Step::output("stick_b", "Stick").set("blueprint", Arg::literal("Stick")).set("public", Arg::literal(false)),
             ],
         },
         api::Action {
@@ -505,6 +507,7 @@ pub(crate) fn actions() -> Vec<api::Action> {
                 Step::input("stick", "Stick"),
                 Step::output("wood_pick", "WoodPick")
                     .set("blueprint", Arg::literal("WoodPick"))
+                    .set("public", Arg::literal(false))
                     .set("durability", Arg::literal(100i64)),
             ],
         },
@@ -515,6 +518,7 @@ pub(crate) fn actions() -> Vec<api::Action> {
                 Step::input("stick", "Stick"),
                 Step::output("stone_pick", "StonePick")
                     .set("blueprint", Arg::literal("StonePick"))
+                    .set("public", Arg::literal(false))
                     .set("durability", Arg::literal(200i64)),
             ],
         },
@@ -529,7 +533,7 @@ pub(crate) fn actions() -> Vec<api::Action> {
             name: "MineStoneWithWoodPick",
             steps: vec![
                 Step::depends("pick", "UseWoodPick"),
-                Step::output("stone", "Stone").set("blueprint", Arg::literal("Stone")),
+                Step::output("stone", "Stone").set("blueprint", Arg::literal("Stone")).set("public", Arg::literal(false)),
             ],
         },
         api::Action {
@@ -543,7 +547,7 @@ pub(crate) fn actions() -> Vec<api::Action> {
             name: "MineStoneWithStonePick",
             steps: vec![
                 Step::depends("pick", "UseStonePick"),
-                Step::output("stone", "Stone").set("blueprint", Arg::literal("Stone")),
+                Step::output("stone", "Stone").set("blueprint", Arg::literal("Stone")).set("public", Arg::literal(false)),
             ],
         },
         // ---------------------------------------------------------------
