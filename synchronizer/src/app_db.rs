@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use pod2::{
     backends::plonky2::primitives::merkletree::{self, MerkleProof},
     middleware::{
-        containers::{Array, Set},
+        containers::{Array, Dictionary, Set},
         db::DB as PodDb,
         Hash, RawValue, Value, EMPTY_HASH, F,
     },
@@ -61,6 +61,10 @@ impl AppDb {
 
     pub fn open_gsr_history(&self, root: Hash) -> Result<Array> {
         Ok(Array::from_db(root, self.db_box())?)
+    }
+
+    pub fn open_public_objects(&self, root: Hash) -> Result<Dictionary> {
+        Ok(Dictionary::from_db(root, self.db_box())?)
     }
 
     pub fn prove_tx(&self, roots: &CanonicalRoots, tx_hash: Hash) -> Result<(bool, MerkleProof)> {

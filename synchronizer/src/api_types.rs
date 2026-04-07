@@ -164,3 +164,21 @@ pub struct GroundingWitnessResponse {
     /// Per-source transaction membership proofs.
     pub source_tx_proofs: Vec<SourceTxProofResponse>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// A single public object entry returned by the public objects listing endpoint.
+pub struct PublicObjectEntry {
+    /// Dictionary commitment hash (hex-encoded).
+    pub id: String,
+    /// Full plaintext state of the public object (JSON-serialized Dictionary).
+    pub state: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Response for the public objects listing endpoint.
+pub struct PublicObjectsResponse {
+    /// Live public objects in canonical state.
+    pub objects: Vec<PublicObjectEntry>,
+}

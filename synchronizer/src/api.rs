@@ -12,8 +12,9 @@ use pod2::{backends::plonky2::primitives::merkletree::MerkleProof, middleware::H
 use synchronizer::api_types::{
     GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, MembershipRequest,
     MembershipResponse, NullifierContainsEntry, NullifierContainsRequest,
-    NullifierContainsResponse, SourceTxProofResponse, StateHeadResponse, SyncProgressResponse,
-    TxContainsEntry, TxContainsRequest, TxContainsResponse, TxStatusResponse,
+    NullifierContainsResponse, PublicObjectEntry, PublicObjectsResponse, SourceTxProofResponse,
+    StateHeadResponse, SyncProgressResponse, TxContainsEntry, TxContainsRequest,
+    TxContainsResponse, TxStatusResponse,
 };
 use tokio::sync::watch;
 use tracing::info;
@@ -105,6 +106,7 @@ pub async fn run_api_server(
         )
         .route("/v1/state/tx/{tx_hash}", get(get_state_tx))
         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
+        .route("/v1/public-objects", get(get_public_objects))
         .with_state(AppState { app_db, sync_db });
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
@@ -392,6 +394,29 @@ fn ensure_membership_query_limit(
         ));
     }
     Ok(())
+}
+
+async fn get_public_objects(
+    State(app_state): State<AppState>,
+) -> Result<Json<PublicObjectsResponse>, (StatusCode, String)> {
+    let snapshot = load_current_snapshot(&app_state).await?;
+    let head = snapshot.head;
+    let public_objects = app_state
+        .app_db
+        .open_public_objects(head.roots.public_objects)
+        .map_err(internal_error)?;
+
+    let mut objects = Vec::new();
+    for entry in public_objects.iter() {
+        let (key, value) = entry.map_err(|e| internal_error(e.into()))?;
+        // The key is the hex-encoded commitment hash, the value is the JSON-serialized Dictionary.
+        let id = format!("{key}");
+        let state: serde_json::Value = serde_json::from_str(&format!("{value}"))
+            .unwrap_or_else(|_| serde_json::Value::String(format!("{value}")));
+        objects.push(PublicObjectEntry { id, state });
+    }
+
+    Ok(Json(PublicObjectsResponse { objects }))
 }
 
 fn tx_contains_entries(tx_hashes: Vec<Hash>, tx_present: Vec<bool>) -> Vec<TxContainsEntry> {

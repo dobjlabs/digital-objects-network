@@ -5,7 +5,10 @@ use std::{
 
 use anyhow::{Context, Result};
 use common::{encode_hash_hex, proof::BlobParser};
-use pod2::middleware::{containers::Array, containers::Set, Hash, Value, EMPTY_HASH};
+use pod2::middleware::{
+    Key, Value, Hash, EMPTY_HASH,
+    containers::{Array, Dictionary, Set},
+};
 use tracing::{info, warn};
 
 use crate::{
@@ -31,6 +34,8 @@ struct WorkingState {
     nullifiers: Set,
     /// Persistent full GSR history array opened from `head.roots.gsr_history`.
     gsr_history: Array,
+    /// Persistent public objects Merkle Dictionary: obj_commitment -> serialized Dictionary.
+    public_objects: Dictionary,
     /// Recent canonical GSRs keyed by hash for grounding validation.
     recent_gsrs: HashMap<Hash, i64>,
 }
@@ -144,6 +149,20 @@ impl StateMachine {
             }
         }
 
+        // Validate public inputs: each must be a live public object.
+        for obj in &payload.public_inputs {
+            let key = Key::from(encode_hash_hex(&obj.commitment()));
+            if state.public_objects.get(&key)?.is_none() {
+                warn!(
+                    slot,
+                    block_number,
+                    "PublicInput references unknown public object; rejecting"
+                );
+                return Ok(());
+            }
+        }
+
+        // All checks passed — apply state mutations.
         state.transactions.insert(&tx_value)?;
         state.metadata.tx_count += 1;
         for nullifier in &payload.nullifiers {
@@ -151,11 +170,29 @@ impl StateMachine {
             state.metadata.nullifier_count += 1;
         }
 
+        // Remove consumed public objects.
+        for obj in &payload.public_inputs {
+            let key = Key::from(encode_hash_hex(&obj.commitment()));
+            state.public_objects.delete(&key)?;
+        }
+
+        // Store new public objects.
+        for obj in &payload.public_outputs {
+            let key = Key::from(encode_hash_hex(&obj.commitment()));
+            let obj_bytes = serde_json::to_string(obj)
+                .map_err(|e| anyhow::anyhow!("serialize public object: {e}"))?;
+            state
+                .public_objects
+                .insert(&key, &Value::from(obj_bytes.as_str()))?;
+        }
+
         info!(
             slot,
             block_number,
             transaction_count = state.metadata.tx_count,
             nullifier_count = state.metadata.nullifier_count,
+            public_outputs = payload.public_outputs.len(),
+            public_inputs = payload.public_inputs.len(),
             "Validated blob state update in slot derivation"
         );
         Ok(())
@@ -196,6 +233,9 @@ impl StateMachine {
                 .open_transactions(base_head.roots.transactions)?,
             nullifiers: self.app_db.open_nullifiers(base_head.roots.nullifiers)?,
             gsr_history: self.app_db.open_gsr_history(base_head.roots.gsr_history)?,
+            public_objects: self
+                .app_db
+                .open_public_objects(base_head.roots.public_objects)?,
             recent_gsrs: recent_gsrs.into_iter().collect(),
         };
 
@@ -215,7 +255,7 @@ impl StateMachine {
             working.transactions.commitment(),
             working.nullifiers.commitment(),
             prior_gsrs_root,
-            EMPTY_HASH,
+            working.public_objects.commitment(),
         )
         .hash();
 
@@ -229,7 +269,7 @@ impl StateMachine {
                 nullifiers: working.nullifiers.commitment(),
                 state_root_gsrs: prior_gsrs_root,
                 gsr_history: working.gsr_history.commitment(),
-                public_objects: EMPTY_HASH,
+                public_objects: working.public_objects.commitment(),
             },
             metadata: HeadMetadata {
                 current_gsr: Some(new_gsr),

@@ -151,16 +151,28 @@ impl BlobParser for ProofParser {
             Err(_) => return Ok(None),
         };
 
-        // 2. Reconstruct the nullifiers Set and build the expected Statement::Custom.
-        //    txlib's TxFinalized(tx_final, tx_nullifiers, state_root_hash):
-        //      - tx_final:        Value::from(tx dict commitment) = Value::from(payload.tx_final)
-        //      - tx_nullifiers:   Set reconstructed from payload.nullifiers
-        //      - state_root_hash: payload.state_root_hash
+        // 2. Reconstruct Sets and build the expected Statement::Custom.
+        //    txlib's TxFinalized(tx_final, tx_nullifiers, state_root_hash,
+        //                        tx_public_outputs, tx_public_inputs)
         let nullifiers_set = Set::new(
             payload
                 .nullifiers
                 .iter()
                 .map(|h| Value::from(*h))
+                .collect::<HashSet<_>>(),
+        );
+        let public_outputs_set = Set::new(
+            payload
+                .public_outputs
+                .iter()
+                .map(|d| Value::from(d.clone()))
+                .collect::<HashSet<_>>(),
+        );
+        let public_inputs_set = Set::new(
+            payload
+                .public_inputs
+                .iter()
+                .map(|d| Value::from(d.clone()))
                 .collect::<HashSet<_>>(),
         );
         let statement = Statement::Custom(
@@ -169,6 +181,8 @@ impl BlobParser for ProofParser {
                 Value::from(payload.tx_final),
                 Value::from(nullifiers_set),
                 Value::from(payload.state_root_hash),
+                Value::from(public_outputs_set),
+                Value::from(public_inputs_set),
             ],
         );
 
