@@ -28,7 +28,7 @@ pub enum ObjectSelector {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ObjectQuery {
     pub class_name: Option<String>,
-    pub live: Option<bool>,
+    pub status: Option<ObjectStatus>,
     pub id: Option<String>,
     pub file_name: Option<String>,
 }
@@ -51,20 +51,6 @@ pub struct ObjectSummary {
     pub tx_hash: Option<String>,
     pub grounded: Option<bool>,
     pub fields: HashMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ObjectDetail {
-    pub id: String,
-    pub file_name: String,
-    pub class_name: String,
-    pub class_hash: String,
-    pub status: ObjectStatus,
-    pub tx_hash: Option<String>,
-    pub grounded: Option<bool>,
-    pub fields: HashMap<String, serde_json::Value>,
-    pub predicate_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -65,13 +65,18 @@ impl CraftOps for AppCraftOps {
         let object = self
             .driver
             .read_object(&::driver::ObjectSelector::ObjectId(object_id.to_string()))?;
+        let predicate_source = self
+            .driver
+            .get_class(&object.class_name)
+            .map(|c| c.predicate_source)
+            .unwrap_or_default();
         Ok(mcp::ObjectDetail {
             id: object.id,
             class_name: object.class_name,
             status: status_string(object.status),
             tx_hash: object.tx_hash,
             state: object.fields,
-            predicate_source: object.predicate_source,
+            predicate_source,
         })
     }
 
