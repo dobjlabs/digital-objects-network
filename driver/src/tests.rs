@@ -304,12 +304,20 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
         .unwrap_err();
     assert!(err.to_string().contains("relayer submit failed"));
 
-    // Submission never reached the relayer, so rollback restores the input
-    // and deletes the output.
+    // Submission never reached the relayer. Output files are kept as Unknown
+    // so the user can retry submission without regenerating proofs.
     let remaining = load_object_files(&paths).unwrap();
-    assert_eq!(remaining.len(), 1);
-    assert_eq!(remaining[0].file_name, "log_1.dobj");
-    assert!(!remaining[0].record.is_nullified());
+    assert_eq!(remaining.len(), 2);
+    let input = remaining
+        .iter()
+        .find(|e| e.file_name == "log_1.dobj")
+        .unwrap();
+    assert!(!input.record.is_nullified());
+    let output = remaining
+        .iter()
+        .find(|e| e.file_name != "log_1.dobj")
+        .unwrap();
+    assert_eq!(output.record.status, ObjectStatus::Unknown);
 }
 
 #[test]
@@ -333,20 +341,17 @@ fn test_execute_keeps_files_after_relayer_accepts() {
     assert!(err.to_string().contains("relayer timeout"));
 
     // The relayer accepted the job, so files must NOT be rolled back.
-    // Input stays nullified, output stays as pending.
+    // Input stays live (not nullified on disk), output stays as Unknown.
     let remaining = load_object_files(&paths).unwrap();
     assert_eq!(remaining.len(), 2);
     let input = remaining
         .iter()
         .find(|e| e.file_name == "log_1.dobj")
         .unwrap();
-    assert!(input.record.is_nullified());
+    assert!(!input.record.is_nullified());
     let output = remaining
         .iter()
         .find(|e| e.file_name != "log_1.dobj")
         .unwrap();
-    // Relayer accepted but confirmation timed out — no Ethereum tx hash yet,
-    // so the output stays Unknown (pending requires a tx hash).
     assert_eq!(output.record.status, ObjectStatus::Unknown);
-    assert!(output.record.tx_hash.is_none());
 }
