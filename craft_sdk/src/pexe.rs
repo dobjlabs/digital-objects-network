@@ -2,18 +2,24 @@ use crate::api;
 use hex::FromHex;
 use pod2::middleware::{
     containers::{Array, Dictionary, Set},
-    Hash, NativePredicate, Params, RawValue, Value,
+    Hash, Key, MainPodProver, NativePredicate, Params, RawValue, Statement, VDSet, Value,
+    EMPTY_VALUE,
 };
 
-use pod2::lang::load_module;
-use pod2utils::dict;
-use rhai::{Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
+use pod2::lang::{load_module, Module};
+use pod2::{
+    backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
+    frontend::{MainPod, MultiPodBuilder, Operation},
+};
+use pod2utils::{dict, macros::BuildContext, rand_raw_value};
+use rhai::{Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope, AST};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 use std::slice;
 use std::sync::Arc;
+use txlib::{GroundingWitness, StateRoot, Tx, TxBuilder};
 
 #[derive(Debug)]
 pub enum Dependency {
@@ -39,20 +45,22 @@ fn placeholder() -> Value {
     Value::from(0xdeadbeef)
 }
 
-#[derive(Clone, Debug)]
-struct Context(Rc<RefCell<ContextInner>>);
+#[derive(Clone)]
+struct ActionContext(Rc<RefCell<ActionContextInner>>);
 
-impl fmt::Display for Context {
+impl fmt::Display for ActionContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0.borrow())
     }
 }
 
-#[derive(Default, Debug)]
-struct ContextInner {
+#[derive(Default)]
+struct ActionContextInner {
+    name: String,
     insts: Vec<Inst>,
     vars: Vec<String>,
     var_state: HashMap<String, VarState>,
+    gen_ctx: Option<GenContext>,
 }
 
 #[derive(Default, Debug)]
@@ -106,9 +114,13 @@ impl<'a> fmt::Display for ArgFmt<'a> {
     }
 }
 
-impl ContextInner {
-    fn new() -> Self {
-        let mut c = Self::default();
+impl ActionContextInner {
+    fn new(name: String, gen_ctx: Option<GenContext>) -> Self {
+        let mut c = Self {
+            name,
+            gen_ctx,
+            ..Default::default()
+        };
         c.add_var("tx".to_string()).expect("tx not yet defined");
         c
     }
@@ -124,6 +136,21 @@ impl ContextInner {
         let state = self.var_state.get_mut(var).expect("var {var} exists");
         state.ts += 1;
         Ok(())
+    }
+    fn mut_out_len(&self) -> usize {
+        self.insts
+            .iter()
+            .filter(|inst| {
+                matches!(
+                    inst,
+                    Inst::Object {
+                        io: ObjectIO::Mutate | ObjectIO::Output,
+                        obj: _,
+                        class: _
+                    }
+                )
+            })
+            .count()
     }
     fn fmt_vars(&self) -> Vec<String> {
         let mut vars = Vec::new();
@@ -156,8 +183,8 @@ impl ContextInner {
         vars.extend_from_slice(&["tx".to_string(), "tx0".to_string()]);
         vars
     }
-    fn fmt_action(&self, w: &mut dyn fmt::Write, name: String) -> fmt::Result {
-        write!(w, "{name}(")?;
+    fn fmt_action(&self, w: &mut dyn fmt::Write) -> fmt::Result {
+        write!(w, "{}(", self.name)?;
         let pub_var_names = self.fmt_pub_vars();
         for var in &pub_var_names {
             write!(w, "{var}, ")?;
@@ -255,7 +282,7 @@ impl ContextInner {
     }
 }
 
-impl fmt::Display for ContextInner {
+impl fmt::Display for ActionContextInner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Vars: ")?;
         for (i, var) in self.vars.iter().enumerate() {
@@ -348,21 +375,55 @@ impl fmt::Display for Intro {
 
 type RResult<T> = Result<T, Box<EvalAltResult>>;
 
-impl Context {
-    fn new() -> Self {
-        Self(Rc::new(RefCell::new(ContextInner::new())))
+impl ActionContext {
+    //
+    // Internal methods
+    //
+    fn new(name: String, gen_ctx: Option<GenContext>) -> Self {
+        Self(Rc::new(RefCell::new(ActionContextInner::new(
+            name, gen_ctx,
+        ))))
+    }
+    fn new_obj() -> Dictionary {
+        dict!({"work" => EMPTY_VALUE, "key" => Value::from(rand_raw_value())})
     }
     fn obj_io(self, io: ObjectIO, class: String) -> RResult<ArgContext> {
         let arg = Rc::new(RefCell::new(Arg::obj()));
         let mut ctx = self.0.borrow_mut();
-        ctx.insts.push(Inst::Object {
-            io,
-            obj: arg.clone(),
-            class,
-        });
+        if let Some(gen_ctx) = &mut ctx.gen_ctx {
+            match io {
+                ObjectIO::Output => {
+                    arg.borrow_mut().value = Some(Value::from(Self::new_obj()));
+                }
+                _ => todo!(),
+            }
+        } else {
+            ctx.insts.push(Inst::Object {
+                io,
+                obj: arg.clone(),
+                class,
+            });
+        }
         ctx.inc_t_var("tx").expect("tx exists");
         Ok(ArgContext::new(self.clone(), arg))
     }
+    //
+    // Exposed methods helpers
+    //
+    fn native_st(self, pred: NativePredicate, args: Vec<Dynamic>) -> RResult<()> {
+        let args = args
+            .into_iter()
+            .map(|v| try_rarg_from_dynamic(v))
+            .collect::<RResult<Vec<_>>>()?;
+        self.0
+            .borrow_mut()
+            .insts
+            .push(Inst::Statement { pred, args });
+        Ok(())
+    }
+    //
+    // Exposed methods
+    //
     fn output(self, class: String) -> RResult<ArgContext> {
         self.obj_io(ObjectIO::Output, class)
     }
@@ -379,17 +440,6 @@ impl Context {
     fn pow_obj_grind(self, obj: Dynamic, target: i64) -> RResult<ArgContext> {
         let key = Rc::new(RefCell::new(Arg::literal(placeholder())));
         Ok(ArgContext::new(self.clone(), key))
-    }
-    fn native_st(self, pred: NativePredicate, args: Vec<Dynamic>) -> RResult<()> {
-        let args = args
-            .into_iter()
-            .map(|v| try_rarg_from_dynamic(v))
-            .collect::<RResult<Vec<_>>>()?;
-        self.0
-            .borrow_mut()
-            .insts
-            .push(Inst::Statement { pred, args });
-        Ok(())
     }
     fn st_gt(self, v0: Dynamic, v1: Dynamic) -> RResult<()> {
         self.native_st(NativePredicate::Gt, vec![v0, v1])
@@ -441,6 +491,7 @@ pub struct Arg {
     value: Option<Value>,
     key: Option<String>,
     is_object: bool,
+    obj_set_list: Vec<(String, Value)>,
     var_name: Option<String>,
 }
 
@@ -460,6 +511,7 @@ impl Arg {
             value: Some(value),
             key: None,
             is_object: false,
+            obj_set_list: Vec::new(),
             var_name: None,
         }
     }
@@ -468,36 +520,60 @@ impl Arg {
             value: None,
             key: None,
             is_object: true,
+            obj_set_list: Vec::new(),
             var_name: None,
         }
     }
     fn set_var_name(&mut self, name: String) {
         self.var_name = Some(name)
     }
+    fn mut_dict<T>(&mut self, mut f: impl FnMut(&mut Dictionary) -> T) -> T {
+        let obj = self.value.as_mut().expect("has value");
+        let mut dict = obj.as_dictionary().expect("is dict");
+        let output = f(&mut dict);
+        *obj = Value::from(dict);
+        output
+    }
 }
 
 #[derive(Clone)]
 struct ArgContext {
-    ctx: Context,
+    ctx: ActionContext,
     arg: RArg,
 }
 
 impl ArgContext {
-    fn new(ctx: Context, arg: RArg) -> Self {
+    fn new(ctx: ActionContext, arg: RArg) -> Self {
         Self { ctx, arg }
     }
-    fn literal(ctx: Context, value: Value) -> Self {
+    fn literal(ctx: ActionContext, value: Value) -> Self {
         let arg = Rc::new(RefCell::new(Arg::literal(value)));
         Self::new(ctx, arg)
     }
     fn set(self, key: String, value: Dynamic) -> RResult<()> {
-        let arg = self.arg.borrow();
+        let mut arg = self.arg.borrow_mut();
         if let Some(name) = &arg.var_name {
-            self.ctx.0.borrow_mut().insts.push(Inst::Set {
-                obj: name.clone(),
-                key,
-                value: try_rarg_from_dynamic(value)?,
-            });
+            let mut ctx = self.ctx.0.borrow_mut();
+            let value = try_rarg_from_dynamic(value)?;
+            if let Some(gen_ctx) = &mut ctx.gen_ctx {
+                let value = value.borrow().value.clone().expect("has value");
+                arg.mut_dict(|obj| {
+                    obj.insert(&Key::from(&key), &value).expect("TODO");
+                });
+                arg.obj_set_list.push((key, value));
+                // let st = gen_ctx
+                //     .bld
+                //     .builder
+                //     .priv_op(Operation::dict_contains(obj.clone(), key, value))
+                //     .unwrap();
+                // gen_ctx.sts.push(st);
+            } else {
+                ctx.insts.push(Inst::Set {
+                    obj: name.clone(),
+                    key,
+                    value,
+                });
+            }
         }
         Ok(())
     }
@@ -598,6 +674,384 @@ fn try_value_from_dynamic(v: Dynamic) -> RResult<Value> {
 
 type RArg = Rc<RefCell<Arg>>;
 
+#[derive(Debug, Default)]
+struct ActionMeta {
+    name: String,
+    /// List of (object, class) for input/mutate
+    inputs: Vec<(String, String)>,
+    /// List of (object, class) for output/mutate
+    outputs: Vec<(String, String)>,
+}
+
+impl From<&ActionContextInner> for ActionMeta {
+    fn from(action: &ActionContextInner) -> Self {
+        let mut meta = Self {
+            name: action.name.clone(),
+            ..Self::default()
+        };
+        for inst in &action.insts {
+            match inst {
+                Inst::Object {
+                    io: ObjectIO::Input,
+                    obj,
+                    class,
+                } => {
+                    let obj_name = obj.borrow().var_name.clone().expect("obj has name");
+                    meta.inputs.push((obj_name, class.clone()));
+                }
+                Inst::Object {
+                    io: ObjectIO::Output,
+                    obj,
+                    class,
+                } => {
+                    let obj_name = obj.borrow().var_name.clone().expect("obj has name");
+                    meta.outputs.push((obj_name, class.clone()));
+                }
+                Inst::Object {
+                    io: ObjectIO::Mutate,
+                    obj,
+                    class,
+                } => {
+                    let obj_name = obj.borrow().var_name.clone().expect("obj has name");
+                    meta.inputs.push((obj_name.clone(), class.clone()));
+                    meta.outputs.push((obj_name, class.clone()));
+                }
+                _ => {}
+            }
+        }
+        meta
+    }
+}
+
+#[derive(Debug)]
+struct Class {
+    name: String,
+    // Actions that define the class with the index within the Action arguments that correspond to
+    // the class.
+    actions: Vec<(String, usize)>,
+}
+
+struct Data0 {
+    txlib_mod: Arc<Module>,
+    dependencies: Vec<Dependency>,
+    actions: Vec<ActionContext>,
+    // Metadata extracted from `actions`
+    actions_meta: Vec<ActionMeta>,
+    classes: Vec<Class>,
+}
+
+impl Data0 {
+    fn actions_to_classes(actions: &[ActionMeta]) -> Vec<Class> {
+        let mut class_to_actions: HashMap<String, Vec<(String, usize)>> = HashMap::new();
+        let mut classes_ordered: Vec<String> = Vec::new();
+        for action in actions {
+            let mut classes = Vec::new();
+            for (_obj, class) in &action.outputs {
+                classes.push(class.clone());
+                if !classes_ordered.contains(&class) {
+                    classes_ordered.push(class.clone());
+                }
+            }
+            for (i, class) in classes.iter().enumerate() {
+                let actions = class_to_actions.entry(class.clone()).or_default();
+                actions.push((action.name.clone(), i));
+            }
+        }
+        let mut classes = Vec::new();
+        for class in classes_ordered {
+            let actions = class_to_actions[&class].clone();
+            classes.push(Class {
+                name: class,
+                actions,
+            });
+        }
+        classes
+    }
+
+    fn new(actions: Vec<ActionContext>) -> Self {
+        let txlib_mod = Arc::new(txlib::predicates::module());
+        let dependencies = vec![
+            Dependency::Module {
+                name: "tx".to_string(),
+                hash: txlib_mod.id(),
+            },
+            Dependency::Intro {
+                pred: "Vdf(count, input, output)".to_string(),
+                hash: Hash::from_hex(
+                    "b77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06",
+                )
+                .unwrap(),
+            },
+            Dependency::Intro {
+                pred: "LtEqU256(lhs, rhs)".to_string(),
+                hash: Hash::from_hex(
+                    "2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529",
+                )
+                .unwrap(),
+            },
+        ];
+        let actions_meta: Vec<_> = actions
+            .iter()
+            .map(|a| ActionMeta::from(&*a.0.borrow()))
+            .collect();
+        let classes = Self::actions_to_classes(&actions_meta);
+        Self {
+            txlib_mod,
+            dependencies,
+            actions,
+            actions_meta,
+            classes,
+        }
+    }
+
+    fn action_by_name(&self, name: &str) -> &ActionMeta {
+        self.actions_meta.iter().find(|a| a.name == name).unwrap()
+    }
+
+    fn fmt_class(&self, w: &mut dyn fmt::Write, class: &Class) -> fmt::Result {
+        let name = &class.name;
+        write!(w, "Is{name}(state, private: tx, tx0")?;
+
+        let other_len = class
+            .actions
+            .iter()
+            .map(|(action_name, _)| self.action_by_name(action_name).outputs.len())
+            .max()
+            .unwrap()
+            - 1;
+        if other_len != 0 {
+            write!(w, ", ")?;
+        }
+        for i in 0..other_len {
+            if i != 0 {
+                write!(w, ", ")?;
+            }
+            write!(w, "_other_{i}")?;
+        }
+        writeln!(w, ") = OR(")?;
+        for (action_name, index) in &class.actions {
+            write!(w, "  {action_name}(")?;
+            let action = self.action_by_name(action_name);
+            let mut count = 0;
+            for i in 0..action.outputs.len() {
+                if i != 0 {
+                    write!(w, ", ")?;
+                }
+                if i == *index {
+                    write!(w, "state")?;
+                } else {
+                    write!(w, "_other_{count}")?;
+                    count += 1;
+                }
+            }
+            writeln!(w, ", tx, tx0)")?;
+        }
+        writeln!(w, ")")?;
+        Ok(())
+    }
+
+    fn fmt(&self, w: &mut dyn fmt::Write) -> fmt::Result {
+        for dep in &self.dependencies {
+            dep.fmt(w).unwrap();
+        }
+        writeln!(w, "\n// Actions\n")?;
+        for action in &self.actions {
+            action.0.borrow().fmt_action(w)?;
+            writeln!(w, "")?;
+        }
+        writeln!(w, "// Classes\n")?;
+        for class in &self.classes {
+            self.fmt_class(w, &class)?;
+            writeln!(w, "")?;
+        }
+        Ok(())
+    }
+
+    fn data1(self, engine: Engine, ast: AST) -> Data1 {
+        let mut podlang_src = String::new();
+        self.fmt(&mut podlang_src).unwrap();
+
+        let params = Params::default();
+        let module = Arc::new(
+            load_module(
+                podlang_src.as_str(),
+                "root",
+                &params,
+                slice::from_ref(&self.txlib_mod),
+            )
+            .expect("compiles"),
+        );
+        Data1 {
+            txlib_mod: self.txlib_mod,
+            podlang_src,
+            actions: self.actions_meta,
+            classes: self.classes,
+            module,
+            engine,
+            ast,
+        }
+    }
+}
+
+struct Data1 {
+    txlib_mod: Arc<Module>,
+    podlang_src: String,
+    actions: Vec<ActionMeta>,
+    classes: Vec<Class>,
+    module: Arc<Module>,
+    engine: Engine,
+    ast: AST,
+}
+
+impl Data1 {
+    fn action_by_name(&self, name: &str) -> &ActionMeta {
+        self.actions.iter().find(|a| a.name == name).unwrap()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SpendableObject {
+    pub pod: MainPod,
+    pub obj: Dictionary,
+    pub tx: Tx,
+}
+
+impl SpendableObject {
+    pub fn tx_input(&self) -> (Dictionary, Tx) {
+        (self.obj.clone(), self.tx.clone())
+    }
+}
+
+pub struct SpendableObjects {
+    pub tx_pod: MainPod,
+    pub obj_pods: Vec<MainPod>,
+    pub objs: Vec<Dictionary>,
+    pub tx: Tx,
+}
+
+impl SpendableObjects {
+    pub fn obj(&self, index: usize) -> SpendableObject {
+        SpendableObject {
+            pod: self.obj_pods[index].clone(),
+            obj: self.objs[index].clone(),
+            tx: self.tx.clone(),
+        }
+    }
+    pub fn objs<const N: usize>(&self) -> [SpendableObject; N] {
+        let objs: Vec<_> = (0..N).map(|i| self.obj(i)).collect();
+        objs.try_into().unwrap()
+    }
+}
+
+struct Phase2 {
+    mock: bool,
+    params: Params,
+    vd_set: VDSet,
+    grounding_witness: Arc<GroundingWitness>,
+    prover: Box<dyn MainPodProver>,
+    modules: Vec<Arc<Module>>,
+    data: Data1,
+}
+
+struct GenContext {
+    mock: bool,
+    params: Params,
+    vd_set: VDSet,
+    grounding_witness: Arc<GroundingWitness>,
+    prover: Box<dyn MainPodProver>,
+    tx_builder: TxBuilder,
+    bld: BuildContext,
+    // Statements used to build the Action custom statement
+    sts: Vec<Statement>,
+}
+
+impl Phase2 {
+    fn new(mock: bool, data: Data1, grounding_witness: Arc<GroundingWitness>) -> Self {
+        let mock_prover = MockProver {};
+        let real_prover = Prover {};
+        let (vd_set, prover): (_, Box<dyn MainPodProver>) = if mock {
+            (VDSet::new(&[]), Box::new(mock_prover))
+        } else {
+            let vd_set = &*DEFAULT_VD_SET;
+            (vd_set.clone(), Box::new(real_prover))
+        };
+        let params = Params::default();
+        let modules = vec![data.txlib_mod.clone(), data.module.clone()];
+        Self {
+            mock,
+            params,
+            vd_set,
+            grounding_witness,
+            prover,
+            modules,
+            data,
+        }
+    }
+    fn new_builder(&self) -> MultiPodBuilder {
+        MultiPodBuilder::new(&self.params, &self.vd_set)
+    }
+    fn new_tx_builder(&self, ctx: &mut BuildContext, inputs: &[(Dictionary, Tx)]) -> TxBuilder {
+        TxBuilder::new(ctx, inputs, self.grounding_witness.clone())
+    }
+    fn action(self, action: &str, inputs: Vec<SpendableObject>) -> SpendableObjects {
+        let action = self.data.action_by_name(action);
+        let builder = self.new_builder();
+        let mut bld = BuildContext {
+            builder,
+            modules: self.modules.clone(),
+        };
+
+        let mut tx_inputs = Vec::new();
+        for (input_index, (_class, _name)) in action.inputs.iter().enumerate() {
+            let input = &inputs[input_index];
+            tx_inputs.push(input.tx_input());
+        }
+
+        let tx_builder = self.new_tx_builder(&mut bld, &tx_inputs);
+
+        let gen_ctx = GenContext {
+            mock: self.mock,
+            params: self.params,
+            vd_set: self.vd_set,
+            grounding_witness: self.grounding_witness,
+            prover: self.prover,
+            bld,
+            tx_builder,
+            sts: Vec::new(),
+        };
+        let ctx = ActionContext::new(action.name.clone(), Some(gen_ctx));
+        let mut scope = Scope::new();
+        let _result = self
+            .data
+            .engine
+            .call_fn::<Dynamic>(&mut scope, &self.data.ast, &action.name, (ctx.clone(),))
+            .unwrap();
+        for st in &ctx.0.borrow().gen_ctx.as_ref().unwrap().sts {
+            println!("DBG st: {st}");
+        }
+        todo!()
+    }
+}
+
+use common::test_state::TestState;
+
+fn tx_hash(tx: &Tx) -> Hash {
+    tx.dict().commitment()
+}
+
+fn grounding_witness(state: &TestState, inputs: &[Tx]) -> Arc<GroundingWitness> {
+    state.build_grounding_witness(
+        inputs,
+        tx_hash,
+        |block_number, transactions_root, nullifiers_root, gsrs_root, source_tx_proofs| {
+            Arc::new(GroundingWitness::new(
+                StateRoot::new(block_number, transactions_root, nullifiers_root, gsrs_root),
+                source_tx_proofs,
+            ))
+        },
+    )
+}
+
 #[test]
 fn test_pexe() {
     let find_log_src = r#"
@@ -636,7 +1090,7 @@ fn test_pexe() {
         fn use_pick(ctx, pick, vdf_iters) {
             ctx.st_gt(pick.durability, 0);
             var durability = pick.get("durability");
-            // durability -= 1;
+            // durability -= 1; // Requires AST rewrite
             var_assign(durability, durability - 1);
             ctx.st_sum_of(pick.durability, durability, 1);
             pick.update("durability", durability);
@@ -681,16 +1135,16 @@ fn test_pexe() {
         .unwrap();
 
     engine
-        .register_type_with_name::<Context>("Context")
-        .register_fn("output", Context::output)
-        .register_fn("input", Context::input)
-        .register_fn("mutate", Context::mutate)
-        .register_fn("random", Context::random)
-        .register_fn("st_gt", Context::st_gt)
-        .register_fn("st_sum_of", Context::st_sum_of)
-        .register_fn("intro_vdf", Context::intro_vdf)
-        .register_fn("intro_lt_eq_u256", Context::intro_lt_eq_u256)
-        .register_fn("pow_obj_grind", Context::pow_obj_grind)
+        .register_type_with_name::<ActionContext>("ActionContext")
+        .register_fn("output", ActionContext::output)
+        .register_fn("input", ActionContext::input)
+        .register_fn("mutate", ActionContext::mutate)
+        .register_fn("random", ActionContext::random)
+        .register_fn("st_gt", ActionContext::st_gt)
+        .register_fn("st_sum_of", ActionContext::st_sum_of)
+        .register_fn("intro_vdf", ActionContext::intro_vdf)
+        .register_fn("intro_lt_eq_u256", ActionContext::intro_lt_eq_u256)
+        .register_fn("pow_obj_grind", ActionContext::pow_obj_grind)
         .register_type_with_name::<ArgContext>("ArgContext")
         .register_fn("set", ArgContext::set)
         .register_fn("get", ArgContext::get)
@@ -721,61 +1175,32 @@ fn test_pexe() {
     // calls.  Otherwise we have to manually write `var_assign(foo, expr)` to assign a new value to
     // an existing `var`.
 
-    let mut podlang_src = String::new();
-
-    let txlib_mod = Arc::new(txlib::predicates::module());
-    let dependencies = vec![
-        Dependency::Module {
-            name: "tx".to_string(),
-            hash: txlib_mod.id(),
-        },
-        Dependency::Intro {
-            pred: "Vdf(count, input, output)".to_string(),
-            hash: Hash::from_hex(
-                "b77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06",
-            )
-            .unwrap(),
-        },
-        Dependency::Intro {
-            pred: "LtEqU256(lhs, rhs)".to_string(),
-            hash: Hash::from_hex(
-                "2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529",
-            )
-            .unwrap(),
-        },
-    ];
-
-    for dep in &dependencies {
-        dep.fmt(&mut podlang_src).unwrap();
-    }
+    let mut actions = Vec::new();
 
     for action in &[
         "FindLog",
-        "CraftWood",
-        "CraftSticks",
-        "CraftWoodPick",
-        "UseWoodPick",
+        // "CraftWood",
+        // "CraftSticks",
+        // "CraftWoodPick",
+        // "UseWoodPick",
     ] {
-        let ctx = Context::new();
+        let ctx = ActionContext::new(action.to_string(), None);
         let _result = engine
             .call_fn::<Dynamic>(&mut scope, &ast, action, (ctx.clone(),))
             .unwrap();
-        // println!("{action}:\n{ctx}\n");
-        ctx.0
-            .borrow()
-            .fmt_action(&mut podlang_src, action.to_string())
-            .unwrap();
+        actions.push(ctx);
     }
+
+    let data = Data0::new(actions);
+    let mut podlang_src = String::new();
+    data.fmt(&mut podlang_src).unwrap();
+
+    // println!("{:#?}", classes);
+
     println!("{podlang_src}");
 
-    let params = Params::default();
-    let module = Arc::new(
-        load_module(
-            podlang_src.as_str(),
-            "root",
-            &params,
-            slice::from_ref(&txlib_mod),
-        )
-        .expect("compiles"),
-    );
+    let mut state = TestState::default();
+    let data = data.data1(engine, ast);
+    let phase2 = Phase2::new(true, data, grounding_witness(&state, &[]));
+    phase2.action("FindLog", vec![]);
 }
