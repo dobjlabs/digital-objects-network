@@ -24,13 +24,11 @@ use crate::object_record::parse_object_record_file;
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, select_object,
 };
-use crate::runtime::ActionRunGate;
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
     ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
     DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
-    ExecutionStepContext, NoopExecutionReporter, ObjectDetail, ObjectQuery, ObjectSelector,
-    ObjectSummary,
+    ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSelector, ObjectSummary,
 };
 
 pub trait PayloadBuilder: Send + Sync {
@@ -77,7 +75,6 @@ impl Default for DriverDeps {
 pub struct Driver {
     paths: DriverPaths,
     deps: DriverDeps,
-    run_gate: Arc<ActionRunGate>,
 }
 
 impl Driver {
@@ -87,11 +84,7 @@ impl Driver {
 
     pub fn open(paths: DriverPaths, deps: DriverDeps) -> Result<Self> {
         ensure_store_dirs(&paths)?;
-        Ok(Self {
-            paths,
-            deps,
-            run_gate: Arc::new(ActionRunGate::new()),
-        })
+        Ok(Self { paths, deps })
     }
 
     pub fn paths(&self) -> &DriverPaths {
@@ -121,20 +114,20 @@ impl Driver {
             .collect())
     }
 
-    pub fn read_object(&self, selector: &ObjectSelector) -> Result<ObjectDetail> {
+    pub fn read_object(&self, selector: &ObjectSelector) -> Result<ObjectSummary> {
         let entries = load_object_files(&self.paths)?;
         let entry = select_object(&entries, selector)?;
-        Ok(self.object_detail(entry, None))
+        Ok(self.object_summary(entry, None))
     }
 
-    pub fn read_object_file(&self, path: &Path) -> Result<ObjectDetail> {
+    pub fn read_object_file(&self, path: &Path) -> Result<ObjectSummary> {
         let file_name = path
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| anyhow!("invalid input path (missing file name): {}", path.display()))?
             .to_string();
         let record = parse_object_record_file(path)?;
-        Ok(self.object_detail(&ObjectFileEntry { file_name, record }, None))
+        Ok(self.object_summary(&ObjectFileEntry { file_name, record }, None))
     }
 
     pub fn sync_inventory(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
@@ -289,7 +282,6 @@ impl Driver {
         input: ExecuteActionInput,
         reporter: &R,
     ) -> Result<ExecuteActionResult> {
-        let _run_guard = self.run_gate.acquire()?;
         let settings = self.load_settings()?;
         let action = self
             .deps
@@ -461,26 +453,6 @@ impl Driver {
             tx_hash: entry.record.tx_hash.clone(),
             grounded,
             fields: entry.record.fields_map(),
-        }
-    }
-
-    fn object_detail(&self, entry: &ObjectFileEntry, grounded: Option<bool>) -> ObjectDetail {
-        let class_info = self.deps.catalog.get_class(&entry.record.class_name);
-        ObjectDetail {
-            id: entry.record.id.clone(),
-            file_name: entry.file_name.clone(),
-            class_name: entry.record.class_name.clone(),
-            class_hash: class_info
-                .as_ref()
-                .map(|class_info| class_info.hash.clone())
-                .unwrap_or_default(),
-            status: entry.record.status,
-            tx_hash: entry.record.tx_hash.clone(),
-            grounded,
-            fields: entry.record.fields_map(),
-            predicate_source: class_info
-                .map(|class_info| class_info.predicate_source)
-                .unwrap_or_else(|| format!("Is{}(state) = OR(...)", entry.record.class_name)),
         }
     }
 

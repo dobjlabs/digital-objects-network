@@ -6,7 +6,6 @@ mod execute;
 mod object_record;
 mod object_store;
 mod paths;
-mod runtime;
 mod settings;
 mod types;
 
@@ -25,6 +24,5 @@ pub use crate::object_record::{ObjectRecord, ObjectStatus};
 pub use crate::types::{
     ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
     DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
-    ExecutionStepContext, NoopExecutionReporter, ObjectDetail, ObjectQuery, ObjectSelector,
-    ObjectSummary,
+    ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSelector, ObjectSummary,
 };

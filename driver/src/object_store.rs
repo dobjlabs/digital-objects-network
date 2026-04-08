@@ -171,8 +171,8 @@ pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> boo
     {
         return false;
     }
-    if let Some(live) = query.live
-        && live == entry.record.is_nullified()
+    if let Some(status) = query.status
+        && status != entry.record.status
     {
         return false;
     }
