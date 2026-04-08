@@ -83,6 +83,10 @@ pub mod api {
         pub(crate) class: String,
         pub(crate) action: String,
         pub(crate) details: Vec<Detail>,
+        /// Whether this step operates on a public object.  Works for all step
+        /// kinds (including Input) and is used by codegen to select the correct
+        /// predicate variant (e.g. TxDeletedPublic vs TxDeletedPrivate).
+        pub(crate) public: bool,
     }
 
     impl Step {
@@ -195,6 +199,13 @@ pub mod api {
         /// Apply a snippet function to the Step
         pub fn snippet(self, f: impl Fn(Step) -> Self) -> Self {
             f(self)
+        }
+        /// Mark the step as operating on a public object.  Unlike `.set()`,
+        /// this works on any step kind (Input, Mutate, Output, Depends) and is
+        /// used by codegen to emit the correct Public/Private predicate variant.
+        pub fn is_public(mut self, value: bool) -> Self {
+            self.public = value;
+            self
         }
     }
 
@@ -1085,9 +1096,10 @@ impl Data {
                     api::Detail::Var { .. } => {}
                 }
             }
-            // Determine if this step's object is public by checking for a
-            // Detail::Set { key: "public", value: Literal(true) } in the step details.
-            let step_is_public = step.details.iter().any(|d| match d {
+            // Determine if this step's object is public.  Check the explicit
+            // `step.public` flag first (works for all step kinds including
+            // Input), then fall back to Detail::Set for Output steps.
+            let step_is_public = step.public || step.details.iter().any(|d| match d {
                 api::Detail::Set { key, value } => {
                     key == "public" && matches!(value, api::Arg::Literal(v) if *v == Value::from(true))
                 }

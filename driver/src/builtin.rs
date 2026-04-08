@@ -566,7 +566,7 @@ pub(crate) fn actions() -> Vec<api::Action> {
         api::Action {
             name: "FillBounty",
             steps: vec![
-                Step::input("bounty", "Bounty"),
+                Step::input("bounty", "Bounty").is_public(true),
                 Step::input("log", "Log"),
                 Step::output("filled_bounty", "Bounty")
                     .set("blueprint", Arg::literal("Bounty"))
