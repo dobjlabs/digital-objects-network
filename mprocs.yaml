@@ -1,7 +1,7 @@
 procs:
   synchronizer:
-    shell: just sync
+    shell: just sync 2>&1 | tee logs/synchronizer.log
   relayer:
-    shell: just relayer
+    shell: just relayer 2>&1 | tee logs/relayer.log
   gui:
-    shell: just gui
+    shell: just gui 2>&1 | tee logs/gui.log

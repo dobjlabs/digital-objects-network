@@ -226,6 +226,18 @@ impl StateMachine {
         block_number: u32,
         blob_payloads: &[(u32, Vec<u8>)],
     ) -> Result<CanonicalHead> {
+        let pub_obj_root_from_head = base_head.roots.public_objects;
+        let public_objects = self
+            .app_db
+            .open_public_objects(pub_obj_root_from_head)?;
+        let pub_obj_root_after_open = public_objects.commitment();
+        if pub_obj_root_from_head != pub_obj_root_after_open {
+            warn!(
+                from_head = %encode_hash_hex(&pub_obj_root_from_head),
+                after_open = %encode_hash_hex(&pub_obj_root_after_open),
+                "public_objects root changed after open_public_objects!"
+            );
+        }
         let mut working = WorkingState {
             metadata: base_head.metadata,
             transactions: self
@@ -233,9 +245,7 @@ impl StateMachine {
                 .open_transactions(base_head.roots.transactions)?,
             nullifiers: self.app_db.open_nullifiers(base_head.roots.nullifiers)?,
             gsr_history: self.app_db.open_gsr_history(base_head.roots.gsr_history)?,
-            public_objects: self
-                .app_db
-                .open_public_objects(base_head.roots.public_objects)?,
+            public_objects,
             recent_gsrs: recent_gsrs.into_iter().collect(),
         };
 

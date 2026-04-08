@@ -149,6 +149,7 @@ impl SyncDb {
                    head_nullifiers_root,
                    head_state_root_gsrs_root,
                    head_gsr_history_root,
+                   head_public_objects_root,
                    head_current_gsr,
                    head_current_block_number,
                    head_tx_count,
@@ -309,10 +310,19 @@ fn decode_head_row(row: &PgRow) -> Result<CanonicalHead> {
             nullifiers: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_nullifiers_root"))?,
             state_root_gsrs: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_state_root_gsrs_root"))?,
             gsr_history: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_gsr_history_root"))?,
-            public_objects: db_bytes_to_hash(
-                &row.try_get::<Vec<u8>, _>("head_public_objects_root")
-                    .unwrap_or_else(|_| hash_to_db_bytes(EMPTY_HASH)),
-            )?,
+            public_objects: {
+                let bytes = row
+                    .try_get::<Vec<u8>, _>("head_public_objects_root")
+                    .unwrap_or_else(|_| hash_to_db_bytes(EMPTY_HASH));
+                // DB default is all-zeros which differs from pod2's EMPTY_HASH
+                // (the commitment of an empty container). Map zero bytes to EMPTY_HASH
+                // so open_public_objects gets the correct empty Dictionary root.
+                if bytes.iter().all(|&b| b == 0) {
+                    EMPTY_HASH
+                } else {
+                    db_bytes_to_hash(&bytes)?
+                }
+            },
         },
         metadata: HeadMetadata {
             current_gsr: row
