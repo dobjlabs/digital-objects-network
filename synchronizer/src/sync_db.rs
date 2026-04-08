@@ -1,6 +1,6 @@
 use alloy::primitives::B256;
 use anyhow::{anyhow, Context, Result};
-use pod2::middleware::{EMPTY_HASH, Hash};
+use pod2::middleware::{Hash, EMPTY_HASH};
 use sqlx::{
     postgres::{PgPoolOptions, PgRow},
     Executor, PgPool, Row,
@@ -72,6 +72,7 @@ impl SyncDb {
                 head_nullifiers_root BYTEA NOT NULL,
                 head_state_root_gsrs_root BYTEA NOT NULL,
                 head_gsr_history_root BYTEA NOT NULL,
+                head_public_objects_root BYTEA NOT NULL DEFAULT E'\\x0000000000000000000000000000000000000000000000000000000000000000',
                 head_current_gsr BYTEA NULL,
                 head_current_block_number INTEGER NULL,
                 head_tx_count BIGINT NOT NULL,
@@ -225,13 +226,14 @@ impl SyncDb {
                 head_nullifiers_root,
                 head_state_root_gsrs_root,
                 head_gsr_history_root,
+                head_public_objects_root,
                 head_current_gsr,
                 head_current_block_number,
                 head_tx_count,
                 head_nullifier_count,
                 head_gsr_count
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             "#,
         )
         .bind(slot.slot as i32)
@@ -244,6 +246,7 @@ impl SyncDb {
         .bind(hash_to_db_bytes(head.roots.nullifiers))
         .bind(hash_to_db_bytes(head.roots.state_root_gsrs))
         .bind(hash_to_db_bytes(head.roots.gsr_history))
+        .bind(hash_to_db_bytes(head.roots.public_objects))
         .bind(head.metadata.current_gsr.map(hash_to_db_bytes))
         .bind(head.metadata.current_block_number.map(|v| v as i32))
         .bind(head.metadata.tx_count as i64)
