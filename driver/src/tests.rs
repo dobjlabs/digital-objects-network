@@ -376,7 +376,8 @@ fn test_execute_keeps_files_after_relayer_accepts() {
 
 /// End-to-end test for message passing: Alice creates a counter with an inbox,
 /// Bob sends an "increment" message, Alice processes it and the counter goes
-/// from 0 to 1.
+/// from 0 to 1. Verifies inbox_id linking, messages_root hash chain,
+/// processed_count/processed_messages_root tracking, and state_commitment.
 #[test]
 fn test_message_passing_counter() {
     ensure_extra_pod_deserializers_registered();
@@ -398,40 +399,51 @@ fn test_message_passing_counter() {
     let inbox = create_outputs.obj(1);
 
     // Verify counter starts at 0
-    let count_val = counter
-        .obj
-        .get(&Key::from("count"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(count_val.as_int().unwrap(), 0);
+    assert_eq!(
+        counter.obj.get(&Key::from("count")).unwrap().unwrap().as_int().unwrap(),
+        0
+    );
 
-    // Verify inbox starts at message_count = 0
-    let msg_count = inbox
-        .obj
-        .get(&Key::from("message_count"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(msg_count.as_int().unwrap(), 0);
+    // Verify inbox_id links inbox and counter
+    let inbox_id = inbox.obj.get(&Key::from("inbox_id")).unwrap().unwrap();
+    let counter_inbox_id = counter.obj.get(&Key::from("inbox_id")).unwrap().unwrap();
+    assert_eq!(inbox_id, counter_inbox_id, "inbox_id must match between inbox and counter");
 
-    // Verify state_commitment matches the counter's commitment
-    let state_commitment = inbox
-        .obj
-        .get(&Key::from("state_commitment"))
-        .unwrap()
-        .unwrap();
+    // Verify inbox initial state
+    assert_eq!(
+        inbox.obj.get(&Key::from("message_count")).unwrap().unwrap().as_int().unwrap(),
+        0
+    );
+    assert_eq!(
+        inbox.obj.get(&Key::from("processed_count")).unwrap().unwrap().as_int().unwrap(),
+        0
+    );
+
+    // messages_root and processed_messages_root start as EMPTY_HASH
+    let empty_root = Value::from(pod2::middleware::EMPTY_HASH);
+    assert_eq!(
+        inbox.obj.get(&Key::from("messages_root")).unwrap().unwrap(),
+        empty_root,
+    );
+    assert_eq!(
+        inbox.obj.get(&Key::from("processed_messages_root")).unwrap().unwrap(),
+        empty_root,
+    );
+
+    // state_commitment = H(counter)
+    let state_commitment = inbox.obj.get(&Key::from("state_commitment")).unwrap().unwrap();
     assert_eq!(
         state_commitment,
         Value::from(pod2::middleware::RawValue::from(counter.obj.commitment()))
     );
 
-    // Apply the create tx to canonical state so objects are grounded
+    // Apply create tx to canonical state
     let mut state = TestState::default();
     apply_tx(&mut state, &create_outputs.tx);
 
     // ---------------------------------------------------------------
     // Step 2: Bob sends an "increment" message
     // ---------------------------------------------------------------
-    // Bob needs a grounding witness that includes the inbox's source tx
     let bob_witness = GroundingWitness::new(
         state_root(&state),
         [(tx_hash(&inbox.tx), state.tx_membership_proof(tx_hash(&inbox.tx)))]
@@ -443,49 +455,67 @@ fn test_message_passing_counter() {
         .execute_action(
             "SendCounterMessage".to_string(),
             bob_witness,
-            vec![
-                // The inbox as a spendable input (public, consumed)
-                inbox.clone(),
-            ],
+            vec![inbox.clone()],
         )
         .unwrap();
 
-    // SendCounterMessage outputs: [0] = new Inbox, [1] = InboxMessage
-    let updated_inbox = send_outputs.obj(0);
-    let message = send_outputs.obj(1);
+    // SendCounterMessage outputs: [0] = InboxMessage, [1] = new Inbox
+    let message = send_outputs.obj(0);
+    let updated_inbox = send_outputs.obj(1);
 
-    // Verify inbox message_count is now 1
-    let msg_count = updated_inbox
-        .obj
-        .get(&Key::from("message_count"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(msg_count.as_int().unwrap(), 1);
+    // Verify message has amount=1 and correct inbox_id
+    assert_eq!(message.obj.get(&Key::from("amount")).unwrap().unwrap().as_int().unwrap(), 1);
+    assert_eq!(
+        message.obj.get(&Key::from("inbox_id")).unwrap().unwrap(),
+        inbox_id,
+        "message inbox_id must match"
+    );
 
-    // Verify message has amount=1
-    let msg_amount = message
-        .obj
-        .get(&Key::from("amount"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(msg_amount.as_int().unwrap(), 1);
+    // Verify inbox message_count incremented
+    assert_eq!(
+        updated_inbox.obj.get(&Key::from("message_count")).unwrap().unwrap().as_int().unwrap(),
+        1
+    );
 
-    // Verify state_commitment was NOT changed by the send
-    let send_state_commitment = updated_inbox
-        .obj
-        .get(&Key::from("state_commitment"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(send_state_commitment, state_commitment, "sender must not touch state_commitment");
+    // Verify messages_root = H(EMPTY_HASH, commitment(message))
+    let expected_root = pod2::middleware::hash_values(&[
+        Value::from(pod2::middleware::EMPTY_HASH),
+        Value::from(message.obj.commitment()),
+    ]);
+    assert_eq!(
+        updated_inbox.obj.get(&Key::from("messages_root")).unwrap().unwrap(),
+        Value::from(pod2::middleware::RawValue::from(expected_root)),
+        "messages_root must be H(old_root, commitment(message))"
+    );
 
-    // Apply the send tx to canonical state
+    // Verify processing fields NOT changed by sender
+    assert_eq!(
+        updated_inbox.obj.get(&Key::from("processed_count")).unwrap().unwrap().as_int().unwrap(),
+        0,
+        "sender must not touch processed_count"
+    );
+    assert_eq!(
+        updated_inbox.obj.get(&Key::from("processed_messages_root")).unwrap().unwrap(),
+        empty_root,
+        "sender must not touch processed_messages_root"
+    );
+    assert_eq!(
+        updated_inbox.obj.get(&Key::from("state_commitment")).unwrap().unwrap(),
+        state_commitment,
+        "sender must not touch state_commitment"
+    );
+    assert_eq!(
+        updated_inbox.obj.get(&Key::from("inbox_id")).unwrap().unwrap(),
+        inbox_id,
+        "sender must not touch inbox_id"
+    );
+
+    // Apply send tx to canonical state
     apply_tx(&mut state, &send_outputs.tx);
 
     // ---------------------------------------------------------------
     // Step 3: Alice processes the message
     // ---------------------------------------------------------------
-    // Alice consumes the message, inbox, and counter. Produces a new
-    // counter (count updated) and a new inbox (state_commitment updated).
     let alice_witness = GroundingWitness::new(
         state_root(&state),
         [
@@ -502,7 +532,6 @@ fn test_message_passing_counter() {
             "ProcessCounterMessages".to_string(),
             alice_witness,
             vec![
-                // Inputs in step order: [0] message, [1] inbox, [2] counter
                 message.clone(),
                 updated_inbox.clone(),
                 counter.clone(),
@@ -515,35 +544,63 @@ fn test_message_passing_counter() {
     let final_inbox = process_outputs.obj(1);
 
     // Verify counter is now 1
-    let final_count = final_counter
-        .obj
-        .get(&Key::from("count"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(final_count.as_int().unwrap(), 1, "counter should be 1 after processing increment");
-
-    // Verify new inbox state_commitment matches the new counter
-    let final_state_commitment = final_inbox
-        .obj
-        .get(&Key::from("state_commitment"))
-        .unwrap()
-        .unwrap();
     assert_eq!(
-        final_state_commitment,
+        final_counter.obj.get(&Key::from("count")).unwrap().unwrap().as_int().unwrap(),
+        1,
+        "counter should be 1 after processing increment"
+    );
+
+    // Verify counter preserves inbox_id
+    assert_eq!(
+        final_counter.obj.get(&Key::from("inbox_id")).unwrap().unwrap(),
+        inbox_id,
+        "counter inbox_id must be preserved"
+    );
+
+    // Verify inbox state_commitment matches new counter
+    assert_eq!(
+        final_inbox.obj.get(&Key::from("state_commitment")).unwrap().unwrap(),
         Value::from(pod2::middleware::RawValue::from(final_counter.obj.commitment())),
         "state_commitment should match the updated counter"
     );
 
-    // Verify message_count preserved through processing
-    let final_msg_count = final_inbox
-        .obj
-        .get(&Key::from("message_count"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(final_msg_count.as_int().unwrap(), 1);
+    // Verify processed_count caught up to message_count
+    assert_eq!(
+        final_inbox.obj.get(&Key::from("processed_count")).unwrap().unwrap().as_int().unwrap(),
+        1,
+        "processed_count should catch up to message_count"
+    );
+
+    // Verify processed_messages_root caught up to messages_root
+    assert_eq!(
+        final_inbox.obj.get(&Key::from("processed_messages_root")).unwrap().unwrap(),
+        final_inbox.obj.get(&Key::from("messages_root")).unwrap().unwrap(),
+        "processed_messages_root should catch up to messages_root"
+    );
+
+    // Verify message_count and messages_root preserved through processing
+    assert_eq!(
+        final_inbox.obj.get(&Key::from("message_count")).unwrap().unwrap().as_int().unwrap(),
+        1,
+        "message_count must be preserved during processing"
+    );
+    assert_eq!(
+        final_inbox.obj.get(&Key::from("messages_root")).unwrap().unwrap(),
+        Value::from(pod2::middleware::RawValue::from(expected_root)),
+        "messages_root must be preserved during processing"
+    );
+
+    // Verify inbox_id preserved through processing
+    assert_eq!(
+        final_inbox.obj.get(&Key::from("inbox_id")).unwrap().unwrap(),
+        inbox_id,
+        "inbox_id must be preserved during processing"
+    );
 
     println!("Message passing test passed:");
-    println!("  - CreateCounterInbox: Inbox (public) + Counter (private, count=0)");
-    println!("  - SendCounterMessage: Inbox updated (message_count=1) + InboxMessage (amount=1)");
-    println!("  - ProcessCounterMessages: Counter (count=1) + Inbox (state_commitment updated)");
+    println!("  - inbox_id links inbox and counter");
+    println!("  - messages_root hash chain: H(EMPTY, commitment(msg)) verified");
+    println!("  - processed_count/processed_messages_root caught up after processing");
+    println!("  - state_commitment updated to H(counter_at_1)");
+    println!("  - counter: 0 -> 1 via message amount=1");
 }

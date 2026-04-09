@@ -9,7 +9,7 @@ use craft_sdk::{
 use lt_eq_u256_pod::LtEqU256Pod;
 use pod2::{
     frontend::{MainPod, Operation},
-    middleware::{F, Key, Pod, RawValue, Statement, Value},
+    middleware::{F, Hash, Key, Pod, RawValue, Statement, Value, hash_values, EMPTY_HASH},
 };
 use txlib::GroundingWitness;
 use vdfpod::VdfPod;
@@ -617,17 +617,43 @@ pub(crate) fn actions() -> Vec<api::Action> {
         // ---------------------------------------------------------------
         //
         // CreateCounterInbox: create a public Inbox + private Counter.
+        // CreateCounterInbox: create Inbox (public) + Counter (private).
+        // Both share an inbox_id. The inbox tracks message_count,
+        // messages_root (hash chain), processed_count,
+        // processed_messages_root, and state_commitment.
         api::Action {
             name: "CreateCounterInbox",
             steps: vec![
                 Step::output("counter", "Counter")
                     .set("blueprint", Arg::literal("Counter"))
                     .set("public", Arg::literal(false))
-                    .set("count", Arg::literal(0i64)),
+                    .set("count", Arg::literal(0i64))
+                    .var(
+                        "inbox_id",
+                        Box::new(|ctx| {
+                            // Derive inbox_id from the inbox output's key
+                            // (inbox isn't staged yet, so we use the counter's
+                            // key as seed — both objects share the same tx)
+                            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+                            let key_val = counter.get(&Key::from("key")).unwrap().unwrap();
+                            let id = hash_values(&[key_val, Value::from("inbox-id")]);
+                            ctx.store("inbox_id_hash", Box::new(id));
+                            Value::from(RawValue::from(id))
+                        }),
+                    )
+                    .set("inbox_id", Arg::var("inbox_id")),
                 Step::output("inbox", "Inbox")
                     .set("blueprint", Arg::literal("Inbox"))
                     .set("public", Arg::literal(true))
                     .set("message_count", Arg::literal(0i64))
+                    .set("processed_count", Arg::literal(0i64))
+                    .var(
+                        "init_inbox_id",
+                        Box::new(|ctx| {
+                            let id: Box<Hash> = ctx.take("inbox_id_hash");
+                            Value::from(RawValue::from(*id))
+                        }),
+                    )
                     .var(
                         "state_commitment",
                         Box::new(|ctx| {
@@ -635,29 +661,45 @@ pub(crate) fn actions() -> Vec<api::Action> {
                             Value::from(RawValue::from(counter.commitment()))
                         }),
                     )
-                    .set("state_commitment", Arg::var("state_commitment")),
+                    .var(
+                        "empty_root",
+                        Box::new(|_ctx| Value::from(EMPTY_HASH)),
+                    )
+                    .set("inbox_id", Arg::var("init_inbox_id"))
+                    .set("state_commitment", Arg::var("state_commitment"))
+                    .set("messages_root", Arg::var("empty_root"))
+                    .set("processed_messages_root", Arg::var("empty_root")),
             ],
         },
         // SendCounterMessage: anyone consumes the old inbox, produces a
-        // new inbox (message_count incremented, state_commitment preserved)
-        // and a separate InboxMessage public object with the amount.
+        // new inbox (message_count++, messages_root extended) and a
+        // separate InboxMessage public object carrying the amount.
         api::Action {
             name: "SendCounterMessage",
             steps: vec![
                 Step::input("inbox", "Inbox").is_public(true),
+                Step::output("message", "InboxMessage")
+                    .set("blueprint", Arg::literal("InboxMessage"))
+                    .set("public", Arg::literal(true))
+                    .set("amount", Arg::literal(1i64))
+                    .var(
+                        "msg_inbox_id",
+                        Box::new(|ctx| {
+                            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+                            inbox.get(&Key::from("inbox_id")).unwrap().unwrap()
+                        }),
+                    )
+                    .set("inbox_id", Arg::var("msg_inbox_id")),
                 Step::output("new_inbox", "Inbox")
                     .set("blueprint", Arg::literal("Inbox"))
                     .set("public", Arg::literal(true))
                     .snippet(|step| send_counter_message_inbox_details(step)),
-                Step::output("message", "InboxMessage")
-                    .set("blueprint", Arg::literal("InboxMessage"))
-                    .set("public", Arg::literal(true))
-                    .set("amount", Arg::literal(1i64)),
             ],
         },
-        // ProcessCounterMessages: the holder consumes the inbox (to read
-        // the message), the counter, and the message. Produces a new inbox
-        // (state_commitment updated) and a new counter (count updated).
+        // ProcessCounterMessages: the holder consumes the message, inbox,
+        // and counter. Produces a new counter (count updated) and a new
+        // inbox (processed_count advanced, messages_root chain verified,
+        // state_commitment updated).
         api::Action {
             name: "ProcessCounterMessages",
             steps: vec![
@@ -678,14 +720,38 @@ pub(crate) fn actions() -> Vec<api::Action> {
     ]
 }
 
-/// SendCounterMessage inbox output: copy state_commitment, increment message_count.
+/// SendCounterMessage inbox output: copy inbox_id, state_commitment,
+/// processed_count, processed_messages_root. Increment message_count.
+/// Extend messages_root hash chain: new_root = H(old_root, commitment(message)).
 fn send_counter_message_inbox_details(step: Step) -> Step {
     step
+    // Pre-compute all values before Sets
+    .var(
+        "old_inbox_id",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("inbox_id")).unwrap().unwrap()
+        }),
+    )
     .var(
         "old_state_commitment",
         Box::new(|ctx| {
             let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
             inbox.get(&Key::from("state_commitment")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "old_processed_count",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("processed_count")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "old_processed_messages_root",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("processed_messages_root")).unwrap().unwrap()
         }),
     )
     .var(
@@ -702,8 +768,33 @@ fn send_counter_message_inbox_details(step: Step) -> Step {
             Value::from(old_count + 1)
         }),
     )
+    .var(
+        "new_messages_root",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_root_val = inbox
+                .get(&Key::from("messages_root"))
+                .unwrap()
+                .unwrap();
+            let old_root = Hash(old_root_val.raw().0);
+            let message = ctx.vars.get("message").as_dictionary().unwrap();
+            let msg_commitment = message.commitment();
+            let new_root = hash_values(&[
+                Value::from(old_root),
+                Value::from(msg_commitment),
+            ]);
+            ctx.store("new_messages_root_hash", Box::new(new_root));
+            Value::from(RawValue::from(new_root))
+        }),
+    )
+    // All Sets (order matters: Sets before Conditions/Updates)
+    .set("inbox_id", Arg::var("old_inbox_id"))
     .set("state_commitment", Arg::var("old_state_commitment"))
+    .set("processed_count", Arg::var("old_processed_count"))
+    .set("processed_messages_root", Arg::var("old_processed_messages_root"))
     .set("message_count", Arg::var("new_message_count"))
+    .set("messages_root", Arg::var("new_messages_root"))
+    // Conditions: prove message_count increment and hash chain extension
     .condition(
         "SumOf(new_message_count, inbox.message_count, 1)",
         Box::new(|ctx| {
@@ -719,10 +810,26 @@ fn send_counter_message_inbox_details(step: Step) -> Step {
                 .unwrap()
         }),
     )
+    .condition(
+        "HashOf(new_messages_root, inbox.messages_root, message)",
+        Box::new(|ctx| {
+            let new_root: Box<Hash> = ctx.take("new_messages_root_hash");
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let message = ctx.vars.get("message").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::hash_of(
+                    RawValue::from(*new_root),
+                    (&inbox, "messages_root"),
+                    message.commitment(),
+                ))
+                .unwrap()
+        }),
+    )
 }
 
 /// ProcessCounterMessages counter output: read amount from the message,
-/// prove new_count = old_count + amount.
+/// prove new_count = old_count + amount. Copy inbox_id from old counter.
 fn process_counter_update_details(step: Step) -> Step {
     step.var(
         "amount",
@@ -736,6 +843,13 @@ fn process_counter_update_details(step: Step) -> Step {
                 .unwrap();
             ctx.store("amount_i64", Box::new(amount));
             Value::from(amount)
+        }),
+    )
+    .var(
+        "counter_inbox_id",
+        Box::new(|ctx| {
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            counter.get(&Key::from("inbox_id")).unwrap().unwrap()
         }),
     )
     .var(
@@ -754,6 +868,7 @@ fn process_counter_update_details(step: Step) -> Step {
             Value::from(old_count + *amount)
         }),
     )
+    .set("inbox_id", Arg::var("counter_inbox_id"))
     .condition(
         "SumOf(new_count, counter.count, amount)",
         Box::new(|ctx| {
@@ -773,15 +888,30 @@ fn process_counter_update_details(step: Step) -> Step {
     .update("count", Arg::var("new_count"))
 }
 
-/// ProcessCounterMessages inbox output: preserve message_count,
-/// update state_commitment to match the new counter.
+/// ProcessCounterMessages inbox output: advance processed_count to
+/// message_count, set processed_messages_root = messages_root (fully
+/// caught up), verify the hash chain link, update state_commitment.
 fn process_counter_inbox_details(step: Step) -> Step {
     step
+    .var(
+        "kept_inbox_id",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("inbox_id")).unwrap().unwrap()
+        }),
+    )
     .var(
         "kept_message_count",
         Box::new(|ctx| {
             let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
             inbox.get(&Key::from("message_count")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "kept_messages_root",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("messages_root")).unwrap().unwrap()
         }),
     )
     .var(
@@ -791,8 +921,30 @@ fn process_counter_inbox_details(step: Step) -> Step {
             Value::from(RawValue::from(new_counter.commitment()))
         }),
     )
+    .set("inbox_id", Arg::var("kept_inbox_id"))
     .set("message_count", Arg::var("kept_message_count"))
+    .set("messages_root", Arg::var("kept_messages_root"))
+    // processed_count catches up to message_count
+    .set("processed_count", Arg::var("kept_message_count"))
+    // processed_messages_root catches up to messages_root
+    .set("processed_messages_root", Arg::var("kept_messages_root"))
     .set("state_commitment", Arg::var("new_state_commitment"))
+    // Verify hash chain: H(old processed_messages_root, commitment(message)) == messages_root
+    .condition(
+        "HashOf(inbox.messages_root, inbox.processed_messages_root, message)",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let message = ctx.vars.get("message").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::hash_of(
+                    (&inbox, "messages_root"),
+                    (&inbox, "processed_messages_root"),
+                    message.commitment(),
+                ))
+                .unwrap()
+        }),
+    )
 }
 
 fn action_signatures(actions: &[api::Action]) -> HashMap<String, ActionSignature> {
