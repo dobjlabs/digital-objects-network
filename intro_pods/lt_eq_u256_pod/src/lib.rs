@@ -71,7 +71,11 @@ const LT_EQ_U256_POD_TYPE: (usize, &str) = (2002, "LtEqU256");
 
 pub static STANDARD_LT_EQ_U256_VD_HASH: std::sync::LazyLock<Hash> =
     std::sync::LazyLock::new(|| {
-        Hash::from_hex("2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529").unwrap()
+        let (_, data) = &*STANDARD_LT_EQ_U256_POD_DATA;
+        let hash_out = pod2::backends::plonky2::recursion::circuit::hash_verifier_data(
+            &data.verifier_only,
+        );
+        Hash(hash_out.elements.map(|e| e))
     });
 
 static STANDARD_LT_EQ_U256_POD_DATA: std::sync::LazyLock<(
