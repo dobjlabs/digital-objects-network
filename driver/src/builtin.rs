@@ -140,6 +140,22 @@ const ACTION_META: &[ActionMeta] = &[
         reads_block: false,
         hidden: false,
     },
+    ActionMeta {
+        name: "SendNegativeCounterMessage",
+        emoji: "📉",
+        description: "Send a -5 decrement message to a counter inbox (for testing rejection).",
+        cpu_cost: "5-10s",
+        reads_block: false,
+        hidden: false,
+    },
+    ActionMeta {
+        name: "RejectCounterMessage",
+        emoji: "🚫",
+        description: "Reject a message that would make the counter negative.",
+        cpu_cost: "5-10s",
+        reads_block: false,
+        hidden: false,
+    },
 ];
 
 const CLASS_META: &[ClassMeta] = &[
@@ -717,7 +733,235 @@ pub(crate) fn actions() -> Vec<api::Action> {
                     .snippet(|step| process_counter_inbox_details(step)),
             ],
         },
+        // SendNegativeCounterMessage: same as SendCounterMessage but
+        // with amount=-5. Used to test rejection.
+        api::Action {
+            name: "SendNegativeCounterMessage",
+            steps: vec![
+                Step::input("inbox", "Inbox").is_public(true),
+                Step::output("message", "InboxMessage")
+                    .set("blueprint", Arg::literal("InboxMessage"))
+                    .set("public", Arg::literal(true))
+                    .set("amount", Arg::literal(-5i64))
+                    .var(
+                        "msg_inbox_id",
+                        Box::new(|ctx| {
+                            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+                            inbox.get(&Key::from("inbox_id")).unwrap().unwrap()
+                        }),
+                    )
+                    .set("inbox_id", Arg::var("msg_inbox_id")),
+                Step::output("new_inbox", "Inbox")
+                    .set("blueprint", Arg::literal("Inbox"))
+                    .set("public", Arg::literal(true))
+                    .snippet(|step| send_counter_message_inbox_details(step)),
+            ],
+        },
+        // RejectCounterMessage: the holder proves a message would make
+        // the counter negative. The counter is consumed and re-emitted
+        // unchanged (same count, same inbox_id) so the proof can read
+        // count and verify count + amount < 0. The inbox advances
+        // processed_count and processed_messages_root but
+        // state_commitment stays the same.
+        api::Action {
+            name: "RejectCounterMessage",
+            steps: vec![
+                Step::input("message", "InboxMessage").is_public(true),
+                Step::input("inbox", "Inbox").is_public(true),
+                Step::input("counter", "Counter"),
+                Step::output("new_counter", "Counter")
+                    .set("blueprint", Arg::literal("Counter"))
+                    .set("public", Arg::literal(false))
+                    .set("count", Arg::literal(0i64))
+                    .snippet(|step| reject_counter_reemit_details(step)),
+                Step::output("new_inbox", "Inbox")
+                    .set("blueprint", Arg::literal("Inbox"))
+                    .set("public", Arg::literal(true))
+                    .snippet(|step| reject_counter_inbox_details(step)),
+            ],
+        },
     ]
+}
+
+/// RejectCounterMessage counter output: re-emit the counter with
+/// the same count and inbox_id. The counter is consumed and re-created
+/// so the proof can read its fields and prove count + amount < 0.
+fn reject_counter_reemit_details(step: Step) -> Step {
+    step
+    .var(
+        "kept_count",
+        Box::new(|ctx| {
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            let count = counter.get(&Key::from("count")).unwrap().unwrap().as_int().unwrap();
+            ctx.store("rejection_count", Box::new(count));
+            Value::from(count)
+        }),
+    )
+    .var(
+        "kept_counter_inbox_id",
+        Box::new(|ctx| {
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            counter.get(&Key::from("inbox_id")).unwrap().unwrap()
+        }),
+    )
+    .set("inbox_id", Arg::var("kept_counter_inbox_id"))
+    .update("count", Arg::var("kept_count"))
+}
+
+/// RejectCounterMessage inbox output: advance processed_count by 1,
+/// advance processed_messages_root by one hash chain link, preserve
+/// state_commitment and all queue fields. Prove the rejection:
+/// count + amount < 0 (would make counter negative).
+fn reject_counter_inbox_details(step: Step) -> Step {
+    step
+    .var(
+        "kept_inbox_id",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("inbox_id")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "kept_message_count",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("message_count")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "kept_messages_root",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("messages_root")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "kept_state_commitment",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("state_commitment")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "new_processed_count",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pc = inbox
+                .get(&Key::from("processed_count"))
+                .unwrap()
+                .unwrap()
+                .as_int()
+                .unwrap();
+            ctx.store("old_processed_count", Box::new(old_pc));
+            Value::from(old_pc + 1)
+        }),
+    )
+    .var(
+        "new_processed_messages_root",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pmr = inbox
+                .get(&Key::from("processed_messages_root"))
+                .unwrap()
+                .unwrap();
+            let old_root = Hash(old_pmr.raw().0);
+            let message = ctx.vars.get("message").as_dictionary().unwrap();
+            let new_root = hash_values(&[
+                Value::from(old_root),
+                Value::from(message.commitment()),
+            ]);
+            ctx.store("new_pmr_hash", Box::new(new_root));
+            Value::from(RawValue::from(new_root))
+        }),
+    )
+    // Compute would_be_result = count + amount (for rejection proof)
+    .var(
+        "would_be_result",
+        Box::new(|ctx| {
+            let count: Box<i64> = ctx.take("rejection_count");
+            let message = ctx.vars.get("message").as_dictionary().unwrap();
+            let amount = message
+                .get(&Key::from("amount"))
+                .unwrap()
+                .unwrap()
+                .as_int()
+                .unwrap();
+            ctx.store("would_be_result_val", Box::new(*count + amount));
+            Value::from(*count + amount)
+        }),
+    )
+    // All Sets
+    .set("inbox_id", Arg::var("kept_inbox_id"))
+    .set("message_count", Arg::var("kept_message_count"))
+    .set("messages_root", Arg::var("kept_messages_root"))
+    .set("state_commitment", Arg::var("kept_state_commitment"))
+    .set("processed_count", Arg::var("new_processed_count"))
+    .set("processed_messages_root", Arg::var("new_processed_messages_root"))
+    // Conditions
+    // 1. processed_count incremented by 1
+    .condition(
+        "SumOf(new_processed_count, inbox.processed_count, 1)",
+        Box::new(|ctx| {
+            let old_pc: Box<i64> = ctx.take("old_processed_count");
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::sum_of(
+                    *old_pc + 1,
+                    (&inbox, "processed_count"),
+                    1,
+                ))
+                .unwrap()
+        }),
+    )
+    // 2. Hash chain link: H(old processed_messages_root, commitment(message)) == new
+    .condition(
+        "HashOf(new_processed_messages_root, inbox.processed_messages_root, message)",
+        Box::new(|ctx| {
+            let new_root: Box<Hash> = ctx.take("new_pmr_hash");
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let message = ctx.vars.get("message").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::hash_of(
+                    RawValue::from(*new_root),
+                    (&inbox, "processed_messages_root"),
+                    message.commitment(),
+                ))
+                .unwrap()
+        }),
+    )
+    // 3. Prove would_be_result = counter.count + message.amount
+    .condition(
+        "SumOf(would_be_result, counter.count, message.amount)",
+        Box::new(|ctx| {
+            let would_be: Box<i64> = ctx.take("would_be_result_val");
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            let message = ctx.vars.get("message").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::sum_of(
+                    *would_be,
+                    (&counter, "count"),
+                    (&message, "amount"),
+                ))
+                .unwrap()
+        }),
+    )
+    // 4. Prove 0 > would_be_result (counter would go negative)
+    .condition(
+        "Gt(0, would_be_result)",
+        Box::new(|ctx| {
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            let message = ctx.vars.get("message").as_dictionary().unwrap();
+            let count = counter.get(&Key::from("count")).unwrap().unwrap().as_int().unwrap();
+            let amount = message.get(&Key::from("amount")).unwrap().unwrap().as_int().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::gt(0, count + amount))
+                .unwrap()
+        }),
+    )
 }
 
 /// SendCounterMessage inbox output: copy inbox_id, state_commitment,
@@ -926,10 +1170,9 @@ fn process_counter_inbox_details(step: Step) -> Step {
     .set("messages_root", Arg::var("kept_messages_root"))
     // processed_count catches up to message_count
     .set("processed_count", Arg::var("kept_message_count"))
-    // processed_messages_root catches up to messages_root
     .set("processed_messages_root", Arg::var("kept_messages_root"))
     .set("state_commitment", Arg::var("new_state_commitment"))
-    // Verify hash chain: H(old processed_messages_root, commitment(message)) == messages_root
+    // Verify hash chain: H(processed_messages_root, commitment(message)) == messages_root
     .condition(
         "HashOf(inbox.messages_root, inbox.processed_messages_root, message)",
         Box::new(|ctx| {

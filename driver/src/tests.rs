@@ -604,3 +604,301 @@ fn test_message_passing_counter() {
     println!("  - state_commitment updated to H(counter_at_1)");
     println!("  - counter: 0 -> 1 via message amount=1");
 }
+
+/// Test MessageRejected: Alice creates a counter at 0, someone sends a
+/// negative amount message (-5), Alice rejects it because it would make
+/// the counter negative. The inbox advances (processed_count, hash chain)
+/// but state_commitment stays the same. Counter is untouched.
+#[test]
+fn test_message_passing_reject() {
+    ensure_extra_pod_deserializers_registered();
+    let catalog = make_catalog();
+
+    // Step 1: Create counter inbox (counter starts at 0)
+    let create_outputs = catalog
+        .execute_action(
+            "CreateCounterInbox".to_string(),
+            dummy_grounding_witness(),
+            vec![],
+        )
+        .unwrap();
+
+    let counter = create_outputs.obj(0);
+    let inbox = create_outputs.obj(1);
+    let inbox_id = inbox.obj.get(&Key::from("inbox_id")).unwrap().unwrap();
+    let state_commitment_before = inbox.obj.get(&Key::from("state_commitment")).unwrap().unwrap();
+
+    let mut state = TestState::default();
+    apply_tx(&mut state, &create_outputs.tx);
+
+    // Step 2: Someone sends a negative amount (-5)
+    let send_witness = GroundingWitness::new(
+        state_root(&state),
+        [(tx_hash(&inbox.tx), state.tx_membership_proof(tx_hash(&inbox.tx)))]
+            .into_iter()
+            .collect(),
+    );
+
+    let send_outputs = catalog
+        .execute_action(
+            "SendNegativeCounterMessage".to_string(),
+            send_witness,
+            vec![inbox.clone()],
+        )
+        .unwrap();
+
+    let bad_message = send_outputs.obj(0);
+    let updated_inbox = send_outputs.obj(1);
+
+    // Verify message has amount=-5
+    assert_eq!(
+        bad_message.obj.get(&Key::from("amount")).unwrap().unwrap().as_int().unwrap(),
+        -5
+    );
+
+    // Verify inbox message_count is 1
+    assert_eq!(
+        updated_inbox.obj.get(&Key::from("message_count")).unwrap().unwrap().as_int().unwrap(),
+        1
+    );
+
+    // processed_count is still 0 (nothing processed yet)
+    assert_eq!(
+        updated_inbox.obj.get(&Key::from("processed_count")).unwrap().unwrap().as_int().unwrap(),
+        0
+    );
+
+    apply_tx(&mut state, &send_outputs.tx);
+
+    // Step 3: Alice rejects the message — counter is consumed and
+    // re-emitted unchanged so the proof can read count and prove
+    // count + amount < 0.
+    let reject_witness = GroundingWitness::new(
+        state_root(&state),
+        [
+            (tx_hash(&bad_message.tx), state.tx_membership_proof(tx_hash(&bad_message.tx))),
+            (tx_hash(&updated_inbox.tx), state.tx_membership_proof(tx_hash(&updated_inbox.tx))),
+            (tx_hash(&counter.tx), state.tx_membership_proof(tx_hash(&counter.tx))),
+        ]
+        .into_iter()
+        .collect(),
+    );
+
+    let reject_outputs = catalog
+        .execute_action(
+            "RejectCounterMessage".to_string(),
+            reject_witness,
+            vec![
+                bad_message.clone(),
+                updated_inbox.clone(),
+                counter.clone(),
+            ],
+        )
+        .unwrap();
+
+    // RejectCounterMessage outputs: [0] = new Counter (same count), [1] = new Inbox
+    let rejected_counter = reject_outputs.obj(0);
+    let rejected_inbox = reject_outputs.obj(1);
+
+    // Verify counter is UNCHANGED (still 0)
+    assert_eq!(
+        rejected_counter.obj.get(&Key::from("count")).unwrap().unwrap().as_int().unwrap(),
+        0,
+        "counter must stay at 0 after rejection"
+    );
+
+    // Verify processed_count advanced to 1 (message was processed as rejected)
+    assert_eq!(
+        rejected_inbox.obj.get(&Key::from("processed_count")).unwrap().unwrap().as_int().unwrap(),
+        1,
+        "processed_count should advance even on rejection"
+    );
+
+    // Verify state_commitment is UNCHANGED (counter wasn't modified)
+    assert_eq!(
+        rejected_inbox.obj.get(&Key::from("state_commitment")).unwrap().unwrap(),
+        state_commitment_before,
+        "state_commitment must not change on rejection"
+    );
+
+    // Verify message_count preserved
+    assert_eq!(
+        rejected_inbox.obj.get(&Key::from("message_count")).unwrap().unwrap().as_int().unwrap(),
+        1,
+        "message_count must be preserved during rejection"
+    );
+
+    // Verify messages_root preserved
+    assert_eq!(
+        rejected_inbox.obj.get(&Key::from("messages_root")).unwrap().unwrap(),
+        updated_inbox.obj.get(&Key::from("messages_root")).unwrap().unwrap(),
+        "messages_root must be preserved during rejection"
+    );
+
+    // Verify processed_messages_root advanced (chain link consumed)
+    let rejected_pmr = rejected_inbox.obj.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+    let expected_pmr = pod2::middleware::hash_values(&[
+        Value::from(pod2::middleware::EMPTY_HASH),
+        Value::from(bad_message.obj.commitment()),
+    ]);
+    assert_eq!(
+        rejected_pmr,
+        Value::from(pod2::middleware::RawValue::from(expected_pmr)),
+        "processed_messages_root should advance by one chain link"
+    );
+
+    // Verify processed_messages_root caught up to messages_root (fully processed)
+    assert_eq!(
+        rejected_pmr,
+        rejected_inbox.obj.get(&Key::from("messages_root")).unwrap().unwrap(),
+        "should be fully caught up after rejecting the only message"
+    );
+
+    // Verify inbox_id preserved
+    assert_eq!(
+        rejected_inbox.obj.get(&Key::from("inbox_id")).unwrap().unwrap(),
+        inbox_id,
+        "inbox_id must be preserved during rejection"
+    );
+
+    println!("Message rejection test passed:");
+    println!("  - SendNegativeCounterMessage: amount=-5, message_count=1");
+    println!("  - RejectCounterMessage: processed_count=1, state_commitment unchanged");
+    println!("  - Hash chain advanced, counter untouched");
+}
+
+/// Verify that Dictionary commitment survives JSON round-trip.
+#[test]
+fn test_dictionary_commitment_json_roundtrip() {
+    use pod2::middleware::containers::Dictionary;
+    use std::collections::HashMap as StdMap;
+
+    let mut map = StdMap::new();
+    map.insert(Key::from("blueprint"), Value::from("InboxMessage"));
+    map.insert(Key::from("public"), Value::from(true));
+    map.insert(Key::from("amount"), Value::from(1i64));
+    map.insert(Key::from("inbox_id"), Value::from(42i64));
+    map.insert(Key::from("key"), Value::from(pod2utils::rand_raw_value()));
+    map.insert(Key::from("work"), Value::from(pod2::middleware::EMPTY_VALUE));
+    let dict = Dictionary::new(map);
+
+    let commitment_before = dict.commitment();
+
+    let json = serde_json::to_string(&dict).unwrap();
+    let dict2: Dictionary = serde_json::from_str(&json).unwrap();
+    let commitment_after = dict2.commitment();
+
+    assert_eq!(
+        commitment_before, commitment_after,
+        "Dictionary commitment must survive JSON round-trip"
+    );
+    println!("Dictionary commitment round-trip: OK ({:#})", commitment_before);
+}
+
+/// Reproduce the GUI's HashOf error: simulate disk round-trip of
+/// objects between SendCounterMessage and ProcessCounterMessages.
+#[test]
+fn test_message_passing_counter_with_roundtrip() {
+    use pod2::middleware::containers::Dictionary;
+
+    ensure_extra_pod_deserializers_registered();
+    let catalog = make_catalog();
+
+    // Step 1: Create
+    let create_outputs = catalog
+        .execute_action("CreateCounterInbox".to_string(), dummy_grounding_witness(), vec![])
+        .unwrap();
+    let counter = create_outputs.obj(0);
+    let inbox = create_outputs.obj(1);
+
+    let mut state = TestState::default();
+    apply_tx(&mut state, &create_outputs.tx);
+
+    // Step 2: Send
+    let bob_witness = GroundingWitness::new(
+        state_root(&state),
+        [(tx_hash(&inbox.tx), state.tx_membership_proof(tx_hash(&inbox.tx)))]
+            .into_iter()
+            .collect(),
+    );
+    let send_outputs = catalog
+        .execute_action("SendCounterMessage".to_string(), bob_witness, vec![inbox.clone()])
+        .unwrap();
+    let message = send_outputs.obj(0);
+    let updated_inbox = send_outputs.obj(1);
+
+    // Simulate disk round-trip: serialize to JSON and back (like .dobj files)
+    let msg_json = serde_json::to_string(&message.obj).unwrap();
+    let msg_obj_roundtrip: Dictionary = serde_json::from_str(&msg_json).unwrap();
+    println!(
+        "message commitment before: {:#}, after: {:#}, equal: {}",
+        message.obj.commitment(),
+        msg_obj_roundtrip.commitment(),
+        message.obj.commitment() == msg_obj_roundtrip.commitment()
+    );
+
+    let inbox_json = serde_json::to_string(&updated_inbox.obj).unwrap();
+    let inbox_obj_roundtrip: Dictionary = serde_json::from_str(&inbox_json).unwrap();
+
+    // Verify the hash chain relationship holds after round-trip
+    let messages_root = inbox_obj_roundtrip.get(&Key::from("messages_root")).unwrap().unwrap();
+    let processed_messages_root = inbox_obj_roundtrip.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+    let expected = pod2::middleware::hash_values(&[
+        processed_messages_root.clone(),
+        Value::from(msg_obj_roundtrip.commitment()),
+    ]);
+    println!(
+        "messages_root: {:#}, H(pmr, msg_commit): {:#}, equal: {}",
+        messages_root.raw(),
+        pod2::middleware::RawValue::from(expected),
+        messages_root == Value::from(pod2::middleware::RawValue::from(expected))
+    );
+
+    apply_tx(&mut state, &send_outputs.tx);
+
+    // Step 3: Process using round-tripped objects
+    let message_rt = SpendableObject {
+        pod: message.pod.clone(),
+        obj: msg_obj_roundtrip,
+        tx: message.tx.clone(),
+    };
+    let inbox_rt = SpendableObject {
+        pod: updated_inbox.pod.clone(),
+        obj: inbox_obj_roundtrip,
+        tx: updated_inbox.tx.clone(),
+    };
+    let counter_json = serde_json::to_string(&counter.obj).unwrap();
+    let counter_obj_roundtrip: Dictionary = serde_json::from_str(&counter_json).unwrap();
+    let counter_rt = SpendableObject {
+        pod: counter.pod.clone(),
+        obj: counter_obj_roundtrip,
+        tx: counter.tx.clone(),
+    };
+
+    let alice_witness = GroundingWitness::new(
+        state_root(&state),
+        [
+            (tx_hash(&message.tx), state.tx_membership_proof(tx_hash(&message.tx))),
+            (tx_hash(&updated_inbox.tx), state.tx_membership_proof(tx_hash(&updated_inbox.tx))),
+            (tx_hash(&counter.tx), state.tx_membership_proof(tx_hash(&counter.tx))),
+        ]
+        .into_iter()
+        .collect(),
+    );
+
+    let process_outputs = catalog
+        .execute_action(
+            "ProcessCounterMessages".to_string(),
+            alice_witness,
+            vec![message_rt, inbox_rt, counter_rt],
+        )
+        .unwrap();
+
+    let final_counter = process_outputs.obj(0);
+    assert_eq!(
+        final_counter.obj.get(&Key::from("count")).unwrap().unwrap().as_int().unwrap(),
+        1,
+        "counter should be 1 after round-trip processing"
+    );
+    println!("Round-trip test passed: counter = 1");
+}
