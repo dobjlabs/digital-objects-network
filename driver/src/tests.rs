@@ -450,8 +450,9 @@ fn test_message_passing_counter() {
         )
         .unwrap();
 
-    // SendCounterMessage outputs: [0] = new Inbox (public, with last_amount embedded)
+    // SendCounterMessage outputs: [0] = new Inbox, [1] = InboxMessage
     let updated_inbox = send_outputs.obj(0);
+    let message = send_outputs.obj(1);
 
     // Verify inbox message_count is now 1
     let msg_count = updated_inbox
@@ -460,6 +461,14 @@ fn test_message_passing_counter() {
         .unwrap()
         .unwrap();
     assert_eq!(msg_count.as_int().unwrap(), 1);
+
+    // Verify message has amount=1
+    let msg_amount = message
+        .obj
+        .get(&Key::from("amount"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(msg_amount.as_int().unwrap(), 1);
 
     // Verify state_commitment was NOT changed by the send
     let send_state_commitment = updated_inbox
@@ -473,15 +482,19 @@ fn test_message_passing_counter() {
     apply_tx(&mut state, &send_outputs.tx);
 
     // ---------------------------------------------------------------
-    // Step 3: Alice processes the message (applies +1 to counter)
+    // Step 3: Alice processes the message
     // ---------------------------------------------------------------
-    // Alice reads the inbox off-chain to see last_amount=1, then
-    // processes by consuming the counter and producing a new one.
+    // Alice consumes the message, inbox, and counter. Produces a new
+    // counter (count updated) and a new inbox (state_commitment updated).
     let alice_witness = GroundingWitness::new(
         state_root(&state),
-        [(tx_hash(&counter.tx), state.tx_membership_proof(tx_hash(&counter.tx)))]
-            .into_iter()
-            .collect(),
+        [
+            (tx_hash(&message.tx), state.tx_membership_proof(tx_hash(&message.tx))),
+            (tx_hash(&updated_inbox.tx), state.tx_membership_proof(tx_hash(&updated_inbox.tx))),
+            (tx_hash(&counter.tx), state.tx_membership_proof(tx_hash(&counter.tx))),
+        ]
+        .into_iter()
+        .collect(),
     );
 
     let process_outputs = catalog
@@ -489,14 +502,17 @@ fn test_message_passing_counter() {
             "ProcessCounterMessages".to_string(),
             alice_witness,
             vec![
-                // Input: [0] counter (consumed)
+                // Inputs in step order: [0] message, [1] inbox, [2] counter
+                message.clone(),
+                updated_inbox.clone(),
                 counter.clone(),
             ],
         )
         .unwrap();
 
-    // ProcessCounterMessages outputs: [0] = new Counter
+    // ProcessCounterMessages outputs: [0] = new Counter, [1] = new Inbox
     let final_counter = process_outputs.obj(0);
+    let final_inbox = process_outputs.obj(1);
 
     // Verify counter is now 1
     let final_count = final_counter
@@ -506,8 +522,28 @@ fn test_message_passing_counter() {
         .unwrap();
     assert_eq!(final_count.as_int().unwrap(), 1, "counter should be 1 after processing increment");
 
+    // Verify new inbox state_commitment matches the new counter
+    let final_state_commitment = final_inbox
+        .obj
+        .get(&Key::from("state_commitment"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        final_state_commitment,
+        Value::from(pod2::middleware::RawValue::from(final_counter.obj.commitment())),
+        "state_commitment should match the updated counter"
+    );
+
+    // Verify message_count preserved through processing
+    let final_msg_count = final_inbox
+        .obj
+        .get(&Key::from("message_count"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(final_msg_count.as_int().unwrap(), 1);
+
     println!("Message passing test passed:");
     println!("  - CreateCounterInbox: Inbox (public) + Counter (private, count=0)");
-    println!("  - SendCounterMessage: Inbox updated (message_count=1, last_amount=1)");
-    println!("  - ProcessCounterMessages: Counter updated (count=0+1=1)");
+    println!("  - SendCounterMessage: Inbox updated (message_count=1) + InboxMessage (amount=1)");
+    println!("  - ProcessCounterMessages: Counter (count=1) + Inbox (state_commitment updated)");
 }

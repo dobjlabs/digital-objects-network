@@ -16,9 +16,8 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-# Branch `next/2026-03-30.a`: Includes:
-# - bump params wildcards to 9
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "364088d316925f59693ed172ead383e4996de410", default-features = false, features = [
+# Local pod2 checkout (bumped max_statement_args for message passing)
+pod2 = { path = "../../0xPARC/pod2", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
