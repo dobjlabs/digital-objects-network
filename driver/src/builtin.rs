@@ -914,24 +914,7 @@ fn reject_counter_inbox_details(step: Step) -> Step {
                 .unwrap()
         }),
     )
-    // 2. Hash chain link: H(old processed_messages_root, commitment(message)) == new
-    .condition(
-        "HashOf(new_processed_messages_root, inbox.processed_messages_root, message)",
-        Box::new(|ctx| {
-            let new_root: Box<Hash> = ctx.take("new_pmr_hash");
-            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
-            let message = ctx.vars.get("message").as_dictionary().unwrap();
-            ctx.bld
-                .builder
-                .priv_op(Operation::hash_of(
-                    RawValue::from(*new_root),
-                    (&inbox, "processed_messages_root"),
-                    message.commitment(),
-                ))
-                .unwrap()
-        }),
-    )
-    // 3. Prove would_be_result = counter.count + message.amount
+    // 2. Prove would_be_result = counter.count + message.amount
     .condition(
         "SumOf(would_be_result, counter.count, message.amount)",
         Box::new(|ctx| {
@@ -948,7 +931,7 @@ fn reject_counter_inbox_details(step: Step) -> Step {
                 .unwrap()
         }),
     )
-    // 4. Prove 0 > would_be_result (counter would go negative)
+    // 3. Prove 0 > would_be_result (counter would go negative)
     .condition(
         "Gt(0, would_be_result)",
         Box::new(|ctx| {
@@ -1132,9 +1115,9 @@ fn process_counter_update_details(step: Step) -> Step {
     .update("count", Arg::var("new_count"))
 }
 
-/// ProcessCounterMessages inbox output: advance processed_count to
-/// message_count, set processed_messages_root = messages_root (fully
-/// caught up), verify the hash chain link, update state_commitment.
+/// ProcessCounterMessages inbox output: advance processed_count by 1,
+/// advance processed_messages_root by one hash chain link, preserve
+/// queue fields, update state_commitment.
 fn process_counter_inbox_details(step: Step) -> Step {
     step
     .var(
@@ -1165,25 +1148,59 @@ fn process_counter_inbox_details(step: Step) -> Step {
             Value::from(RawValue::from(new_counter.commitment()))
         }),
     )
+    // Advance processed_count by 1 (process one message at a time)
+    .var(
+        "new_processed_count",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pc = inbox
+                .get(&Key::from("processed_count"))
+                .unwrap()
+                .unwrap()
+                .as_int()
+                .unwrap();
+            ctx.store("old_processed_count_val", Box::new(old_pc));
+            Value::from(old_pc + 1)
+        }),
+    )
+    // Advance processed_messages_root by one chain link:
+    // new_pmr = H(old_pmr, commitment(message))
+    .var(
+        "new_processed_messages_root",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pmr = inbox
+                .get(&Key::from("processed_messages_root"))
+                .unwrap()
+                .unwrap();
+            let old_root = Hash(old_pmr.raw().0);
+            let message = ctx.vars.get("message").as_dictionary().unwrap();
+            let new_root = hash_values(&[
+                Value::from(old_root),
+                Value::from(message.commitment()),
+            ]);
+            ctx.store("process_new_pmr_hash", Box::new(new_root));
+            Value::from(RawValue::from(new_root))
+        }),
+    )
     .set("inbox_id", Arg::var("kept_inbox_id"))
     .set("message_count", Arg::var("kept_message_count"))
     .set("messages_root", Arg::var("kept_messages_root"))
-    // processed_count catches up to message_count
-    .set("processed_count", Arg::var("kept_message_count"))
-    .set("processed_messages_root", Arg::var("kept_messages_root"))
+    .set("processed_count", Arg::var("new_processed_count"))
+    .set("processed_messages_root", Arg::var("new_processed_messages_root"))
     .set("state_commitment", Arg::var("new_state_commitment"))
-    // Verify hash chain: H(processed_messages_root, commitment(message)) == messages_root
+    // Prove processed_count incremented by 1
     .condition(
-        "HashOf(inbox.messages_root, inbox.processed_messages_root, message)",
+        "SumOf(new_processed_count, inbox.processed_count, 1)",
         Box::new(|ctx| {
+            let old_pc: Box<i64> = ctx.take("old_processed_count_val");
             let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
-            let message = ctx.vars.get("message").as_dictionary().unwrap();
             ctx.bld
                 .builder
-                .priv_op(Operation::hash_of(
-                    (&inbox, "messages_root"),
-                    (&inbox, "processed_messages_root"),
-                    message.commitment(),
+                .priv_op(Operation::sum_of(
+                    *old_pc + 1,
+                    (&inbox, "processed_count"),
+                    1,
                 ))
                 .unwrap()
         }),
