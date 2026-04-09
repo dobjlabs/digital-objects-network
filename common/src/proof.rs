@@ -178,11 +178,11 @@ impl BlobParser for ProofParser {
         let statement = Statement::Custom(
             self.txn_finalized_pred.clone(),
             vec![
-                Value::from(payload.tx_final),
-                Value::from(nullifiers_set),
-                Value::from(payload.state_root_hash),
-                Value::from(public_outputs_set),
-                Value::from(public_inputs_set),
+                pod2::middleware::ValueRef::Literal(Value::from(payload.tx_final)),
+                pod2::middleware::ValueRef::Literal(Value::from(nullifiers_set)),
+                pod2::middleware::ValueRef::Literal(Value::from(payload.state_root_hash)),
+                pod2::middleware::ValueRef::Literal(Value::from(public_outputs_set)),
+                pod2::middleware::ValueRef::Literal(Value::from(public_inputs_set)),
             ],
         );
 

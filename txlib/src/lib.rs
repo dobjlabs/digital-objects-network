@@ -242,7 +242,7 @@ impl TxBuilder {
             .iter()
             .find_map(|module| module.predicate_ref_by_name("Tx"))
             .unwrap();
-        let st_tx = Statement::Custom(tx_pred, vec![Value::from(tx.dict())]);
+        let st_tx = Statement::Custom(tx_pred, vec![pod2::middleware::ValueRef::Literal(Value::from(tx.dict()))]);
         Self { st_tx, tx }
     }
 

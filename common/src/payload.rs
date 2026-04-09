@@ -305,9 +305,9 @@ mod tests {
         let st = Statement::Custom(
             pred,
             vec![
-                Value::from(payload.tx_final),
-                nullifiers_set,
-                Value::from(payload.state_root_hash),
+                pod2::middleware::ValueRef::Literal(Value::from(payload.tx_final)),
+                pod2::middleware::ValueRef::Literal(nullifiers_set),
+                pod2::middleware::ValueRef::Literal(Value::from(payload.state_root_hash)),
             ],
         );
         println!("st: {st:?}");

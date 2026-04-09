@@ -149,6 +149,14 @@ const ACTION_META: &[ActionMeta] = &[
         hidden: false,
     },
     ActionMeta {
+        name: "ProcessCounterMessages2",
+        emoji: "⚙️",
+        description: "Process 2 pending messages and update the counter (batch).",
+        cpu_cost: "10-20s",
+        reads_block: false,
+        hidden: false,
+    },
+    ActionMeta {
         name: "RejectCounterMessage",
         emoji: "🚫",
         description: "Reject a message that would make the counter negative.",
@@ -733,6 +741,27 @@ pub(crate) fn actions() -> Vec<api::Action> {
                     .snippet(|step| process_counter_inbox_details(step)),
             ],
         },
+        // ProcessCounterMessages2: batch process exactly 2 messages.
+        // Messages must be provided in FIFO order (msg1 first, msg2 second).
+        // The chain is verified: H(H(old_pmr, c1), c2) == messages_root.
+        api::Action {
+            name: "ProcessCounterMessages2",
+            steps: vec![
+                Step::input("message1", "InboxMessage").is_public(true),
+                Step::input("message2", "InboxMessage").is_public(true),
+                Step::input("inbox", "Inbox").is_public(true),
+                Step::input("counter", "Counter"),
+                Step::output("new_counter", "Counter")
+                    .set("blueprint", Arg::literal("Counter"))
+                    .set("public", Arg::literal(false))
+                    .set("count", Arg::literal(0i64))
+                    .snippet(|step| process_counter_update2_details(step)),
+                Step::output("new_inbox", "Inbox")
+                    .set("blueprint", Arg::literal("Inbox"))
+                    .set("public", Arg::literal(true))
+                    .snippet(|step| process_counter_inbox2_details(step)),
+            ],
+        },
         // SendNegativeCounterMessage: same as SendCounterMessage but
         // with amount=-5. Used to test rejection.
         api::Action {
@@ -914,7 +943,27 @@ fn reject_counter_inbox_details(step: Step) -> Step {
                 .unwrap()
         }),
     )
-    // 2. Prove would_be_result = counter.count + message.amount
+    // 2. Prove fully caught up: new_pmr == messages_root
+    .condition(
+        "Equal(new_processed_messages_root, kept_messages_root)",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pmr_val = inbox.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+            let old_root = Hash(old_pmr_val.raw().0);
+            let message = ctx.vars.get("message").as_dictionary().unwrap();
+            let new_pmr = hash_values(&[Value::from(old_root), Value::from(message.commitment())]);
+            let messages_root_val = inbox.get(&Key::from("messages_root")).unwrap().unwrap();
+            let mr = Hash(messages_root_val.raw().0);
+            ctx.bld
+                .builder
+                .priv_op(Operation::eq(
+                    RawValue::from(new_pmr),
+                    RawValue::from(mr),
+                ))
+                .unwrap()
+        }),
+    )
+    // 3. Prove would_be_result = counter.count + message.amount
     .condition(
         "SumOf(would_be_result, counter.count, message.amount)",
         Box::new(|ctx| {
@@ -931,7 +980,7 @@ fn reject_counter_inbox_details(step: Step) -> Step {
                 .unwrap()
         }),
     )
-    // 3. Prove 0 > would_be_result (counter would go negative)
+    // 4. Prove 0 > would_be_result (counter would go negative)
     .condition(
         "Gt(0, would_be_result)",
         Box::new(|ctx| {
@@ -1201,6 +1250,257 @@ fn process_counter_inbox_details(step: Step) -> Step {
                     *old_pc + 1,
                     (&inbox, "processed_count"),
                     1,
+                ))
+                .unwrap()
+        }),
+    )
+    // Prove fully caught up: new_pmr == messages_root.
+    // This enforces FIFO — only works when processing the LAST
+    // unprocessed message. If there are multiple pending messages,
+    // use ProcessCounterMessages2 (batch variant).
+    .condition(
+        "Equal(new_processed_messages_root, kept_messages_root)",
+        Box::new(|ctx| {
+            // Compare the computed new_pmr against messages_root using
+            // concrete values (not dict field refs, since the output
+            // dict may not be finalized yet)
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pmr_val = inbox.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+            let old_root = Hash(old_pmr_val.raw().0);
+            let message = ctx.vars.get("message").as_dictionary().unwrap();
+            let new_pmr = hash_values(&[Value::from(old_root), Value::from(message.commitment())]);
+            let messages_root_val = inbox.get(&Key::from("messages_root")).unwrap().unwrap();
+            let mr = Hash(messages_root_val.raw().0);
+            ctx.bld
+                .builder
+                .priv_op(Operation::eq(
+                    RawValue::from(new_pmr),
+                    RawValue::from(mr),
+                ))
+                .unwrap()
+        }),
+    )
+}
+
+/// ProcessCounterMessages2 counter output: apply 2 messages sequentially.
+/// new_count = old_count + amount1 + amount2.
+fn process_counter_update2_details(step: Step) -> Step {
+    step.var(
+        "amount1",
+        Box::new(|ctx| {
+            let m = ctx.vars.get("message1").as_dictionary().unwrap();
+            Value::from(m.get(&Key::from("amount")).unwrap().unwrap().as_int().unwrap())
+        }),
+    )
+    .var(
+        "amount2",
+        Box::new(|ctx| {
+            let m = ctx.vars.get("message2").as_dictionary().unwrap();
+            Value::from(m.get(&Key::from("amount")).unwrap().unwrap().as_int().unwrap())
+        }),
+    )
+    .var(
+        "counter_inbox_id_2",
+        Box::new(|ctx| {
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            counter.get(&Key::from("inbox_id")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "mid_count",
+        Box::new(|ctx| {
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            let old_count = counter.get(&Key::from("count")).unwrap().unwrap().as_int().unwrap();
+            let a1 = ctx.vars.get("amount1").as_int().unwrap();
+            ctx.store("batch_old_count", Box::new(old_count));
+            ctx.store("batch_a1", Box::new(a1));
+            Value::from(old_count + a1)
+        }),
+    )
+    .var(
+        "new_count_2",
+        Box::new(|ctx| {
+            let mid = ctx.vars.get("mid_count").as_int().unwrap();
+            let a2 = ctx.vars.get("amount2").as_int().unwrap();
+            ctx.store("batch_a2", Box::new(a2));
+            Value::from(mid + a2)
+        }),
+    )
+    .set("inbox_id", Arg::var("counter_inbox_id_2"))
+    // Prove: mid_count = old_count + amount1
+    .condition(
+        "SumOf(mid_count, counter.count, amount1)",
+        Box::new(|ctx| {
+            let old_count: Box<i64> = ctx.take("batch_old_count");
+            let a1: Box<i64> = ctx.take("batch_a1");
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::sum_of(
+                    *old_count + *a1,
+                    (&counter, "count"),
+                    *a1,
+                ))
+                .unwrap()
+        }),
+    )
+    // Prove: new_count = mid_count + amount2
+    .condition(
+        "SumOf(new_count_2, mid_count, amount2)",
+        Box::new(|ctx| {
+            let a2: Box<i64> = ctx.take("batch_a2");
+            let mid = ctx.vars.get("mid_count").as_int().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::sum_of(
+                    mid + *a2,
+                    mid,
+                    *a2,
+                ))
+                .unwrap()
+        }),
+    )
+    .update("count", Arg::var("new_count_2"))
+}
+
+/// ProcessCounterMessages2 inbox output: advance processed_count by 2,
+/// chain through both messages, verify endpoint == messages_root.
+fn process_counter_inbox2_details(step: Step) -> Step {
+    step
+    .var(
+        "kept_inbox_id_2",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("inbox_id")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "kept_message_count_2",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("message_count")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "kept_messages_root_2",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("messages_root")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "new_state_commitment_2",
+        Box::new(|ctx| {
+            let new_counter = ctx.vars.get("new_counter").as_dictionary().unwrap();
+            Value::from(RawValue::from(new_counter.commitment()))
+        }),
+    )
+    // processed_count += 2
+    .var(
+        "new_processed_count_2",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pc = inbox.get(&Key::from("processed_count")).unwrap().unwrap().as_int().unwrap();
+            ctx.store("batch_old_pc", Box::new(old_pc));
+            Value::from(old_pc + 2)
+        }),
+    )
+    // Chain: pmr0 -> H(pmr0, c1) = mid_root -> H(mid_root, c2) = new_pmr
+    .var(
+        "mid_root",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pmr = inbox.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+            let old_root = Hash(old_pmr.raw().0);
+            let m1 = ctx.vars.get("message1").as_dictionary().unwrap();
+            let mid_root = hash_values(&[Value::from(old_root), Value::from(m1.commitment())]);
+            ctx.store("batch_mid_root", Box::new(mid_root));
+            Value::from(RawValue::from(mid_root))
+        }),
+    )
+    .var(
+        "new_pmr_2",
+        Box::new(|ctx| {
+            let mid_root: Box<Hash> = ctx.take("batch_mid_root");
+            let m2 = ctx.vars.get("message2").as_dictionary().unwrap();
+            let new_root = hash_values(&[Value::from(*mid_root), Value::from(m2.commitment())]);
+            ctx.store("batch_new_pmr", Box::new(new_root));
+            Value::from(RawValue::from(new_root))
+        }),
+    )
+    .set("inbox_id", Arg::var("kept_inbox_id_2"))
+    .set("message_count", Arg::var("kept_message_count_2"))
+    .set("messages_root", Arg::var("kept_messages_root_2"))
+    .set("processed_count", Arg::var("new_processed_count_2"))
+    .set("processed_messages_root", Arg::var("new_pmr_2"))
+    .set("state_commitment", Arg::var("new_state_commitment_2"))
+    // Prove processed_count += 2: SumOf(new_pc, old_pc, 2)
+    .condition(
+        "SumOf(new_processed_count_2, inbox.processed_count, 2)",
+        Box::new(|ctx| {
+            let old_pc: Box<i64> = ctx.take("batch_old_pc");
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::sum_of(*old_pc + 2, (&inbox, "processed_count"), 2))
+                .unwrap()
+        }),
+    )
+    // Prove chain link 1: mid_root = H(old_pmr, commitment(msg1))
+    .condition(
+        "HashOf(mid_root, inbox.processed_messages_root, message1)",
+        Box::new(|ctx| {
+            let mid_root: Box<Hash> = ctx.take("batch_mid_root");
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let m1 = ctx.vars.get("message1").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::hash_of(
+                    RawValue::from(*mid_root),
+                    (&inbox, "processed_messages_root"),
+                    m1.commitment(),
+                ))
+                .unwrap()
+        }),
+    )
+    // Prove chain link 2: new_pmr = H(mid_root, commitment(msg2))
+    .condition(
+        "HashOf(new_pmr_2, mid_root, message2)",
+        Box::new(|ctx| {
+            let new_root: Box<Hash> = ctx.take("batch_new_pmr");
+            let m1 = ctx.vars.get("message1").as_dictionary().unwrap();
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pmr = inbox.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+            let mid = hash_values(&[old_pmr, Value::from(m1.commitment())]);
+            let m2 = ctx.vars.get("message2").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::hash_of(
+                    RawValue::from(*new_root),
+                    RawValue::from(mid),
+                    m2.commitment(),
+                ))
+                .unwrap()
+        }),
+    )
+    // Prove fully caught up: new_pmr == messages_root
+    .condition(
+        "Equal(new_pmr_2, kept_messages_root_2)",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pmr = inbox.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+            let old_root = Hash(old_pmr.raw().0);
+            let m1 = ctx.vars.get("message1").as_dictionary().unwrap();
+            let m2 = ctx.vars.get("message2").as_dictionary().unwrap();
+            let mid = hash_values(&[Value::from(old_root), Value::from(m1.commitment())]);
+            let new_pmr = hash_values(&[Value::from(mid), Value::from(m2.commitment())]);
+            let mr_val = inbox.get(&Key::from("messages_root")).unwrap().unwrap();
+            let mr = Hash(mr_val.raw().0);
+            ctx.bld
+                .builder
+                .priv_op(Operation::eq(
+                    RawValue::from(new_pmr),
+                    RawValue::from(mr),
                 ))
                 .unwrap()
         }),
