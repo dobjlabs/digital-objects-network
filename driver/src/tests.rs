@@ -8,6 +8,8 @@ use pod2::middleware::Hash;
 use tempfile::tempdir;
 use txlib::{GroundingWitness, StateRoot};
 
+use pod2::middleware::{Key, Value};
+
 use crate::builtin::{actions, dependencies};
 use crate::catalog::ActionCatalog;
 use crate::clients::{
@@ -370,4 +372,142 @@ fn test_execute_keeps_files_after_relayer_accepts() {
         .find(|e| e.file_name != "log_1.dobj")
         .unwrap();
     assert_eq!(output.record.status, ObjectStatus::Unknown);
+}
+
+/// End-to-end test for message passing: Alice creates a counter with an inbox,
+/// Bob sends an "increment" message, Alice processes it and the counter goes
+/// from 0 to 1.
+#[test]
+fn test_message_passing_counter() {
+    ensure_extra_pod_deserializers_registered();
+    let catalog = make_catalog();
+
+    // ---------------------------------------------------------------
+    // Step 1: Alice creates the counter inbox
+    // ---------------------------------------------------------------
+    let create_outputs = catalog
+        .execute_action(
+            "CreateCounterInbox".to_string(),
+            dummy_grounding_witness(),
+            vec![],
+        )
+        .unwrap();
+
+    // CreateCounterInbox outputs: [0] = Counter (private), [1] = Inbox (public)
+    let counter = create_outputs.obj(0);
+    let inbox = create_outputs.obj(1);
+
+    // Verify counter starts at 0
+    let count_val = counter
+        .obj
+        .get(&Key::from("count"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(count_val.as_int().unwrap(), 0);
+
+    // Verify inbox starts at message_count = 0
+    let msg_count = inbox
+        .obj
+        .get(&Key::from("message_count"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(msg_count.as_int().unwrap(), 0);
+
+    // Verify state_commitment matches the counter's commitment
+    let state_commitment = inbox
+        .obj
+        .get(&Key::from("state_commitment"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        state_commitment,
+        Value::from(pod2::middleware::RawValue::from(counter.obj.commitment()))
+    );
+
+    // Apply the create tx to canonical state so objects are grounded
+    let mut state = TestState::default();
+    apply_tx(&mut state, &create_outputs.tx);
+
+    // ---------------------------------------------------------------
+    // Step 2: Bob sends an "increment" message
+    // ---------------------------------------------------------------
+    // Bob needs a grounding witness that includes the inbox's source tx
+    let bob_witness = GroundingWitness::new(
+        state_root(&state),
+        [(tx_hash(&inbox.tx), state.tx_membership_proof(tx_hash(&inbox.tx)))]
+            .into_iter()
+            .collect(),
+    );
+
+    let send_outputs = catalog
+        .execute_action(
+            "SendCounterMessage".to_string(),
+            bob_witness,
+            vec![
+                // The inbox as a spendable input (public, consumed)
+                inbox.clone(),
+            ],
+        )
+        .unwrap();
+
+    // SendCounterMessage outputs: [0] = new Inbox (public, with last_amount embedded)
+    let updated_inbox = send_outputs.obj(0);
+
+    // Verify inbox message_count is now 1
+    let msg_count = updated_inbox
+        .obj
+        .get(&Key::from("message_count"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(msg_count.as_int().unwrap(), 1);
+
+    // Verify state_commitment was NOT changed by the send
+    let send_state_commitment = updated_inbox
+        .obj
+        .get(&Key::from("state_commitment"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(send_state_commitment, state_commitment, "sender must not touch state_commitment");
+
+    // Apply the send tx to canonical state
+    apply_tx(&mut state, &send_outputs.tx);
+
+    // ---------------------------------------------------------------
+    // Step 3: Alice processes the message (applies +1 to counter)
+    // ---------------------------------------------------------------
+    // Alice reads the inbox off-chain to see last_amount=1, then
+    // processes by consuming the counter and producing a new one.
+    let alice_witness = GroundingWitness::new(
+        state_root(&state),
+        [(tx_hash(&counter.tx), state.tx_membership_proof(tx_hash(&counter.tx)))]
+            .into_iter()
+            .collect(),
+    );
+
+    let process_outputs = catalog
+        .execute_action(
+            "ProcessCounterMessages".to_string(),
+            alice_witness,
+            vec![
+                // Input: [0] counter (consumed)
+                counter.clone(),
+            ],
+        )
+        .unwrap();
+
+    // ProcessCounterMessages outputs: [0] = new Counter
+    let final_counter = process_outputs.obj(0);
+
+    // Verify counter is now 1
+    let final_count = final_counter
+        .obj
+        .get(&Key::from("count"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(final_count.as_int().unwrap(), 1, "counter should be 1 after processing increment");
+
+    println!("Message passing test passed:");
+    println!("  - CreateCounterInbox: Inbox (public) + Counter (private, count=0)");
+    println!("  - SendCounterMessage: Inbox updated (message_count=1, last_amount=1)");
+    println!("  - ProcessCounterMessages: Counter updated (count=0+1=1)");
 }

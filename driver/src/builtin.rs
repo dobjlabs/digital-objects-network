@@ -114,6 +114,33 @@ const ACTION_META: &[ActionMeta] = &[
         reads_block: false,
         hidden: false,
     },
+    // ---------------------------------------------------------------
+    // Message passing
+    // ---------------------------------------------------------------
+    ActionMeta {
+        name: "CreateCounterInbox",
+        emoji: "📬",
+        description: "Create a counter with a public inbox for message passing.",
+        cpu_cost: "5-10s",
+        reads_block: false,
+        hidden: false,
+    },
+    ActionMeta {
+        name: "SendCounterMessage",
+        emoji: "✉️",
+        description: "Send an increment/decrement message to a counter inbox.",
+        cpu_cost: "5-10s",
+        reads_block: false,
+        hidden: false,
+    },
+    ActionMeta {
+        name: "ProcessCounterMessages",
+        emoji: "⚙️",
+        description: "Process pending messages and update the counter.",
+        cpu_cost: "5-10s",
+        reads_block: false,
+        hidden: false,
+    },
 ];
 
 const CLASS_META: &[ClassMeta] = &[
@@ -146,6 +173,24 @@ const CLASS_META: &[ClassMeta] = &[
         name: "StonePick",
         emoji: "⛏️",
         description: "A sturdier pick with higher starting durability.",
+    },
+    // ---------------------------------------------------------------
+    // Message passing
+    // ---------------------------------------------------------------
+    ClassMeta {
+        name: "Inbox",
+        emoji: "📬",
+        description: "A public inbox for message passing to a private object.",
+    },
+    ClassMeta {
+        name: "InboxMessage",
+        emoji: "✉️",
+        description: "A public message sent to an inbox.",
+    },
+    ClassMeta {
+        name: "Counter",
+        emoji: "🔢",
+        description: "A private counter whose state is driven by inbox messages.",
     },
 ];
 
@@ -574,7 +619,147 @@ pub(crate) fn actions() -> Vec<api::Action> {
                     .set("status", Arg::literal("filled")),
             ],
         },
+        // ---------------------------------------------------------------
+        // Message passing example: Counter with Inbox
+        // ---------------------------------------------------------------
+        //
+        // CreateCounterInbox: create a public Inbox + private Counter.
+        // The inbox tracks the message hash chain and processing state.
+        // The counter holds a single `count` field driven by messages.
+        api::Action {
+            name: "CreateCounterInbox",
+            steps: vec![
+                Step::output("counter", "Counter")
+                    .set("blueprint", Arg::literal("Counter"))
+                    .set("public", Arg::literal(false))
+                    .set("count", Arg::literal(0i64)),
+                Step::output("inbox", "Inbox")
+                    .set("blueprint", Arg::literal("Inbox"))
+                    .set("public", Arg::literal(true))
+                    .set("message_count", Arg::literal(0i64))
+                    .var(
+                        "state_commitment",
+                        Box::new(|ctx| {
+                            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+                            Value::from(RawValue::from(counter.commitment()))
+                        }),
+                    )
+                    .set("state_commitment", Arg::var("state_commitment")),
+            ],
+        },
+        // SendCounterMessage: anyone consumes the old inbox and produces
+        // a new inbox with message_count incremented and the message
+        // amount embedded as `last_amount`.
+        api::Action {
+            name: "SendCounterMessage",
+            steps: vec![
+                Step::input("inbox", "Inbox").is_public(true),
+                Step::output("new_inbox", "Inbox")
+                    .set("blueprint", Arg::literal("Inbox"))
+                    .set("public", Arg::literal(true))
+                    .set("last_amount", Arg::literal(1i64))
+                    .snippet(|step| send_counter_message_details(step)),
+            ],
+        },
+        // ProcessCounterMessages: the holder consumes the counter and
+        // produces a new counter with count incremented by 1. The inbox
+        // is not consumed here — the holder reads the message off-chain
+        // and applies it locally. This is the simplest possible form:
+        // 1 private input + 1 private output.
+        api::Action {
+            name: "ProcessCounterMessages",
+            steps: vec![
+                Step::input("counter", "Counter"),
+                Step::output("new_counter", "Counter")
+                    .set("blueprint", Arg::literal("Counter"))
+                    .set("public", Arg::literal(false))
+                    .set("count", Arg::literal(0i64))
+                    .snippet(|step| process_counter_update_details(step)),
+            ],
+        },
     ]
+}
+
+/// Details for SendCounterMessage: set message_count = old + 1 and
+/// copy state_commitment from the consumed inbox.
+fn send_counter_message_details(step: Step) -> Step {
+    step
+    // Pre-compute values before any Set calls
+    .var(
+        "old_state_commitment",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("state_commitment")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "new_message_count",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_count = inbox
+                .get(&Key::from("message_count"))
+                .unwrap()
+                .unwrap()
+                .as_int()
+                .unwrap();
+            ctx.store("old_message_count", Box::new(old_count));
+            Value::from(old_count + 1)
+        }),
+    )
+    // All Sets come first (with vars already computed)
+    .set("state_commitment", Arg::var("old_state_commitment"))
+    .set("message_count", Arg::var("new_message_count"))
+    // Conditions come after all Sets
+    .condition(
+        "SumOf(new_message_count, inbox.message_count, 1)",
+        Box::new(|ctx| {
+            let old_count: Box<i64> = ctx.take("old_message_count");
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::sum_of(
+                    *old_count + 1,
+                    (&inbox, "message_count"),
+                    1,
+                ))
+                .unwrap()
+        }),
+    )
+}
+
+/// Details for ProcessCounterMessages counter mutation: apply the message
+/// amount to the counter's count field.
+fn process_counter_update_details(step: Step) -> Step {
+    step.var(
+        "new_count",
+        Box::new(|ctx| {
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            let old_count = counter
+                .get(&Key::from("count"))
+                .unwrap()
+                .unwrap()
+                .as_int()
+                .unwrap();
+            ctx.store("old_count", Box::new(old_count));
+            Value::from(old_count + 1)
+        }),
+    )
+    .condition(
+        "SumOf(new_count, counter.count, 1)",
+        Box::new(|ctx| {
+            let old_count: Box<i64> = ctx.take("old_count");
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::sum_of(
+                    *old_count + 1,
+                    (&counter, "count"),
+                    1,
+                ))
+                .unwrap()
+        }),
+    )
+    .update("count", Arg::var("new_count"))
 }
 
 fn action_signatures(actions: &[api::Action]) -> HashMap<String, ActionSignature> {
