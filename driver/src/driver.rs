@@ -167,11 +167,11 @@ impl Driver {
                 .deps
                 .relayer
                 .lookup_tx_hash(&settings.relayer_api_url, &tx_final);
-            if let Ok(Some(relayer_hash)) = current_hash {
-                if entry.record.tx_hash.as_deref() != Some(&relayer_hash) {
-                    entry.record.tx_hash = Some(relayer_hash);
-                    let _ = write_object_file(&self.paths, &entry.record, &entry.file_name);
-                }
+            if let Ok(Some(relayer_hash)) = current_hash
+                && entry.record.tx_hash.as_deref() != Some(&relayer_hash)
+            {
+                entry.record.tx_hash = Some(relayer_hash);
+                let _ = write_object_file(&self.paths, &entry.record, &entry.file_name);
             }
         }
 
