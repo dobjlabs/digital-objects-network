@@ -8,6 +8,7 @@ use alloy::{
     rpc::types::{BlockNumberOrTag, TransactionRequest},
     signers::local::PrivateKeySigner,
 };
+use alloy::consensus::Transaction;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -39,6 +40,14 @@ pub struct FeeEstimate {
     pub max_priority_fee_per_gas: u128,
 }
 
+/// Fee caps extracted from a pending/queued transaction.
+#[derive(Debug, Clone, Copy)]
+pub struct PendingTxFees {
+    pub max_fee_per_gas: u128,
+    pub max_priority_fee_per_gas: u128,
+    pub max_fee_per_blob_gas: Option<u128>,
+}
+
 /// Explicit fee overrides for replacement (fee-bump) transactions.
 /// Fields set to `None` are left for alloy's provider to auto-fill.
 #[derive(Debug, Clone, Copy)]
@@ -57,6 +66,8 @@ pub trait EthGateway: Send + Sync {
     async fn get_next_nonce(&self) -> Result<u64>;
     /// Fetch current network fee estimates from the latest block.
     async fn get_current_fees(&self) -> Result<FeeEstimate>;
+    /// Fetch fee caps from a previously submitted (possibly pending) transaction.
+    async fn get_pending_tx_fees(&self, tx_hash: &str) -> Result<Option<PendingTxFees>>;
     /// Submit a blob TX with explicit nonce and fee overrides (for RBF replacement).
     async fn submit_payload_with_fees(
         &self,
@@ -166,6 +177,17 @@ impl EthGateway for EthClient {
             base_fee_per_gas: base_fee_per_gas as u128,
             max_priority_fee_per_gas: priority_fee,
         })
+    }
+
+    async fn get_pending_tx_fees(&self, tx_hash: &str) -> Result<Option<PendingTxFees>> {
+        let hash =
+            B256::from_str(tx_hash).map_err(|e| anyhow!("invalid tx hash '{tx_hash}': {e}"))?;
+        let tx = self.provider.get_transaction_by_hash(hash).await?;
+        Ok(tx.map(|t| PendingTxFees {
+            max_fee_per_gas: t.max_fee_per_gas(),
+            max_priority_fee_per_gas: t.max_priority_fee_per_gas().unwrap_or(0),
+            max_fee_per_blob_gas: t.max_fee_per_blob_gas(),
+        }))
     }
 
     async fn submit_payload_with_fees(
