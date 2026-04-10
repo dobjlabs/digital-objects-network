@@ -23,6 +23,7 @@ use crate::object_record::ObjectStatus;
 use crate::object_record::parse_object_record_file;
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, select_object,
+    write_object_file,
 };
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
@@ -154,6 +155,25 @@ impl Driver {
             &membership.grounded_txs,
             &membership.on_chain_nullifiers,
         )?;
+
+        // Resolve correct Ethereum tx hashes from the relayer for any
+        // objects whose hash may be stale due to fee-bump replacements.
+        for entry in entries.iter_mut() {
+            if entry.record.status != ObjectStatus::Pending {
+                continue;
+            }
+            let tx_final = encode_hash_hex(&entry.record.tx.dict().commitment());
+            let current_hash = self
+                .deps
+                .relayer
+                .lookup_tx_hash(&settings.relayer_api_url, &tx_final);
+            if let Ok(Some(relayer_hash)) = current_hash {
+                if entry.record.tx_hash.as_deref() != Some(&relayer_hash) {
+                    entry.record.tx_hash = Some(relayer_hash);
+                    let _ = write_object_file(&self.paths, &entry.record, &entry.file_name);
+                }
+            }
+        }
 
         Ok(entries
             .iter()

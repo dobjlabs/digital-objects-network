@@ -102,6 +102,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/v1/proofs", post(submit_proof))
         .route("/api/v1/proofs/{job_id}", get(get_proof))
+        .route("/api/v1/proofs/by-tx-final/{tx_final}", get(get_proof_by_tx_final))
         .with_state(state)
 }
 
@@ -215,6 +216,22 @@ async fn get_proof(
         attempts = job.attempt_count,
         "Returning relay job status"
     );
+    Ok(Json(to_status_response(job)))
+}
+
+async fn get_proof_by_tx_final(
+    State(app_state): State<AppState>,
+    Path(tx_final): Path<String>,
+) -> Result<Json<JobStatusResponse>, ApiError> {
+    debug!(tx_final = %tx_final, "Handling relay job lookup by tx_final");
+
+    let job = app_state
+        .db
+        .get_job_by_tx_final(&tx_final)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::NotFound(format!("job not found for tx_final: {tx_final}")))?;
+
     Ok(Json(to_status_response(job)))
 }
 
