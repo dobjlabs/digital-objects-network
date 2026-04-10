@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 use anyhow::{anyhow, bail};
 
@@ -8,12 +7,11 @@ use crate::types::*;
 
 /// Mock implementation of CraftOps for testing.
 /// Returns realistic fixtures matching the zk-craft game.
+/// Multiple actions can run concurrently
 pub struct MockCraftOps {
     inventory: Vec<InventoryObject>,
     actions: Vec<Action>,
     state_root: String,
-    /// Simulates mutual exclusion: only one action at a time.
-    action_in_progress: Mutex<bool>,
 }
 
 impl MockCraftOps {
@@ -22,19 +20,12 @@ impl MockCraftOps {
             inventory: default_inventory(),
             actions: default_actions(),
             state_root: "0x9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b".to_string(),
-            action_in_progress: Mutex::new(false),
         }
     }
 
     /// Create a mock with a custom inventory.
     pub fn with_inventory(mut self, inventory: Vec<InventoryObject>) -> Self {
         self.inventory = inventory;
-        self
-    }
-
-    /// Create a mock that simulates an action already in progress.
-    pub fn with_action_in_progress(self) -> Self {
-        *self.action_in_progress.lock().unwrap() = true;
         self
     }
 }
@@ -134,19 +125,10 @@ impl CraftOps for MockCraftOps {
     }
 
     fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunActionResult> {
-        let mut in_progress = self.action_in_progress.lock().unwrap();
-        if *in_progress {
-            bail!("an action is already in progress");
-        }
-
         // Validate the action exists
         if !self.actions.iter().any(|a| a.id == input.action_id) {
             bail!("unknown action: {}", input.action_id);
         }
-
-        *in_progress = true;
-        // Simulate completion (in real impl this would block for proof generation)
-        *in_progress = false;
 
         Ok(RunActionResult {
             success: true,
@@ -476,19 +458,25 @@ mod tests {
     }
 
     #[test]
-    fn test_run_action_already_in_progress() {
-        let mock = MockCraftOps::new().with_action_in_progress();
-        let result = mock.run_action(RunActionInput {
-            action_id: "CraftWood".to_string(),
-            input_object_paths: vec!["Log.dobj".to_string()],
-        });
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("already in progress")
-        );
+    fn test_run_action_concurrent() {
+        use std::sync::Arc;
+        let mock = Arc::new(MockCraftOps::new());
+        let handles: Vec<_> = (0..3)
+            .map(|_| {
+                let mock = mock.clone();
+                std::thread::spawn(move || {
+                    mock.run_action(RunActionInput {
+                        action_id: "FindLog".to_string(),
+                        input_object_paths: vec![],
+                    })
+                })
+            })
+            .collect();
+        for handle in handles {
+            let result = handle.join().unwrap();
+            assert!(result.is_ok());
+            assert!(result.unwrap().success);
+        }
     }
 
     #[test]

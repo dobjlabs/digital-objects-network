@@ -126,7 +126,7 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Execute a crafting action. Blocks until proof generation completes. Returns error if another action is already in progress."
+        description = "Execute a crafting action. Blocks until proof generation completes. Multiple actions can run concurrently."
     )]
     async fn run_action(
         &self,
@@ -372,16 +372,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_action_in_progress_returns_error() {
-        let service = CraftMcpService::new(Arc::new(MockCraftOps::new().with_action_in_progress()));
-        let result = service
-            .run_action(Parameters(RunActionInput {
-                action_id: "FindLog".to_string(),
-                input_object_paths: vec![],
-            }))
-            .await;
-        let err = result.err().expect("should be an error");
-        assert!(err.contains("already in progress"));
+    async fn test_run_action_concurrent() {
+        let service = Arc::new(make_service());
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let svc = service.clone();
+            handles.push(tokio::spawn(async move {
+                svc.run_action(Parameters(RunActionInput {
+                    action_id: "FindLog".to_string(),
+                    input_object_paths: vec![],
+                }))
+                .await
+            }));
+        }
+        for handle in handles {
+            let result = handle.await.unwrap();
+            assert!(result.is_ok());
+            assert!(result.unwrap().0.success);
+        }
     }
 
     #[test]

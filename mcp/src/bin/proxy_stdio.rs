@@ -3,77 +3,151 @@
 /// Claude Desktop launches this as a child process. It reads JSON-RPC from
 /// stdin, forwards to the Tauri app's streamable HTTP MCP endpoint, and
 /// writes responses to stdout.
+///
+/// Requests are dispatched concurrently so that long-running tool calls
+/// (e.g. proof generation) do not block other requests.
 use std::io::{BufRead, Write};
+use std::sync::Arc;
 
-fn main() -> anyhow::Result<()> {
+use tokio::sync::{Notify, RwLock, mpsc};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     craft_mcp::logging::init_stderr();
 
     let url = parse_url_from_args();
     tracing::info!("ZK-Craft MCP proxy connecting to {url}");
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .build()?;
-    let mut session_id: Option<String> = None;
 
-    let stdin = std::io::stdin().lock();
-    let mut stdout = std::io::stdout().lock();
+    let session_id: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+    let session_ready = Arc::new(Notify::new());
 
-    for line in stdin.lines() {
-        let line = line?;
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+    // Channel for serialised stdout writes (avoids interleaving).
+    let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+
+    // Stdout writer task.
+    tokio::spawn(async move {
+        while let Some(line) = stdout_rx.recv().await {
+            let mut stdout = std::io::stdout().lock();
+            let _ = writeln!(stdout, "{line}");
+            let _ = stdout.flush();
         }
+    });
 
-        // Check if this is a request (has "id") or notification (no "id")
-        let parsed: serde_json::Value = serde_json::from_str(line)?;
-        let is_request = parsed.get("id").is_some();
-
-        // Build the HTTP request
-        let mut req = client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream");
-
-        if let Some(sid) = &session_id {
-            req = req.header("Mcp-Session-Id", sid);
-        }
-
-        let resp = req.body(line.to_string()).send().map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to connect to MCP server at {url}: {e}. Is the Tauri app running?"
-            )
-        })?;
-
-        // Capture session ID from response
-        if let Some(sid) = resp.headers().get("mcp-session-id") {
-            session_id = Some(sid.to_str().unwrap_or_default().to_string());
-        }
-
-        if !is_request {
-            // Notification — no response expected on stdio
-            continue;
-        }
-
-        // Parse SSE response to extract JSON-RPC messages
-        let body = resp.text()?;
-        for sse_line in body.lines() {
-            if let Some(data) = sse_line.strip_prefix("data: ") {
-                let data = data.trim();
-                if data.is_empty() {
-                    continue;
-                }
-                // Validate it's JSON before forwarding
-                if data.starts_with('{') {
-                    writeln!(stdout, "{data}")?;
-                    stdout.flush()?;
-                }
+    // Read stdin on a dedicated thread (blocking I/O).
+    let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<String>();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin().lock();
+        for line in stdin.lines() {
+            let Ok(line) = line else { break };
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                continue;
             }
+            if stdin_tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    // Dispatch loop.
+    let mut first = true;
+    while let Some(line) = stdin_rx.recv().await {
+        if first {
+            // The first request (typically `initialize`) must complete before
+            // concurrent requests can be dispatched, because we need the
+            // session ID from the response.
+            first = false;
+            handle_request(&client, &url, &line, &session_id, &stdout_tx).await;
+            session_ready.notify_waiters();
+        } else {
+            let client = client.clone();
+            let url = url.clone();
+            let session_id = session_id.clone();
+            let session_ready = session_ready.clone();
+            let stdout_tx = stdout_tx.clone();
+            tokio::spawn(async move {
+                // Wait until the session has been established.
+                if session_id.read().await.is_none() {
+                    session_ready.notified().await;
+                }
+                handle_request(&client, &url, &line, &session_id, &stdout_tx).await;
+            });
         }
     }
 
     Ok(())
+}
+
+async fn handle_request(
+    client: &reqwest::Client,
+    url: &str,
+    line: &str,
+    session_id: &Arc<RwLock<Option<String>>>,
+    stdout_tx: &mpsc::UnboundedSender<String>,
+) {
+    let parsed: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("invalid JSON from stdin: {e}");
+            return;
+        }
+    };
+    let is_request = parsed.get("id").is_some();
+
+    let mut req = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream");
+
+    if let Some(sid) = session_id.read().await.as_deref() {
+        req = req.header("Mcp-Session-Id", sid);
+    }
+
+    let resp = match req.body(line.to_string()).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(
+                "Failed to connect to MCP server at {url}: {e}. Is the Tauri app running?"
+            );
+            return;
+        }
+    };
+
+    // Capture session ID from response.
+    if let Some(sid) = resp.headers().get("mcp-session-id") {
+        if let Ok(sid) = sid.to_str() {
+            *session_id.write().await = Some(sid.to_string());
+        }
+    }
+
+    if !is_request {
+        // Notification — no response expected on stdio.
+        return;
+    }
+
+    // Parse SSE response to extract JSON-RPC messages.
+    let body = match resp.text().await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("failed to read response body: {e}");
+            return;
+        }
+    };
+    for sse_line in body.lines() {
+        if let Some(data) = sse_line.strip_prefix("data: ") {
+            let data = data.trim();
+            if data.is_empty() {
+                continue;
+            }
+            if data.starts_with('{') {
+                let _ = stdout_tx.send(data.to_string());
+            }
+        }
+    }
 }
 
 fn parse_url_from_args() -> String {
