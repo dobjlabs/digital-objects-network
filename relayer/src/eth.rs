@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use alloy::consensus::Transaction;
 use alloy::{
     eips::eip4844::builder::{SidecarBuilder, SimpleCoder},
     network::{Ethereum, TransactionBuilder4844},
@@ -8,7 +9,6 @@ use alloy::{
     rpc::types::{BlockNumberOrTag, TransactionRequest},
     signers::local::PrivateKeySigner,
 };
-use alloy::consensus::Transaction;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use tracing::{debug, info};
