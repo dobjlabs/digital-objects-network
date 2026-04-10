@@ -386,6 +386,21 @@ impl Driver {
             RELAYER_POLL_INTERVAL_MS,
         )?;
 
+        // Use the confirmed tx_hash — it may differ from the initial one if
+        // the relayer performed a fee-bump replacement while waiting.
+        let final_tx_hash = confirmation.tx_hash.as_deref().unwrap_or(&eth_tx_hash);
+
+        if final_tx_hash != eth_tx_hash {
+            // Fee bump replaced the original tx; update .dobj files with the
+            // new hash so they point at the on-chain transaction.
+            update_output_files(
+                &self.paths,
+                &saved.output_files,
+                ObjectStatus::Pending,
+                Some(final_tx_hash),
+            )?;
+        }
+
         reporter.on_step(
             ExecutionPhase::Commit,
             "Waiting for synchronizer to observe commit",
@@ -406,7 +421,7 @@ impl Driver {
                     &self.paths,
                     &saved.output_files,
                     ObjectStatus::Unknown,
-                    Some(&eth_tx_hash),
+                    Some(final_tx_hash),
                 )?;
                 return Err(err);
             }
@@ -417,7 +432,7 @@ impl Driver {
             &self.paths,
             &saved.output_files,
             ObjectStatus::Live,
-            Some(&eth_tx_hash),
+            Some(final_tx_hash),
         )?;
 
         let result = ExecuteActionResult {
@@ -426,7 +441,7 @@ impl Driver {
             output_files: saved.output_files.clone(),
             nullified_files: saved.nullified_files.clone(),
             relayer_job_id: confirmation.job_id,
-            tx_hash: Some(eth_tx_hash),
+            tx_hash: Some(final_tx_hash.to_string()),
             block_number: confirmation.block_number,
         };
         reporter.on_done(ExecutionPhase::Commit, Some(&result));

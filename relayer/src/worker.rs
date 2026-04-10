@@ -251,13 +251,10 @@ async fn poll_submitted_job(
             // Check if we should attempt a fee bump.
             if let Some(bump_after) = cfg.fee_bump_after_secs {
                 if let (Some(submitted_at), Some(nonce)) = (job.submitted_at, job.nonce) {
-                    let bump_threshold =
-                        bump_after as i64 * (job.bump_count as i64 + 1);
+                    let bump_threshold = bump_after as i64 * (job.bump_count as i64 + 1);
                     let elapsed = now.saturating_sub(submitted_at);
 
-                    if elapsed >= bump_threshold
-                        && (job.bump_count as u32) < cfg.fee_bump_max
-                    {
+                    if elapsed >= bump_threshold && (job.bump_count as u32) < cfg.fee_bump_max {
                         match try_fee_bump(
                             eth_client,
                             cfg,
@@ -272,8 +269,7 @@ async fn poll_submitted_job(
                                 let old_hash = tx_hash_str.clone();
                                 job.tx_hash = Some(new_tx_hash.clone());
                                 job.bump_count += 1;
-                                job.next_attempt_at =
-                                    Some(now + cfg.receipt_poll_secs as i64);
+                                job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
                                 job.updated_at = now;
                                 db.put_job(&job).await?;
                                 info!(
@@ -347,9 +343,8 @@ async fn try_fee_bump(
         .ok_or_else(|| anyhow!("pending tx {current_tx_hash} not found in mempool"))?;
 
     let multiplier_pct = cfg.fee_bump_multiplier_pct;
-    let apply_bump = |base: u128| -> u128 {
-        base.saturating_mul(100 + multiplier_pct as u128) / 100
-    };
+    let apply_bump =
+        |base: u128| -> u128 { base.saturating_mul(100 + multiplier_pct as u128) / 100 };
 
     // Use max(network estimate, original TX) as the floor, then bump above it.
     let base_priority = original
