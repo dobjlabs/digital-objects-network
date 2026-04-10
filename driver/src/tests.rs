@@ -279,6 +279,10 @@ impl RelayerClient for MockRelayer {
             block_number: Some(7),
         })
     }
+
+    fn lookup_tx_hash(&self, _relayer_api_url: &str, _tx_final: &str) -> Result<Option<String>> {
+        Ok(Some("0xtx".to_string()))
+    }
 }
 
 #[test]
