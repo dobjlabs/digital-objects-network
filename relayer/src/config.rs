@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, str::FromStr};
 
 use alloy::primitives::Address;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1:3200";
 const DEFAULT_DB_URL: &str = "postgres://postgres@localhost:5432/relayer";
@@ -99,6 +99,15 @@ pub fn load_config() -> Result<AppConfig> {
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(5)
         .max(1);
+
+    if let Some(bump_after) = fee_bump_after_secs {
+        if bump_after < receipt_poll_secs {
+            bail!(
+                "FEE_BUMP_AFTER_SECS ({bump_after}) must be >= RECEIPT_POLL_SECS ({receipt_poll_secs}); \
+                 bumps are only checked during receipt polls so a lower value has no effect"
+            );
+        }
+    }
 
     Ok(AppConfig {
         bind,

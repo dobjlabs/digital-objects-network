@@ -263,6 +263,7 @@ async fn poll_submitted_job(
                             cfg,
                             &job.payload_bytes,
                             nonce as u64,
+                            &tx_hash_str,
                             job.bump_count,
                         )
                         .await
@@ -327,46 +328,59 @@ async fn poll_submitted_job(
     }
 }
 
-/// Fetch current network fees, apply the bump multiplier, and resubmit at the same nonce.
+/// Fetch the original TX's fees and current network fees, take the max of each,
+/// apply the bump multiplier, and resubmit at the same nonce.
 async fn try_fee_bump(
     eth_client: &dyn EthGateway,
     cfg: &WorkerConfig,
     payload_bytes: &[u8],
     nonce: u64,
+    current_tx_hash: &str,
     current_bump_count: i32,
 ) -> Result<String> {
-    let estimate = eth_client.get_current_fees().await?;
+    let network = eth_client.get_current_fees().await?;
 
-    // Apply multiplier compounding once per bump done so far + this one.
-    // This ensures each replacement is >= 12.5% above the previous (EIP-1559 rule).
+    // Fetch the queued TX's fee caps so we can guarantee the replacement exceeds them.
+    let original = eth_client
+        .get_pending_tx_fees(current_tx_hash)
+        .await?
+        .ok_or_else(|| anyhow!("pending tx {current_tx_hash} not found in mempool"))?;
+
     let multiplier_pct = cfg.fee_bump_multiplier_pct;
-    let bumps = (current_bump_count + 1) as u32;
     let apply_bump = |base: u128| -> u128 {
-        let mut val = base;
-        for _ in 0..bumps {
-            val = val.saturating_mul(100 + multiplier_pct as u128) / 100;
-        }
-        val.max(1)
+        base.saturating_mul(100 + multiplier_pct as u128) / 100
     };
 
-    let bumped_priority = apply_bump(estimate.max_priority_fee_per_gas);
-    let bumped_max_fee = apply_bump(estimate.base_fee_per_gas + estimate.max_priority_fee_per_gas);
+    // Use max(network estimate, original TX) as the floor, then bump above it.
+    let base_priority = original
+        .max_priority_fee_per_gas
+        .max(network.max_priority_fee_per_gas);
+    let base_max_fee = original
+        .max_fee_per_gas
+        .max(network.base_fee_per_gas + base_priority);
 
-    // Don't override blob fee — let alloy auto-fill it the same way it does for
-    // initial submissions. The blob fee market is separate from the regular base
-    // fee, and explicitly bumping it can produce values that exceed account balance.
+    let bumped_priority = apply_bump(base_priority);
+    let bumped_max_fee = apply_bump(base_max_fee);
+
+    // Bump blob fee relative to the original TX's blob fee — not the current
+    // network rate, which can be orders of magnitude higher on some chains.
+    let bumped_blob_fee = original.max_fee_per_blob_gas.map(apply_bump);
+
     let fees = FeeOverrides {
         max_fee_per_gas: bumped_max_fee,
         max_priority_fee_per_gas: bumped_priority,
-        max_fee_per_blob_gas: None,
+        max_fee_per_blob_gas: bumped_blob_fee,
     };
 
     info!(
         nonce,
-        bump = bumps,
+        bump = current_bump_count + 1,
         max_fee_per_gas = fees.max_fee_per_gas,
         max_priority_fee_per_gas = fees.max_priority_fee_per_gas,
-        network_base_fee = estimate.base_fee_per_gas,
+        max_fee_per_blob_gas = ?fees.max_fee_per_blob_gas,
+        original_max_fee = original.max_fee_per_gas,
+        original_blob_fee = ?original.max_fee_per_blob_gas,
+        network_base_fee = network.base_fee_per_gas,
         "Attempting fee bump"
     );
 
@@ -462,7 +476,7 @@ mod tests {
     use sqlx::{postgres::PgPoolOptions, Executor};
     use url::Url;
 
-    use crate::eth::FeeEstimate;
+    use crate::eth::{FeeEstimate, PendingTxFees};
 
     use super::*;
 
@@ -472,6 +486,7 @@ mod tests {
         poll_results: Mutex<VecDeque<Result<Option<ReceiptOutcome>>>>,
         nonce_results: Mutex<VecDeque<Result<u64>>>,
         fee_results: Mutex<VecDeque<Result<FeeEstimate>>>,
+        pending_tx_fees_results: Mutex<VecDeque<Result<Option<PendingTxFees>>>>,
         bump_submit_results: Mutex<VecDeque<Result<String>>>,
     }
 
@@ -510,6 +525,18 @@ mod tests {
                     base_fee_per_gas: 1_000_000_000,
                     max_priority_fee_per_gas: 100_000_000,
                 }))
+        }
+
+        async fn get_pending_tx_fees(&self, _tx_hash: &str) -> Result<Option<PendingTxFees>> {
+            self.pending_tx_fees_results
+                .lock()
+                .expect("poisoned")
+                .pop_front()
+                .unwrap_or(Ok(Some(PendingTxFees {
+                    max_fee_per_gas: 1_000_000_000,
+                    max_priority_fee_per_gas: 100_000_000,
+                    max_fee_per_blob_gas: Some(1),
+                })))
         }
 
         async fn submit_payload_with_fees(
