@@ -25,6 +25,9 @@ pub struct AppConfig {
     pub receipt_timeout_secs: Option<u64>,
     pub worker_idle_sleep_ms: u64,
     pub max_fee_per_blob_gas: Option<u128>,
+    pub fee_bump_after_secs: Option<u64>,
+    pub fee_bump_multiplier_pct: u64,
+    pub fee_bump_max: u32,
 }
 
 pub fn load_config() -> Result<AppConfig> {
@@ -80,6 +83,23 @@ pub fn load_config() -> Result<AppConfig> {
         .ok()
         .and_then(|v| v.parse::<u128>().ok());
 
+    let fee_bump_after_secs = dotenvy::var("FEE_BUMP_AFTER_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0);
+
+    let fee_bump_multiplier_pct = dotenvy::var("FEE_BUMP_MULTIPLIER_PCT")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(20)
+        .max(13); // EIP-1559 requires ~12.5% minimum increase for replacement
+
+    let fee_bump_max = dotenvy::var("FEE_BUMP_MAX")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(5)
+        .max(1);
+
     Ok(AppConfig {
         bind,
         db_url,
@@ -93,5 +113,8 @@ pub fn load_config() -> Result<AppConfig> {
         receipt_timeout_secs,
         worker_idle_sleep_ms,
         max_fee_per_blob_gas,
+        fee_bump_after_secs,
+        fee_bump_multiplier_pct,
+        fee_bump_max,
     })
 }

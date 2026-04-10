@@ -28,6 +28,8 @@ Service that accepts zk-craft proof payloads over HTTP and relays them to Ethere
 - `block_number BIGINT NULL`
 - `last_error TEXT NULL`
 - `next_attempt_at BIGINT NULL`
+- `nonce BIGINT NULL`
+- `bump_count INTEGER NOT NULL DEFAULT 0`
 - `created_at BIGINT NOT NULL`
 - `updated_at BIGINT NOT NULL`
 
@@ -60,6 +62,9 @@ Indexes:
 - `RECEIPT_TIMEOUT_SECS` (optional timeout for submitted tx receipts)
 - `WORKER_IDLE_SLEEP_MS` (default: `1000`)
 - `MAX_FEE_PER_BLOB_GAS` (optional override)
+- `FEE_BUMP_AFTER_SECS` (seconds before first fee-bump attempt; unset = disabled)
+- `FEE_BUMP_MULTIPLIER_PCT` (default: `20`, i.e. 1.2x per bump; min `13` for EIP-1559)
+- `FEE_BUMP_MAX` (default: `5`, max replacement attempts per job)
 
 ## Run
 
