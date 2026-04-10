@@ -38,7 +38,6 @@
 //! of this file).
 
 use anyhow::{Result, anyhow};
-use hex::FromHex;
 use itertools::Itertools;
 use plonky2::{
     field::types::Field,
@@ -91,7 +90,10 @@ const NUM_PUBLIC_INPUTS: usize = 13; // 13: count + input + output + verified_da
 const VDF_POD_TYPE: (usize, &str) = (2001, "Vdf");
 
 pub static STANDARD_VDF_VD_HASH: std::sync::LazyLock<Hash> = std::sync::LazyLock::new(|| {
-    Hash::from_hex("b77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06").unwrap()
+    let (_, data) = &*STANDARD_VDF_POD_DATA;
+    let hash_out =
+        pod2::backends::plonky2::recursion::circuit::hash_verifier_data(&data.verifier_only);
+    Hash(hash_out.elements.map(|e| e))
 });
 
 static STANDARD_VDF_POD_DATA: std::sync::LazyLock<(VdfPodTarget, CircuitData<F, C, D>)> =
