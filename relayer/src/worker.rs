@@ -265,8 +265,9 @@ async fn poll_submitted_job(
                         )
                         .await
                         {
-                            Ok(new_tx_hash) => {
+                            Ok(Some(new_tx_hash)) => {
                                 let old_hash = tx_hash_str.clone();
+                                job.prev_tx_hashes.push(old_hash.clone());
                                 job.tx_hash = Some(new_tx_hash.clone());
                                 job.bump_count += 1;
                                 job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
@@ -280,6 +281,54 @@ async fn poll_submitted_job(
                                     "Fee-bumped blob transaction"
                                 );
                                 return Ok(());
+                            }
+                            Ok(None) => {
+                                // TX gone from mempool. Check if the nonce was
+                                // consumed — if so, an earlier replacement TX
+                                // was mined and the blob payload is on-chain.
+                                if let Ok(current_nonce) = eth_client.get_next_nonce().await {
+                                    if current_nonce > nonce as u64 {
+                                        // Scan previous hashes to find the one
+                                        // that actually got mined.
+                                        let mut mined_hash = None;
+                                        let mut mined_block = None;
+                                        for prev_hash in job.prev_tx_hashes.iter().rev() {
+                                            if let Ok(Some(receipt)) =
+                                                eth_client.poll_receipt(prev_hash).await
+                                            {
+                                                if receipt.success {
+                                                    mined_hash = Some(prev_hash.clone());
+                                                    mined_block = receipt.block_number;
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        if let Some(hash) = &mined_hash {
+                                            job.tx_hash = Some(hash.clone());
+                                        }
+                                        job.status = JobStatus::Confirmed;
+                                        job.block_number = mined_block.or(job.block_number);
+                                        job.next_attempt_at = None;
+                                        job.last_error = None;
+                                        job.updated_at = now;
+                                        db.put_job(&job).await?;
+                                        info!(
+                                            job_id = %job.job_id,
+                                            mined_tx_hash = ?mined_hash,
+                                            block_number = ?mined_block,
+                                            used_nonce = nonce,
+                                            current_nonce = current_nonce,
+                                            "Nonce consumed; replacement TX confirmed"
+                                        );
+                                        return Ok(());
+                                    }
+                                }
+                                // Nonce not consumed — TX was dropped. Stop
+                                // bumping and let receipt timeout fail the job.
+                                job.bump_count = cfg.fee_bump_max as i32;
+                                job.updated_at = now;
+                                db.put_job(&job).await?;
                             }
                             Err(err) => {
                                 warn!(
@@ -326,6 +375,9 @@ async fn poll_submitted_job(
 
 /// Fetch the original TX's fees and current network fees, take the max of each,
 /// apply the bump multiplier, and resubmit at the same nonce.
+///
+/// Returns `Ok(None)` when the TX is no longer in the mempool (already mined
+/// or dropped) — the caller should stop bumping and just keep polling receipts.
 async fn try_fee_bump(
     eth_client: &dyn EthGateway,
     cfg: &WorkerConfig,
@@ -333,14 +385,22 @@ async fn try_fee_bump(
     nonce: u64,
     current_tx_hash: &str,
     current_bump_count: i32,
-) -> Result<String> {
+) -> Result<Option<String>> {
     let network = eth_client.get_current_fees().await?;
 
     // Fetch the queued TX's fee caps so we can guarantee the replacement exceeds them.
-    let original = eth_client
-        .get_pending_tx_fees(current_tx_hash)
-        .await?
-        .ok_or_else(|| anyhow!("pending tx {current_tx_hash} not found in mempool"))?;
+    let original = match eth_client.get_pending_tx_fees(current_tx_hash).await? {
+        Some(fees) => fees,
+        None => {
+            // TX is no longer in the mempool — either a previous replacement
+            // was mined or the node dropped it. Nothing left to replace.
+            info!(
+                tx_hash = current_tx_hash,
+                "TX not in mempool; skipping fee bump"
+            );
+            return Ok(None);
+        }
+    };
 
     let multiplier_pct = cfg.fee_bump_multiplier_pct;
     let apply_bump =
@@ -379,9 +439,10 @@ async fn try_fee_bump(
         "Attempting fee bump"
     );
 
-    eth_client
+    let tx_hash = eth_client
         .submit_payload_with_fees(payload_bytes, nonce, &fees)
-        .await
+        .await?;
+    Ok(Some(tx_hash))
 }
 
 /// Mark a job as failed while preserving any known receipt block number.
@@ -564,6 +625,7 @@ mod tests {
             next_attempt_at: Some(now_ts()),
             nonce: None,
             bump_count: 0,
+            prev_tx_hashes: Vec::new(),
             created_at: now_ts(),
             updated_at: now_ts(),
         }

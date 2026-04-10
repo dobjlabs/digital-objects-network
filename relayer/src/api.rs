@@ -159,6 +159,7 @@ async fn submit_proof(
         next_attempt_at: Some(now),
         nonce: None,
         bump_count: 0,
+        prev_tx_hashes: Vec::new(),
         created_at: now,
         updated_at: now,
     };

@@ -51,6 +51,7 @@ impl Db {
                 next_attempt_at BIGINT NULL,
                 nonce BIGINT NULL,
                 bump_count INTEGER NOT NULL DEFAULT 0,
+                prev_tx_hashes TEXT[] NOT NULL DEFAULT '{}',
                 created_at BIGINT NOT NULL,
                 updated_at BIGINT NOT NULL
             )
@@ -93,10 +94,11 @@ impl Db {
                 next_attempt_at,
                 nonce,
                 bump_count,
+                prev_tx_hashes,
                 created_at,
                 updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             ON CONFLICT (tx_final) DO NOTHING
             RETURNING job_id
             "#,
@@ -115,6 +117,7 @@ impl Db {
         .bind(job.next_attempt_at)
         .bind(job.nonce)
         .bind(job.bump_count)
+        .bind(&job.prev_tx_hashes)
         .bind(job.created_at)
         .bind(job.updated_at)
         .fetch_optional(&self.pool)
@@ -152,8 +155,9 @@ impl Db {
                 next_attempt_at = $12,
                 nonce = $13,
                 bump_count = $14,
-                created_at = $15,
-                updated_at = $16
+                prev_tx_hashes = $15,
+                created_at = $16,
+                updated_at = $17
             WHERE job_id = $1
             "#,
         )
@@ -171,6 +175,7 @@ impl Db {
         .bind(job.next_attempt_at)
         .bind(job.nonce)
         .bind(job.bump_count)
+        .bind(&job.prev_tx_hashes)
         .bind(job.created_at)
         .bind(job.updated_at)
         .execute(&self.pool)
@@ -202,6 +207,7 @@ impl Db {
                    next_attempt_at,
                    nonce,
                    bump_count,
+                   prev_tx_hashes,
                    created_at,
                    updated_at
             FROM relay_jobs
@@ -233,6 +239,7 @@ impl Db {
                    next_attempt_at,
                    nonce,
                    bump_count,
+                   prev_tx_hashes,
                    created_at,
                    updated_at
             FROM relay_jobs
@@ -282,6 +289,7 @@ impl Db {
                    next_attempt_at,
                    nonce,
                    bump_count,
+                   prev_tx_hashes,
                    created_at,
                    updated_at
             FROM relay_jobs
@@ -329,6 +337,7 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<RelayJob> {
         next_attempt_at: row.get("next_attempt_at"),
         nonce: row.get("nonce"),
         bump_count: row.get("bump_count"),
+        prev_tx_hashes: row.get("prev_tx_hashes"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })
@@ -396,6 +405,7 @@ mod tests {
             next_attempt_at: next,
             nonce: None,
             bump_count: 0,
+            prev_tx_hashes: Vec::new(),
             created_at: now(),
             updated_at: now(),
         }
