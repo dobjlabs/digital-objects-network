@@ -768,4 +768,178 @@ mod tests {
         drop_db(&admin_url, &db_name).await?;
         Ok(())
     }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn fee_bump_replaces_stale_submitted_tx() -> Result<()> {
+        let (db, admin_url, db_name) = setup_db().await?;
+        let gateway = MockEthGateway::default();
+
+        // Receipt poll returns None (not mined yet).
+        gateway
+            .poll_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(None));
+
+        // Fee bump: get_pending_tx_fees returns original fees, submit succeeds.
+        gateway
+            .bump_submit_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(
+                "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            ));
+
+        let mut job = mk_job(JobStatus::Submitted);
+        job.tx_hash =
+            Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+        job.submitted_at = Some(now_ts() - 100); // Well past bump threshold.
+        job.nonce = Some(42);
+        db.insert_job(&job).await?;
+
+        let mut cfg = cfg();
+        cfg.fee_bump_after_secs = Some(10);
+        cfg.fee_bump_multiplier_pct = 100;
+        cfg.receipt_timeout_secs = None;
+
+        let job = db.get_job("job-1").await?.expect("job");
+        poll_submitted_job(&db, &gateway, &cfg, job).await?;
+
+        let bumped = db.get_job("job-1").await?.expect("job");
+        assert_eq!(bumped.status, JobStatus::Submitted);
+        assert_eq!(bumped.bump_count, 1);
+        assert_eq!(
+            bumped.tx_hash.as_deref(),
+            Some("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        assert_eq!(
+            bumped.prev_tx_hashes,
+            vec!["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+        );
+
+        drop(db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn fee_bump_confirms_via_nonce_when_tx_gone() -> Result<()> {
+        let (db, admin_url, db_name) = setup_db().await?;
+        let gateway = MockEthGateway::default();
+
+        // Receipt poll returns None for current hash.
+        gateway
+            .poll_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(None));
+
+        // get_pending_tx_fees returns None (TX gone from mempool).
+        gateway
+            .pending_tx_fees_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(None));
+
+        // get_next_nonce returns 44 (past our nonce of 42 → consumed).
+        gateway
+            .nonce_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(44));
+
+        // poll_receipt for prev hash returns a receipt.
+        gateway
+            .poll_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(Some(ReceiptOutcome {
+                success: true,
+                block_number: Some(99),
+            })));
+
+        let mut job = mk_job(JobStatus::Submitted);
+        job.tx_hash =
+            Some("0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string());
+        job.submitted_at = Some(now_ts() - 100);
+        job.nonce = Some(42);
+        job.bump_count = 1;
+        job.prev_tx_hashes =
+            vec!["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()];
+        db.insert_job(&job).await?;
+
+        let mut cfg = cfg();
+        cfg.fee_bump_after_secs = Some(10);
+        cfg.receipt_timeout_secs = None;
+
+        let job = db.get_job("job-1").await?.expect("job");
+        poll_submitted_job(&db, &gateway, &cfg, job).await?;
+
+        let confirmed = db.get_job("job-1").await?.expect("job");
+        assert_eq!(confirmed.status, JobStatus::Confirmed);
+        assert_eq!(confirmed.block_number, Some(99));
+        // tx_hash updated to the one that actually had a receipt.
+        assert_eq!(
+            confirmed.tx_hash.as_deref(),
+            Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+
+        drop(db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn fee_bump_stops_when_tx_dropped_and_nonce_unused() -> Result<()> {
+        let (db, admin_url, db_name) = setup_db().await?;
+        let gateway = MockEthGateway::default();
+
+        // Receipt poll returns None.
+        gateway
+            .poll_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(None));
+
+        // TX gone from mempool.
+        gateway
+            .pending_tx_fees_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(None));
+
+        // Nonce NOT consumed (still at 42).
+        gateway
+            .nonce_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(42));
+
+        let mut job = mk_job(JobStatus::Submitted);
+        job.tx_hash =
+            Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+        job.submitted_at = Some(now_ts() - 100);
+        job.nonce = Some(42);
+        db.insert_job(&job).await?;
+
+        let mut cfg = cfg();
+        cfg.fee_bump_after_secs = Some(10);
+        cfg.fee_bump_max = 5;
+        cfg.receipt_timeout_secs = None;
+
+        let job = db.get_job("job-1").await?.expect("job");
+        poll_submitted_job(&db, &gateway, &cfg, job).await?;
+
+        let stopped = db.get_job("job-1").await?.expect("job");
+        assert_eq!(stopped.status, JobStatus::Submitted);
+        // bump_count set to max to prevent further attempts.
+        assert_eq!(stopped.bump_count, 5);
+
+        drop(db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
 }

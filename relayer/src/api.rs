@@ -102,7 +102,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/v1/proofs", post(submit_proof))
         .route("/api/v1/proofs/{job_id}", get(get_proof))
-        .route("/api/v1/proofs/by-tx-final/{tx_final}", get(get_proof_by_tx_final))
+        .route(
+            "/api/v1/proofs/by-tx-final/{tx_final}",
+            get(get_proof_by_tx_final),
+        )
         .with_state(state)
 }
 
