@@ -902,3 +902,172 @@ fn test_message_passing_counter_with_roundtrip() {
     );
     println!("Round-trip test passed: counter = 1");
 }
+
+/// Test ProcessAndRejectCounterMessages: Alice creates a counter at 0,
+/// Bob sends an increment (+1), then someone sends a negative (-5).
+/// Alice calls ProcessAndRejectCounterMessages to apply msg1 and reject msg2
+/// in one batch. Counter ends at 1 (only msg1 applied), inbox fully caught up.
+#[test]
+fn test_process_and_reject_counter_messages() {
+    ensure_extra_pod_deserializers_registered();
+    let catalog = make_catalog();
+
+    // Step 1: Create counter inbox (counter starts at 0)
+    let create_outputs = catalog
+        .execute_action(
+            "CreateCounterInbox".to_string(),
+            dummy_grounding_witness(),
+            vec![],
+        )
+        .unwrap();
+
+    let counter = create_outputs.obj(0);
+    let inbox = create_outputs.obj(1);
+    let inbox_id = inbox.obj.get(&Key::from("inbox_id")).unwrap().unwrap();
+
+    let mut state = TestState::default();
+    apply_tx(&mut state, &create_outputs.tx);
+
+    // Step 2: Bob sends +1
+    let send_witness = GroundingWitness::new(
+        state_root(&state),
+        [(tx_hash(&inbox.tx), state.tx_membership_proof(tx_hash(&inbox.tx)))]
+            .into_iter()
+            .collect(),
+    );
+
+    let send_outputs = catalog
+        .execute_action(
+            "SendCounterMessage".to_string(),
+            send_witness,
+            vec![inbox.clone()],
+        )
+        .unwrap();
+
+    let message1 = send_outputs.obj(0);
+    let inbox_after_msg1 = send_outputs.obj(1);
+
+    assert_eq!(
+        message1.obj.get(&Key::from("amount")).unwrap().unwrap().as_int().unwrap(),
+        1
+    );
+
+    apply_tx(&mut state, &send_outputs.tx);
+
+    // Step 3: Someone sends -5
+    let send2_witness = GroundingWitness::new(
+        state_root(&state),
+        [(tx_hash(&inbox_after_msg1.tx), state.tx_membership_proof(tx_hash(&inbox_after_msg1.tx)))]
+            .into_iter()
+            .collect(),
+    );
+
+    let send2_outputs = catalog
+        .execute_action(
+            "SendNegativeCounterMessage".to_string(),
+            send2_witness,
+            vec![inbox_after_msg1.clone()],
+        )
+        .unwrap();
+
+    let message2 = send2_outputs.obj(0);
+    let inbox_after_msg2 = send2_outputs.obj(1);
+
+    assert_eq!(
+        message2.obj.get(&Key::from("amount")).unwrap().unwrap().as_int().unwrap(),
+        -5
+    );
+    assert_eq!(
+        inbox_after_msg2.obj.get(&Key::from("message_count")).unwrap().unwrap().as_int().unwrap(),
+        2
+    );
+
+    apply_tx(&mut state, &send2_outputs.tx);
+
+    // Step 4: Alice processes msg1 and rejects msg2 in one batch
+    let pr_witness = GroundingWitness::new(
+        state_root(&state),
+        [
+            (tx_hash(&message1.tx), state.tx_membership_proof(tx_hash(&message1.tx))),
+            (tx_hash(&message2.tx), state.tx_membership_proof(tx_hash(&message2.tx))),
+            (tx_hash(&inbox_after_msg2.tx), state.tx_membership_proof(tx_hash(&inbox_after_msg2.tx))),
+            (tx_hash(&counter.tx), state.tx_membership_proof(tx_hash(&counter.tx))),
+        ]
+        .into_iter()
+        .collect(),
+    );
+
+    let pr_outputs = catalog
+        .execute_action(
+            "ProcessAndRejectCounterMessages".to_string(),
+            pr_witness,
+            vec![
+                message1.clone(),
+                message2.clone(),
+                inbox_after_msg2.clone(),
+                counter.clone(),
+            ],
+        )
+        .unwrap();
+
+    let final_counter = pr_outputs.obj(0);
+    let final_inbox = pr_outputs.obj(1);
+
+    // Counter should be 1 (only msg1 applied, msg2 rejected)
+    assert_eq!(
+        final_counter.obj.get(&Key::from("count")).unwrap().unwrap().as_int().unwrap(),
+        1,
+        "counter must be 1 (msg1 +1 applied, msg2 -5 rejected)"
+    );
+
+    // processed_count should be 2 (both messages consumed from queue)
+    assert_eq!(
+        final_inbox.obj.get(&Key::from("processed_count")).unwrap().unwrap().as_int().unwrap(),
+        2,
+        "processed_count must be 2"
+    );
+
+    // Fully caught up: processed_messages_root == messages_root
+    let final_pmr = final_inbox.obj.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+    let final_mr = final_inbox.obj.get(&Key::from("messages_root")).unwrap().unwrap();
+    assert_eq!(
+        final_pmr, final_mr,
+        "must be fully caught up after processing both messages"
+    );
+
+    // Verify hash chain: H(H(EMPTY, c1), c2) == messages_root
+    let expected_mid = pod2::middleware::hash_values(&[
+        Value::from(pod2::middleware::EMPTY_HASH),
+        Value::from(message1.obj.commitment()),
+    ]);
+    let expected_final = pod2::middleware::hash_values(&[
+        Value::from(expected_mid),
+        Value::from(message2.obj.commitment()),
+    ]);
+    assert_eq!(
+        final_mr,
+        Value::from(pod2::middleware::RawValue::from(expected_final)),
+        "hash chain must match"
+    );
+
+    // state_commitment should reflect counter AFTER msg1 (count=1), not unchanged
+    let new_state_commitment = final_inbox.obj.get(&Key::from("state_commitment")).unwrap().unwrap();
+    let expected_sc = Value::from(pod2::middleware::RawValue::from(final_counter.obj.commitment()));
+    assert_eq!(
+        new_state_commitment, expected_sc,
+        "state_commitment must reflect counter after applying msg1"
+    );
+
+    // inbox_id preserved
+    assert_eq!(
+        final_inbox.obj.get(&Key::from("inbox_id")).unwrap().unwrap(),
+        inbox_id,
+        "inbox_id must be preserved"
+    );
+
+    println!("ProcessAndRejectCounterMessages test passed:");
+    println!("  - msg1 (+1) applied, msg2 (-5) rejected");
+    println!("  - counter: 0 -> 1");
+    println!("  - processed_count: 0 -> 2, fully caught up");
+    println!("  - state_commitment updated to H(counter_at_1)");
+}

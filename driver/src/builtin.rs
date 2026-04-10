@@ -164,6 +164,14 @@ const ACTION_META: &[ActionMeta] = &[
         reads_block: false,
         hidden: false,
     },
+    ActionMeta {
+        name: "ProcessAndRejectCounterMessages",
+        emoji: "⚙️🚫",
+        description: "Process msg1 (increment) and reject msg2 (would go negative) in one batch.",
+        cpu_cost: "10-20s",
+        reads_block: false,
+        hidden: false,
+    },
 ];
 
 const CLASS_META: &[ClassMeta] = &[
@@ -807,6 +815,28 @@ pub(crate) fn actions() -> Vec<api::Action> {
                     .set("blueprint", Arg::literal("Inbox"))
                     .set("public", Arg::literal(true))
                     .snippet(|step| reject_counter_inbox_details(step)),
+            ],
+        },
+        // ProcessAndRejectCounterMessages: process msg1 (apply its amount),
+        // reject msg2 (prove count + amount1 + amount2 < 0). Chain through
+        // both messages: H(H(old_pmr, c1), c2) == messages_root.
+        // Counter is updated with msg1's amount only.
+        api::Action {
+            name: "ProcessAndRejectCounterMessages",
+            steps: vec![
+                Step::input("message1", "InboxMessage").is_public(true),
+                Step::input("message2", "InboxMessage").is_public(true),
+                Step::input("inbox", "Inbox").is_public(true),
+                Step::input("counter", "Counter"),
+                Step::output("new_counter", "Counter")
+                    .set("blueprint", Arg::literal("Counter"))
+                    .set("public", Arg::literal(false))
+                    .set("count", Arg::literal(0i64))
+                    .snippet(|step| process_and_reject_counter_details(step)),
+                Step::output("new_inbox", "Inbox")
+                    .set("blueprint", Arg::literal("Inbox"))
+                    .set("public", Arg::literal(true))
+                    .snippet(|step| process_and_reject_inbox_details(step)),
             ],
         },
     ]
@@ -1486,6 +1516,263 @@ fn process_counter_inbox2_details(step: Step) -> Step {
     // Prove fully caught up: new_pmr == messages_root
     .condition(
         "Equal(new_pmr_2, kept_messages_root_2)",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pmr = inbox.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+            let old_root = Hash(old_pmr.raw().0);
+            let m1 = ctx.vars.get("message1").as_dictionary().unwrap();
+            let m2 = ctx.vars.get("message2").as_dictionary().unwrap();
+            let mid = hash_values(&[Value::from(old_root), Value::from(m1.commitment())]);
+            let new_pmr = hash_values(&[Value::from(mid), Value::from(m2.commitment())]);
+            let mr_val = inbox.get(&Key::from("messages_root")).unwrap().unwrap();
+            let mr = Hash(mr_val.raw().0);
+            ctx.bld
+                .builder
+                .priv_op(Operation::eq(
+                    RawValue::from(new_pmr),
+                    RawValue::from(mr),
+                ))
+                .unwrap()
+        }),
+    )
+}
+
+/// ProcessAndRejectCounterMessages counter output: apply only msg1's amount.
+/// new_count = old_count + amount1 (msg2 is rejected, not applied).
+/// Also proves the rejection: count + amount1 + amount2 < 0.
+/// Rejection conditions live here (not on the inbox step) to avoid
+/// pushing the inbox step over the predicate split boundary limit.
+fn process_and_reject_counter_details(step: Step) -> Step {
+    step.var(
+        "pr_amount1",
+        Box::new(|ctx| {
+            let m = ctx.vars.get("message1").as_dictionary().unwrap();
+            let amount = m.get(&Key::from("amount")).unwrap().unwrap().as_int().unwrap();
+            ctx.store("pr_amount1_val", Box::new(amount));
+            Value::from(amount)
+        }),
+    )
+    .var(
+        "pr_amount2",
+        Box::new(|ctx| {
+            let m = ctx.vars.get("message2").as_dictionary().unwrap();
+            let amount = m.get(&Key::from("amount")).unwrap().unwrap().as_int().unwrap();
+            ctx.store("pr_amount2_val", Box::new(amount));
+            Value::from(amount)
+        }),
+    )
+    .var(
+        "pr_counter_inbox_id",
+        Box::new(|ctx| {
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            counter.get(&Key::from("inbox_id")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "pr_new_count",
+        Box::new(|ctx| {
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            let old_count = counter.get(&Key::from("count")).unwrap().unwrap().as_int().unwrap();
+            let a1: Box<i64> = ctx.take("pr_amount1_val");
+            ctx.store("pr_old_count", Box::new(old_count));
+            ctx.store("pr_a1_for_sum", Box::new(*a1));
+            Value::from(old_count + *a1)
+        }),
+    )
+    // would_be = new_count + amount2 = (count + amount1) + amount2
+    .var(
+        "pr_would_be",
+        Box::new(|ctx| {
+            let new_count = ctx.vars.get("pr_new_count").as_int().unwrap();
+            let a2: Box<i64> = ctx.take("pr_amount2_val");
+            ctx.store("pr_a2_for_sum", Box::new(*a2));
+            ctx.store("pr_new_count_for_sum", Box::new(new_count));
+            Value::from(new_count + *a2)
+        }),
+    )
+    .set("inbox_id", Arg::var("pr_counter_inbox_id"))
+    // Prove: new_count = old_count + amount1
+    .condition(
+        "SumOf(pr_new_count, counter.count, pr_amount1)",
+        Box::new(|ctx| {
+            let old_count: Box<i64> = ctx.take("pr_old_count");
+            let a1: Box<i64> = ctx.take("pr_a1_for_sum");
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::sum_of(
+                    *old_count + *a1,
+                    (&counter, "count"),
+                    *a1,
+                ))
+                .unwrap()
+        }),
+    )
+    // Prove: would_be = new_count + amount2
+    .condition(
+        "SumOf(pr_would_be, pr_new_count, pr_amount2)",
+        Box::new(|ctx| {
+            let new_count: Box<i64> = ctx.take("pr_new_count_for_sum");
+            let a2: Box<i64> = ctx.take("pr_a2_for_sum");
+            ctx.bld
+                .builder
+                .priv_op(Operation::sum_of(
+                    *new_count + *a2,
+                    *new_count,
+                    *a2,
+                ))
+                .unwrap()
+        }),
+    )
+    // Prove: 0 > would_be (applying msg2 would make counter negative)
+    .condition(
+        "Gt(0, pr_would_be)",
+        Box::new(|ctx| {
+            let counter = ctx.vars.get("counter").as_dictionary().unwrap();
+            let old_count = counter.get(&Key::from("count")).unwrap().unwrap().as_int().unwrap();
+            let m1 = ctx.vars.get("message1").as_dictionary().unwrap();
+            let a1 = m1.get(&Key::from("amount")).unwrap().unwrap().as_int().unwrap();
+            let m2 = ctx.vars.get("message2").as_dictionary().unwrap();
+            let a2 = m2.get(&Key::from("amount")).unwrap().unwrap().as_int().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::gt(0, old_count + a1 + a2))
+                .unwrap()
+        }),
+    )
+    .update("count", Arg::var("pr_new_count"))
+}
+
+/// ProcessAndRejectCounterMessages inbox output: advance processed_count by 2,
+/// chain through both messages, verify endpoint == messages_root.
+/// state_commitment reflects the counter AFTER applying msg1 only.
+/// NOTE: Rejection proof lives on the counter step to stay within
+/// the predicate split boundary public-arg limit.
+fn process_and_reject_inbox_details(step: Step) -> Step {
+    step
+    .var(
+        "pr_kept_inbox_id",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("inbox_id")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "pr_kept_message_count",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("message_count")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "pr_kept_messages_root",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            inbox.get(&Key::from("messages_root")).unwrap().unwrap()
+        }),
+    )
+    .var(
+        "pr_new_state_commitment",
+        Box::new(|ctx| {
+            let new_counter = ctx.vars.get("new_counter").as_dictionary().unwrap();
+            Value::from(RawValue::from(new_counter.commitment()))
+        }),
+    )
+    // processed_count += 2
+    .var(
+        "pr_new_processed_count",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pc = inbox.get(&Key::from("processed_count")).unwrap().unwrap().as_int().unwrap();
+            ctx.store("pr_old_pc", Box::new(old_pc));
+            Value::from(old_pc + 2)
+        }),
+    )
+    // Chain: pmr0 -> H(pmr0, c1) = mid_root -> H(mid_root, c2) = new_pmr
+    .var(
+        "pr_mid_root",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pmr = inbox.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+            let old_root = Hash(old_pmr.raw().0);
+            let m1 = ctx.vars.get("message1").as_dictionary().unwrap();
+            let mid_root = hash_values(&[Value::from(old_root), Value::from(m1.commitment())]);
+            ctx.store("pr_mid_root_hash", Box::new(mid_root));
+            Value::from(RawValue::from(mid_root))
+        }),
+    )
+    .var(
+        "pr_new_pmr",
+        Box::new(|ctx| {
+            let mid_root: Box<Hash> = ctx.take("pr_mid_root_hash");
+            let m2 = ctx.vars.get("message2").as_dictionary().unwrap();
+            let new_root = hash_values(&[Value::from(*mid_root), Value::from(m2.commitment())]);
+            ctx.store("pr_new_pmr_hash", Box::new(new_root));
+            Value::from(RawValue::from(new_root))
+        }),
+    )
+    // All Sets
+    .set("inbox_id", Arg::var("pr_kept_inbox_id"))
+    .set("message_count", Arg::var("pr_kept_message_count"))
+    .set("messages_root", Arg::var("pr_kept_messages_root"))
+    .set("processed_count", Arg::var("pr_new_processed_count"))
+    .set("processed_messages_root", Arg::var("pr_new_pmr"))
+    .set("state_commitment", Arg::var("pr_new_state_commitment"))
+    // 1. processed_count incremented by 2
+    .condition(
+        "SumOf(pr_new_processed_count, inbox.processed_count, 2)",
+        Box::new(|ctx| {
+            let old_pc: Box<i64> = ctx.take("pr_old_pc");
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            ctx.bld
+                .builder
+                .priv_op(Operation::sum_of(*old_pc + 2, (&inbox, "processed_count"), 2))
+                .unwrap()
+        }),
+    )
+    // 2. Chain link 1: mid_root = H(old_pmr, commitment(msg1))
+    .condition(
+        "HashOf(pr_mid_root, inbox.processed_messages_root, message1)",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pmr = inbox.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+            let old_root = Hash(old_pmr.raw().0);
+            let m1 = ctx.vars.get("message1").as_dictionary().unwrap();
+            let mid_root = hash_values(&[Value::from(old_root), Value::from(m1.commitment())]);
+            ctx.bld
+                .builder
+                .priv_op(Operation::hash_of(
+                    RawValue::from(mid_root),
+                    (&inbox, "processed_messages_root"),
+                    m1.commitment(),
+                ))
+                .unwrap()
+        }),
+    )
+    // 3. Chain link 2: new_pmr = H(mid_root, commitment(msg2))
+    .condition(
+        "HashOf(pr_new_pmr, pr_mid_root, message2)",
+        Box::new(|ctx| {
+            let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
+            let old_pmr = inbox.get(&Key::from("processed_messages_root")).unwrap().unwrap();
+            let old_root = Hash(old_pmr.raw().0);
+            let m1 = ctx.vars.get("message1").as_dictionary().unwrap();
+            let mid = hash_values(&[Value::from(old_root), Value::from(m1.commitment())]);
+            let m2 = ctx.vars.get("message2").as_dictionary().unwrap();
+            let new_root = hash_values(&[Value::from(mid), Value::from(m2.commitment())]);
+            ctx.bld
+                .builder
+                .priv_op(Operation::hash_of(
+                    RawValue::from(new_root),
+                    RawValue::from(mid),
+                    m2.commitment(),
+                ))
+                .unwrap()
+        }),
+    )
+    // 4. Fully caught up: new_pmr == messages_root
+    .condition(
+        "Equal(pr_new_pmr, pr_kept_messages_root)",
         Box::new(|ctx| {
             let inbox = ctx.vars.get("inbox").as_dictionary().unwrap();
             let old_pmr = inbox.get(&Key::from("processed_messages_root")).unwrap().unwrap();
