@@ -157,6 +157,8 @@ async fn submit_proof(
         block_number: None,
         last_error: None,
         next_attempt_at: Some(now),
+        nonce: None,
+        bump_count: 0,
         created_at: now,
         updated_at: now,
     };

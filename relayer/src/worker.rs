@@ -6,7 +6,7 @@ use tracing::{info, warn};
 
 use crate::{
     db::Db,
-    eth::{EthGateway, ReceiptOutcome},
+    eth::{EthGateway, FeeOverrides, ReceiptOutcome},
     model::{JobStatus, RelayJob},
     time_utils::now_ts,
 };
@@ -20,6 +20,12 @@ pub struct WorkerConfig {
     pub receipt_poll_secs: u64,
     pub receipt_timeout_secs: Option<u64>,
     pub idle_sleep_ms: u64,
+    /// Seconds after submission before first fee-bump attempt. `None` disables bumping.
+    pub fee_bump_after_secs: Option<u64>,
+    /// Percentage to increase fees per bump (e.g. 20 = 1.2x). Min 13 for EIP-1559 rules.
+    pub fee_bump_multiplier_pct: u64,
+    /// Maximum number of fee bumps per job.
+    pub fee_bump_max: u32,
 }
 
 /// Main worker loop: recover inflight rows, then repeatedly pick and process due jobs.
@@ -109,12 +115,23 @@ async fn send_queued_job(
     job.updated_at = now;
     db.put_job(&job).await?;
 
+    // Query nonce before submission so we can store it for potential fee bumps.
+    // Single-worker guarantees no nonce race between query and send_transaction.
+    let nonce = match eth_client.get_next_nonce().await {
+        Ok(n) => Some(n),
+        Err(err) => {
+            warn!(job_id = %job.job_id, ?err, "Failed to query nonce; submitting without tracking");
+            None
+        }
+    };
+
     info!(
         job_id = %job.job_id,
         attempt = job.attempt_count,
         payload_bytes = job.payload_bytes.len(),
         tx_final = %job.tx_final,
         state_root_hash = %job.state_root_hash,
+        nonce = ?nonce,
         "Submitting relay payload to Ethereum"
     );
 
@@ -125,11 +142,14 @@ async fn send_queued_job(
             job.submitted_at = Some(now);
             job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
             job.last_error = None;
+            job.nonce = nonce.map(|n| n as i64);
+            job.bump_count = 0;
             job.updated_at = now;
             db.put_job(&job).await?;
             info!(
                 job_id = %job.job_id,
                 tx_hash = ?job.tx_hash,
+                nonce = ?job.nonce,
                 next_attempt_at = ?job.next_attempt_at,
                 "Submitted blob transaction"
             );
@@ -228,6 +248,55 @@ async fn poll_submitted_job(
             Ok(())
         }
         Ok(None) => {
+            // Check if we should attempt a fee bump.
+            if let Some(bump_after) = cfg.fee_bump_after_secs {
+                if let (Some(submitted_at), Some(nonce)) = (job.submitted_at, job.nonce) {
+                    let bump_threshold =
+                        bump_after as i64 * (job.bump_count as i64 + 1);
+                    let elapsed = now.saturating_sub(submitted_at);
+
+                    if elapsed >= bump_threshold
+                        && (job.bump_count as u32) < cfg.fee_bump_max
+                    {
+                        match try_fee_bump(
+                            eth_client,
+                            cfg,
+                            &job.payload_bytes,
+                            nonce as u64,
+                            job.bump_count,
+                        )
+                        .await
+                        {
+                            Ok(new_tx_hash) => {
+                                let old_hash = tx_hash_str.clone();
+                                job.tx_hash = Some(new_tx_hash.clone());
+                                job.bump_count += 1;
+                                job.next_attempt_at =
+                                    Some(now + cfg.receipt_poll_secs as i64);
+                                job.updated_at = now;
+                                db.put_job(&job).await?;
+                                info!(
+                                    job_id = %job.job_id,
+                                    old_tx_hash = %old_hash,
+                                    new_tx_hash = %new_tx_hash,
+                                    bump_count = job.bump_count,
+                                    "Fee-bumped blob transaction"
+                                );
+                                return Ok(());
+                            }
+                            Err(err) => {
+                                warn!(
+                                    job_id = %job.job_id,
+                                    bump_count = job.bump_count,
+                                    ?err,
+                                    "Fee bump failed; continuing to poll original tx"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             job.status = JobStatus::Submitted;
             job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
             job.updated_at = now;
@@ -256,6 +325,54 @@ async fn poll_submitted_job(
             Ok(())
         }
     }
+}
+
+/// Fetch current network fees, apply the bump multiplier, and resubmit at the same nonce.
+async fn try_fee_bump(
+    eth_client: &dyn EthGateway,
+    cfg: &WorkerConfig,
+    payload_bytes: &[u8],
+    nonce: u64,
+    current_bump_count: i32,
+) -> Result<String> {
+    let estimate = eth_client.get_current_fees().await?;
+
+    // Apply multiplier compounding once per bump done so far + this one.
+    // This ensures each replacement is >= 12.5% above the previous (EIP-1559 rule).
+    let multiplier_pct = cfg.fee_bump_multiplier_pct;
+    let bumps = (current_bump_count + 1) as u32;
+    let apply_bump = |base: u128| -> u128 {
+        let mut val = base;
+        for _ in 0..bumps {
+            val = val.saturating_mul(100 + multiplier_pct as u128) / 100;
+        }
+        val.max(1)
+    };
+
+    let bumped_priority = apply_bump(estimate.max_priority_fee_per_gas);
+    let bumped_max_fee = apply_bump(estimate.base_fee_per_gas + estimate.max_priority_fee_per_gas);
+
+    // Don't override blob fee — let alloy auto-fill it the same way it does for
+    // initial submissions. The blob fee market is separate from the regular base
+    // fee, and explicitly bumping it can produce values that exceed account balance.
+    let fees = FeeOverrides {
+        max_fee_per_gas: bumped_max_fee,
+        max_priority_fee_per_gas: bumped_priority,
+        max_fee_per_blob_gas: None,
+    };
+
+    info!(
+        nonce,
+        bump = bumps,
+        max_fee_per_gas = fees.max_fee_per_gas,
+        max_priority_fee_per_gas = fees.max_priority_fee_per_gas,
+        network_base_fee = estimate.base_fee_per_gas,
+        "Attempting fee bump"
+    );
+
+    eth_client
+        .submit_payload_with_fees(payload_bytes, nonce, &fees)
+        .await
 }
 
 /// Mark a job as failed while preserving any known receipt block number.
@@ -345,12 +462,17 @@ mod tests {
     use sqlx::{postgres::PgPoolOptions, Executor};
     use url::Url;
 
+    use crate::eth::FeeEstimate;
+
     use super::*;
 
     #[derive(Default)]
     struct MockEthGateway {
         submit_results: Mutex<VecDeque<Result<String>>>,
         poll_results: Mutex<VecDeque<Result<Option<ReceiptOutcome>>>>,
+        nonce_results: Mutex<VecDeque<Result<u64>>>,
+        fee_results: Mutex<VecDeque<Result<FeeEstimate>>>,
+        bump_submit_results: Mutex<VecDeque<Result<String>>>,
     }
 
     #[async_trait]
@@ -370,6 +492,38 @@ mod tests {
                 .pop_front()
                 .unwrap_or_else(|| Err(anyhow!("unexpected poll call")))
         }
+
+        async fn get_next_nonce(&self) -> Result<u64> {
+            self.nonce_results
+                .lock()
+                .expect("poisoned")
+                .pop_front()
+                .unwrap_or(Ok(0))
+        }
+
+        async fn get_current_fees(&self) -> Result<FeeEstimate> {
+            self.fee_results
+                .lock()
+                .expect("poisoned")
+                .pop_front()
+                .unwrap_or(Ok(FeeEstimate {
+                    base_fee_per_gas: 1_000_000_000,
+                    max_priority_fee_per_gas: 100_000_000,
+                }))
+        }
+
+        async fn submit_payload_with_fees(
+            &self,
+            _payload_bytes: &[u8],
+            _nonce: u64,
+            _fees: &FeeOverrides,
+        ) -> Result<String> {
+            self.bump_submit_results
+                .lock()
+                .expect("poisoned")
+                .pop_front()
+                .unwrap_or_else(|| Err(anyhow!("unexpected bump submit call")))
+        }
     }
 
     fn mk_job(status: JobStatus) -> RelayJob {
@@ -386,6 +540,8 @@ mod tests {
             block_number: None,
             last_error: None,
             next_attempt_at: Some(now_ts()),
+            nonce: None,
+            bump_count: 0,
             created_at: now_ts(),
             updated_at: now_ts(),
         }
@@ -399,6 +555,9 @@ mod tests {
             receipt_poll_secs: 1,
             receipt_timeout_secs: Some(3),
             idle_sleep_ms: 20,
+            fee_bump_after_secs: None,
+            fee_bump_multiplier_pct: 20,
+            fee_bump_max: 5,
         }
     }
 
