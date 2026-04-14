@@ -264,6 +264,13 @@ pub(crate) fn build_relayer_payload(
         .iter()
         .map(|entry| Ok(Hash(entry?.raw().0)))
         .collect::<Result<Vec<_>>>()?;
+    // Measure compressed proof size
+    let mut proof_buf: Vec<u8> = Vec::new();
+    plonky2::util::serialization::Write::write_compressed_proof(&mut proof_buf, &compressed)
+        .expect("proof size measurement");
+    let proof_bytes = proof_buf.len();
+
+    let nullifiers_len = nullifiers.len();
     let payload = Payload {
         proof: PayloadProof::Plonky2(Box::new(compressed)),
         tx_final,
@@ -271,5 +278,19 @@ pub(crate) fn build_relayer_payload(
         nullifiers,
     };
 
-    Ok(payload.to_bytes())
+    let payload_bytes = payload.to_bytes();
+    let nullifier_bytes = nullifiers_len * 32;
+    let overhead = 2 + 1 + 32 + 32 + 1; // magic + proof_type + tx_final + state_root_hash + nullifier_count
+    eprintln!(
+        "[PAYLOAD_SIZE] proof: {} bytes, nullifiers: {} ({} bytes), overhead: {} bytes, total: {} bytes ({:.1} KiB / {:.1} KiB max)",
+        proof_bytes,
+        nullifiers_len,
+        nullifier_bytes,
+        overhead,
+        payload_bytes.len(),
+        payload_bytes.len() as f64 / 1024.0,
+        common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES as f64 / 1024.0,
+    );
+
+    Ok(payload_bytes)
 }
