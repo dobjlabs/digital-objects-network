@@ -1,4 +1,6 @@
-# Crafting predicates
+# Test example
+
+The example in the test `test_sdk_1` produces the following podlang code:
 
 ```
 FindLog(log, tx, tx0, private: log0, work) = AND (

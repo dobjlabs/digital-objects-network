@@ -34,6 +34,7 @@ fn grounding_witness(state: &TestState, inputs: &[Tx]) -> Arc<GroundingWitness> 
     )
 }
 
+#[allow(clippy::cloned_ref_to_slice_refs)]
 #[test]
 fn test_sdk_1() {
     let find_log_src = r#"
@@ -90,7 +91,7 @@ fn test_sdk_1() {
         }
 "#;
 
-    let sdk = Sdk::new();
+    let sdk = Sdk::default();
 
     let actions = &[
         "FindLog",
@@ -99,7 +100,7 @@ fn test_sdk_1() {
         "CraftWoodPick",
         "UseWoodPick",
     ];
-    let module = sdk.load_module_from_src_actions(&find_log_src, actions);
+    let module = sdk.load_module_from_src_actions(find_log_src, actions);
 
     println!("{}", module.podlang_src);
 
