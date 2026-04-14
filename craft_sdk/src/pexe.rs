@@ -1,10 +1,13 @@
 use crate::api;
 use hex::FromHex;
+use itertools::zip_eq;
+use lt_eq_u256_pod::LtEqU256Pod;
 use pod2::middleware::{
     containers::{Array, Dictionary, Set},
-    Hash, Key, MainPodProver, NativePredicate, Params, RawValue, Statement, VDSet, Value,
+    Hash, Key, MainPodProver, NativePredicate, Params, Pod, RawValue, Statement, VDSet, Value,
     EMPTY_VALUE,
 };
+use vdfpod::VdfPod;
 
 use pod2::lang::{load_module, Module};
 use pod2::{
@@ -60,7 +63,7 @@ struct ActionContextInner {
     insts: Vec<Inst>,
     vars: Vec<String>,
     var_state: HashMap<String, VarState>,
-    gen_ctx: Option<GenContext>,
+    exe_ctx: Option<ExeContext>,
 }
 
 #[derive(Default, Debug)]
@@ -68,13 +71,13 @@ struct VarState {
     ts: usize,
 }
 
-struct Var<'a> {
+struct VarNameFmt<'a> {
     name: &'a str,
     ts: usize,
     max_ts: usize,
 }
 
-impl<'a> Var<'a> {
+impl<'a> VarNameFmt<'a> {
     fn inc(&mut self) {
         self.ts += 1;
     }
@@ -87,7 +90,7 @@ impl<'a> Var<'a> {
     }
 }
 
-impl<'a> fmt::Display for Var<'a> {
+impl<'a> fmt::Display for VarNameFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name)?;
         if self.ts != self.max_ts {
@@ -97,28 +100,30 @@ impl<'a> fmt::Display for Var<'a> {
     }
 }
 
-struct ArgFmt<'a>(&'a HashMap<&'a str, Var<'a>>, &'a RArg);
+struct ArgFmt<'a>(&'a HashMap<&'a str, VarNameFmt<'a>>, &'a RArg);
 
 impl<'a> fmt::Display for ArgFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let arg = self.1.borrow();
-        if let Some(name) = arg.var_name.as_ref() {
-            if let Some(key) = arg.key.as_ref() {
-                write!(f, "{}.{key}", self.0[name.as_str()])
-            } else {
-                write!(f, "{}", self.0[name.as_str()])
-            }
-        } else {
-            write!(f, "{}", arg.value.as_ref().expect("value defined"))
+        match &*arg {
+            VarOrValue::Var(Var {
+                name, key: None, ..
+            }) => write!(f, "{}", self.0[name.as_str()]),
+            VarOrValue::Var(Var {
+                name,
+                key: Some(key),
+                ..
+            }) => write!(f, "{}.{key}", self.0[name.as_str()]),
+            VarOrValue::Value(value) => write!(f, "{value}"),
         }
     }
 }
 
 impl ActionContextInner {
-    fn new(name: String, gen_ctx: Option<GenContext>) -> Self {
+    fn new(name: String, exe_ctx: Option<ExeContext>) -> Self {
         let mut c = Self {
             name,
-            gen_ctx,
+            exe_ctx: exe_ctx,
             ..Default::default()
         };
         c.add_var("tx".to_string()).expect("tx not yet defined");
@@ -175,7 +180,7 @@ impl ActionContextInner {
                     obj,
                     class: _,
                 } => {
-                    vars.push(obj.borrow().var_name.clone().unwrap());
+                    vars.push(obj.borrow().var_name().to_string());
                 }
                 _ => {}
             }
@@ -201,13 +206,13 @@ impl ActionContextInner {
             }
             write!(w, "{var}")?;
         }
-        let mut vars: HashMap<&str, Var> = self
+        let mut vars: HashMap<&str, VarNameFmt> = self
             .vars
             .iter()
             .map(|v| {
                 (
                     v.as_str(),
-                    Var {
+                    VarNameFmt {
                         name: v,
                         ts: 0,
                         max_ts: self.var_state[v].ts,
@@ -230,12 +235,14 @@ impl ActionContextInner {
                         }
                     }
                     let obj = obj.borrow();
-                    objs.push((io, obj.var_name.clone().expect("obj var name")));
+                    objs.push((io, obj.var_name().to_string()));
                 }
-                Inst::Set { obj, key, value } => {
+                Inst::Set { obj, kvs } => {
                     let obj = &vars[obj.as_str()];
-                    let value = ArgFmt(&vars, value);
-                    writeln!(w, r#"  DictContains({obj}, "{key}", {value})"#,)?;
+                    for (key, value) in kvs {
+                        let value = ArgFmt(&vars, value);
+                        writeln!(w, r#"  DictContains({obj}, "{key}", {value})"#,)?;
+                    }
                 }
                 Inst::Update { obj, key, value } => {
                     let obj_name = obj.as_str();
@@ -313,11 +320,10 @@ enum Inst {
         key: String,
         value: RArg,
     },
-    /// Set a key of the object (doesn't modify the object)
+    /// Set a list of keys values that the object must have
     Set {
         obj: String,
-        key: String,
-        value: RArg,
+        kvs: Vec<(String, RArg)>,
     },
     Statement {
         pred: NativePredicate,
@@ -343,7 +349,16 @@ impl fmt::Display for Inst {
         match self {
             Self::Object { io, obj, class } => write!(f, "object {io} {}: {class}", obj.borrow()),
             Self::Update { obj, key, value } => write!(f, "update {obj}.{key} {}", value.borrow()),
-            Self::Set { obj, key, value } => write!(f, "set {obj}.{key} {}", value.borrow()),
+            Self::Set { obj, kvs } => {
+                write!(f, "set [")?;
+                for (i, (k, v)) in kvs.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{obj}.{k} {}", v.borrow())?;
+                }
+                write!(f, "]")
+            }
             Self::Statement { pred, args } => {
                 write!(f, "statement {pred}(")?;
                 fmt_args(args, f)?;
@@ -379,31 +394,40 @@ impl ActionContext {
     //
     // Internal methods
     //
-    fn new(name: String, gen_ctx: Option<GenContext>) -> Self {
+    fn new(name: String, exe_ctx: Option<ExeContext>) -> Self {
         Self(Rc::new(RefCell::new(ActionContextInner::new(
-            name, gen_ctx,
+            name, exe_ctx,
         ))))
     }
-    fn new_obj() -> Dictionary {
-        dict!({"work" => EMPTY_VALUE, "key" => Value::from(rand_raw_value())})
+    fn new_obj(exe_ctx: &ExeContext) -> Dictionary {
+        dict!({"work" => EMPTY_VALUE, "key" => exe_ctx.rand_value()})
     }
     fn obj_io(self, io: ObjectIO, class: String) -> RResult<ArgContext> {
-        let arg = Rc::new(RefCell::new(Arg::obj()));
+        let arg = Rc::new(RefCell::new(VarOrValue::var()));
         let mut ctx = self.0.borrow_mut();
-        if let Some(gen_ctx) = &mut ctx.gen_ctx {
+        if let Some(exe_ctx) = &mut ctx.exe_ctx {
             match io {
                 ObjectIO::Output => {
-                    arg.borrow_mut().value = Some(Value::from(Self::new_obj()));
+                    arg.borrow_mut()
+                        .set_value(Value::from(Self::new_obj(exe_ctx)));
                 }
-                _ => todo!(),
+                ObjectIO::Input => {
+                    let (st_class, obj) = exe_ctx.inputs.pop().expect("exists");
+                    exe_ctx.sts.push(st_class);
+                    arg.borrow_mut().set_value(Value::from(obj));
+                }
+                ObjectIO::Mutate => {
+                    let (st_class, obj) = exe_ctx.inputs.pop().expect("exists");
+                    exe_ctx.sts.push(st_class);
+                    arg.borrow_mut().set_value(Value::from(obj));
+                }
             }
-        } else {
-            ctx.insts.push(Inst::Object {
-                io,
-                obj: arg.clone(),
-                class,
-            });
         }
+        ctx.insts.push(Inst::Object {
+            io,
+            obj: arg.clone(),
+            class,
+        });
         ctx.inc_t_var("tx").expect("tx exists");
         Ok(ArgContext::new(self.clone(), arg))
     }
@@ -434,11 +458,32 @@ impl ActionContext {
         self.obj_io(ObjectIO::Mutate, class)
     }
     fn random(self) -> RResult<ArgContext> {
-        let value = Rc::new(RefCell::new(Arg::literal(placeholder())));
+        let value = Rc::new(RefCell::new(VarOrValue::var()));
+        let mut ctx = self.0.borrow_mut();
+        if let Some(exe_ctx) = &mut ctx.exe_ctx {
+            value.borrow_mut().set_value(exe_ctx.rand_value());
+        }
         Ok(ArgContext::new(self.clone(), value))
     }
-    fn pow_obj_grind(self, obj: Dynamic, target: i64) -> RResult<ArgContext> {
-        let key = Rc::new(RefCell::new(Arg::literal(placeholder())));
+    fn pow_obj_grind(self, obj: Dynamic, target: Dynamic) -> RResult<ArgContext> {
+        // For now we assume that obj is var, and thus return a key that is also var
+        let key = Rc::new(RefCell::new(VarOrValue::var()));
+        let obj = try_rarg_from_dynamic(obj)?;
+        let target = try_rarg_from_dynamic(target)?;
+        let mut ctx = self.0.borrow_mut();
+        if let Some(exe_ctx) = &mut ctx.exe_ctx {
+            // This is a copy of the object, we don't modify the obj argument.
+            let mut obj = obj.borrow().as_value().as_dictionary().expect("dict");
+            let target = target.borrow().as_value().as_int().expect("int") as u64;
+            let mut k = exe_ctx.rand_value();
+            if !exe_ctx.mock {
+                while RawValue::from(obj.commitment()).0[3].0 > target {
+                    k = exe_ctx.rand_value();
+                    obj.update(&Key::from("key"), &k).unwrap();
+                }
+            }
+            key.borrow_mut().set_value(k);
+        }
         Ok(ArgContext::new(self.clone(), key))
     }
     fn st_gt(self, v0: Dynamic, v1: Dynamic) -> RResult<()> {
@@ -448,21 +493,59 @@ impl ActionContext {
         self.native_st(NativePredicate::SumOf, vec![v0, v1, v2])
     }
     fn intro_vdf(self, n_iters: Dynamic, input: Dynamic) -> RResult<ArgContext> {
-        let work = Rc::new(RefCell::new(Arg::literal(placeholder())));
-        self.0.borrow_mut().insts.push(Inst::Intro {
+        let n_iters = try_rarg_from_dynamic(n_iters)?;
+        let input = try_rarg_from_dynamic(input)?;
+        let work = Rc::new(RefCell::new(VarOrValue::var()));
+        let mut ctx = self.0.borrow_mut();
+        if let Some(exe_ctx) = &mut ctx.exe_ctx {
+            let n_iters = n_iters.borrow().as_value().as_int().expect("int") as usize;
+            let input = input.borrow().as_value().raw();
+            let vdf_pod = if exe_ctx.mock {
+                VdfPod::new_boxed_mock(&exe_ctx.params, exe_ctx.vd_set.clone(), n_iters, input)
+            } else {
+                VdfPod::new_boxed(&exe_ctx.params, exe_ctx.vd_set.clone(), n_iters, input)
+            }
+            .unwrap();
+            let st_vdf = vdf_pod.pub_statements()[0].clone();
+            let work_value = st_vdf.args()[2].literal().unwrap();
+            exe_ctx
+                .bld
+                .builder
+                .add_pod(exe_ctx.main_pod(vdf_pod))
+                .unwrap();
+            exe_ctx.sts.push(st_vdf);
+            work.borrow_mut().set_value(work_value);
+        }
+        ctx.insts.push(Inst::Intro {
             pred: Intro::Vdf,
-            args: vec![
-                try_rarg_from_dynamic(n_iters)?,
-                try_rarg_from_dynamic(input)?,
-                work.clone(),
-            ],
+            args: vec![n_iters, input, work.clone()],
         });
         Ok(ArgContext::new(self.clone(), work))
     }
     fn intro_lt_eq_u256(self, lhs: Dynamic, rhs: Dynamic) -> RResult<()> {
-        self.0.borrow_mut().insts.push(Inst::Intro {
+        let lhs = try_rarg_from_dynamic(lhs)?;
+        let rhs = try_rarg_from_dynamic(rhs)?;
+        let mut ctx = self.0.borrow_mut();
+        if let Some(exe_ctx) = &mut ctx.exe_ctx {
+            let lhs = lhs.borrow().as_value().raw();
+            let rhs = rhs.borrow().as_value().raw();
+            let lt_eq_u256_pod = if exe_ctx.mock {
+                LtEqU256Pod::new_boxed_mock(&exe_ctx.params, exe_ctx.vd_set.clone(), lhs, rhs)
+            } else {
+                LtEqU256Pod::new_boxed(&exe_ctx.params, exe_ctx.vd_set.clone(), lhs, rhs)
+            }
+            .unwrap();
+            let st_lt_eq_u256 = lt_eq_u256_pod.pub_statements()[0].clone();
+            exe_ctx
+                .bld
+                .builder
+                .add_pod(exe_ctx.main_pod(lt_eq_u256_pod))
+                .unwrap();
+            exe_ctx.sts.push(st_lt_eq_u256);
+        }
+        ctx.insts.push(Inst::Intro {
             pred: Intro::LtEqU256,
-            args: vec![try_rarg_from_dynamic(lhs)?, try_rarg_from_dynamic(rhs)?],
+            args: vec![lhs, rhs],
         });
         Ok(())
     }
@@ -485,50 +568,96 @@ impl fmt::Display for ObjectIO {
     }
 }
 
-/// Argument to a statement template
-#[derive(Clone, Debug)]
-pub struct Arg {
+/// Corresponds to a variable/wildcard in a custom predicate.
+#[derive(Debug, Clone)]
+struct Var {
+    name: String,
+    /// Is None at declaration time, Some at execution time
     value: Option<Value>,
+    /// If Some, then this `Var` is treated as an Entry
     key: Option<String>,
-    is_object: bool,
-    obj_set_list: Vec<(String, Value)>,
-    var_name: Option<String>,
 }
 
-impl fmt::Display for Arg {
+#[derive(Debug, Clone)]
+enum VarOrValue {
+    Var(Var),
+    Value(Value),
+}
+
+impl fmt::Display for VarOrValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match (&self.var_name, &self.key) {
-            (Some(name), None) => write!(f, "{name}"),
-            (Some(name), Some(key)) => write!(f, "{name}.{key}"),
-            (None, _) => write!(f, "{}", self.value.as_ref().expect("has value")),
+        match &self {
+            Self::Var(Var {
+                name, key: None, ..
+            }) => write!(f, "{name}"),
+            Self::Var(Var {
+                name,
+                key: Some(key),
+                ..
+            }) => write!(f, "{name}.{key}"),
+            Self::Value(value) => write!(f, "{value}"),
         }
     }
 }
 
-impl Arg {
-    fn literal(value: Value) -> Self {
-        Self {
-            value: Some(value),
-            key: None,
-            is_object: false,
-            obj_set_list: Vec::new(),
-            var_name: None,
-        }
+impl VarOrValue {
+    fn value(value: Value) -> Self {
+        Self::Value(value)
     }
-    fn obj() -> Self {
-        Self {
+    fn var() -> Self {
+        Self::Var(Var {
+            name: "?".to_string(),
             value: None,
             key: None,
-            is_object: true,
-            obj_set_list: Vec::new(),
-            var_name: None,
+        })
+    }
+    fn var_name(&self) -> &str {
+        self.as_var().name.as_str()
+    }
+    fn set_var_name(&mut self, name: String) -> RResult<()> {
+        match self {
+            Self::Value(_) => Err("var cannot be a literal value".into()),
+            Self::Var(var) => {
+                var.name = name;
+                Ok(())
+            }
         }
     }
-    fn set_var_name(&mut self, name: String) {
-        self.var_name = Some(name)
+    fn as_var(&self) -> &Var {
+        match self {
+            Self::Var(var) => var,
+            Self::Value(_) => panic!("not a var"),
+        }
+    }
+    fn as_mut_var(&mut self) -> &mut Var {
+        match self {
+            Self::Var(var) => var,
+            Self::Value(_) => panic!("not a var"),
+        }
+    }
+    fn as_value(&self) -> &Value {
+        match self {
+            Self::Value(value) => value,
+            Self::Var(Var { value, .. }) => value.as_ref().expect("has value"),
+        }
+    }
+    fn as_mut_value(&mut self) -> &mut Value {
+        match self {
+            Self::Value(value) => value,
+            Self::Var(Var { value, .. }) => value.as_mut().expect("has value"),
+        }
+    }
+    fn set_value(&mut self, value: Value) {
+        match self {
+            Self::Value(v) => *v = value,
+            Self::Var(Var { value: v, .. }) => *v = Some(value),
+        }
+    }
+    fn into_obj(&self) -> Dictionary {
+        self.as_value().as_dictionary().expect("is dict")
     }
     fn mut_dict<T>(&mut self, mut f: impl FnMut(&mut Dictionary) -> T) -> T {
-        let obj = self.value.as_mut().expect("has value");
+        let obj = self.as_mut_value();
         let mut dict = obj.as_dictionary().expect("is dict");
         let output = f(&mut dict);
         *obj = Value::from(dict);
@@ -542,63 +671,108 @@ struct ArgContext {
     arg: RArg,
 }
 
+fn dynamic_to_kvs(kvs: Dynamic) -> RResult<Vec<(String, RArg)>> {
+    let kvs = kvs
+        .try_cast::<Vec<Dynamic>>()
+        .ok_or_else(|| "kvs not array")?;
+    let kvs = kvs
+        .into_iter()
+        .map(|kv| {
+            kv.try_cast::<Vec<Dynamic>>()
+                .ok_or_else(|| "kv not array".into())
+        })
+        .collect::<RResult<Vec<_>>>()?;
+    kvs.into_iter()
+        .map(|kv| {
+            let [k, v] = kv.try_into().map_err(|_| "kv.len != 2")?;
+            let k = k.try_cast::<String>().ok_or_else(|| "k not string")?;
+            let v = try_rarg_from_dynamic(v)?;
+            Ok((k, v))
+        })
+        .collect()
+}
+
 impl ArgContext {
     fn new(ctx: ActionContext, arg: RArg) -> Self {
         Self { ctx, arg }
     }
     fn literal(ctx: ActionContext, value: Value) -> Self {
-        let arg = Rc::new(RefCell::new(Arg::literal(value)));
+        let arg = Rc::new(RefCell::new(VarOrValue::value(value)));
         Self::new(ctx, arg)
     }
-    fn set(self, key: String, value: Dynamic) -> RResult<()> {
+    fn set(self, kvs: Dynamic) -> RResult<()> {
+        let kvs = dynamic_to_kvs(kvs)?;
         let mut arg = self.arg.borrow_mut();
-        if let Some(name) = &arg.var_name {
+        if let VarOrValue::Var(var) = &*arg {
+            let var_name = var.name.clone();
             let mut ctx = self.ctx.0.borrow_mut();
-            let value = try_rarg_from_dynamic(value)?;
-            if let Some(gen_ctx) = &mut ctx.gen_ctx {
-                let value = value.borrow().value.clone().expect("has value");
-                arg.mut_dict(|obj| {
-                    obj.insert(&Key::from(&key), &value).expect("TODO");
-                });
-                arg.obj_set_list.push((key, value));
-                // let st = gen_ctx
-                //     .bld
-                //     .builder
-                //     .priv_op(Operation::dict_contains(obj.clone(), key, value))
-                //     .unwrap();
-                // gen_ctx.sts.push(st);
-            } else {
-                ctx.insts.push(Inst::Set {
-                    obj: name.clone(),
-                    key,
-                    value,
-                });
+            if let Some(exe_ctx) = &mut ctx.exe_ctx {
+                let mut obj_set_list = Vec::new();
+                for (key, value) in &kvs {
+                    let value = value.borrow().as_value().clone();
+                    arg.mut_dict(|obj| {
+                        obj.insert(&Key::from(key), &value).expect("TODO");
+                    });
+                    obj_set_list.push((key, value));
+                }
+                for (key, value) in obj_set_list {
+                    let obj = arg.into_obj();
+                    let st = exe_ctx
+                        .bld
+                        .builder
+                        .priv_op(Operation::dict_contains(obj.clone(), key.clone(), value))
+                        .unwrap();
+                    exe_ctx.sts.push(st);
+                }
             }
+            ctx.insts.push(Inst::Set { obj: var_name, kvs });
         }
         Ok(())
     }
     fn get(self, key: String) -> RResult<ArgContext> {
-        let value = Rc::new(RefCell::new(Arg::literal(placeholder())));
+        // For now we assume that obj is var, and thus return a value that is also var
+        let value = Rc::new(RefCell::new(VarOrValue::var()));
+        let mut ctx = self.ctx.0.borrow_mut();
+        if let Some(_) = &mut ctx.exe_ctx {
+            let obj = self.arg.borrow().as_value().as_dictionary().expect("dict");
+            let v = obj.get(&Key::from(key)).expect("TODO").expect("TODO");
+            value.borrow_mut().set_value(v);
+        }
         Ok(ArgContext::new(self.ctx.clone(), value))
     }
     fn update(self, key: String, value: Dynamic) -> RResult<()> {
-        let arg = self.arg.borrow();
-        if let Some(name) = &arg.var_name {
+        let mut arg = self.arg.borrow_mut();
+        if let VarOrValue::Var(var) = &*arg {
+            let var_name = var.name.clone();
+            let value = try_rarg_from_dynamic(value)?;
             let mut ctx = self.ctx.0.borrow_mut();
+            if let Some(exe_ctx) = &mut ctx.exe_ctx {
+                let value = value.borrow().as_value().clone();
+                let (obj0, obj) = arg.mut_dict(|obj| {
+                    let obj0 = obj.clone();
+                    obj.update(&Key::from(&key), &value).expect("TODO");
+                    (obj0, obj.clone())
+                });
+                let st = exe_ctx
+                    .bld
+                    .builder
+                    .priv_op(Operation::dict_update(obj, obj0, key.clone(), value))
+                    .unwrap();
+                exe_ctx.sts.push(st);
+            }
+            ctx.inc_t_var(var_name.as_str())?;
             ctx.insts.push(Inst::Update {
-                obj: name.clone(),
+                obj: var_name,
                 key,
-                value: try_rarg_from_dynamic(value)?,
+                value,
             });
-            ctx.inc_t_var(name.as_str())?;
         }
         Ok(())
     }
     fn entry(&mut self, index: String) -> RResult<ArgContext> {
         let mut arg = self.arg.borrow().clone();
-        assert!(arg.key.is_none());
-        assert!(arg.var_name.is_some());
-        arg.key = Some(index);
+        let var = arg.as_mut_var();
+        var.key = Some(index);
         let arg = Rc::new(RefCell::new(arg));
         Ok(ArgContext::new(self.ctx.clone(), arg))
     }
@@ -606,7 +780,7 @@ impl ArgContext {
 
 fn arg_sub(a: ArgContext, b: ArgContext) -> RResult<ArgContext> {
     // TODO
-    let value = Rc::new(RefCell::new(Arg::literal(placeholder())));
+    let value = Rc::new(RefCell::new(VarOrValue::value(placeholder())));
     Ok(ArgContext::new(a.ctx.clone(), value))
 }
 
@@ -640,7 +814,7 @@ fn _try_value_from_dynamic(v: Dynamic) -> Result<Value, Dynamic> {
 
 fn try_rarg_from_dynamic(v: Dynamic) -> RResult<RArg> {
     let v = match _try_value_from_dynamic(v) {
-        Ok(v) => return Ok(Rc::new(RefCell::new(Arg::literal(v)))),
+        Ok(v) => return Ok(Rc::new(RefCell::new(VarOrValue::value(v)))),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<RArg>() {
@@ -661,18 +835,18 @@ fn try_value_from_dynamic(v: Dynamic) -> RResult<Value> {
         Err(v) => v,
     };
     let v = match v.try_cast_result::<RArg>() {
-        Ok(v) => return Ok(v.borrow().value.clone().expect("TODO")),
+        Ok(v) => return Ok(v.borrow().as_value().clone()),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<ArgContext>() {
-        Ok(v) => return Ok(v.arg.borrow().value.clone().expect("TODO")),
+        Ok(v) => return Ok(v.arg.borrow().as_value().clone()),
         Err(v) => v,
     };
     _ = v;
     Err(format!("invalid value type: {}", v.type_name()).into())
 }
 
-type RArg = Rc<RefCell<Arg>>;
+type RArg = Rc<RefCell<VarOrValue>>;
 
 #[derive(Debug, Default)]
 struct ActionMeta {
@@ -696,7 +870,7 @@ impl From<&ActionContextInner> for ActionMeta {
                     obj,
                     class,
                 } => {
-                    let obj_name = obj.borrow().var_name.clone().expect("obj has name");
+                    let obj_name = obj.borrow().as_var().name.clone();
                     meta.inputs.push((obj_name, class.clone()));
                 }
                 Inst::Object {
@@ -704,7 +878,7 @@ impl From<&ActionContextInner> for ActionMeta {
                     obj,
                     class,
                 } => {
-                    let obj_name = obj.borrow().var_name.clone().expect("obj has name");
+                    let obj_name = obj.borrow().as_var().name.clone();
                     meta.outputs.push((obj_name, class.clone()));
                 }
                 Inst::Object {
@@ -712,7 +886,7 @@ impl From<&ActionContextInner> for ActionMeta {
                     obj,
                     class,
                 } => {
-                    let obj_name = obj.borrow().var_name.clone().expect("obj has name");
+                    let obj_name = obj.borrow().as_var().name.clone();
                     meta.inputs.push((obj_name.clone(), class.clone()));
                     meta.outputs.push((obj_name, class.clone()));
                 }
@@ -724,7 +898,7 @@ impl From<&ActionContextInner> for ActionMeta {
 }
 
 #[derive(Debug)]
-struct Class {
+struct ClassMeta {
     name: String,
     // Actions that define the class with the index within the Action arguments that correspond to
     // the class.
@@ -737,11 +911,11 @@ struct Data0 {
     actions: Vec<ActionContext>,
     // Metadata extracted from `actions`
     actions_meta: Vec<ActionMeta>,
-    classes: Vec<Class>,
+    classes: Vec<ClassMeta>,
 }
 
 impl Data0 {
-    fn actions_to_classes(actions: &[ActionMeta]) -> Vec<Class> {
+    fn actions_to_classes(actions: &[ActionMeta]) -> Vec<ClassMeta> {
         let mut class_to_actions: HashMap<String, Vec<(String, usize)>> = HashMap::new();
         let mut classes_ordered: Vec<String> = Vec::new();
         for action in actions {
@@ -760,7 +934,7 @@ impl Data0 {
         let mut classes = Vec::new();
         for class in classes_ordered {
             let actions = class_to_actions[&class].clone();
-            classes.push(Class {
+            classes.push(ClassMeta {
                 name: class,
                 actions,
             });
@@ -808,7 +982,7 @@ impl Data0 {
         self.actions_meta.iter().find(|a| a.name == name).unwrap()
     }
 
-    fn fmt_class(&self, w: &mut dyn fmt::Write, class: &Class) -> fmt::Result {
+    fn fmt_class(&self, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt::Result {
         let name = &class.name;
         write!(w, "Is{name}(state, private: tx, tx0")?;
 
@@ -867,6 +1041,20 @@ impl Data0 {
         Ok(())
     }
 
+    fn output_index_class_st_index(actions: &[ActionMeta]) -> HashMap<(String, usize), usize> {
+        let mut output_index_class_st_index = HashMap::new();
+        let mut class_action_count = HashMap::new();
+        for action in actions {
+            for (output_index, (class, _name)) in action.outputs.iter().enumerate() {
+                let class_st_index = class_action_count.entry(class).or_insert(0);
+                output_index_class_st_index
+                    .insert((action.name.clone(), output_index), *class_st_index);
+                *class_st_index += 1;
+            }
+        }
+        output_index_class_st_index
+    }
+
     fn data1(self, engine: Engine, ast: AST) -> Data1 {
         let mut podlang_src = String::new();
         self.fmt(&mut podlang_src).unwrap();
@@ -881,11 +1069,13 @@ impl Data0 {
             )
             .expect("compiles"),
         );
+        let output_index_class_st_index = Self::output_index_class_st_index(&self.actions_meta);
         Data1 {
             txlib_mod: self.txlib_mod,
             podlang_src,
             actions: self.actions_meta,
             classes: self.classes,
+            output_index_class_st_index,
             module,
             engine,
             ast,
@@ -897,7 +1087,9 @@ struct Data1 {
     txlib_mod: Arc<Module>,
     podlang_src: String,
     actions: Vec<ActionMeta>,
-    classes: Vec<Class>,
+    classes: Vec<ClassMeta>,
+    // Maps from output index in the Action to statement index in the Class predicate
+    output_index_class_st_index: HashMap<(String, usize), usize>,
     module: Arc<Module>,
     engine: Engine,
     ast: AST,
@@ -906,6 +1098,9 @@ struct Data1 {
 impl Data1 {
     fn action_by_name(&self, name: &str) -> &ActionMeta {
         self.actions.iter().find(|a| a.name == name).unwrap()
+    }
+    fn class_by_name(&self, name: &str) -> &ClassMeta {
+        self.classes.iter().find(|a| a.name == name).unwrap()
     }
 }
 
@@ -953,16 +1148,45 @@ struct Phase2 {
     data: Data1,
 }
 
-struct GenContext {
+struct ExeContext {
     mock: bool,
     params: Params,
     vd_set: VDSet,
-    grounding_witness: Arc<GroundingWitness>,
-    prover: Box<dyn MainPodProver>,
+    // grounding_witness: Arc<GroundingWitness>,
+    // prover: Box<dyn MainPodProver>,
     tx_builder: TxBuilder,
     bld: BuildContext,
+    // Input (class statement, object) to be consumed by input/mutate
+    inputs: Vec<(Statement, Dictionary)>,
     // Statements used to build the Action custom statement
     sts: Vec<Statement>,
+}
+
+impl ExeContext {
+    fn main_pod(&self, pod: Box<dyn Pod>) -> MainPod {
+        let pub_statements = pod.pub_statements();
+        MainPod {
+            pod,
+            public_statements: pub_statements,
+            params: self.params.clone(),
+        }
+    }
+    fn rand_value(&self) -> Value {
+        // TODO: If mock return a deterministic value that is different after every call, with a
+        // nonce that persists
+        Value::from(rand_raw_value())
+    }
+}
+
+struct OutputData {
+    class: String,
+    obj: Dictionary,
+}
+
+fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
+    let solution = builder.solve().unwrap();
+    log::debug!("solution needs {} pods", solution.solution().pod_count);
+    solution.prove(prover).unwrap().pods.pop().unwrap()
 }
 
 impl Phase2 {
@@ -993,7 +1217,7 @@ impl Phase2 {
     fn new_tx_builder(&self, ctx: &mut BuildContext, inputs: &[(Dictionary, Tx)]) -> TxBuilder {
         TxBuilder::new(ctx, inputs, self.grounding_witness.clone())
     }
-    fn action(self, action: &str, inputs: Vec<SpendableObject>) -> SpendableObjects {
+    fn action(&self, action: &str, inputs: Vec<SpendableObject>) -> SpendableObjects {
         let action = self.data.action_by_name(action);
         let builder = self.new_builder();
         let mut bld = BuildContext {
@@ -1002,34 +1226,150 @@ impl Phase2 {
         };
 
         let mut tx_inputs = Vec::new();
-        for (input_index, (_class, _name)) in action.inputs.iter().enumerate() {
-            let input = &inputs[input_index];
+        let mut input_class_sts_objs = Vec::with_capacity(inputs.len());
+        for (input, (_class, _name)) in zip_eq(inputs, &action.inputs) {
             tx_inputs.push(input.tx_input());
+            let input_pod_sts = input.pod.pod.pub_statements();
+            let st_class = input_pod_sts[0].clone();
+            bld.builder.add_pod(input.pod).unwrap();
+            input_class_sts_objs.push((st_class, input.obj));
         }
+        // Reverse the input objects so that we can pop them in order
+        input_class_sts_objs.reverse();
 
         let tx_builder = self.new_tx_builder(&mut bld, &tx_inputs);
 
-        let gen_ctx = GenContext {
+        let exe_ctx = ExeContext {
             mock: self.mock,
-            params: self.params,
-            vd_set: self.vd_set,
-            grounding_witness: self.grounding_witness,
-            prover: self.prover,
+            params: self.params.clone(),
+            vd_set: self.vd_set.clone(),
+            // grounding_witness: self.grounding_witness,
+            // prover: self.prover,
+            inputs: input_class_sts_objs.clone(),
             bld,
             tx_builder,
             sts: Vec::new(),
         };
-        let ctx = ActionContext::new(action.name.clone(), Some(gen_ctx));
+        let rctx = ActionContext::new(action.name.clone(), Some(exe_ctx));
         let mut scope = Scope::new();
+        // Execute the action rhai code
         let _result = self
             .data
             .engine
-            .call_fn::<Dynamic>(&mut scope, &self.data.ast, &action.name, (ctx.clone(),))
+            .call_fn::<Dynamic>(&mut scope, &self.data.ast, &action.name, (rctx.clone(),))
             .unwrap();
-        for st in &ctx.0.borrow().gen_ctx.as_ref().unwrap().sts {
+        let mut ctx = rctx.0.borrow_mut();
+        let mut exe_ctx = ctx.exe_ctx.take().unwrap();
+
+        // Add the transaction predicates
+        let mut output_objs = Vec::new();
+        for inst in &ctx.insts {
+            match inst {
+                Inst::Object { io, obj, class } => {
+                    let obj = obj.borrow().into_obj();
+                    let st = match io {
+                        ObjectIO::Output => {
+                            output_objs.push(OutputData {
+                                class: class.clone(),
+                                obj: obj.clone(),
+                            });
+                            exe_ctx.tx_builder.insert(&mut exe_ctx.bld, obj)
+                        }
+                        ObjectIO::Input => {
+                            input_class_sts_objs.pop().expect("exists");
+                            exe_ctx.tx_builder.delete(&mut exe_ctx.bld, obj)
+                        }
+                        ObjectIO::Mutate => {
+                            let obj0 = input_class_sts_objs.pop().expect("exists").1;
+                            output_objs.push(OutputData {
+                                class: class.clone(),
+                                obj: obj.clone(),
+                            });
+                            exe_ctx.tx_builder.mutate(&mut exe_ctx.bld, obj, obj0)
+                        }
+                    };
+                    exe_ctx.sts.push(st);
+                }
+                _ => {}
+            };
+        }
+        for st in &exe_ctx.sts {
             println!("DBG st: {st}");
         }
-        todo!()
+
+        // Action statement
+        let st_action = exe_ctx
+            .bld
+            .apply_custom_pred(false, &action.name, HashMap::new(), exe_ctx.sts)
+            .unwrap();
+        exe_ctx.bld.builder.reveal(&st_action).unwrap();
+
+        // Data necessary to make each output object' class statement
+        let mut output_objs_st_class_data = Vec::new();
+
+        // Output (includes Output & Mutate) Class(obj) statements
+        for (index, OutputData { class, obj }) in output_objs.iter().enumerate() {
+            let class = self.data.class_by_name(class);
+            let mut sts = vec![Statement::None; class.actions.len()];
+            let class_st_index =
+                self.data.output_index_class_st_index[&(action.name.clone(), index)];
+            sts[class_st_index] = st_action.clone();
+            let pred = format!("Is{}", class.name);
+            // We delay the creation of the class statement until we have created all actions
+            // because the class statements go to different pods.
+            output_objs_st_class_data.push((pred, sts));
+        }
+
+        // output_objs.extend(output.into_iter().map(|out| out.obj));
+
+        // Prove a pod with the class statements and the last tx statement
+        exe_ctx
+            .bld
+            .builder
+            .reveal(exe_ctx.tx_builder.st_tx())
+            .unwrap();
+        let pod = prove(exe_ctx.bld.builder, &*self.prover);
+        pod.pod.verify().unwrap();
+
+        // Finalize tx and prove it in another pod
+        let tx = exe_ctx.tx_builder.tx;
+
+        let mut builder = self.new_builder();
+        let mut bld = BuildContext {
+            builder,
+            modules: self.modules.clone(),
+        };
+
+        bld.builder.add_pod(pod.clone()).unwrap();
+        let tx_builder = TxBuilder::new_from_tx(&bld, tx);
+        let (st_tx_finalize, tx) = tx_builder.finalize(&mut bld);
+        bld.builder.reveal(&st_tx_finalize).unwrap();
+
+        let tx_pod = prove(bld.builder, &*self.prover);
+        tx_pod.pod.verify().unwrap();
+
+        // Make one pod for each object with just the corresponding class statement.
+        let mut obj_pods = Vec::new();
+        for (pred, sts) in output_objs_st_class_data {
+            bld.builder = self.new_builder();
+            bld.builder.add_pod(pod.clone()).unwrap();
+            let st_class = bld
+                .apply_custom_pred(false, &pred, HashMap::new(), sts)
+                .unwrap();
+            bld.builder.reveal(&st_class).unwrap();
+
+            let obj_pod = prove(bld.builder, &*self.prover);
+            obj_pod.pod.verify().unwrap();
+            obj_pods.push(obj_pod);
+        }
+
+        let objs = output_objs.into_iter().map(|out| out.obj).collect();
+        SpendableObjects {
+            tx_pod,
+            obj_pods,
+            objs,
+            tx,
+        }
     }
 }
 
@@ -1037,6 +1377,20 @@ use common::test_state::TestState;
 
 fn tx_hash(tx: &Tx) -> Hash {
     tx.dict().commitment()
+}
+
+fn tx_nullifiers(tx: &Tx) -> Vec<Hash> {
+    tx.nullifiers
+        .iter()
+        .map(|nullifier| {
+            let nullifier = nullifier.expect("tx nullifier should decode");
+            Hash(nullifier.raw().0)
+        })
+        .collect()
+}
+
+fn apply_tx(state: &mut TestState, tx: &Tx) {
+    state.apply_tx(tx_hash(tx), tx_nullifiers(tx));
 }
 
 fn grounding_witness(state: &TestState, inputs: &[Tx]) -> Arc<GroundingWitness> {
@@ -1057,7 +1411,7 @@ fn test_pexe() {
     let find_log_src = r#"
         fn FindLog(ctx) {
             var log = ctx.output("Log");
-            log.set("blueprint", "Log");
+            log.set([["blueprint", "Log"]]);
             var work = ctx.intro_vdf(3, log);
             log.update("work", work);
         }
@@ -1065,7 +1419,7 @@ fn test_pexe() {
         fn CraftWood(ctx) {
             var log = ctx.input("Log");
             var wood = ctx.output("Wood");
-            wood.set("blueprint", "Wood");
+            wood.set([["blueprint", "Wood"]]);
             var key = ctx.pow_obj_grind(wood, 9007199254740992);
             wood.update("key", key);
             ctx.intro_lt_eq_u256(wood, 9007199254740992);
@@ -1075,16 +1429,18 @@ fn test_pexe() {
             var wood = ctx.input("Wood");
             var stick_a = ctx.output("Stick");
             var stick_b = ctx.output("Stick");
-            stick_a.set("blueprint", "Stick");
-            stick_b.set("blueprint", "Stick");
+            stick_a.set([["blueprint", "Stick"]]);
+            stick_b.set([["blueprint", "Stick"]]);
         }
 
         fn CraftWoodPick(ctx) {
             var wood = ctx.input("Wood");
             var stick = ctx.input("Stick");
             var pick = ctx.output("WoodPick");
-            pick.set("blueprint", "WoodPick");
-            pick.set("durability", 100);
+            pick.set([
+                ["blueprint", "WoodPick"],
+                ["durability", 100]
+            ]);
         }
 
         fn use_pick(ctx, pick, vdf_iters) {
@@ -1114,22 +1470,32 @@ fn test_pexe() {
             ["var", "$ident$", "=", "$expr$"],
             true,
             |ctx: &mut EvalContext, inputs: &[Expression]| -> RResult<Dynamic> {
+                fn f(
+                    ctx: &mut EvalContext,
+                    var_name: String,
+                    expr: &Expression,
+                ) -> RResult<Dynamic> {
+                    let value = ctx.eval_expression_tree(expr)?;
+                    let arg_ctx = value.try_cast::<ArgContext>().expect("TODO");
+
+                    // Push a new variable into the scope if it doesn't already exist and upgrade it to
+                    // store the var_name.
+                    // Otherwise just set its value.
+                    if !ctx.scope().is_constant(&var_name).unwrap_or(false) {
+                        arg_ctx.arg.borrow_mut().set_var_name(var_name.clone())?;
+                        arg_ctx.ctx.0.borrow_mut().add_var(var_name.clone())?;
+                        ctx.scope_mut().set_value(var_name, arg_ctx.clone());
+                        Ok(Dynamic::from(arg_ctx))
+                    } else {
+                        Err(format!("variable {} is constant", var_name).into())
+                    }
+                }
                 let var_name = inputs[0].get_string_value().expect("ident").to_string();
                 let expr = &inputs[1];
-                let value = ctx.eval_expression_tree(expr)?;
-                let arg_ctx = value.try_cast::<ArgContext>().expect("TODO");
-
-                // Push a new variable into the scope if it doesn't already exist and upgrade it to
-                // store the var_name.
-                // Otherwise just set its value.
-                if !ctx.scope().is_constant(&var_name).unwrap_or(false) {
-                    arg_ctx.arg.borrow_mut().set_var_name(var_name.clone());
-                    arg_ctx.ctx.0.borrow_mut().add_var(var_name.clone())?;
-                    ctx.scope_mut().set_value(var_name, arg_ctx.clone());
-                    Ok(Dynamic::from(arg_ctx))
-                } else {
-                    Err(format!("variable {} is constant", var_name).into())
-                }
+                f(ctx, var_name, expr).map_err(|mut e| {
+                    e.set_position(expr.position());
+                    e
+                })
             },
         )
         .unwrap();
@@ -1153,7 +1519,10 @@ fn test_pexe() {
             "var_assign",
             |lhs: ArgContext, rhs: Dynamic| -> RResult<()> {
                 let value = try_value_from_dynamic(rhs)?;
-                lhs.arg.borrow_mut().value = Some(value);
+                let mut ctx = lhs.ctx.0.borrow_mut();
+                if let Some(_) = &mut ctx.exe_ctx {
+                    *lhs.arg.borrow_mut().as_mut_value() = value;
+                }
                 Ok(())
             },
         )
@@ -1179,10 +1548,10 @@ fn test_pexe() {
 
     for action in &[
         "FindLog",
-        // "CraftWood",
-        // "CraftSticks",
-        // "CraftWoodPick",
-        // "UseWoodPick",
+        "CraftWood",
+        "CraftSticks",
+        "CraftWoodPick",
+        "UseWoodPick",
     ] {
         let ctx = ActionContext::new(action.to_string(), None);
         let _result = engine
@@ -1201,6 +1570,53 @@ fn test_pexe() {
 
     let mut state = TestState::default();
     let data = data.data1(engine, ast);
+
     let phase2 = Phase2::new(true, data, grounding_witness(&state, &[]));
-    phase2.action("FindLog", vec![]);
+    let [log_a] = phase2.action("FindLog", vec![]).objs();
+    println!();
+    apply_tx(&mut state, &log_a.tx);
+
+    let data = phase2.data;
+    let phase2 = Phase2::new(true, data, grounding_witness(&state, &[log_a.tx.clone()]));
+    let [wood_a] = phase2.action("CraftWood", vec![log_a]).objs();
+    println!();
+    apply_tx(&mut state, &wood_a.tx);
+
+    let data = phase2.data;
+    let phase2 = Phase2::new(true, data, grounding_witness(&state, &[wood_a.tx.clone()]));
+    let [stick_a, stick_b] = phase2.action("CraftSticks", vec![wood_a]).objs();
+    println!();
+    apply_tx(&mut state, &stick_a.tx);
+
+    let data = phase2.data;
+    let phase2 = Phase2::new(true, data, grounding_witness(&state, &[]));
+    let [log_b] = phase2.action("FindLog", vec![]).objs();
+    println!();
+    apply_tx(&mut state, &log_b.tx);
+
+    let data = phase2.data;
+    let phase2 = Phase2::new(true, data, grounding_witness(&state, &[log_b.tx.clone()]));
+    let [wood_b] = phase2.action("CraftWood", vec![log_b]).objs();
+    println!();
+    apply_tx(&mut state, &wood_b.tx);
+
+    let data = phase2.data;
+    let phase2 = Phase2::new(
+        true,
+        data,
+        grounding_witness(&state, &[wood_b.tx.clone(), stick_a.tx.clone()]),
+    );
+    let [wood_pick] = phase2.action("CraftWoodPick", vec![wood_b, stick_a]).objs();
+    println!();
+    apply_tx(&mut state, &wood_pick.tx);
+
+    let data = phase2.data;
+    let phase2 = Phase2::new(
+        true,
+        data,
+        grounding_witness(&state, &[wood_pick.tx.clone()]),
+    );
+    let [wood_pick] = phase2.action("UseWoodPick", vec![wood_pick]).objs();
+    println!();
+    apply_tx(&mut state, &wood_pick.tx);
 }

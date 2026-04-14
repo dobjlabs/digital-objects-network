@@ -13,6 +13,7 @@ hex = { workspace = true }
 rand = { workspace = true }
 plonky2 = { workspace = true }
 env_logger = { workspace = true }
+itertools = { workspace = true }
 time = "0.3.46"
 tinytemplate = "1.2.1"
 rhai = "1.24.0"

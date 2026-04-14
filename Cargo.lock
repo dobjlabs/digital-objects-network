@@ -2180,6 +2180,7 @@ dependencies = [
  "common",
  "env_logger",
  "hex",
+ "itertools 0.14.0",
  "log",
  "lt_eq_u256_pod",
  "plonky2",
