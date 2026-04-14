@@ -4,15 +4,15 @@ use itertools::zip_eq;
 use lt_eq_u256_pod::LtEqU256Pod;
 use pod2::middleware::{
     containers::{Array, Dictionary, Set},
-    Hash, Key, MainPodProver, NativePredicate, Params, Pod, RawValue, Statement, VDSet, Value,
-    EMPTY_VALUE,
+    Hash, Key, MainPodProver, NativeOperation, NativePredicate, OperationAux, OperationType,
+    Params, Pod, Predicate, RawValue, Statement, VDSet, Value, EMPTY_VALUE,
 };
 use vdfpod::VdfPod;
 
 use pod2::lang::{load_module, Module};
 use pod2::{
     backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
-    frontend::{MainPod, MultiPodBuilder, Operation},
+    frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
 use rhai::{Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope, AST};
@@ -390,6 +390,40 @@ impl fmt::Display for Intro {
 
 type RResult<T> = Result<T, Box<EvalAltResult>>;
 
+fn native_pred_to_op(pred: NativePredicate) -> NativeOperation {
+    match pred {
+        NativePredicate::Equal => NativeOperation::EqualFromEntries,
+        NativePredicate::NotEqual => NativeOperation::NotEqualFromEntries,
+        NativePredicate::Lt => NativeOperation::LtFromEntries,
+        NativePredicate::LtEq => NativeOperation::LtEqFromEntries,
+        NativePredicate::Gt => NativeOperation::GtFromEntries,
+        NativePredicate::GtEq => NativeOperation::GtEqFromEntries,
+        NativePredicate::Contains => NativeOperation::ContainsFromEntries,
+        NativePredicate::NotContains => NativeOperation::NotContainsFromEntries,
+        NativePredicate::SumOf => NativeOperation::SumOf,
+        NativePredicate::ProductOf => NativeOperation::ProductOf,
+        NativePredicate::MaxOf => NativeOperation::MaxOf,
+        NativePredicate::HashOf => NativeOperation::HashOf,
+        NativePredicate::PublicKeyOf => NativeOperation::PublicKeyOf,
+        NativePredicate::SignedBy => NativeOperation::SignedBy,
+        NativePredicate::ContainerInsert => NativeOperation::ContainerInsertFromEntries,
+        NativePredicate::ContainerUpdate => NativeOperation::ContainerUpdateFromEntries,
+        NativePredicate::ContainerDelete => NativeOperation::ContainerDeleteFromEntries,
+        NativePredicate::DictContains => NativeOperation::DictContainsFromEntries,
+        NativePredicate::DictNotContains => NativeOperation::DictNotContainsFromEntries,
+        NativePredicate::ArrayContains => NativeOperation::ArrayContainsFromEntries,
+        NativePredicate::SetContains => NativeOperation::SetContainsFromEntries,
+        NativePredicate::SetNotContains => NativeOperation::SetNotContainsFromEntries,
+        NativePredicate::DictInsert => NativeOperation::DictInsertFromEntries,
+        NativePredicate::DictUpdate => NativeOperation::DictUpdateFromEntries,
+        NativePredicate::DictDelete => NativeOperation::DictDeleteFromEntries,
+        NativePredicate::SetInsert => NativeOperation::SetInsertFromEntries,
+        NativePredicate::SetDelete => NativeOperation::SetDeleteFromEntries,
+        NativePredicate::ArrayUpdate => NativeOperation::ArrayUpdateFromEntries,
+        _ => panic!("unused"),
+    }
+}
+
 impl ActionContext {
     //
     // Internal methods
@@ -439,10 +473,19 @@ impl ActionContext {
             .into_iter()
             .map(|v| try_rarg_from_dynamic(v))
             .collect::<RResult<Vec<_>>>()?;
-        self.0
-            .borrow_mut()
-            .insts
-            .push(Inst::Statement { pred, args });
+        let op = native_pred_to_op(pred);
+        let op_type = OperationType::Native(op);
+        let mut ctx = self.0.borrow_mut();
+        if let Some(exe_ctx) = &mut ctx.exe_ctx {
+            let args = args.iter().map(|v| v.borrow().as_op_arg()).collect();
+            let st = exe_ctx
+                .bld
+                .builder
+                .priv_op(Operation(op_type.clone(), args, OperationAux::None))
+                .unwrap();
+            exe_ctx.sts.push(st);
+        }
+        ctx.insts.push(Inst::Statement { pred, args });
         Ok(())
     }
     //
@@ -641,6 +684,25 @@ impl VarOrValue {
             Self::Var(Var { value, .. }) => value.as_ref().expect("has value"),
         }
     }
+    fn as_op_arg(&self) -> OperationArg {
+        match self {
+            Self::Value(value) => OperationArg::Literal(value.clone()),
+            Self::Var(Var { value, key, .. }) => {
+                let value = value.as_ref().expect("has value").clone();
+                if let Some(key) = key {
+                    let dict = value.as_dictionary().expect("dict");
+                    let value = dict.get(&key.into()).unwrap().unwrap();
+                    OperationArg::Statement(Statement::Contains(
+                        dict.into(),
+                        key.clone().into(),
+                        value.into(),
+                    ))
+                } else {
+                    OperationArg::Literal(value)
+                }
+            }
+        }
+    }
     fn as_mut_value(&mut self) -> &mut Value {
         match self {
             Self::Value(value) => value,
@@ -779,8 +841,15 @@ impl ArgContext {
 }
 
 fn arg_sub(a: ArgContext, b: ArgContext) -> RResult<ArgContext> {
-    // TODO
-    let value = Rc::new(RefCell::new(VarOrValue::value(placeholder())));
+    // TODO: Handle the case where a and b are not var
+    let value = Rc::new(RefCell::new(VarOrValue::var()));
+    let ctx = a.ctx.0.borrow();
+    if let Some(_) = &ctx.exe_ctx {
+        let a = a.arg.borrow().as_value().as_int().expect("int");
+        let b = b.arg.borrow().as_value().as_int().expect("int");
+        let result = a.checked_sub(b).expect("no overflow");
+        value.borrow_mut().set_value(Value::from(result));
+    }
     Ok(ArgContext::new(a.ctx.clone(), value))
 }
 
@@ -1045,7 +1114,7 @@ impl Data0 {
         let mut output_index_class_st_index = HashMap::new();
         let mut class_action_count = HashMap::new();
         for action in actions {
-            for (output_index, (class, _name)) in action.outputs.iter().enumerate() {
+            for (output_index, (_name, class)) in action.outputs.iter().enumerate() {
                 let class_st_index = class_action_count.entry(class).or_insert(0);
                 output_index_class_st_index
                     .insert((action.name.clone(), output_index), *class_st_index);
@@ -1518,10 +1587,10 @@ fn test_pexe() {
         .register_fn(
             "var_assign",
             |lhs: ArgContext, rhs: Dynamic| -> RResult<()> {
-                let value = try_value_from_dynamic(rhs)?;
                 let mut ctx = lhs.ctx.0.borrow_mut();
                 if let Some(_) = &mut ctx.exe_ctx {
-                    *lhs.arg.borrow_mut().as_mut_value() = value;
+                    let rhs = try_value_from_dynamic(rhs)?;
+                    *lhs.arg.borrow_mut().as_mut_value() = rhs;
                 }
                 Ok(())
             },
