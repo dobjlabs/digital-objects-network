@@ -68,6 +68,18 @@ If you do not want to create the local `postgres` role, also set:
 - In `synchronizer/.env`:
   - `SYNC_METADATA_DB_URL`
 
+## Groth16 Setup (optional)
+
+The driver supports two proof backends: **Plonky2** (default) and **Groth16**.
+Groth16 proofs are ~600 bytes vs ~120 KiB for Plonky2, but require a one-time
+trusted setup that generates ~1.6 GB of artifacts in `~/.cache/pod2-groth16/`.
+
+```bash
+just groth16-setup
+```
+
+This takes ~10 minutes. Once complete, enable Groth16 by setting `"proofType": "groth16"` in `~/.dobj/settings.json`.
+
 ## Run
 
 Start the full local stack:

@@ -7,6 +7,7 @@ edition = "2024"
 pod2_onchain = { git = "https://github.com/dhvanipa/pod2-onchain.git", rev = "b7d1859", default-features = false, features = [
   "disk_cache",
 ], optional = true }
+dirs = { version = "6.0.0", optional = true }
 pod2 = { workspace = true }
 plonky2 = { workspace = true }
 anyhow = { workspace = true }
@@ -24,5 +25,5 @@ txlib = { path = "../txlib" }
 
 [features]
 default = []
-groth16 = ["pod2_onchain"]
+groth16 = ["pod2_onchain", "dirs"]
 test-utils = []

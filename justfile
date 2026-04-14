@@ -36,6 +36,11 @@ test-ignored:
 test-e2e:
     cargo test -p synchronizer test_e2e_real_proof --release -- --ignored --nocapture
 
+# Generate Groth16 trusted setup artifacts (one-time, slow ~10min)
+# Outputs to ~/.cache/pod2-groth16/
+groth16-setup:
+    cargo test --release -p common --features common/groth16 groth::tests::test_gen_trusted_setup -- --ignored --nocapture
+
 # Build all workspace crates
 build:
     cargo build --workspace

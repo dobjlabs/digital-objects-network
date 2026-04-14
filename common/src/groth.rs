@@ -4,38 +4,35 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use tracing::info;
 
-const INPUT_DIR: &str = "tmp/plonky2-proof";
-const OUTPUT_DIR: &str = "tmp/groth-artifacts";
+const CACHE_SUBDIR_INPUT: &str = "pod2-groth16/plonky2-proof";
+const CACHE_SUBDIR_OUTPUT: &str = "pod2-groth16/groth-artifacts";
 
-/// Resolve groth artifact paths relative to the workspace root (the directory
-/// containing the top-level `Cargo.toml`).  This file lives at
-/// `common/src/groth.rs`, so walking up two levels from `CARGO_MANIFEST_DIR`
-/// (which points at `common/`) lands on the workspace root.  At runtime the
-/// compile-time path is baked in, so it works regardless of the process cwd.
-fn workspace_path(relative: &str) -> String {
-    let workspace_root: PathBuf = [env!("CARGO_MANIFEST_DIR"), ".."].iter().collect();
-    workspace_root
-        .join(relative)
-        .canonicalize()
-        .unwrap_or_else(|_| workspace_root.join(relative))
-        .to_string_lossy()
-        .into_owned()
+/// Returns the platform cache directory (~/.cache on Linux, ~/Library/Caches on
+/// macOS) joined with the given subdirectory. Creates the path if it doesn't
+/// exist.
+fn cache_path(subdir: &str) -> Result<String> {
+    let base = dirs::cache_dir()
+        .ok_or_else(|| anyhow!("could not determine user cache directory"))?;
+    let path = base.join(subdir);
+    std::fs::create_dir_all(&path)
+        .map_err(|e| anyhow!("failed to create cache dir {}: {e}", path.display()))?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// initializes the groth16 prover memory, loading the artifacts. This method
 /// must be called before the `prove` method.
 pub fn init() -> Result<()> {
-    let input = workspace_path(INPUT_DIR);
-    let output = workspace_path(OUTPUT_DIR);
+    let input = cache_path(CACHE_SUBDIR_INPUT)?;
+    let output = cache_path(CACHE_SUBDIR_OUTPUT)?;
     pod2_onchain::init(&input, &output)?;
     Ok(())
 }
 
 pub fn load_vk() -> Result<()> {
-    let output = workspace_path(OUTPUT_DIR);
+    let output = cache_path(CACHE_SUBDIR_OUTPUT)?;
     pod2_onchain::load_vk(&output)?;
     Ok(())
 }
@@ -71,20 +68,20 @@ mod tests {
     use super::*;
 
     fn gen_trusted_setup() -> Result<()> {
-        let input_path = workspace_path(INPUT_DIR);
-        let output_path = workspace_path(OUTPUT_DIR);
+        let input_path = cache_path(CACHE_SUBDIR_INPUT)?;
+        let output_path = cache_path(CACHE_SUBDIR_OUTPUT)?;
 
         // if plonky2 groth16-friendly proof does not exist yet, generate it
         if !Path::new(&input_path).is_dir() {
-            println!("generating plonky2 groth16-friendly proof");
+            println!("generating plonky2 groth16-friendly proof at {input_path}");
             pod2_onchain::pod::sample_plonky2_g16_friendly_proof(&input_path)?;
         } else {
-            println!("plonky2 groth16-friendly proof already exists, skipping generation");
+            println!("plonky2 groth16-friendly proof already exists at {input_path}, skipping");
         }
 
         // if trusted setup does not exist yet, generate it
         if !Path::new(&output_path).is_dir() {
-            println!("generating groth16's trusted setup");
+            println!("generating groth16's trusted setup at {output_path}");
             let result = pod2_onchain::trusted_setup(&input_path, &output_path);
             println!("trusted_setup result: {result}");
         } else {
