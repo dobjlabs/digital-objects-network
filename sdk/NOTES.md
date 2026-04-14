@@ -128,15 +128,3 @@ IsStone(state, private: tx, tx0) = OR(
   MineStoneWithStonePick(state, tx, tx0)
 )
 ```
-
----
-
-src.rhai, manifest
-
-Engine
-
-Sdk::new()
-
-Sdk.load_module(src.rhai, manifest) -> SdkModule
-
-SdkModule.
