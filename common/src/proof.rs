@@ -153,13 +153,22 @@ impl ProofParser {
     }
 
     #[cfg(feature = "groth16")]
-    fn verify_groth16_proof(&self, framed: &[u8], public_inputs: Vec<F>) -> Result<()> {
-        // Decode framed bytes: [proof_len: u32 LE] [proof] [public_inputs]
+    fn verify_groth16_proof(&self, framed: &[u8], _public_inputs: Vec<F>) -> Result<()> {
+        // The Groth16 wrapping circuit exposes 15 public inputs (not the 8 from
+        // the inner Plonky2 circuit). These are produced by pod2_onchain::groth16_prove
+        // and stored in the framed payload alongside the proof.
+        //
+        // Security: the Groth16 circuit internally verifies the Plonky2 recursive
+        // proof which checks the TxFinalized statement. If the public inputs don't
+        // match, groth16_verify will reject the proof.
+        //
+        // Framing: [proof_len: u32 LE] [proof] [public_inputs]
         if framed.len() < 4 {
             return Err(anyhow!("Groth16 framed payload too short"));
         }
-        let proof_len =
-            u32::from_le_bytes(framed[..4].try_into().unwrap()) as usize;
+        let proof_len = u32::from_le_bytes(
+            framed[..4].try_into().map_err(|_| anyhow!("bad proof_len bytes"))?,
+        ) as usize;
         if framed.len() < 4 + proof_len {
             return Err(anyhow!(
                 "Groth16 framed payload truncated: expected {} proof bytes, got {}",
@@ -168,8 +177,7 @@ impl ProofParser {
             ));
         }
         let g16_proof = framed[4..4 + proof_len].to_vec();
-        // Re-encode public inputs in Gnark's format for verification
-        let g16_pub_inp = pod2_onchain::encode_public_inputs_gnark(public_inputs);
+        let g16_pub_inp = framed[4 + proof_len..].to_vec();
         pod2_onchain::groth16_verify(g16_proof, g16_pub_inp)
             .map_err(|e| anyhow!("Groth16 proof verification failed: {e}"))
     }

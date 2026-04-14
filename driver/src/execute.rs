@@ -318,6 +318,8 @@ fn build_groth16_relayer_payload(
 
     // Frame proof + public_inputs so the verifier can split them:
     // [proof_len: u32 LE] [proof] [public_inputs]
+    // The Groth16 wrapping circuit has 15 public inputs (not the 8 from the inner
+    // Plonky2 circuit), so they cannot be reconstructed — must be stored.
     let mut framed = Vec::with_capacity(4 + g16_proof.len() + g16_pub_inp.len());
     framed.extend_from_slice(&(g16_proof.len() as u32).to_le_bytes());
     framed.extend_from_slice(&g16_proof);
