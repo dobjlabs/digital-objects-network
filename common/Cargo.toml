@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-pod2_onchain = { git = "https://github.com/0xPARC/pod2-onchain.git", rev = "5f2047752349a0f06665bc8f6ba82f50bc5ad435", default-features = false, features = [
+pod2_onchain = { git = "https://github.com/dhvanipa/pod2-onchain.git", rev = "b7d1859", default-features = false, features = [
   "disk_cache",
 ], optional = true }
 pod2 = { workspace = true }

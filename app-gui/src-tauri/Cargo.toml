@@ -27,7 +27,7 @@ sysinfo = "0.37"
 craft_sdk = { path = "../../craft_sdk" }
 txlib = { path = "../../txlib" }
 common = { path = "../../common" }
-driver = { path = "../../driver" }
+driver = { path = "../../driver", features = ["groth16"] }
 pod2utils = { path = "../../pod2utils" }
 vdfpod = { path = "../../intro_pods/vdfpod" }
 lt_eq_u256_pod = { path = "../../intro_pods/lt_eq_u256_pod" }

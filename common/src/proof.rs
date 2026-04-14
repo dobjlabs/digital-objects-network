@@ -9,8 +9,8 @@ use plonky2::plonk::proof::CompressedProofWithPublicInputs;
 use pod2::{
     backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::calculate_statements_hash},
     middleware::{
-        CommonCircuitData, CustomPredicateRef, Hash, Params, Statement, Value, VerifierCircuitData,
-        containers::Set,
+        CommonCircuitData, CustomPredicateRef, F, Hash, Params, Statement, Value,
+        VerifierCircuitData, containers::Set,
     },
 };
 
@@ -102,6 +102,12 @@ impl ProofParser {
         let vds_root = DEFAULT_VD_SET.root();
         let (common_circuit_data, verifier_circuit_data) =
             &*cache_get_shrunk_main_pod_circuit_data(&params);
+
+        // Load Groth16 verification key so verify_groth16_proof can call groth16_verify.
+        #[cfg(feature = "groth16")]
+        crate::groth::load_vk()
+            .map_err(|e| anyhow!("failed to load Groth16 verification key: {e}"))?;
+
         Ok(Self {
             txn_finalized_pred,
             vds_root,
@@ -119,25 +125,53 @@ impl ProofParser {
     fn verify_shrunk_main_pod(&self, proof: PayloadProof, st: Statement) -> Result<()> {
         let sts_hash = calculate_statements_hash(&[st.into()]);
         let public_inputs = [sts_hash.0, self.vds_root.0].concat();
-        let compressed_proof = match proof {
-            PayloadProof::Plonky2(proof) => proof,
-            PayloadProof::Groth16(_) => {
-                return Err(anyhow!("Groth16 proof verification is not yet implemented"));
+        match proof {
+            PayloadProof::Plonky2(compressed_proof) => {
+                let proof_with_pis = CompressedProofWithPublicInputs {
+                    proof: *compressed_proof,
+                    public_inputs,
+                };
+                let proof = proof_with_pis
+                    .decompress(
+                        &self.verifier_circuit_data.verifier_only.circuit_digest,
+                        &self.common_circuit_data,
+                    )
+                    .map_err(|e| anyhow!("decompress proof: {e}"))?;
+                self.verifier_circuit_data
+                    .verify(proof)
+                    .map_err(|e| anyhow!("proof verification failed: {e}"))
             }
-        };
-        let proof_with_pis = CompressedProofWithPublicInputs {
-            proof: *compressed_proof,
-            public_inputs,
-        };
-        let proof = proof_with_pis
-            .decompress(
-                &self.verifier_circuit_data.verifier_only.circuit_digest,
-                &self.common_circuit_data,
-            )
-            .map_err(|e| anyhow!("decompress proof: {e}"))?;
-        self.verifier_circuit_data
-            .verify(proof)
-            .map_err(|e| anyhow!("proof verification failed: {e}"))
+            #[cfg(feature = "groth16")]
+            PayloadProof::Groth16(framed) => {
+                self.verify_groth16_proof(&framed, public_inputs)
+            }
+            #[cfg(not(feature = "groth16"))]
+            PayloadProof::Groth16(_) => {
+                Err(anyhow!("Groth16 proof received but 'groth16' feature is not enabled"))
+            }
+        }
+    }
+
+    #[cfg(feature = "groth16")]
+    fn verify_groth16_proof(&self, framed: &[u8], public_inputs: Vec<F>) -> Result<()> {
+        // Decode framed bytes: [proof_len: u32 LE] [proof] [public_inputs]
+        if framed.len() < 4 {
+            return Err(anyhow!("Groth16 framed payload too short"));
+        }
+        let proof_len =
+            u32::from_le_bytes(framed[..4].try_into().unwrap()) as usize;
+        if framed.len() < 4 + proof_len {
+            return Err(anyhow!(
+                "Groth16 framed payload truncated: expected {} proof bytes, got {}",
+                proof_len,
+                framed.len() - 4
+            ));
+        }
+        let g16_proof = framed[4..4 + proof_len].to_vec();
+        // Re-encode public inputs in Gnark's format for verification
+        let g16_pub_inp = pod2_onchain::encode_public_inputs_gnark(public_inputs);
+        pod2_onchain::groth16_verify(g16_proof, g16_pub_inp)
+            .map_err(|e| anyhow!("Groth16 proof verification failed: {e}"))
     }
 }
 

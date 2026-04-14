@@ -1,23 +1,42 @@
 //! Check out common/src/lib.rs documentation for context.
 //!
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Result;
 use tracing::info;
 
-const INPUT_PATH: &str = "../tmp/plonky2-proof";
-const OUTPUT_PATH: &str = "../tmp/groth-artifacts";
+const INPUT_DIR: &str = "tmp/plonky2-proof";
+const OUTPUT_DIR: &str = "tmp/groth-artifacts";
+
+/// Resolve groth artifact paths relative to the workspace root (the directory
+/// containing the top-level `Cargo.toml`).  This file lives at
+/// `common/src/groth.rs`, so walking up two levels from `CARGO_MANIFEST_DIR`
+/// (which points at `common/`) lands on the workspace root.  At runtime the
+/// compile-time path is baked in, so it works regardless of the process cwd.
+fn workspace_path(relative: &str) -> String {
+    let workspace_root: PathBuf = [env!("CARGO_MANIFEST_DIR"), ".."].iter().collect();
+    workspace_root
+        .join(relative)
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_root.join(relative))
+        .to_string_lossy()
+        .into_owned()
+}
 
 /// initializes the groth16 prover memory, loading the artifacts. This method
 /// must be called before the `prove` method.
 pub fn init() -> Result<()> {
-    pod2_onchain::init(INPUT_PATH, OUTPUT_PATH)?;
+    let input = workspace_path(INPUT_DIR);
+    let output = workspace_path(OUTPUT_DIR);
+    pod2_onchain::init(&input, &output)?;
     Ok(())
 }
 
 pub fn load_vk() -> Result<()> {
-    pod2_onchain::load_vk(OUTPUT_PATH)?;
+    let output = workspace_path(OUTPUT_DIR);
+    pod2_onchain::load_vk(&output)?;
     Ok(())
 }
 
