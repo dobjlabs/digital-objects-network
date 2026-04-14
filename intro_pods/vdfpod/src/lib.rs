@@ -72,8 +72,10 @@ use pod2::{
             circuit::{dummy as dummy_recursive, hash_verifier_data_gadget},
             new_params as new_recursive_params,
         },
+        serialization::CircuitDataSerializer,
         serialize_proof,
     },
+    cache::{self, CacheEntry},
     measure_gates_begin, measure_gates_end, middleware,
     middleware::{
         C, D, EMPTY_HASH, F, HASH_SIZE, Hash, IntroPredicateRef, Params, Pod, Proof, RawValue,
@@ -90,14 +92,21 @@ const NUM_PUBLIC_INPUTS: usize = 13; // 13: count + input + output + verified_da
 const VDF_POD_TYPE: (usize, &str) = (2001, "Vdf");
 
 pub static STANDARD_VDF_VD_HASH: std::sync::LazyLock<Hash> = std::sync::LazyLock::new(|| {
-    let (_, data) = &*STANDARD_VDF_POD_DATA;
+    let (_, data) = &**STANDARD_VDF_POD_DATA;
     let hash_out =
         pod2::backends::plonky2::recursion::circuit::hash_verifier_data(&data.verifier_only);
     Hash(hash_out.elements.map(|e| e))
 });
 
-static STANDARD_VDF_POD_DATA: std::sync::LazyLock<(VdfPodTarget, CircuitData<F, C, D>)> =
-    std::sync::LazyLock::new(|| build().expect("successful build"));
+static STANDARD_VDF_POD_DATA: std::sync::LazyLock<
+    CacheEntry<(VdfPodTarget, CircuitDataSerializer)>,
+> = std::sync::LazyLock::new(|| {
+    cache::get("standard_vdf_pod_circuit_data", &(), |_| {
+        let (target, circuit_data) = build().expect("successful build");
+        (target, CircuitDataSerializer(circuit_data))
+    })
+    .expect("cache ok")
+});
 fn build() -> Result<(VdfPodTarget, CircuitData<F, C, D>)> {
     let params = Params::default();
 
@@ -217,7 +226,7 @@ impl VdfPod {
         proof: ProofWithPublicInputs<F, C, D>,
     ) -> Result<VdfPod> {
         // verify the given proof in a VdfPodTarget circuit
-        let (vdf_pod_target, circuit_data) = &*STANDARD_VDF_POD_DATA;
+        let (vdf_pod_target, circuit_data) = &**STANDARD_VDF_POD_DATA;
         let statements = pub_self_statements(count, input, output)
             .into_iter()
             .map(mainpod::Statement::from)
@@ -339,7 +348,7 @@ impl Pod for VdfPod {
             ));
         }
 
-        let (_, circuit_data) = &*STANDARD_VDF_POD_DATA;
+        let (_, circuit_data) = &**STANDARD_VDF_POD_DATA;
 
         let public_inputs = statements_hash
             .to_fields()
@@ -402,11 +411,8 @@ impl Pod for VdfPod {
     }
 
     fn verifier_data(&self) -> VerifierOnlyCircuitData<C, D> {
-        STANDARD_VDF_POD_DATA
-            .1
-            .verifier_data()
-            .verifier_only
-            .clone()
+        let (_, circuit_data) = &**STANDARD_VDF_POD_DATA;
+        circuit_data.verifier_data().verifier_only.clone()
     }
 
     fn common_hash(&self) -> String {
@@ -465,7 +471,7 @@ fn pub_self_statements_target(
     )]
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct VdfPodTarget {
     vd_root: HashOutTarget,
     statements_hash: HashOutTarget,
@@ -753,7 +759,7 @@ mod tests {
             "generate VDF_RECURSIVE_CIRCUIT, STANDARD_VDF_POD_DATA, STANDARD_REC_MAIN_POD_CIRCUIT",
             {
                 let (_, _) = &*VDF_RECURSIVE_CIRCUIT;
-                let (_, _) = &*STANDARD_VDF_POD_DATA;
+                let (_, _) = &**STANDARD_VDF_POD_DATA;
                 let _ =
                     &*pod2::backends::plonky2::cache_get_standard_rec_main_pod_common_circuit_data(
                     );
@@ -819,7 +825,7 @@ mod tests {
             "generate VDF_RECURSIVE_CIRCUIT, STANDARD_VDF_POD_DATA, standard_rec_main_pod_common_circuit_data",
             {
                 let (_, _) = &*VDF_RECURSIVE_CIRCUIT;
-                let (_, _) = &*STANDARD_VDF_POD_DATA;
+                let (_, _) = &**STANDARD_VDF_POD_DATA;
                 let _ =
                     &*pod2::backends::plonky2::cache_get_standard_rec_main_pod_common_circuit_data(
                     );
@@ -881,8 +887,8 @@ mod tests {
 
     #[test]
     fn test_vdf_vd_hash() {
-        let expected_vd_hash =
-            hash_verifier_data(&STANDARD_VDF_POD_DATA.1.verifier_data().verifier_only);
+        let (_, circuit_data) = &**STANDARD_VDF_POD_DATA;
+        let expected_vd_hash = hash_verifier_data(&circuit_data.verifier_data().verifier_only);
         assert_eq!(expected_vd_hash, HashOut::from(*STANDARD_VDF_VD_HASH));
     }
 
