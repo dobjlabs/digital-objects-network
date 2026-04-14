@@ -71,18 +71,21 @@ mod tests {
     use super::*;
 
     fn gen_trusted_setup() -> Result<()> {
+        let input_path = workspace_path(INPUT_DIR);
+        let output_path = workspace_path(OUTPUT_DIR);
+
         // if plonky2 groth16-friendly proof does not exist yet, generate it
-        if !Path::new(INPUT_PATH).is_dir() {
+        if !Path::new(&input_path).is_dir() {
             println!("generating plonky2 groth16-friendly proof");
-            pod2_onchain::pod::sample_plonky2_g16_friendly_proof(INPUT_PATH)?;
+            pod2_onchain::pod::sample_plonky2_g16_friendly_proof(&input_path)?;
         } else {
             println!("plonky2 groth16-friendly proof already exists, skipping generation");
         }
 
         // if trusted setup does not exist yet, generate it
-        if !Path::new(OUTPUT_PATH).is_dir() {
+        if !Path::new(&output_path).is_dir() {
             println!("generating groth16's trusted setup");
-            let result = pod2_onchain::trusted_setup(INPUT_PATH, OUTPUT_PATH);
+            let result = pod2_onchain::trusted_setup(&input_path, &output_path);
             println!("trusted_setup result: {result}");
         } else {
             println!("trusted setup already exists, skipping generation");
