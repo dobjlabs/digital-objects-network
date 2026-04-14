@@ -7,6 +7,8 @@ use crate::types::{DriverPaths, DriverSettings};
 const DEFAULT_SYNCHRONIZER_API_URL: &str = "http://127.0.0.1:3000";
 const DEFAULT_RELAYER_API_URL: &str = "http://127.0.0.1:3200";
 
+const DEFAULT_PROOF_TYPE: &str = "plonky2";
+
 pub fn default_settings() -> DriverSettings {
     DriverSettings {
         synchronizer_api_url: option_env!("DEFAULT_SYNCHRONIZER_API_URL")
@@ -14,6 +16,9 @@ pub fn default_settings() -> DriverSettings {
             .to_string(),
         relayer_api_url: option_env!("DEFAULT_RELAYER_API_URL")
             .unwrap_or(DEFAULT_RELAYER_API_URL)
+            .to_string(),
+        proof_type: option_env!("DEFAULT_PROOF_TYPE")
+            .unwrap_or(DEFAULT_PROOF_TYPE)
             .to_string(),
     }
 }

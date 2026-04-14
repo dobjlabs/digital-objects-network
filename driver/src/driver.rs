@@ -35,6 +35,7 @@ use crate::types::{
 pub trait PayloadBuilder: Send + Sync {
     fn build_payload(
         &self,
+        proof_type: &str,
         old_state_root_hash: &Hash,
         action_output: &SpendableObjects,
     ) -> Result<Vec<u8>>;
@@ -46,10 +47,11 @@ struct DefaultPayloadBuilder;
 impl PayloadBuilder for DefaultPayloadBuilder {
     fn build_payload(
         &self,
+        proof_type: &str,
         old_state_root_hash: &Hash,
         action_output: &SpendableObjects,
     ) -> Result<Vec<u8>> {
-        build_relayer_payload(old_state_root_hash, action_output)
+        build_relayer_payload(proof_type, old_state_root_hash, action_output)
     }
 }
 
@@ -341,11 +343,15 @@ impl Driver {
         let commit_ctx = ExecutionStepContext {
             old_root: Some(old_root.clone()),
         };
-        reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &commit_ctx);
+        let proof_step_msg = match settings.proof_type.as_str() {
+            "groth16" => "Generating Groth16 proof",
+            _ => "Shrinking proof",
+        };
+        reporter.on_step(ExecutionPhase::Commit, proof_step_msg, &commit_ctx);
         let payload_bytes = self
             .deps
             .payload_builder
-            .build_payload(&old_root_hash, &spendable_outputs)?;
+            .build_payload(&settings.proof_type, &old_root_hash, &spendable_outputs)?;
         let expected_tx_final = spendable_outputs.tx.dict().commitment();
 
         reporter.on_step(ExecutionPhase::Commit, "Creating files", &commit_ctx);

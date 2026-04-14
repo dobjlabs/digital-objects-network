@@ -160,6 +160,7 @@ struct MockPayloadBuilder;
 impl PayloadBuilder for MockPayloadBuilder {
     fn build_payload(
         &self,
+        _proof_type: &str,
         _old_state_root_hash: &Hash,
         _action_output: &SpendableObjects,
     ) -> Result<Vec<u8>> {

@@ -17,6 +17,13 @@ pub struct DriverPaths {
 pub struct DriverSettings {
     pub synchronizer_api_url: String,
     pub relayer_api_url: String,
+    /// Proof system to use: "plonky2" (default) or "groth16".
+    #[serde(default = "default_proof_type")]
+    pub proof_type: String,
+}
+
+fn default_proof_type() -> String {
+    "plonky2".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

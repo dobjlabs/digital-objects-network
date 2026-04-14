@@ -246,7 +246,29 @@ pub(crate) fn update_output_files(
     Ok(())
 }
 
+/// Top-level dispatcher: selects Plonky2 or Groth16 proof generation based on `proof_type`.
 pub(crate) fn build_relayer_payload(
+    proof_type: &str,
+    old_state_root_hash: &Hash,
+    action_output: &SpendableObjects,
+) -> Result<Vec<u8>> {
+    match proof_type {
+        "plonky2" => build_plonky2_relayer_payload(old_state_root_hash, action_output),
+        #[cfg(feature = "groth16")]
+        "groth16" => build_groth16_relayer_payload(old_state_root_hash, action_output),
+        #[cfg(not(feature = "groth16"))]
+        "groth16" => Err(anyhow!(
+            "groth16 proof type requested but the 'groth16' feature is not enabled. \
+             Rebuild with: cargo build --features groth16"
+        )),
+        other => Err(anyhow!(
+            "unsupported proof_type '{}': expected 'plonky2' or 'groth16'",
+            other
+        )),
+    }
+}
+
+fn build_plonky2_relayer_payload(
     old_state_root_hash: &Hash,
     action_output: &SpendableObjects,
 ) -> Result<Vec<u8>> {
@@ -264,6 +286,7 @@ pub(crate) fn build_relayer_payload(
         .iter()
         .map(|entry| Ok(Hash(entry?.raw().0)))
         .collect::<Result<Vec<_>>>()?;
+
     // Measure compressed proof size
     let mut proof_buf: Vec<u8> = Vec::new();
     plonky2::util::serialization::Write::write_compressed_proof(&mut proof_buf, &compressed)
@@ -278,11 +301,56 @@ pub(crate) fn build_relayer_payload(
         nullifiers,
     };
 
+    log_payload_size("plonky2", proof_bytes, nullifiers_len, &payload);
+    Ok(payload.to_bytes())
+}
+
+#[cfg(feature = "groth16")]
+fn build_groth16_relayer_payload(
+    old_state_root_hash: &Hash,
+    action_output: &SpendableObjects,
+) -> Result<Vec<u8>> {
+    common::groth::init()
+        .map_err(|err| anyhow!("failed to initialize groth16 prover: {err}"))?;
+
+    let (g16_proof, g16_pub_inp) = common::groth::prove(action_output.tx_pod.clone())
+        .map_err(|err| anyhow!("groth16 proof generation failed: {err}"))?;
+
+    // Frame proof + public_inputs so the verifier can split them:
+    // [proof_len: u32 LE] [proof] [public_inputs]
+    let mut framed = Vec::with_capacity(4 + g16_proof.len() + g16_pub_inp.len());
+    framed.extend_from_slice(&(g16_proof.len() as u32).to_le_bytes());
+    framed.extend_from_slice(&g16_proof);
+    framed.extend_from_slice(&g16_pub_inp);
+    let proof_bytes = framed.len();
+
+    let tx_final = action_output.tx.dict().commitment();
+    let nullifiers = action_output
+        .tx
+        .nullifiers
+        .iter()
+        .map(|entry| Ok(Hash(entry?.raw().0)))
+        .collect::<Result<Vec<_>>>()?;
+
+    let nullifiers_len = nullifiers.len();
+    let payload = Payload {
+        proof: PayloadProof::Groth16(framed),
+        tx_final,
+        state_root_hash: *old_state_root_hash,
+        nullifiers,
+    };
+
+    log_payload_size("groth16", proof_bytes, nullifiers_len, &payload);
+    Ok(payload.to_bytes())
+}
+
+fn log_payload_size(proof_type: &str, proof_bytes: usize, nullifiers_len: usize, payload: &Payload) {
     let payload_bytes = payload.to_bytes();
     let nullifier_bytes = nullifiers_len * 32;
     let overhead = 2 + 1 + 32 + 32 + 1; // magic + proof_type + tx_final + state_root_hash + nullifier_count
     eprintln!(
-        "[PAYLOAD_SIZE] proof: {} bytes, nullifiers: {} ({} bytes), overhead: {} bytes, total: {} bytes ({:.1} KiB / {:.1} KiB max)",
+        "[PAYLOAD_SIZE] type: {}, proof: {} bytes, nullifiers: {} ({} bytes), overhead: {} bytes, total: {} bytes ({:.1} KiB / {:.1} KiB max)",
+        proof_type,
         proof_bytes,
         nullifiers_len,
         nullifier_bytes,
@@ -291,6 +359,4 @@ pub(crate) fn build_relayer_payload(
         payload_bytes.len() as f64 / 1024.0,
         common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES as f64 / 1024.0,
     );
-
-    Ok(payload_bytes)
 }
