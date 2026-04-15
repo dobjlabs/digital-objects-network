@@ -59,3 +59,8 @@ tracing-log = "0.1.1"
 time = { version = "0.3.44", features = ["formatting", "local-offset"] }
 rand = { version = "0.9.2", features = ["std_rng"] }
 thiserror = "2.0.18"
+
+# temporarily patch pod2 version, since it is constantly updated, to avoid
+# updating pod2-onchain usage of it each time
+[patch."https://github.com/0xPARC/pod2"]
+pod2 = { git = "https://github.com/0xPARC/pod2?rev=main", rev = "364088d316925f59693ed172ead383e4996de410" }

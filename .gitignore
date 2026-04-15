@@ -24,4 +24,3 @@ target
 .env
 /data/
 *.log
-tmp/
