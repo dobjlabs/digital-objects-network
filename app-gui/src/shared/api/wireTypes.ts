@@ -75,4 +75,5 @@ export interface CpuSample {
 export interface AppSettingsPayload {
   synchronizerApiUrl: string;
   relayerApiUrl: string;
+  proofType: string;
 }

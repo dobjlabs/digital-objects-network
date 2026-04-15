@@ -59,6 +59,26 @@
   border-color: var(--accent);
 }
 
+.settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.settings-checkbox input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.settings-checkbox span {
+  font-size: 12px;
+  color: var(--text);
+  letter-spacing: normal;
+}
+
 .settings-error {
   font-size: 11px;
   color: var(--danger);

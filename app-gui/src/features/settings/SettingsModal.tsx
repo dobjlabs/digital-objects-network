@@ -19,6 +19,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [form, setForm] = useState<AppSettingsPayload>({
     synchronizerApiUrl: "",
     relayerApiUrl: "",
+    proofType: "plonky2",
   });
 
   useEffect(() => {
@@ -123,6 +124,21 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               disabled={loading || saving}
               spellCheck={false}
             />
+          </label>
+
+          <label className="settings-checkbox">
+            <input
+              type="checkbox"
+              checked={form.proofType === "groth16"}
+              onChange={(event) =>
+                setForm((prev) => ({
+                  ...prev,
+                  proofType: event.target.checked ? "groth16" : "plonky2",
+                }))
+              }
+              disabled={loading || saving}
+            />
+            <span>Compress proof (Groth16)</span>
           </label>
 
           {error && <div className="settings-error">{error}</div>}
