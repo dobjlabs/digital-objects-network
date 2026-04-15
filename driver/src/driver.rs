@@ -23,6 +23,7 @@ use crate::object_record::ObjectStatus;
 use crate::object_record::parse_object_record_file;
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, select_object,
+    write_object_file,
 };
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
@@ -154,6 +155,25 @@ impl Driver {
             &membership.grounded_txs,
             &membership.on_chain_nullifiers,
         )?;
+
+        // Resolve correct Ethereum tx hashes from the relayer for any
+        // objects whose hash may be stale due to fee-bump replacements.
+        for entry in entries.iter_mut() {
+            if entry.record.status != ObjectStatus::Pending {
+                continue;
+            }
+            let tx_final = encode_hash_hex(&entry.record.tx.dict().commitment());
+            let current_hash = self
+                .deps
+                .relayer
+                .lookup_tx_hash(&settings.relayer_api_url, &tx_final);
+            if let Ok(Some(relayer_hash)) = current_hash
+                && entry.record.tx_hash.as_deref() != Some(&relayer_hash)
+            {
+                entry.record.tx_hash = Some(relayer_hash);
+                let _ = write_object_file(&self.paths, &entry.record, &entry.file_name);
+            }
+        }
 
         Ok(entries
             .iter()
@@ -386,6 +406,21 @@ impl Driver {
             RELAYER_POLL_INTERVAL_MS,
         )?;
 
+        // Use the confirmed tx_hash — it may differ from the initial one if
+        // the relayer performed a fee-bump replacement while waiting.
+        let final_tx_hash = confirmation.tx_hash.as_deref().unwrap_or(&eth_tx_hash);
+
+        if final_tx_hash != eth_tx_hash {
+            // Fee bump replaced the original tx; update .dobj files with the
+            // new hash so they point at the on-chain transaction.
+            update_output_files(
+                &self.paths,
+                &saved.output_files,
+                ObjectStatus::Pending,
+                Some(final_tx_hash),
+            )?;
+        }
+
         reporter.on_step(
             ExecutionPhase::Commit,
             "Waiting for synchronizer to observe commit",
@@ -406,7 +441,7 @@ impl Driver {
                     &self.paths,
                     &saved.output_files,
                     ObjectStatus::Unknown,
-                    Some(&eth_tx_hash),
+                    Some(final_tx_hash),
                 )?;
                 return Err(err);
             }
@@ -417,7 +452,7 @@ impl Driver {
             &self.paths,
             &saved.output_files,
             ObjectStatus::Live,
-            Some(&eth_tx_hash),
+            Some(final_tx_hash),
         )?;
 
         let result = ExecuteActionResult {
@@ -426,7 +461,7 @@ impl Driver {
             output_files: saved.output_files.clone(),
             nullified_files: saved.nullified_files.clone(),
             relayer_job_id: confirmation.job_id,
-            tx_hash: Some(eth_tx_hash),
+            tx_hash: Some(final_tx_hash.to_string()),
             block_number: confirmation.block_number,
         };
         reporter.on_done(ExecutionPhase::Commit, Some(&result));

@@ -37,6 +37,9 @@ pub trait RelayerClient: Send + Sync {
         timeout_secs: u64,
         poll_interval_ms: u64,
     ) -> Result<RelayerConfirmation>;
+    /// Look up the current tx_hash for a job by its tx_final (proof commitment).
+    /// Returns `Ok(None)` if the relayer has no record for this tx_final.
+    fn lookup_tx_hash(&self, relayer_api_url: &str, tx_final: &str) -> Result<Option<String>>;
 }
 
 #[derive(Debug, Default)]
@@ -192,5 +195,36 @@ impl RelayerClient for HttpRelayerClient {
             }
             std::thread::sleep(poll_interval);
         }
+    }
+
+    fn lookup_tx_hash(&self, relayer_api_url: &str, tx_final: &str) -> Result<Option<String>> {
+        let endpoint = format!(
+            "{}/api/v1/proofs/by-tx-final/{tx_final}",
+            relayer_api_url.trim_end_matches('/')
+        );
+        let client = reqwest::blocking::Client::new();
+        let response = client
+            .get(&endpoint)
+            .send()
+            .map_err(|err| anyhow!("failed to query relayer by tx_final at {endpoint}: {err}"))?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(anyhow!(
+                "relayer lookup by tx_final failed with {} {}: {}",
+                status.as_u16(),
+                status,
+                body
+            ));
+        }
+
+        let job: JobStatusResponse = serde_json::from_str(&body)
+            .map_err(|err| anyhow!("failed to decode relayer response: {err}; body={body}"))?;
+        Ok(job.tx_hash)
     }
 }

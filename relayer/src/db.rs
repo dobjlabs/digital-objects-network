@@ -49,6 +49,9 @@ impl Db {
                 block_number BIGINT NULL,
                 last_error TEXT NULL,
                 next_attempt_at BIGINT NULL,
+                nonce BIGINT NULL,
+                bump_count INTEGER NOT NULL DEFAULT 0,
+                prev_tx_hashes TEXT[] NOT NULL DEFAULT '{}',
                 created_at BIGINT NOT NULL,
                 updated_at BIGINT NOT NULL
             )
@@ -89,10 +92,13 @@ impl Db {
                 block_number,
                 last_error,
                 next_attempt_at,
+                nonce,
+                bump_count,
+                prev_tx_hashes,
                 created_at,
                 updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             ON CONFLICT (tx_final) DO NOTHING
             RETURNING job_id
             "#,
@@ -109,6 +115,9 @@ impl Db {
         .bind(job.block_number.map(|value| value as i64))
         .bind(job.last_error.clone())
         .bind(job.next_attempt_at)
+        .bind(job.nonce)
+        .bind(job.bump_count)
+        .bind(&job.prev_tx_hashes)
         .bind(job.created_at)
         .bind(job.updated_at)
         .fetch_optional(&self.pool)
@@ -144,8 +153,11 @@ impl Db {
                 block_number = $10,
                 last_error = $11,
                 next_attempt_at = $12,
-                created_at = $13,
-                updated_at = $14
+                nonce = $13,
+                bump_count = $14,
+                prev_tx_hashes = $15,
+                created_at = $16,
+                updated_at = $17
             WHERE job_id = $1
             "#,
         )
@@ -161,6 +173,9 @@ impl Db {
         .bind(job.block_number.map(|value| value as i64))
         .bind(job.last_error.clone())
         .bind(job.next_attempt_at)
+        .bind(job.nonce)
+        .bind(job.bump_count)
+        .bind(&job.prev_tx_hashes)
         .bind(job.created_at)
         .bind(job.updated_at)
         .execute(&self.pool)
@@ -190,6 +205,9 @@ impl Db {
                    block_number,
                    last_error,
                    next_attempt_at,
+                   nonce,
+                   bump_count,
+                   prev_tx_hashes,
                    created_at,
                    updated_at
             FROM relay_jobs
@@ -219,6 +237,9 @@ impl Db {
                    block_number,
                    last_error,
                    next_attempt_at,
+                   nonce,
+                   bump_count,
+                   prev_tx_hashes,
                    created_at,
                    updated_at
             FROM relay_jobs
@@ -266,6 +287,9 @@ impl Db {
                    block_number,
                    last_error,
                    next_attempt_at,
+                   nonce,
+                   bump_count,
+                   prev_tx_hashes,
                    created_at,
                    updated_at
             FROM relay_jobs
@@ -311,6 +335,9 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<RelayJob> {
         block_number,
         last_error: row.get("last_error"),
         next_attempt_at: row.get("next_attempt_at"),
+        nonce: row.get("nonce"),
+        bump_count: row.get("bump_count"),
+        prev_tx_hashes: row.get("prev_tx_hashes"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })
@@ -376,6 +403,9 @@ mod tests {
             block_number: None,
             last_error: None,
             next_attempt_at: next,
+            nonce: None,
+            bump_count: 0,
+            prev_tx_hashes: Vec::new(),
             created_at: now(),
             updated_at: now(),
         }

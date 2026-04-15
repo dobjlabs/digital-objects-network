@@ -6,7 +6,7 @@ use tracing::{info, warn};
 
 use crate::{
     db::Db,
-    eth::{EthGateway, ReceiptOutcome},
+    eth::{EthGateway, FeeOverrides, ReceiptOutcome},
     model::{JobStatus, RelayJob},
     time_utils::now_ts,
 };
@@ -20,6 +20,12 @@ pub struct WorkerConfig {
     pub receipt_poll_secs: u64,
     pub receipt_timeout_secs: Option<u64>,
     pub idle_sleep_ms: u64,
+    /// Seconds after submission before first fee-bump attempt. `None` disables bumping.
+    pub fee_bump_after_secs: Option<u64>,
+    /// Percentage to increase fees per bump (e.g. 20 = 1.2x). Min 13 for EIP-1559 rules.
+    pub fee_bump_multiplier_pct: u64,
+    /// Maximum number of fee bumps per job.
+    pub fee_bump_max: u32,
 }
 
 /// Main worker loop: recover inflight rows, then repeatedly pick and process due jobs.
@@ -109,27 +115,35 @@ async fn send_queued_job(
     job.updated_at = now;
     db.put_job(&job).await?;
 
+    // Query nonce before submission so we can pass it explicitly and store it
+    // for potential fee bumps. Single-worker guarantees no nonce race.
+    let nonce = eth_client.get_next_nonce().await?;
+
     info!(
         job_id = %job.job_id,
         attempt = job.attempt_count,
         payload_bytes = job.payload_bytes.len(),
         tx_final = %job.tx_final,
         state_root_hash = %job.state_root_hash,
+        nonce,
         "Submitting relay payload to Ethereum"
     );
 
-    match eth_client.submit_payload(&job.payload_bytes).await {
+    match eth_client.submit_payload(&job.payload_bytes, nonce).await {
         Ok(tx_hash) => {
             job.status = JobStatus::Submitted;
             job.tx_hash = Some(tx_hash);
             job.submitted_at = Some(now);
             job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
             job.last_error = None;
+            job.nonce = Some(nonce as i64);
+            job.bump_count = 0;
             job.updated_at = now;
             db.put_job(&job).await?;
             info!(
                 job_id = %job.job_id,
                 tx_hash = ?job.tx_hash,
+                nonce = ?job.nonce,
                 next_attempt_at = ?job.next_attempt_at,
                 "Submitted blob transaction"
             );
@@ -228,6 +242,119 @@ async fn poll_submitted_job(
             Ok(())
         }
         Ok(None) => {
+            // Check if we should attempt a fee bump.
+            if let Some(bump_after) = cfg.fee_bump_after_secs {
+                if let (Some(submitted_at), Some(nonce)) = (job.submitted_at, job.nonce) {
+                    let bump_threshold = bump_after as i64 * (job.bump_count as i64 + 1);
+                    let elapsed = now.saturating_sub(submitted_at);
+
+                    if elapsed >= bump_threshold && (job.bump_count as u32) < cfg.fee_bump_max {
+                        match try_fee_bump(
+                            eth_client,
+                            cfg,
+                            &job.payload_bytes,
+                            nonce as u64,
+                            &tx_hash_str,
+                            job.bump_count,
+                        )
+                        .await
+                        {
+                            Ok(Some(new_tx_hash)) => {
+                                let old_hash = tx_hash_str.clone();
+                                job.prev_tx_hashes.push(old_hash.clone());
+                                job.tx_hash = Some(new_tx_hash.clone());
+                                job.bump_count += 1;
+                                job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
+                                job.updated_at = now;
+                                db.put_job(&job).await?;
+                                info!(
+                                    job_id = %job.job_id,
+                                    old_tx_hash = %old_hash,
+                                    new_tx_hash = %new_tx_hash,
+                                    bump_count = job.bump_count,
+                                    "Fee-bumped blob transaction"
+                                );
+                                return Ok(());
+                            }
+                            Ok(None) => {
+                                // TX gone from mempool. Check if the nonce was
+                                // consumed — if so, an earlier replacement TX
+                                // was mined and the blob payload is on-chain.
+                                if let Ok(current_nonce) = eth_client.get_next_nonce().await {
+                                    if current_nonce > nonce as u64 {
+                                        // Scan previous hashes to find the one
+                                        // that actually got mined.
+                                        let mut mined_hash = None;
+                                        let mut mined_block = None;
+                                        for prev_hash in job.prev_tx_hashes.iter().rev() {
+                                            if let Ok(Some(receipt)) =
+                                                eth_client.poll_receipt(prev_hash).await
+                                            {
+                                                if receipt.success {
+                                                    mined_hash = Some(prev_hash.clone());
+                                                    mined_block = receipt.block_number;
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        if let Some(hash) = mined_hash {
+                                            job.tx_hash = Some(hash);
+                                            job.status = JobStatus::Confirmed;
+                                            job.block_number = mined_block.or(job.block_number);
+                                            job.next_attempt_at = None;
+                                            job.last_error = None;
+                                            job.updated_at = now;
+                                            db.put_job(&job).await?;
+                                            info!(
+                                                job_id = %job.job_id,
+                                                tx_hash = ?job.tx_hash,
+                                                block_number = ?mined_block,
+                                                used_nonce = nonce,
+                                                current_nonce = current_nonce,
+                                                "Nonce consumed; replacement TX confirmed"
+                                            );
+                                            return Ok(());
+                                        }
+
+                                        // Nonce consumed but no receipt available
+                                        // for any known hash yet — stop bumping
+                                        // (nothing to replace) and keep polling
+                                        // until the receipt propagates.
+                                        warn!(
+                                            job_id = %job.job_id,
+                                            used_nonce = nonce,
+                                            current_nonce = current_nonce,
+                                            prev_tx_count = job.prev_tx_hashes.len(),
+                                            "Nonce consumed but no receipt found yet; will keep polling"
+                                        );
+                                        job.bump_count = cfg.fee_bump_max as i32;
+                                        job.next_attempt_at =
+                                            Some(now + cfg.receipt_poll_secs as i64);
+                                        job.updated_at = now;
+                                        db.put_job(&job).await?;
+                                        return Ok(());
+                                    }
+                                }
+                                // Nonce not consumed — TX was dropped. Stop
+                                // bumping and let receipt timeout fail the job.
+                                job.bump_count = cfg.fee_bump_max as i32;
+                                job.updated_at = now;
+                                db.put_job(&job).await?;
+                            }
+                            Err(err) => {
+                                warn!(
+                                    job_id = %job.job_id,
+                                    bump_count = job.bump_count,
+                                    ?err,
+                                    "Fee bump failed; continuing to poll original tx"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             job.status = JobStatus::Submitted;
             job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
             job.updated_at = now;
@@ -256,6 +383,78 @@ async fn poll_submitted_job(
             Ok(())
         }
     }
+}
+
+/// Fetch the original TX's fees and current network fees, take the max of each,
+/// apply the bump multiplier, and resubmit at the same nonce.
+///
+/// Returns `Ok(None)` when the TX is no longer in the mempool (already mined
+/// or dropped) — the caller should stop bumping and just keep polling receipts.
+async fn try_fee_bump(
+    eth_client: &dyn EthGateway,
+    cfg: &WorkerConfig,
+    payload_bytes: &[u8],
+    nonce: u64,
+    current_tx_hash: &str,
+    current_bump_count: i32,
+) -> Result<Option<String>> {
+    let network = eth_client.get_current_fees().await?;
+
+    // Fetch the queued TX's fee caps so we can guarantee the replacement exceeds them.
+    let original = match eth_client.get_pending_tx_fees(current_tx_hash).await? {
+        Some(fees) => fees,
+        None => {
+            // TX is no longer in the mempool — either a previous replacement
+            // was mined or the node dropped it. Nothing left to replace.
+            info!(
+                tx_hash = current_tx_hash,
+                "TX not in mempool; skipping fee bump"
+            );
+            return Ok(None);
+        }
+    };
+
+    let multiplier_pct = cfg.fee_bump_multiplier_pct;
+    let apply_bump =
+        |base: u128| -> u128 { base.saturating_mul(100 + multiplier_pct as u128) / 100 };
+
+    // Use max(network estimate, original TX) as the floor, then bump above it.
+    let base_priority = original
+        .max_priority_fee_per_gas
+        .max(network.max_priority_fee_per_gas);
+    let base_max_fee = original
+        .max_fee_per_gas
+        .max(network.base_fee_per_gas + base_priority);
+
+    let bumped_priority = apply_bump(base_priority);
+    let bumped_max_fee = apply_bump(base_max_fee);
+
+    // Bump blob fee relative to the original TX's blob fee — not the current
+    // network rate, which can be orders of magnitude higher on some chains.
+    let bumped_blob_fee = original.max_fee_per_blob_gas.map(apply_bump);
+
+    let fees = FeeOverrides {
+        max_fee_per_gas: bumped_max_fee,
+        max_priority_fee_per_gas: bumped_priority,
+        max_fee_per_blob_gas: bumped_blob_fee,
+    };
+
+    info!(
+        nonce,
+        bump = current_bump_count + 1,
+        max_fee_per_gas = fees.max_fee_per_gas,
+        max_priority_fee_per_gas = fees.max_priority_fee_per_gas,
+        max_fee_per_blob_gas = ?fees.max_fee_per_blob_gas,
+        original_max_fee = original.max_fee_per_gas,
+        original_blob_fee = ?original.max_fee_per_blob_gas,
+        network_base_fee = network.base_fee_per_gas,
+        "Attempting fee bump"
+    );
+
+    let tx_hash = eth_client
+        .submit_payload_with_fees(payload_bytes, nonce, &fees)
+        .await?;
+    Ok(Some(tx_hash))
 }
 
 /// Mark a job as failed while preserving any known receipt block number.
@@ -345,17 +544,23 @@ mod tests {
     use sqlx::{postgres::PgPoolOptions, Executor};
     use url::Url;
 
+    use crate::eth::{FeeEstimate, PendingTxFees};
+
     use super::*;
 
     #[derive(Default)]
     struct MockEthGateway {
         submit_results: Mutex<VecDeque<Result<String>>>,
         poll_results: Mutex<VecDeque<Result<Option<ReceiptOutcome>>>>,
+        nonce_results: Mutex<VecDeque<Result<u64>>>,
+        fee_results: Mutex<VecDeque<Result<FeeEstimate>>>,
+        pending_tx_fees_results: Mutex<VecDeque<Result<Option<PendingTxFees>>>>,
+        bump_submit_results: Mutex<VecDeque<Result<String>>>,
     }
 
     #[async_trait]
     impl EthGateway for MockEthGateway {
-        async fn submit_payload(&self, _payload_bytes: &[u8]) -> Result<String> {
+        async fn submit_payload(&self, _payload_bytes: &[u8], _nonce: u64) -> Result<String> {
             self.submit_results
                 .lock()
                 .expect("poisoned")
@@ -369,6 +574,50 @@ mod tests {
                 .expect("poisoned")
                 .pop_front()
                 .unwrap_or_else(|| Err(anyhow!("unexpected poll call")))
+        }
+
+        async fn get_next_nonce(&self) -> Result<u64> {
+            self.nonce_results
+                .lock()
+                .expect("poisoned")
+                .pop_front()
+                .unwrap_or(Ok(0))
+        }
+
+        async fn get_current_fees(&self) -> Result<FeeEstimate> {
+            self.fee_results
+                .lock()
+                .expect("poisoned")
+                .pop_front()
+                .unwrap_or(Ok(FeeEstimate {
+                    base_fee_per_gas: 1_000_000_000,
+                    max_priority_fee_per_gas: 100_000_000,
+                }))
+        }
+
+        async fn get_pending_tx_fees(&self, _tx_hash: &str) -> Result<Option<PendingTxFees>> {
+            self.pending_tx_fees_results
+                .lock()
+                .expect("poisoned")
+                .pop_front()
+                .unwrap_or(Ok(Some(PendingTxFees {
+                    max_fee_per_gas: 1_000_000_000,
+                    max_priority_fee_per_gas: 100_000_000,
+                    max_fee_per_blob_gas: Some(1),
+                })))
+        }
+
+        async fn submit_payload_with_fees(
+            &self,
+            _payload_bytes: &[u8],
+            _nonce: u64,
+            _fees: &FeeOverrides,
+        ) -> Result<String> {
+            self.bump_submit_results
+                .lock()
+                .expect("poisoned")
+                .pop_front()
+                .unwrap_or_else(|| Err(anyhow!("unexpected bump submit call")))
         }
     }
 
@@ -386,6 +635,9 @@ mod tests {
             block_number: None,
             last_error: None,
             next_attempt_at: Some(now_ts()),
+            nonce: None,
+            bump_count: 0,
+            prev_tx_hashes: Vec::new(),
             created_at: now_ts(),
             updated_at: now_ts(),
         }
@@ -399,6 +651,9 @@ mod tests {
             receipt_poll_secs: 1,
             receipt_timeout_secs: Some(3),
             idle_sleep_ms: 20,
+            fee_bump_after_secs: None,
+            fee_bump_multiplier_pct: 20,
+            fee_bump_max: 5,
         }
     }
 
@@ -520,6 +775,180 @@ mod tests {
             .last_error
             .expect("error")
             .contains("receipt timeout after"));
+
+        drop(db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn fee_bump_replaces_stale_submitted_tx() -> Result<()> {
+        let (db, admin_url, db_name) = setup_db().await?;
+        let gateway = MockEthGateway::default();
+
+        // Receipt poll returns None (not mined yet).
+        gateway
+            .poll_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(None));
+
+        // Fee bump: get_pending_tx_fees returns original fees, submit succeeds.
+        gateway
+            .bump_submit_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(
+                "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            ));
+
+        let mut job = mk_job(JobStatus::Submitted);
+        job.tx_hash =
+            Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+        job.submitted_at = Some(now_ts() - 100); // Well past bump threshold.
+        job.nonce = Some(42);
+        db.insert_job(&job).await?;
+
+        let mut cfg = cfg();
+        cfg.fee_bump_after_secs = Some(10);
+        cfg.fee_bump_multiplier_pct = 100;
+        cfg.receipt_timeout_secs = None;
+
+        let job = db.get_job("job-1").await?.expect("job");
+        poll_submitted_job(&db, &gateway, &cfg, job).await?;
+
+        let bumped = db.get_job("job-1").await?.expect("job");
+        assert_eq!(bumped.status, JobStatus::Submitted);
+        assert_eq!(bumped.bump_count, 1);
+        assert_eq!(
+            bumped.tx_hash.as_deref(),
+            Some("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        assert_eq!(
+            bumped.prev_tx_hashes,
+            vec!["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+        );
+
+        drop(db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn fee_bump_confirms_via_nonce_when_tx_gone() -> Result<()> {
+        let (db, admin_url, db_name) = setup_db().await?;
+        let gateway = MockEthGateway::default();
+
+        // Receipt poll returns None for current hash.
+        gateway
+            .poll_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(None));
+
+        // get_pending_tx_fees returns None (TX gone from mempool).
+        gateway
+            .pending_tx_fees_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(None));
+
+        // get_next_nonce returns 44 (past our nonce of 42 → consumed).
+        gateway
+            .nonce_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(44));
+
+        // poll_receipt for prev hash returns a receipt.
+        gateway
+            .poll_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(Some(ReceiptOutcome {
+                success: true,
+                block_number: Some(99),
+            })));
+
+        let mut job = mk_job(JobStatus::Submitted);
+        job.tx_hash =
+            Some("0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string());
+        job.submitted_at = Some(now_ts() - 100);
+        job.nonce = Some(42);
+        job.bump_count = 1;
+        job.prev_tx_hashes =
+            vec!["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()];
+        db.insert_job(&job).await?;
+
+        let mut cfg = cfg();
+        cfg.fee_bump_after_secs = Some(10);
+        cfg.receipt_timeout_secs = None;
+
+        let job = db.get_job("job-1").await?.expect("job");
+        poll_submitted_job(&db, &gateway, &cfg, job).await?;
+
+        let confirmed = db.get_job("job-1").await?.expect("job");
+        assert_eq!(confirmed.status, JobStatus::Confirmed);
+        assert_eq!(confirmed.block_number, Some(99));
+        // tx_hash updated to the one that actually had a receipt.
+        assert_eq!(
+            confirmed.tx_hash.as_deref(),
+            Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+
+        drop(db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn fee_bump_stops_when_tx_dropped_and_nonce_unused() -> Result<()> {
+        let (db, admin_url, db_name) = setup_db().await?;
+        let gateway = MockEthGateway::default();
+
+        // Receipt poll returns None.
+        gateway
+            .poll_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(None));
+
+        // TX gone from mempool.
+        gateway
+            .pending_tx_fees_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(None));
+
+        // Nonce NOT consumed (still at 42).
+        gateway
+            .nonce_results
+            .lock()
+            .expect("poisoned")
+            .push_back(Ok(42));
+
+        let mut job = mk_job(JobStatus::Submitted);
+        job.tx_hash =
+            Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+        job.submitted_at = Some(now_ts() - 100);
+        job.nonce = Some(42);
+        db.insert_job(&job).await?;
+
+        let mut cfg = cfg();
+        cfg.fee_bump_after_secs = Some(10);
+        cfg.fee_bump_max = 5;
+        cfg.receipt_timeout_secs = None;
+
+        let job = db.get_job("job-1").await?.expect("job");
+        poll_submitted_job(&db, &gateway, &cfg, job).await?;
+
+        let stopped = db.get_job("job-1").await?.expect("job");
+        assert_eq!(stopped.status, JobStatus::Submitted);
+        // bump_count set to max to prevent further attempts.
+        assert_eq!(stopped.bump_count, 5);
 
         drop(db);
         drop_db(&admin_url, &db_name).await?;

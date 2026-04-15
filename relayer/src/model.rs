@@ -29,6 +29,12 @@ pub struct RelayJob {
     pub last_error: Option<String>,
     /// Next timestamp when worker may process this job.
     pub next_attempt_at: Option<i64>,
+    /// Ethereum nonce used for current TX (needed for RBF replacement).
+    pub nonce: Option<i64>,
+    /// Number of fee-bump replacements applied for this job.
+    pub bump_count: i32,
+    /// Previous tx hashes replaced by fee bumps (most recent last).
+    pub prev_tx_hashes: Vec<String>,
     /// Creation timestamp (unix seconds).
     pub created_at: i64,
     /// Last update timestamp (unix seconds).

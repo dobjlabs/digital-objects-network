@@ -38,6 +38,9 @@ async fn main() -> Result<()> {
         receipt_poll_secs: cfg.receipt_poll_secs,
         receipt_timeout_secs: cfg.receipt_timeout_secs,
         idle_sleep_ms: cfg.worker_idle_sleep_ms,
+        fee_bump_after_secs: cfg.fee_bump_after_secs,
+        fee_bump_multiplier_pct: cfg.fee_bump_multiplier_pct,
+        fee_bump_max: cfg.fee_bump_max,
     };
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
