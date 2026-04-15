@@ -155,7 +155,11 @@ impl EthGateway for EthClient {
     }
 
     async fn get_next_nonce(&self) -> Result<u64> {
-        let count = self.provider.get_transaction_count(self.from).await?;
+        let count = self
+            .provider
+            .get_transaction_count(self.from)
+            .pending()
+            .await?;
         Ok(count)
     }
 
