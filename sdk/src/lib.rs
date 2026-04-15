@@ -1,33 +1,39 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 use std::slice;
 use std::sync::Arc;
 
+use anyhow::{anyhow, Result};
 use hex::FromHex;
 use itertools::zip_eq;
 use lt_eq_u256_pod::LtEqU256Pod;
 use pod2::{
     backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
     frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
-    lang::{Module, load_module},
+    lang::{load_module, Module},
     middleware::{
-        EMPTY_VALUE, Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType,
-        Params, Pod, RawValue, Statement, VDSet, Value,
         containers::{Array, Dictionary, Set},
+        Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType, Params, Pod,
+        RawValue, Statement, VDSet, Value, EMPTY_VALUE,
     },
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
-use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
+use rhai::{CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope, AST};
 use txlib::{GroundingWitness, Tx, TxBuilder};
 use vdfpod::VdfPod;
 
+mod error;
 mod fmt_podlang;
-#[cfg(test)]
-mod tests;
+pub mod manifest;
 mod utils;
 
+#[cfg(test)]
+mod tests;
+
+pub use error::SdkError;
+use manifest::Manifest;
 use utils::native_pred_to_op;
 
 /// Shared reference with interior mutability for anything that could be used as an argument to a
@@ -1054,7 +1060,12 @@ impl Executor {
         TxBuilder::new(ctx, inputs, self.grounding_witness.clone())
     }
     /// Execute an action that consumes some input objects and produces some output objects
-    pub fn action(&self, action: &str, inputs: Vec<SpendableObject>) -> SpendableObjects {
+    pub fn action(
+        &self,
+        action: &str,
+        inputs: Vec<SpendableObject>,
+    ) -> Result<SpendableObjects, SdkError> {
+        // TODO: In this function: return errors instead of panic from unwrap.
         let action = self.module.action_by_name(action);
         let builder = self.new_builder();
         let mut bld = BuildContext {
@@ -1068,7 +1079,9 @@ impl Executor {
             tx_inputs.push(input.tx_input());
             let input_pod_sts = input.pod.pod.pub_statements();
             let st_class = input_pod_sts[0].clone();
-            bld.builder.add_pod(input.pod).unwrap();
+            bld.builder
+                .add_pod(input.pod)
+                .expect("MultiPodBuilder is unlimited");
             input_class_sts_objs.push((st_class, input.obj));
         }
         // Reverse the input objects so that we can pop them in order
@@ -1091,19 +1104,15 @@ impl Executor {
         let mut scope = Scope::new();
         let options = CallFnOptions::new().with_tag(action_handle.clone());
         // Execute the action rhai code
-        let _result = self
-            .module
-            .engine
-            .call_fn_with_options::<Dynamic>(
-                options,
-                &mut scope,
-                &self.module.ast,
-                &action.name,
-                (action_handle.clone(),),
-            )
-            .unwrap();
+        let _result = self.module.engine.call_fn_with_options::<Dynamic>(
+            options,
+            &mut scope,
+            &self.module.ast,
+            &action.name,
+            (action_handle.clone(),),
+        )?;
         let mut ctx = action_handle.0.borrow_mut();
-        let mut exe_ctx = ctx.exe_ctx.take().unwrap();
+        let mut exe_ctx = ctx.exe_ctx.take().expect("Some");
 
         // Add the transaction predicates
         let mut output_objs = Vec::new();
@@ -1202,12 +1211,12 @@ impl Executor {
         }
 
         let objs = output_objs.into_iter().map(|out| out.obj).collect();
-        SpendableObjects {
+        Ok(SpendableObjects {
             tx_pod,
             obj_pods,
             objs,
             tx,
-        }
+        })
     }
 }
 
@@ -1321,30 +1330,64 @@ impl Default for Sdk {
 
 impl Sdk {
     /// Load a module defined by the list of `actions` defined in the `src` script.
-    pub fn load_module_from_src_actions(&self, src: &str, actions: &[&str]) -> Rc<SdkModule> {
+    pub fn load_module_from_src_actions(
+        &self,
+        src: &str,
+        actions: &[&str],
+    ) -> Result<Rc<SdkModule>, SdkError> {
         let scope = Scope::new();
         let ast = self.engine.compile_with_scope(&scope, src).unwrap();
-        // println!("{:#?}", ast);
 
         let mut action_handles = Vec::new();
         for action in actions {
             let action_handle = ActionHandle::new(action.to_string(), None);
             let mut scope = Scope::new();
             let options = CallFnOptions::new().with_tag(action_handle.clone());
-            let _result = self
-                .engine
-                .call_fn_with_options::<Dynamic>(
-                    options,
-                    &mut scope,
-                    &ast,
-                    action,
-                    (action_handle.clone(),),
-                )
-                .unwrap();
+            let _result = self.engine.call_fn_with_options::<Dynamic>(
+                options,
+                &mut scope,
+                &ast,
+                action,
+                (action_handle.clone(),),
+            )?;
             action_handles.push(action_handle);
         }
 
         let loader = Loader::new(action_handles);
-        Rc::new(loader.module(self.engine.clone(), ast))
+        Ok(Rc::new(loader.module(self.engine.clone(), ast)))
+    }
+
+    pub fn load_module_from_src_manifest(
+        &self,
+        src: &str,
+        manifest: &Manifest,
+    ) -> Result<Rc<SdkModule>, SdkError> {
+        let manifest_actions: Vec<_> = manifest.actions.iter().map(|a| a.name.as_str()).collect();
+        let sdk_module = self.load_module_from_src_actions(src, &manifest_actions)?;
+
+        // Validate against the manifest metadata
+        let loaded_classes: HashSet<_> = sdk_module
+            .classes()
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        let manifest_classes: HashSet<_> =
+            manifest.classes.iter().map(|c| c.name.as_str()).collect();
+        if manifest_classes != loaded_classes {
+            return Err(anyhow!(
+                "manifest classes = {:?} but module classes = {:?}",
+                manifest_classes,
+                loaded_classes
+            ))?;
+        }
+        if manifest.plugin.module_hash != sdk_module.module.batch.id() {
+            return Err(anyhow!(
+                "manifest.plugin.module_hash = {:#} but module.hash = {:#}",
+                manifest.plugin.module_hash,
+                sdk_module.module.batch.id()
+            ))?;
+        }
+
+        Ok(sdk_module)
     }
 }
