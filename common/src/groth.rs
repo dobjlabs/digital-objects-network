@@ -13,8 +13,8 @@ const CACHE_SUBDIR_OUTPUT: &str = "pod2-groth16/groth-artifacts";
 /// macOS) joined with the given subdirectory. Creates the path if it doesn't
 /// exist.
 fn cache_path(subdir: &str) -> Result<String> {
-    let base = dirs::cache_dir()
-        .ok_or_else(|| anyhow!("could not determine user cache directory"))?;
+    let base =
+        dirs::cache_dir().ok_or_else(|| anyhow!("could not determine user cache directory"))?;
     let path = base.join(subdir);
     std::fs::create_dir_all(&path)
         .map_err(|e| anyhow!("failed to create cache dir {}: {e}", path.display()))?;

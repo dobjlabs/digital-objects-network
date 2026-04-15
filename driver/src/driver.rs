@@ -348,10 +348,11 @@ impl Driver {
             _ => "Shrinking proof",
         };
         reporter.on_step(ExecutionPhase::Commit, proof_step_msg, &commit_ctx);
-        let payload_bytes = self
-            .deps
-            .payload_builder
-            .build_payload(&settings.proof_type, &old_root_hash, &spendable_outputs)?;
+        let payload_bytes = self.deps.payload_builder.build_payload(
+            &settings.proof_type,
+            &old_root_hash,
+            &spendable_outputs,
+        )?;
         let expected_tx_final = spendable_outputs.tx.dict().commitment();
 
         reporter.on_step(ExecutionPhase::Commit, "Creating files", &commit_ctx);

@@ -315,7 +315,6 @@ fn build_groth16_relayer_payload(
     framed.extend_from_slice(&(g16_proof.len() as u32).to_le_bytes());
     framed.extend_from_slice(&g16_proof);
     framed.extend_from_slice(&g16_pub_inp);
-    let proof_bytes = framed.len();
 
     let tx_final = action_output.tx.dict().commitment();
     let nullifiers = action_output
@@ -325,7 +324,6 @@ fn build_groth16_relayer_payload(
         .map(|entry| Ok(Hash(entry?.raw().0)))
         .collect::<Result<Vec<_>>>()?;
 
-    let nullifiers_len = nullifiers.len();
     let payload = Payload {
         proof: PayloadProof::Groth16(framed),
         tx_final,

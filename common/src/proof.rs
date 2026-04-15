@@ -111,7 +111,9 @@ impl ProofParser {
         {
             use tracing::warn;
             if let Err(e) = crate::groth::load_vk() {
-                warn!("Groth16 verification key not loaded: {e}. Groth16 proofs will be rejected. Run `just groth16-setup` to enable.");
+                warn!(
+                    "Groth16 verification key not loaded: {e}. Groth16 proofs will be rejected. Run `just groth16-setup` to enable."
+                );
             }
         }
 
@@ -149,13 +151,11 @@ impl ProofParser {
                     .map_err(|e| anyhow!("proof verification failed: {e}"))
             }
             #[cfg(feature = "groth16")]
-            PayloadProof::Groth16(framed) => {
-                self.verify_groth16_proof(&framed, public_inputs)
-            }
+            PayloadProof::Groth16(framed) => self.verify_groth16_proof(&framed, public_inputs),
             #[cfg(not(feature = "groth16"))]
-            PayloadProof::Groth16(_) => {
-                Err(anyhow!("Groth16 proof received but 'groth16' feature is not enabled"))
-            }
+            PayloadProof::Groth16(_) => Err(anyhow!(
+                "Groth16 proof received but 'groth16' feature is not enabled"
+            )),
         }
     }
 
@@ -174,7 +174,9 @@ impl ProofParser {
             return Err(anyhow!("Groth16 framed payload too short"));
         }
         let proof_len = u32::from_le_bytes(
-            framed[..4].try_into().map_err(|_| anyhow!("bad proof_len bytes"))?,
+            framed[..4]
+                .try_into()
+                .map_err(|_| anyhow!("bad proof_len bytes"))?,
         ) as usize;
         if framed.len() < 4 + proof_len {
             return Err(anyhow!(
