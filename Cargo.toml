@@ -9,6 +9,7 @@ members = [
     "timelib",
     "txlib",
     "craft_sdk",
+    "sdk",
     "intro_pods/vdfpod",
     "intro_pods/lt_eq_u256_pod",
     "mcp",
@@ -42,6 +43,7 @@ anyhow = "1.0.56"
 itertools = "0.14.0"
 dotenvy = "0.15.7"
 hex = "0.4.3"
+toml = "1.1.2"
 
 # logging
 env_logger = { version = "0.11" }
