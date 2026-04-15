@@ -128,7 +128,7 @@ entries (at Load time we don't know what's the type of `pick.durability`).
 - [ ] operator*
 - [ ] dependent action
 - [ ] pexe.zip support
-- [ ] manifest support
+- [x] manifest support
 - [ ] error pretty print
 - [ ] forbid multiple Object::set operations on the same object
 - [ ] forbid Object::set after the objec thas been used in other operations
