@@ -15,7 +15,7 @@ use pod2::{
     frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
-use rhai::{Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope, AST};
+use rhai::{CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope, AST};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -30,7 +30,10 @@ mod utils;
 
 use utils::native_pred_to_op;
 
+/// Shared reference with interior mutability for anything that could be used as an argument to a
+/// statement template
 type Ref = Rc<RefCell<VarOrValue>>;
+/// Result that carries an error produced during the evaluation of a Rhai script
 type RuntimeResult<T> = Result<T, Box<EvalAltResult>>;
 
 #[derive(Debug)]
@@ -52,6 +55,8 @@ enum ObjectIO {
     Output,
 }
 
+/// An instruction corresponds to some operations that happen in an action.  Each instruction has
+/// associated constraints (expressed via statement templates in the action predicate).
 #[derive(Debug)]
 enum Inst {
     Object {
@@ -80,6 +85,7 @@ enum Inst {
     },
 }
 
+/// pod2 value type information.  Used for type checking of vars at Load time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Type {
     Unk,
@@ -94,7 +100,8 @@ impl fmt::Display for Type {
     }
 }
 
-/// Corresponds to a variable/wildcard in a custom predicate.
+/// Corresponds to a variable or variable.key in a custom predicate.
+/// In pod2 a variable is a wildcard.
 #[derive(Debug, Clone)]
 struct Var {
     name: String,
@@ -112,9 +119,11 @@ enum VarOrValue {
 }
 
 impl VarOrValue {
+    /// Constructor
     fn value(value: Value) -> Self {
         Self::Value(value)
     }
+    /// Constructor
     fn var(typ: Type) -> Self {
         Self::Var(Var {
             name: "?".to_string(),
@@ -177,17 +186,38 @@ impl VarOrValue {
         }
     }
     // Only call this at exec time
-    fn as_value(&self) -> &Value {
+    fn as_value(&self) -> Value {
         match self {
-            Self::Value(value) => value,
-            Self::Var(Var { value, .. }) => value.as_ref().expect("has value at exec time"),
+            Self::Value(value) => value.clone(),
+            Self::Var(Var {
+                value, key: None, ..
+            }) => value.clone().expect("has value at exec time"),
+            Self::Var(Var {
+                value,
+                key: Some(key),
+                ..
+            }) => {
+                let dict = value
+                    .as_ref()
+                    .expect("has value at exec time")
+                    .as_dictionary()
+                    .expect("dict");
+                dict.get(&Key::from(key)).unwrap().expect("key exists")
+            }
         }
     }
     // Only call this at exec time
     fn as_mut_value(&mut self) -> &mut Value {
         match self {
             Self::Value(value) => value,
-            Self::Var(Var { value, .. }) => value.as_mut().expect("has value at exec time"),
+            Self::Var(Var {
+                value, key: None, ..
+            }) => value.as_mut().expect("has value at exec time"),
+            Self::Var(Var {
+                value: _,
+                key: Some(_),
+                ..
+            }) => panic!("entry can't be mutated"),
         }
     }
     // Only call this at exec time
@@ -249,14 +279,18 @@ fn validate_args<const N: usize>(args_types: [(Dynamic, Type); N]) -> RuntimeRes
     Ok(rs.try_into().expect("len = N"))
 }
 
+/// Used to track how many updates from mutations a variable takes.
 #[derive(Default, Debug)]
 struct VarState {
     ts: usize,
 }
 
+/// This handler is accessible in the action script function to define action operations.  It
+/// contains a shared ActionContext with interior mutability.
 #[derive(Clone)]
 struct ActionHandle(Rc<RefCell<ActionContext>>);
 
+/// Holds the state of an action being defined.
 #[derive(Default)]
 struct ActionContext {
     name: String,
@@ -264,6 +298,7 @@ struct ActionContext {
     vars: Vec<String>,
     var_state: HashMap<String, VarState>,
     exe_ctx: Option<ExeContext>,
+    unsafe_block: bool,
 }
 
 impl ActionContext {
@@ -287,6 +322,16 @@ impl ActionContext {
     fn inc_t_var(&mut self, var: &str) -> RuntimeResult<()> {
         let state = self.var_state.get_mut(var).expect("var {var} exists");
         state.ts += 1;
+        Ok(())
+    }
+    fn assert_unsafe(&self, unsafe_block: bool) -> RuntimeResult<()> {
+        if self.unsafe_block != unsafe_block {
+            if self.unsafe_block {
+                return Err("unexpected unsafe block".into());
+            } else {
+                return Err("expected unsafe block".into());
+            }
+        }
         Ok(())
     }
 }
@@ -330,6 +375,15 @@ impl ActionHandle {
         ctx.inc_t_var("tx").expect("tx exists");
         Ok(ArgHandle::new(self.clone(), arg))
     }
+    fn set_unsafe(&self, unsafe_block: bool) -> RuntimeResult<()> {
+        let mut ctx = self.0.borrow_mut();
+        if unsafe_block && ctx.unsafe_block {
+            Err("unsafe already set".into())
+        } else {
+            ctx.unsafe_block = unsafe_block;
+            Ok(())
+        }
+    }
     //
     // Exposed methods helpers
     //
@@ -337,6 +391,7 @@ impl ActionHandle {
         let op = native_pred_to_op(pred);
         let op_type = OperationType::Native(op);
         let mut ctx = self.0.borrow_mut();
+        ctx.assert_unsafe(false)?;
         if let Some(exe_ctx) = &mut ctx.exe_ctx {
             let args = args.iter().map(|v| v.borrow().as_op_arg()).collect();
             let st = exe_ctx
@@ -402,6 +457,7 @@ impl ActionHandle {
 
         let work = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
         let mut ctx = self.0.borrow_mut();
+        ctx.assert_unsafe(false)?;
         if let Some(exe_ctx) = &mut ctx.exe_ctx {
             let n_iters = n_iters.borrow().as_value().as_int().expect("int") as usize;
             let input = input.borrow().as_value().raw();
@@ -430,6 +486,7 @@ impl ActionHandle {
     fn intro_lt_eq_u256(self, lhs: Dynamic, rhs: Dynamic) -> RuntimeResult<()> {
         let [lhs, rhs] = validate_args([(lhs, Type::Raw), (rhs, Type::Raw)])?;
         let mut ctx = self.0.borrow_mut();
+        ctx.assert_unsafe(false)?;
         if let Some(exe_ctx) = &mut ctx.exe_ctx {
             let lhs = lhs.borrow().as_value().raw();
             let rhs = rhs.borrow().as_value().raw();
@@ -455,6 +512,8 @@ impl ActionHandle {
     }
 }
 
+/// Helper function to type check and cast an array of pairs of String and VarOrValue, to be used
+/// as key values.
 fn dynamic_to_kvs(kvs: Dynamic) -> RuntimeResult<Vec<(String, Ref)>> {
     let kvs = kvs.try_cast::<Vec<Dynamic>>().ok_or("kvs not array")?;
     let kvs = kvs
@@ -474,6 +533,8 @@ fn dynamic_to_kvs(kvs: Dynamic) -> RuntimeResult<Vec<(String, Ref)>> {
         .collect()
 }
 
+/// This handle is returned by host functions that return a var that can be used to define further
+/// constraints.
 #[derive(Clone)]
 struct ArgHandle {
     ctx: ActionHandle,
@@ -481,9 +542,11 @@ struct ArgHandle {
 }
 
 impl ArgHandle {
+    /// Constructor
     fn new(ctx: ActionHandle, arg: Ref) -> Self {
         Self { ctx, arg }
     }
+    /// Constructor
     fn literal(ctx: ActionHandle, value: Value) -> Self {
         let arg = Rc::new(RefCell::new(VarOrValue::value(value)));
         Self::new(ctx, arg)
@@ -495,6 +558,7 @@ impl ArgHandle {
         if let VarOrValue::Var(var) = &*arg {
             let var_name = var.name.clone();
             let mut ctx = self.ctx.0.borrow_mut();
+            ctx.assert_unsafe(false)?;
             if let Some(exe_ctx) = &mut ctx.exe_ctx {
                 let mut obj_set_list = Vec::new();
                 for (key, value) in &kvs {
@@ -519,16 +583,17 @@ impl ArgHandle {
         Ok(())
     }
     fn get(self, key: String) -> RuntimeResult<ArgHandle> {
-        type_check_args([(&self, Type::Dict)])?;
-        // For now we assume that obj is var, and thus return a value that is also var
-        let value = Rc::new(RefCell::new(VarOrValue::var(Type::Unk)));
-        let ctx = self.ctx.0.borrow();
-        if ctx.exe_ctx.is_some() {
-            let obj = self.arg.borrow().as_value().as_dictionary().expect("dict");
-            let v = obj.get(&Key::from(key)).expect("TODO").expect("TODO");
-            value.borrow_mut().set_value(v);
-        }
-        Ok(ArgHandle::new(self.ctx.clone(), value))
+        todo!();
+        // type_check_args([(&self, Type::Dict)])?;
+        // // For now we assume that obj is var, and thus return a value that is also var
+        // let value = Rc::new(RefCell::new(VarOrValue::var(Type::Unk)));
+        // let ctx = self.ctx.0.borrow();
+        // if ctx.exe_ctx.is_some() {
+        //     let obj = self.arg.borrow().as_value().as_dictionary().expect("dict");
+        //     let v = obj.get(&Key::from(key)).expect("TODO").expect("TODO");
+        //     value.borrow_mut().set_value(v);
+        // }
+        // Ok(ArgHandle::new(self.ctx.clone(), value))
     }
     fn update(self, key: String, value: Dynamic) -> RuntimeResult<()> {
         type_check_args([(&self, Type::Dict)])?;
@@ -537,6 +602,7 @@ impl ArgHandle {
             let var_name = var.name.clone();
             let value = try_ref_from_dynamic(value)?;
             let mut ctx = self.ctx.0.borrow_mut();
+            ctx.assert_unsafe(false)?;
             if let Some(exe_ctx) = &mut ctx.exe_ctx {
                 let value = value.borrow().as_value().clone();
                 let (obj0, obj) = arg.mut_dict(|obj| {
@@ -569,11 +635,13 @@ impl ArgHandle {
     }
 }
 
+/// operator- for maybe-var types
 fn arg_sub(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
     type_check_args([(&a, Type::Int), (&b, Type::Int)])?;
     // TODO: Handle the case where a and b are not var
     let value = Rc::new(RefCell::new(VarOrValue::var(Type::Int)));
     let ctx = a.ctx.0.borrow();
+    ctx.assert_unsafe(true)?;
     if ctx.exe_ctx.is_some() {
         let a = a.arg.borrow().as_value().as_int().expect("int");
         let b = b.arg.borrow().as_value().as_int().expect("int");
@@ -583,7 +651,12 @@ fn arg_sub(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
     Ok(ArgHandle::new(a.ctx.clone(), value))
 }
 
+/// Try to get the pod2 Value or promote a native type to it.
 fn _try_value_from_dynamic(v: Dynamic) -> Result<Value, Dynamic> {
+    let v = match v.try_cast_result::<Value>() {
+        Ok(v) => return Ok(v),
+        Err(v) => v,
+    };
     let v = match v.try_cast_result::<String>() {
         Ok(v) => return Ok(Value::from(v)),
         Err(v) => v,
@@ -611,6 +684,7 @@ fn _try_value_from_dynamic(v: Dynamic) -> Result<Value, Dynamic> {
     Err(v)
 }
 
+/// Try to get a Ref or promote a native pod2 Value-compatible type to it.
 fn try_ref_from_dynamic(v: Dynamic) -> RuntimeResult<Ref> {
     let v = match _try_value_from_dynamic(v) {
         Ok(v) => return Ok(Rc::new(RefCell::new(VarOrValue::value(v)))),
@@ -628,7 +702,9 @@ fn try_ref_from_dynamic(v: Dynamic) -> RuntimeResult<Ref> {
     Err(format!("invalid Ref type: {}", v.type_name()).into())
 }
 
-// Only call this at exec time
+/// Get the Value from a type that encapsulates VarOrValue, or promote a native pod2
+/// Value-compatible type to it.
+/// Only call this at exec time
 fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
     let v = match _try_value_from_dynamic(v) {
         Ok(v) => return Ok(v),
@@ -646,6 +722,7 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
     Err(format!("invalid value type: {}", v.type_name()).into())
 }
 
+/// Collected metadata that declares an Action
 #[derive(Debug, Default)]
 pub struct ActionMeta {
     pub name: String,
@@ -695,6 +772,7 @@ impl From<&ActionContext> for ActionMeta {
     }
 }
 
+/// Collected metadata that declares a Class
 #[derive(Debug)]
 pub struct ClassMeta {
     pub name: String,
@@ -703,6 +781,7 @@ pub struct ClassMeta {
     pub actions: Vec<(String, usize)>,
 }
 
+/// The Loader is used to store declarative module information at Load time.
 struct Loader {
     txlib_mod: Arc<Module>,
     dependencies: Vec<Dependency>,
@@ -822,6 +901,7 @@ impl Loader {
     }
 }
 
+/// An SdkModule contains a loaded module and allows executing actions.
 pub struct SdkModule {
     txlib_mod: Arc<Module>,
     podlang_src: String,
@@ -893,6 +973,7 @@ impl SpendableObjects {
     }
 }
 
+/// The Executor is used to hold the state of action execution at Execution time.
 pub struct Executor {
     mock: bool,
     params: Params,
@@ -903,6 +984,8 @@ pub struct Executor {
     module: Rc<SdkModule>,
 }
 
+/// This context is available via ActionContext at Execution time.  It keeps the state of the
+/// artifacts being generated in the execution of an action.
 struct ExeContext {
     mock: bool,
     params: Params,
@@ -970,6 +1053,7 @@ impl Executor {
     fn new_tx_builder(&self, ctx: &mut BuildContext, inputs: &[(Dictionary, Tx)]) -> TxBuilder {
         TxBuilder::new(ctx, inputs, self.grounding_witness.clone())
     }
+    /// Execute an action that consumes some input objects and produces some output objects
     pub fn action(&self, action: &str, inputs: Vec<SpendableObject>) -> SpendableObjects {
         let action = self.module.action_by_name(action);
         let builder = self.new_builder();
@@ -1003,15 +1087,22 @@ impl Executor {
             tx_builder,
             sts: Vec::new(),
         };
-        let rctx = ActionHandle::new(action.name.clone(), Some(exe_ctx));
+        let action_handle = ActionHandle::new(action.name.clone(), Some(exe_ctx));
         let mut scope = Scope::new();
+        let options = CallFnOptions::new().with_tag(action_handle.clone());
         // Execute the action rhai code
         let _result = self
             .module
             .engine
-            .call_fn::<Dynamic>(&mut scope, &self.module.ast, &action.name, (rctx.clone(),))
+            .call_fn_with_options::<Dynamic>(
+                options,
+                &mut scope,
+                &self.module.ast,
+                &action.name,
+                (action_handle.clone(),),
+            )
             .unwrap();
-        let mut ctx = rctx.0.borrow_mut();
+        let mut ctx = action_handle.0.borrow_mut();
         let mut exe_ctx = ctx.exe_ctx.take().unwrap();
 
         // Add the transaction predicates
@@ -1120,6 +1211,8 @@ impl Executor {
     }
 }
 
+/// The Sdk is the main entrypoint of this crate.  It's used to load modules from manifests and
+/// scripts.
 pub struct Sdk {
     engine: Rc<Engine>,
 }
@@ -1127,7 +1220,7 @@ pub struct Sdk {
 fn new_engine() -> Engine {
     let mut engine = Engine::new();
 
-    // Register the custom syntax: var x = ???
+    // Register the custom syntax: var $ident$ = $expr$
     engine
         .register_custom_syntax(
             ["var", "$ident$", "=", "$expr$"],
@@ -1141,21 +1234,36 @@ fn new_engine() -> Engine {
                     let value = ctx.eval_expression_tree(expr)?;
                     let arg_ctx = value.try_cast::<ArgHandle>().expect("TODO");
 
-                    // Push a new variable into the scope if it doesn't already exist and upgrade
-                    // it to store the var_name.
-                    // Otherwise just set its value.
-                    if !ctx.scope().is_constant(&var_name).unwrap_or(false) {
-                        arg_ctx.arg.borrow_mut().set_var_name(var_name.clone())?;
-                        arg_ctx.ctx.0.borrow_mut().add_var(var_name.clone())?;
-                        ctx.scope_mut().set_value(var_name, arg_ctx.clone());
-                        Ok(Dynamic::from(arg_ctx))
-                    } else {
-                        Err(format!("variable {} is constant", var_name).into())
-                    }
+                    arg_ctx.arg.borrow_mut().set_var_name(var_name.clone())?;
+                    arg_ctx.ctx.0.borrow_mut().add_var(var_name.clone())?;
+                    ctx.scope_mut().push(var_name, arg_ctx.clone());
+                    Ok(Dynamic::from(arg_ctx))
                 }
                 let var_name = inputs[0].get_string_value().expect("ident").to_string();
                 let expr = &inputs[1];
                 f(ctx, var_name, expr).map_err(|mut e| {
+                    e.set_position(expr.position());
+                    e
+                })
+            },
+        )
+        .unwrap();
+
+    // Register the custom syntax: unsafe $expr$
+    engine
+        .register_custom_syntax(
+            ["unsafe", "$expr$"],
+            true,
+            |ctx: &mut EvalContext, inputs: &[Expression]| -> RuntimeResult<Dynamic> {
+                fn f(ctx: &mut EvalContext, expr: &Expression) -> RuntimeResult<Dynamic> {
+                    let action_handle = ctx.tag().clone_cast::<ActionHandle>();
+                    action_handle.set_unsafe(true)?;
+                    let result = ctx.eval_expression_tree(expr)?;
+                    action_handle.set_unsafe(false)?;
+                    Ok(result)
+                }
+                let expr = &inputs[0];
+                f(ctx, expr).map_err(|mut e| {
                     e.set_position(expr.position());
                     e
                 })
@@ -1212,20 +1320,26 @@ impl Default for Sdk {
 }
 
 impl Sdk {
+    /// Load a module defined by the list of `actions` defined in the `src` script.
     pub fn load_module_from_src_actions(&self, src: &str, actions: &[&str]) -> Rc<SdkModule> {
         let scope = Scope::new();
         let ast = self.engine.compile_with_scope(&scope, src).unwrap();
-        // TODO: Rewrite the AST to replace assignment to `ArgContext` types by `var_assign` function
-        // calls.  Otherwise we have to manually write `var_assign(foo, expr)` to assign a new value to
-        // an existing `var`.
+        // println!("{:#?}", ast);
 
         let mut action_handles = Vec::new();
         for action in actions {
             let action_handle = ActionHandle::new(action.to_string(), None);
             let mut scope = Scope::new();
+            let options = CallFnOptions::new().with_tag(action_handle.clone());
             let _result = self
                 .engine
-                .call_fn::<Dynamic>(&mut scope, &ast, action, (action_handle.clone(),))
+                .call_fn_with_options::<Dynamic>(
+                    options,
+                    &mut scope,
+                    &ast,
+                    action,
+                    (action_handle.clone(),),
+                )
                 .unwrap();
             action_handles.push(action_handle);
         }

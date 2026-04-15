@@ -1,5 +1,9 @@
+//! Various utilities
+
 use pod2::middleware::{NativeOperation, NativePredicate};
 
+/// Return the operation that generates the predicate from entries.
+/// Panics for predicates that have no corresponding operation.
 pub(crate) fn native_pred_to_op(pred: NativePredicate) -> NativeOperation {
     match pred {
         NativePredicate::Equal => NativeOperation::EqualFromEntries,

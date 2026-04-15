@@ -1,3 +1,5 @@
+//! Functions used to format to podlang source code
+
 use crate::{
     ActionContext, ClassMeta, Dependency, Inst, Intro, Loader, ObjectIO, Ref, Var, VarOrValue,
 };

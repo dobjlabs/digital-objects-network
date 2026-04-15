@@ -74,9 +74,7 @@ fn test_sdk_1() {
 
         fn use_pick(action, pick, vdf_iters) {
             action.st_gt(pick.durability, 0);
-            var durability = pick.get("durability");
-            // durability -= 1; // Requires AST rewrite
-            var_assign(durability, durability - 1);
+            var durability = unsafe { pick.durability - 1 };
             action.st_sum_of(pick.durability, durability, 1);
             pick.update("durability", durability);
             var key = action.random();
