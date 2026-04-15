@@ -1,0 +1,24 @@
+[package]
+name = "craft_sdk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
+pod2 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+plonky2 = { workspace = true }
+env_logger = { workspace = true }
+time = "0.3.46"
+tinytemplate = "1.2.1"
+pod2utils = { path = "../pod2utils" }
+txlib = { path = "../txlib" }
+vdfpod = { path = "../intro_pods/vdfpod" }
+lt_eq_u256_pod = { path = "../intro_pods/lt_eq_u256_pod" }
+
+[dev-dependencies]
+common = { path = "../common", features = ["test-utils"] }
