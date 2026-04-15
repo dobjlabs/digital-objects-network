@@ -78,7 +78,7 @@ trusted setup that generates ~1.6 GB of artifacts in `~/.cache/pod2-groth16/`.
 just groth16-setup
 ```
 
-This takes ~10 minutes. Once complete, enable Groth16 by setting `"proofType": "groth16"` in `~/.dobj/settings.json`.
+This takes ~10 minutes. Once complete, enable Groth16 via the "Compress proof (Groth16)" checkbox in the GUI settings, or by setting `"proofType": "groth16"` in `~/.dobj/settings.json`.
 
 ## Run
 

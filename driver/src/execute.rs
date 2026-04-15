@@ -286,7 +286,6 @@ fn build_plonky2_relayer_payload(
         .iter()
         .map(|entry| Ok(Hash(entry?.raw().0)))
         .collect::<Result<Vec<_>>>()?;
-
     let payload = Payload {
         proof: PayloadProof::Plonky2(Box::new(compressed)),
         tx_final,
