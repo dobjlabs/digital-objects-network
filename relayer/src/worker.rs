@@ -135,7 +135,7 @@ async fn send_queued_job(
         "Submitting relay payload to Ethereum"
     );
 
-    match eth_client.submit_payload(&job.payload_bytes).await {
+    match eth_client.submit_payload(&job.payload_bytes, nonce).await {
         Ok(tx_hash) => {
             job.status = JobStatus::Submitted;
             job.tx_hash = Some(tx_hash);
@@ -548,7 +548,7 @@ mod tests {
 
     #[async_trait]
     impl EthGateway for MockEthGateway {
-        async fn submit_payload(&self, _payload_bytes: &[u8]) -> Result<String> {
+        async fn submit_payload(&self, _payload_bytes: &[u8], _nonce: u64) -> Result<String> {
             self.submit_results
                 .lock()
                 .expect("poisoned")
