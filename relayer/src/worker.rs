@@ -115,15 +115,9 @@ async fn send_queued_job(
     job.updated_at = now;
     db.put_job(&job).await?;
 
-    // Query nonce before submission so we can store it for potential fee bumps.
-    // Single-worker guarantees no nonce race between query and send_transaction.
-    let nonce = match eth_client.get_next_nonce().await {
-        Ok(n) => Some(n),
-        Err(err) => {
-            warn!(job_id = %job.job_id, ?err, "Failed to query nonce; submitting without tracking");
-            None
-        }
-    };
+    // Query nonce before submission so we can pass it explicitly and store it
+    // for potential fee bumps. Single-worker guarantees no nonce race.
+    let nonce = eth_client.get_next_nonce().await?;
 
     info!(
         job_id = %job.job_id,
@@ -131,7 +125,7 @@ async fn send_queued_job(
         payload_bytes = job.payload_bytes.len(),
         tx_final = %job.tx_final,
         state_root_hash = %job.state_root_hash,
-        nonce = ?nonce,
+        nonce,
         "Submitting relay payload to Ethereum"
     );
 
@@ -142,7 +136,7 @@ async fn send_queued_job(
             job.submitted_at = Some(now);
             job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
             job.last_error = None;
-            job.nonce = nonce.map(|n| n as i64);
+            job.nonce = Some(nonce as i64);
             job.bump_count = 0;
             job.updated_at = now;
             db.put_job(&job).await?;
@@ -304,23 +298,41 @@ async fn poll_submitted_job(
                                             }
                                         }
 
-                                        if let Some(hash) = &mined_hash {
-                                            job.tx_hash = Some(hash.clone());
+                                        if let Some(hash) = mined_hash {
+                                            job.tx_hash = Some(hash);
+                                            job.status = JobStatus::Confirmed;
+                                            job.block_number = mined_block.or(job.block_number);
+                                            job.next_attempt_at = None;
+                                            job.last_error = None;
+                                            job.updated_at = now;
+                                            db.put_job(&job).await?;
+                                            info!(
+                                                job_id = %job.job_id,
+                                                tx_hash = ?job.tx_hash,
+                                                block_number = ?mined_block,
+                                                used_nonce = nonce,
+                                                current_nonce = current_nonce,
+                                                "Nonce consumed; replacement TX confirmed"
+                                            );
+                                            return Ok(());
                                         }
-                                        job.status = JobStatus::Confirmed;
-                                        job.block_number = mined_block.or(job.block_number);
-                                        job.next_attempt_at = None;
-                                        job.last_error = None;
-                                        job.updated_at = now;
-                                        db.put_job(&job).await?;
-                                        info!(
+
+                                        // Nonce consumed but no receipt available
+                                        // for any known hash yet — stop bumping
+                                        // (nothing to replace) and keep polling
+                                        // until the receipt propagates.
+                                        warn!(
                                             job_id = %job.job_id,
-                                            mined_tx_hash = ?mined_hash,
-                                            block_number = ?mined_block,
                                             used_nonce = nonce,
                                             current_nonce = current_nonce,
-                                            "Nonce consumed; replacement TX confirmed"
+                                            prev_tx_count = job.prev_tx_hashes.len(),
+                                            "Nonce consumed but no receipt found yet; will keep polling"
                                         );
+                                        job.bump_count = cfg.fee_bump_max as i32;
+                                        job.next_attempt_at =
+                                            Some(now + cfg.receipt_poll_secs as i64);
+                                        job.updated_at = now;
+                                        db.put_job(&job).await?;
                                         return Ok(());
                                     }
                                 }
