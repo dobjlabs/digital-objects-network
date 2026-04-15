@@ -28,7 +28,6 @@
 //! ```
 
 use anyhow::Result;
-use hex::FromHex;
 use itertools::Itertools;
 use plonky2::{
     field::types::{Field, PrimeField64},
@@ -55,8 +54,10 @@ use pod2::{
         },
         deserialize_proof, mainpod,
         mainpod::calculate_statements_hash,
+        serialization::CircuitDataSerializer,
         serialize_proof,
     },
+    cache::{self, CacheEntry},
     measure_gates_begin, measure_gates_end, middleware,
     middleware::{
         C, D, EMPTY_HASH, F, Hash, IntroPredicateRef, Params, Pod, Proof, RawValue, ToFields,
@@ -71,13 +72,21 @@ const LT_EQ_U256_POD_TYPE: (usize, &str) = (2002, "LtEqU256");
 
 pub static STANDARD_LT_EQ_U256_VD_HASH: std::sync::LazyLock<Hash> =
     std::sync::LazyLock::new(|| {
-        Hash::from_hex("2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529").unwrap()
+        let (_, data) = &**STANDARD_LT_EQ_U256_POD_DATA;
+        let hash_out =
+            pod2::backends::plonky2::recursion::circuit::hash_verifier_data(&data.verifier_only);
+        Hash(hash_out.elements.map(|e| e))
     });
 
-static STANDARD_LT_EQ_U256_POD_DATA: std::sync::LazyLock<(
-    LtEqU256PodTarget,
-    CircuitData<F, C, D>,
-)> = std::sync::LazyLock::new(|| build().expect("successful build"));
+static STANDARD_LT_EQ_U256_POD_DATA: std::sync::LazyLock<
+    CacheEntry<(LtEqU256PodTarget, CircuitDataSerializer)>,
+> = std::sync::LazyLock::new(|| {
+    cache::get("standard_lt_eq_u256_pod_circuit_data", &(), |_| {
+        let (target, circuit_data) = build().expect("successful build");
+        (target, CircuitDataSerializer(circuit_data))
+    })
+    .expect("cache ok")
+});
 fn build() -> Result<(LtEqU256PodTarget, CircuitData<F, C, D>)> {
     let params = Params::default();
 
@@ -157,7 +166,7 @@ impl LtEqU256Pod {
         }
 
         // Build the proof
-        let (lt_eq_u256_pod_target, circuit_data) = &*STANDARD_LT_EQ_U256_POD_DATA;
+        let (lt_eq_u256_pod_target, circuit_data) = &**STANDARD_LT_EQ_U256_POD_DATA;
         let statements = pub_self_statements(lhs, rhs)
             .into_iter()
             .map(mainpod::Statement::from)
@@ -225,7 +234,7 @@ impl Pod for LtEqU256Pod {
             ));
         }
 
-        let (_, circuit_data) = &*STANDARD_LT_EQ_U256_POD_DATA;
+        let (_, circuit_data) = &**STANDARD_LT_EQ_U256_POD_DATA;
 
         let public_inputs = statements_hash
             .to_fields()
@@ -286,11 +295,8 @@ impl Pod for LtEqU256Pod {
     }
 
     fn verifier_data(&self) -> VerifierOnlyCircuitData<C, D> {
-        STANDARD_LT_EQ_U256_POD_DATA
-            .1
-            .verifier_data()
-            .verifier_only
-            .clone()
+        let (_, circuit_data) = &**STANDARD_LT_EQ_U256_POD_DATA;
+        circuit_data.verifier_data().verifier_only.clone()
     }
 
     fn common_hash(&self) -> String {
@@ -343,7 +349,7 @@ fn pub_self_statements_target(
     )]
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct LtEqU256PodTarget {
     vd_root: HashOutTarget,
     lhs: ValueTarget,
@@ -582,8 +588,8 @@ mod tests {
 
     #[test]
     fn test_ltequ256_vd_hash() {
-        let expected_vd_hash =
-            hash_verifier_data(&STANDARD_LT_EQ_U256_POD_DATA.1.verifier_data().verifier_only);
+        let (_, circuit_data) = &**STANDARD_LT_EQ_U256_POD_DATA;
+        let expected_vd_hash = hash_verifier_data(&circuit_data.verifier_data().verifier_only);
         assert_eq!(
             expected_vd_hash,
             HashOut::from(*STANDARD_LT_EQ_U256_VD_HASH)
