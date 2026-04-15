@@ -60,7 +60,7 @@ pub struct FeeOverrides {
 /// Worker-facing Ethereum operations. Kept as a trait for test mocking.
 #[async_trait]
 pub trait EthGateway: Send + Sync {
-    async fn submit_payload(&self, payload_bytes: &[u8]) -> Result<String>;
+    async fn submit_payload(&self, payload_bytes: &[u8], nonce: u64) -> Result<String>;
     async fn poll_receipt(&self, tx_hash: &str) -> Result<Option<ReceiptOutcome>>;
     /// Get the next available nonce for the relayer signer address.
     async fn get_next_nonce(&self) -> Result<u64>;
@@ -123,10 +123,10 @@ impl EthClient {
 #[async_trait]
 impl EthGateway for EthClient {
     /// Build and broadcast an EIP-4844 blob transaction from payload bytes.
-    async fn submit_payload(&self, payload_bytes: &[u8]) -> Result<String> {
+    async fn submit_payload(&self, payload_bytes: &[u8], nonce: u64) -> Result<String> {
         info!(
             payload_bytes = payload_bytes.len(),
-            "Preparing EIP-4844 transaction from relay payload"
+            nonce, "Preparing EIP-4844 transaction from relay payload"
         );
         let sidecar = SidecarBuilder::<SimpleCoder>::from_slice(payload_bytes)
             .build_4844()
@@ -136,6 +136,7 @@ impl EthGateway for EthClient {
             .to(self.to)
             .from(self.from)
             .value(U256::ZERO)
+            .nonce(nonce)
             .with_blob_sidecar(sidecar);
 
         if let Some(max_fee_per_blob_gas) = self.max_fee_per_blob_gas {
@@ -145,12 +146,13 @@ impl EthGateway for EthClient {
         debug!(
             from = %self.from,
             to = %self.to,
+            nonce,
             max_fee_per_blob_gas = ?self.max_fee_per_blob_gas,
             "Sending Ethereum blob transaction"
         );
         let pending = self.provider.send_transaction(tx).await?;
         let tx_hash = format!("{:#x}", pending.tx_hash());
-        info!(tx_hash = %tx_hash, "Ethereum blob transaction submitted");
+        info!(tx_hash = %tx_hash, nonce, "Ethereum blob transaction submitted");
         Ok(tx_hash)
     }
 

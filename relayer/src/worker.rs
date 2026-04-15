@@ -115,15 +115,9 @@ async fn send_queued_job(
     job.updated_at = now;
     db.put_job(&job).await?;
 
-    // Query nonce before submission so we can store it for potential fee bumps.
-    // Single-worker guarantees no nonce race between query and send_transaction.
-    let nonce = match eth_client.get_next_nonce().await {
-        Ok(n) => Some(n),
-        Err(err) => {
-            warn!(job_id = %job.job_id, ?err, "Failed to query nonce; submitting without tracking");
-            None
-        }
-    };
+    // Query nonce before submission so we can pass it explicitly and store it
+    // for potential fee bumps. Single-worker guarantees no nonce race.
+    let nonce = eth_client.get_next_nonce().await?;
 
     info!(
         job_id = %job.job_id,
@@ -131,18 +125,18 @@ async fn send_queued_job(
         payload_bytes = job.payload_bytes.len(),
         tx_final = %job.tx_final,
         state_root_hash = %job.state_root_hash,
-        nonce = ?nonce,
+        nonce,
         "Submitting relay payload to Ethereum"
     );
 
-    match eth_client.submit_payload(&job.payload_bytes).await {
+    match eth_client.submit_payload(&job.payload_bytes, nonce).await {
         Ok(tx_hash) => {
             job.status = JobStatus::Submitted;
             job.tx_hash = Some(tx_hash);
             job.submitted_at = Some(now);
             job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
             job.last_error = None;
-            job.nonce = nonce.map(|n| n as i64);
+            job.nonce = Some(nonce as i64);
             job.bump_count = 0;
             job.updated_at = now;
             db.put_job(&job).await?;
@@ -566,7 +560,7 @@ mod tests {
 
     #[async_trait]
     impl EthGateway for MockEthGateway {
-        async fn submit_payload(&self, _payload_bytes: &[u8]) -> Result<String> {
+        async fn submit_payload(&self, _payload_bytes: &[u8], _nonce: u64) -> Result<String> {
             self.submit_results
                 .lock()
                 .expect("poisoned")
