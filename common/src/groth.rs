@@ -1,7 +1,6 @@
 //! Check out common/src/lib.rs documentation for context.
 //!
 
-use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
@@ -72,7 +71,8 @@ mod tests {
         let output_path = cache_path(CACHE_SUBDIR_OUTPUT)?;
 
         // if plonky2 groth16-friendly proof does not exist yet, generate it
-        if !Path::new(&input_path).is_dir() {
+        let proof_marker = Path::new(&input_path).join("proof_with_public_inputs.bin");
+        if !proof_marker.exists() {
             println!("generating plonky2 groth16-friendly proof at {input_path}");
             pod2_onchain::pod::sample_plonky2_g16_friendly_proof(&input_path)?;
         } else {
@@ -80,12 +80,13 @@ mod tests {
         }
 
         // if trusted setup does not exist yet, generate it
-        if !Path::new(&output_path).is_dir() {
+        let vk_marker = Path::new(&output_path).join("verifying.key");
+        if !vk_marker.exists() {
             println!("generating groth16's trusted setup at {output_path}");
             let result = pod2_onchain::trusted_setup(&input_path, &output_path);
             println!("trusted_setup result: {result}");
         } else {
-            println!("trusted setup already exists, skipping generation");
+            println!("trusted setup already exists at {output_path}, skipping");
         }
 
         Ok(())
