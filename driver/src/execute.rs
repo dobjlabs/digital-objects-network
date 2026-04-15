@@ -287,13 +287,6 @@ fn build_plonky2_relayer_payload(
         .map(|entry| Ok(Hash(entry?.raw().0)))
         .collect::<Result<Vec<_>>>()?;
 
-    // Measure compressed proof size
-    let mut proof_buf: Vec<u8> = Vec::new();
-    plonky2::util::serialization::Write::write_compressed_proof(&mut proof_buf, &compressed)
-        .expect("proof size measurement");
-    let proof_bytes = proof_buf.len();
-
-    let nullifiers_len = nullifiers.len();
     let payload = Payload {
         proof: PayloadProof::Plonky2(Box::new(compressed)),
         tx_final,
@@ -301,7 +294,6 @@ fn build_plonky2_relayer_payload(
         nullifiers,
     };
 
-    log_payload_size("plonky2", proof_bytes, nullifiers_len, &payload);
     Ok(payload.to_bytes())
 }
 
@@ -310,8 +302,7 @@ fn build_groth16_relayer_payload(
     old_state_root_hash: &Hash,
     action_output: &SpendableObjects,
 ) -> Result<Vec<u8>> {
-    common::groth::init()
-        .map_err(|err| anyhow!("failed to initialize groth16 prover: {err}"))?;
+    common::groth::init().map_err(|err| anyhow!("failed to initialize groth16 prover: {err}"))?;
 
     let (g16_proof, g16_pub_inp) = common::groth::prove(action_output.tx_pod.clone())
         .map_err(|err| anyhow!("groth16 proof generation failed: {err}"))?;
@@ -342,23 +333,5 @@ fn build_groth16_relayer_payload(
         nullifiers,
     };
 
-    log_payload_size("groth16", proof_bytes, nullifiers_len, &payload);
     Ok(payload.to_bytes())
-}
-
-fn log_payload_size(proof_type: &str, proof_bytes: usize, nullifiers_len: usize, payload: &Payload) {
-    let payload_bytes = payload.to_bytes();
-    let nullifier_bytes = nullifiers_len * 32;
-    let overhead = 2 + 1 + 32 + 32 + 1; // magic + proof_type + tx_final + state_root_hash + nullifier_count
-    eprintln!(
-        "[PAYLOAD_SIZE] type: {}, proof: {} bytes, nullifiers: {} ({} bytes), overhead: {} bytes, total: {} bytes ({:.1} KiB / {:.1} KiB max)",
-        proof_type,
-        proof_bytes,
-        nullifiers_len,
-        nullifier_bytes,
-        overhead,
-        payload_bytes.len(),
-        payload_bytes.len() as f64 / 1024.0,
-        common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES as f64 / 1024.0,
-    );
 }
