@@ -304,23 +304,41 @@ async fn poll_submitted_job(
                                             }
                                         }
 
-                                        if let Some(hash) = &mined_hash {
-                                            job.tx_hash = Some(hash.clone());
+                                        if let Some(hash) = mined_hash {
+                                            job.tx_hash = Some(hash);
+                                            job.status = JobStatus::Confirmed;
+                                            job.block_number = mined_block.or(job.block_number);
+                                            job.next_attempt_at = None;
+                                            job.last_error = None;
+                                            job.updated_at = now;
+                                            db.put_job(&job).await?;
+                                            info!(
+                                                job_id = %job.job_id,
+                                                tx_hash = ?job.tx_hash,
+                                                block_number = ?mined_block,
+                                                used_nonce = nonce,
+                                                current_nonce = current_nonce,
+                                                "Nonce consumed; replacement TX confirmed"
+                                            );
+                                            return Ok(());
                                         }
-                                        job.status = JobStatus::Confirmed;
-                                        job.block_number = mined_block.or(job.block_number);
-                                        job.next_attempt_at = None;
-                                        job.last_error = None;
-                                        job.updated_at = now;
-                                        db.put_job(&job).await?;
-                                        info!(
+
+                                        // Nonce consumed but no receipt available
+                                        // for any known hash yet — stop bumping
+                                        // (nothing to replace) and keep polling
+                                        // until the receipt propagates.
+                                        warn!(
                                             job_id = %job.job_id,
-                                            mined_tx_hash = ?mined_hash,
-                                            block_number = ?mined_block,
                                             used_nonce = nonce,
                                             current_nonce = current_nonce,
-                                            "Nonce consumed; replacement TX confirmed"
+                                            prev_tx_count = job.prev_tx_hashes.len(),
+                                            "Nonce consumed but no receipt found yet; will keep polling"
                                         );
+                                        job.bump_count = cfg.fee_bump_max as i32;
+                                        job.next_attempt_at =
+                                            Some(now + cfg.receipt_poll_secs as i64);
+                                        job.updated_at = now;
+                                        db.put_job(&job).await?;
                                         return Ok(());
                                     }
                                 }
