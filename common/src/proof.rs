@@ -103,10 +103,17 @@ impl ProofParser {
         let (common_circuit_data, verifier_circuit_data) =
             &*cache_get_shrunk_main_pod_circuit_data(&params);
 
-        // Load Groth16 verification key so verify_groth16_proof can call groth16_verify.
+        // Try to load the Groth16 verification key. If the artifacts don't exist
+        // (user hasn't run `just groth16-setup`), log a warning and continue —
+        // Plonky2 proofs will still work. Groth16 proofs will be rejected at
+        // verification time with a clear error.
         #[cfg(feature = "groth16")]
-        crate::groth::load_vk()
-            .map_err(|e| anyhow!("failed to load Groth16 verification key: {e}"))?;
+        {
+            use tracing::warn;
+            if let Err(e) = crate::groth::load_vk() {
+                warn!("Groth16 verification key not loaded: {e}. Groth16 proofs will be rejected. Run `just groth16-setup` to enable.");
+            }
+        }
 
         Ok(Self {
             txn_finalized_pred,
