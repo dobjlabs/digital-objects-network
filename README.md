@@ -5,6 +5,8 @@ Proof-driven digital objects with:
 - a Tauri desktop app
 - a relayer that submits proof payloads as EIP-4844 blob transactions
 - a synchronizer that rebuilds app state from chain data
+- a plugin system (`.pexe` archives) where each plugin ships a Rhai script
+  + TOML manifest that the driver loads at startup
 
 ## Prerequisites
 
@@ -82,7 +84,36 @@ This runs:
 - `just relayer`
 - `just gui`
 
+It also runs `just ensure-plugins` first, which installs the built-in plugins
+from `plugins/` into `~/.dobj/actions/` if no `.pexe` files are present there.
+On a fresh clone (or after `just reset`) this is how the GUI gets its
+initial catalog of actions.
+
 You can also run each service individually with those commands.
+
+## Plugins
+
+Actions and classes are defined by plugin archives (`.pexe` files) loaded from
+`~/.dobj/actions/`. Each plugin is a zip of:
+
+- `manifest.toml` — plugin metadata (name, version, class descriptions, action
+  names, module hash)
+- `plugin.rhai` — the action logic as a Rhai script
+
+Plugin sources live in-repo under `plugins/<name>/`. The `pexe` crate provides
+a CLI for packaging them:
+
+```bash
+just pack-plugins       # build plugins into target/pexe/*.pexe
+just install-plugins    # same, then copy to ~/.dobj/actions/
+```
+
+`install-plugins` also rewrites the `module_hash` line in each plugin's
+`manifest.toml` to match the hash the compiled pod2 module actually produces,
+so the committed manifest always matches what the driver will accept.
+
+To add or modify a plugin, edit the files under `plugins/<name>/` and
+re-run `just install-plugins`. Restart the GUI to pick up the new catalog.
 
 ## Restarting Fresh
 
@@ -92,8 +123,10 @@ If you want to wipe local state and start over, run:
 just reset
 ```
 
-This clears local RocksDB state, local object files, and the local Postgres
-databases used by the synchronizer and relayer.
+This clears local RocksDB state, local object files, local plugin
+installations (`~/.dobj/actions/`), and the local Postgres databases used
+by the synchronizer and relayer. The next `just dev` will re-install
+plugins automatically.
 
 If you are not using the default local `postgres` role/admin database, either
 adjust the `just reset` command or drop the `synchronizer` and `relayer`
