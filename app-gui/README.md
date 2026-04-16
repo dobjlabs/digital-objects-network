@@ -110,7 +110,6 @@ just dev
 
 - `pnpm dev` (Vite only)
 - `pnpm tauri dev`
-- `pnpm gen:ids`
 - `pnpm build`
 
 ## Prereqs

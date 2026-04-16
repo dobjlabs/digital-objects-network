@@ -2,7 +2,6 @@ import { create } from "zustand";
 import {
   loadGuiInventory,
   runAction,
-  type ActionId,
   type ActionPayload as Action,
   type InventoryObjectPayload as InventoryObject,
   type RunActionProgress,
@@ -66,7 +65,7 @@ export interface AppState {
   applyRunActionProgress: (event: RunActionProgress) => void;
   initProofPanel: (input: { actionId: string; args: string[] }) => void;
   runProof: (input: {
-    actionId: ActionId;
+    actionId: string;
     inputBindings: Array<{
       objectPath: string;
       label: string;

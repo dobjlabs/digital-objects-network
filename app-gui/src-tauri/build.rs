@@ -239,19 +239,6 @@ fn copy_mac_gcc_runtime_libs(bundle_libs_dir: &Path) {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn configure_macos_tauri_overrides() {
-    if std::env::var("PROFILE").as_deref() == Ok("debug") {
-        // `pnpm build` runs `cargo run --example gen_ids` in debug mode before the
-        // actual release bundle step. That helper binary does not need macOS
-        // framework staging, and skipping it keeps the host-side build light.
-        std::env::set_var(
-            "TAURI_CONFIG",
-            r#"{"bundle":{"macOS":{"frameworks":null}}}"#,
-        );
-    }
-}
-
 fn main() {
     println!("cargo:rerun-if-env-changed=DEP_SCIP_LIBDIR");
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
@@ -286,7 +273,6 @@ fn main() {
         copy_mac_gcc_runtime_libs(&bundle_libs_dir);
         rewrite_mac_dylib_ids(&bundle_libs_dir);
         resign_mac_dylibs(&bundle_libs_dir);
-        configure_macos_tauri_overrides();
     }
 
     #[cfg(target_os = "linux")]

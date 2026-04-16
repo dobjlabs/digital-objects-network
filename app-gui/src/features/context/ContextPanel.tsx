@@ -7,7 +7,6 @@ import type {
 import {
   pickDobjFilePath,
   readDobjFile,
-  type ActionId,
 } from "../../shared/api/tauriClient";
 import { truncateDisplayHash } from "../../shared/format";
 import {
@@ -27,7 +26,7 @@ interface ContextPanelProps {
   actions: Action[];
   onClearSelection: () => void;
   onRunProof: (input: {
-    actionId: ActionId;
+    actionId: string;
     inputBindings: Array<{
       objectPath: string;
       label: string;

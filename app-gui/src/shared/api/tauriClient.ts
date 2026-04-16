@@ -10,8 +10,6 @@ import type {
   RunActionResult,
 } from "./wireTypes";
 
-export type { ActionId, ClassName } from "../generated/ids";
-
 export type {
   ActionPayload,
   AppSettingsPayload,
