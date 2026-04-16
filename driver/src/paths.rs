@@ -9,10 +9,12 @@ pub fn default_paths() -> Result<DriverPaths> {
     let settings_path = root.join("settings.json");
     let objects_dir = root.join("objects");
     let nullified_objects_dir = objects_dir.join(".nullified");
+    let actions_dir = root.join("actions");
     Ok(DriverPaths {
         settings_path,
         objects_dir,
         nullified_objects_dir,
+        actions_dir,
     })
 }
 
@@ -30,5 +32,6 @@ mod tests {
                 .nullified_objects_dir
                 .ends_with(".dobj/objects/.nullified")
         );
+        assert!(paths.actions_dir.ends_with(".dobj/actions"));
     }
 }

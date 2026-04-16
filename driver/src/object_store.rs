@@ -23,6 +23,12 @@ pub(crate) fn ensure_store_dirs(paths: &DriverPaths) -> Result<()> {
             paths.nullified_objects_dir.display()
         )
     })?;
+    fs::create_dir_all(&paths.actions_dir).map_err(|err| {
+        anyhow!(
+            "failed to create actions directory {}: {err}",
+            paths.actions_dir.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -196,8 +202,9 @@ mod tests {
     use tempfile::tempdir;
     use txlib::{GroundingWitness, StateRoot};
 
-    use crate::builtin::execute_with_script;
+    use crate::catalog::ActionCatalog;
     use crate::paths::default_paths;
+    use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
     use crate::types::DriverPaths;
 
     use super::{load_object_files, write_object_file};
@@ -212,10 +219,12 @@ mod tests {
         let settings_path = root.join("settings.json");
         let objects_dir = root.join("objects");
         let nullified_objects_dir = objects_dir.join(".nullified");
+        let actions_dir = root.join("actions");
         DriverPaths {
             settings_path,
             objects_dir,
             nullified_objects_dir,
+            actions_dir,
         }
     }
 
@@ -233,8 +242,17 @@ mod tests {
 
     fn make_record() -> ObjectRecord {
         ensure_extra_pod_deserializers_registered();
-        let outputs =
-            execute_with_script("FindLog", dummy_grounding_witness(), vec![], true).unwrap();
+        let catalog = PexeCatalog::from_bytes(
+            std::iter::once((
+                std::path::PathBuf::from("craft-basics.pexe"),
+                test_plugin_bytes(),
+            )),
+            true,
+        )
+        .unwrap();
+        let outputs = catalog
+            .execute_action("FindLog".to_string(), dummy_grounding_witness(), vec![])
+            .unwrap();
         let spendable = outputs.obj(0);
         ObjectRecord {
             id: format!("{:#}", spendable.obj.commitment()),

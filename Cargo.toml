@@ -9,6 +9,7 @@ members = [
     "timelib",
     "txlib",
     "sdk",
+    "pexe",
     "intro_pods/vdfpod",
     "intro_pods/lt_eq_u256_pod",
     "mcp",

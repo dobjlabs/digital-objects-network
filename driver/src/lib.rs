@@ -1,4 +1,3 @@
-mod builtin;
 mod catalog;
 mod clients;
 mod driver;
@@ -6,14 +5,15 @@ mod execute;
 mod object_record;
 mod object_store;
 mod paths;
+mod pexe_catalog;
 mod settings;
 mod types;
 
 #[cfg(test)]
 mod tests;
 
-pub use crate::builtin::BuiltinActionCatalog;
 pub use crate::catalog::ActionCatalog as DriverActionCatalog;
+pub use crate::pexe_catalog::PexeCatalog;
 pub use crate::clients::{
     RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS, SYNCHRONIZER_POLL_INTERVAL_MS,
     SYNCHRONIZER_POLL_TIMEOUT_SECS,
