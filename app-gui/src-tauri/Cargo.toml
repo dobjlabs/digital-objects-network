@@ -42,3 +42,8 @@ notify = "6"
 rfd = "0.14"
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# Used by examples/gen_ids.rs to pack in-repo plugin sources in-memory and
+# derive the catalog of action/class names without touching ~/.dobj/actions.
+pexe = { path = "../../pexe" }

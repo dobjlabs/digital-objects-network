@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use common::test_state::TestState;
 use pod2::middleware::Hash;
-use sdk::{SpendableObject, SpendableObjects};
+use sdk::SpendableObjects;
 use tempfile::tempdir;
 use txlib::{GroundingWitness, StateRoot};
 

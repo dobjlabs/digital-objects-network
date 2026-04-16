@@ -977,6 +977,7 @@ dependencies = [
  "hex",
  "lt_eq_u256_pod",
  "notify",
+ "pexe",
  "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=364088d316925f59693ed172ead383e4996de410)",
  "pod2utils",
  "relayer",
