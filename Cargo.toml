@@ -8,7 +8,6 @@ members = [
     "relayer",
     "timelib",
     "txlib",
-    "craft_sdk",
     "sdk",
     "intro_pods/vdfpod",
     "intro_pods/lt_eq_u256_pod",

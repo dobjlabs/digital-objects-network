@@ -192,13 +192,11 @@ pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> boo
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
-    use craft_sdk::Helper;
     use tempfile::tempdir;
     use txlib::{GroundingWitness, StateRoot};
 
-    use crate::builtin::{actions, dependencies};
+    use crate::builtin::execute_with_script;
     use crate::paths::default_paths;
     use crate::types::DriverPaths;
 
@@ -235,9 +233,8 @@ mod tests {
 
     fn make_record() -> ObjectRecord {
         ensure_extra_pod_deserializers_registered();
-        let helper = Helper::new(dependencies(), actions());
-        let builder = helper.builder(true, Arc::new(dummy_grounding_witness()));
-        let outputs = builder.action("FindLog", vec![]);
+        let outputs =
+            execute_with_script("FindLog", dummy_grounding_witness(), vec![], true).unwrap();
         let spendable = outputs.obj(0);
         ObjectRecord {
             id: format!("{:#}", spendable.obj.commitment()),

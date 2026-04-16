@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use common::encode_hash_hex;
-use craft_sdk::SpendableObjects;
+use sdk::SpendableObjects;
 use pod2::middleware::Hash;
 use txlib::object_nullifier_hash;
 

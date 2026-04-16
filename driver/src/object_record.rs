@@ -1,4 +1,4 @@
-use craft_sdk::SpendableObject;
+use sdk::SpendableObject;
 use pod2::{frontend::MainPod, middleware::containers::Dictionary};
 use serde::de::{DeserializeOwned, Error as _};
 use serde::ser::Error as _;

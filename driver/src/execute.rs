@@ -5,7 +5,7 @@ use common::{
     payload::{Payload, PayloadProof},
     shrink::{ShrunkMainPodSetup, shrink_compress_pod},
 };
-use craft_sdk::SpendableObjects;
+use sdk::SpendableObjects;
 use pod2::middleware::{Hash, Params};
 use txlib::object_nullifier_hash;
 

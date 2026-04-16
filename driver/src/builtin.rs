@@ -1,25 +1,14 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use anyhow::Result;
-use craft_sdk::{
-    Context, Helper, SpendableObject, SpendableObjects,
-    api::{self, Arg, Step, StepKind},
-};
-use lt_eq_u256_pod::LtEqU256Pod;
-use pod2::{
-    frontend::{MainPod, Operation},
-    middleware::{F, Key, Pod, RawValue, Statement, Value},
-};
+use sdk::{Sdk, SpendableObject, SpendableObjects};
 use txlib::GroundingWitness;
-use vdfpod::VdfPod;
 
 use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
 use crate::types::ActionSummary;
 
-const WOOD_POW_DIFFICULTY: u64 = 0x0020_0000_0000_0000;
-
-struct ActionMeta {
+struct ActionMetaInfo {
     name: &'static str,
     emoji: &'static str,
     description: &'static str,
@@ -28,20 +17,14 @@ struct ActionMeta {
     hidden: bool,
 }
 
-struct ClassMeta {
+struct ClassMetaInfo {
     name: &'static str,
     emoji: &'static str,
     description: &'static str,
 }
 
-#[derive(Debug, Clone)]
-struct ActionSignature {
-    inputs: Vec<String>,
-    outputs: Vec<String>,
-}
-
-const ACTION_META: &[ActionMeta] = &[
-    ActionMeta {
+const ACTION_META: &[ActionMetaInfo] = &[
+    ActionMetaInfo {
         name: "FindLog",
         emoji: "🌲",
         description: "Discover a log object by proving a short VDF.",
@@ -49,7 +32,7 @@ const ACTION_META: &[ActionMeta] = &[
         reads_block: false,
         hidden: false,
     },
-    ActionMeta {
+    ActionMetaInfo {
         name: "CraftWood",
         emoji: "🪵",
         description: "Refine one log into a wood object with PoW quality checks.",
@@ -57,7 +40,7 @@ const ACTION_META: &[ActionMeta] = &[
         reads_block: false,
         hidden: false,
     },
-    ActionMeta {
+    ActionMetaInfo {
         name: "CraftSticks",
         emoji: "🥢",
         description: "Split one wood object into two stick objects.",
@@ -65,7 +48,7 @@ const ACTION_META: &[ActionMeta] = &[
         reads_block: false,
         hidden: false,
     },
-    ActionMeta {
+    ActionMetaInfo {
         name: "CraftWoodPick",
         emoji: "⛏️",
         description: "Combine wood and a stick to craft a wood pick.",
@@ -73,15 +56,7 @@ const ACTION_META: &[ActionMeta] = &[
         reads_block: false,
         hidden: false,
     },
-    ActionMeta {
-        name: "CraftStonePick",
-        emoji: "⛏️",
-        description: "Combine stone and a stick to craft a stronger stone pick.",
-        cpu_cost: "10-20s",
-        reads_block: false,
-        hidden: false,
-    },
-    ActionMeta {
+    ActionMetaInfo {
         name: "UseWoodPick",
         emoji: "⛏️",
         description: "Internal durability/work update for wood pick usage.",
@@ -89,64 +64,90 @@ const ACTION_META: &[ActionMeta] = &[
         reads_block: false,
         hidden: true,
     },
-    ActionMeta {
-        name: "MineStoneWithWoodPick",
-        emoji: "🪨",
-        description: "Mine stone using a wood pick (consumes durability).",
-        cpu_cost: "25-45s",
-        reads_block: false,
-        hidden: false,
-    },
-    ActionMeta {
-        name: "UseStonePick",
-        emoji: "⛏️",
-        description: "Internal durability/work update for stone pick usage.",
-        cpu_cost: "5-20s",
-        reads_block: false,
-        hidden: true,
-    },
-    ActionMeta {
-        name: "MineStoneWithStonePick",
-        emoji: "🪨",
-        description: "Mine stone using a stone pick (consumes durability).",
-        cpu_cost: "15-35s",
-        reads_block: false,
-        hidden: false,
-    },
 ];
 
-const CLASS_META: &[ClassMeta] = &[
-    ClassMeta {
+const CLASS_META: &[ClassMetaInfo] = &[
+    ClassMetaInfo {
         name: "Log",
         emoji: "🌲",
         description: "A discovered log that can be refined into wood.",
     },
-    ClassMeta {
+    ClassMetaInfo {
         name: "Wood",
         emoji: "🪵",
         description: "Refined wood used for sticks and basic tools.",
     },
-    ClassMeta {
+    ClassMetaInfo {
         name: "Stick",
         emoji: "🥢",
         description: "A stick used as a handle in tool crafting.",
     },
-    ClassMeta {
+    ClassMetaInfo {
         name: "WoodPick",
         emoji: "⛏️",
         description: "A wood pick that can mine stone while durability remains.",
     },
-    ClassMeta {
-        name: "Stone",
-        emoji: "🪨",
-        description: "Mined stone used to craft stronger tools.",
-    },
-    ClassMeta {
-        name: "StonePick",
-        emoji: "⛏️",
-        description: "A sturdier pick with higher starting durability.",
-    },
 ];
+
+pub(crate) const ACTION_NAMES: &[&str] = &[
+    "FindLog",
+    "CraftWood",
+    "CraftSticks",
+    "CraftWoodPick",
+    "UseWoodPick",
+];
+
+pub(crate) const CRAFT_SCRIPT: &str = r#"
+fn FindLog(action) {
+    var log = action.output("Log");
+    log.set([["blueprint", "Log"]]);
+    var work = action.intro_vdf(3, log);
+    log.update("work", work);
+}
+
+fn CraftWood(action) {
+    var log = action.input("Log");
+    var wood = action.output("Wood");
+    wood.set([["blueprint", "Wood"]]);
+    var key = action.pow_obj_grind(wood, 9007199254740992);
+    wood.update("key", key);
+    action.intro_lt_eq_u256(wood, 9007199254740992);
+}
+
+fn CraftSticks(action) {
+    var wood = action.input("Wood");
+    var stick_a = action.output("Stick");
+    var stick_b = action.output("Stick");
+    stick_a.set([["blueprint", "Stick"]]);
+    stick_b.set([["blueprint", "Stick"]]);
+}
+
+fn CraftWoodPick(action) {
+    var wood = action.input("Wood");
+    var stick = action.input("Stick");
+    var pick = action.output("WoodPick");
+    pick.set([
+        ["blueprint", "WoodPick"],
+        ["durability", 100]
+    ]);
+}
+
+fn use_pick(action, pick, vdf_iters) {
+    action.st_gt(pick.durability, 0);
+    var durability = unsafe { pick.durability - 1 };
+    action.st_sum_of(pick.durability, durability, 1);
+    pick.update("durability", durability);
+    var key = action.random();
+    pick.update("key", key);
+    var work = action.intro_vdf(vdf_iters, pick);
+    pick.update("work", work);
+}
+
+fn UseWoodPick(action) {
+    var wood_pick = action.mutate("WoodPick");
+    use_pick(action, wood_pick, 10);
+}
+"#;
 
 pub struct BuiltinActionCatalog {
     actions: Vec<ActionSummary>,
@@ -158,47 +159,50 @@ pub struct BuiltinActionCatalog {
 
 impl BuiltinActionCatalog {
     pub fn new() -> Self {
-        let helper = Helper::new(dependencies(), actions());
-        let action_hashes = helper.action_hashes();
-        let class_hashes = helper.class_hashes();
-        let podlang_src = helper.podlang_src.clone();
+        let sdk = Sdk::default();
+        let module = sdk
+            .load_module_from_src_actions(CRAFT_SCRIPT, ACTION_NAMES)
+            .expect("builtin craft script compiles");
 
-        let action_defs = actions();
-        let signatures = action_signatures(&action_defs);
-        let meta_by_name: HashMap<&str, &ActionMeta> =
+        let podlang_src = module.podlang_src().to_string();
+
+        let action_meta_by_name: HashMap<&str, &ActionMetaInfo> =
             ACTION_META.iter().map(|m| (m.name, m)).collect();
 
-        let actions: Vec<ActionSummary> = action_defs
+        let actions: Vec<ActionSummary> = module
+            .actions()
             .iter()
             .filter_map(|action| {
-                let name = action.name();
-                let meta = meta_by_name.get(name);
+                let name = action.name.as_str();
+                let meta = action_meta_by_name.get(name);
                 if meta.is_some_and(|m| m.hidden) {
                     return None;
                 }
-                let signature = signatures.get(name)?;
+                let input_classes: Vec<String> =
+                    action.inputs.iter().map(|(_o, c)| c.clone()).collect();
+                let output_classes: Vec<String> =
+                    action.outputs.iter().map(|(_o, c)| c.clone()).collect();
                 Some(ActionSummary {
                     id: name.to_string(),
                     emoji: meta.map_or("⚙️", |m| m.emoji).to_string(),
-                    hash: action_hashes
-                        .get(name)
-                        .map(|hash| format!("{:#}", hash))
+                    hash: module
+                        .action_hash(name)
+                        .map(|h| format!("{:#}", h))
                         .unwrap_or_default(),
-                    input_class_hashes: signature
-                        .inputs
+                    input_class_hashes: input_classes
                         .iter()
-                        .map(|class_name| {
-                            class_hashes
-                                .get(class_name.as_str())
-                                .map(|hash| format!("{:#}", hash))
+                        .map(|c| {
+                            module
+                                .class_hash(c)
+                                .map(|h| format!("{:#}", h))
                                 .unwrap_or_default()
                         })
                         .collect(),
                     description: meta.map_or("SDK action", |m| m.description).to_string(),
                     cpu_cost: meta.map_or("unknown", |m| m.cpu_cost).to_string(),
                     reads_block: meta.is_some_and(|m| m.reads_block),
-                    input_classes: signature.inputs.clone(),
-                    output_classes: signature.outputs.clone(),
+                    input_classes,
+                    output_classes,
                 })
             })
             .collect();
@@ -207,12 +211,16 @@ impl BuiltinActionCatalog {
             .map(|action| (action.id.clone(), action.clone()))
             .collect();
 
-        let class_meta_by_name: HashMap<&str, &ClassMeta> =
+        let class_meta_by_name: HashMap<&str, &ClassMetaInfo> =
             CLASS_META.iter().map(|m| (m.name, m)).collect();
         let mut class_name_set = BTreeSet::<String>::new();
-        for sig in signatures.values() {
-            class_name_set.extend(sig.inputs.iter().cloned());
-            class_name_set.extend(sig.outputs.iter().cloned());
+        for action in module.actions() {
+            for (_, class) in &action.inputs {
+                class_name_set.insert(class.clone());
+            }
+            for (_, class) in &action.outputs {
+                class_name_set.insert(class.clone());
+            }
         }
         for cm in CLASS_META {
             class_name_set.insert(cm.name.to_string());
@@ -237,9 +245,9 @@ impl BuiltinActionCatalog {
                 CatalogClass {
                     name: class_name.clone(),
                     emoji: cm.map_or("📦", |m| m.emoji).to_string(),
-                    hash: class_hashes
-                        .get(&class_name)
-                        .map(|hash| format!("{:#}", hash))
+                    hash: module
+                        .class_hash(&class_name)
+                        .map(|h| format!("{:#}", h))
                         .unwrap_or_default(),
                     description: cm
                         .map_or("Unknown class object", |m| m.description)
@@ -294,9 +302,7 @@ impl ActionCatalog for BuiltinActionCatalog {
         grounding_witness: GroundingWitness,
         inputs: Vec<SpendableObject>,
     ) -> Result<SpendableObjects> {
-        let helper = Helper::new(dependencies(), actions());
-        let builder = helper.builder(false, Arc::new(grounding_witness));
-        Ok(builder.action(&action_id, inputs))
+        execute_with_script(&action_id, grounding_witness, inputs, false)
     }
 
     fn generated_podlang(&self) -> Option<String> {
@@ -304,311 +310,17 @@ impl ActionCatalog for BuiltinActionCatalog {
     }
 }
 
-fn main_pod(ctx: &Context<'_>, pod: Box<dyn Pod>) -> MainPod {
-    let pub_statements = pod.pub_statements();
-    MainPod {
-        pod,
-        public_statements: pub_statements,
-        params: ctx.params.clone(),
-    }
-}
-
-fn vdf(ctx: &mut Context<'_>, n_iters: usize, input: RawValue) -> (MainPod, Statement, Value) {
-    let vdf_pod = if ctx.mock {
-        VdfPod::new_boxed_mock(&ctx.params, ctx.vd_set.clone(), n_iters, input)
-    } else {
-        VdfPod::new_boxed(&ctx.params, ctx.vd_set.clone(), n_iters, input)
-    }
-    .unwrap();
-    let st_vdf = vdf_pod.pub_statements()[0].clone();
-    let work = st_vdf.args()[2].literal().unwrap();
-    (main_pod(ctx, vdf_pod), st_vdf, work)
-}
-
-fn lt_eq_u256(ctx: &mut Context<'_>, lhs: RawValue, rhs: RawValue) -> (MainPod, Statement) {
-    let lt_eq_u256_pod = if ctx.mock {
-        LtEqU256Pod::new_boxed_mock(&ctx.params, ctx.vd_set.clone(), lhs, rhs)
-    } else {
-        LtEqU256Pod::new_boxed(&ctx.params, ctx.vd_set.clone(), lhs, rhs)
-    }
-    .unwrap();
-    let st_lt_eq_u256 = lt_eq_u256_pod.pub_statements()[0].clone();
-    (main_pod(ctx, lt_eq_u256_pod), st_lt_eq_u256)
-}
-
-fn use_pick_details(step: Step, name: &'static str, vdf_iters: usize) -> Step {
-    step.condition(
-        "Gt({state}.durability, 0)",
-        Box::new(|ctx| {
-            let obj = ctx.vars.get(name).as_dictionary().unwrap();
-            ctx.bld
-                .builder
-                .priv_op(Operation::gt((&obj, "durability"), 0))
-                .unwrap()
-        }),
-    )
-    .var(
-        "durability",
-        Box::new(|ctx| {
-            let obj = ctx.vars.get(name).as_dictionary().unwrap();
-            let mut durability = obj
-                .get(&Key::from("durability"))
-                .unwrap()
-                .unwrap()
-                .as_int()
-                .unwrap();
-            durability -= 1;
-            ctx.store("durability", Box::new(durability));
-            Value::from(durability)
-        }),
-    )
-    .condition(
-        "SumOf({state}.durability, durability, 1)",
-        Box::new(|ctx| {
-            let durability: Box<i64> = ctx.take("durability");
-            let obj = ctx.vars.get(name).as_dictionary().unwrap();
-            ctx.bld
-                .builder
-                .priv_op(Operation::sum_of((&obj, "durability"), *durability, 1))
-                .unwrap()
-        }),
-    )
-    .update("durability", Arg::var("durability"))
-    .var(
-        "key",
-        Box::new(|_ctx| Value::from(pod2utils::rand_raw_value())),
-    )
-    .update("key", Arg::var("key"))
-    .var(
-        "work",
-        Box::new(move |ctx| {
-            let obj = ctx.vars.get(name);
-            let obj_raw = obj.as_raw();
-            let (vdf_pod, st_vdf, work) = vdf(ctx, vdf_iters, obj_raw);
-            ctx.store("vdf_pod", Box::new(vdf_pod));
-            ctx.store("st_vdf", Box::new(st_vdf));
-            work
-        }),
-    )
-    .condition(
-        format!("Vdf({vdf_iters}, {{state}}, work)").leak(),
-        Box::new(|ctx| {
-            let vdf_pod: Box<MainPod> = ctx.take("vdf_pod");
-            let st_vdf: Box<Statement> = ctx.take("st_vdf");
-            ctx.bld.builder.add_pod(*vdf_pod).unwrap();
-            *st_vdf
-        }),
-    )
-    .update("work", Arg::var("work"))
-}
-
-pub(crate) fn dependencies() -> Vec<api::Dependency> {
-    vec![
-        api::Dependency::Intro {
-            pred: "Vdf(count, input, output)",
-            hash: *vdfpod::STANDARD_VDF_VD_HASH,
-        },
-        api::Dependency::Intro {
-            pred: "LtEqU256(lhs, rhs)",
-            hash: *lt_eq_u256_pod::STANDARD_LT_EQ_U256_VD_HASH,
-        },
-    ]
-}
-
-pub(crate) fn actions() -> Vec<api::Action> {
-    vec![
-        api::Action {
-            name: "FindLog",
-            steps: vec![
-                Step::output("log", "Log")
-                    .set("blueprint", Arg::literal("Log"))
-                    .var(
-                        "work",
-                        Box::new(|ctx| {
-                            let log = ctx.vars.get("log");
-                            let log_raw = log.as_raw();
-                            let (vdf_pod, st_vdf, work) = vdf(ctx, 3, log_raw);
-                            ctx.store("vdf_pod", Box::new(vdf_pod));
-                            ctx.store("st_vdf", Box::new(st_vdf));
-                            work
-                        }),
-                    )
-                    .condition(
-                        "Vdf(3, {state}, work)",
-                        Box::new(|ctx| {
-                            let vdf_pod: Box<MainPod> = ctx.take("vdf_pod");
-                            let st_vdf: Box<Statement> = ctx.take("st_vdf");
-                            ctx.bld.builder.add_pod(*vdf_pod).unwrap();
-                            *st_vdf
-                        }),
-                    )
-                    .update("work", Arg::var("work")),
-            ],
-        },
-        api::Action {
-            name: "CraftWood",
-            steps: vec![
-                Step::input("log", "Log"),
-                Step::output("wood", "Wood")
-                    .set("blueprint", Arg::literal("Wood"))
-                    .var(
-                        "key",
-                        Box::new(|ctx| {
-                            let mut wood = ctx.vars.get("wood").as_dictionary().unwrap();
-                            let mut key = Value::from(pod2utils::rand_raw_value());
-                            if !ctx.mock {
-                                while RawValue::from(wood.commitment()).0[3].0 > WOOD_POW_DIFFICULTY
-                                {
-                                    key = Value::from(pod2utils::rand_raw_value());
-                                    wood.update(&Key::from("key"), &key).unwrap();
-                                }
-                            }
-                            key
-                        }),
-                    )
-                    .update("key", Arg::var("key"))
-                    .condition(
-                        "LtEqU256({state}, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))",
-                        Box::new(|ctx| {
-                            let wood = ctx.vars.get("wood");
-                            let wood_raw = wood.as_raw();
-                            let (lt_eq_u256_pod, st_lt_eq_u256) = lt_eq_u256(
-                                ctx,
-                                wood_raw,
-                                RawValue([F(0), F(0), F(0), F(WOOD_POW_DIFFICULTY)]),
-                            );
-                            ctx.bld.builder.add_pod(lt_eq_u256_pod).unwrap();
-                            st_lt_eq_u256
-                        }),
-                    ),
-            ],
-        },
-        api::Action {
-            name: "CraftSticks",
-            steps: vec![
-                Step::input("wood", "Wood"),
-                Step::output("stick_a", "Stick").set("blueprint", Arg::literal("Stick")),
-                Step::output("stick_b", "Stick").set("blueprint", Arg::literal("Stick")),
-            ],
-        },
-        api::Action {
-            name: "CraftWoodPick",
-            steps: vec![
-                Step::input("wood", "Wood"),
-                Step::input("stick", "Stick"),
-                Step::output("wood_pick", "WoodPick")
-                    .set("blueprint", Arg::literal("WoodPick"))
-                    .set("durability", Arg::literal(100i64)),
-            ],
-        },
-        api::Action {
-            name: "CraftStonePick",
-            steps: vec![
-                Step::input("stone", "Stone"),
-                Step::input("stick", "Stick"),
-                Step::output("stone_pick", "StonePick")
-                    .set("blueprint", Arg::literal("StonePick"))
-                    .set("durability", Arg::literal(200i64)),
-            ],
-        },
-        api::Action {
-            name: "UseWoodPick",
-            steps: vec![
-                Step::mutate("wood_pick", "WoodPick")
-                    .snippet(|step| use_pick_details(step, "wood_pick", 10)),
-            ],
-        },
-        api::Action {
-            name: "MineStoneWithWoodPick",
-            steps: vec![
-                Step::depends("pick", "UseWoodPick"),
-                Step::output("stone", "Stone").set("blueprint", Arg::literal("Stone")),
-            ],
-        },
-        api::Action {
-            name: "UseStonePick",
-            steps: vec![
-                Step::mutate("stone_pick", "StonePick")
-                    .snippet(|step| use_pick_details(step, "stone_pick", 5)),
-            ],
-        },
-        api::Action {
-            name: "MineStoneWithStonePick",
-            steps: vec![
-                Step::depends("pick", "UseStonePick"),
-                Step::output("stone", "Stone").set("blueprint", Arg::literal("Stone")),
-            ],
-        },
-    ]
-}
-
-fn action_signatures(actions: &[api::Action]) -> HashMap<String, ActionSignature> {
-    let by_name = actions
-        .iter()
-        .map(|action| (action.name(), action))
-        .collect::<HashMap<_, _>>();
-    let mut signatures = HashMap::<String, ActionSignature>::new();
-    let mut visiting = HashSet::<String>::new();
-    for action in actions {
-        derive_signature(action.name(), &by_name, &mut signatures, &mut visiting);
-    }
-    signatures
-}
-
-fn derive_signature<'a>(
-    action_name: &str,
-    actions_by_name: &HashMap<&'a str, &'a api::Action>,
-    cache: &mut HashMap<String, ActionSignature>,
-    visiting: &mut HashSet<String>,
-) -> ActionSignature {
-    if let Some(signature) = cache.get(action_name) {
-        return signature.clone();
-    }
-    if !visiting.insert(action_name.to_string()) {
-        panic!("cyclic action dependency detected at {action_name}");
-    }
-    let action = actions_by_name
-        .get(action_name)
-        .unwrap_or_else(|| panic!("missing action definition for {action_name}"));
-    let mut inputs = Vec::new();
-    let mut outputs = Vec::new();
-    for step in action.steps() {
-        match step.kind() {
-            StepKind::Input => {
-                let class_name = step
-                    .class()
-                    .unwrap_or_else(|| panic!("input step missing class in {action_name}"));
-                inputs.push(class_name.to_string());
-            }
-            StepKind::Mutate => {
-                let class_name = step
-                    .class()
-                    .unwrap_or_else(|| panic!("mutate step missing class in {action_name}"))
-                    .to_string();
-                inputs.push(class_name.clone());
-                outputs.push(class_name);
-            }
-            StepKind::Output => {
-                let class_name = step
-                    .class()
-                    .unwrap_or_else(|| panic!("output step missing class in {action_name}"));
-                outputs.push(class_name.to_string());
-            }
-            StepKind::Depends => {
-                let dependency = step
-                    .action()
-                    .unwrap_or_else(|| panic!("depends step missing action in {action_name}"));
-                let signature = derive_signature(dependency, actions_by_name, cache, visiting);
-                inputs.extend(signature.inputs);
-                outputs.extend(signature.outputs);
-            }
-        }
-    }
-
-    visiting.remove(action_name);
-    let signature = ActionSignature { inputs, outputs };
-    cache.insert(action_name.to_string(), signature.clone());
-    signature
+/// Run an action against the built-in craft script. Used by the catalog and by tests.
+pub(crate) fn execute_with_script(
+    action_id: &str,
+    grounding_witness: GroundingWitness,
+    inputs: Vec<SpendableObject>,
+    mock: bool,
+) -> Result<SpendableObjects> {
+    let sdk = Sdk::default();
+    let module = sdk.load_module_from_src_actions(CRAFT_SCRIPT, ACTION_NAMES)?;
+    let executor = module.executor(mock, Arc::new(grounding_witness));
+    Ok(executor.action(action_id, inputs)?)
 }
 
 #[cfg(test)]
@@ -637,6 +349,6 @@ mod tests {
             .map(|class_info| class_info.name)
             .collect::<Vec<_>>();
         assert!(class_names.contains(&"Log".to_string()));
-        assert!(class_names.contains(&"StonePick".to_string()));
+        assert!(class_names.contains(&"WoodPick".to_string()));
     }
 }

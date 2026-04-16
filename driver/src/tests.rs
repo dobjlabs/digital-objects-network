@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use common::test_state::TestState;
-use craft_sdk::{Helper, SpendableObject, SpendableObjects};
 use pod2::middleware::Hash;
+use sdk::{SpendableObject, SpendableObjects};
 use tempfile::tempdir;
 use txlib::{GroundingWitness, StateRoot};
 
-use crate::builtin::{actions, dependencies};
+use crate::builtin::execute_with_script;
 use crate::catalog::ActionCatalog;
 use crate::clients::{
     RelayerClient, RelayerConfirmation, SynchronizerClient, SynchronizerHead,
@@ -145,9 +145,7 @@ impl ActionCatalog for MockCatalog {
         grounding_witness: GroundingWitness,
         inputs: Vec<SpendableObject>,
     ) -> Result<SpendableObjects> {
-        let helper = Helper::new(dependencies(), actions());
-        let builder = helper.builder(self.mock_proofs, Arc::new(grounding_witness));
-        Ok(builder.action(&action_id, inputs))
+        execute_with_script(&action_id, grounding_witness, inputs, self.mock_proofs)
     }
 
     fn generated_podlang(&self) -> Option<String> {

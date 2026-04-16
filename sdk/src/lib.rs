@@ -15,7 +15,7 @@ use pod2::{
     lang::{Module, load_module},
     middleware::{
         EMPTY_VALUE, Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType,
-        Params, Pod, RawValue, Statement, VDSet, Value,
+        Params, Pod, Predicate, RawValue, Statement, VDSet, Value,
         containers::{Array, Dictionary, Set},
     },
 };
@@ -935,6 +935,24 @@ impl SdkModule {
     }
     pub fn classes(&self) -> &[ClassMeta] {
         &self.classes
+    }
+    pub fn module(&self) -> &Arc<Module> {
+        &self.module
+    }
+    /// Hash of the action's custom predicate in the loaded module.
+    pub fn action_hash(&self, action_name: &str) -> Option<Hash> {
+        self.module
+            .predicate_ref_by_name(action_name)
+            .map(Predicate::Custom)
+            .map(|p| p.hash())
+    }
+    /// Hash of the `Is{class_name}` custom predicate in the loaded module.
+    pub fn class_hash(&self, class_name: &str) -> Option<Hash> {
+        let pred_name = format!("Is{class_name}");
+        self.module
+            .predicate_ref_by_name(pred_name.as_str())
+            .map(Predicate::Custom)
+            .map(|p| p.hash())
     }
     pub fn executor(
         self: &Rc<Self>,
