@@ -18,6 +18,9 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 pub const MANIFEST_FILE: &str = "manifest.toml";
 pub const SCRIPT_FILE: &str = "plugin.rhai";
 
+/// File extension (no leading dot) of a pexe archive.
+pub const PEXE_EXTENSION: &str = "pexe";
+
 /// Pexe source on disk: a directory containing `manifest.toml` and `plugin.rhai`.
 pub struct PluginSource {
     pub root: PathBuf,
@@ -150,12 +153,6 @@ pub fn set_manifest_hash(toml_src: &str, new_hash_hex: &str) -> String {
     out
 }
 
-/// Default install directory for .pexe plugins (`~/.dobj/actions`).
-pub fn default_install_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory"))?;
-    Ok(home.join(".dobj").join("actions"))
-}
-
 /// Install pexe bytes into `target_dir` as `<plugin_name>.pexe`.
 pub fn install(bytes: &[u8], target_dir: &Path, plugin_name: &str) -> Result<PathBuf> {
     if plugin_name.is_empty() {
@@ -164,7 +161,7 @@ pub fn install(bytes: &[u8], target_dir: &Path, plugin_name: &str) -> Result<Pat
     std::fs::create_dir_all(target_dir).with_context(|| {
         format!("failed to create actions dir: {}", target_dir.display())
     })?;
-    let path = target_dir.join(format!("{plugin_name}.pexe"));
+    let path = target_dir.join(format!("{plugin_name}.{PEXE_EXTENSION}"));
     std::fs::write(&path, bytes)
         .with_context(|| format!("failed to write {}", path.display()))?;
     Ok(path)

@@ -5,9 +5,21 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use pexe::{
-    MANIFEST_FILE, PluginSource, compile_module_hash, default_install_dir, install, pack,
+    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash, install, pack,
     set_manifest_hash, unpack,
 };
+
+// These names intentionally mirror `driver::paths::{DOBJ_HOME_DIR, ACTIONS_DIR}`.
+// They're duplicated here because the `pexe` lib is a dependency of `driver`, so
+// `pexe` can't depend on `driver` without a cycle. If either changes over there,
+// change it here too.
+const DRIVER_DOBJ_HOME_DIR: &str = ".dobj";
+const DRIVER_ACTIONS_DIR: &str = "actions";
+
+fn default_install_dir() -> Result<PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory"))?;
+    Ok(home.join(DRIVER_DOBJ_HOME_DIR).join(DRIVER_ACTIONS_DIR))
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "pexe", about = "zk-craft plugin packaging tool")]
@@ -128,7 +140,7 @@ fn build_one(
     };
 
     let bytes = pack(&manifest_toml, &source.script)?;
-    let out_path = out_dir.join(format!("{plugin_name}.pexe"));
+    let out_path = out_dir.join(format!("{plugin_name}.{PEXE_EXTENSION}"));
     std::fs::write(&out_path, &bytes)
         .with_context(|| format!("failed to write {}", out_path.display()))?;
     log::info!(

@@ -92,8 +92,7 @@ fn load_object_files_from_dir(
         if !path.is_file() {
             continue;
         }
-        let is_dobj = path.extension().and_then(|ext| ext.to_str()) == Some("dobj");
-        if !is_dobj {
+        if !crate::paths::is_dobj_file(&path) {
             continue;
         }
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -215,17 +214,7 @@ mod tests {
 
     fn temp_paths() -> DriverPaths {
         let dir = tempdir().unwrap();
-        let root = dir.keep();
-        let settings_path = root.join("settings.json");
-        let objects_dir = root.join("objects");
-        let nullified_objects_dir = objects_dir.join(".nullified");
-        let actions_dir = root.join("actions");
-        DriverPaths {
-            settings_path,
-            objects_dir,
-            nullified_objects_dir,
-            actions_dir,
-        }
+        DriverPaths::from_dobj_root(dir.keep())
     }
 
     fn dummy_grounding_witness() -> GroundingWitness {

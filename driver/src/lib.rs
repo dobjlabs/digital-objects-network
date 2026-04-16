@@ -4,7 +4,7 @@ mod driver;
 mod execute;
 mod object_record;
 mod object_store;
-mod paths;
+pub mod paths;
 mod pexe_catalog;
 mod settings;
 mod types;

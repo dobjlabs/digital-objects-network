@@ -301,7 +301,9 @@ fn discover_plugins(actions_dir: &Path) -> Result<Vec<Plugin>> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(actions_dir)
         .with_context(|| format!("failed to read {}", actions_dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("pexe"))
+        .filter(|p| {
+            p.extension().and_then(|s| s.to_str()) == Some(pexe::PEXE_EXTENSION)
+        })
         .collect();
     entries.sort();
 

@@ -11,6 +11,7 @@ use txlib::object_nullifier_hash;
 
 use crate::object_record::{ObjectRecord as StoredObjectRecord, ObjectStatus};
 use crate::object_store::{ObjectFileEntry, select_object, write_object_file};
+use crate::paths::DOBJ_EXTENSION;
 use crate::types::{ActionSummary, DriverPaths, ExecuteActionInput, ObjectSelector};
 
 pub(crate) fn reconcile_objects(
@@ -202,7 +203,7 @@ pub(crate) fn save_results(
         let spendable = spendable_outputs.obj(index);
         let object_id = format!("{:#}", spendable.obj.commitment());
         let file_name = format!(
-            "{}_{}.dobj",
+            "{}_{}.{DOBJ_EXTENSION}",
             class_name.to_ascii_lowercase(),
             object_id.to_ascii_lowercase()
         );

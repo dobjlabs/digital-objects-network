@@ -23,17 +23,7 @@ use crate::{ActionQuery, DriverPaths, ExecuteActionInput, ObjectSelector};
 
 fn temp_paths() -> DriverPaths {
     let dir = tempdir().unwrap();
-    let root = dir.keep();
-    let settings_path = root.join("settings.json");
-    let objects_dir = root.join("objects");
-    let nullified_objects_dir = objects_dir.join(".nullified");
-    let actions_dir = root.join("actions");
-    DriverPaths {
-        settings_path,
-        objects_dir,
-        nullified_objects_dir,
-        actions_dir,
-    }
+    DriverPaths::from_dobj_root(dir.keep())
 }
 
 fn make_catalog() -> PexeCatalog {
