@@ -69,8 +69,6 @@ pub struct Action {
     pub input_classes: Vec<String>,
     /// Class names produced as outputs
     pub output_classes: Vec<String>,
-    /// Approximate CPU cost, e.g. "~10s"
-    pub cpu_cost: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -144,11 +144,6 @@ impl PexeCatalog {
                     description: meta
                         .map_or("Pexe action", |m| m.description.as_str())
                         .to_string(),
-                    cpu_cost: meta
-                        .and_then(|m| m.cpu_cost.as_deref())
-                        .unwrap_or("unknown")
-                        .to_string(),
-                    reads_block: meta.is_some_and(|m| m.reads_block),
                     input_classes,
                     output_classes,
                 });

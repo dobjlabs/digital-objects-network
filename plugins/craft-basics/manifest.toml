@@ -28,29 +28,24 @@ description = "A wood pick that can mine stone while durability remains."
 name = "FindLog"
 emoji = "🌲"
 description = "Discover a log object by proving a short VDF."
-cpu_cost = "20-40s"
 
 [[actions]]
 name = "CraftWood"
 emoji = "🪵"
 description = "Refine one log into a wood object with PoW quality checks."
-cpu_cost = "15-30s"
 
 [[actions]]
 name = "CraftSticks"
 emoji = "🥢"
 description = "Split one wood object into two stick objects."
-cpu_cost = "5-10s"
 
 [[actions]]
 name = "CraftWoodPick"
 emoji = "⛏️"
 description = "Combine wood and a stick to craft a wood pick."
-cpu_cost = "10-20s"
 
 [[actions]]
 name = "UseWoodPick"
 emoji = "⛏️"
 description = "Internal durability/work update for wood pick usage."
-cpu_cost = "10-30s"
 hidden = true

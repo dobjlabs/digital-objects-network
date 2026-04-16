@@ -7,10 +7,10 @@ import { SettingsModal } from "./features/settings/SettingsModal";
 import {
   getGlobalStateRoot,
   getObjectsDir,
+  listenMcpActionStarted,
   listenOpenSettings,
   listenObjectsChanged,
   listenRunActionProgress,
-  listenMcpActionStarted,
   openObjectsDir,
   sampleAppCpu,
 } from "./shared/api/tauriClient";
@@ -110,17 +110,15 @@ function App() {
     };
   }, [applyRunActionProgress]);
 
-  // Listen for MCP-initiated actions so the proof panel shows progress
+  // Arm the proof panel when MCP kicks off an action. Without this, the
+  // backend's run-action-progress events arrive but the store's runActionId
+  // guard short-circuits them because no one called initProofPanel.
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
     listenMcpActionStarted((event) => {
       if (!cancelled) {
-        initProofPanel({
-          actionId: event.actionId,
-          cpuCost: event.cpuCost,
-          args: ["(via MCP)"],
-        });
+        initProofPanel({ actionId: event.actionId, args: ["(via MCP)"] });
       }
     })
       .then((dispose) => {

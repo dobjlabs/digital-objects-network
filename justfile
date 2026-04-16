@@ -39,3 +39,11 @@ test-e2e:
 # Build all workspace crates
 build:
     cargo build --workspace
+
+# Build all plugins into target/pexe/*.pexe
+pack-plugins:
+    cargo run -p pexe --release -- build plugins/*
+
+# Build and install plugins into ~/.dobj/actions/
+install-plugins:
+    cargo run -p pexe --release -- build --install plugins/*

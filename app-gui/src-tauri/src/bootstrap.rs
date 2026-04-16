@@ -27,8 +27,6 @@ pub struct Action {
     pub hash: String,
     pub input_class_hashes: Vec<String>,
     pub description: String,
-    pub cpu_cost: String,
-    pub reads_block: bool,
     pub input_classes: Vec<String>,
 }
 
@@ -85,8 +83,6 @@ pub async fn load_gui_inventory(
                 hash: action.hash,
                 input_class_hashes: action.input_class_hashes,
                 description: action.description,
-                cpu_cost: action.cpu_cost,
-                reads_block: action.reads_block,
                 input_classes: action.input_classes,
             })
             .collect();

@@ -77,14 +77,11 @@ export function getGlobalStateRoot(): Promise<string> {
 }
 
 export function listenMcpActionStarted(
-  handler: (event: { actionId: string; cpuCost: string }) => void,
+  handler: (event: { actionId: string }) => void,
 ): Promise<UnlistenFn> {
-  return listen<{ actionId: string; cpuCost: string }>(
-    "mcp-action-started",
-    (event) => {
-      handler(event.payload);
-    },
-  );
+  return listen<{ actionId: string }>("mcp-action-started", (event) => {
+    handler(event.payload);
+  });
 }
 
 export function getAppSettings(): Promise<AppSettingsPayload> {

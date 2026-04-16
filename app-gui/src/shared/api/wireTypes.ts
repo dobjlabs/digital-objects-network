@@ -24,8 +24,6 @@ export interface ActionPayload {
   hash: string;
   inputClassHashes: string[];
   description: string;
-  cpuCost: string;
-  readsBlock: boolean;
   inputClasses: ClassName[];
 }
 
