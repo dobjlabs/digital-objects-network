@@ -59,13 +59,15 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    hydrateData().catch((error) => {
-      console.error("Failed to load GUI inventory:", error);
-    }).finally(() => {
-      if (!cancelled) {
-        setInitialHydrationPending(false);
-      }
-    });
+    hydrateData()
+      .catch((error) => {
+        console.error("Failed to load GUI inventory:", error);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setInitialHydrationPending(false);
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -110,9 +112,7 @@ function App() {
     };
   }, [applyRunActionProgress]);
 
-  // Arm the proof panel when MCP kicks off an action. Without this, the
-  // backend's run-action-progress events arrive but the store's runActionId
-  // guard short-circuits them because no one called initProofPanel.
+  // Listen for MCP-initiated actions so the proof panel shows progress
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;

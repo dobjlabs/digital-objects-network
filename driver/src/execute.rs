@@ -5,8 +5,8 @@ use common::{
     payload::{Payload, PayloadProof},
     shrink::{ShrunkMainPodSetup, shrink_compress_pod},
 };
-use sdk::SpendableObjects;
 use pod2::middleware::{Hash, Params};
+use sdk::SpendableObjects;
 use txlib::object_nullifier_hash;
 
 use crate::object_record::{ObjectRecord as StoredObjectRecord, ObjectStatus};

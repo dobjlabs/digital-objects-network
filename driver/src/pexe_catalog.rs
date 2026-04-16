@@ -111,11 +111,7 @@ impl PexeCatalog {
                 .map(|a| (a.name.as_str(), a))
                 .collect();
 
-            plugin.action_names = module
-                .actions()
-                .iter()
-                .map(|a| a.name.clone())
-                .collect();
+            plugin.action_names = module.actions().iter().map(|a| a.name.clone()).collect();
 
             for action in module.actions() {
                 let name = action.name.as_str();
@@ -200,11 +196,9 @@ impl PexeCatalog {
                     .filter(|a| a.input_classes.contains(&class_name))
                     .map(|a| a.id.clone())
                     .collect();
-                let predicate_source = extract_predicate(
-                    &combined_podlang,
-                    &format!("Is{class_name}"),
-                )
-                .unwrap_or_else(|| format!("Is{class_name}(state) = OR(...)"));
+                let predicate_source =
+                    extract_predicate(&combined_podlang, &format!("Is{class_name}"))
+                        .unwrap_or_else(|| format!("Is{class_name}(state) = OR(...)"));
                 CatalogClass {
                     name: class_name.clone(),
                     emoji,
@@ -221,8 +215,10 @@ impl PexeCatalog {
             .iter()
             .map(|a| (a.id.clone(), a.clone()))
             .collect();
-        let classes_by_name: HashMap<String, CatalogClass> =
-            classes.iter().map(|c| (c.name.clone(), c.clone())).collect();
+        let classes_by_name: HashMap<String, CatalogClass> = classes
+            .iter()
+            .map(|c| (c.name.clone(), c.clone()))
+            .collect();
 
         Ok(Self {
             plugins: enriched_plugins,
@@ -301,9 +297,7 @@ fn discover_plugins(actions_dir: &Path) -> Result<Vec<Plugin>> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(actions_dir)
         .with_context(|| format!("failed to read {}", actions_dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension().and_then(|s| s.to_str()) == Some(pexe::PEXE_EXTENSION)
-        })
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some(pexe::PEXE_EXTENSION))
         .collect();
     entries.sort();
 
@@ -351,11 +345,7 @@ mod tests {
     #[test]
     fn test_pexe_catalog_hides_internal_actions() {
         let catalog = test_catalog();
-        let action_ids: Vec<_> = catalog
-            .list_actions()
-            .into_iter()
-            .map(|a| a.id)
-            .collect();
+        let action_ids: Vec<_> = catalog.list_actions().into_iter().map(|a| a.id).collect();
         assert!(action_ids.contains(&"CraftWood".to_string()));
         assert!(!action_ids.contains(&"UseWoodPick".to_string()));
     }

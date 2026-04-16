@@ -133,9 +133,8 @@ fn build_one(
         );
         let rewritten = set_manifest_hash(&source.manifest_toml, &real_hash_clean);
         let manifest_path = source.root.join(MANIFEST_FILE);
-        std::fs::write(&manifest_path, &rewritten).with_context(|| {
-            format!("failed to write back {}", manifest_path.display())
-        })?;
+        std::fs::write(&manifest_path, &rewritten)
+            .with_context(|| format!("failed to write back {}", manifest_path.display()))?;
         rewritten
     };
 

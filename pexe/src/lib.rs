@@ -33,12 +33,8 @@ impl PluginSource {
         let root = root.as_ref().to_path_buf();
         let manifest_path = root.join(MANIFEST_FILE);
         let script_path = root.join(SCRIPT_FILE);
-        let manifest_toml = std::fs::read_to_string(&manifest_path).with_context(|| {
-            format!(
-                "failed to read manifest: {}",
-                manifest_path.display()
-            )
-        })?;
+        let manifest_toml = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("failed to read manifest: {}", manifest_path.display()))?;
         let script = std::fs::read_to_string(&script_path)
             .with_context(|| format!("failed to read script: {}", script_path.display()))?;
         Ok(Self {
@@ -71,8 +67,8 @@ pub fn pack(manifest_toml: &str, script: &str) -> Result<Vec<u8>> {
 
 /// Unpack pexe bytes into `(manifest_toml_src, script_src)` without parsing.
 pub fn unpack_raw(bytes: &[u8]) -> Result<(String, String)> {
-    let mut zip = ZipArchive::new(Cursor::new(bytes))
-        .map_err(|err| anyhow!("invalid pexe zip: {err}"))?;
+    let mut zip =
+        ZipArchive::new(Cursor::new(bytes)).map_err(|err| anyhow!("invalid pexe zip: {err}"))?;
     let manifest_toml = read_entry(&mut zip, MANIFEST_FILE)?;
     let script = read_entry(&mut zip, SCRIPT_FILE)?;
     Ok((manifest_toml, script))
@@ -81,8 +77,8 @@ pub fn unpack_raw(bytes: &[u8]) -> Result<(String, String)> {
 /// Unpack pexe bytes into a parsed [`Manifest`] and the script source.
 pub fn unpack(bytes: &[u8]) -> Result<(Manifest, String)> {
     let (manifest_toml, script) = unpack_raw(bytes)?;
-    let manifest: Manifest = toml::from_str(&manifest_toml)
-        .map_err(|err| anyhow!("invalid manifest.toml: {err}"))?;
+    let manifest: Manifest =
+        toml::from_str(&manifest_toml).map_err(|err| anyhow!("invalid manifest.toml: {err}"))?;
     Ok((manifest, script))
 }
 
@@ -158,12 +154,10 @@ pub fn install(bytes: &[u8], target_dir: &Path, plugin_name: &str) -> Result<Pat
     if plugin_name.is_empty() {
         bail!("plugin name is empty");
     }
-    std::fs::create_dir_all(target_dir).with_context(|| {
-        format!("failed to create actions dir: {}", target_dir.display())
-    })?;
+    std::fs::create_dir_all(target_dir)
+        .with_context(|| format!("failed to create actions dir: {}", target_dir.display()))?;
     let path = target_dir.join(format!("{plugin_name}.{PEXE_EXTENSION}"));
-    std::fs::write(&path, bytes)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    std::fs::write(&path, bytes).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(path)
 }
 

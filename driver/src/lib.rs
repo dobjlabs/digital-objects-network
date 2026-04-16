@@ -13,7 +13,6 @@ mod types;
 mod tests;
 
 pub use crate::catalog::ActionCatalog as DriverActionCatalog;
-pub use crate::pexe_catalog::PexeCatalog;
 pub use crate::clients::{
     RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS, SYNCHRONIZER_POLL_INTERVAL_MS,
     SYNCHRONIZER_POLL_TIMEOUT_SECS,
@@ -21,6 +20,7 @@ pub use crate::clients::{
 pub use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 pub use crate::object_record::parse_object_record_file;
 pub use crate::object_record::{ObjectRecord, ObjectStatus};
+pub use crate::pexe_catalog::PexeCatalog;
 pub use crate::types::{
     ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
     DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,

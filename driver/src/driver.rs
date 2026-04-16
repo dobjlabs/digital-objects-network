@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use common::encode_hash_hex;
-use sdk::SpendableObjects;
 use pod2::middleware::Hash;
+use sdk::SpendableObjects;
 use txlib::object_nullifier_hash;
 
 use crate::catalog::{ActionCatalog, CatalogClass};
-use crate::pexe_catalog::PexeCatalog;
 use crate::clients::{
     HttpRelayerClient, HttpSynchronizerClient, RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
     RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS,
@@ -25,6 +24,7 @@ use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, select_object,
     write_object_file,
 };
+use crate::pexe_catalog::PexeCatalog;
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
     ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,

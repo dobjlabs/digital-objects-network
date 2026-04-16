@@ -108,9 +108,6 @@ impl CraftOps for AppCraftOps {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        // Notify the frontend so it can arm the proof panel before progress
-        // events start landing. Only `actionId` is needed — the subsequent
-        // `run-action-progress` events carry the rest of the state.
         let _ = self.app.emit(
             "mcp-action-started",
             serde_json::json!({ "actionId": input.action_id }),
