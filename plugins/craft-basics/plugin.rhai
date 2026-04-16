@@ -9,9 +9,13 @@ fn CraftWood(action) {
     var log = action.input("Log");
     var wood = action.output("Wood");
     wood.set([["blueprint", "Wood"]]);
-    var key = action.pow_obj_grind(wood, 9007199254740992);
+    // Difficulty target: top limb ≤ 2^53. Both pow_obj_grind and
+    // intro_lt_eq_u256 consume the same u256, so the proved statement
+    // matches what grinding produced.
+    let target = action.top_limb_u256(9007199254740992);
+    var key = action.pow_obj_grind(wood, target);
     wood.update("key", key);
-    action.intro_lt_eq_u256(wood, 9007199254740992);
+    action.intro_lt_eq_u256(wood, target);
 }
 
 fn CraftSticks(action) {
