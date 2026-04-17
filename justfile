@@ -11,7 +11,7 @@ relayer:
 
 # Run the gui
 gui:
-    cd app-gui && RUST_LOG=trace pnpm tauri dev --release
+    cd app-gui && RUST_LOG=info pnpm tauri dev --release
 
 # Run relayer + synchronizer + gui together via mprocs
 # https://github.com/pvolok/mprocs

@@ -974,6 +974,7 @@ dependencies = [
  "common",
  "craft-mcp",
  "driver",
+ "env_logger",
  "hex",
  "lt_eq_u256_pod",
  "notify",

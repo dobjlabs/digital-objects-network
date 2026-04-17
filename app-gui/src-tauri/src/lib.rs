@@ -24,6 +24,7 @@ pub fn run() {
     if let Err(err) = common::load_dotenv() {
         eprintln!("zk-craft: failed to load app-gui env: {err}");
     }
+    let _ = env_logger::builder().try_init();
 
     let driver = Arc::new(::driver::Driver::open_default().expect("failed to initialize driver"));
 

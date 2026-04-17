@@ -1077,7 +1077,7 @@ struct OutputData {
 
 fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
     let solution = builder.solve().unwrap();
-    log::debug!("solution needs {} pods", solution.solution().pod_count);
+    log::info!("solution needs {} pods", solution.solution().pod_count);
     solution.prove(prover).unwrap().pods.pop().unwrap()
 }
 
