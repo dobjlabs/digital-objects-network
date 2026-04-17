@@ -9,7 +9,7 @@ use axum::{
 };
 use hex::FromHex;
 use pod2::{backends::plonky2::primitives::merkletree::MerkleProof, middleware::Hash};
-use synchronizer::api_types::{
+use crate::api_types::{
     GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, MembershipRequest,
     MembershipResponse, NullifierContainsEntry, NullifierContainsRequest,
     NullifierContainsResponse, SourceTxProofResponse, StateHeadResponse, SyncProgressResponse,
