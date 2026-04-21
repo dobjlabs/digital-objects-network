@@ -7,7 +7,6 @@ import type {
 import {
   pickDobjFilePath,
   readDobjFile,
-  type ActionId,
 } from "../../shared/api/tauriClient";
 import { truncateDisplayHash } from "../../shared/format";
 import {
@@ -27,12 +26,11 @@ interface ContextPanelProps {
   actions: Action[];
   onClearSelection: () => void;
   onRunProof: (input: {
-    actionId: ActionId;
+    actionId: string;
     inputBindings: Array<{
       objectPath: string;
       label: string;
     }>;
-    cpuCost: string;
   }) => Promise<void>;
   proofRunning: boolean;
   proofStatus: "idle" | "generating" | "committing" | "summary" | "error";
@@ -292,8 +290,6 @@ export function ContextPanel({
   const renderMethodCard = (config: {
     methodId: string;
     methodName: string;
-    cpuCost: string;
-    readsBlock: boolean;
     inputClasses: string[];
     inputClassHashes: string[];
     onRun: (boundArgs: BoundArg[]) => void;
@@ -393,14 +389,6 @@ export function ContextPanel({
           <div
             className={`method-footer ${hasInputs ? "" : "no-inputs"}`.trim()}
           >
-            <div className="method-meta-row">
-              <div className="method-meta-line">
-                ⏱ CPU <span className="mval">{config.cpuCost}</span>
-              </div>
-              {config.readsBlock && (
-                <div className="method-meta-line">reads block number</div>
-              )}
-            </div>
             <button
               type="button"
               className="method-execute"
@@ -613,8 +601,6 @@ export function ContextPanel({
       {renderMethodCard({
         methodId: action.id,
         methodName: action.id,
-        cpuCost: action.cpuCost,
-        readsBlock: action.readsBlock,
         inputClasses: action.inputClasses,
         inputClassHashes: action.inputClassHashes,
         onRun: (boundArgs) =>
@@ -624,7 +610,6 @@ export function ContextPanel({
               objectPath: arg.objectPath,
               label: arg.label,
             })),
-            cpuCost: action.cpuCost,
           }),
       })}
     </section>

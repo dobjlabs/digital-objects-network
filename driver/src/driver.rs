@@ -4,11 +4,10 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use common::encode_hash_hex;
-use craft_sdk::SpendableObjects;
 use pod2::middleware::Hash;
+use sdk::SpendableObjects;
 use txlib::object_nullifier_hash;
 
-use crate::builtin::BuiltinActionCatalog;
 use crate::catalog::{ActionCatalog, CatalogClass};
 use crate::clients::{
     HttpRelayerClient, HttpSynchronizerClient, RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
@@ -25,6 +24,7 @@ use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, select_object,
     write_object_file,
 };
+use crate::pexe_catalog::PexeCatalog;
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
     ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
@@ -61,14 +61,22 @@ pub struct DriverDeps {
     pub payload_builder: Arc<dyn PayloadBuilder>,
 }
 
-impl Default for DriverDeps {
-    fn default() -> Self {
-        Self {
-            catalog: Arc::new(BuiltinActionCatalog::new()),
+impl DriverDeps {
+    /// Build deps with a catalog loaded from `paths.actions_dir`.
+    pub fn load(paths: &DriverPaths) -> Result<Self> {
+        let catalog = PexeCatalog::load(&paths.actions_dir)?;
+        if catalog.plugin_count() == 0 {
+            log::warn!(
+                "no .pexe plugins installed in {}; run `just install-plugins`",
+                paths.actions_dir.display()
+            );
+        }
+        Ok(Self {
+            catalog: Arc::new(catalog),
             synchronizer: Arc::new(HttpSynchronizerClient),
             relayer: Arc::new(HttpRelayerClient),
             payload_builder: Arc::new(DefaultPayloadBuilder),
-        }
+        })
     }
 }
 
@@ -80,7 +88,10 @@ pub struct Driver {
 
 impl Driver {
     pub fn open_default() -> Result<Self> {
-        Self::open(crate::paths::default_paths()?, DriverDeps::default())
+        let paths = crate::paths::default_paths()?;
+        ensure_store_dirs(&paths)?;
+        let deps = DriverDeps::load(&paths)?;
+        Ok(Self { paths, deps })
     }
 
     pub fn open(paths: DriverPaths, deps: DriverDeps) -> Result<Self> {

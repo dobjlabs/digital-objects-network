@@ -14,8 +14,8 @@ use pod2::{
     frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
     lang::{Module, load_module},
     middleware::{
-        EMPTY_VALUE, Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType,
-        Params, Pod, RawValue, Statement, VDSet, Value,
+        EMPTY_VALUE, F, Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType,
+        Params, Pod, Predicate, RawValue, Statement, VDSet, Value,
         containers::{Array, Dictionary, Set},
     },
 };
@@ -431,17 +431,19 @@ impl ActionHandle {
         Ok(ArgHandle::new(self.clone(), value))
     }
     fn pow_obj_grind(self, obj: Dynamic, target: Dynamic) -> RuntimeResult<ArgHandle> {
-        let [obj, target] = validate_args([(obj, Type::Dict), (target, Type::Int)])?;
+        // Target is a full u256 (Raw). To build one with a desired top-limb
+        // difficulty, scripts use `action.top_limb_u256(n)`.
+        let [obj, target] = validate_args([(obj, Type::Dict), (target, Type::Raw)])?;
         // For now we assume that obj is var, and thus return a key that is also var
         let key = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
         let mut ctx = self.0.borrow_mut();
         if let Some(exe_ctx) = &mut ctx.exe_ctx {
             // This is a copy of the object, we don't modify the obj argument.
             let mut obj = obj.borrow().to_dict();
-            let target = target.borrow().as_value().as_int().expect("int") as u64;
+            let target_raw = target.borrow().as_value().raw();
             let mut k = exe_ctx.rand_value();
             if !exe_ctx.mock {
-                while RawValue::from(obj.commitment()).0[3].0 > target {
+                while u256_gt(&RawValue::from(obj.commitment()), &target_raw) {
                     k = exe_ctx.rand_value();
                     obj.update(&Key::from("key"), &k).unwrap();
                 }
@@ -449,6 +451,23 @@ impl ActionHandle {
             key.borrow_mut().set_value(k);
         }
         Ok(ArgHandle::new(self.clone(), key))
+    }
+    /// Build a u256 with `n` in the most-significant limb and zeros elsewhere.
+    /// Useful as a difficulty target for [`pow_obj_grind`] and [`intro_lt_eq_u256`]
+    /// — a u256 `x` satisfies `x <= top_limb_u256(n)` iff the top limb of `x` is
+    /// `<= n` (with all lower limbs of `x` implicitly bounded by the zeros).
+    fn top_limb_u256(self, n: Dynamic) -> RuntimeResult<ArgHandle> {
+        let [n] = validate_args([(n, Type::Int)])?;
+        let n_int = match &*n.borrow() {
+            VarOrValue::Value(v) => v
+                .as_int()
+                .ok_or::<Box<EvalAltResult>>("top_limb_u256: expected int".into())?,
+            VarOrValue::Var(_) => {
+                return Err("top_limb_u256: n must be a literal integer".into());
+            }
+        };
+        let raw = RawValue([F(0), F(0), F(0), F(n_int as u64)]);
+        Ok(ArgHandle::literal(self.clone(), Value::from(raw)))
     }
     fn st_gt(self, v0: Dynamic, v1: Dynamic) -> RuntimeResult<()> {
         let [v0, v1] = validate_args([(v0, Type::Int), (v1, Type::Int)])?;
@@ -516,6 +535,19 @@ impl ActionHandle {
         });
         Ok(())
     }
+}
+
+/// Lexicographic (little-endian limb order) u256 `>` comparison on `RawValue`.
+/// `RawValue::0[0]` is the least-significant limb; `0[3]` is the most-significant.
+fn u256_gt(a: &RawValue, b: &RawValue) -> bool {
+    for i in (0..4).rev() {
+        let la = a.0[i].0;
+        let lb = b.0[i].0;
+        if la != lb {
+            return la > lb;
+        }
+    }
+    false
 }
 
 /// Helper function to type check and cast an array of pairs of String and VarOrValue, to be used
@@ -936,6 +968,24 @@ impl SdkModule {
     pub fn classes(&self) -> &[ClassMeta] {
         &self.classes
     }
+    pub fn module(&self) -> &Arc<Module> {
+        &self.module
+    }
+    /// Hash of the action's custom predicate in the loaded module.
+    pub fn action_hash(&self, action_name: &str) -> Option<Hash> {
+        self.module
+            .predicate_ref_by_name(action_name)
+            .map(Predicate::Custom)
+            .map(|p| p.hash())
+    }
+    /// Hash of the `Is{class_name}` custom predicate in the loaded module.
+    pub fn class_hash(&self, class_name: &str) -> Option<Hash> {
+        let pred_name = format!("Is{class_name}");
+        self.module
+            .predicate_ref_by_name(pred_name.as_str())
+            .map(Predicate::Custom)
+            .map(|p| p.hash())
+    }
     pub fn executor(
         self: &Rc<Self>,
         mock: bool,
@@ -1027,7 +1077,7 @@ struct OutputData {
 
 fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
     let solution = builder.solve().unwrap();
-    log::debug!("solution needs {} pods", solution.solution().pod_count);
+    log::info!("solution needs {} pods", solution.solution().pod_count);
     solution.prove(prover).unwrap().pods.pop().unwrap()
 }
 
@@ -1291,6 +1341,7 @@ fn new_engine() -> Engine {
         .register_fn("intro_vdf", ActionHandle::intro_vdf)
         .register_fn("intro_lt_eq_u256", ActionHandle::intro_lt_eq_u256)
         .register_fn("pow_obj_grind", ActionHandle::pow_obj_grind)
+        .register_fn("top_limb_u256", ActionHandle::top_limb_u256)
         .register_type_with_name::<ArgHandle>("ArgContext")
         .register_fn("set", ArgHandle::set)
         .register_fn("get", ArgHandle::get)

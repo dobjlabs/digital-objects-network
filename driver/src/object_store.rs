@@ -23,6 +23,12 @@ pub(crate) fn ensure_store_dirs(paths: &DriverPaths) -> Result<()> {
             paths.nullified_objects_dir.display()
         )
     })?;
+    fs::create_dir_all(&paths.actions_dir).map_err(|err| {
+        anyhow!(
+            "failed to create actions directory {}: {err}",
+            paths.actions_dir.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -86,8 +92,7 @@ fn load_object_files_from_dir(
         if !path.is_file() {
             continue;
         }
-        let is_dobj = path.extension().and_then(|ext| ext.to_str()) == Some("dobj");
-        if !is_dobj {
+        if !crate::paths::is_dobj_file(&path) {
             continue;
         }
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -192,14 +197,13 @@ pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> boo
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
-    use craft_sdk::Helper;
     use tempfile::tempdir;
     use txlib::{GroundingWitness, StateRoot};
 
-    use crate::builtin::{actions, dependencies};
+    use crate::catalog::ActionCatalog;
     use crate::paths::default_paths;
+    use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
     use crate::types::DriverPaths;
 
     use super::{load_object_files, write_object_file};
@@ -210,15 +214,7 @@ mod tests {
 
     fn temp_paths() -> DriverPaths {
         let dir = tempdir().unwrap();
-        let root = dir.keep();
-        let settings_path = root.join("settings.json");
-        let objects_dir = root.join("objects");
-        let nullified_objects_dir = objects_dir.join(".nullified");
-        DriverPaths {
-            settings_path,
-            objects_dir,
-            nullified_objects_dir,
-        }
+        DriverPaths::from_dobj_root(dir.keep())
     }
 
     fn dummy_grounding_witness() -> GroundingWitness {
@@ -235,9 +231,17 @@ mod tests {
 
     fn make_record() -> ObjectRecord {
         ensure_extra_pod_deserializers_registered();
-        let helper = Helper::new(dependencies(), actions());
-        let builder = helper.builder(true, Arc::new(dummy_grounding_witness()));
-        let outputs = builder.action("FindLog", vec![]);
+        let catalog = PexeCatalog::from_bytes(
+            std::iter::once((
+                std::path::PathBuf::from("craft-basics.pexe"),
+                test_plugin_bytes(),
+            )),
+            true,
+        )
+        .unwrap();
+        let outputs = catalog
+            .execute_action("FindLog".to_string(), dummy_grounding_witness(), vec![])
+            .unwrap();
         let spendable = outputs.obj(0);
         ObjectRecord {
             id: format!("{:#}", spendable.obj.commitment()),

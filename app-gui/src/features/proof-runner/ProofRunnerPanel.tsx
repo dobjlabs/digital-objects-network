@@ -187,7 +187,7 @@ export function ProofRunnerPanel() {
               <span
                 className={`stage-detail-value ${statusClass(generateState)}`}
               >
-                {generateProofStep?.detail ?? proof.cpuCost ?? "..."}
+                {generateProofStep?.detail ?? "..."}
               </span>
             </div>
           </div>

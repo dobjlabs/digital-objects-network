@@ -14,7 +14,8 @@ plonky2 = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 common = { path = "../common" }
-craft_sdk = { path = "../craft_sdk" }
+sdk = { path = "../sdk" }
+pexe = { path = "../pexe" }
 pod2utils = { path = "../pod2utils" }
 txlib = { path = "../txlib" }
 timelib = { path = "../timelib" }

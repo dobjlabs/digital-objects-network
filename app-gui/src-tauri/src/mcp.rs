@@ -38,7 +38,6 @@ impl CraftOps for AppCraftOps {
                 description: action.description,
                 input_classes: action.input_classes,
                 output_classes: action.output_classes,
-                cpu_cost: action.cpu_cost,
             })
             .collect())
     }
@@ -109,19 +108,9 @@ impl CraftOps for AppCraftOps {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        let cpu_cost = self
-            .driver
-            .list_actions(None)?
-            .into_iter()
-            .find(|action| action.id == input.action_id)
-            .map(|action| action.cpu_cost)
-            .unwrap_or_default();
         let _ = self.app.emit(
             "mcp-action-started",
-            serde_json::json!({
-                "actionId": input.action_id,
-                "cpuCost": cpu_cost,
-            }),
+            serde_json::json!({ "actionId": input.action_id }),
         );
 
         let reporter = TauriProgressReporter::new(self.app.clone(), input.action_id.clone());

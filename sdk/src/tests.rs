@@ -49,9 +49,10 @@ fn test_sdk_1() {
             var log = action.input("Log");
             var wood = action.output("Wood");
             wood.set([["blueprint", "Wood"]]);
-            var key = action.pow_obj_grind(wood, 9007199254740992);
+            let target = action.top_limb_u256(9007199254740992);
+            var key = action.pow_obj_grind(wood, target);
             wood.update("key", key);
-            action.intro_lt_eq_u256(wood, 9007199254740992);
+            action.intro_lt_eq_u256(wood, target);
         }
 
         fn CraftSticks(action) {
@@ -151,7 +152,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "486a97a437960b49bc5b20a505a6a3e20661988388f7bb653ab6186bb672bfaa"
+        module_hash = "b837ea9d1c477c9668d4ebfcedc60f86c47a2669642738428f344cc68ff721ba"
 
         [[classes]]
         name = "Log"
@@ -186,9 +187,10 @@ fn test_sdk_2() {
             var log = action.input("Log");
             var wood = action.output("Wood");
             wood.set([["blueprint", "Wood"]]);
-            var key = action.pow_obj_grind(wood, 9007199254740992);
+            let target = action.top_limb_u256(9007199254740992);
+            var key = action.pow_obj_grind(wood, target);
             wood.update("key", key);
-            action.intro_lt_eq_u256(wood, 9007199254740992);
+            action.intro_lt_eq_u256(wood, target);
         }
 "#;
 

@@ -1,14 +1,15 @@
-import type { ActionId, ClassName } from "../generated/ids";
-
 export type ProofPhase = "generateProof" | "commit";
 export type ProofProgressStatus = "running" | "done";
 
 export type ObjectStatus = "unknown" | "pending" | "live" | "nullified";
 
+// Action IDs and class names are not enumerated at compile time — they come
+// from whichever plugin archives the user has installed in ~/.dobj/actions/.
+
 export interface InventoryObjectPayload {
   id: string;
   fileName: string;
-  className: ClassName;
+  className: string;
   classHash: string;
   emoji: string;
   status: ObjectStatus;
@@ -19,14 +20,12 @@ export interface InventoryObjectPayload {
 }
 
 export interface ActionPayload {
-  id: ActionId;
+  id: string;
   emoji: string;
   hash: string;
   inputClassHashes: string[];
   description: string;
-  cpuCost: string;
-  readsBlock: boolean;
-  inputClasses: ClassName[];
+  inputClasses: string[];
 }
 
 export interface LoadGuiInventoryResult {
@@ -35,7 +34,7 @@ export interface LoadGuiInventoryResult {
 }
 
 export interface RunActionInput {
-  actionId: ActionId;
+  actionId: string;
   inputObjectPaths: string[];
 }
 
@@ -49,7 +48,7 @@ export interface RunActionResult {
 
 export interface ObjectRecordPayload {
   id: string;
-  className: ClassName;
+  className: string;
   status: ObjectStatus;
   txHash: string | null;
   pod: unknown;

@@ -30,7 +30,7 @@ pub fn open_objects_dir(
 #[tauri::command]
 pub fn pick_dobj_file_path() -> Result<String, CommandError> {
     let Some(path) = FileDialog::new()
-        .add_filter("Digital Object (.dobj)", &["dobj"])
+        .add_filter("Digital Object (.dobj)", &[::driver::paths::DOBJ_EXTENSION])
         .pick_file()
     else {
         return Err(anyhow!("No file selected").into());

@@ -2,7 +2,6 @@ import { create } from "zustand";
 import {
   loadGuiInventory,
   runAction,
-  type ActionId,
   type ActionPayload as Action,
   type InventoryObjectPayload as InventoryObject,
   type RunActionProgress,
@@ -33,7 +32,6 @@ interface ProofSummary {
 interface ProofState {
   runActionId: string | null;
   status: ProofStatus;
-  cpuCost: string | null;
   args: string[];
   messages: string[];
   steps: ProofStep[];
@@ -65,18 +63,13 @@ export interface AppState {
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   setGlobalStateRoot: (hash: string | null) => void;
   applyRunActionProgress: (event: RunActionProgress) => void;
-  initProofPanel: (input: {
-    actionId: string;
-    cpuCost: string;
-    args: string[];
-  }) => void;
+  initProofPanel: (input: { actionId: string; args: string[] }) => void;
   runProof: (input: {
-    actionId: ActionId;
+    actionId: string;
     inputBindings: Array<{
       objectPath: string;
       label: string;
     }>;
-    cpuCost: string;
   }) => Promise<void>;
 }
 
@@ -97,7 +90,6 @@ export const useStore = create<AppState>((set, get) => ({
   proof: {
     runActionId: null,
     status: "idle",
-    cpuCost: null,
     args: [],
     messages: [],
     steps: [],
@@ -250,7 +242,7 @@ export const useStore = create<AppState>((set, get) => ({
         },
       };
     }),
-  initProofPanel: ({ actionId, cpuCost, args }) =>
+  initProofPanel: ({ actionId, args }) =>
     set((prev) => {
       if (
         prev.proof.status === "generating" ||
@@ -263,14 +255,13 @@ export const useStore = create<AppState>((set, get) => ({
         proof: {
           runActionId: actionId,
           status: "generating",
-          cpuCost,
           args,
           messages: ["Running action..."],
           steps: [
             {
               id: "generate-proof",
               label: "Generate Proof",
-              detail: cpuCost,
+              detail: "pending",
               status: "pending",
             },
             {
@@ -288,14 +279,14 @@ export const useStore = create<AppState>((set, get) => ({
         },
       };
     }),
-  runProof: async ({ actionId, inputBindings, cpuCost }) => {
+  runProof: async ({ actionId, inputBindings }) => {
     const postDoneHoldMs = 2800;
     const verifyTargets =
       inputBindings.length > 0
         ? inputBindings.map((binding) => binding.label)
         : ["(no inputs)"];
 
-    get().initProofPanel({ actionId, cpuCost, args: verifyTargets });
+    get().initProofPanel({ actionId, args: verifyTargets });
 
     try {
       const result = await runAction({
@@ -330,7 +321,6 @@ export const useStore = create<AppState>((set, get) => ({
           ...prev.proof,
           runActionId: null,
           status: "idle",
-          cpuCost: null,
           args: [],
           messages: [],
           steps: [],
@@ -348,7 +338,6 @@ export const useStore = create<AppState>((set, get) => ({
         proof: {
           runActionId: null,
           status: "error",
-          cpuCost,
           args: verifyTargets,
           messages: [],
           steps: [],

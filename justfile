@@ -11,12 +11,21 @@ relayer:
 
 # Run the gui
 gui:
-    cd app-gui && RUST_LOG=trace pnpm tauri dev --release
+    cd app-gui && RUST_LOG=info pnpm tauri dev --release
 
 # Run relayer + synchronizer + gui together via mprocs
 # https://github.com/pvolok/mprocs
-dev:
+dev: ensure-plugins
     mprocs --config mprocs.yaml
+
+# Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
+# `just dev` so a fresh clone (or a `just reset`-ed dev env) boots cleanly.
+ensure-plugins:
+    @mkdir -p ~/.dobj/actions
+    @if [ -z "$(find ~/.dobj/actions -maxdepth 1 -name '*.pexe' -print -quit)" ]; then \
+        echo "No .pexe plugins installed — packaging from plugins/ and installing..."; \
+        just install-plugins; \
+    fi
 
 # Wipe local state (RocksDB + local Postgres DBs + objects)
 reset:
@@ -39,3 +48,11 @@ test-e2e:
 # Build all workspace crates
 build:
     cargo build --workspace
+
+# Build all plugins into target/pexe/*.pexe
+pack-plugins:
+    cargo run -p pexe --release -- build plugins/*
+
+# Build and install plugins into ~/.dobj/actions/
+install-plugins:
+    cargo run -p pexe --release -- build --install plugins/*

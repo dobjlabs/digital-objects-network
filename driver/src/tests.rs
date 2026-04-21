@@ -3,12 +3,11 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use common::test_state::TestState;
-use craft_sdk::{Helper, SpendableObject, SpendableObjects};
 use pod2::middleware::Hash;
+use sdk::SpendableObjects;
 use tempfile::tempdir;
 use txlib::{GroundingWitness, StateRoot};
 
-use crate::builtin::{actions, dependencies};
 use crate::catalog::ActionCatalog;
 use crate::clients::{
     RelayerClient, RelayerConfirmation, SynchronizerClient, SynchronizerHead,
@@ -19,26 +18,23 @@ use crate::object_record::{ObjectRecord, ObjectStatus, ensure_extra_pod_deserial
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
 };
-use crate::{ActionQuery, BuiltinActionCatalog, DriverPaths, ExecuteActionInput, ObjectSelector};
+use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
+use crate::{ActionQuery, DriverPaths, ExecuteActionInput, ObjectSelector};
 
 fn temp_paths() -> DriverPaths {
     let dir = tempdir().unwrap();
-    let root = dir.keep();
-    let settings_path = root.join("settings.json");
-    let objects_dir = root.join("objects");
-    let nullified_objects_dir = objects_dir.join(".nullified");
-    DriverPaths {
-        settings_path,
-        objects_dir,
-        nullified_objects_dir,
-    }
+    DriverPaths::from_dobj_root(dir.keep())
 }
 
-fn make_catalog() -> MockCatalog {
-    MockCatalog {
-        inner: BuiltinActionCatalog::new(),
-        mock_proofs: true,
-    }
+fn make_catalog() -> PexeCatalog {
+    PexeCatalog::from_bytes(
+        std::iter::once((
+            std::path::PathBuf::from("craft-basics.pexe"),
+            test_plugin_bytes(),
+        )),
+        true,
+    )
+    .expect("catalog loads from test plugin bytes")
 }
 
 fn dummy_grounding_witness() -> GroundingWitness {
@@ -115,44 +111,6 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
             payload_builder: Arc::new(MockPayloadBuilder),
         },
     )
-}
-
-struct MockCatalog {
-    inner: BuiltinActionCatalog,
-    mock_proofs: bool,
-}
-
-impl ActionCatalog for MockCatalog {
-    fn list_actions(&self) -> Vec<crate::ActionSummary> {
-        self.inner.list_actions()
-    }
-
-    fn get_action(&self, action_id: &str) -> Option<crate::ActionSummary> {
-        self.inner.get_action(action_id)
-    }
-
-    fn list_classes(&self) -> Vec<crate::catalog::CatalogClass> {
-        self.inner.list_classes()
-    }
-
-    fn get_class(&self, class_name: &str) -> Option<crate::catalog::CatalogClass> {
-        self.inner.get_class(class_name)
-    }
-
-    fn execute_action(
-        &self,
-        action_id: String,
-        grounding_witness: GroundingWitness,
-        inputs: Vec<SpendableObject>,
-    ) -> Result<SpendableObjects> {
-        let helper = Helper::new(dependencies(), actions());
-        let builder = helper.builder(self.mock_proofs, Arc::new(grounding_witness));
-        Ok(builder.action(&action_id, inputs))
-    }
-
-    fn generated_podlang(&self) -> Option<String> {
-        self.inner.generated_podlang()
-    }
 }
 
 struct MockPayloadBuilder;

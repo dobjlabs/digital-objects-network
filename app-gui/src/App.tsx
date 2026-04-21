@@ -7,10 +7,10 @@ import { SettingsModal } from "./features/settings/SettingsModal";
 import {
   getGlobalStateRoot,
   getObjectsDir,
+  listenMcpActionStarted,
   listenOpenSettings,
   listenObjectsChanged,
   listenRunActionProgress,
-  listenMcpActionStarted,
   openObjectsDir,
   sampleAppCpu,
 } from "./shared/api/tauriClient";
@@ -59,13 +59,15 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    hydrateData().catch((error) => {
-      console.error("Failed to load GUI inventory:", error);
-    }).finally(() => {
-      if (!cancelled) {
-        setInitialHydrationPending(false);
-      }
-    });
+    hydrateData()
+      .catch((error) => {
+        console.error("Failed to load GUI inventory:", error);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setInitialHydrationPending(false);
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -116,11 +118,7 @@ function App() {
     let unlisten: (() => void) | null = null;
     listenMcpActionStarted((event) => {
       if (!cancelled) {
-        initProofPanel({
-          actionId: event.actionId,
-          cpuCost: event.cpuCost,
-          args: ["(via MCP)"],
-        });
+        initProofPanel({ actionId: event.actionId, args: ["(via MCP)"] });
       }
     })
       .then((dispose) => {

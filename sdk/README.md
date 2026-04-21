@@ -63,6 +63,27 @@ Some level of type checking can be perfomed at Load time, but there are cases
 where we can only do it at Execution time, like operations involving object
 entries (at Load time we don't know what's the type of `pick.durability`).
 
+## u256 difficulty targets
+
+`pow_obj_grind(obj, target)` and `intro_lt_eq_u256(x, target)` both compare
+full 256-bit `RawValue`s.  Integer literals in Rhai promote to a pod2 `Value`
+whose `RawValue` has the integer in the *least*-significant limb — not what
+you want for a "top-limb ≤ N" difficulty target.
+
+Use `action.top_limb_u256(n)` to build a `RawValue` with `n` in the
+most-significant limb and zeros elsewhere.  Bind it once with `let` (not
+`var`, since it is a literal, not a wildcard) and reuse for both grinding
+and the proof:
+
+```rhai
+let target = action.top_limb_u256(9007199254740992);
+var key = action.pow_obj_grind(wood, target);
+wood.update("key", key);
+action.intro_lt_eq_u256(wood, target);
+```
+
+The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
+
 # Missing features
 
 - [ ] Literal Array
@@ -127,7 +148,7 @@ entries (at Load time we don't know what's the type of `pick.durability`).
 - [ ] operator+
 - [ ] operator*
 - [ ] dependent action
-- [ ] pexe.zip support
+- [x] pexe.zip support (packaged by the `pexe` crate's CLI)
 - [x] manifest support
 - [ ] error pretty print
 - [ ] forbid multiple Object::set operations on the same object
@@ -155,7 +176,7 @@ CraftWood(wood, tx, tx0, private: tx1, log, wood0, key) = AND(
   IsLog(log)
   DictContains(wood0, "blueprint", "Wood")
   DictUpdate(wood, wood0, "key", key)
-  LtEqU256(wood, 9007199254740992)
+  LtEqU256(wood, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))
   tx::TxDeleted(tx1, tx0, log)
   tx::TxInserted(tx, tx1, wood)
 )

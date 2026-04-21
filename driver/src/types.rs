@@ -10,6 +10,7 @@ pub struct DriverPaths {
     pub settings_path: PathBuf,
     pub objects_dir: PathBuf,
     pub nullified_objects_dir: PathBuf,
+    pub actions_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,8 +62,6 @@ pub struct ActionSummary {
     pub hash: String,
     pub input_class_hashes: Vec<String>,
     pub description: String,
-    pub cpu_cost: String,
-    pub reads_block: bool,
     pub input_classes: Vec<String>,
     pub output_classes: Vec<String>,
 }

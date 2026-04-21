@@ -1,0 +1,51 @@
+[plugin]
+name = "craft-basics"
+version = "0.1.0"
+# Rewritten by `cargo run -p pexe -- build plugins/craft-basics`.
+module_hash = "62525b9696c1402d3b37fbad775e7d3cc915aec4346f231b0fcb57d37ef451b9"
+
+[[classes]]
+name = "Log"
+emoji = "🌲"
+description = "A discovered log that can be refined into wood."
+
+[[classes]]
+name = "Wood"
+emoji = "🪵"
+description = "Refined wood used for sticks and basic tools."
+
+[[classes]]
+name = "Stick"
+emoji = "🥢"
+description = "A stick used as a handle in tool crafting."
+
+[[classes]]
+name = "WoodPick"
+emoji = "⛏️"
+description = "A wood pick that can mine stone while durability remains."
+
+[[actions]]
+name = "FindLog"
+emoji = "🌲"
+description = "Discover a log object by proving a short VDF."
+
+[[actions]]
+name = "CraftWood"
+emoji = "🪵"
+description = "Refine one log into a wood object with PoW quality checks."
+
+[[actions]]
+name = "CraftSticks"
+emoji = "🥢"
+description = "Split one wood object into two stick objects."
+
+[[actions]]
+name = "CraftWoodPick"
+emoji = "⛏️"
+description = "Combine wood and a stick to craft a wood pick."
+
+[[actions]]
+name = "UseWoodPick"
+emoji = "⛏️"
+description = "Internal durability/work update for wood pick usage."
+hidden = true

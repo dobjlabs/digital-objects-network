@@ -1,5 +1,5 @@
 use anyhow::Result;
-use craft_sdk::{SpendableObject, SpendableObjects};
+use sdk::{SpendableObject, SpendableObjects};
 use txlib::GroundingWitness;
 
 use crate::types::ActionSummary;
