@@ -106,47 +106,24 @@ pub fn compile_module_hash(manifest: &Manifest, script: &str) -> Result<String> 
 /// Rewrite the `module_hash` line in a manifest's TOML source to the given hash,
 /// preserving formatting of everything else. Adds the line under `[plugin]` if
 /// absent.
-pub fn set_manifest_hash(toml_src: &str, new_hash_hex: &str) -> String {
-    // Strip leading `0x` if present to match the serialization used by the sdk tests.
+pub fn set_manifest_hash(toml_src: &str, new_hash_hex: &str) -> Result<String> {
     let clean = new_hash_hex.trim_start_matches("0x");
-    let mut out = String::with_capacity(toml_src.len());
-    let mut inserted = false;
-    let mut seen_plugin = false;
-    let mut inside_plugin = false;
-    for line in toml_src.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('[') {
-            // Leaving the [plugin] section? If we never saw a module_hash, insert one.
-            if inside_plugin && !inserted {
-                out.push_str(&format!("module_hash = \"{clean}\"\n"));
-                inserted = true;
-            }
-            inside_plugin = trimmed.starts_with("[plugin]");
-            if inside_plugin {
-                seen_plugin = true;
-            }
-        }
-        if inside_plugin && trimmed.starts_with("module_hash") {
-            out.push_str(&format!("module_hash = \"{clean}\"\n"));
-            inserted = true;
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
+    let mut doc = toml_src
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|err| anyhow!("invalid manifest toml: {err}"))?;
+    // If the key already exists, preserve its surrounding whitespace and comments
+    // by replacing only the inner string while keeping the value's decor.
+    if let Some(val) = doc["plugin"]
+        .get_mut("module_hash")
+        .and_then(|i| i.as_value_mut())
+    {
+        let decor = val.decor().clone();
+        *val = clean.into();
+        *val.decor_mut() = decor;
+    } else {
+        doc["plugin"]["module_hash"] = toml_edit::value(clean);
     }
-    if inside_plugin && !inserted {
-        out.push_str(&format!("module_hash = \"{clean}\"\n"));
-        return out;
-    }
-    if !seen_plugin {
-        // No [plugin] section — append one. Callers shouldn't hit this, but keep it
-        // safe rather than silently drop the hash.
-        if !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str(&format!("\n[plugin]\nmodule_hash = \"{clean}\"\n"));
-    }
-    out
+    Ok(doc.to_string())
 }
 
 /// Install pexe bytes into `target_dir` as `<plugin_name>.pexe`.
@@ -182,7 +159,7 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 
     #[test]
     fn test_set_manifest_hash_replaces() {
-        let out = set_manifest_hash(TOML_WITH_HASH, "deadbeef");
+        let out = set_manifest_hash(TOML_WITH_HASH, "deadbeef").unwrap();
         assert!(out.contains("module_hash = \"deadbeef\""));
         assert!(!out.contains(
             "module_hash = \"0000000000000000000000000000000000000000000000000000000000000000\""
@@ -191,14 +168,22 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 
     #[test]
     fn test_set_manifest_hash_strips_prefix() {
-        let out = set_manifest_hash(TOML_WITH_HASH, "0xdeadbeef");
+        let out = set_manifest_hash(TOML_WITH_HASH, "0xdeadbeef").unwrap();
         assert!(out.contains("module_hash = \"deadbeef\""));
     }
 
     #[test]
     fn test_set_manifest_hash_inserts_when_missing() {
         let src = "[plugin]\nname = \"x\"\nversion = \"0.1\"\n";
-        let out = set_manifest_hash(src, "cafe");
+        let out = set_manifest_hash(src, "cafe").unwrap();
         assert!(out.contains("module_hash = \"cafe\""));
+    }
+
+    #[test]
+    fn test_set_manifest_hash_preserves_trailing_comment() {
+        let src = "[plugin]\nname = \"x\"\nmodule_hash = \"0000\" # pinned by CI\n";
+        let out = set_manifest_hash(src, "cafe").unwrap();
+        assert!(out.contains("cafe"));
+        assert!(out.contains("# pinned by CI"));
     }
 }

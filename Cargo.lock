@@ -5686,6 +5686,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "toml 1.1.2+spec-1.1.0",
+ "toml_edit 0.23.10+spec-1.0.0",
  "zip 2.4.2",
 ]
 
@@ -8987,6 +8988,19 @@ dependencies = [
  "serde_spanned 0.6.9",
  "toml_datetime 0.6.3",
  "winnow 0.5.40",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.23.10+spec-1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84c8b9f757e028cee9fa244aea147aab2a9ec09d5325a9b01e0a49730c2b5269"
+dependencies = [
+ "indexmap 2.13.0",
+ "toml_datetime 0.7.5+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 0.7.15",
 ]
 
 [[package]]
