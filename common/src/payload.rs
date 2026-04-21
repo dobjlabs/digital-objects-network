@@ -37,7 +37,7 @@ pub fn read_elems<const N: usize>(bytes: &mut impl Read) -> Result<[F; N]> {
 #[allow(clippy::large_enum_variant)]
 pub struct Payload {
     pub proof: PayloadProof,
-    /// Commitment of the finalized transaction dictionary `{live, nullifiers, state_root_hash}`.
+    /// Commitment of the finalized transaction dictionary `{live, nullifiers, tx_start, tx_end}`.
     pub tx_final: Hash,
     pub state_root_hash: Hash,
     pub nullifiers: Vec<Hash>,
@@ -247,9 +247,9 @@ mod tests {
         let st = Statement::Custom(
             pred,
             vec![
-                Value::from(payload.tx_final),
-                nullifiers_set,
-                Value::from(payload.state_root_hash),
+                Value::from(payload.state_root_hash).into(),
+                Value::from(payload.tx_final).into(),
+                nullifiers_set.into(),
             ],
         );
         println!("st: {st:?}");
