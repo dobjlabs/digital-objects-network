@@ -1,114 +1,340 @@
 /*
-  Tx = {
-    live: set,
-    nullifiers: set,
-    state_root_hash: hash
-  }
+  txlib: Transaction predicates for verifiable state transitions.
 
-  Object = {
-    key: value
-    // ... other fields
+  A transaction takes input objects (each proved live in a prior
+  finalized transaction) and produces output objects through a
+  sequence of insert, mutate, and delete events. The event sequence
+  is recorded as a hash chain. A proof of TxFinalized attests that
+  the chain is valid without revealing the events or the live set.
+
+  This file has four layers, bottom-up:
+
+  1. Chain Primitives -- hash chain steps for each event type.
+     Called by application action predicates (e.g. MineStone) to
+     record events. These are the building blocks.
+
+  2. Replay -- walks the recorded chain, verifying each event's
+     hash step, updating the live/nullifier sets, and calling the
+     affected object's type guard to authorize the event.
+
+  3. InputsGrounded -- proves each input object existed in a prior
+     finalized transaction referenced by the state root.
+
+  4. TxFinalized -- the public entry point. Ties input grounding,
+     chain seeding, and full replay together. Exposes
+     (state_root_hash, tx_final, nullifiers) publicly.
+
+  State convention: most predicates thread four public arguments:
+  (before_ctx, after_ctx, before_chain, after_chain). Each step
+  transforms (before_ctx, before_chain) into (after_ctx, after_chain).
+  Steps compose by chaining: one step's "after" is the next step's
+  "before".
+
+  Ctx = {
+    live: set,          // objects currently alive
+    nullifiers: set,    // accumulated nullifiers (double-spend prevention)
+    tx_start: hash,     // enclosing action's chain start (for guard dispatch)
+    tx_end: hash        // enclosing action's chain end (for guard dispatch)
   }
 */
 
-// Holds iff `state_root` is the hash of the given fields.
-StateRoot(state_root, block_number, txns_root, nullifiers_root, gsrs_root,
-    private: txn_nullifiers_hash, block_number_gsrs_hash) = AND(
-  HashOf(txn_nullifiers_hash, txns_root, nullifiers_root)
-  HashOf(block_number_gsrs_hash, block_number, gsrs_root)
-  HashOf(state_root, txn_nullifiers_hash, block_number_gsrs_hash)
+// ========================================================
+// Chain Primitives
+// ========================================================
+//
+// Called by application action predicates (e.g. CraftWoodPick,
+// UseWoodPick) to record events into the hash chain. These prove
+// the hash relationship but do not update live/nullifier sets --
+// that happens during replay.
+
+// Insert: chain = H(prev, H(0, new))
+TxInserted(chain, prev_chain, new, private: event_hash) = AND(
+  HashOf(event_hash, 0, new)
+  HashOf(chain, prev_chain, event_hash)
 )
 
-// Holds iff `source_txn` is recorded in the transactions set of `state_root_hash`.
+// Mutate: chain = H(prev, H(old, new)). The type-preservation check
+// is enforced by ReplayMutate, not here.
+TxMutated(chain, prev_chain, new, old, private: event_hash) = AND(
+  HashOf(event_hash, old, new)
+  HashOf(chain, prev_chain, event_hash)
+)
+
+// Delete: chain = H(prev, H(old, 0))
+TxDeleted(chain, prev_chain, old, private: event_hash) = AND(
+  HashOf(event_hash, old, 0)
+  HashOf(chain, prev_chain, event_hash)
+)
+
+// ========================================================
+// Replay: Helpers
+// ========================================================
+
+// Standalone nullifier derivation: H(H(obj, obj.key), "txlib-nullifier-v1").
+// In practice we inline this into ReplayNullify, but it's useful to have it
+// for third-party code that needs to compute nullifiers outside of replay.
+Nullify(nullifier, obj, private: obj_key_hash) = AND(
+  HashOf(obj_key_hash, obj, obj.key)
+  HashOf(nullifier, obj_key_hash, "txlib-nullifier-v1")
+)
+
+// ========================================================
+// Replay: List Structure
+// ========================================================
+//
+// Replay walks the recorded event chain, element by element.
+// ReplayContents encodes a variable-length list as a recursive OR.
+// The four branches handle different list lengths:
+//   Done    -- 0 elements (before == after)
+//   Element -- exactly 1 element
+//   Pair    -- exactly 2 elements (avoids one recursion level)
+//   Step    -- 1 element + recursive tail (3+ elements)
+
+ReplayContents(before_ctx, after_ctx, before_chain, after_chain) = OR(
+  ReplayContentsDone(before_ctx, after_ctx, before_chain, after_chain)
+  ReplayElement(before_ctx, after_ctx, before_chain, after_chain)
+  ReplayContentsPair(before_ctx, after_ctx, before_chain, after_chain)
+  ReplayContentsStep(before_ctx, after_ctx, before_chain, after_chain)
+)
+
+// Empty list: nothing to replay, state passes through unchanged.
+ReplayContentsDone(before_ctx, after_ctx, before_chain, after_chain) = AND(
+  Equal(before_ctx, after_ctx)
+  Equal(before_chain, after_chain)
+)
+
+// Exactly two elements, threaded through a midpoint.
+ReplayContentsPair(before_ctx, after_ctx, before_chain, after_chain,
+    private: mid_ctx, mid_chain) = AND(
+  ReplayElement(before_ctx, mid_ctx, before_chain, mid_chain)
+  ReplayElement(mid_ctx, after_ctx, mid_chain, after_chain)
+)
+
+// Head + recursive tail (for 3+ elements).
+ReplayContentsStep(before_ctx, after_ctx, before_chain, after_chain,
+    private: mid_ctx, mid_chain) = AND(
+  ReplayElement(before_ctx, mid_ctx, before_chain, mid_chain)
+  ReplayContents(mid_ctx, after_ctx, mid_chain, after_chain)
+)
+
+// A single element: one of the three event types, or a nested
+// action (which recursively contains its own ReplayContents).
+ReplayElement(before_ctx, after_ctx, before_chain, after_chain) = OR(
+  ReplayInsert(before_ctx, after_ctx, before_chain, after_chain)
+  ReplayMutate(before_ctx, after_ctx, before_chain, after_chain)
+  ReplayDelete(before_ctx, after_ctx, before_chain, after_chain)
+  ReplayAction(before_ctx, after_ctx, before_chain, after_chain)
+)
+
+// ========================================================
+// Replay: Actions
+// ========================================================
+//
+// An action is a contiguous segment of the hash chain that groups
+// related events (e.g. "mine a stone" = mutate pick + insert stone).
+// Actions nest: a parent action can contain sub-actions.
+//
+// Replaying an action:
+//   1. Write the action's chain range into ctx as tx_start/tx_end
+//      (so guard dispatch knows which action scope to match).
+//   2. Replay the action's contents (events and sub-actions).
+//   3. Copy inner live/nullifier changes back to the outer ctx
+//      (restoring the parent's tx_start/tx_end automatically,
+//      since after_ctx derives from before_ctx, not inner_ctx).
+
+// Set tx_start/tx_end in ctx, replay contents, copy live/nullifiers
+// back to outer ctx (which restores the parent's tx_start/tx_end).
+ReplayAction(before_ctx, after_ctx, before_chain, after_chain,
+    private: scope_mid, inner_ctx, end_ctx, mid) = AND(
+  DictUpdate(scope_mid, before_ctx, "tx_start", before_chain)
+  DictUpdate(inner_ctx, scope_mid, "tx_end", after_chain)
+  ReplayContents(inner_ctx, end_ctx, before_chain, after_chain)
+  DictUpdate(mid, before_ctx, "live", end_ctx.live)
+  DictUpdate(after_ctx, mid, "nullifiers", end_ctx.nullifiers)
+)
+
+// Top-level walker: every event at the transaction's top level is
+// required by construction to be an action (the prover API never
+// emits bare events outside an action scope). Dispatching directly
+// to ReplayAction here skips the ReplayElement layer that would
+// otherwise be needed to discriminate between event variants.
+// ReplayContents is still used *within* an action, where inserts,
+// mutates, deletes, and sub-actions can all appear.
+ReplayActions(before_ctx, after_ctx, before_chain, after_chain) = OR(
+  ReplayContentsDone(before_ctx, after_ctx, before_chain, after_chain)
+  ReplayAction(before_ctx, after_ctx, before_chain, after_chain)
+  ReplayActionsStep(before_ctx, after_ctx, before_chain, after_chain)
+)
+
+// One action, then a recursive tail. Used for transactions that
+// contain 2+ top-level actions.
+ReplayActionsStep(before_ctx, after_ctx, before_chain, after_chain,
+    private: mid_ctx, mid_chain) = AND(
+  ReplayAction(before_ctx, mid_ctx, before_chain, mid_chain)
+  ReplayActions(mid_ctx, after_ctx, mid_chain, after_chain)
+)
+
+// ========================================================
+// Replay: Insert
+// ========================================================
+
+// Full insert replay: chain step (via TxInserted) + live update +
+// guard dispatch. Referencing TxInserted instead of re-proving the
+// HashOf equations lets the prover reuse the record-time statement
+// that it already built for the application's action predicate.
+ReplayInsert(before_ctx, after_ctx, before_chain, after_chain,
+    private: new, new_live, guard) = AND(
+  TxInserted(after_chain, before_chain, new)
+  SetInsert(new_live, before_ctx.live, new)
+  DictUpdate(after_ctx, before_ctx, "live", new_live)
+  DictContains(new, "type", guard)
+  guard(new, before_ctx.tx_start, before_ctx.tx_end)
+)
+
+// ========================================================
+// Replay: Mutate
+// ========================================================
+
+// Nullifier computation and accumulation. Shared by mutate and
+// delete to prevent double-spending of the consumed object.
+// nullifier = H(H(obj, obj.key), "txlib-nullifier-v1")
+ReplayNullify(mid_ctx, after_ctx, old,
+    private: obj_key_hash, nullifier, new_nullifiers) = AND(
+  HashOf(obj_key_hash, old, old.key)
+  HashOf(nullifier, obj_key_hash, "txlib-nullifier-v1")
+  SetInsert(new_nullifiers, mid_ctx.nullifiers, nullifier)
+  DictUpdate(after_ctx, mid_ctx, "nullifiers", new_nullifiers)
+)
+
+// Live-set swap + nullifier accumulation. Chain/event-hash work is
+// delegated to TxMutated in the ReplayMutate parent.
+ReplayMutateEvent(before_ctx, after_ctx, old, new,
+    private: new_live, live_mid, mid_ctx) = AND(
+  SetDelete(live_mid, before_ctx.live, old)
+  SetInsert(new_live, live_mid, new)
+  DictUpdate(mid_ctx, before_ctx, "live", new_live)
+  ReplayNullify(mid_ctx, after_ctx, old)
+)
+
+// Full mutate replay: type-preserve check + chain step (via TxMutated)
+// + state update + guard dispatch. The explicit old.type == new.type
+// check lets the guard dispatch on *new* alone (the authorizing action
+// predicate can reference either old or new, since their types are
+// equal here).
+ReplayMutate(before_ctx, after_ctx, before_chain, after_chain,
+    private: old, new, guard) = AND(
+  Equal(old.type, new.type)
+  TxMutated(after_chain, before_chain, new, old)
+  ReplayMutateEvent(before_ctx, after_ctx, old, new)
+  DictContains(new, "type", guard)
+  guard(new, before_ctx.tx_start, before_ctx.tx_end)
+)
+
+// ========================================================
+// Replay: Delete
+// ========================================================
+
+// Live-set removal + nullifier accumulation. Chain/event-hash work is
+// delegated to TxDeleted in the ReplayDelete parent.
+ReplayDeleteEvent(before_ctx, after_ctx, old,
+    private: new_live, mid_ctx) = AND(
+  SetDelete(new_live, before_ctx.live, old)
+  DictUpdate(mid_ctx, before_ctx, "live", new_live)
+  ReplayNullify(mid_ctx, after_ctx, old)
+)
+
+// Full delete replay: chain step (via TxDeleted) + state update +
+// guard dispatch.
+ReplayDelete(before_ctx, after_ctx, before_chain, after_chain,
+    private: old, guard) = AND(
+  TxDeleted(after_chain, before_chain, old)
+  ReplayDeleteEvent(before_ctx, after_ctx, old)
+  DictContains(old, "type", guard)
+  guard(old, before_ctx.tx_start, before_ctx.tx_end)
+)
+
+// ========================================================
+// State Root
+// ========================================================
+//
+// A state root commits to (block_number, transactions_root,
+// nullifiers_root, gsrs_root) via a 3-layer hash:
+//   state_root = H(H(txns_root, nullifiers_root),
+//                  H(block_number, gsrs_root))
+// block_number anchors the root to an execution block; gsrs_root
+// commits to a prior-GSR history array used by time-based predicates.
+
+// Holds iff `source_txn` is recorded in the transactions set of
+// the state root whose hash is `state_root_hash`. Unpacks the 3-layer
+// state-root hash inline (avoiding a separate StateRoot predicate).
 TxInStateRoot(state_root_hash, source_txn,
-    private: transactions, nullifiers, block_number, gsrs_root) = AND(
-  StateRoot(state_root_hash, block_number, transactions, nullifiers, gsrs_root)
+    private: transactions, nullifiers, block_number, gsrs_root,
+             txn_nullifiers_hash, block_number_gsrs_hash) = AND(
+  HashOf(txn_nullifiers_hash, transactions, nullifiers)
+  HashOf(block_number_gsrs_hash, block_number, gsrs_root)
+  HashOf(state_root_hash, txn_nullifiers_hash, block_number_gsrs_hash)
   SetContains(transactions, source_txn)
 )
 
-// Holds iff every member of `inputs` is grounded in `state_root_hash`.
+// ========================================================
+// Inputs Grounded
+// ========================================================
+//
+// Proves each input object was live in some prior finalized
+// transaction referenced by the state root. For each input, we
+// show that some transaction in that root's transactions set
+// has the input in its live set.
+//
+// Encoded as a recursive OR (like ReplayContents) since the
+// number of inputs varies per transaction.
+
 InputsGrounded(inputs, state_root_hash) = OR(
-  // state_root_hash is intentionally unconstrained here
+  // Base case: empty inputs. state_root_hash is intentionally
+  // unconstrained -- an empty-input tx needs no prior state.
   Equal(inputs, {})
+  InputsGroundedSingle(inputs, state_root_hash)
   InputsGroundedRecursive(inputs, state_root_hash)
 )
 
-// Holds iff one grounded input can be removed, leaving a grounded remainder.
+// Single-input fast path: avoids the cost of a recursive
+// InputsGrounded call.
+InputsGroundedSingle(inputs, state_root_hash,
+    private: input, source_ctx) = AND(
+  TxInStateRoot(state_root_hash, source_ctx)
+  SetContains(source_ctx.live, input)
+  SetInsert(inputs, {}, input)
+)
+
+// 2+ inputs: ground one input, then recurse for the rest.
 InputsGroundedRecursive(inputs, state_root_hash,
-    private: input, prev_inputs, source_txn) = AND(
-  TxInStateRoot(state_root_hash, source_txn)
-  SetContains(source_txn.live, input)
+    private: input, prev_inputs, source_ctx) = AND(
+  TxInStateRoot(state_root_hash, source_ctx)
+  SetContains(source_ctx.live, input)
   SetInsert(inputs, prev_inputs, input)
   InputsGrounded(prev_inputs, state_root_hash)
 )
 
-// Holds iff `tx_after` is the initialized transaction over `inputs`,
-// with empty predecessor and empty nullifier set.
-TxInit(tx_after, tx_before, inputs, state_root_hash,
-    private: s1, s2) = AND(
-  Equal(tx_before, {})
-  DictInsert(s1, tx_before, "live", inputs)
-  DictInsert(s2, s1, "state_root_hash", state_root_hash)
-  DictInsert(tx_after, s2, "nullifiers", {})
-  InputsGrounded(inputs, state_root_hash)
-)
+// ========================================================
+// TxFinalized
+// ========================================================
+//
+// The public entry point. A proof of TxFinalized is a self-contained
+// certificate: it attests to the final state without revealing the
+// event sequence that produced it.
 
-// Holds iff `tx_after_nullified` equals `tx_before` with `obj`'s nullifier inserted.
-TxObjectStateNullified(tx_after_nullified, tx_before, obj,
-    private: obj_key_hash, obj_nullifier, nullifiers_after) = AND(
-  HashOf(obj_key_hash, obj, obj.key)
-  HashOf(obj_nullifier, obj_key_hash, "txlib-nullifier-v1")
-  SetInsert(nullifiers_after, tx_before.nullifiers, obj_nullifier)
-  DictUpdate(tx_after_nullified, tx_before, "nullifiers", nullifiers_after)
-)
-
-// Holds iff `tx_after` is a valid delete step from `tx_before`,
-// deleting one live object state and including its nullifier.
-TxDeleted(tx_after, tx_before, obj,
-    private: live_after, tx_after_nullified) = AND(
-  Tx(tx_before)
-  TxObjectStateNullified(tx_after_nullified, tx_before, obj)
-  SetDelete(live_after, tx_after_nullified.live, obj)
-  DictUpdate(tx_after, tx_after_nullified, "live", live_after)
-)
-
-// Holds iff `tx_after` is a valid mutation step from `tx_before`,
-// replacing `old` with `new` and including `old`'s nullifier.
-TxMutated(tx_after, tx_before, new, old,
-    private: live_mid, live_after, tx_after_nullified) = AND(
-  Tx(tx_before)
-  TxObjectStateNullified(tx_after_nullified, tx_before, old)
-  SetDelete(live_mid, tx_after_nullified.live, old)
-  SetInsert(live_after, live_mid, new)
-  // There is a potential optimization here: if the state being nullified is the
-  // result of a mutation, we don't need to post a nullifier for it, since it will
-  // never "escape" the transaction. However, for the sake of simplicity, we can
-  // just post nullifiers for all states.
-  DictUpdate(tx_after, tx_after_nullified, "live", live_after)
-)
-
-// Holds iff `tx_after` is a valid insert step from `tx_before`,
-// extending the live set with `new` while leaving nullifiers unchanged.
-TxInserted(tx_after, tx_before, new,
-    private: live_after) = AND(
-  Tx(tx_before)
-  SetInsert(live_after, tx_before.live, new)
-  DictUpdate(tx_after, tx_before, "live", live_after)
-)
-
-// Holds iff `tx_after` is either initialized from empty or obtained by one
-// admissible transition (delete, mutate, or insert) from a prior transaction.
-Tx(tx_after, private: tx_before, inputs, state_root_hash, old, new) = OR(
-  TxInit(tx_after, tx_before, inputs, state_root_hash)
-  TxDeleted(tx_after, tx_before, old)
-  TxMutated(tx_after, tx_before, new, old)
-  TxInserted(tx_after, tx_before, new)
-)
-
-// Holds iff `tx_final` is a valid transaction, `tx_nullifiers` equals
-// `tx_final.nullifiers`, and `state_root_hash` equals `tx_final.state_root_hash`.
-TxFinalized(tx_final, tx_nullifiers, state_root_hash) = AND(
-  Tx(tx_final)
-  DictContains(tx_final, "nullifiers", tx_nullifiers)
-  DictContains(tx_final, "state_root_hash", state_root_hash)
+// Exposes (state_root_hash, tx_final, nullifiers) publicly.
+// tx_final is the after_ctx dictionary commitment, which binds the
+// live set, nullifiers, and final tx_start/tx_end together. The
+// live set and chain are private. The top-level walker is
+// ReplayActions, so every top-level event is guaranteed to be an
+// action (no bare events can escape an action's guard dispatch).
+// The `nullifiers = {}` check on `before_ctx` prevents a tx from
+// inheriting nullifiers it did not emit itself.
+TxFinalized(state_root_hash, tx_final, nullifiers,
+    private: before_ctx, chain_start, chain_final) = AND(
+  InputsGrounded(before_ctx.live, state_root_hash)
+  HashOf(chain_start, before_ctx.live, 0)
+  DictContains(before_ctx, "nullifiers", {})
+  DictContains(tx_final, "nullifiers", nullifiers)
+  ReplayActions(before_ctx, tx_final, chain_start, chain_final)
 )
