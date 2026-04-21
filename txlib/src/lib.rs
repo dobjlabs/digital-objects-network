@@ -1,39 +1,67 @@
-// pub mod examples;
-pub mod predicates;
-use std::{collections::HashMap, sync::Arc};
+//! Transaction predicates for verifiable state transitions.
+//!
+//! A transaction consumes grounded input objects, emits a sequence of
+//! insert/mutate/delete events grouped into actions, and produces a
+//! `TxFinalized` proof. The event sequence is recorded as a hash chain
+//! and verified by replay at finalize time; only the state root, final
+//! tx commitment, and nullifier set are public.
+//!
+//! # API layering
+//!
+//! The public surface is intentionally small:
+//!
+//! - [`TxBuilder::new`] — grounds the inputs against a state root.
+//! - [`TxBuilder::action`] — opens an action scope; the closure emits
+//!   events through an [`ActionCtx`] and attaches guard evidence per
+//!   event. Scopes nest via [`ActionCtx::sub`].
+//! - [`TxBuilder::finalize`] — walks the event tree and emits the
+//!   `TxFinalized` proof.
+//!
+//! Below that sits a `pub(crate)` primitive layer (`begin_action`,
+//! `end_action`, `insert`, `mutate`, `delete`) that the closure API
+//! uses internally. Below that, the [`replay`] submodule contains the
+//! predicate-tree construction invoked by `finalize`.
 
-use anyhow::{Result, anyhow};
+pub mod predicates;
+mod replay;
+
+use std::{array, collections::HashMap, sync::Arc};
+
+use plonky2::field::types::Field;
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     frontend::Operation,
     middleware::{
-        EMPTY_VALUE, Hash, Key, NativeOperation, OperationAux, OperationType, Statement, Value,
+        EMPTY_VALUE, F, Hash, Key, NativeOperation, OperationAux, OperationType, RawValue,
+        Statement, Value,
         containers::{Dictionary, Set},
         hash_values,
     },
 };
-use pod2utils::{dict, dict_define, macros::BuildContext, rand_raw_value, set, st_custom};
+use pod2utils::{dict, macros::BuildContext, map, op, set, st_custom};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+// ============================================================================
+// Data structures
+// ============================================================================
 
 /// Compact committed view of canonical app state used for grounding transactions.
 ///
-/// This struct does not carry full containers. It stores only the root commitments needed to
-/// recompute the canonical global state root hash and to verify synchronizer-supplied proofs.
+/// Holds only the Merkle roots needed to recompute the canonical global state
+/// root hash and to verify synchronizer-supplied membership proofs. Full
+/// containers are not carried -- callers prove source-tx inclusion with
+/// per-input Merkle proofs packaged in a [`GroundingWitness`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateRoot {
-    /// Execution block number this state root is anchored to.
     pub block_number: i64,
-    /// Root of the canonical transactions set.
     pub transactions_root: Hash,
-    /// Root of the canonical spent-nullifiers set.
     pub nullifiers_root: Hash,
-    /// Root of the prior-GSR history array committed into this state root.
     pub gsrs_root: Hash,
 }
 
 impl StateRoot {
-    /// Construct a `StateRoot` from committed root values.
     pub fn new(
         block_number: i64,
         transactions_root: Hash,
@@ -48,13 +76,17 @@ impl StateRoot {
         }
     }
 
+    /// 3-layer hash:
+    ///   H(H(txns_root, nullifiers_root), H(block_number, gsrs_root))
     pub fn hash(&self) -> Hash {
         let txn_nullifiers_hash = hash_values(&[
             Value::from(self.transactions_root),
             Value::from(self.nullifiers_root),
         ]);
-        let block_number_gsrs_hash =
-            hash_values(&[Value::from(self.block_number), Value::from(self.gsrs_root)]);
+        let block_number_gsrs_hash = hash_values(&[
+            Value::from(self.block_number),
+            Value::from(self.gsrs_root),
+        ]);
         hash_values(&[
             Value::from(txn_nullifiers_hash),
             Value::from(block_number_gsrs_hash),
@@ -64,13 +96,14 @@ impl StateRoot {
 
 /// Proof-bearing grounding data required to build a new transaction.
 ///
-/// Callers use `state_root` as the committed global context and `source_tx_proofs` to prove that
-/// each consumed source transaction is present in `state_root.transactions_root`.
+/// Callers use `state_root` as the committed global context and
+/// `source_tx_proofs` to prove that each consumed source transaction is
+/// present in `state_root.transactions_root`.
 #[derive(Clone, Debug)]
 pub struct GroundingWitness {
-    /// Canonical state root the new transaction is grounded against.
     pub state_root: StateRoot,
-    /// Merkle proofs for source transaction inclusion keyed by source tx hash.
+    /// Merkle proofs for source transaction inclusion keyed by source tx
+    /// commitment (`Tx::dict().commitment()`).
     pub source_tx_proofs: HashMap<Hash, MerkleProof>,
 }
 
@@ -83,19 +116,34 @@ impl GroundingWitness {
     }
 }
 
+/// Output of a finalized transaction. The live set is known to the prover
+/// but private in the proof.
 #[derive(Clone, Debug)]
 pub struct Tx {
     pub live: Set,
-    pub state_root: Arc<StateRoot>,
     pub nullifiers: Set,
+    /// The after_ctx dictionary. Its commitment is tx_final (stored in
+    /// the state root's transactions set). Contains live, nullifiers,
+    /// tx_start, tx_end.
+    pub ctx: Dictionary,
+    pub state_root: Arc<StateRoot>,
+}
+
+impl Tx {
+    /// The transaction's committed dictionary. Its commitment is what
+    /// gets stored in the state root's transactions set.
+    pub fn dict(&self) -> Dictionary {
+        self.ctx.clone()
+    }
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TxSerde {
     live: Set,
-    state_root: StateRoot,
     nullifiers: Set,
+    ctx: Dictionary,
+    state_root: StateRoot,
 }
 
 impl Serialize for Tx {
@@ -105,8 +153,9 @@ impl Serialize for Tx {
     {
         TxSerde {
             live: self.live.clone(),
-            state_root: (*self.state_root).clone(),
             nullifiers: self.nullifiers.clone(),
+            ctx: self.ctx.clone(),
+            state_root: (*self.state_root).clone(),
         }
         .serialize(serializer)
     }
@@ -120,33 +169,19 @@ impl<'de> Deserialize<'de> for Tx {
         let payload = TxSerde::deserialize(deserializer)?;
         Ok(Self {
             live: payload.live,
-            state_root: Arc::new(payload.state_root),
             nullifiers: payload.nullifiers,
+            ctx: payload.ctx,
+            state_root: Arc::new(payload.state_root),
         })
     }
-}
-
-impl Tx {
-    pub fn dict(&self) -> Dictionary {
-        dict!({
-            "live" => self.live.clone(),
-            "state_root_hash" => self.state_root.hash(),
-            "nullifiers" => self.nullifiers.clone()
-        })
-    }
-}
-
-pub fn rekey(obj: &mut Dictionary) {
-    obj.update(&Key::from("key"), &Value::from(rand_raw_value()))
-        .unwrap();
 }
 
 const OBJECT_NULLIFIER_VERSION: &str = "txlib-nullifier-v1";
 
-pub fn object_key_hash(obj: &Dictionary) -> Result<Hash> {
+pub fn object_key_hash(obj: &Dictionary) -> anyhow::Result<Hash> {
     let key = obj
         .get(&Key::from("key"))?
-        .ok_or_else(|| anyhow!("object missing required key field"))?;
+        .ok_or_else(|| anyhow::anyhow!("object missing required key field"))?;
     Ok(hash_values(&[Value::from(obj.commitment()), key]))
 }
 
@@ -157,262 +192,24 @@ pub fn object_nullifier_from_key_hash(obj_key_hash: Hash) -> Hash {
     ])
 }
 
-pub fn object_nullifier_hash(obj: &Dictionary) -> Result<Hash> {
+pub fn object_nullifier_hash(obj: &Dictionary) -> anyhow::Result<Hash> {
     object_key_hash(obj).map(object_nullifier_from_key_hash)
 }
 
-pub struct TxBuilder {
-    st_tx: Statement,
-    pub tx: Tx,
+/// Infallible variant used internally after keys have been validated.
+/// H(H(obj, obj.key), "txlib-nullifier-v1")
+pub fn compute_nullifier(obj: &Dictionary) -> Hash {
+    object_nullifier_hash(obj).expect("object missing required key field")
 }
 
-impl TxBuilder {
-    pub fn new(
-        ctx: &mut BuildContext,
-        inputs: &[(Dictionary, Tx)],
-        grounding_witness: Arc<GroundingWitness>,
-    ) -> Self {
-        let (st_inputs_grounded, inputs_set) =
-            Self::st_inputs_grounded(ctx, inputs, &grounding_witness);
+pub fn rand_raw_value() -> RawValue {
+    let mut rng = StdRng::from_os_rng();
+    RawValue(array::from_fn(|_| F::from_noncanonical_u64(rng.next_u64())))
+}
 
-        let tx = Tx {
-            live: inputs_set.clone(),
-            nullifiers: set!(),
-            state_root: Arc::new(grounding_witness.state_root.clone()),
-        };
-
-        let state_root_hash = grounding_witness.state_root.hash();
-        let [s0, s1, s2, tx_after] = dict_define!({"live" => &inputs_set, "state_root_hash" => &state_root_hash, "nullifiers" => set!()});
-
-        let st_tx_init = st_custom!(
-            ctx,
-            TxInit() = (
-                Equal(dict!(), dict!()),
-                DictInsert(s1, s0, "live", inputs_set),
-                DictInsert(s2, s1, "state_root_hash", state_root_hash),
-                DictInsert(tx_after, s2, "nullifiers", set!()),
-                st_inputs_grounded
-            )
-        )
+pub fn rekey(obj: &mut Dictionary) {
+    obj.update(&Key::from("key"), &Value::from(rand_raw_value()))
         .unwrap();
-        let st_tx = st_custom!(
-            ctx,
-            Tx() = (
-                st_tx_init,
-                Statement::None,
-                Statement::None,
-                Statement::None
-            )
-        )
-        .unwrap();
-        Self { st_tx, tx }
-    }
-
-    pub fn new_from_tx(ctx: &BuildContext, tx: Tx) -> Self {
-        let tx_pred = ctx
-            .modules
-            .iter()
-            .find_map(|module| module.predicate_ref_by_name("Tx"))
-            .unwrap();
-        let st_tx = Statement::Custom(tx_pred, vec![Value::from(tx.dict())]);
-        Self { st_tx, tx }
-    }
-
-    pub fn st_tx(&self) -> &Statement {
-        &self.st_tx
-    }
-
-    fn st_inputs_grounded(
-        ctx: &mut BuildContext,
-        inputs: &[(Dictionary, Tx)],
-        grounding_witness: &GroundingWitness,
-    ) -> (Statement, Set) {
-        let state_root = &grounding_witness.state_root;
-        let state_root_hash = state_root.hash();
-        let transactions = state_root.transactions_root;
-        let nullifiers = state_root.nullifiers_root;
-        let gsrs = state_root.gsrs_root;
-        let block_number = state_root.block_number;
-        let txn_nullifiers_hash =
-            hash_values(&[Value::from(transactions), Value::from(nullifiers)]);
-        let block_number_gsrs_hash = hash_values(&[Value::from(block_number), Value::from(gsrs)]);
-        let mut st = st_custom!(
-            ctx,
-            InputsGrounded(state_root_hash = state_root_hash) =
-                (Equal(set!(), set!()), Statement::None)
-        )
-        .unwrap();
-        let mut prev_inputs_set = set!();
-        for (obj, source_tx) in inputs {
-            let mut inputs_set = prev_inputs_set.clone();
-            inputs_set.insert(&Value::from(obj.clone())).unwrap();
-            let st_state_root = st_custom!(
-                ctx,
-                StateRoot() = (
-                    HashOf(txn_nullifiers_hash, transactions, nullifiers),
-                    HashOf(block_number_gsrs_hash, block_number, gsrs),
-                    HashOf(state_root_hash, txn_nullifiers_hash, block_number_gsrs_hash)
-                )
-            )
-            .unwrap();
-            let source_tx_hash = source_tx.dict().commitment();
-            let source_tx_proof = grounding_witness
-                .source_tx_proofs
-                .get(&source_tx_hash)
-                .cloned()
-                .expect("missing source tx proof in grounding witness");
-            let st_tx_membership = ctx
-                .builder
-                .priv_op(Operation(
-                    OperationType::Native(NativeOperation::SetContainsFromEntries),
-                    vec![transactions.into(), source_tx.dict().into()],
-                    OperationAux::MerkleProof(source_tx_proof),
-                ))
-                .unwrap();
-            let st_tx_in_state_root =
-                st_custom!(ctx, TxInStateRoot() = (st_state_root, st_tx_membership)).unwrap();
-            let st_rec = st_custom!(
-                ctx,
-                InputsGroundedRecursive() = (
-                    st_tx_in_state_root,
-                    SetContains((&source_tx.dict(), "live"), obj),
-                    SetInsert(inputs_set, prev_inputs_set, obj),
-                    st
-                )
-            )
-            .unwrap();
-            prev_inputs_set = inputs_set;
-
-            st = st_custom!(ctx, InputsGrounded() = (Statement::None, st_rec)).unwrap();
-        }
-        (st, prev_inputs_set)
-    }
-
-    pub fn insert(&mut self, ctx: &mut BuildContext, new: Dictionary) -> Statement {
-        let new = Value::from(new);
-        let tx_before = self.tx.dict();
-        self.tx.live.insert(&new).unwrap();
-        let st_tx_inserted = st_custom!(
-            ctx,
-            TxInserted() = (
-                self.st_tx.clone(),
-                SetInsert(self.tx.live, (&tx_before, "live"), new),
-                DictUpdate(self.tx.dict(), tx_before, "live", self.tx.live)
-            )
-        )
-        .unwrap();
-        self.st_tx = st_custom!(
-            ctx,
-            Tx() = (
-                Statement::None,
-                Statement::None,
-                Statement::None,
-                st_tx_inserted.clone()
-            )
-        )
-        .unwrap();
-        st_tx_inserted
-    }
-
-    fn st_tx_obj_nullified(&mut self, ctx: &mut BuildContext, obj: &Dictionary) -> Statement {
-        let obj_key_hash = object_key_hash(obj).expect("tx object must include required key field");
-        let obj_nullifier = object_nullifier_from_key_hash(obj_key_hash);
-        let tx_before = self.tx.dict();
-        self.tx
-            .nullifiers
-            .insert(&Value::from(obj_nullifier))
-            .unwrap();
-        st_custom!(
-            ctx,
-            TxObjectStateNullified(tx_before = tx_before) = (
-                HashOf(obj_key_hash, obj, (obj, "key")),
-                HashOf(obj_nullifier, obj_key_hash, OBJECT_NULLIFIER_VERSION),
-                SetInsert(
-                    self.tx.nullifiers,
-                    (&tx_before, "nullifiers"),
-                    obj_nullifier
-                ),
-                DictUpdate(self.tx.dict(), tx_before, "nullifiers", self.tx.nullifiers)
-            )
-        )
-        .unwrap()
-    }
-
-    pub fn delete(&mut self, ctx: &mut BuildContext, obj: Dictionary) -> Statement {
-        let st_tx_obj_nullified = self.st_tx_obj_nullified(ctx, &obj);
-        let tx_after_nullified = self.tx.dict();
-        self.tx.live.delete(&Value::from(obj.commitment())).unwrap();
-        let st_tx_deleted = st_custom!(
-            ctx,
-            TxDeleted() = (
-                self.st_tx.clone(),
-                st_tx_obj_nullified,
-                SetDelete(self.tx.live, (&tx_after_nullified, "live"), obj),
-                DictUpdate(self.tx.dict(), tx_after_nullified, "live", self.tx.live)
-            )
-        )
-        .unwrap();
-        self.st_tx = st_custom!(
-            ctx,
-            Tx() = (
-                Statement::None,
-                st_tx_deleted.clone(),
-                Statement::None,
-                Statement::None
-            )
-        )
-        .unwrap();
-        st_tx_deleted
-    }
-
-    pub fn mutate(
-        &mut self,
-        ctx: &mut BuildContext,
-        new: Dictionary,
-        old: Dictionary,
-    ) -> Statement {
-        let st_tx_obj_nullified = self.st_tx_obj_nullified(ctx, &old);
-        let tx_after_nullified = self.tx.dict();
-        self.tx.live.delete(&Value::from(old.commitment())).unwrap();
-        let live_mid = self.tx.live.clone();
-        self.tx.live.insert(&Value::from(new.clone())).unwrap();
-        let st_tx_mutated = st_custom!(
-            ctx,
-            TxMutated() = (
-                self.st_tx.clone(),
-                st_tx_obj_nullified,
-                SetDelete(live_mid, (&tx_after_nullified, "live"), old),
-                SetInsert(self.tx.live, live_mid, new),
-                DictUpdate(self.tx.dict(), tx_after_nullified, "live", self.tx.live)
-            )
-        )
-        .unwrap();
-        self.st_tx = st_custom!(
-            ctx,
-            Tx() = (
-                Statement::None,
-                Statement::None,
-                st_tx_mutated.clone(),
-                Statement::None
-            )
-        )
-        .unwrap();
-        st_tx_mutated
-    }
-
-    pub fn finalize(self, ctx: &mut BuildContext) -> (Statement, Tx) {
-        let tx_final = self.tx.dict();
-        let st = st_custom!(
-            ctx,
-            TxFinalized() = (
-                self.st_tx.clone(),
-                DictContains(tx_final, "nullifiers", self.tx.nullifiers),
-                DictContains(tx_final, "state_root_hash", self.tx.state_root.hash())
-            )
-        )
-        .unwrap();
-        (st, self.tx)
-    }
 }
 
 pub fn new_obj() -> Dictionary {
@@ -422,108 +219,956 @@ pub fn new_obj() -> Dictionary {
     Dictionary::new(map)
 }
 
+// ============================================================================
+// Event tree (for replay construction in finalize)
+// ============================================================================
+
+pub(crate) enum ChainEvent {
+    Insert {
+        new: Dictionary,
+        chain_after: Hash,
+        /// The TxInserted statement emitted at record time. Replay
+        /// references this directly instead of re-proving the chain
+        /// step's hash equations.
+        tx_stmt: Statement,
+        guard_evidence: Option<Statement>,
+    },
+    Mutate {
+        new: Dictionary,
+        old: Dictionary,
+        chain_after: Hash,
+        /// The TxMutated statement emitted at record time.
+        tx_stmt: Statement,
+        guard_evidence: Option<Statement>,
+    },
+    Delete {
+        old: Dictionary,
+        chain_after: Hash,
+        /// The TxDeleted statement emitted at record time.
+        tx_stmt: Statement,
+        guard_evidence: Option<Statement>,
+    },
+    Action {
+        chain_after: Hash,
+        contents: Vec<ChainEvent>,
+    },
+}
+
+struct ActionScope {
+    events: Vec<ChainEvent>,
+    scope_id: u64,
+}
+
+/// Opaque, Copy handle to a direct event emitted inside an `ActionCtx`.
+/// Pass to `ActionCtx::set_guard` to attach guard evidence. A handle is
+/// only valid in the `ActionCtx` that emitted it; using it elsewhere
+/// panics with a scope-mismatch message.
+#[derive(Copy, Clone, Debug)]
+pub struct EventHandle {
+    scope_id: u64,
+    index: usize,
+}
+
+// ============================================================================
+// Replay context helpers
+// ============================================================================
+
+/// Build a replay context dict with all 4 keys (chain is separate).
+pub(crate) fn build_ctx(live: &Set, nullifiers: &Set, tx_start: Hash, tx_end: Hash) -> Dictionary {
+    dict!({
+        "live" => live.clone(),
+        "nullifiers" => nullifiers.clone(),
+        "tx_start" => tx_start,
+        "tx_end" => tx_end
+    })
+}
+
+/// Return a clone of `ctx` with one field replaced.
+pub(crate) fn ctx_with(ctx: &Dictionary, key: &str, value: Value) -> Dictionary {
+    let mut result = ctx.clone();
+    result.update(&Key::from(key), &value).unwrap();
+    result
+}
+
+// ============================================================================
+// TxBuilder
+// ============================================================================
+
+/// Predicate call counts from building a transaction.
+pub type TxStats = std::collections::BTreeMap<String, usize>;
+
+pub(crate) fn record(stats: &mut TxStats, name: &str) {
+    *stats.entry(name.to_string()).or_default() += 1;
+}
+
+pub fn print_stats(stats: &TxStats) {
+    let total: usize = stats.values().sum();
+    println!("Predicate calls ({total} total):");
+    for (name, count) in stats {
+        println!("  {count:3}x {name}");
+    }
+}
+
+pub struct TxBuilder {
+    pub chain: Hash,
+    pub chain_start: Hash,
+    live: Set,
+    nullifiers: Set,
+    state_root: Arc<StateRoot>,
+    st_inputs_grounded: Statement,
+    inputs_set: Set,
+    events: Vec<ChainEvent>,
+    action_stack: Vec<ActionScope>,
+    next_scope_id: u64,
+    stats: TxStats,
+}
+
+// ============================================================================
+// Display
+// ============================================================================
+
+/// Fields to skip in compact display (noise for debugging).
+const DISPLAY_SKIP_FIELDS: &[&str] = &["type", "key"];
+
+/// Format a Dictionary as a compact summary: commitment + interesting fields.
+fn obj_summary(obj: &Dictionary) -> String {
+    let prefix = format!("{}", obj.commitment());
+    let mut fields = Vec::new();
+    for entry in obj.iter() {
+        let Ok((k, v)) = entry else { continue };
+        if DISPLAY_SKIP_FIELDS.contains(&k.as_str()) {
+            continue;
+        }
+        fields.push(format!("{k}: {v}"));
+    }
+    if fields.is_empty() {
+        prefix
+    } else {
+        fields.sort();
+        format!("{prefix} {{{}}}", fields.join(", "))
+    }
+}
+
+/// Show which fields changed between old and new.
+fn mutation_diff(old: &Dictionary, new: &Dictionary) -> String {
+    let prefix = format!("{}", new.commitment());
+    let mut diffs = Vec::new();
+    for entry in new.iter() {
+        let Ok((k, new_val)) = entry else { continue };
+        if k == "type" {
+            continue;
+        }
+        let old_val = old.get(&Key::from(&k)).ok().flatten();
+        match old_val {
+            Some(ov) if ov.raw() != new_val.raw() => {
+                diffs.push(format!("{k}: {ov} -> {new_val}"));
+            }
+            None => {
+                diffs.push(format!("+{k}: {new_val}"));
+            }
+            _ => {}
+        }
+    }
+    if diffs.is_empty() {
+        format!("{prefix} (no visible changes)")
+    } else {
+        diffs.sort();
+        format!("{prefix} {{{}}}", diffs.join(", "))
+    }
+}
+
+fn fmt_events(
+    f: &mut std::fmt::Formatter<'_>,
+    events: &[ChainEvent],
+    indent: usize,
+) -> std::fmt::Result {
+    let pad = "  ".repeat(indent);
+    for event in events {
+        match event {
+            ChainEvent::Insert { new, .. } => {
+                writeln!(f, "{pad}insert {}", obj_summary(new))?;
+            }
+            ChainEvent::Mutate { old, new, .. } => {
+                writeln!(f, "{pad}mutate {}", mutation_diff(old, new))?;
+            }
+            ChainEvent::Delete { old, .. } => {
+                writeln!(f, "{pad}delete {}", obj_summary(old))?;
+            }
+            ChainEvent::Action { contents, .. } => {
+                writeln!(f, "{pad}action")?;
+                fmt_events(f, contents, indent + 1)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+impl std::fmt::Display for TxBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Tx {} -> {}", self.chain_start, self.chain)?;
+        fmt_events(f, &self.events, 1)?;
+
+        // Live set
+        let live_items: Vec<_> = self.live.iter().filter_map(|r| r.ok()).collect();
+        if live_items.is_empty() {
+            writeln!(f, "  live: (empty)")?;
+        } else {
+            writeln!(f, "  live: {} object(s)", live_items.len())?;
+        }
+
+        // Nullifiers
+        let null_count = self.nullifiers.iter().filter(|r| r.is_ok()).count();
+        if null_count > 0 {
+            writeln!(f, "  nullifiers: {null_count}")?;
+        }
+
+        // Open scopes
+        if !self.action_stack.is_empty() {
+            writeln!(f, "  ({} open action scope(s))", self.action_stack.len())?;
+        }
+
+        Ok(())
+    }
+}
+
+impl TxBuilder {
+    /// Create a new transaction builder from grounded inputs.
+    /// Seeds `chain_start = H(inputs, 0)`.
+    pub fn new(
+        ctx: &mut BuildContext,
+        inputs: &[(Dictionary, Tx)],
+        grounding: Arc<GroundingWitness>,
+    ) -> Self {
+        let (st_inputs_grounded, inputs_set, stats) =
+            Self::build_inputs_grounded(ctx, inputs, &grounding);
+        let chain_start = hash_values(&[
+            Value::from(inputs_set.commitment()),
+            Value::from(EMPTY_VALUE),
+        ]);
+        let state_root = Arc::new(grounding.state_root.clone());
+        Self {
+            chain: chain_start,
+            chain_start,
+            live: inputs_set.clone(),
+            nullifiers: set!(),
+            state_root,
+            st_inputs_grounded,
+            inputs_set,
+            events: vec![],
+            action_stack: vec![],
+            next_scope_id: 0,
+            stats,
+        }
+    }
+
+    pub fn chain_position(&self) -> Hash {
+        self.chain
+    }
+
+    /// Open a top-level action scope, run the body, and close it. All
+    /// direct events emitted inside must have guard evidence attached
+    /// via `ActionCtx::set_guard` before the closure returns (checked
+    /// at scope close). The body's return value -- typically the
+    /// action's predicate statement -- is forwarded to the caller.
+    pub fn action<F>(&mut self, ctx: &mut BuildContext, body: F) -> Statement
+    where
+        F: FnOnce(&mut ActionCtx<'_>, &mut BuildContext) -> Statement,
+    {
+        self.run_action_scope(ctx, body)
+    }
+
+    /// Shared implementation of `action` (top-level) and `ActionCtx::sub`
+    /// (nested). Both behave identically: open a scope, run the body with
+    /// an ActionCtx, verify guards, close the scope.
+    fn run_action_scope<F>(&mut self, ctx: &mut BuildContext, body: F) -> Statement
+    where
+        F: FnOnce(&mut ActionCtx<'_>, &mut BuildContext) -> Statement,
+    {
+        let scope_id = self.begin_action();
+        let result = {
+            let mut a = ActionCtx {
+                tx: &mut *self,
+                scope_id,
+            };
+            body(&mut a, ctx)
+        };
+        self.verify_scope_guards(scope_id);
+        self.end_action();
+        result
+    }
+
+    /// Check that every direct event in the current top-of-stack scope
+    /// has guard evidence attached. Panics with a descriptive message
+    /// on the first unattached event found.
+    fn verify_scope_guards(&self, scope_id: u64) {
+        let scope = self.action_stack.last().expect("action scope missing");
+        assert_eq!(scope.scope_id, scope_id);
+        for (i, event) in scope.events.iter().enumerate() {
+            match event {
+                ChainEvent::Insert { guard_evidence, .. }
+                | ChainEvent::Mutate { guard_evidence, .. }
+                | ChainEvent::Delete { guard_evidence, .. } => {
+                    assert!(
+                        guard_evidence.is_some(),
+                        "action scope {scope_id}: direct event {i} has no guard evidence"
+                    );
+                }
+                ChainEvent::Action { .. } => {}
+            }
+        }
+    }
+
+    /// Start a new action scope. Returns the fresh scope id so an
+    /// `ActionCtx` can stamp its event handles with it.
+    pub(crate) fn begin_action(&mut self) -> u64 {
+        let scope_id = self.next_scope_id;
+        self.next_scope_id += 1;
+        self.action_stack.push(ActionScope {
+            events: vec![],
+            scope_id,
+        });
+        scope_id
+    }
+
+    /// Close the current action scope. Does not advance the chain --
+    /// the action's range is defined by the chain positions of its
+    /// first and last events.
+    pub(crate) fn end_action(&mut self) {
+        let scope = self.action_stack.pop().expect("no action scope to close");
+        self.push_event(ChainEvent::Action {
+            chain_after: self.chain,
+            contents: scope.events,
+        });
+    }
+
+    /// Record an insertion. Emits TxInserted, updates live set.
+    /// Must be called inside an open action scope.
+    pub(crate) fn insert(&mut self, ctx: &mut BuildContext, new: &Dictionary) -> Statement {
+        assert!(
+            !self.action_stack.is_empty(),
+            "insert must be called inside an action scope",
+        );
+        let prev = self.chain;
+        let event_hash = hash_values(&[Value::from(EMPTY_VALUE), Value::from(new.clone())]);
+        self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
+        self.live.insert(&Value::from(new.clone())).unwrap();
+
+        let st_h1 = ctx
+            .builder
+            .priv_op(op!(HashOf(event_hash, EMPTY_VALUE, new)))
+            .unwrap();
+        let st_h2 = ctx
+            .builder
+            .priv_op(op!(HashOf(self.chain, prev, event_hash)))
+            .unwrap();
+        let st = ctx
+            .apply_custom_pred(
+                false,
+                "TxInserted",
+                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone()}),
+                vec![st_h1, st_h2],
+            )
+            .unwrap();
+        record(&mut self.stats, "TxInserted");
+
+        self.push_event(ChainEvent::Insert {
+            new: new.clone(),
+            chain_after: self.chain,
+            tx_stmt: st.clone(),
+            guard_evidence: None,
+        });
+        st
+    }
+
+    /// Record a mutation. Emits TxMutated, updates live set and nullifiers.
+    /// Must be called inside an open action scope.
+    pub(crate) fn mutate(
+        &mut self,
+        ctx: &mut BuildContext,
+        new: &Dictionary,
+        old: &Dictionary,
+    ) -> Statement {
+        assert!(
+            !self.action_stack.is_empty(),
+            "mutate must be called inside an action scope",
+        );
+        let prev = self.chain;
+        let event_hash = hash_values(&[Value::from(old.clone()), Value::from(new.clone())]);
+        self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
+        self.live.delete(&Value::from(old.commitment())).unwrap();
+        self.live.insert(&Value::from(new.clone())).unwrap();
+        self.nullifiers
+            .insert(&Value::from(compute_nullifier(old)))
+            .unwrap();
+
+        let st_h1 = ctx
+            .builder
+            .priv_op(op!(HashOf(event_hash, old, new)))
+            .unwrap();
+        let st_h2 = ctx
+            .builder
+            .priv_op(op!(HashOf(self.chain, prev, event_hash)))
+            .unwrap();
+        let st = ctx
+            .apply_custom_pred(
+                false,
+                "TxMutated",
+                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "old" => old.clone()}),
+                vec![st_h1, st_h2],
+            )
+            .unwrap();
+        record(&mut self.stats, "TxMutated");
+
+        self.push_event(ChainEvent::Mutate {
+            new: new.clone(),
+            old: old.clone(),
+            chain_after: self.chain,
+            tx_stmt: st.clone(),
+            guard_evidence: None,
+        });
+        st
+    }
+
+    /// Record a deletion. Emits TxDeleted, updates live set and nullifiers.
+    /// Must be called inside an open action scope.
+    pub(crate) fn delete(&mut self, ctx: &mut BuildContext, old: &Dictionary) -> Statement {
+        assert!(
+            !self.action_stack.is_empty(),
+            "delete must be called inside an action scope",
+        );
+        let prev = self.chain;
+        let event_hash = hash_values(&[Value::from(old.clone()), Value::from(EMPTY_VALUE)]);
+        self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
+        self.live.delete(&Value::from(old.commitment())).unwrap();
+        self.nullifiers
+            .insert(&Value::from(compute_nullifier(old)))
+            .unwrap();
+
+        let st_h1 = ctx
+            .builder
+            .priv_op(op!(HashOf(event_hash, old, EMPTY_VALUE)))
+            .unwrap();
+        let st_h2 = ctx
+            .builder
+            .priv_op(op!(HashOf(self.chain, prev, event_hash)))
+            .unwrap();
+        let st = ctx
+            .apply_custom_pred(
+                false,
+                "TxDeleted",
+                map!({"chain" => self.chain, "prev_chain" => prev, "old" => old.clone()}),
+                vec![st_h1, st_h2],
+            )
+            .unwrap();
+        record(&mut self.stats, "TxDeleted");
+
+        self.push_event(ChainEvent::Delete {
+            old: old.clone(),
+            chain_after: self.chain,
+            tx_stmt: st.clone(),
+            guard_evidence: None,
+        });
+        st
+    }
+
+    /// Build the replay chain and emit TxFinalized.
+    pub fn finalize(self, ctx: &mut BuildContext) -> (Statement, Tx, TxStats) {
+        assert!(self.action_stack.is_empty(), "unclosed action scopes");
+
+        let mut stats = self.stats;
+        let zero: Hash = EMPTY_VALUE.into();
+
+        let before_ctx = build_ctx(&self.inputs_set, &set!(), zero, zero);
+        let after_ctx = build_ctx(&self.live, &self.nullifiers, zero, zero);
+
+        // Replay the top-level action sequence. Every top-level event
+        // is guaranteed to be a ChainEvent::Action (enforced by the
+        // ActionCtx closure API), so we dispatch directly to
+        // ReplayActions instead of going through ReplayContents.
+        let (st_replay, _, _, _) = replay::build_replay_actions(
+            ctx,
+            &mut stats,
+            &self.events,
+            self.chain_start,
+            &self.inputs_set,
+            &set!(),
+            zero,
+            zero,
+        );
+
+        // TxFinalized -- rebind inputs_grounded and chain_start hash
+        // to reference before_ctx.live instead of a literal inputs set.
+        let st_inputs_rebound = ctx
+            .builder
+            .priv_op(Operation::replace_value_with_entry(
+                vec![Some((&before_ctx, "live")), None],
+                self.st_inputs_grounded.clone(),
+            ))
+            .unwrap();
+        let st_hash = ctx
+            .builder
+            .priv_op(op!(HashOf(self.chain_start, self.inputs_set, EMPTY_VALUE)))
+            .unwrap();
+        let st_hash_rebound = ctx
+            .builder
+            .priv_op(Operation::replace_value_with_entry(
+                vec![None, Some((&before_ctx, "live")), None],
+                st_hash,
+            ))
+            .unwrap();
+        let st_dc_null_before = ctx
+            .builder
+            .priv_op(op!(DictContains(before_ctx, "nullifiers", set!())))
+            .unwrap();
+        let st_dc_null_after = ctx
+            .builder
+            .priv_op(op!(DictContains(after_ctx, "nullifiers", self.nullifiers)))
+            .unwrap();
+        let st = ctx
+            .apply_custom_pred_simple(
+                false,
+                "TxFinalized",
+                vec![
+                    st_inputs_rebound,
+                    st_hash_rebound,
+                    st_dc_null_before,
+                    st_dc_null_after,
+                    st_replay,
+                ],
+            )
+            .unwrap();
+        record(&mut stats, "TxFinalized");
+
+        let tx = Tx {
+            live: self.live,
+            nullifiers: self.nullifiers,
+            ctx: after_ctx,
+            state_root: self.state_root,
+        };
+        (st, tx, stats)
+    }
+
+    // ========================================================================
+    // Private
+    // ========================================================================
+
+    fn push_event(&mut self, event: ChainEvent) {
+        if let Some(scope) = self.action_stack.last_mut() {
+            scope.events.push(event);
+        } else {
+            self.events.push(event);
+        }
+    }
+
+    fn build_inputs_grounded(
+        ctx: &mut BuildContext,
+        inputs: &[(Dictionary, Tx)],
+        grounding: &GroundingWitness,
+    ) -> (Statement, Set, TxStats) {
+        let mut stats = TxStats::new();
+        let state_root = &grounding.state_root;
+        let state_root_hash = state_root.hash();
+        let block_number = state_root.block_number;
+        let transactions_root = state_root.transactions_root;
+        let nullifiers_root = state_root.nullifiers_root;
+        let gsrs_root = state_root.gsrs_root;
+
+        if inputs.is_empty() {
+            // Base case: empty inputs. state_root_hash is unconstrained here.
+            let st = st_custom!(ctx,
+                InputsGrounded(state_root_hash=state_root_hash) = (
+                    Equal(set!(), set!()),
+                    Statement::None,
+                    Statement::None
+                ))
+            .unwrap();
+            record(&mut stats, "InputsGrounded");
+            return (st, set!(), stats);
+        }
+
+        // Intermediate hashes for the 3-layer state-root commitment.
+        let txn_null_hash = hash_values(&[
+            Value::from(transactions_root),
+            Value::from(nullifiers_root),
+        ]);
+        let bn_gsrs_hash =
+            hash_values(&[Value::from(block_number), Value::from(gsrs_root)]);
+
+        // Build the three HashOf statements that unpack the state-root
+        // hash once; reused as sub-clauses by each TxInStateRoot below.
+        let st_h_txn_null = ctx
+            .builder
+            .priv_op(op!(HashOf(
+                txn_null_hash,
+                transactions_root,
+                nullifiers_root
+            )))
+            .unwrap();
+        let st_h_bn_gsrs = ctx
+            .builder
+            .priv_op(op!(HashOf(bn_gsrs_hash, block_number, gsrs_root)))
+            .unwrap();
+        let st_h_state_root = ctx
+            .builder
+            .priv_op(op!(HashOf(state_root_hash, txn_null_hash, bn_gsrs_hash)))
+            .unwrap();
+
+        if inputs.len() == 1 {
+            // Single-input fast path: InputsGroundedSingle avoids recursion.
+            let (obj, source_tx) = &inputs[0];
+            let source_ctx = source_tx.ctx.clone();
+            let mut inputs_set = set!();
+            inputs_set.insert(&Value::from(obj.clone())).unwrap();
+            let st_tx_membership =
+                prove_source_tx_membership(ctx, grounding, transactions_root, &source_ctx);
+            let st_tx_in_sr = st_custom!(ctx,
+                TxInStateRoot() = (
+                    st_h_txn_null.clone(),
+                    st_h_bn_gsrs.clone(),
+                    st_h_state_root.clone(),
+                    st_tx_membership
+                ))
+            .unwrap();
+            record(&mut stats, "TxInStateRoot");
+            let st_single = st_custom!(ctx,
+                InputsGroundedSingle() = (
+                    st_tx_in_sr,
+                    SetContains((&source_ctx, "live"), obj),
+                    SetInsert(inputs_set, set!(), obj)
+                ))
+            .unwrap();
+            record(&mut stats, "InputsGroundedSingle");
+            let st = st_custom!(ctx,
+                InputsGrounded(state_root_hash=state_root_hash) = (
+                    Statement::None,
+                    st_single,
+                    Statement::None
+                ))
+            .unwrap();
+            record(&mut stats, "InputsGrounded");
+            return (st, inputs_set, stats);
+        }
+
+        let mut st = st_custom!(ctx,
+            InputsGrounded(state_root_hash=state_root_hash) = (
+                Equal(set!(), set!()),
+                Statement::None,
+                Statement::None
+            ))
+        .unwrap();
+        record(&mut stats, "InputsGrounded");
+        let mut prev_set = set!();
+        for (obj, source_tx) in inputs {
+            let source_ctx = source_tx.ctx.clone();
+            let mut next_set = prev_set.clone();
+            next_set.insert(&Value::from(obj.clone())).unwrap();
+            let st_tx_membership =
+                prove_source_tx_membership(ctx, grounding, transactions_root, &source_ctx);
+            let st_tx_in_sr = st_custom!(ctx,
+                TxInStateRoot() = (
+                    st_h_txn_null.clone(),
+                    st_h_bn_gsrs.clone(),
+                    st_h_state_root.clone(),
+                    st_tx_membership
+                ))
+            .unwrap();
+            record(&mut stats, "TxInStateRoot");
+            let st_rec = st_custom!(ctx,
+                InputsGroundedRecursive() = (
+                    st_tx_in_sr,
+                    SetContains((&source_ctx, "live"), obj),
+                    SetInsert(next_set, prev_set, obj),
+                    st
+                ))
+            .unwrap();
+            record(&mut stats, "InputsGroundedRecursive");
+            prev_set = next_set;
+            st = st_custom!(ctx,
+                InputsGrounded() = (
+                    Statement::None,
+                    Statement::None,
+                    st_rec
+                ))
+            .unwrap();
+            record(&mut stats, "InputsGrounded");
+        }
+        (st, prev_set, stats)
+    }
+}
+
+/// Prove `SetContains(transactions_root, source_ctx)` using a Merkle proof
+/// supplied by the grounding witness.
+fn prove_source_tx_membership(
+    ctx: &mut BuildContext,
+    grounding: &GroundingWitness,
+    transactions_root: Hash,
+    source_ctx: &Dictionary,
+) -> Statement {
+    let proof = grounding
+        .source_tx_proofs
+        .get(&source_ctx.commitment())
+        .cloned()
+        .expect("missing source tx proof in grounding witness");
+    ctx.builder
+        .priv_op(Operation(
+            OperationType::Native(NativeOperation::SetContainsFromEntries),
+            vec![transactions_root.into(), source_ctx.clone().into()],
+            OperationAux::MerkleProof(proof),
+        ))
+        .unwrap()
+}
+
+// ============================================================================
+// ActionCtx
+// ============================================================================
+
+/// Event-emitting handle bound to one open action scope. Obtained inside
+/// the closure passed to `TxBuilder::action` or `ActionCtx::sub`. Emits
+/// insert/mutate/delete events, lets the caller attach guard evidence
+/// per event via `set_guard`, and opens nested sub-actions via `sub`.
+///
+/// An `ActionCtx` cannot be constructed directly; its scope id is
+/// stamped onto every `EventHandle` it hands out, so handles from other
+/// scopes are rejected at `set_guard` time.
+pub struct ActionCtx<'a> {
+    tx: &'a mut TxBuilder,
+    scope_id: u64,
+}
+
+impl<'a> ActionCtx<'a> {
+    /// Emit an insert event. Returns the TxInserted statement (for
+    /// composition into this action's predicate) and a handle used to
+    /// attach guard evidence via `set_guard`.
+    pub fn insert(
+        &mut self,
+        ctx: &mut BuildContext,
+        new: &Dictionary,
+    ) -> (Statement, EventHandle) {
+        let stmt = self.tx.insert(ctx, new);
+        let handle = self.handle_for_last_event();
+        (stmt, handle)
+    }
+
+    /// Emit a mutate event. Returns the TxMutated statement and a
+    /// handle for guard attachment.
+    pub fn mutate(
+        &mut self,
+        ctx: &mut BuildContext,
+        new: &Dictionary,
+        old: &Dictionary,
+    ) -> (Statement, EventHandle) {
+        let stmt = self.tx.mutate(ctx, new, old);
+        let handle = self.handle_for_last_event();
+        (stmt, handle)
+    }
+
+    /// Emit a delete event. Returns the TxDeleted statement and a
+    /// handle for guard attachment.
+    pub fn delete(
+        &mut self,
+        ctx: &mut BuildContext,
+        old: &Dictionary,
+    ) -> (Statement, EventHandle) {
+        let stmt = self.tx.delete(ctx, old);
+        let handle = self.handle_for_last_event();
+        (stmt, handle)
+    }
+
+    /// Attach guard evidence to a previously emitted event. The handle
+    /// must be one this `ActionCtx` produced; cross-scope handles panic.
+    pub fn set_guard(&mut self, handle: EventHandle, guard: Statement) {
+        assert_eq!(
+            handle.scope_id, self.scope_id,
+            "EventHandle from a different scope (handle={}, current={})",
+            handle.scope_id, self.scope_id
+        );
+        let scope = self.tx.action_stack.last_mut().expect("scope missing");
+        assert_eq!(scope.scope_id, self.scope_id);
+        let event = scope
+            .events
+            .get_mut(handle.index)
+            .expect("event index out of range");
+        match event {
+            ChainEvent::Insert { guard_evidence, .. }
+            | ChainEvent::Mutate { guard_evidence, .. }
+            | ChainEvent::Delete { guard_evidence, .. } => {
+                assert!(guard_evidence.is_none(), "guard evidence already set");
+                *guard_evidence = Some(guard);
+            }
+            ChainEvent::Action { .. } => panic!("cannot set guard evidence on an action"),
+        }
+    }
+
+    /// Open a nested sub-action. Returns the sub-action's body return
+    /// value -- typically its predicate statement, for composition into
+    /// this action's predicate. All direct events emitted inside the
+    /// sub-scope must have guard evidence attached before the closure
+    /// returns.
+    pub fn sub<F>(&mut self, ctx: &mut BuildContext, body: F) -> Statement
+    where
+        F: FnOnce(&mut ActionCtx<'_>, &mut BuildContext) -> Statement,
+    {
+        self.tx.run_action_scope(ctx, body)
+    }
+
+    fn handle_for_last_event(&self) -> EventHandle {
+        let scope = self.tx.action_stack.last().expect("scope missing");
+        assert_eq!(scope.scope_id, self.scope_id);
+        let index = scope.events.len() - 1;
+        EventHandle {
+            scope_id: self.scope_id,
+            index,
+        }
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use common::test_state::TestState;
     use hex::FromHex;
     use pod2::{
-        backends::plonky2::{
-            basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver,
-        },
+        backends::plonky2::mock::mainpod::MockProver,
         frontend::{MainPod, MultiPodBuilder},
-        middleware::{MainPodProver, Params, VDSet, containers::Array},
+        middleware::{Params, Predicate, VDSet, containers::Array},
     };
-    use pod2utils::macros::BuildContext;
+    use pod2utils::{macros::BuildContext, set};
 
     use super::*;
 
-    fn tx_hash(tx: &Tx) -> Hash {
-        tx.dict().commitment()
+    /// Running test state that mirrors what the synchronizer tracks. Keeps
+    /// full transactions/nullifier sets on the prover side so it can hand
+    /// out real Merkle proofs; exposes the canonical commitments-only
+    /// `StateRoot` to callers.
+    struct TestState {
+        block_number: i64,
+        transactions: Set,
+        nullifiers: Set,
+        gsrs: Array,
     }
 
-    fn tx_nullifiers(tx: &Tx) -> Vec<Hash> {
-        tx.nullifiers
-            .iter()
-            .map(|nullifier| {
+    impl TestState {
+        fn empty(block_number: i64) -> Self {
+            Self {
+                block_number,
+                transactions: set!(),
+                nullifiers: set!(),
+                gsrs: Array::new(Vec::new()),
+            }
+        }
+
+        fn state_root(&self) -> StateRoot {
+            StateRoot::new(
+                self.block_number,
+                self.transactions.commitment(),
+                self.nullifiers.commitment(),
+                self.gsrs.commitment(),
+            )
+        }
+
+        fn apply_tx(&mut self, tx: &Tx) {
+            self.transactions
+                .insert(&Value::from(tx.ctx.clone()))
+                .unwrap();
+            for nullifier in tx.nullifiers.iter() {
                 let nullifier = nullifier.expect("tx nullifier should decode");
-                Hash(nullifier.raw().0)
-            })
-            .collect()
+                self.nullifiers.insert(&nullifier).unwrap();
+            }
+        }
+
+        fn grounding_witness(&self, source_txs: &[Tx]) -> Arc<GroundingWitness> {
+            let source_tx_proofs = source_txs
+                .iter()
+                .map(|tx| {
+                    let commitment = tx.ctx.commitment();
+                    let proof = self
+                        .transactions
+                        .prove(&Value::from(commitment))
+                        .expect("source tx should be provable from test state");
+                    (commitment, proof)
+                })
+                .collect();
+            Arc::new(GroundingWitness::new(self.state_root(), source_tx_proofs))
+        }
     }
 
-    fn apply_tx(state: &mut TestState, tx: &Tx) {
-        state.apply_tx(tx_hash(tx), tx_nullifiers(tx));
+    fn solve_and_verify(builder: MultiPodBuilder) -> MainPod {
+        eprintln!("resource summary: {}", builder.resource_summary());
+        let solution = builder.solve().unwrap();
+        eprintln!("solution: {}", solution.solution_breakdown());
+        let pod = solution.prove(&MockProver {}).unwrap().output_pod().clone();
+        pod.pod.verify().unwrap();
+        pod
+    }
+
+    fn make_object(guard_hash: Value, fields: &[(&str, Value)]) -> Dictionary {
+        let mut d = dict!({
+            "type" => guard_hash,
+            "key" => rand_raw_value()
+        });
+        for (k, v) in fields {
+            d.insert(&Key::from(*k), v).unwrap();
+        }
+        d
     }
 
     fn test_hash(byte: u8) -> Hash {
         Hash::from_hex(hex::encode([byte; 32])).expect("valid test hash")
     }
 
-    fn grounding_witness(state: &TestState, inputs: &[Tx]) -> Arc<GroundingWitness> {
-        state.build_grounding_witness(
-            inputs,
-            tx_hash,
-            |block_number, transactions_root, nullifiers_root, gsrs_root, source_tx_proofs| {
-                Arc::new(GroundingWitness::new(
-                    StateRoot::new(block_number, transactions_root, nullifiers_root, gsrs_root),
-                    source_tx_proofs,
-                ))
-            },
-        )
-    }
-
     #[test]
     fn object_nullifier_hash_matches_key_hash_path() {
         let obj = new_obj();
-        let key_hash = object_key_hash(&obj).expect("new_obj should always set key");
-        let nullifier = object_nullifier_hash(&obj).expect("new_obj should always set key");
+        let key_hash = object_key_hash(&obj).unwrap();
+        let nullifier = object_nullifier_hash(&obj).unwrap();
         assert_eq!(nullifier, object_nullifier_from_key_hash(key_hash));
+        assert_eq!(nullifier, compute_nullifier(&obj));
     }
 
     #[test]
     fn object_nullifier_hash_errors_without_key() {
         let mut obj = new_obj();
-        obj.delete(&Key::from("key"))
-            .expect("deleting key from dictionary should succeed");
+        obj.delete(&Key::from("key")).unwrap();
         let err = object_nullifier_hash(&obj).expect_err("missing key must fail");
         assert!(format!("{err}").contains("missing required key field"));
     }
 
     #[test]
-    fn state_root_compact_hash_matches_legacy_commitments() {
+    fn state_root_hash_matches_legacy_commitments() {
         let txns = [test_hash(1), test_hash(2)]
             .into_iter()
             .collect::<HashSet<_>>();
         let nullifiers = [test_hash(3)].into_iter().collect::<HashSet<_>>();
         let prior_gsrs = vec![test_hash(4), test_hash(5)];
 
-        let legacy_txs = Set::new(txns.iter().map(|hash| Value::from(*hash)).collect());
-        let legacy_nullifiers =
-            Set::new(nullifiers.iter().map(|hash| Value::from(*hash)).collect());
-        let legacy_gsrs = Array::new(prior_gsrs.iter().map(|hash| Value::from(*hash)).collect());
+        let txs = Set::new(txns.iter().map(|hash| Value::from(*hash)).collect());
+        let nulls = Set::new(nullifiers.iter().map(|hash| Value::from(*hash)).collect());
+        let gsrs = Array::new(prior_gsrs.iter().map(|hash| Value::from(*hash)).collect());
         let compact = StateRoot::new(
             7,
-            legacy_txs.commitment(),
-            legacy_nullifiers.commitment(),
-            legacy_gsrs.commitment(),
+            txs.commitment(),
+            nulls.commitment(),
+            gsrs.commitment(),
         );
         let legacy_hash = hash_values(&[
             Value::from(hash_values(&[
-                Value::from(legacy_txs.commitment()),
-                Value::from(legacy_nullifiers.commitment()),
+                Value::from(txs.commitment()),
+                Value::from(nulls.commitment()),
             ])),
             Value::from(hash_values(&[
                 Value::from(7_i64),
-                Value::from(legacy_gsrs.commitment()),
+                Value::from(gsrs.commitment()),
             ])),
         ]);
         assert_eq!(compact.hash(), legacy_hash);
     }
 
     #[test]
-    fn state_root_serializes_and_deserializes_compact_shape() {
+    fn state_root_serializes_and_deserializes_camelcase() {
         let original = StateRoot::new(9, test_hash(1), test_hash(2), test_hash(3));
         let encoded = serde_json::to_value(&original).unwrap();
         assert_eq!(encoded["blockNumber"], serde_json::json!(9));
@@ -544,88 +1189,406 @@ mod tests {
         assert_eq!(decoded, original);
     }
 
-    fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
-        let solution = builder.solve().unwrap();
-        solution.prove(prover).unwrap().pods.pop().unwrap()
+    #[test]
+    fn test_tx_builder_empty() {
+        let modules = vec![Arc::new(crate::predicates::module())];
+        let state = TestState::empty(0);
+        let params = Params::default();
+        let vd_set = VDSet::new(&[]);
+        let builder = MultiPodBuilder::new(&params, &vd_set);
+        let mut ctx = BuildContext { builder, modules };
+
+        let tx = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
+        let (st, tx, stats) = tx.finalize(&mut ctx);
+        print_stats(&stats);
+        ctx.builder.reveal(&st).unwrap();
+
+        solve_and_verify(ctx.builder);
+        assert!(tx.live.iter().next().is_none());
+        assert!(tx.nullifiers.iter().next().is_none());
     }
 
+    /// Tx 1: Spawn a WoodPick (insert, no inputs).
+    /// Tx 2: MineStone using the WoodPick (mutate pick + insert stone).
     #[test]
-    fn test_tx_builder() {
-        let txlib_mod = crate::predicates::module();
-        let modules = vec![Arc::new(txlib_mod)];
-        let mut state = TestState::default();
+    fn test_mine_stone() {
+        let txlib = Arc::new(crate::predicates::module());
+        let craft = Arc::new(crate::predicates::crafting_test_module());
+        let modules = vec![txlib.clone(), craft.clone()];
 
-        let mock = true;
+        let is_wood_pick = Value::from(
+            Predicate::Custom(craft.predicate_ref_by_name("IsWoodPick").unwrap()).hash(),
+        );
+        let is_stone =
+            Value::from(Predicate::Custom(craft.predicate_ref_by_name("IsStone").unwrap()).hash());
 
-        let mock_prover = MockProver {};
-        let real_prover = Prover {};
-        let (vd_set, prover): (_, &dyn MainPodProver) = if mock {
-            (&VDSet::new(&[]), &mock_prover)
-        } else {
-            let vd_set = &*DEFAULT_VD_SET;
-            (vd_set, &real_prover)
-        };
+        let mut state = TestState::empty(0);
         let params = Params::default();
+        let vd_set = VDSet::new(&[]);
 
-        // Insert
-        let builder = MultiPodBuilder::new(&params, vd_set);
+        // ---- Tx 1: Spawn a WoodPick ----
+
+        let builder = MultiPodBuilder::new(&params, &vd_set);
         let mut ctx = BuildContext {
             builder,
             modules: modules.clone(),
         };
 
-        let mut tx_builder = TxBuilder::new(&mut ctx, &[], grounding_witness(&state, &[]));
-        let obj0 = new_obj();
-        tx_builder.insert(&mut ctx, obj0.clone());
-        let (st, tx0) = tx_builder.finalize(&mut ctx);
-        ctx.builder.reveal(&st).unwrap();
-
-        let tx_pod = prove(ctx.builder, prover);
-        tx_pod.pod.verify().unwrap();
-        apply_tx(&mut state, &tx0);
-
-        // Mutate
-        let builder = MultiPodBuilder::new(&params, vd_set);
-        let mut ctx = BuildContext {
-            builder,
-            modules: modules.clone(),
-        };
-
-        let inputs = vec![(obj0.clone(), tx0)];
-        let mut tx_builder = TxBuilder::new(
-            &mut ctx,
-            &inputs,
-            grounding_witness(&state, &[inputs[0].1.clone()]),
+        let pick = make_object(
+            is_wood_pick.clone(),
+            &[("durability", Value::from(100_i64))],
         );
-        let mut obj1 = obj0.clone();
-        obj1.insert(&Key::from("foo"), &Value::from("bar")).unwrap();
-        tx_builder.mutate(&mut ctx, obj1.clone(), obj0);
-        let (st, tx1) = tx_builder.finalize(&mut ctx);
+
+        let mut tx1 = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
+
+        tx1.action(&mut ctx, |a, ctx| {
+            let (st_insert, h) = a.insert(ctx, &pick);
+            let op_type = ctx
+                .builder
+                .priv_op(op!(DictContains(pick, "type", is_wood_pick.clone())))
+                .unwrap();
+            let op_dur = ctx
+                .builder
+                .priv_op(op!(DictContains(pick, "durability", 100_i64)))
+                .unwrap();
+            let st_spawn = ctx
+                .apply_custom_pred_simple(false, "SpawnWoodPick", vec![op_type, op_dur, st_insert])
+                .unwrap();
+            let st_guard = ctx
+                .apply_custom_pred_simple(
+                    false,
+                    "IsWoodPick",
+                    vec![st_spawn.clone(), Statement::None, Statement::None],
+                )
+                .unwrap();
+            a.set_guard(h, st_guard);
+            st_spawn
+        });
+
+        eprintln!("{tx1}");
+        let (st, tx0, stats) = tx1.finalize(&mut ctx);
+        print_stats(&stats);
         ctx.builder.reveal(&st).unwrap();
+        solve_and_verify(ctx.builder);
 
-        let tx_pod = prove(ctx.builder, prover);
-        tx_pod.pod.verify().unwrap();
-        apply_tx(&mut state, &tx1);
+        state.apply_tx(&tx0);
 
-        // Delete
-        let builder = MultiPodBuilder::new(&params, vd_set);
+        // ---- Tx 2: MineStone ----
+
+        let builder = MultiPodBuilder::new(&params, &vd_set);
+        let mut ctx = BuildContext { builder, modules };
+
+        let mut pick_new = pick.clone();
+        pick_new
+            .update(&Key::from("durability"), &Value::from(99_i64))
+            .unwrap();
+        let stone = make_object(is_stone.clone(), &[]);
+
+        let witness = state.grounding_witness(std::slice::from_ref(&tx0));
+        let inputs = vec![(pick.clone(), tx0)];
+        let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
+
+        tx2.action(&mut ctx, |a, ctx| {
+            // Sub-action: UseWoodPick (mutate pick)
+            let st_use_wp = a.sub(ctx, |sub, ctx| {
+                let (st_mutate, h) = sub.mutate(ctx, &pick_new, &pick);
+                let pick_type = pick.get(&Key::from("type")).unwrap().unwrap();
+                let op_type = ctx
+                    .builder
+                    .priv_op(op!(DictContains(pick, "type", pick_type)))
+                    .unwrap();
+                let op_gt = ctx
+                    .builder
+                    .priv_op(op!(Gt((&pick, "durability"), 0_i64)))
+                    .unwrap();
+                let op_sum = ctx
+                    .builder
+                    .priv_op(op!(SumOf((&pick, "durability"), 99_i64, 1_i64)))
+                    .unwrap();
+                let op_du = ctx
+                    .builder
+                    .priv_op(op!(DictUpdate(pick_new, pick, "durability", 99_i64)))
+                    .unwrap();
+                let st_action = ctx
+                    .apply_custom_pred_simple(
+                        false,
+                        "UseWoodPick",
+                        vec![op_type, op_gt, op_sum, op_du, st_mutate],
+                    )
+                    .unwrap();
+                let st_guard = ctx
+                    .apply_custom_pred_simple(
+                        false,
+                        "IsWoodPick",
+                        vec![Statement::None, Statement::None, st_action.clone()],
+                    )
+                    .unwrap();
+                sub.set_guard(h, st_guard);
+                st_action
+            });
+
+            // Direct: insert stone
+            let (st_stone_insert, h) = a.insert(ctx, &stone);
+            let op_type = ctx
+                .builder
+                .priv_op(op!(DictContains(stone, "type", is_stone.clone())))
+                .unwrap();
+            let st_mine = ctx
+                .apply_custom_pred_simple(
+                    false,
+                    "MineStone",
+                    vec![st_use_wp, op_type, st_stone_insert],
+                )
+                .unwrap();
+            let st_guard = ctx
+                .apply_custom_pred_simple(false, "IsStone", vec![st_mine.clone()])
+                .unwrap();
+            a.set_guard(h, st_guard);
+            st_mine
+        });
+
+        eprintln!("{tx2}");
+        let (st, tx_out, stats) = tx2.finalize(&mut ctx);
+        print_stats(&stats);
+        ctx.builder.reveal(&st).unwrap();
+        solve_and_verify(ctx.builder);
+
+        assert!(
+            tx_out
+                .nullifiers
+                .contains(&Value::from(compute_nullifier(&pick)))
+                .unwrap()
+        );
+    }
+
+    /// Tx 1: FindLog (genesis insert).
+    /// Tx 2: CraftWood (delete log, insert wood).
+    /// Tx 3: CraftSticks (delete wood, insert two sticks).
+    #[test]
+    fn test_craft_sticks() {
+        let txlib = Arc::new(crate::predicates::module());
+        let craft = Arc::new(crate::predicates::crafting_test_module());
+        let modules = vec![txlib.clone(), craft.clone()];
+
+        let is_log = Value::from(
+            Predicate::Custom(craft.predicate_ref_by_name("IsLog").unwrap()).hash(),
+        );
+        let is_wood = Value::from(
+            Predicate::Custom(craft.predicate_ref_by_name("IsWood").unwrap()).hash(),
+        );
+        let is_stick = Value::from(
+            Predicate::Custom(craft.predicate_ref_by_name("IsStick").unwrap()).hash(),
+        );
+
+        let mut state = TestState::empty(0);
+        let params = Params::default();
+        let vd_set = VDSet::new(&[]);
+
+        // ---- Tx 1: FindLog ----
+
+        let builder = MultiPodBuilder::new(&params, &vd_set);
         let mut ctx = BuildContext {
             builder,
             modules: modules.clone(),
         };
 
-        let inputs = vec![(obj1.clone(), tx1)];
-        let mut tx_builder = TxBuilder::new(
-            &mut ctx,
-            &inputs,
-            grounding_witness(&state, &[inputs[0].1.clone()]),
-        );
-        tx_builder.delete(&mut ctx, obj1);
-        let (st, tx2) = tx_builder.finalize(&mut ctx);
-        ctx.builder.reveal(&st).unwrap();
+        let log = make_object(is_log.clone(), &[]);
 
-        let tx_pod = prove(ctx.builder, prover);
-        tx_pod.pod.verify().unwrap();
-        apply_tx(&mut state, &tx2);
+        let mut tx1 = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
+
+        tx1.action(&mut ctx, |a, ctx| {
+            let (st_insert, h) = a.insert(ctx, &log);
+            let op_type = ctx
+                .builder
+                .priv_op(op!(DictContains(log, "type", is_log.clone())))
+                .unwrap();
+            let st_find = ctx
+                .apply_custom_pred_simple(false, "FindLog", vec![op_type, st_insert])
+                .unwrap();
+            let st_guard = ctx
+                .apply_custom_pred_simple(
+                    false,
+                    "IsLog",
+                    vec![st_find.clone(), Statement::None],
+                )
+                .unwrap();
+            a.set_guard(h, st_guard);
+            st_find
+        });
+
+        eprintln!("{tx1}");
+        let (st, tx1_out, stats) = tx1.finalize(&mut ctx);
+        print_stats(&stats);
+        ctx.builder.reveal(&st).unwrap();
+        solve_and_verify(ctx.builder);
+
+        state.apply_tx(&tx1_out);
+
+        // ---- Tx 2: CraftWood ----
+
+        let builder = MultiPodBuilder::new(&params, &vd_set);
+        let mut ctx = BuildContext {
+            builder,
+            modules: modules.clone(),
+        };
+
+        let wood = make_object(is_wood.clone(), &[]);
+
+        let witness = state.grounding_witness(std::slice::from_ref(&tx1_out));
+        let inputs = vec![(log.clone(), tx1_out)];
+        let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
+
+        tx2.action(&mut ctx, |a, ctx| {
+            // Sub-action: DeleteLog
+            let st_del_log = a.sub(ctx, |sub, ctx| {
+                let (st_del, h) = sub.delete(ctx, &log);
+                let log_type = log.get(&Key::from("type")).unwrap().unwrap();
+                let op_type = ctx
+                    .builder
+                    .priv_op(op!(DictContains(log, "type", log_type)))
+                    .unwrap();
+                let st_action = ctx
+                    .apply_custom_pred_simple(false, "DeleteLog", vec![op_type, st_del])
+                    .unwrap();
+                let st_guard = ctx
+                    .apply_custom_pred_simple(
+                        false,
+                        "IsLog",
+                        vec![Statement::None, st_action.clone()],
+                    )
+                    .unwrap();
+                sub.set_guard(h, st_guard);
+                st_action
+            });
+
+            // Direct: insert wood
+            let (st_ins, h) = a.insert(ctx, &wood);
+            let op_type = ctx
+                .builder
+                .priv_op(op!(DictContains(wood, "type", is_wood.clone())))
+                .unwrap();
+            let st_craft_wood = ctx
+                .apply_custom_pred_simple(
+                    false,
+                    "CraftWood",
+                    vec![st_del_log, op_type, st_ins],
+                )
+                .unwrap();
+            let st_guard = ctx
+                .apply_custom_pred_simple(
+                    false,
+                    "IsWood",
+                    vec![st_craft_wood.clone(), Statement::None],
+                )
+                .unwrap();
+            a.set_guard(h, st_guard);
+            st_craft_wood
+        });
+
+        eprintln!("{tx2}");
+        let (st, tx2_out, stats) = tx2.finalize(&mut ctx);
+        print_stats(&stats);
+        ctx.builder.reveal(&st).unwrap();
+        solve_and_verify(ctx.builder);
+
+        state.apply_tx(&tx2_out);
+
+        // ---- Tx 3: CraftSticks ----
+
+        let builder = MultiPodBuilder::new(&params, &vd_set);
+        let mut ctx = BuildContext { builder, modules };
+
+        let stick_a = make_object(is_stick.clone(), &[]);
+        let stick_b = make_object(is_stick, &[]);
+
+        let witness = state.grounding_witness(std::slice::from_ref(&tx2_out));
+        let inputs = vec![(wood.clone(), tx2_out)];
+        let mut tx3 = TxBuilder::new(&mut ctx, &inputs, witness);
+
+        tx3.action(&mut ctx, |a, ctx| {
+            // Sub-action: DeleteWood
+            let st_del_wood = a.sub(ctx, |sub, ctx| {
+                let (st_del, h) = sub.delete(ctx, &wood);
+                let wood_type = wood.get(&Key::from("type")).unwrap().unwrap();
+                let op_type = ctx
+                    .builder
+                    .priv_op(op!(DictContains(wood, "type", wood_type)))
+                    .unwrap();
+                let st_action = ctx
+                    .apply_custom_pred_simple(false, "DeleteWood", vec![op_type, st_del])
+                    .unwrap();
+                let st_guard = ctx
+                    .apply_custom_pred_simple(
+                        false,
+                        "IsWood",
+                        vec![Statement::None, st_action.clone()],
+                    )
+                    .unwrap();
+                sub.set_guard(h, st_guard);
+                st_action
+            });
+
+            // Direct: insert stick_a
+            let (st_ins_a, h_a) = a.insert(ctx, &stick_a);
+            let stick_type = stick_a.get(&Key::from("type")).unwrap().unwrap();
+            let op_type_a = ctx
+                .builder
+                .priv_op(op!(DictContains(stick_a, "type", stick_type.clone())))
+                .unwrap();
+
+            // Direct: insert stick_b
+            let (st_ins_b, h_b) = a.insert(ctx, &stick_b);
+            let op_type_b = ctx
+                .builder
+                .priv_op(op!(DictContains(stick_b, "type", stick_type)))
+                .unwrap();
+
+            let st_craft_sticks = ctx
+                .apply_custom_pred_simple(
+                    false,
+                    "CraftSticks",
+                    vec![st_del_wood, op_type_a, st_ins_a, op_type_b, st_ins_b],
+                )
+                .unwrap();
+
+            // stick_a: IsStick branch 2 = CraftSticks(obj, other, tx_start, tx_end)
+            let st_is_stick_a = ctx
+                .apply_custom_pred_simple(
+                    false,
+                    "IsStick",
+                    vec![Statement::None, st_craft_sticks.clone(), Statement::None],
+                )
+                .unwrap();
+            a.set_guard(h_a, st_is_stick_a);
+
+            // stick_b: IsStick branch 3 = CraftSticks(other, obj, tx_start, tx_end)
+            let st_is_stick_b = ctx
+                .apply_custom_pred_simple(
+                    false,
+                    "IsStick",
+                    vec![Statement::None, Statement::None, st_craft_sticks.clone()],
+                )
+                .unwrap();
+            a.set_guard(h_b, st_is_stick_b);
+
+            st_craft_sticks
+        });
+
+        eprintln!("{tx3}");
+        let (st, tx3_out, stats) = tx3.finalize(&mut ctx);
+        print_stats(&stats);
+        ctx.builder.reveal(&st).unwrap();
+        solve_and_verify(ctx.builder);
+
+        // Both sticks should be live
+        assert!(tx3_out.live.contains(&Value::from(stick_a)).unwrap());
+        assert!(tx3_out.live.contains(&Value::from(stick_b)).unwrap());
+        // Wood should be nullified
+        assert!(
+            tx3_out
+                .nullifiers
+                .contains(&Value::from(compute_nullifier(&wood)))
+                .unwrap()
+        );
     }
 }
