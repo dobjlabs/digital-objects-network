@@ -18,7 +18,6 @@ sdk = { path = "../sdk" }
 pexe = { path = "../pexe" }
 pod2utils = { path = "../pod2utils" }
 txlib = { path = "../txlib" }
-timelib = { path = "../timelib" }
 vdfpod = { path = "../intro_pods/vdfpod" }
 lt_eq_u256_pod = { path = "../intro_pods/lt_eq_u256_pod" }
 synchronizer = { path = "../synchronizer" }
