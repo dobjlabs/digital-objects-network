@@ -93,13 +93,14 @@ fn fmt_action_vars(action: &ActionContext) -> Vec<String> {
 fn fmt_action_pub_vars(action: &ActionContext) -> Vec<String> {
     let mut vars = Vec::new();
     for inst in &action.insts {
-        if let Inst::Object {
-            io: ObjectIO::Mutate | ObjectIO::Output,
-            obj,
-            class: _,
-        } = inst
-        {
-            vars.push(obj.borrow().var_name().to_string());
+        match inst {
+            Inst::Object {
+                io: ObjectIO::Mutate | ObjectIO::Output,
+                obj,
+                class: _,
+            } => vars.push(obj.borrow().var_name().to_string()),
+            Inst::SubAction { action: _, obj } => vars.push(obj.borrow().var_name().to_string()),
+            _ => {}
         }
     }
     vars.extend_from_slice(&["tx".to_string(), "tx0".to_string()]);
@@ -109,11 +110,16 @@ fn fmt_action_pub_vars(action: &ActionContext) -> Vec<String> {
 fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
     write!(w, "{}(", action.name)?;
     let pub_var_names = fmt_action_pub_vars(action);
-    for var in &pub_var_names {
-        write!(w, "{var}, ")?;
+    for (i, var) in pub_var_names.iter().enumerate() {
+        if i != 0 {
+            write!(w, ", ")?;
+        }
+        write!(w, "{var}")?;
     }
-    write!(w, "private: ")?;
     let var_names = fmt_action_vars(action);
+    if var_names.len() - pub_var_names.len() > 0 {
+        write!(w, ", private: ")?;
+    }
     for (i, var) in var_names
         .iter()
         .filter(|v| !pub_var_names.contains(v))
@@ -154,6 +160,16 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                 }
                 let obj = obj.borrow();
                 objs.push((io, obj.var_name().to_string()));
+            }
+            Inst::SubAction { action, obj } => {
+                let tx = &vars["tx"];
+                let tx_next = tx.next();
+                writeln!(
+                    w,
+                    "  {action}({obj}, {tx_next}, {tx})",
+                    obj = ArgFmt(&vars, obj)
+                )?;
+                vars.get_mut("tx").expect("tx exists").inc();
             }
             Inst::Set { obj, kvs } => {
                 let obj = &vars[obj.as_str()];

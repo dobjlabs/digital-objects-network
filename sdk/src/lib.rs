@@ -5,22 +5,22 @@ use std::rc::Rc;
 use std::slice;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use hex::FromHex;
 use itertools::zip_eq;
 use lt_eq_u256_pod::LtEqU256Pod;
 use pod2::{
     backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
     frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
-    lang::{Module, load_module},
+    lang::{load_module, Module},
     middleware::{
-        EMPTY_VALUE, F, Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType,
-        Params, Pod, Predicate, RawValue, Statement, VDSet, Value,
         containers::{Array, Dictionary, Set},
+        Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType, Params, Pod,
+        Predicate, RawValue, Statement, VDSet, Value, EMPTY_VALUE, F,
     },
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
-use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
+use rhai::{CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope, AST};
 use txlib::{GroundingWitness, Tx, TxBuilder};
 use vdfpod::VdfPod;
 
@@ -69,6 +69,10 @@ enum Inst {
         io: ObjectIO,
         obj: Ref,
         class: String,
+    },
+    SubAction {
+        action: String,
+        obj: Ref,
     },
     /// Update a key of the object
     Update {
@@ -422,6 +426,23 @@ impl ActionHandle {
     fn mutate(self, class: String) -> RuntimeResult<ArgHandle> {
         self.obj_io(ObjectIO::Mutate, class)
     }
+    fn subaction(self, action: String) -> RuntimeResult<ArgHandle> {
+        // For now assume that a subaction returns a single output object.
+        // If we want multiple outputs we need to extend the `var` syntax to declare multiple
+        // variables.  We could define the var syntax with destructuring of arrays with
+        // `engine.register_custom_syntax_with_state_raw`
+        let arg = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
+        let mut ctx = self.0.borrow_mut();
+        if let Some(exe_ctx) = &mut ctx.exe_ctx {
+            // exe_ctx.sub_action(action);
+        }
+        ctx.insts.push(Inst::SubAction {
+            action,
+            obj: arg.clone(),
+        });
+        ctx.inc_t_var("tx").expect("tx exists");
+        Ok(ArgHandle::new(self.clone(), arg))
+    }
     fn random(self) -> RuntimeResult<ArgHandle> {
         let value = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
         let mut ctx = self.0.borrow_mut();
@@ -770,13 +791,13 @@ pub struct ActionMeta {
     pub outputs: Vec<(String, String)>,
 }
 
-impl From<&ActionContext> for ActionMeta {
-    fn from(action: &ActionContext) -> Self {
+impl ActionMeta {
+    fn from_action_ctx(actions: &[ActionMeta], action_ctx: &ActionContext) -> Result<ActionMeta> {
         let mut meta = Self {
-            name: action.name.clone(),
+            name: action_ctx.name.clone(),
             ..Self::default()
         };
-        for inst in &action.insts {
+        for inst in &action_ctx.insts {
             match inst {
                 Inst::Object {
                     io: ObjectIO::Input,
@@ -803,10 +824,24 @@ impl From<&ActionContext> for ActionMeta {
                     meta.inputs.push((obj_name.clone(), class.clone()));
                     meta.outputs.push((obj_name, class.clone()));
                 }
+                Inst::SubAction { action, obj } => {
+                    let subaction = actions
+                        .iter()
+                        .find(|a| &a.name == action)
+                        .ok_or_else(|| anyhow!("subaction {action} not defined"))?;
+                    for input in &subaction.inputs {
+                        meta.inputs.push(input.clone());
+                    }
+                    // For now subactions only support 1 output
+                    assert_eq!(1, subaction.outputs.len());
+                    let class = subaction.outputs[0].1.clone();
+                    let obj_name = obj.borrow().as_var().name.clone();
+                    meta.outputs.push((obj_name, class));
+                }
                 _ => {}
             }
         }
-        meta
+        Ok(meta)
     }
 }
 
@@ -857,7 +892,7 @@ impl Loader {
         classes
     }
 
-    fn new(actions: Vec<ActionHandle>) -> Self {
+    fn new(actions: Vec<ActionHandle>) -> Result<Self> {
         let txlib_mod = Arc::new(txlib::predicates::module());
         let dependencies = vec![
             Dependency::Module {
@@ -879,18 +914,19 @@ impl Loader {
                 .unwrap(),
             },
         ];
-        let actions_meta: Vec<_> = actions
-            .iter()
-            .map(|a| ActionMeta::from(&*a.0.borrow()))
-            .collect();
+        let mut actions_meta = Vec::with_capacity(actions.len());
+        for action in &actions {
+            let action_meta = ActionMeta::from_action_ctx(&actions_meta, &*action.0.borrow())?;
+            actions_meta.push(action_meta);
+        }
         let classes = Self::actions_to_classes(&actions_meta);
-        Self {
+        Ok(Self {
             txlib_mod,
             dependencies,
             actions,
             actions_meta,
             classes,
-        }
+        })
     }
 
     fn action_by_name(&self, name: &str) -> &ActionMeta {
@@ -914,6 +950,7 @@ impl Loader {
     fn module(self, engine: Rc<Engine>, ast: AST) -> SdkModule {
         let mut podlang_src = String::new();
         fmt_podlang::fmt(&self, &mut podlang_src).unwrap();
+        println!("DBG\n{podlang_src}");
 
         let params = Params::default();
         let module = Arc::new(
@@ -1068,6 +1105,9 @@ impl ExeContext {
         // nonce that persists
         Value::from(rand_raw_value())
     }
+    fn action(&mut self) -> Result<()> {
+        todo!()
+    }
 }
 
 struct OutputData {
@@ -1143,8 +1183,6 @@ impl Executor {
             mock: self.mock,
             params: self.params.clone(),
             vd_set: self.vd_set.clone(),
-            // grounding_witness: self.grounding_witness,
-            // prover: self.prover,
             inputs: input_class_sts_objs.clone(),
             bld,
             tx_builder,
@@ -1335,6 +1373,7 @@ fn new_engine() -> Engine {
         .register_fn("output", ActionHandle::output)
         .register_fn("input", ActionHandle::input)
         .register_fn("mutate", ActionHandle::mutate)
+        .register_fn("subaction", ActionHandle::subaction)
         .register_fn("random", ActionHandle::random)
         .register_fn("st_gt", ActionHandle::st_gt)
         .register_fn("st_sum_of", ActionHandle::st_sum_of)
@@ -1404,7 +1443,7 @@ impl Sdk {
             action_handles.push(action_handle);
         }
 
-        let loader = Loader::new(action_handles);
+        let loader = Loader::new(action_handles)?;
         Ok(Rc::new(loader.module(self.engine.clone(), ast)))
     }
 

@@ -88,6 +88,12 @@ fn test_sdk_1() {
             var wood_pick = action.mutate("WoodPick");
             use_pick(action, wood_pick, 10);
         }
+
+        fn MineStoneWithWoodPick(action) {
+            var pick = action.subaction("UseWoodPick");
+            var stone = action.output("Stone");
+            stone.set([["blueprint", "Stone"]]);
+        }
 "#;
 
     let sdk = Sdk::default();
@@ -98,6 +104,7 @@ fn test_sdk_1() {
         "CraftSticks",
         "CraftWoodPick",
         "UseWoodPick",
+        "MineStoneWithWoodPick",
     ];
     let module = sdk
         .load_module_from_src_actions(craft_src, actions)
@@ -143,6 +150,13 @@ fn test_sdk_1() {
         .unwrap()
         .objs();
     apply_tx(&mut state, &wood_pick.tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[wood_pick.tx.clone()]));
+    let [stone] = executor
+        .action("MineStoneWithWoodPick", vec![wood_pick])
+        .unwrap()
+        .objs();
+    apply_tx(&mut state, &stone.tx);
 }
 
 #[allow(clippy::cloned_ref_to_slice_refs)]
