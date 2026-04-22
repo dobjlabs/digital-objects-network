@@ -99,7 +99,7 @@ fn fmt_action_pub_vars(action: &ActionContext) -> Vec<String> {
                 obj,
                 class: _,
             } => vars.push(obj.borrow().var_name().to_string()),
-            Inst::SubAction { action: _, obj } => vars.push(obj.borrow().var_name().to_string()),
+            // Inst::SubAction { action: _, obj } => vars.push(obj.borrow().var_name().to_string()),
             _ => {}
         }
     }
