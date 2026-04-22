@@ -453,6 +453,8 @@ impl ActionHandle {
             .bld
             .apply_custom_pred(false, &action, HashMap::new(), sts)
             .unwrap();
+        // Reveal the action in the internal pod that just outputs action statements.
+        exe_ctx.bld.builder.reveal(&st_action).unwrap();
 
         for (index, OutputData { class, obj: _ }) in output_objs.iter().enumerate() {
             let class = module.class_by_name(class);
@@ -1282,7 +1284,7 @@ impl Executor {
             sts: Vec::new(),
         };
         let action_handle = ActionHandle::new(action.name.clone(), Some(exe_ctx));
-        let st_action = action_handle.exe_action(&action.name)?;
+        action_handle.exe_action(&action.name)?;
 
         // let options = CallFnOptions::new().with_tag(action_handle.clone());
         // // Execute the action rhai code
@@ -1332,7 +1334,7 @@ impl Executor {
         //     .bld
         //     .apply_custom_pred(false, &action.name, HashMap::new(), exe_ctx.sts)
         //     .unwrap();
-        exe_ctx.bld.builder.reveal(&st_action).unwrap();
+        // exe_ctx.bld.builder.reveal(&st_action).unwrap();
 
         // // Data necessary to make each output object' class statement
         // let mut output_objs_st_class_data = Vec::new();

@@ -114,32 +114,32 @@ fn test_sdk_1() {
 
     let mut state = TestState::default();
 
-    println!("DBG FindLog");
+    println!("exe FindLog");
     let executor = module.executor(true, grounding_witness(&state, &[]));
     let [log_a] = executor.action("FindLog", vec![]).unwrap().objs();
     apply_tx(&mut state, &log_a.tx);
 
-    println!("DBG CraftWood");
+    println!("exe CraftWood");
     let executor = module.executor(true, grounding_witness(&state, &[log_a.tx.clone()]));
     let [wood_a] = executor.action("CraftWood", vec![log_a]).unwrap().objs();
     apply_tx(&mut state, &wood_a.tx);
 
-    println!("DBG CraftSticks");
+    println!("exe CraftSticks");
     let executor = module.executor(true, grounding_witness(&state, &[wood_a.tx.clone()]));
     let [stick_a, _stick_b] = executor.action("CraftSticks", vec![wood_a]).unwrap().objs();
     apply_tx(&mut state, &stick_a.tx);
 
-    println!("DBG FindLog");
+    println!("exe FindLog");
     let executor = module.executor(true, grounding_witness(&state, &[]));
     let [log_b] = executor.action("FindLog", vec![]).unwrap().objs();
     apply_tx(&mut state, &log_b.tx);
 
-    println!("DBG CraftWood");
+    println!("exe CraftWood");
     let executor = module.executor(true, grounding_witness(&state, &[log_b.tx.clone()]));
     let [wood_b] = executor.action("CraftWood", vec![log_b]).unwrap().objs();
     apply_tx(&mut state, &wood_b.tx);
 
-    println!("DBG CraftWoodPick");
+    println!("exe CraftWoodPick");
     let executor = module.executor(
         true,
         grounding_witness(&state, &[wood_b.tx.clone(), stick_a.tx.clone()]),
@@ -150,7 +150,7 @@ fn test_sdk_1() {
         .objs();
     apply_tx(&mut state, &wood_pick.tx);
 
-    println!("DBG UseWoodPick");
+    println!("exe UseWoodPick");
     let executor = module.executor(true, grounding_witness(&state, &[wood_pick.tx.clone()]));
     let [wood_pick] = executor
         .action("UseWoodPick", vec![wood_pick])
@@ -158,7 +158,7 @@ fn test_sdk_1() {
         .objs();
     apply_tx(&mut state, &wood_pick.tx);
 
-    println!("DBG MineStoneWithWoodPick");
+    println!("exe MineStoneWithWoodPick");
     let executor = module.executor(true, grounding_witness(&state, &[wood_pick.tx.clone()]));
     let [stone] = executor
         .action("MineStoneWithWoodPick", vec![wood_pick])
