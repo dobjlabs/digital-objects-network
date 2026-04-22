@@ -93,14 +93,13 @@ fn fmt_action_vars(action: &ActionContext) -> Vec<String> {
 fn fmt_action_pub_vars(action: &ActionContext) -> Vec<String> {
     let mut vars = Vec::new();
     for inst in &action.insts {
-        match inst {
-            Inst::Object {
-                io: ObjectIO::Mutate | ObjectIO::Output,
-                obj,
-                class: _,
-            } => vars.push(obj.borrow().var_name().to_string()),
-            // Inst::SubAction { action: _, obj } => vars.push(obj.borrow().var_name().to_string()),
-            _ => {}
+        if let Inst::Object {
+            io: ObjectIO::Mutate | ObjectIO::Output,
+            obj,
+            class: _,
+        } = inst
+        {
+            vars.push(obj.borrow().var_name().to_string())
         }
     }
     vars.extend_from_slice(&["tx".to_string(), "tx0".to_string()]);
