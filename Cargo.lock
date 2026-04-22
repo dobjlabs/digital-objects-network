@@ -2789,7 +2789,6 @@ dependencies = [
  "serde_json",
  "synchronizer",
  "tempfile",
- "timelib",
  "txlib",
  "vdfpod",
 ]
@@ -8744,24 +8743,6 @@ checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
 dependencies = [
  "num-conv",
  "time-core",
-]
-
-[[package]]
-name = "timelib"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "common",
- "env_logger",
- "hex",
- "log",
- "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=70cf88ddfe7df6597096191550d91dfde563b855)",
- "pod2utils",
- "rand 0.9.2",
- "serde",
- "serde_json",
- "txlib",
 ]
 
 [[package]]
