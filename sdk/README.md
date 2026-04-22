@@ -147,7 +147,7 @@ The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
 - [ ] Execution time type checking without panics
 - [ ] operator+
 - [ ] operator*
-- [ ] dependent action
+- [x] dependent action
 - [x] pexe.zip support (packaged by the `pexe` crate's CLI)
 - [x] manifest support
 - [ ] error pretty print
@@ -211,6 +211,12 @@ UseWoodPick(wood_pick, tx, tx0, private: wood_pick0, wood_pick1, wood_pick2, dur
   tx::TxMutated(tx, tx0, wood_pick, wood_pick0)
 )
 
+MineStoneWithWoodPick(stone, tx, tx0, private: tx1, pick) = AND(
+  UseWoodPick(pick, tx1, tx0)
+  DictContains(stone, "blueprint", "Stone")
+  tx::TxInserted(tx, tx1, stone)
+)
+
 // Classes
 
 IsLog(state, private: tx, tx0) = OR(
@@ -229,5 +235,9 @@ IsStick(state, private: tx, tx0, _other_0) = OR(
 IsWoodPick(state, private: tx, tx0) = OR(
   CraftWoodPick(state, tx, tx0)
   UseWoodPick(state, tx, tx0)
+)
+
+IsStone(state, private: tx, tx0) = OR(
+  MineStoneWithWoodPick(state, tx, tx0)
 )
 ```

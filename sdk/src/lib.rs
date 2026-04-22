@@ -6,22 +6,22 @@ use std::rc::Rc;
 use std::slice;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use hex::FromHex;
 use itertools::zip_eq;
 use lt_eq_u256_pod::LtEqU256Pod;
 use pod2::{
     backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
     frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
-    lang::{Module, load_module},
+    lang::{load_module, Module},
     middleware::{
-        EMPTY_VALUE, F, Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType,
-        Params, Pod, Predicate, RawValue, Statement, VDSet, Value,
         containers::{Array, Dictionary, Set},
+        Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType, Params, Pod,
+        Predicate, RawValue, Statement, VDSet, Value, EMPTY_VALUE, F,
     },
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
-use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
+use rhai::{CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope, AST};
 use txlib::{GroundingWitness, Tx, TxBuilder};
 use vdfpod::VdfPod;
 
@@ -923,11 +923,6 @@ impl ActionMeta {
                     for input in &subaction.inputs {
                         meta.inputs.push(input.clone());
                     }
-                    // For now subactions only support 1 output
-                    // assert_eq!(1, subaction.outputs.len());
-                    // let class = subaction.outputs[0].1.clone();
-                    // let obj_name = obj.borrow().as_var().name.clone();
-                    // meta.outputs.push((obj_name, class));
                 }
                 _ => {}
             }
@@ -1331,7 +1326,6 @@ impl Executor {
             obj_pods.push(obj_pod);
         }
 
-        // let objs = output_objs.into_iter().map(|out| out.obj).collect();
         Ok(SpendableObjects {
             tx_pod,
             obj_pods,
