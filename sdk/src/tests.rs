@@ -88,6 +88,12 @@ fn test_sdk_1() {
             var wood_pick = action.mutate("WoodPick");
             use_pick(action, wood_pick, 10);
         }
+
+        fn MineStoneWithWoodPick(action) {
+            var pick = action.subaction("UseWoodPick");
+            var stone = action.output("Stone");
+            stone.set([["blueprint", "Stone"]]);
+        }
 "#;
 
     let sdk = Sdk::default();
@@ -98,6 +104,7 @@ fn test_sdk_1() {
         "CraftSticks",
         "CraftWoodPick",
         "UseWoodPick",
+        "MineStoneWithWoodPick",
     ];
     let module = sdk
         .load_module_from_src_actions(craft_src, actions)
@@ -143,6 +150,21 @@ fn test_sdk_1() {
         .unwrap()
         .objs();
     apply_tx(&mut state, &wood_pick.tx);
+
+    // Exercises sub-actions: MineStoneWithWoodPick calls UseWoodPick
+    // as a nested action. The parent produces a Stone; the sub-action
+    // produces a mutated WoodPick. Both come back as SpendableObjects
+    // with IsX pods bound to the originating action's OR branch.
+    let executor = module.executor(true, grounding_witness(&state, &[wood_pick.tx.clone()]));
+    let [mined_pick, stone] = executor
+        .action("MineStoneWithWoodPick", vec![wood_pick])
+        .unwrap()
+        .objs();
+    apply_tx(&mut state, &stone.tx);
+
+    // Sanity: the mutated pick and stone share the same tx (both came
+    // from the single MineStoneWithWoodPick transaction).
+    assert_eq!(tx_hash(&mined_pick.tx), tx_hash(&stone.tx));
 }
 
 #[allow(clippy::cloned_ref_to_slice_refs)]

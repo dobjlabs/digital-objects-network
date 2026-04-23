@@ -103,9 +103,12 @@ fn fmt_action_vars(action: &ActionContext) -> Vec<String> {
 fn fmt_action_pub_vars(action: &ActionContext) -> Vec<String> {
     let mut vars = Vec::new();
     for inst in &action.insts {
-        // Every Object inst is public: Inputs (deletes), Outputs (inserts),
-        // and Mutates all become arguments so the class's IsX OR can
-        // dispatch on any of them at replay time.
+        // Every direct Object inst is public: Inputs (deletes),
+        // Outputs (inserts), and Mutates all become arguments so the
+        // class's IsX OR can dispatch on any of them at replay time.
+        // Sub-action references stay private — a sub-action's I/O
+        // appears in the sub-action's own predicate signature, and
+        // its output is a private witness within the parent.
         if let Inst::Object { obj, .. } = inst {
             vars.push(obj.borrow().var_name().to_string());
         }
@@ -191,6 +194,20 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                     write!(w, "{}", ArgFmt(&vars, arg))?;
                 }
                 writeln!(w, ")")?;
+            }
+            Inst::SubAction { action, obj } => {
+                // Render as a sub-predicate reference: the sub-action
+                // produces one chain step from the parent's perspective
+                // (encapsulated by the new txlib's ReplayAction), so
+                // we bump parent's chain var by one.
+                let chain = &vars["chain"];
+                let chain_next = chain.next();
+                writeln!(
+                    w,
+                    "  {action}({obj}, {chain}, {chain_next})",
+                    obj = ArgFmt(&vars, obj)
+                )?;
+                vars.get_mut("chain").expect("chain exists").inc();
             }
         }
     }
