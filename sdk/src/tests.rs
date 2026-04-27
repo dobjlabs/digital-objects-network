@@ -114,32 +114,32 @@ fn test_sdk_1() {
 
     let mut state = TestState::default();
 
-    println!("exe FindLog");
     let executor = module.executor(true, grounding_witness(&state, &[]));
-    let [log_a] = executor.action("FindLog", vec![]).unwrap().objs();
+    let spendable = executor.action("FindLog", vec![]).unwrap();
+    assert_eq!(
+        spendable.tx_pod.public_statements.len(),
+        1,
+        "tx_pod must expose exactly one public statement (TxFinalized)"
+    );
+    let [log_a] = spendable.objs();
     apply_tx(&mut state, &log_a.tx);
 
-    println!("exe CraftWood");
     let executor = module.executor(true, grounding_witness(&state, &[log_a.tx.clone()]));
     let [wood_a] = executor.action("CraftWood", vec![log_a]).unwrap().objs();
     apply_tx(&mut state, &wood_a.tx);
 
-    println!("exe CraftSticks");
     let executor = module.executor(true, grounding_witness(&state, &[wood_a.tx.clone()]));
     let [stick_a, _stick_b] = executor.action("CraftSticks", vec![wood_a]).unwrap().objs();
     apply_tx(&mut state, &stick_a.tx);
 
-    println!("exe FindLog");
     let executor = module.executor(true, grounding_witness(&state, &[]));
     let [log_b] = executor.action("FindLog", vec![]).unwrap().objs();
     apply_tx(&mut state, &log_b.tx);
 
-    println!("exe CraftWood");
     let executor = module.executor(true, grounding_witness(&state, &[log_b.tx.clone()]));
     let [wood_b] = executor.action("CraftWood", vec![log_b]).unwrap().objs();
     apply_tx(&mut state, &wood_b.tx);
 
-    println!("exe CraftWoodPick");
     let executor = module.executor(
         true,
         grounding_witness(&state, &[wood_b.tx.clone(), stick_a.tx.clone()]),
@@ -150,7 +150,6 @@ fn test_sdk_1() {
         .objs();
     apply_tx(&mut state, &wood_pick.tx);
 
-    println!("exe UseWoodPick");
     let executor = module.executor(true, grounding_witness(&state, &[wood_pick.tx.clone()]));
     let [wood_pick] = executor
         .action("UseWoodPick", vec![wood_pick])
@@ -158,13 +157,20 @@ fn test_sdk_1() {
         .objs();
     apply_tx(&mut state, &wood_pick.tx);
 
-    println!("exe MineStoneWithWoodPick");
+    // Exercises sub-actions: MineStoneWithWoodPick calls UseWoodPick
+    // as a nested action. The parent produces a Stone; the sub-action
+    // produces a mutated WoodPick. Both come back as SpendableObjects
+    // with IsX pods bound to the originating action's OR branch.
     let executor = module.executor(true, grounding_witness(&state, &[wood_pick.tx.clone()]));
-    let [stone] = executor
+    let [mined_pick, stone] = executor
         .action("MineStoneWithWoodPick", vec![wood_pick])
         .unwrap()
         .objs();
     apply_tx(&mut state, &stone.tx);
+
+    // Sanity: the mutated pick and stone share the same tx (both came
+    // from the single MineStoneWithWoodPick transaction).
+    assert_eq!(tx_hash(&mined_pick.tx), tx_hash(&stone.tx));
 }
 
 #[allow(clippy::cloned_ref_to_slice_refs)]
@@ -174,7 +180,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "b837ea9d1c477c9668d4ebfcedc60f86c47a2669642738428f344cc68ff721ba"
+        module_hash = "89186d51b500e63c74bc8b797f2f9268ed9e883f6c5525138bfd3f4cc6ba4cf6"
 
         [[classes]]
         name = "Log"
