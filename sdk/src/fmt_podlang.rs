@@ -27,14 +27,18 @@ impl fmt::Display for Intro {
     }
 }
 
+/// Public-arg labels for the chain var endpoints. Hard-coupled to the
+/// txlib's `TxFinalized` / `ReplayActions` predicate signatures.
+const CHAIN_START: &str = "chain_start";
+const CHAIN_END: &str = "chain_end";
+
 /// Render the txlib chain var at a given timestamp. The naming scheme
-/// (`chain_start` / `chain_end` / `chain_{ts}`) is a protocol concern:
-/// the txlib's `TxFinalized` and `ReplayActions` predicates expect those
-/// literal labels for the chain endpoints.
+/// is a protocol concern: the txlib's `TxFinalized` and `ReplayActions`
+/// predicates expect those literal labels for the chain endpoints.
 fn fmt_chain_at(ts: usize, max_ts: usize) -> String {
     match ts {
-        0 => "chain_start".to_string(),
-        t if t == max_ts => "chain_end".to_string(),
+        0 => CHAIN_START.to_string(),
+        t if t == max_ts => CHAIN_END.to_string(),
         t => format!("chain_{t}"),
     }
 }
@@ -88,6 +92,24 @@ impl<'a> fmt::Display for VarNameFmt<'a> {
 
 struct ArgFmt<'a>(&'a HashMap<&'a str, VarNameFmt<'a>>, &'a Ref);
 
+/// `  pred(arg0, arg1, ...)` — shared rendering for `Inst::Statement`
+/// and `Inst::Intro`, which differ only in the type of `pred`.
+fn fmt_pred_call(
+    w: &mut dyn fmt::Write,
+    pred: &dyn fmt::Display,
+    args: &[Ref],
+    vars: &HashMap<&str, VarNameFmt>,
+) -> fmt::Result {
+    write!(w, "  {pred}(")?;
+    for (i, arg) in args.iter().enumerate() {
+        if i != 0 {
+            write!(w, ", ")?;
+        }
+        write!(w, "{}", ArgFmt(vars, arg))?;
+    }
+    writeln!(w, ")")
+}
+
 impl<'a> fmt::Display for ArgFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let arg = self.1.borrow();
@@ -132,7 +154,7 @@ fn fmt_action_pub_vars(action: &ActionContext) -> Vec<String> {
             vars.push(obj.borrow().var_name().to_string());
         }
     }
-    vars.extend_from_slice(&["chain_start".to_string(), "chain_end".to_string()]);
+    vars.extend_from_slice(&[CHAIN_START.to_string(), CHAIN_END.to_string()]);
     vars
 }
 
@@ -198,26 +220,8 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                 writeln!(w, r#"  DictUpdate({obj_next}, {obj}, "{key}", {value})"#,)?;
                 vars.get_mut(obj_name).expect("obj exists").inc();
             }
-            Inst::Statement { pred, args } => {
-                write!(w, "  {pred}(")?;
-                for (i, arg) in args.iter().enumerate() {
-                    if i != 0 {
-                        write!(w, ", ")?;
-                    }
-                    write!(w, "{}", ArgFmt(&vars, arg))?;
-                }
-                writeln!(w, ")")?;
-            }
-            Inst::Intro { pred, args } => {
-                write!(w, "  {pred}(")?;
-                for (i, arg) in args.iter().enumerate() {
-                    if i != 0 {
-                        write!(w, ", ")?;
-                    }
-                    write!(w, "{}", ArgFmt(&vars, arg))?;
-                }
-                writeln!(w, ")")?;
-            }
+            Inst::Statement { pred, args } => fmt_pred_call(w, pred, args, &vars)?,
+            Inst::Intro { pred, args } => fmt_pred_call(w, pred, args, &vars)?,
             Inst::SubAction { action, obj } => {
                 // Render as a sub-predicate reference: the sub-action
                 // produces one chain step from the parent's perspective

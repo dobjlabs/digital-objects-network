@@ -448,9 +448,7 @@ impl ActionHandle {
     fn new_obj(exe_ctx: &ExeContext, class: &str) -> Dictionary {
         let type_hash = exe_ctx
             .module
-            .class_hashes
-            .get(class)
-            .copied()
+            .class_hash(class)
             .unwrap_or_else(|| panic!("no Is{class} predicate hash registered"));
         dict!({
             "type" => type_hash,
@@ -942,26 +940,27 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
     Err(format!("invalid value type: {}", v.type_name()).into())
 }
 
-/// One object reference in an action, in declaration order.
+/// One object reference in an action, in declaration order. Only
+/// `class` is exposed; `io` is internal — used for the
+/// `inputs()`/`outputs()` filters.
 #[derive(Debug, Clone)]
 pub struct ActionObjectRef {
-    pub io: ObjectIO,
-    pub obj_name: String,
+    io: ObjectIO,
     pub class: String,
 }
 
 /// Collected metadata that declares an Action.
 ///
 /// `object_refs` is the list of the action's direct Object instructions
-/// in declaration order, which matches the action predicate's
-/// public-arg ordering. `aggregated_inputs` is the full ordered list
-/// of objects this action consumes across its whole call tree — used
-/// by `Executor::action` to zip against the caller-supplied inputs.
+/// in declaration order, matching the action predicate's public-arg
+/// ordering. `aggregated_inputs` flattens this action's plus all
+/// transitively-called sub-actions' inputs — used by `Executor::action`
+/// to zip against the caller-supplied inputs.
 #[derive(Debug, Default)]
 pub struct ActionMeta {
     pub name: String,
-    pub object_refs: Vec<ActionObjectRef>,
-    pub aggregated_inputs: Vec<ActionObjectRef>,
+    object_refs: Vec<ActionObjectRef>,
+    aggregated_inputs: Vec<ActionObjectRef>,
 }
 
 impl ActionMeta {
@@ -986,11 +985,9 @@ impl ActionMeta {
         };
         for inst in &ctx.insts {
             match inst {
-                Inst::Object { io, obj, class, .. } => {
-                    let obj_name = obj.borrow().as_var().name.clone();
+                Inst::Object { io, class, .. } => {
                     let r = ActionObjectRef {
                         io: io.clone(),
-                        obj_name,
                         class: class.clone(),
                     };
                     if io.consumes() {
@@ -1133,15 +1130,6 @@ impl Loader {
             .expect("compiles"),
         );
         let object_index_class_st_index = Self::object_index_class_st_index(&self.actions_meta);
-        let class_hashes: HashMap<String, Hash> = self
-            .classes
-            .iter()
-            .filter_map(|c| {
-                module
-                    .predicate_ref_by_name(&class_predicate_name(&c.name))
-                    .map(|p| (c.name.clone(), Predicate::Custom(p).hash()))
-            })
-            .collect();
         SdkModule {
             txlib_mod: self.txlib_mod,
             podlang_src,
@@ -1151,7 +1139,6 @@ impl Loader {
             module,
             engine,
             ast,
-            class_hashes,
         }
     }
 }
@@ -1168,9 +1155,6 @@ pub struct SdkModule {
     module: Arc<Module>,
     engine: Rc<Engine>,
     ast: AST,
-    // Cached Is{class} predicate hashes, stamped onto new objects at
-    // exe time so txlib replay can dispatch the type guard.
-    class_hashes: HashMap<String, Hash>,
 }
 
 impl SdkModule {
@@ -1201,7 +1185,9 @@ impl SdkModule {
     }
     /// Hash of the `Is{class_name}` custom predicate in the loaded module.
     pub fn class_hash(&self, class_name: &str) -> Option<Hash> {
-        self.class_hashes.get(class_name).copied()
+        self.module
+            .predicate_ref_by_name(&class_predicate_name(class_name))
+            .map(|p| Predicate::Custom(p).hash())
     }
     pub fn executor(
         self: &Rc<Self>,
@@ -1229,13 +1215,8 @@ impl SdkModule {
         let class_st_index =
             self.object_index_class_st_index[&(action_name.to_string(), object_refs_index)];
         branch_sts[class_st_index] = st_action;
-        bld.apply_custom_pred(
-            false,
-            &class_predicate_name(class),
-            HashMap::new(),
-            branch_sts,
-        )
-        .unwrap()
+        bld.apply_custom_pred_simple(false, &class_predicate_name(class), branch_sts)
+            .unwrap()
     }
 }
 
@@ -1530,14 +1511,17 @@ fn emit_action_body(
         class: String,
         object_refs_index: usize,
     }
-    let n = action_ctx.insts.len();
-    let mut pre_sts: Vec<Statement> = Vec::with_capacity(n);
+    /// A produced object captured during the walk, awaiting `st_action`
+    /// to be assembled into a `PerOutput`.
+    struct PendingOutput {
+        class: String,
+        obj: Dictionary,
+        object_refs_index: usize,
+    }
+    let mut pre_sts: Vec<Statement> = Vec::with_capacity(action_ctx.insts.len());
     let mut event_sts: Vec<Statement> = Vec::new();
     let mut events: Vec<EventData> = Vec::new();
-    // Indices into `outputs` for entries pushed by this action's
-    // direct Objects; we backfill `action_st` on exactly these after
-    // building `st_action`.
-    let mut direct_outputs: Vec<usize> = Vec::new();
+    let mut produced: Vec<PendingOutput> = Vec::new();
     let mut obj_refs_index: usize = 0;
 
     for (inst_idx, (inst, exe)) in zip_eq(&action_ctx.insts, &action_ctx.exe).enumerate() {
@@ -1555,13 +1539,10 @@ fn emit_action_body(
                     }
                 };
                 if io.produces() {
-                    direct_outputs.push(outputs.len());
-                    outputs.push(PerOutput {
+                    produced.push(PendingOutput {
                         class: class.clone(),
                         obj: obj_dict,
-                        action_name: action_name.to_string(),
                         object_refs_index: obj_refs_index,
-                        action_st: Statement::None,
                     });
                 }
                 events.push(EventData {
@@ -1599,12 +1580,16 @@ fn emit_action_body(
 
     pre_sts.extend(event_sts);
     let st_action = bld
-        .apply_custom_pred(false, action_name, HashMap::new(), pre_sts)
+        .apply_custom_pred_simple(false, action_name, pre_sts)
         .unwrap();
 
-    for idx in &direct_outputs {
-        outputs[*idx].action_st = st_action.clone();
-    }
+    outputs.extend(produced.into_iter().map(|p| PerOutput {
+        class: p.class,
+        obj: p.obj,
+        action_name: action_name.to_string(),
+        object_refs_index: p.object_refs_index,
+        action_st: st_action.clone(),
+    }));
 
     // Attach an IsX guard to each directly-emitted event.
     for EventData {
