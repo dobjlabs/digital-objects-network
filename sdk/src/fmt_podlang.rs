@@ -27,32 +27,65 @@ impl fmt::Display for Intro {
     }
 }
 
-struct VarNameFmt<'a> {
-    name: &'a str,
-    ts: usize,
-    max_ts: usize,
+/// Public-arg labels for the chain var endpoints. Hard-coupled to the
+/// txlib's `TxFinalized` / `ReplayActions` predicate signatures.
+const CHAIN_START: &str = "chain_start";
+const CHAIN_END: &str = "chain_end";
+
+/// Render the txlib chain var at a given timestamp. The naming scheme
+/// is a protocol concern: the txlib's `TxFinalized` and `ReplayActions`
+/// predicates expect those literal labels for the chain endpoints.
+fn fmt_chain_at(ts: usize, max_ts: usize) -> String {
+    match ts {
+        0 => CHAIN_START.to_string(),
+        t if t == max_ts => CHAIN_END.to_string(),
+        t => format!("chain_{t}"),
+    }
+}
+
+/// Render a user-defined var at a given timestamp. Final ts renders as
+/// the bare name; intermediate timestamps suffix the index. SSA-style
+/// disambiguation for vars rewritten by mutations.
+fn fmt_var_at(name: &str, ts: usize, max_ts: usize) -> String {
+    if ts == max_ts {
+        name.to_string()
+    } else {
+        format!("{name}{ts}")
+    }
+}
+
+/// Two variants encode the protocol/implementation split between
+/// `fmt_chain_at` and `fmt_var_at` so dispatch is at the type level
+/// instead of by string comparison.
+enum VarNameFmt<'a> {
+    Chain { ts: usize, max_ts: usize },
+    Var { name: &'a str, ts: usize, max_ts: usize },
 }
 
 impl<'a> VarNameFmt<'a> {
     fn inc(&mut self) {
-        self.ts += 1;
+        match self {
+            Self::Chain { ts, .. } | Self::Var { ts, .. } => *ts += 1,
+        }
     }
-    fn next(&'a self) -> Self {
-        Self {
-            name: self.name,
-            ts: self.ts + 1,
-            max_ts: self.max_ts,
+    fn next(&self) -> Self {
+        match *self {
+            Self::Chain { ts, max_ts } => Self::Chain { ts: ts + 1, max_ts },
+            Self::Var { name, ts, max_ts } => Self::Var {
+                name,
+                ts: ts + 1,
+                max_ts,
+            },
         }
     }
 }
 
 impl<'a> fmt::Display for VarNameFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name)?;
-        if self.ts != self.max_ts {
-            write!(f, "{}", self.ts)?;
+        match self {
+            Self::Chain { ts, max_ts } => write!(f, "{}", fmt_chain_at(*ts, *max_ts)),
+            Self::Var { name, ts, max_ts } => write!(f, "{}", fmt_var_at(name, *ts, *max_ts)),
         }
-        Ok(())
     }
 }
 
@@ -77,14 +110,13 @@ impl<'a> fmt::Display for ArgFmt<'a> {
 
 fn fmt_action_vars(action: &ActionContext) -> Vec<String> {
     let mut vars = Vec::new();
+    for i in 0..=action.chain_ts {
+        vars.push(fmt_chain_at(i, action.chain_ts));
+    }
     for var in &action.vars {
         let state = &action.var_state[var];
-        for i in 0..state.ts + 1 {
-            if i == state.ts {
-                vars.push(var.clone());
-            } else {
-                vars.push(format!("{var}{i}"));
-            }
+        for i in 0..=state.ts {
+            vars.push(fmt_var_at(var, i, state.ts));
         }
     }
     vars
@@ -93,32 +125,28 @@ fn fmt_action_vars(action: &ActionContext) -> Vec<String> {
 fn fmt_action_pub_vars(action: &ActionContext) -> Vec<String> {
     let mut vars = Vec::new();
     for inst in &action.insts {
-        if let Inst::Object {
-            io: ObjectIO::Mutate | ObjectIO::Output,
-            obj,
-            class: _,
-        } = inst
-        {
-            vars.push(obj.borrow().var_name().to_string())
+        // Every direct Object inst is public: Inputs (deletes),
+        // Outputs (inserts), and Mutates all become arguments so the
+        // class's IsX OR can dispatch on any of them at replay time.
+        // Sub-action references stay private — a sub-action's I/O
+        // appears in the sub-action's own predicate signature, and
+        // its output is a private witness within the parent.
+        if let Inst::Object { obj, .. } = inst {
+            vars.push(obj.borrow().var_name().to_string());
         }
     }
-    vars.extend_from_slice(&["tx".to_string(), "tx0".to_string()]);
+    vars.extend_from_slice(&[CHAIN_START.to_string(), CHAIN_END.to_string()]);
     vars
 }
 
 fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
     write!(w, "{}(", action.name)?;
     let pub_var_names = fmt_action_pub_vars(action);
-    for (i, var) in pub_var_names.iter().enumerate() {
-        if i != 0 {
-            write!(w, ", ")?;
-        }
-        write!(w, "{var}")?;
+    for var in &pub_var_names {
+        write!(w, "{var}, ")?;
     }
+    write!(w, "private: ")?;
     let var_names = fmt_action_vars(action);
-    if var_names.len() - pub_var_names.len() > 0 {
-        write!(w, ", private: ")?;
-    }
     for (i, var) in var_names
         .iter()
         .filter(|v| !pub_var_names.contains(v))
@@ -135,7 +163,7 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
         .map(|v| {
             (
                 v.as_str(),
-                VarNameFmt {
+                VarNameFmt::Var {
                     name: v,
                     ts: 0,
                     max_ts: action.var_state[v].ts,
@@ -143,32 +171,20 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
             )
         })
         .collect();
+    let mut chain = VarNameFmt::Chain {
+        ts: 0,
+        max_ts: action.chain_ts,
+    };
     writeln!(w, ") = AND(")?;
     let mut objs = Vec::new();
     for inst in &action.insts {
         match inst {
-            Inst::Object { io, obj, class } => {
-                match io {
-                    ObjectIO::Input => {
-                        writeln!(w, "  Is{}({})", class, ArgFmt(&vars, obj))?;
-                    }
-                    ObjectIO::Output => {}
-                    ObjectIO::Mutate => {
-                        writeln!(w, "  Is{}({})", class, ArgFmt(&vars, obj))?;
-                    }
-                }
+            Inst::Object { io, obj, .. } => {
+                // Input/Mutate type-guards are enforced at replay time by
+                // the new txlib (ReplayDelete/ReplayMutate call the obj's
+                // type predicate). Nothing to emit inline.
                 let obj = obj.borrow();
                 objs.push((io, obj.var_name().to_string()));
-            }
-            Inst::SubAction { action, obj } => {
-                let tx = &vars["tx"];
-                let tx_next = tx.next();
-                writeln!(
-                    w,
-                    "  {action}({obj}, {tx_next}, {tx})",
-                    obj = ArgFmt(&vars, obj)
-                )?;
-                vars.get_mut("tx").expect("tx exists").inc();
             }
             Inst::Set { obj, kvs } => {
                 let obj = &vars[obj.as_str()];
@@ -205,17 +221,29 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                 }
                 writeln!(w, ")")?;
             }
+            Inst::SubAction { action, obj } => {
+                // The sub-action's ReplayAction encapsulates all its
+                // events as one chain step from the parent's view.
+                let chain_next = chain.next();
+                writeln!(
+                    w,
+                    "  {action}({obj}, {chain}, {chain_next})",
+                    obj = ArgFmt(&vars, obj)
+                )?;
+                chain.inc();
+            }
         }
     }
     for (io, obj) in &objs {
-        let tx = &vars["tx"];
-        let tx_next = tx.next();
+        let chain_next = chain.next();
         match io {
-            ObjectIO::Input => writeln!(w, "  tx::TxDeleted({tx_next}, {tx}, {obj})")?,
-            ObjectIO::Output => writeln!(w, "  tx::TxInserted({tx_next}, {tx}, {obj})")?,
-            ObjectIO::Mutate => writeln!(w, "  tx::TxMutated({tx_next}, {tx}, {obj}, {obj}0)")?,
+            ObjectIO::Input => writeln!(w, "  tx::TxDeleted({chain_next}, {chain}, {obj})")?,
+            ObjectIO::Output => writeln!(w, "  tx::TxInserted({chain_next}, {chain}, {obj})")?,
+            ObjectIO::Mutate => {
+                writeln!(w, "  tx::TxMutated({chain_next}, {chain}, {obj}, {obj}0)")?
+            }
         }
-        vars.get_mut("tx").expect("tx exists").inc();
+        chain.inc();
     }
     writeln!(w, ")")?;
     Ok(())
@@ -223,17 +251,17 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
 
 fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt::Result {
     let name = &class.name;
-    write!(w, "Is{name}(state, private: tx, tx0")?;
+    write!(w, "Is{name}(state, chain_start, chain_end")?;
 
     let other_len = class
         .actions
         .iter()
-        .map(|(action_name, _)| loader.action_by_name(action_name).local_outputs.len())
+        .map(|(action_name, _)| loader.action_by_name(action_name).object_refs.len())
         .max()
         .unwrap()
         - 1;
     if other_len != 0 {
-        write!(w, ", ")?;
+        write!(w, ", private: ")?;
     }
     for i in 0..other_len {
         if i != 0 {
@@ -246,7 +274,7 @@ fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt:
         write!(w, "  {action_name}(")?;
         let action = loader.action_by_name(action_name);
         let mut count = 0;
-        for i in 0..action.local_outputs.len() {
+        for i in 0..action.object_refs.len() {
             if i != 0 {
                 write!(w, ", ")?;
             }
@@ -257,7 +285,7 @@ fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt:
                 count += 1;
             }
         }
-        writeln!(w, ", tx, tx0)")?;
+        writeln!(w, ", chain_start, chain_end)")?;
     }
     writeln!(w, ")")?;
     Ok(())

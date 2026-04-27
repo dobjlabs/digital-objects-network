@@ -110,57 +110,46 @@ fn test_sdk_1() {
         .load_module_from_src_actions(craft_src, actions)
         .unwrap();
 
-    fn list(xs: &[(&str, &str)]) -> Vec<(String, String)> {
-        xs.into_iter()
-            .map(|(a, b)| (a.to_string(), b.to_string()))
-            .collect()
+    fn classes<'a>(refs: impl Iterator<Item = &'a ActionObjectRef>) -> Vec<&'a str> {
+        refs.map(|r| r.class.as_str()).collect()
     }
     let actions = module.actions();
     // FindLog
     let action = &actions[0];
-    assert_eq!(action.local_inputs, action.total_inputs);
-    assert_eq!(&action.local_inputs, &[]);
-    assert_eq!(action.local_outputs, action.total_outputs);
-    assert_eq!(action.local_outputs, list(&[("log", "Log")]));
+    assert_eq!(classes(action.inputs()), classes(action.total_inputs()));
+    assert_eq!(classes(action.inputs()), Vec::<&str>::new());
+    assert_eq!(classes(action.outputs()), classes(action.total_outputs()));
+    assert_eq!(classes(action.outputs()), vec!["Log"]);
     // CraftWood
     let action = &actions[1];
-    assert_eq!(action.local_inputs, action.total_inputs);
-    assert_eq!(action.local_inputs, list(&[("log", "Log")]));
-    assert_eq!(action.local_outputs, action.total_outputs);
-    assert_eq!(action.local_outputs, list(&[("wood", "Wood")]));
+    assert_eq!(classes(action.inputs()), classes(action.total_inputs()));
+    assert_eq!(classes(action.inputs()), vec!["Log"]);
+    assert_eq!(classes(action.outputs()), classes(action.total_outputs()));
+    assert_eq!(classes(action.outputs()), vec!["Wood"]);
     // CraftSticks
     let action = &actions[2];
-    assert_eq!(action.local_inputs, action.total_inputs);
-    assert_eq!(action.local_inputs, list(&[("wood", "Wood")]));
-    assert_eq!(action.local_outputs, action.total_outputs);
-    assert_eq!(
-        action.local_outputs,
-        list(&[("stick_a", "Stick"), ("stick_b", "Stick")])
-    );
+    assert_eq!(classes(action.inputs()), classes(action.total_inputs()));
+    assert_eq!(classes(action.inputs()), vec!["Wood"]);
+    assert_eq!(classes(action.outputs()), classes(action.total_outputs()));
+    assert_eq!(classes(action.outputs()), vec!["Stick", "Stick"]);
     // CraftWoodPick
     let action = &actions[3];
-    assert_eq!(action.local_inputs, action.total_inputs);
-    assert_eq!(
-        action.local_inputs,
-        list(&[("wood", "Wood"), ("stick", "Stick")])
-    );
-    assert_eq!(action.local_outputs, action.total_outputs);
-    assert_eq!(action.local_outputs, list(&[("pick", "WoodPick")]));
+    assert_eq!(classes(action.inputs()), classes(action.total_inputs()));
+    assert_eq!(classes(action.inputs()), vec!["Wood", "Stick"]);
+    assert_eq!(classes(action.outputs()), classes(action.total_outputs()));
+    assert_eq!(classes(action.outputs()), vec!["WoodPick"]);
     // UseWoodPick
     let action = &actions[4];
-    assert_eq!(action.local_inputs, action.total_inputs);
-    assert_eq!(action.local_inputs, list(&[("wood_pick", "WoodPick")]));
-    assert_eq!(action.local_outputs, action.total_outputs);
-    assert_eq!(action.local_outputs, list(&[("wood_pick", "WoodPick")]));
+    assert_eq!(classes(action.inputs()), classes(action.total_inputs()));
+    assert_eq!(classes(action.inputs()), vec!["WoodPick"]);
+    assert_eq!(classes(action.outputs()), classes(action.total_outputs()));
+    assert_eq!(classes(action.outputs()), vec!["WoodPick"]);
     // MineStoneWithWoodPick
     let action = &actions[5];
-    assert_eq!(action.local_inputs, list(&[]));
-    assert_eq!(action.total_inputs, list(&[("wood_pick", "WoodPick")]));
-    assert_eq!(action.local_outputs, list(&[("stone", "Stone")]));
-    assert_eq!(
-        action.total_outputs,
-        list(&[("wood_pick", "WoodPick"), ("stone", "Stone")])
-    );
+    assert_eq!(classes(action.inputs()), Vec::<&str>::new());
+    assert_eq!(classes(action.total_inputs()), vec!["WoodPick"]);
+    assert_eq!(classes(action.outputs()), vec!["Stone"]);
+    assert_eq!(classes(action.total_outputs()), vec!["WoodPick", "Stone"]);
 
     println!("{}", module.podlang_src);
 
@@ -226,7 +215,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "b837ea9d1c477c9668d4ebfcedc60f86c47a2669642738428f344cc68ff721ba"
+        module_hash = "89186d51b500e63c74bc8b797f2f9268ed9e883f6c5525138bfd3f4cc6ba4cf6"
 
         [[classes]]
         name = "Log"
