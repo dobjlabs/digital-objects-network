@@ -11,16 +11,18 @@
 //! The public surface is intentionally small:
 //!
 //! - [`TxBuilder::new`] — grounds the inputs against a state root.
-//! - [`TxBuilder::action`] — opens an action scope; the closure emits
-//!   events through an [`ActionCtx`] and attaches guard evidence per
-//!   event. Scopes nest via [`ActionCtx::sub`].
+//! - [`TxBuilder::begin_action`] / [`TxBuilder::end_action`] — open and
+//!   close an action scope. Direct events
+//!   ([`TxBuilder::insert`] / [`TxBuilder::mutate`] / [`TxBuilder::delete`])
+//!   emitted between them must each have guard evidence attached via
+//!   [`TxBuilder::set_guard`] before the scope closes. Scopes nest:
+//!   calling `begin_action` again before closing the first opens a
+//!   sub-action whose events appear nested under the parent.
 //! - [`TxBuilder::finalize`] — walks the event tree and emits the
 //!   `TxFinalized` proof.
 //!
-//! Below that sits a `pub(crate)` primitive layer (`begin_action`,
-//! `end_action`, `insert`, `mutate`, `delete`) that the closure API
-//! uses internally. Below that, the [`replay`] submodule contains the
-//! predicate-tree construction invoked by `finalize`.
+//! The [`replay`] submodule contains the predicate-tree construction
+//! invoked by `finalize`.
 
 pub mod predicates;
 mod replay;
@@ -259,10 +261,11 @@ struct ActionScope {
     scope_id: u64,
 }
 
-/// Opaque, Copy handle to a direct event emitted inside an `ActionCtx`.
-/// Pass to `ActionCtx::set_guard` to attach guard evidence. A handle is
-/// only valid in the `ActionCtx` that emitted it; using it elsewhere
-/// panics with a scope-mismatch message.
+/// Opaque, Copy handle to a direct event emitted inside an action scope.
+/// Pass to [`TxBuilder::set_guard`] to attach guard evidence. A handle
+/// is only valid for the scope it was emitted in; using it after that
+/// scope has closed (or in a different scope) panics with a
+/// scope-mismatch message.
 #[derive(Copy, Clone, Debug)]
 pub struct EventHandle {
     scope_id: u64,
@@ -465,41 +468,67 @@ impl TxBuilder {
         self.chain
     }
 
-    /// Open a top-level action scope, run the body, and close it. All
-    /// direct events emitted inside must have guard evidence attached
-    /// via `ActionCtx::set_guard` before the closure returns (checked
-    /// at scope close). The body's return value -- typically the
-    /// action's predicate statement -- is forwarded to the caller.
-    pub fn action<F>(&mut self, ctx: &mut BuildContext, body: F) -> Statement
-    where
-        F: FnOnce(&mut ActionCtx<'_>, &mut BuildContext) -> Statement,
-    {
-        self.run_action_scope(ctx, body)
+    /// Open a new action scope. Subsequent direct events
+    /// (`insert`/`mutate`/`delete`) are recorded in this scope until
+    /// `end_action` is called with the returned id. Scopes nest:
+    /// calling `begin_action` again before closing the first opens a
+    /// sub-action whose events appear nested under the parent.
+    pub fn begin_action(&mut self) -> u64 {
+        let scope_id = self.next_scope_id;
+        self.next_scope_id += 1;
+        self.action_stack.push(ActionScope {
+            events: vec![],
+            scope_id,
+        });
+        scope_id
     }
 
-    /// Shared implementation of `action` (top-level) and `ActionCtx::sub`
-    /// (nested). Both behave identically: open a scope, run the body with
-    /// an ActionCtx, verify guards, close the scope.
-    fn run_action_scope<F>(&mut self, ctx: &mut BuildContext, body: F) -> Statement
-    where
-        F: FnOnce(&mut ActionCtx<'_>, &mut BuildContext) -> Statement,
-    {
-        let scope_id = self.begin_action();
-        let result = {
-            let mut a = ActionCtx {
-                tx: &mut *self,
-                scope_id,
-            };
-            body(&mut a, ctx)
-        };
+    /// Close the action scope identified by `scope_id`. Verifies that
+    /// every direct event in the scope has guard evidence attached
+    /// (panics on the first missing one) and that the supplied id
+    /// matches the top-of-stack scope.
+    pub fn end_action(&mut self, scope_id: u64) {
         self.verify_scope_guards(scope_id);
-        self.end_action();
-        result
+        let scope = self.action_stack.pop().expect("no action scope to close");
+        assert_eq!(
+            scope.scope_id, scope_id,
+            "end_action scope id mismatch (expected {scope_id}, got {})",
+            scope.scope_id
+        );
+        self.push_event(ChainEvent::Action {
+            chain_after: self.chain,
+            contents: scope.events,
+        });
     }
 
-    /// Check that every direct event in the current top-of-stack scope
-    /// has guard evidence attached. Panics with a descriptive message
-    /// on the first unattached event found.
+    /// Attach guard evidence to a previously emitted event. The handle
+    /// must belong to the current (top-of-stack) scope; cross-scope
+    /// handles panic.
+    pub fn set_guard(&mut self, handle: EventHandle, guard: Statement) {
+        let scope = self.action_stack.last_mut().expect("no open scope");
+        assert_eq!(
+            handle.scope_id, scope.scope_id,
+            "EventHandle from a different scope (handle={}, current={})",
+            handle.scope_id, scope.scope_id
+        );
+        let event = scope
+            .events
+            .get_mut(handle.index)
+            .expect("event index out of range");
+        match event {
+            ChainEvent::Insert { guard_evidence, .. }
+            | ChainEvent::Mutate { guard_evidence, .. }
+            | ChainEvent::Delete { guard_evidence, .. } => {
+                assert!(guard_evidence.is_none(), "guard evidence already set");
+                *guard_evidence = Some(guard);
+            }
+            ChainEvent::Action { .. } => panic!("cannot set guard evidence on an action"),
+        }
+    }
+
+    /// Check that every direct event in the named scope has guard
+    /// evidence attached. Called by `end_action`; panics on the first
+    /// unattached event found.
     fn verify_scope_guards(&self, scope_id: u64) {
         let scope = self.action_stack.last().expect("action scope missing");
         assert_eq!(scope.scope_id, scope_id);
@@ -518,32 +547,25 @@ impl TxBuilder {
         }
     }
 
-    /// Start a new action scope. Returns the fresh scope id so an
-    /// `ActionCtx` can stamp its event handles with it.
-    pub(crate) fn begin_action(&mut self) -> u64 {
-        let scope_id = self.next_scope_id;
-        self.next_scope_id += 1;
-        self.action_stack.push(ActionScope {
-            events: vec![],
-            scope_id,
-        });
-        scope_id
-    }
-
-    /// Close the current action scope. Does not advance the chain --
-    /// the action's range is defined by the chain positions of its
-    /// first and last events.
-    pub(crate) fn end_action(&mut self) {
-        let scope = self.action_stack.pop().expect("no action scope to close");
-        self.push_event(ChainEvent::Action {
-            chain_after: self.chain,
-            contents: scope.events,
-        });
+    fn handle_for_last_event(&self) -> EventHandle {
+        let scope = self.action_stack.last().expect("scope missing");
+        let index = scope.events.len() - 1;
+        EventHandle {
+            scope_id: scope.scope_id,
+            index,
+        }
     }
 
     /// Record an insertion. Emits TxInserted, updates live set.
-    /// Must be called inside an open action scope.
-    pub(crate) fn insert(&mut self, ctx: &mut BuildContext, new: &Dictionary) -> Statement {
+    /// Must be called inside an open action scope. Returns the
+    /// TxInserted statement (for composition into the action's
+    /// predicate) and a handle used to attach guard evidence via
+    /// `set_guard`.
+    pub fn insert(
+        &mut self,
+        ctx: &mut BuildContext,
+        new: &Dictionary,
+    ) -> (Statement, EventHandle) {
         assert!(
             !self.action_stack.is_empty(),
             "insert must be called inside an action scope",
@@ -577,17 +599,19 @@ impl TxBuilder {
             tx_stmt: st.clone(),
             guard_evidence: None,
         });
-        st
+        let handle = self.handle_for_last_event();
+        (st, handle)
     }
 
     /// Record a mutation. Emits TxMutated, updates live set and nullifiers.
-    /// Must be called inside an open action scope.
-    pub(crate) fn mutate(
+    /// Must be called inside an open action scope. Returns the
+    /// TxMutated statement and a handle for guard attachment.
+    pub fn mutate(
         &mut self,
         ctx: &mut BuildContext,
         new: &Dictionary,
         old: &Dictionary,
-    ) -> Statement {
+    ) -> (Statement, EventHandle) {
         assert!(
             !self.action_stack.is_empty(),
             "mutate must be called inside an action scope",
@@ -626,12 +650,18 @@ impl TxBuilder {
             tx_stmt: st.clone(),
             guard_evidence: None,
         });
-        st
+        let handle = self.handle_for_last_event();
+        (st, handle)
     }
 
     /// Record a deletion. Emits TxDeleted, updates live set and nullifiers.
-    /// Must be called inside an open action scope.
-    pub(crate) fn delete(&mut self, ctx: &mut BuildContext, old: &Dictionary) -> Statement {
+    /// Must be called inside an open action scope. Returns the
+    /// TxDeleted statement and a handle for guard attachment.
+    pub fn delete(
+        &mut self,
+        ctx: &mut BuildContext,
+        old: &Dictionary,
+    ) -> (Statement, EventHandle) {
         assert!(
             !self.action_stack.is_empty(),
             "delete must be called inside an action scope",
@@ -668,7 +698,8 @@ impl TxBuilder {
             tx_stmt: st.clone(),
             guard_evidence: None,
         });
-        st
+        let handle = self.handle_for_last_event();
+        (st, handle)
     }
 
     /// Build the replay chain and emit TxFinalized.
@@ -683,7 +714,7 @@ impl TxBuilder {
 
         // Replay the top-level action sequence. Every top-level event
         // is guaranteed to be a ChainEvent::Action (enforced by the
-        // ActionCtx closure API), so we dispatch directly to
+        // begin_action/end_action API), so we dispatch directly to
         // ReplayActions instead of going through ReplayContents.
         let (st_replay, _, _, _) = replay::build_replay_actions(
             ctx,
@@ -919,110 +950,6 @@ fn prove_source_tx_membership(
 }
 
 // ============================================================================
-// ActionCtx
-// ============================================================================
-
-/// Event-emitting handle bound to one open action scope. Obtained inside
-/// the closure passed to `TxBuilder::action` or `ActionCtx::sub`. Emits
-/// insert/mutate/delete events, lets the caller attach guard evidence
-/// per event via `set_guard`, and opens nested sub-actions via `sub`.
-///
-/// An `ActionCtx` cannot be constructed directly; its scope id is
-/// stamped onto every `EventHandle` it hands out, so handles from other
-/// scopes are rejected at `set_guard` time.
-pub struct ActionCtx<'a> {
-    tx: &'a mut TxBuilder,
-    scope_id: u64,
-}
-
-impl<'a> ActionCtx<'a> {
-    /// Emit an insert event. Returns the TxInserted statement (for
-    /// composition into this action's predicate) and a handle used to
-    /// attach guard evidence via `set_guard`.
-    pub fn insert(
-        &mut self,
-        ctx: &mut BuildContext,
-        new: &Dictionary,
-    ) -> (Statement, EventHandle) {
-        let stmt = self.tx.insert(ctx, new);
-        let handle = self.handle_for_last_event();
-        (stmt, handle)
-    }
-
-    /// Emit a mutate event. Returns the TxMutated statement and a
-    /// handle for guard attachment.
-    pub fn mutate(
-        &mut self,
-        ctx: &mut BuildContext,
-        new: &Dictionary,
-        old: &Dictionary,
-    ) -> (Statement, EventHandle) {
-        let stmt = self.tx.mutate(ctx, new, old);
-        let handle = self.handle_for_last_event();
-        (stmt, handle)
-    }
-
-    /// Emit a delete event. Returns the TxDeleted statement and a
-    /// handle for guard attachment.
-    pub fn delete(
-        &mut self,
-        ctx: &mut BuildContext,
-        old: &Dictionary,
-    ) -> (Statement, EventHandle) {
-        let stmt = self.tx.delete(ctx, old);
-        let handle = self.handle_for_last_event();
-        (stmt, handle)
-    }
-
-    /// Attach guard evidence to a previously emitted event. The handle
-    /// must be one this `ActionCtx` produced; cross-scope handles panic.
-    pub fn set_guard(&mut self, handle: EventHandle, guard: Statement) {
-        assert_eq!(
-            handle.scope_id, self.scope_id,
-            "EventHandle from a different scope (handle={}, current={})",
-            handle.scope_id, self.scope_id
-        );
-        let scope = self.tx.action_stack.last_mut().expect("scope missing");
-        assert_eq!(scope.scope_id, self.scope_id);
-        let event = scope
-            .events
-            .get_mut(handle.index)
-            .expect("event index out of range");
-        match event {
-            ChainEvent::Insert { guard_evidence, .. }
-            | ChainEvent::Mutate { guard_evidence, .. }
-            | ChainEvent::Delete { guard_evidence, .. } => {
-                assert!(guard_evidence.is_none(), "guard evidence already set");
-                *guard_evidence = Some(guard);
-            }
-            ChainEvent::Action { .. } => panic!("cannot set guard evidence on an action"),
-        }
-    }
-
-    /// Open a nested sub-action. Returns the sub-action's body return
-    /// value -- typically its predicate statement, for composition into
-    /// this action's predicate. All direct events emitted inside the
-    /// sub-scope must have guard evidence attached before the closure
-    /// returns.
-    pub fn sub<F>(&mut self, ctx: &mut BuildContext, body: F) -> Statement
-    where
-        F: FnOnce(&mut ActionCtx<'_>, &mut BuildContext) -> Statement,
-    {
-        self.tx.run_action_scope(ctx, body)
-    }
-
-    fn handle_for_last_event(&self) -> EventHandle {
-        let scope = self.tx.action_stack.last().expect("scope missing");
-        assert_eq!(scope.scope_id, self.scope_id);
-        let index = scope.events.len() - 1;
-        EventHandle {
-            scope_id: self.scope_id,
-            index,
-        }
-    }
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1241,29 +1168,28 @@ mod tests {
 
         let mut tx1 = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
 
-        tx1.action(&mut ctx, |a, ctx| {
-            let (st_insert, h) = a.insert(ctx, &pick);
-            let op_type = ctx
-                .builder
-                .priv_op(op!(DictContains(pick, "type", is_wood_pick.clone())))
-                .unwrap();
-            let op_dur = ctx
-                .builder
-                .priv_op(op!(DictContains(pick, "durability", 100_i64)))
-                .unwrap();
-            let st_spawn = ctx
-                .apply_custom_pred_simple(false, "SpawnWoodPick", vec![op_type, op_dur, st_insert])
-                .unwrap();
-            let st_guard = ctx
-                .apply_custom_pred_simple(
-                    false,
-                    "IsWoodPick",
-                    vec![st_spawn.clone(), Statement::None, Statement::None],
-                )
-                .unwrap();
-            a.set_guard(h, st_guard);
-            st_spawn
-        });
+        let scope = tx1.begin_action();
+        let (st_insert, h) = tx1.insert(&mut ctx, &pick);
+        let op_type = ctx
+            .builder
+            .priv_op(op!(DictContains(pick, "type", is_wood_pick.clone())))
+            .unwrap();
+        let op_dur = ctx
+            .builder
+            .priv_op(op!(DictContains(pick, "durability", 100_i64)))
+            .unwrap();
+        let st_spawn = ctx
+            .apply_custom_pred_simple(false, "SpawnWoodPick", vec![op_type, op_dur, st_insert])
+            .unwrap();
+        let st_guard = ctx
+            .apply_custom_pred_simple(
+                false,
+                "IsWoodPick",
+                vec![st_spawn.clone(), Statement::None, Statement::None],
+            )
+            .unwrap();
+        tx1.set_guard(h, st_guard);
+        tx1.end_action(scope);
 
         eprintln!("{tx1}");
         let (st, tx0, stats) = tx1.finalize(&mut ctx);
@@ -1288,64 +1214,66 @@ mod tests {
         let inputs = vec![(pick.clone(), tx0)];
         let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
 
-        tx2.action(&mut ctx, |a, ctx| {
-            // Sub-action: UseWoodPick (mutate pick)
-            let st_use_wp = a.sub(ctx, |sub, ctx| {
-                let (st_mutate, h) = sub.mutate(ctx, &pick_new, &pick);
-                let pick_type = pick.get(&Key::from("type")).unwrap().unwrap();
-                let op_type = ctx
-                    .builder
-                    .priv_op(op!(DictContains(pick, "type", pick_type)))
-                    .unwrap();
-                let op_gt = ctx
-                    .builder
-                    .priv_op(op!(Gt((&pick, "durability"), 0_i64)))
-                    .unwrap();
-                let op_sum = ctx
-                    .builder
-                    .priv_op(op!(SumOf((&pick, "durability"), 99_i64, 1_i64)))
-                    .unwrap();
-                let op_du = ctx
-                    .builder
-                    .priv_op(op!(DictUpdate(pick_new, pick, "durability", 99_i64)))
-                    .unwrap();
-                let st_action = ctx
-                    .apply_custom_pred_simple(
-                        false,
-                        "UseWoodPick",
-                        vec![op_type, op_gt, op_sum, op_du, st_mutate],
-                    )
-                    .unwrap();
-                let st_guard = ctx
-                    .apply_custom_pred_simple(
-                        false,
-                        "IsWoodPick",
-                        vec![Statement::None, Statement::None, st_action.clone()],
-                    )
-                    .unwrap();
-                sub.set_guard(h, st_guard);
-                st_action
-            });
+        let scope_outer = tx2.begin_action();
 
-            // Direct: insert stone
-            let (st_stone_insert, h) = a.insert(ctx, &stone);
+        // Sub-action: UseWoodPick (mutate pick)
+        let st_use_wp = {
+            let scope_sub = tx2.begin_action();
+            let (st_mutate, h_sub) = tx2.mutate(&mut ctx, &pick_new, &pick);
+            let pick_type = pick.get(&Key::from("type")).unwrap().unwrap();
             let op_type = ctx
                 .builder
-                .priv_op(op!(DictContains(stone, "type", is_stone.clone())))
+                .priv_op(op!(DictContains(pick, "type", pick_type)))
                 .unwrap();
-            let st_mine = ctx
+            let op_gt = ctx
+                .builder
+                .priv_op(op!(Gt((&pick, "durability"), 0_i64)))
+                .unwrap();
+            let op_sum = ctx
+                .builder
+                .priv_op(op!(SumOf((&pick, "durability"), 99_i64, 1_i64)))
+                .unwrap();
+            let op_du = ctx
+                .builder
+                .priv_op(op!(DictUpdate(pick_new, pick, "durability", 99_i64)))
+                .unwrap();
+            let st_action = ctx
                 .apply_custom_pred_simple(
                     false,
-                    "MineStone",
-                    vec![st_use_wp, op_type, st_stone_insert],
+                    "UseWoodPick",
+                    vec![op_type, op_gt, op_sum, op_du, st_mutate],
                 )
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(false, "IsStone", vec![st_mine.clone()])
+                .apply_custom_pred_simple(
+                    false,
+                    "IsWoodPick",
+                    vec![Statement::None, Statement::None, st_action.clone()],
+                )
                 .unwrap();
-            a.set_guard(h, st_guard);
-            st_mine
-        });
+            tx2.set_guard(h_sub, st_guard);
+            tx2.end_action(scope_sub);
+            st_action
+        };
+
+        // Direct: insert stone
+        let (st_stone_insert, h) = tx2.insert(&mut ctx, &stone);
+        let op_type = ctx
+            .builder
+            .priv_op(op!(DictContains(stone, "type", is_stone.clone())))
+            .unwrap();
+        let st_mine = ctx
+            .apply_custom_pred_simple(
+                false,
+                "MineStone",
+                vec![st_use_wp, op_type, st_stone_insert],
+            )
+            .unwrap();
+        let st_guard = ctx
+            .apply_custom_pred_simple(false, "IsStone", vec![st_mine.clone()])
+            .unwrap();
+        tx2.set_guard(h, st_guard);
+        tx2.end_action(scope_outer);
 
         eprintln!("{tx2}");
         let (st, tx_out, stats) = tx2.finalize(&mut ctx);
@@ -1396,25 +1324,24 @@ mod tests {
 
         let mut tx1 = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
 
-        tx1.action(&mut ctx, |a, ctx| {
-            let (st_insert, h) = a.insert(ctx, &log);
-            let op_type = ctx
-                .builder
-                .priv_op(op!(DictContains(log, "type", is_log.clone())))
-                .unwrap();
-            let st_find = ctx
-                .apply_custom_pred_simple(false, "FindLog", vec![op_type, st_insert])
-                .unwrap();
-            let st_guard = ctx
-                .apply_custom_pred_simple(
-                    false,
-                    "IsLog",
-                    vec![st_find.clone(), Statement::None],
-                )
-                .unwrap();
-            a.set_guard(h, st_guard);
-            st_find
-        });
+        let scope = tx1.begin_action();
+        let (st_insert, h) = tx1.insert(&mut ctx, &log);
+        let op_type = ctx
+            .builder
+            .priv_op(op!(DictContains(log, "type", is_log.clone())))
+            .unwrap();
+        let st_find = ctx
+            .apply_custom_pred_simple(false, "FindLog", vec![op_type, st_insert])
+            .unwrap();
+        let st_guard = ctx
+            .apply_custom_pred_simple(
+                false,
+                "IsLog",
+                vec![st_find.clone(), Statement::None],
+            )
+            .unwrap();
+        tx1.set_guard(h, st_guard);
+        tx1.end_action(scope);
 
         eprintln!("{tx1}");
         let (st, tx1_out, stats) = tx1.finalize(&mut ctx);
@@ -1438,52 +1365,54 @@ mod tests {
         let inputs = vec![(log.clone(), tx1_out)];
         let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
 
-        tx2.action(&mut ctx, |a, ctx| {
-            // Sub-action: DeleteLog
-            let st_del_log = a.sub(ctx, |sub, ctx| {
-                let (st_del, h) = sub.delete(ctx, &log);
-                let log_type = log.get(&Key::from("type")).unwrap().unwrap();
-                let op_type = ctx
-                    .builder
-                    .priv_op(op!(DictContains(log, "type", log_type)))
-                    .unwrap();
-                let st_action = ctx
-                    .apply_custom_pred_simple(false, "DeleteLog", vec![op_type, st_del])
-                    .unwrap();
-                let st_guard = ctx
-                    .apply_custom_pred_simple(
-                        false,
-                        "IsLog",
-                        vec![Statement::None, st_action.clone()],
-                    )
-                    .unwrap();
-                sub.set_guard(h, st_guard);
-                st_action
-            });
+        let scope_outer = tx2.begin_action();
 
-            // Direct: insert wood
-            let (st_ins, h) = a.insert(ctx, &wood);
+        // Sub-action: DeleteLog
+        let st_del_log = {
+            let scope_sub = tx2.begin_action();
+            let (st_del, h_sub) = tx2.delete(&mut ctx, &log);
+            let log_type = log.get(&Key::from("type")).unwrap().unwrap();
             let op_type = ctx
                 .builder
-                .priv_op(op!(DictContains(wood, "type", is_wood.clone())))
+                .priv_op(op!(DictContains(log, "type", log_type)))
                 .unwrap();
-            let st_craft_wood = ctx
-                .apply_custom_pred_simple(
-                    false,
-                    "CraftWood",
-                    vec![st_del_log, op_type, st_ins],
-                )
+            let st_action = ctx
+                .apply_custom_pred_simple(false, "DeleteLog", vec![op_type, st_del])
                 .unwrap();
             let st_guard = ctx
                 .apply_custom_pred_simple(
                     false,
-                    "IsWood",
-                    vec![st_craft_wood.clone(), Statement::None],
+                    "IsLog",
+                    vec![Statement::None, st_action.clone()],
                 )
                 .unwrap();
-            a.set_guard(h, st_guard);
-            st_craft_wood
-        });
+            tx2.set_guard(h_sub, st_guard);
+            tx2.end_action(scope_sub);
+            st_action
+        };
+
+        // Direct: insert wood
+        let (st_ins, h) = tx2.insert(&mut ctx, &wood);
+        let op_type = ctx
+            .builder
+            .priv_op(op!(DictContains(wood, "type", is_wood.clone())))
+            .unwrap();
+        let st_craft_wood = ctx
+            .apply_custom_pred_simple(
+                false,
+                "CraftWood",
+                vec![st_del_log, op_type, st_ins],
+            )
+            .unwrap();
+        let st_guard = ctx
+            .apply_custom_pred_simple(
+                false,
+                "IsWood",
+                vec![st_craft_wood.clone(), Statement::None],
+            )
+            .unwrap();
+        tx2.set_guard(h, st_guard);
+        tx2.end_action(scope_outer);
 
         eprintln!("{tx2}");
         let (st, tx2_out, stats) = tx2.finalize(&mut ctx);
@@ -1505,74 +1434,76 @@ mod tests {
         let inputs = vec![(wood.clone(), tx2_out)];
         let mut tx3 = TxBuilder::new(&mut ctx, &inputs, witness);
 
-        tx3.action(&mut ctx, |a, ctx| {
-            // Sub-action: DeleteWood
-            let st_del_wood = a.sub(ctx, |sub, ctx| {
-                let (st_del, h) = sub.delete(ctx, &wood);
-                let wood_type = wood.get(&Key::from("type")).unwrap().unwrap();
-                let op_type = ctx
-                    .builder
-                    .priv_op(op!(DictContains(wood, "type", wood_type)))
-                    .unwrap();
-                let st_action = ctx
-                    .apply_custom_pred_simple(false, "DeleteWood", vec![op_type, st_del])
-                    .unwrap();
-                let st_guard = ctx
-                    .apply_custom_pred_simple(
-                        false,
-                        "IsWood",
-                        vec![Statement::None, st_action.clone()],
-                    )
-                    .unwrap();
-                sub.set_guard(h, st_guard);
-                st_action
-            });
+        let scope_outer = tx3.begin_action();
 
-            // Direct: insert stick_a
-            let (st_ins_a, h_a) = a.insert(ctx, &stick_a);
-            let stick_type = stick_a.get(&Key::from("type")).unwrap().unwrap();
-            let op_type_a = ctx
+        // Sub-action: DeleteWood
+        let st_del_wood = {
+            let scope_sub = tx3.begin_action();
+            let (st_del, h_sub) = tx3.delete(&mut ctx, &wood);
+            let wood_type = wood.get(&Key::from("type")).unwrap().unwrap();
+            let op_type = ctx
                 .builder
-                .priv_op(op!(DictContains(stick_a, "type", stick_type.clone())))
+                .priv_op(op!(DictContains(wood, "type", wood_type)))
                 .unwrap();
-
-            // Direct: insert stick_b
-            let (st_ins_b, h_b) = a.insert(ctx, &stick_b);
-            let op_type_b = ctx
-                .builder
-                .priv_op(op!(DictContains(stick_b, "type", stick_type)))
+            let st_action = ctx
+                .apply_custom_pred_simple(false, "DeleteWood", vec![op_type, st_del])
                 .unwrap();
-
-            let st_craft_sticks = ctx
+            let st_guard = ctx
                 .apply_custom_pred_simple(
                     false,
-                    "CraftSticks",
-                    vec![st_del_wood, op_type_a, st_ins_a, op_type_b, st_ins_b],
+                    "IsWood",
+                    vec![Statement::None, st_action.clone()],
                 )
                 .unwrap();
+            tx3.set_guard(h_sub, st_guard);
+            tx3.end_action(scope_sub);
+            st_action
+        };
 
-            // stick_a: IsStick branch 2 = CraftSticks(obj, other, tx_start, tx_end)
-            let st_is_stick_a = ctx
-                .apply_custom_pred_simple(
-                    false,
-                    "IsStick",
-                    vec![Statement::None, st_craft_sticks.clone(), Statement::None],
-                )
-                .unwrap();
-            a.set_guard(h_a, st_is_stick_a);
+        // Direct: insert stick_a
+        let (st_ins_a, h_a) = tx3.insert(&mut ctx, &stick_a);
+        let stick_type = stick_a.get(&Key::from("type")).unwrap().unwrap();
+        let op_type_a = ctx
+            .builder
+            .priv_op(op!(DictContains(stick_a, "type", stick_type.clone())))
+            .unwrap();
 
-            // stick_b: IsStick branch 3 = CraftSticks(other, obj, tx_start, tx_end)
-            let st_is_stick_b = ctx
-                .apply_custom_pred_simple(
-                    false,
-                    "IsStick",
-                    vec![Statement::None, Statement::None, st_craft_sticks.clone()],
-                )
-                .unwrap();
-            a.set_guard(h_b, st_is_stick_b);
+        // Direct: insert stick_b
+        let (st_ins_b, h_b) = tx3.insert(&mut ctx, &stick_b);
+        let op_type_b = ctx
+            .builder
+            .priv_op(op!(DictContains(stick_b, "type", stick_type)))
+            .unwrap();
 
-            st_craft_sticks
-        });
+        let st_craft_sticks = ctx
+            .apply_custom_pred_simple(
+                false,
+                "CraftSticks",
+                vec![st_del_wood, op_type_a, st_ins_a, op_type_b, st_ins_b],
+            )
+            .unwrap();
+
+        // stick_a: IsStick branch 2 = CraftSticks(obj, other, tx_start, tx_end)
+        let st_is_stick_a = ctx
+            .apply_custom_pred_simple(
+                false,
+                "IsStick",
+                vec![Statement::None, st_craft_sticks.clone(), Statement::None],
+            )
+            .unwrap();
+        tx3.set_guard(h_a, st_is_stick_a);
+
+        // stick_b: IsStick branch 3 = CraftSticks(other, obj, tx_start, tx_end)
+        let st_is_stick_b = ctx
+            .apply_custom_pred_simple(
+                false,
+                "IsStick",
+                vec![Statement::None, Statement::None, st_craft_sticks.clone()],
+            )
+            .unwrap();
+        tx3.set_guard(h_b, st_is_stick_b);
+
+        tx3.end_action(scope_outer);
 
         eprintln!("{tx3}");
         let (st, tx3_out, stats) = tx3.finalize(&mut ctx);

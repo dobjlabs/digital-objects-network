@@ -115,10 +115,9 @@ impl PexeCatalog {
 
             for action in module.actions() {
                 let name = action.name.as_str();
-                let input_classes: Vec<String> =
-                    action.inputs.iter().map(|(_o, c)| c.clone()).collect();
+                let input_classes: Vec<String> = action.inputs().map(|r| r.class.clone()).collect();
                 let output_classes: Vec<String> =
-                    action.outputs.iter().map(|(_o, c)| c.clone()).collect();
+                    action.outputs().map(|r| r.class.clone()).collect();
                 action_signatures.insert(
                     name.to_string(),
                     (input_classes.clone(), output_classes.clone()),
