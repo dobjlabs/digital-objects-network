@@ -289,6 +289,64 @@ name = "ReactionChamber"
 emoji = "🏭"
 description = "Reaction chamber. Stable variants of extract, resin, engine, rocket."
 
+# ── tool wear / equipment touch (hidden helpers) ─────────────────────────────
+# Listed first so recipes that subaction("Use*") / subaction("Touch*") can
+# resolve them — actions are loaded in manifest order.
+
+[[actions]]
+name = "UseDrillBit"
+emoji = "🪛"
+description = "Internal: deplete one use of a drill bit."
+hidden = true
+
+[[actions]]
+name = "UseSolderingIron"
+emoji = "🔥"
+description = "Internal: deplete one use of a soldering iron."
+hidden = true
+
+[[actions]]
+name = "UsePressureValve"
+emoji = "🪠"
+description = "Internal: deplete one use of a pressure valve."
+hidden = true
+
+[[actions]]
+name = "TouchMachineI"
+emoji = "🤖"
+description = "Internal: prove possession of a MachineI."
+hidden = true
+
+[[actions]]
+name = "TouchMachineII"
+emoji = "🤖"
+description = "Internal: prove possession of a MachineII."
+hidden = true
+
+[[actions]]
+name = "TouchBlastFurnace"
+emoji = "🏭"
+description = "Internal: prove possession of a BlastFurnace."
+hidden = true
+
+[[actions]]
+name = "TouchCircuitFab"
+emoji = "🏭"
+description = "Internal: prove possession of a CircuitFab."
+hidden = true
+
+[[actions]]
+name = "TouchCrackingUnit"
+emoji = "🏭"
+description = "Internal: prove possession of a CrackingUnit."
+hidden = true
+
+[[actions]]
+name = "TouchReactionChamber"
+emoji = "🏭"
+description = "Internal: prove possession of a ReactionChamber."
+hidden = true
+
 # ── mines (PoW) ──────────────────────────────────────────────────────────────
 
 [[actions]]
@@ -680,22 +738,3 @@ name = "CraftRocketCat"
 emoji = "🚀"
 description = "Catalysed rocket — reaction-chamber + catalyst, deterministic."
 
-# ── tool wear (hidden helpers) ───────────────────────────────────────────────
-
-[[actions]]
-name = "UseDrillBit"
-emoji = "🪛"
-description = "Internal: deplete one use of a drill bit."
-hidden = true
-
-[[actions]]
-name = "UseSolderingIron"
-emoji = "🔥"
-description = "Internal: deplete one use of a soldering iron."
-hidden = true
-
-[[actions]]
-name = "UsePressureValve"
-emoji = "🪠"
-description = "Internal: deplete one use of a pressure valve."
-hidden = true

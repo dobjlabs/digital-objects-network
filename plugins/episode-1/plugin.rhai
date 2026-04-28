@@ -24,14 +24,6 @@ fn vdf_proof(action, obj, iters) {
     obj.update("work", work);
 }
 
-// Mutate an object without changing its semantic state. Used for level/station
-// "proof of possession" — decremented by a fresh random key so the txlib
-// mutation event is well-formed.
-fn touch(action, obj) {
-    var key = action.random();
-    obj.update("key", key);
-}
-
 // One use of a durability-bearing tool. The Gt(0) constraint fails when the
 // tool is exhausted, matching the simulator's "remove on hit zero" behavior.
 fn wear(action, tool) {
@@ -44,6 +36,9 @@ fn wear(action, tool) {
 }
 
 // ── tool wear (hidden top-level actions, called via subaction) ───────────────
+// Each is its own action so its `var key`/`var durability` live in their own
+// scope and don't collide with the calling recipe's `var key` (e.g. from a
+// pow_proof on the recipe's output).
 
 fn UseDrillBit(action) {
     var tool = action.mutate("DrillBit");
@@ -58,6 +53,47 @@ fn UseSolderingIron(action) {
 fn UsePressureValve(action) {
     var tool = action.mutate("PressureValve");
     wear(action, tool);
+}
+
+// ── level/station possession (hidden, called via subaction) ──────────────────
+// Mutating a machine or station with a fresh random key proves possession
+// without changing semantic state. One hidden action per class so each call
+// site has its own var scope.
+
+fn TouchMachineI(action) {
+    var m = action.mutate("MachineI");
+    var key = action.random();
+    m.update("key", key);
+}
+
+fn TouchMachineII(action) {
+    var m = action.mutate("MachineII");
+    var key = action.random();
+    m.update("key", key);
+}
+
+fn TouchBlastFurnace(action) {
+    var s = action.mutate("BlastFurnace");
+    var key = action.random();
+    s.update("key", key);
+}
+
+fn TouchCircuitFab(action) {
+    var s = action.mutate("CircuitFab");
+    var key = action.random();
+    s.update("key", key);
+}
+
+fn TouchCrackingUnit(action) {
+    var s = action.mutate("CrackingUnit");
+    var key = action.random();
+    s.update("key", key);
+}
+
+fn TouchReactionChamber(action) {
+    var s = action.mutate("ReactionChamber");
+    var key = action.random();
+    s.update("key", key);
 }
 
 // ── mines (PoW) ──────────────────────────────────────────────────────────────
@@ -249,8 +285,7 @@ fn CraftRefineryCrude(action) {
 }
 
 fn CraftRefineryCracked(action) {
-    var station = action.mutate("CrackingUnit");
-    touch(action, station);
+    var cu = action.subaction("TouchCrackingUnit");
     var oil = action.input("Oil");
     var water = action.input("Water");
     var tar_a = action.output("Tar");
@@ -302,8 +337,7 @@ fn CraftSteel(action) {
 }
 
 fn CraftSteelBlast(action) {
-    var station = action.mutate("BlastFurnace");
-    touch(action, station);
+    var bf = action.subaction("TouchBlastFurnace");
     var ingot_a = action.input("Ingot");
     var ingot_b = action.input("Ingot");
     var ingot_c = action.input("Ingot");
@@ -328,8 +362,7 @@ fn CraftMold(action) {
 }
 
 fn CraftGearCast(action) {
-    var station = action.mutate("BlastFurnace");
-    touch(action, station);
+    var bf = action.subaction("TouchBlastFurnace");
     var steel = action.input("Steel");
     var mold = action.input("Mold");
     var gear_a = action.output("Gear");
@@ -468,8 +501,7 @@ fn CraftExtract(action) {
 }
 
 fn CraftExtractCtrl(action) {
-    var station = action.mutate("ReactionChamber");
-    touch(action, station);
+    var rc = action.subaction("TouchReactionChamber");
     var acid_a = action.input("Acid");
     var acid_b = action.input("Acid");
     var extract = action.output("Extract");
@@ -580,8 +612,7 @@ fn CraftMachineI(action) {
 }
 
 fn CraftBlastFurnace(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var steel_a = action.input("Steel");
     var steel_b = action.input("Steel");
     var steel_c = action.input("Steel");
@@ -597,8 +628,7 @@ fn CraftBlastFurnace(action) {
 }
 
 fn CraftCircuitFab(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var bearing_a = action.input("Bearing");
     var bearing_b = action.input("Bearing");
     var coil_a = action.input("Coil");
@@ -615,8 +645,7 @@ fn CraftCircuitFab(action) {
 }
 
 fn CraftCrackingUnit(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var acid_a = action.input("Acid");
     var acid_b = action.input("Acid");
     var acid_c = action.input("Acid");
@@ -634,8 +663,7 @@ fn CraftCrackingUnit(action) {
 }
 
 fn CraftMachineII(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var circuit_a = action.input("Circuit");
     var circuit_b = action.input("Circuit");
     var bearing_a = action.input("Bearing");
@@ -650,8 +678,7 @@ fn CraftMachineII(action) {
 }
 
 fn CraftReactionChamber(action) {
-    var asm = action.mutate("MachineII");
-    touch(action, asm);
+    var m2 = action.subaction("TouchMachineII");
     var circuit_a = action.input("Circuit");
     var circuit_b = action.input("Circuit");
     var grease_a = action.input("Grease");
@@ -665,8 +692,7 @@ fn CraftReactionChamber(action) {
 // ── t3 (require MachineI) ────────────────────────────────────────────────────
 
 fn CraftBearing(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var steel = action.input("Steel");
     var grease_a = action.input("Grease");
     var grease_b = action.input("Grease");
@@ -678,8 +704,7 @@ fn CraftBearing(action) {
 }
 
 fn CraftCircuit(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var steel = action.input("Steel");
@@ -690,8 +715,7 @@ fn CraftCircuit(action) {
 }
 
 fn CraftCircuitSoldered(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var steel = action.input("Steel");
@@ -702,10 +726,8 @@ fn CraftCircuitSoldered(action) {
 }
 
 fn CraftCircuitFabbed(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
-    var station = action.mutate("CircuitFab");
-    touch(action, station);
+    var m1 = action.subaction("TouchMachineI");
+    var cf = action.subaction("TouchCircuitFab");
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var wire_c = action.input("Wire");
@@ -719,8 +741,7 @@ fn CraftCircuitFabbed(action) {
 }
 
 fn CraftCircuitFlash(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var steel = action.input("Steel");
@@ -730,8 +751,7 @@ fn CraftCircuitFlash(action) {
 }
 
 fn CraftCircuitCrude(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var steel = action.input("Steel");
@@ -744,8 +764,7 @@ fn CraftCircuitCrude(action) {
 }
 
 fn CraftCanvas(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var cloth_a = action.input("Cloth");
     var cloth_b = action.input("Cloth");
     var fiber = action.input("Fiber");
@@ -756,8 +775,7 @@ fn CraftCanvas(action) {
 }
 
 fn CraftCanvasLye(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var cloth_a = action.input("Cloth");
     var cloth_b = action.input("Cloth");
     var fiber = action.input("Fiber");
@@ -768,8 +786,7 @@ fn CraftCanvasLye(action) {
 }
 
 fn CraftCanvasFlash(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var cloth_a = action.input("Cloth");
     var cloth_b = action.input("Cloth");
     var fiber = action.input("Fiber");
@@ -780,8 +797,7 @@ fn CraftCanvasFlash(action) {
 }
 
 fn CraftCanvasCrude(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var cloth_a = action.input("Cloth");
     var cloth_b = action.input("Cloth");
     var fiber = action.input("Fiber");
@@ -795,8 +811,7 @@ fn CraftCanvasCrude(action) {
 }
 
 fn CraftPanel(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var board = action.input("Board");
     var extract = action.input("Extract");
     var panel_a = action.output("Panel");
@@ -806,8 +821,7 @@ fn CraftPanel(action) {
 }
 
 fn CraftPistons(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var bearing_a = action.input("Bearing");
     var bearing_b = action.input("Bearing");
     var coil_a = action.input("Coil");
@@ -820,8 +834,7 @@ fn CraftPistons(action) {
 }
 
 fn CraftResin(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var grease = action.input("Grease");
     var solvent = action.input("Solvent");
     var rubber = action.input("Rubber");
@@ -832,8 +845,7 @@ fn CraftResin(action) {
 }
 
 fn CraftResinPressurized(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var grease = action.input("Grease");
     var solvent = action.input("Solvent");
     var rubber = action.input("Rubber");
@@ -844,10 +856,8 @@ fn CraftResinPressurized(action) {
 }
 
 fn CraftResinStable(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
-    var station = action.mutate("ReactionChamber");
-    touch(action, station);
+    var m1 = action.subaction("TouchMachineI");
+    var rc = action.subaction("TouchReactionChamber");
     var grease = action.input("Grease");
     var solvent = action.input("Solvent");
     var rubber = action.input("Rubber");
@@ -860,8 +870,7 @@ fn CraftResinStable(action) {
 }
 
 fn CraftResinFlash(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var grease = action.input("Grease");
     var solvent = action.input("Solvent");
     var rubber = action.input("Rubber");
@@ -871,8 +880,7 @@ fn CraftResinFlash(action) {
 }
 
 fn CraftResinCrude(action) {
-    var asm = action.mutate("MachineI");
-    touch(action, asm);
+    var m1 = action.subaction("TouchMachineI");
     var grease = action.input("Grease");
     var solvent = action.input("Solvent");
     var rubber = action.input("Rubber");
@@ -887,8 +895,7 @@ fn CraftResinCrude(action) {
 // ── t4 (require MachineII) ───────────────────────────────────────────────────
 
 fn CraftEngine(action) {
-    var asm = action.mutate("MachineII");
-    touch(action, asm);
+    var m2 = action.subaction("TouchMachineII");
     var pistons = action.input("Pistons");
     var gear_a = action.input("Gear");
     var gear_b = action.input("Gear");
@@ -902,10 +909,8 @@ fn CraftEngine(action) {
 }
 
 fn CraftEngineTuned(action) {
-    var asm = action.mutate("MachineII");
-    touch(action, asm);
-    var station = action.mutate("ReactionChamber");
-    touch(action, station);
+    var m2 = action.subaction("TouchMachineII");
+    var rc = action.subaction("TouchReactionChamber");
     var pistons = action.input("Pistons");
     var gear_a = action.input("Gear");
     var gear_b = action.input("Gear");
@@ -919,8 +924,7 @@ fn CraftEngineTuned(action) {
 }
 
 fn CraftCasing(action) {
-    var asm = action.mutate("MachineII");
-    touch(action, asm);
+    var m2 = action.subaction("TouchMachineII");
     var steel_a = action.input("Steel");
     var steel_b = action.input("Steel");
     var steel_c = action.input("Steel");
@@ -937,8 +941,7 @@ fn CraftCasing(action) {
 }
 
 fn CraftCasingCoated(action) {
-    var asm = action.mutate("MachineII");
-    touch(action, asm);
+    var m2 = action.subaction("TouchMachineII");
     var steel_a = action.input("Steel");
     var steel_b = action.input("Steel");
     var steel_c = action.input("Steel");
@@ -956,8 +959,7 @@ fn CraftCasingCoated(action) {
 }
 
 fn CraftPayload(action) {
-    var asm = action.mutate("MachineII");
-    touch(action, asm);
+    var m2 = action.subaction("TouchMachineII");
     var panel_a = action.input("Panel");
     var panel_b = action.input("Panel");
     var panel_c = action.input("Panel");
@@ -974,8 +976,7 @@ fn CraftPayload(action) {
 // ── t5 (require MachineII) ───────────────────────────────────────────────────
 
 fn CraftRocket(action) {
-    var asm = action.mutate("MachineII");
-    touch(action, asm);
+    var m2 = action.subaction("TouchMachineII");
     var engine = action.input("Engine");
     var casing = action.input("Casing");
     var payload = action.input("Payload");
@@ -988,10 +989,8 @@ fn CraftRocket(action) {
 }
 
 fn CraftRocketCat(action) {
-    var asm = action.mutate("MachineII");
-    touch(action, asm);
-    var station = action.mutate("ReactionChamber");
-    touch(action, station);
+    var m2 = action.subaction("TouchMachineII");
+    var rc = action.subaction("TouchReactionChamber");
     var engine = action.input("Engine");
     var casing = action.input("Casing");
     var payload = action.input("Payload");
