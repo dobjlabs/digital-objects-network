@@ -104,9 +104,7 @@ fn fmt_action_pub_vars(action: &ActionContext) -> Vec<String> {
             // ActionMeta accumulates it. The class predicate (`IsClass`) calls
             // this predicate with one positional arg per output, so the parent
             // must publish the subaction's binding alongside its own outputs.
-            Inst::SubAction { action: _, obj } => {
-                vars.push(obj.borrow().var_name().to_string())
-            }
+            Inst::SubAction { action: _, obj } => vars.push(obj.borrow().var_name().to_string()),
             _ => {}
         }
     }
