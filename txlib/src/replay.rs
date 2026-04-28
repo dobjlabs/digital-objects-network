@@ -39,15 +39,14 @@ pub(crate) fn build_replay_actions(
     if events.is_empty() {
         // Done: reuse ReplayContentsDone.
         let d = build_ctx(live, nullifiers, tx_start, tx_end);
-        let st_done = st_custom!(ctx,
-            ReplayContentsDone() = (
-                Equal(d, d),
-                Equal(chain, chain)
-            )
+        let st_done = st_custom!(
+            ctx,
+            ReplayContentsDone() = (Equal(d, d), Equal(chain, chain))
         )
         .unwrap();
         record(stats, "ReplayContentsDone");
-        let st = st_custom!(ctx,
+        let st = st_custom!(
+            ctx,
             ReplayActions() = (st_done, Statement::None, Statement::None)
         )
         .unwrap();
@@ -60,7 +59,8 @@ pub(crate) fn build_replay_actions(
         let (st_action, c, l, n) = build_top_level_action(
             ctx, stats, &events[0], chain, live, nullifiers, tx_start, tx_end,
         );
-        let st = st_custom!(ctx,
+        let st = st_custom!(
+            ctx,
             ReplayActions() = (Statement::None, st_action, Statement::None)
         )
         .unwrap();
@@ -70,17 +70,13 @@ pub(crate) fn build_replay_actions(
 
     // Step: first action + recursive tail.
     let (first, rest) = events.split_first().unwrap();
-    let (st_action, c, l, n) = build_top_level_action(
-        ctx, stats, first, chain, live, nullifiers, tx_start, tx_end,
-    );
-    let (st_rest, c2, l2, n2) =
-        build_replay_actions(ctx, stats, rest, c, &l, &n, tx_start, tx_end);
-    let st_step = st_custom!(ctx,
-        ReplayActionsStep() = (st_action, st_rest)
-    )
-    .unwrap();
+    let (st_action, c, l, n) =
+        build_top_level_action(ctx, stats, first, chain, live, nullifiers, tx_start, tx_end);
+    let (st_rest, c2, l2, n2) = build_replay_actions(ctx, stats, rest, c, &l, &n, tx_start, tx_end);
+    let st_step = st_custom!(ctx, ReplayActionsStep() = (st_action, st_rest)).unwrap();
     record(stats, "ReplayActionsStep");
-    let st = st_custom!(ctx,
+    let st = st_custom!(
+        ctx,
         ReplayActions() = (Statement::None, Statement::None, st_step)
     )
     .unwrap();
@@ -120,7 +116,9 @@ fn build_top_level_action(
             (st, *chain_after, new_live, new_null)
         }
         ChainEvent::Insert { .. } | ChainEvent::Mutate { .. } | ChainEvent::Delete { .. } => {
-            panic!("top-level event must be a ChainEvent::Action (bare events are only allowed inside an action scope)");
+            panic!(
+                "top-level event must be a ChainEvent::Action (bare events are only allowed inside an action scope)"
+            );
         }
     }
 }
@@ -140,15 +138,14 @@ pub(crate) fn build_replay_contents(
     if events.is_empty() {
         // Done: before_ctx = after_ctx AND before_chain = after_chain
         let d = build_ctx(live, nullifiers, tx_start, tx_end);
-        let st_done = st_custom!(ctx,
-            ReplayContentsDone() = (
-                Equal(d, d),
-                Equal(chain, chain)
-            )
+        let st_done = st_custom!(
+            ctx,
+            ReplayContentsDone() = (Equal(d, d), Equal(chain, chain))
         )
         .unwrap();
         record(stats, "ReplayContentsDone");
-        let st = st_custom!(ctx,
+        let st = st_custom!(
+            ctx,
             ReplayContents() = (st_done, Statement::None, Statement::None, Statement::None)
         )
         .unwrap();
@@ -161,7 +158,8 @@ pub(crate) fn build_replay_contents(
         let (st_elem, c, l, n) = build_replay_element(
             ctx, stats, &events[0], chain, live, nullifiers, tx_start, tx_end,
         );
-        let st = st_custom!(ctx,
+        let st = st_custom!(
+            ctx,
             ReplayContents() = (Statement::None, st_elem, Statement::None, Statement::None)
         )
         .unwrap();
@@ -176,12 +174,10 @@ pub(crate) fn build_replay_contents(
         );
         let (st_elem2, c2, l2, n2) =
             build_replay_element(ctx, stats, &events[1], c1, &l1, &n1, tx_start, tx_end);
-        let st_pair = st_custom!(ctx,
-            ReplayContentsPair() = (st_elem1, st_elem2)
-        )
-        .unwrap();
+        let st_pair = st_custom!(ctx, ReplayContentsPair() = (st_elem1, st_elem2)).unwrap();
         record(stats, "ReplayContentsPair");
-        let st = st_custom!(ctx,
+        let st = st_custom!(
+            ctx,
             ReplayContents() = (Statement::None, Statement::None, st_pair, Statement::None)
         )
         .unwrap();
@@ -191,18 +187,15 @@ pub(crate) fn build_replay_contents(
 
     // Step branch: 3+ elements, peel off first and recurse
     let (first, rest) = events.split_first().unwrap();
-    let (st_elem, c, l, n) = build_replay_element(
-        ctx, stats, first, chain, live, nullifiers, tx_start, tx_end,
-    );
+    let (st_elem, c, l, n) =
+        build_replay_element(ctx, stats, first, chain, live, nullifiers, tx_start, tx_end);
     let (st_rest, c2, l2, n2) =
         build_replay_contents(ctx, stats, rest, c, &l, &n, tx_start, tx_end);
 
-    let st_step = st_custom!(ctx,
-        ReplayContentsStep() = (st_elem, st_rest)
-    )
-    .unwrap();
+    let st_step = st_custom!(ctx, ReplayContentsStep() = (st_elem, st_rest)).unwrap();
     record(stats, "ReplayContentsStep");
-    let st = st_custom!(ctx,
+    let st = st_custom!(
+        ctx,
         ReplayContents() = (Statement::None, Statement::None, Statement::None, st_step)
     )
     .unwrap();
@@ -233,10 +226,18 @@ fn build_replay_element(
                 .clone()
                 .expect("missing guard evidence for insert");
             let (st, new_live) = build_replay_insert(
-                ctx, stats, new, live, nullifiers, tx_start, tx_end,
-                tx_stmt.clone(), evidence,
+                ctx,
+                stats,
+                new,
+                live,
+                nullifiers,
+                tx_start,
+                tx_end,
+                tx_stmt.clone(),
+                evidence,
             );
-            let st = st_custom!(ctx,
+            let st = st_custom!(
+                ctx,
                 ReplayElement() = (st, Statement::None, Statement::None, Statement::None)
             )
             .unwrap();
@@ -255,10 +256,19 @@ fn build_replay_element(
                 .clone()
                 .expect("missing guard evidence for mutate");
             let (st, new_live, new_null) = build_replay_mutate(
-                ctx, stats, new, old, live, nullifiers, tx_start, tx_end,
-                tx_stmt.clone(), evidence,
+                ctx,
+                stats,
+                new,
+                old,
+                live,
+                nullifiers,
+                tx_start,
+                tx_end,
+                tx_stmt.clone(),
+                evidence,
             );
-            let st = st_custom!(ctx,
+            let st = st_custom!(
+                ctx,
                 ReplayElement() = (Statement::None, st, Statement::None, Statement::None)
             )
             .unwrap();
@@ -276,10 +286,18 @@ fn build_replay_element(
                 .clone()
                 .expect("missing guard evidence for delete");
             let (st, new_live, new_null) = build_replay_delete(
-                ctx, stats, old, live, nullifiers, tx_start, tx_end,
-                tx_stmt.clone(), evidence,
+                ctx,
+                stats,
+                old,
+                live,
+                nullifiers,
+                tx_start,
+                tx_end,
+                tx_stmt.clone(),
+                evidence,
             );
-            let st = st_custom!(ctx,
+            let st = st_custom!(
+                ctx,
                 ReplayElement() = (Statement::None, Statement::None, st, Statement::None)
             )
             .unwrap();
@@ -302,7 +320,8 @@ fn build_replay_element(
                 tx_end,
                 *chain_after,
             );
-            let st = st_custom!(ctx,
+            let st = st_custom!(
+                ctx,
                 ReplayElement() = (Statement::None, Statement::None, Statement::None, st)
             )
             .unwrap();

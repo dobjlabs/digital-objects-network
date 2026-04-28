@@ -85,10 +85,8 @@ impl StateRoot {
             Value::from(self.transactions_root),
             Value::from(self.nullifiers_root),
         ]);
-        let block_number_gsrs_hash = hash_values(&[
-            Value::from(self.block_number),
-            Value::from(self.gsrs_root),
-        ]);
+        let block_number_gsrs_hash =
+            hash_values(&[Value::from(self.block_number), Value::from(self.gsrs_root)]);
         hash_values(&[
             Value::from(txn_nullifiers_hash),
             Value::from(block_number_gsrs_hash),
@@ -561,11 +559,7 @@ impl TxBuilder {
     /// TxInserted statement (for composition into the action's
     /// predicate) and a handle used to attach guard evidence via
     /// `set_guard`.
-    pub fn insert(
-        &mut self,
-        ctx: &mut BuildContext,
-        new: &Dictionary,
-    ) -> (Statement, EventHandle) {
+    pub fn insert(&mut self, ctx: &mut BuildContext, new: &Dictionary) -> (Statement, EventHandle) {
         assert!(
             !self.action_stack.is_empty(),
             "insert must be called inside an action scope",
@@ -657,11 +651,7 @@ impl TxBuilder {
     /// Record a deletion. Emits TxDeleted, updates live set and nullifiers.
     /// Must be called inside an open action scope. Returns the
     /// TxDeleted statement and a handle for guard attachment.
-    pub fn delete(
-        &mut self,
-        ctx: &mut BuildContext,
-        old: &Dictionary,
-    ) -> (Statement, EventHandle) {
+    pub fn delete(&mut self, ctx: &mut BuildContext, old: &Dictionary) -> (Statement, EventHandle) {
         assert!(
             !self.action_stack.is_empty(),
             "delete must be called inside an action scope",
@@ -806,24 +796,20 @@ impl TxBuilder {
 
         if inputs.is_empty() {
             // Base case: empty inputs. state_root_hash is unconstrained here.
-            let st = st_custom!(ctx,
-                InputsGrounded(state_root_hash=state_root_hash) = (
-                    Equal(set!(), set!()),
-                    Statement::None,
-                    Statement::None
-                ))
+            let st = st_custom!(
+                ctx,
+                InputsGrounded(state_root_hash = state_root_hash) =
+                    (Equal(set!(), set!()), Statement::None, Statement::None)
+            )
             .unwrap();
             record(&mut stats, "InputsGrounded");
             return (st, set!(), stats);
         }
 
         // Intermediate hashes for the 3-layer state-root commitment.
-        let txn_null_hash = hash_values(&[
-            Value::from(transactions_root),
-            Value::from(nullifiers_root),
-        ]);
-        let bn_gsrs_hash =
-            hash_values(&[Value::from(block_number), Value::from(gsrs_root)]);
+        let txn_null_hash =
+            hash_values(&[Value::from(transactions_root), Value::from(nullifiers_root)]);
+        let bn_gsrs_hash = hash_values(&[Value::from(block_number), Value::from(gsrs_root)]);
 
         // Build the three HashOf statements that unpack the state-root
         // hash once; reused as sub-clauses by each TxInStateRoot below.
@@ -852,40 +838,42 @@ impl TxBuilder {
             inputs_set.insert(&Value::from(obj.clone())).unwrap();
             let st_tx_membership =
                 prove_source_tx_membership(ctx, grounding, transactions_root, &source_ctx);
-            let st_tx_in_sr = st_custom!(ctx,
+            let st_tx_in_sr = st_custom!(
+                ctx,
                 TxInStateRoot() = (
                     st_h_txn_null.clone(),
                     st_h_bn_gsrs.clone(),
                     st_h_state_root.clone(),
                     st_tx_membership
-                ))
+                )
+            )
             .unwrap();
             record(&mut stats, "TxInStateRoot");
-            let st_single = st_custom!(ctx,
+            let st_single = st_custom!(
+                ctx,
                 InputsGroundedSingle() = (
                     st_tx_in_sr,
                     SetContains((&source_ctx, "live"), obj),
                     SetInsert(inputs_set, set!(), obj)
-                ))
+                )
+            )
             .unwrap();
             record(&mut stats, "InputsGroundedSingle");
-            let st = st_custom!(ctx,
-                InputsGrounded(state_root_hash=state_root_hash) = (
-                    Statement::None,
-                    st_single,
-                    Statement::None
-                ))
+            let st = st_custom!(
+                ctx,
+                InputsGrounded(state_root_hash = state_root_hash) =
+                    (Statement::None, st_single, Statement::None)
+            )
             .unwrap();
             record(&mut stats, "InputsGrounded");
             return (st, inputs_set, stats);
         }
 
-        let mut st = st_custom!(ctx,
-            InputsGrounded(state_root_hash=state_root_hash) = (
-                Equal(set!(), set!()),
-                Statement::None,
-                Statement::None
-            ))
+        let mut st = st_custom!(
+            ctx,
+            InputsGrounded(state_root_hash = state_root_hash) =
+                (Equal(set!(), set!()), Statement::None, Statement::None)
+        )
         .unwrap();
         record(&mut stats, "InputsGrounded");
         let mut prev_set = set!();
@@ -895,31 +883,33 @@ impl TxBuilder {
             next_set.insert(&Value::from(obj.clone())).unwrap();
             let st_tx_membership =
                 prove_source_tx_membership(ctx, grounding, transactions_root, &source_ctx);
-            let st_tx_in_sr = st_custom!(ctx,
+            let st_tx_in_sr = st_custom!(
+                ctx,
                 TxInStateRoot() = (
                     st_h_txn_null.clone(),
                     st_h_bn_gsrs.clone(),
                     st_h_state_root.clone(),
                     st_tx_membership
-                ))
+                )
+            )
             .unwrap();
             record(&mut stats, "TxInStateRoot");
-            let st_rec = st_custom!(ctx,
+            let st_rec = st_custom!(
+                ctx,
                 InputsGroundedRecursive() = (
                     st_tx_in_sr,
                     SetContains((&source_ctx, "live"), obj),
                     SetInsert(next_set, prev_set, obj),
                     st
-                ))
+                )
+            )
             .unwrap();
             record(&mut stats, "InputsGroundedRecursive");
             prev_set = next_set;
-            st = st_custom!(ctx,
-                InputsGrounded() = (
-                    Statement::None,
-                    Statement::None,
-                    st_rec
-                ))
+            st = st_custom!(
+                ctx,
+                InputsGrounded() = (Statement::None, Statement::None, st_rec)
+            )
             .unwrap();
             record(&mut stats, "InputsGrounded");
         }
@@ -1075,12 +1065,7 @@ mod tests {
         let txs = Set::new(txns.iter().map(|hash| Value::from(*hash)).collect());
         let nulls = Set::new(nullifiers.iter().map(|hash| Value::from(*hash)).collect());
         let gsrs = Array::new(prior_gsrs.iter().map(|hash| Value::from(*hash)).collect());
-        let compact = StateRoot::new(
-            7,
-            txs.commitment(),
-            nulls.commitment(),
-            gsrs.commitment(),
-        );
+        let compact = StateRoot::new(7, txs.commitment(), nulls.commitment(), gsrs.commitment());
         let legacy_hash = hash_values(&[
             Value::from(hash_values(&[
                 Value::from(txs.commitment()),
@@ -1298,15 +1283,12 @@ mod tests {
         let craft = Arc::new(crate::predicates::crafting_test_module());
         let modules = vec![txlib.clone(), craft.clone()];
 
-        let is_log = Value::from(
-            Predicate::Custom(craft.predicate_ref_by_name("IsLog").unwrap()).hash(),
-        );
-        let is_wood = Value::from(
-            Predicate::Custom(craft.predicate_ref_by_name("IsWood").unwrap()).hash(),
-        );
-        let is_stick = Value::from(
-            Predicate::Custom(craft.predicate_ref_by_name("IsStick").unwrap()).hash(),
-        );
+        let is_log =
+            Value::from(Predicate::Custom(craft.predicate_ref_by_name("IsLog").unwrap()).hash());
+        let is_wood =
+            Value::from(Predicate::Custom(craft.predicate_ref_by_name("IsWood").unwrap()).hash());
+        let is_stick =
+            Value::from(Predicate::Custom(craft.predicate_ref_by_name("IsStick").unwrap()).hash());
 
         let mut state = TestState::empty(0);
         let params = Params::default();
@@ -1334,11 +1316,7 @@ mod tests {
             .apply_custom_pred_simple(false, "FindLog", vec![op_type, st_insert])
             .unwrap();
         let st_guard = ctx
-            .apply_custom_pred_simple(
-                false,
-                "IsLog",
-                vec![st_find.clone(), Statement::None],
-            )
+            .apply_custom_pred_simple(false, "IsLog", vec![st_find.clone(), Statement::None])
             .unwrap();
         tx1.set_guard(h, st_guard);
         tx1.end_action(scope);
@@ -1380,11 +1358,7 @@ mod tests {
                 .apply_custom_pred_simple(false, "DeleteLog", vec![op_type, st_del])
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(
-                    false,
-                    "IsLog",
-                    vec![Statement::None, st_action.clone()],
-                )
+                .apply_custom_pred_simple(false, "IsLog", vec![Statement::None, st_action.clone()])
                 .unwrap();
             tx2.set_guard(h_sub, st_guard);
             tx2.end_action(scope_sub);
@@ -1398,11 +1372,7 @@ mod tests {
             .priv_op(op!(DictContains(wood, "type", is_wood.clone())))
             .unwrap();
         let st_craft_wood = ctx
-            .apply_custom_pred_simple(
-                false,
-                "CraftWood",
-                vec![st_del_log, op_type, st_ins],
-            )
+            .apply_custom_pred_simple(false, "CraftWood", vec![st_del_log, op_type, st_ins])
             .unwrap();
         let st_guard = ctx
             .apply_custom_pred_simple(
@@ -1449,11 +1419,7 @@ mod tests {
                 .apply_custom_pred_simple(false, "DeleteWood", vec![op_type, st_del])
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(
-                    false,
-                    "IsWood",
-                    vec![Statement::None, st_action.clone()],
-                )
+                .apply_custom_pred_simple(false, "IsWood", vec![Statement::None, st_action.clone()])
                 .unwrap();
             tx3.set_guard(h_sub, st_guard);
             tx3.end_action(scope_sub);

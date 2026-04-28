@@ -73,7 +73,9 @@ mod tests {
 
         // Finalization
         module.predicate_ref_by_name("InputsGrounded").unwrap();
-        module.predicate_ref_by_name("InputsGroundedSingle").unwrap();
+        module
+            .predicate_ref_by_name("InputsGroundedSingle")
+            .unwrap();
         module.predicate_ref_by_name("TxFinalized").unwrap();
     }
 }
