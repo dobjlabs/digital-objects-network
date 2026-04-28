@@ -93,13 +93,21 @@ fn fmt_action_vars(action: &ActionContext) -> Vec<String> {
 fn fmt_action_pub_vars(action: &ActionContext) -> Vec<String> {
     let mut vars = Vec::new();
     for inst in &action.insts {
-        if let Inst::Object {
-            io: ObjectIO::Mutate | ObjectIO::Output,
-            obj,
-            class: _,
-        } = inst
-        {
-            vars.push(obj.borrow().var_name().to_string())
+        match inst {
+            Inst::Object {
+                io: ObjectIO::Mutate | ObjectIO::Output,
+                obj,
+                class: _,
+            } => vars.push(obj.borrow().var_name().to_string()),
+            // A subaction's primary output is an output of the parent action
+            // too: it gets emitted into exe_ctx.outputs and the parent's
+            // ActionMeta accumulates it. The class predicate (`IsClass`) calls
+            // this predicate with one positional arg per output, so the parent
+            // must publish the subaction's binding alongside its own outputs.
+            Inst::SubAction { action: _, obj } => {
+                vars.push(obj.borrow().var_name().to_string())
+            }
+            _ => {}
         }
     }
     vars.extend_from_slice(&["tx".to_string(), "tx0".to_string()]);

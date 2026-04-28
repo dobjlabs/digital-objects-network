@@ -160,7 +160,10 @@ fn test_sdk_1() {
 
     println!("exe MineStoneWithWoodPick");
     let executor = module.executor(true, grounding_witness(&state, &[wood_pick.tx.clone()]));
-    let [stone] = executor
+    // MineStoneWithWoodPick produces two outputs: the mutated WoodPick (from
+    // the UseWoodPick subaction) and the new Stone. Engine emission order is
+    // subaction-first.
+    let [_wood_pick, stone] = executor
         .action("MineStoneWithWoodPick", vec![wood_pick])
         .unwrap()
         .objs();

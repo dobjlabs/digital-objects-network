@@ -349,13 +349,15 @@ fn default_actions() -> Vec<Action> {
             id: "MineStoneWithWoodPick".to_string(),
             description: "Mine stone using a wood pick (consumes durability)".to_string(),
             input_classes: vec!["WoodPick".to_string()],
-            output_classes: vec!["Stone".to_string(), "WoodPick".to_string()],
+            // Order matches engine emission: subaction's mutated WoodPick first,
+            // then the parent's freshly-output Stone.
+            output_classes: vec!["WoodPick".to_string(), "Stone".to_string()],
         },
         Action {
             id: "MineStoneWithStonePick".to_string(),
             description: "Mine stone using a stone pick (consumes durability)".to_string(),
             input_classes: vec!["StonePick".to_string()],
-            output_classes: vec!["Stone".to_string(), "StonePick".to_string()],
+            output_classes: vec!["StonePick".to_string(), "Stone".to_string()],
         },
     ]
 }

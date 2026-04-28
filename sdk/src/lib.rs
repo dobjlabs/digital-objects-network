@@ -459,10 +459,18 @@ impl ActionHandle {
         // Reveal the action in the internal pod that just outputs action statements.
         exe_ctx.bld.builder.reveal(&st_action).unwrap();
 
+        // Outputs from subactions have already been pushed onto
+        // exe_ctx.outputs by their own exe_action calls. The metadata indexes
+        // outputs of *this* action globally (subaction outputs first, then
+        // parent's own outputs in source order), so shift the local index by
+        // the number of outputs already accumulated to look up the right
+        // class_st_index.
+        let output_offset = exe_ctx.outputs.len();
         for (index, OutputData { class, obj: _ }) in output_objs.iter().enumerate() {
             let class = module.class_by_name(class);
             let mut sts = vec![Statement::None; class.actions.len()];
-            let class_st_index = module.output_index_class_st_index[&(action.to_string(), index)];
+            let class_st_index =
+                module.output_index_class_st_index[&(action.to_string(), output_offset + index)];
             sts[class_st_index] = st_action.clone();
             let pred = format!("Is{}", class.name);
             // We delay the creation of the class statement until we have created all actions
@@ -922,6 +930,15 @@ impl ActionMeta {
                         .ok_or_else(|| anyhow!("subaction {action} not defined"))?;
                     for input in &subaction.inputs {
                         meta.inputs.push(input.clone());
+                    }
+                    // The subaction's outputs are emitted into the same
+                    // exe_ctx.outputs at runtime (see exe_action), so they must
+                    // appear in the parent's metadata too — otherwise the
+                    // descriptor's output count won't match what the engine
+                    // returns. Subaction outputs come first in source order
+                    // because the subaction runs before the parent's own insts.
+                    for output in &subaction.outputs {
+                        meta.outputs.push(output.clone());
                     }
                 }
                 _ => {}
