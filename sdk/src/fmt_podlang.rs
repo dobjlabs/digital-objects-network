@@ -58,8 +58,15 @@ fn fmt_var_at(name: &str, ts: usize, max_ts: usize) -> String {
 /// `fmt_chain_at` and `fmt_var_at` so dispatch is at the type level
 /// instead of by string comparison.
 enum VarNameFmt<'a> {
-    Chain { ts: usize, max_ts: usize },
-    Var { name: &'a str, ts: usize, max_ts: usize },
+    Chain {
+        ts: usize,
+        max_ts: usize,
+    },
+    Var {
+        name: &'a str,
+        ts: usize,
+        max_ts: usize,
+    },
 }
 
 impl<'a> VarNameFmt<'a> {
