@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use common::test_state::TestState;
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
@@ -14,11 +14,11 @@ use crate::clients::{
     SynchronizerMembership,
 };
 use crate::driver::{Driver, DriverDeps, PayloadBuilder};
-use crate::object_record::{ensure_extra_pod_deserializers_registered, ObjectRecord, ObjectStatus};
+use crate::object_record::{ObjectRecord, ObjectStatus, ensure_extra_pod_deserializers_registered};
 use crate::object_store::{
-    ensure_store_dirs, load_object_files, write_object_file, ObjectFileEntry,
+    ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
 };
-use crate::pexe_catalog::{test_plugin_bytes, PexeCatalog};
+use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
 use crate::{ActionQuery, DriverPaths, ExecuteActionInput, ObjectSelector};
 
 fn temp_paths() -> DriverPaths {
@@ -252,9 +252,11 @@ fn test_list_actions_filters_by_input_class() {
             ..ActionQuery::default()
         }))
         .unwrap();
-    assert!(filtered
-        .iter()
-        .all(|action| action.total_input_classes.contains(&"Wood".to_string())));
+    assert!(
+        filtered
+            .iter()
+            .all(|action| action.total_input_classes.contains(&"Wood".to_string()))
+    );
 }
 
 #[test]

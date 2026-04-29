@@ -13,11 +13,11 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
-use sdk::{manifest::Manifest, Sdk, SpendableObject, SpendableObjects};
+use anyhow::{Context, Result, anyhow};
+use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
 use txlib::GroundingWitness;
 
-use crate::catalog::{extract_predicate, ActionCatalog, CatalogClass};
+use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
 use crate::types::ActionSummary;
 
 struct Plugin {

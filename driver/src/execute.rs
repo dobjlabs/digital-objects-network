@@ -1,16 +1,16 @@
 use std::collections::HashSet;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use common::{
     payload::{Payload, PayloadProof},
-    shrink::{shrink_compress_pod, ShrunkMainPodSetup},
+    shrink::{ShrunkMainPodSetup, shrink_compress_pod},
 };
 use pod2::middleware::{Hash, Params};
 use sdk::SpendableObjects;
 use txlib::object_nullifier_hash;
 
 use crate::object_record::{ObjectRecord as StoredObjectRecord, ObjectStatus};
-use crate::object_store::{select_object, write_object_file, ObjectFileEntry};
+use crate::object_store::{ObjectFileEntry, select_object, write_object_file};
 use crate::paths::DOBJ_EXTENSION;
 use crate::types::{ActionSummary, DriverPaths, ExecuteActionInput, ObjectSelector};
 

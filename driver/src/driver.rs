@@ -205,14 +205,12 @@ impl Driver {
             .filter(|action| {
                 query.is_none_or(|query| {
                     query.name.as_ref().is_none_or(|name| &action.id == name)
-                        && query
-                            .input_class
-                            .as_ref()
-                            .is_none_or(|class_name| action.total_input_classes.contains(class_name))
-                        && query
-                            .output_class
-                            .as_ref()
-                            .is_none_or(|class_name| action.total_output_classes.contains(class_name))
+                        && query.input_class.as_ref().is_none_or(|class_name| {
+                            action.total_input_classes.contains(class_name)
+                        })
+                        && query.output_class.as_ref().is_none_or(|class_name| {
+                            action.total_output_classes.contains(class_name)
+                        })
                 })
             })
             .collect())

@@ -6,22 +6,22 @@ use std::rc::Rc;
 use std::slice;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use hex::FromHex;
 use itertools::zip_eq;
 use lt_eq_u256_pod::LtEqU256Pod;
 use pod2::{
     backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
     frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
-    lang::{load_module, Module},
+    lang::{Module, load_module},
     middleware::{
+        EMPTY_VALUE, F, Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType,
+        Params, Pod, Predicate, RawValue, Statement, VDSet, Value,
         containers::{Array, Dictionary, Set},
-        Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType, Params, Pod,
-        Predicate, RawValue, Statement, VDSet, Value, EMPTY_VALUE, F,
     },
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
-use rhai::{CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope, AST};
+use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
 use txlib::{GroundingWitness, Tx, TxBuilder};
 use vdfpod::VdfPod;
 
