@@ -1,0 +1,37 @@
+[package]
+name = "craft-guest"
+version = "0.1.0"
+edition = "2021"
+
+# This is the risc0 zkVM guest binary. It is **not** a workspace member —
+# it depends on the risc0 zkVM toolchain (see `rust-toolchain.toml` here)
+# and compiles to the `riscv32im-risc0-zkvm-elf` target. Build it via the
+# `craft-methods` crate (Phase 4), which uses `risc0-build` to invoke
+# `cargo build` against this directory.
+#
+# To build/run independently (requires `rzup install`):
+#
+#     cd craft-guest
+#     cargo build --release
+#
+# That produces an ELF the host can load via `risc0_zkvm::Executor`.
+
+[workspace]
+# Empty — this crate is its own one-crate workspace, deliberately not
+# included in the parent zk-craft workspace.
+
+[[bin]]
+name = "craft-guest"
+path = "src/main.rs"
+
+[dependencies]
+risc0-zkvm = { version = "2.1", default-features = false, features = ["std"] }
+craft-actions = { path = "../craft-actions", default-features = false }
+txlib-core = { path = "../txlib-core", default-features = false }
+borsh = { version = "1.5", default-features = false, features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = false

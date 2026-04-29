@@ -81,11 +81,14 @@ impl Object {
 }
 
 /// Convenience builder for constructing literal objects in tests / actions.
+///
+/// `Object::insert` accepts `impl Into<String>`, so `&str` keys work directly
+/// — the macro doesn't need `ToString` in scope (which matters in no_std).
 #[macro_export]
 macro_rules! object {
     ( $( $key:literal => $value:expr ),* $(,)? ) => {{
         let mut o = $crate::object::Object::new();
-        $( o.insert($key.to_string(), $crate::value::Value::from($value)); )*
+        $( o.insert($key, $crate::value::Value::from($value)); )*
         o
     }};
 }
@@ -97,12 +100,12 @@ mod tests {
     #[test]
     fn commitment_is_deterministic_across_inserts() {
         let mut a = Object::new();
-        a.insert("blueprint".to_string(), "Wood");
-        a.insert("key".to_string(), Hash([1u8; 32]));
+        a.insert("blueprint", "Wood");
+        a.insert("key", Hash([1u8; 32]));
 
         let mut b = Object::new();
-        b.insert("key".to_string(), Hash([1u8; 32]));
-        b.insert("blueprint".to_string(), "Wood");
+        b.insert("key", Hash([1u8; 32]));
+        b.insert("blueprint", "Wood");
 
         // BTreeMap sorts → insert order doesn't matter.
         assert_eq!(a.commitment(), b.commitment());

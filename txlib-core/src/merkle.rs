@@ -34,9 +34,7 @@ use alloc::vec::Vec;
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
-use crate::hash::{Hash, domain, sha256_concat};
-#[cfg(any(test, feature = "host"))]
-use crate::hash::ZERO_HASH;
+use crate::hash::{Hash, ZERO_HASH, domain, sha256_concat};
 
 pub const SMT_DEPTH: usize = 256;
 
@@ -91,23 +89,28 @@ pub fn verify_inclusion(root: Hash, key: Hash, value: Hash, proof: &MerkleProof)
 }
 
 // ---------------------------------------------------------------------------
-// In-memory builder (host-only)
+// In-memory builder (no_std-compatible)
 // ---------------------------------------------------------------------------
+//
+// Available in the guest as well as the host — the guest uses it to build
+// `live_root` / `nullifiers_root` for each new tx (typically 1-3 leaves, so
+// the cost is dominated by the depth-256 default-subtree precomputation,
+// which happens once per `MerkleTree::new()`).
 
-#[cfg(feature = "host")]
-pub use host::MerkleTree;
+pub use mem::MerkleTree;
 
-#[cfg(feature = "host")]
-mod host {
+mod mem {
     use super::*;
     use alloc::collections::BTreeMap;
     use alloc::vec;
+    use alloc::vec::Vec;
 
-    /// In-memory sparse Merkle tree. Suitable for tests and small data sets;
-    /// the synchronizer will use a persistent variant in Phase 2.
+    /// In-memory sparse Merkle tree. Suitable for tests, small per-tx sets in
+    /// the guest, and reference implementations. The synchronizer uses
+    /// [`crate::merkle_store::PersistentSmt`] instead.
     ///
-    /// Each `root()` / `prove()` call recomputes from scratch in `O(n · depth)`
-    /// time. Don't use for large sets.
+    /// Each `root()` / `prove()` call recomputes from scratch in
+    /// `O(n · depth)` time. Don't use for large sets.
     pub struct MerkleTree {
         leaves: BTreeMap<Hash, Hash>,
         default_subtree: Vec<Hash>,
@@ -199,6 +202,19 @@ mod host {
             Self::new()
         }
     }
+}
+
+/// Convenience: SMT root over a set of hashes using `value = key` for each
+/// member (the Set-membership convention this crate uses everywhere).
+///
+/// Used in the guest to compute `live_root` and `nullifiers_root` for a new
+/// transaction — typical input is 1-3 hashes per call.
+pub fn set_smt_root(values: &[Hash]) -> Hash {
+    let mut tree = MerkleTree::new();
+    for v in values {
+        tree.insert(*v, *v);
+    }
+    tree.root()
 }
 
 #[cfg(test)]
@@ -322,7 +338,9 @@ mod tests {
 
     #[test]
     fn malformed_proof_rejected() {
-        let bad = MerkleProof { siblings: vec![] };
+        let bad = MerkleProof {
+            siblings: alloc::vec::Vec::new(),
+        };
         assert!(!verify_inclusion(ZERO_HASH, ZERO_HASH, ZERO_HASH, &bad));
     }
 }

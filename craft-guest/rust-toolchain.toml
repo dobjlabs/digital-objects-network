@@ -1,0 +1,6 @@
+[toolchain]
+# The risc0 zkVM guest needs the risc0 toolchain, installed via `rzup install`.
+# This toolchain provides the `riscv32im-risc0-zkvm-elf` target and a stdlib
+# patched for in-circuit execution.
+channel = "1.85.0"
+targets = ["riscv32im-risc0-zkvm-elf"]

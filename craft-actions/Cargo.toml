@@ -1,0 +1,25 @@
+[package]
+name = "craft-actions"
+version = "0.1.0"
+edition = "2024"
+
+# no_std-friendly action validators for the craft-basics world.
+# Imported by both the risc0 guest (which runs them inside the zkVM) and the
+# driver (which runs them client-side as a feasibility check before proving).
+#
+# The guest dispatches into [`validate`] given a `GuestInput` and an
+# `action_id`. Validators are pure: they take a `&GuestInput`, check the
+# predicate, panic on violation. The guest treats a panic as "this proof
+# can't be built" and the driver treats it as "this action wouldn't be
+# accepted" — same semantics, different reaction.
+
+[features]
+default = ["host"]
+host = ["std", "txlib-core/host"]
+std = []
+
+[dependencies]
+txlib-core = { path = "../txlib-core", default-features = false }
+
+[dev-dependencies]
+borsh = { version = "1.5", features = ["derive"] }

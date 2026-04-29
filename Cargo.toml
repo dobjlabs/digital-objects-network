@@ -1,16 +1,22 @@
 [workspace]
 members = [
     "common",
+    "craft-actions",
     "synchronizer",
     "relayer",
     "txlib-core",
 ]
-# Crates from the pre-risc0 stack — kept on disk during the migration but
-# excluded from the workspace until they get rewritten in Phase 4. They still
-# depend on pod2 / plonky2 / the old txlib and would otherwise block the
-# build of everything else.
+# Excluded from the workspace:
+# - `craft-guest` is a risc0 zkVM guest binary that requires the risc0
+#   toolchain (`rzup install`) and targets `riscv32im-risc0-zkvm-elf`.
+#   It's its own one-crate workspace so the parent `cargo build` ignores
+#   it. The future `craft-methods` crate (Phase 4) will build it via
+#   `risc0-build::embed_methods`.
+# - The rest are pre-risc0 crates that still depend on pod2 / plonky2 /
+#   the old txlib. Will be rewritten in Phase 4.
 exclude = [
     "app-gui/src-tauri",
+    "craft-guest",
     "driver",
     "pod2utils",
     "txlib",
