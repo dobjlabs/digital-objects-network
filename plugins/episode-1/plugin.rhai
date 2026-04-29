@@ -8,12 +8,19 @@
 //
 // VDF iters are scaled from the spec's vdf_ms by /5000 (round to int, min 1)
 // so the on-chain timing stays in roughly the same shape as the simulator.
-// PoW target is fixed at 2^53 (matches craft-basics::CraftWood).
+//
+// PoW difficulty scales with the spec's pow_ms: the top-limb target is
+// 2^53 * 60000 / pow_ms, so pow_ms=60000 anchors at the existing
+// craft-basics::CraftWood baseline (2^53, ~2^11 expected hashes), pow_ms=500
+// gives ~2^60 (very easy), and pow_ms=252000 gives ~2^51 (~2^13 hashes).
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn pow_proof(action, obj) {
-    let target = action.top_limb_u256(9007199254740992);
+fn pow_proof(action, obj, pow_ms) {
+    // Reorder the multiplication so the intermediate fits in i64:
+    // (2^53 / pow_ms) * 60000 instead of (2^53 * 60000) / pow_ms.
+    let target_n = 9007199254740992 / pow_ms * 60000;
+    let target = action.top_limb_u256(target_n);
     var key = action.pow_obj_grind(obj, target);
     obj.update("key", key);
     action.intro_lt_eq_u256(obj, target);
@@ -101,19 +108,19 @@ fn TouchReactionChamber(action) {
 fn MineIron(action) {
     var iron = action.output("Iron");
     iron.set([["blueprint", "Iron"]]);
-    pow_proof(action, iron);
+    pow_proof(action, iron, 1000);
 }
 
 fn MineCopper(action) {
     var copper = action.output("Copper");
     copper.set([["blueprint", "Copper"]]);
-    pow_proof(action, copper);
+    pow_proof(action, copper, 500);
 }
 
 fn MineOil(action) {
     var oil = action.output("Oil");
     oil.set([["blueprint", "Oil"]]);
-    pow_proof(action, oil);
+    pow_proof(action, oil, 3000);
 }
 
 fn MineSulfur(action) {
@@ -207,7 +214,7 @@ fn CraftAcid(action) {
     var acid_b = action.output("Acid");
     acid_a.set([["blueprint", "Acid"]]);
     acid_b.set([["blueprint", "Acid"]]);
-    pow_proof(action, acid_a);
+    pow_proof(action, acid_a, 100000);
 }
 
 fn CraftAcidFlash(action) {
@@ -215,7 +222,7 @@ fn CraftAcidFlash(action) {
     var water = action.input("Water");
     var acid = action.output("Acid");
     acid.set([["blueprint", "Acid"]]);
-    pow_proof(action, acid);
+    pow_proof(action, acid, 50000);
 }
 
 fn CraftAcidCrude(action) {
@@ -227,7 +234,7 @@ fn CraftAcidCrude(action) {
     acid_a.set([["blueprint", "Acid"]]);
     acid_b.set([["blueprint", "Acid"]]);
     acid_c.set([["blueprint", "Acid"]]);
-    pow_proof(action, acid_a);
+    pow_proof(action, acid_a, 60000);
     vdf_proof(action, acid_a, 16);
 }
 
@@ -244,7 +251,7 @@ fn CraftRefinery(action) {
     tar_c.set([["blueprint", "Tar"]]);
     fuel.set([["blueprint", "Fuel"]]);
     gas.set([["blueprint", "Gas"]]);
-    pow_proof(action, tar_a);
+    pow_proof(action, tar_a, 48000);
     vdf_proof(action, tar_a, 14);
 }
 
@@ -261,7 +268,7 @@ fn CraftRefineryFlash(action) {
     tar_c.set([["blueprint", "Tar"]]);
     fuel.set([["blueprint", "Fuel"]]);
     gas.set([["blueprint", "Gas"]]);
-    pow_proof(action, tar_a);
+    pow_proof(action, tar_a, 60000);
 }
 
 fn CraftRefineryCrude(action) {
@@ -280,7 +287,7 @@ fn CraftRefineryCrude(action) {
     fuel.set([["blueprint", "Fuel"]]);
     gas.set([["blueprint", "Gas"]]);
     oil_recovered.set([["blueprint", "Oil"]]);
-    pow_proof(action, tar_a);
+    pow_proof(action, tar_a, 60000);
     vdf_proof(action, tar_a, 22);
 }
 
@@ -308,7 +315,7 @@ fn CraftRefineryCracked(action) {
     fuel_c.set([["blueprint", "Fuel"]]);
     gas_a.set([["blueprint", "Gas"]]);
     gas_b.set([["blueprint", "Gas"]]);
-    pow_proof(action, tar_a);
+    pow_proof(action, tar_a, 48000);
     vdf_proof(action, tar_a, 14);
 }
 
@@ -434,7 +441,7 @@ fn CraftSolvent(action) {
     var solvent_b = action.output("Solvent");
     solvent_a.set([["blueprint", "Solvent"]]);
     solvent_b.set([["blueprint", "Solvent"]]);
-    pow_proof(action, solvent_a);
+    pow_proof(action, solvent_a, 76000);
 }
 
 fn CraftSolventLye(action) {
@@ -466,7 +473,7 @@ fn CraftRubber(action) {
     var gas_c = action.input("Gas");
     var rubber = action.output("Rubber");
     rubber.set([["blueprint", "Rubber"]]);
-    pow_proof(action, rubber);
+    pow_proof(action, rubber, 96000);
 }
 
 fn CraftRubberFlash(action) {
@@ -475,7 +482,7 @@ fn CraftRubberFlash(action) {
     var gas_c = action.input("Gas");
     var rubber = action.output("Rubber");
     rubber.set([["blueprint", "Rubber"]]);
-    pow_proof(action, rubber);
+    pow_proof(action, rubber, 48000);
 }
 
 fn CraftRubberCrude(action) {
@@ -486,7 +493,7 @@ fn CraftRubberCrude(action) {
     var gas_recovered = action.output("Gas");
     rubber.set([["blueprint", "Rubber"]]);
     gas_recovered.set([["blueprint", "Gas"]]);
-    pow_proof(action, rubber);
+    pow_proof(action, rubber, 60000);
     vdf_proof(action, rubber, 16);
 }
 
@@ -497,7 +504,7 @@ fn CraftExtract(action) {
     var sludge = action.output("Sludge");
     extract.set([["blueprint", "Extract"]]);
     sludge.set([["blueprint", "Sludge"]]);
-    pow_proof(action, extract);
+    pow_proof(action, extract, 120000);
 }
 
 fn CraftExtractCtrl(action) {
@@ -510,7 +517,7 @@ fn CraftExtractCtrl(action) {
     extract.set([["blueprint", "Extract"]]);
     sludge_a.set([["blueprint", "Sludge"]]);
     sludge_b.set([["blueprint", "Sludge"]]);
-    pow_proof(action, extract);
+    pow_proof(action, extract, 25000);
     vdf_proof(action, extract, 12);
 }
 
@@ -607,7 +614,7 @@ fn CraftMachineI(action) {
         ["blueprint", "MachineI"],
         ["level", 1]
     ]);
-    pow_proof(action, machine);
+    pow_proof(action, machine, 44000);
     vdf_proof(action, machine, 13);
 }
 
@@ -623,7 +630,7 @@ fn CraftBlastFurnace(action) {
     var acid_b = action.input("Acid");
     var bf = action.output("BlastFurnace");
     bf.set([["blueprint", "BlastFurnace"]]);
-    pow_proof(action, bf);
+    pow_proof(action, bf, 40000);
     vdf_proof(action, bf, 16);
 }
 
@@ -640,7 +647,7 @@ fn CraftCircuitFab(action) {
     var grease_b = action.input("Grease");
     var fab = action.output("CircuitFab");
     fab.set([["blueprint", "CircuitFab"]]);
-    pow_proof(action, fab);
+    pow_proof(action, fab, 60000);
     vdf_proof(action, fab, 18);
 }
 
@@ -658,7 +665,7 @@ fn CraftCrackingUnit(action) {
     var grease_c = action.input("Grease");
     var unit = action.output("CrackingUnit");
     unit.set([["blueprint", "CrackingUnit"]]);
-    pow_proof(action, unit);
+    pow_proof(action, unit, 60000);
     vdf_proof(action, unit, 16);
 }
 
@@ -673,7 +680,7 @@ fn CraftMachineII(action) {
         ["blueprint", "MachineII"],
         ["level", 2]
     ]);
-    pow_proof(action, machine);
+    pow_proof(action, machine, 76000);
     vdf_proof(action, machine, 23);
 }
 
@@ -685,7 +692,7 @@ fn CraftReactionChamber(action) {
     var grease_b = action.input("Grease");
     var chamber = action.output("ReactionChamber");
     chamber.set([["blueprint", "ReactionChamber"]]);
-    pow_proof(action, chamber);
+    pow_proof(action, chamber, 70000);
     vdf_proof(action, chamber, 20);
 }
 
@@ -710,7 +717,7 @@ fn CraftCircuit(action) {
     var steel = action.input("Steel");
     var circuit = action.output("Circuit");
     circuit.set([["blueprint", "Circuit"]]);
-    pow_proof(action, circuit);
+    pow_proof(action, circuit, 84000);
     vdf_proof(action, circuit, 25);
 }
 
@@ -747,7 +754,7 @@ fn CraftCircuitFlash(action) {
     var steel = action.input("Steel");
     var circuit = action.output("Circuit");
     circuit.set([["blueprint", "Circuit"]]);
-    pow_proof(action, circuit);
+    pow_proof(action, circuit, 110000);
 }
 
 fn CraftCircuitCrude(action) {
@@ -759,7 +766,7 @@ fn CraftCircuitCrude(action) {
     var wire_recovered = action.output("Wire");
     circuit.set([["blueprint", "Circuit"]]);
     wire_recovered.set([["blueprint", "Wire"]]);
-    pow_proof(action, circuit);
+    pow_proof(action, circuit, 50000);
     vdf_proof(action, circuit, 38);
 }
 
@@ -793,7 +800,7 @@ fn CraftCanvasFlash(action) {
     var wax = action.input("Wax");
     var canvas = action.output("Canvas");
     canvas.set([["blueprint", "Canvas"]]);
-    pow_proof(action, canvas);
+    pow_proof(action, canvas, 75000);
 }
 
 fn CraftCanvasCrude(action) {
@@ -806,7 +813,7 @@ fn CraftCanvasCrude(action) {
     var cloth_recovered = action.output("Cloth");
     canvas.set([["blueprint", "Canvas"]]);
     cloth_recovered.set([["blueprint", "Cloth"]]);
-    pow_proof(action, canvas);
+    pow_proof(action, canvas, 30000);
     vdf_proof(action, canvas, 24);
 }
 
@@ -829,7 +836,7 @@ fn CraftPistons(action) {
     var grease = action.input("Grease");
     var pistons = action.output("Pistons");
     pistons.set([["blueprint", "Pistons"]]);
-    pow_proof(action, pistons);
+    pow_proof(action, pistons, 62000);
     vdf_proof(action, pistons, 22);
 }
 
@@ -840,7 +847,7 @@ fn CraftResin(action) {
     var rubber = action.input("Rubber");
     var resin = action.output("Resin");
     resin.set([["blueprint", "Resin"]]);
-    pow_proof(action, resin);
+    pow_proof(action, resin, 132000);
     vdf_proof(action, resin, 40);
 }
 
@@ -876,7 +883,7 @@ fn CraftResinFlash(action) {
     var rubber = action.input("Rubber");
     var resin = action.output("Resin");
     resin.set([["blueprint", "Resin"]]);
-    pow_proof(action, resin);
+    pow_proof(action, resin, 165000);
 }
 
 fn CraftResinCrude(action) {
@@ -888,7 +895,7 @@ fn CraftResinCrude(action) {
     var grease_recovered = action.output("Grease");
     resin.set([["blueprint", "Resin"]]);
     grease_recovered.set([["blueprint", "Grease"]]);
-    pow_proof(action, resin);
+    pow_proof(action, resin, 110000);
     vdf_proof(action, resin, 60);
 }
 
@@ -904,7 +911,7 @@ fn CraftEngine(action) {
     var canvas = action.input("Canvas");
     var engine = action.output("Engine");
     engine.set([["blueprint", "Engine"]]);
-    pow_proof(action, engine);
+    pow_proof(action, engine, 68000);
     vdf_proof(action, engine, 20);
 }
 
@@ -969,7 +976,7 @@ fn CraftPayload(action) {
     var grease = action.input("Grease");
     var payload = action.output("Payload");
     payload.set([["blueprint", "Payload"]]);
-    pow_proof(action, payload);
+    pow_proof(action, payload, 64000);
     vdf_proof(action, payload, 19);
 }
 
@@ -984,7 +991,7 @@ fn CraftRocket(action) {
     var resin_b = action.input("Resin");
     var rocket = action.output("Rocket");
     rocket.set([["blueprint", "Rocket"]]);
-    pow_proof(action, rocket);
+    pow_proof(action, rocket, 252000);
     vdf_proof(action, rocket, 76);
 }
 
