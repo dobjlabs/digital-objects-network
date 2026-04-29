@@ -16,9 +16,8 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-# Branch `next/2026-03-30.a`: Includes:
-# - bump params wildcards to 9
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "70cf88ddfe7df6597096191550d91dfde563b855", default-features = false, features = [
+# Local pod2 checkout — bumped BASE_PARAMS to fit the episode-1 recipe sizes.
+pod2 = { path = "/Users/dhvanipa/Documents/Tenet/0xPARC/pod2", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
