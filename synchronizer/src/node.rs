@@ -19,7 +19,7 @@ use alloy_provider::{Provider, RootProvider};
 use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
-use pod2::middleware::Hash;
+use txlib_core::Hash;
 use tracing::{debug, info, trace, warn};
 
 use crate::config::AppConfig;

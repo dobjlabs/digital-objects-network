@@ -1,18 +1,25 @@
 [workspace]
 members = [
-    "app-gui/src-tauri",
     "common",
-    "driver",
-    "pod2utils",
     "synchronizer",
     "relayer",
-    "txlib",
     "txlib-core",
+]
+# Crates from the pre-risc0 stack — kept on disk during the migration but
+# excluded from the workspace until they get rewritten in Phase 4. They still
+# depend on pod2 / plonky2 / the old txlib and would otherwise block the
+# build of everything else.
+exclude = [
+    "app-gui/src-tauri",
+    "driver",
+    "pod2utils",
+    "txlib",
     "sdk",
     "pexe",
     "intro_pods/vdfpod",
     "intro_pods/lt_eq_u256_pod",
     "mcp",
+    "timelib",
 ]
 resolver = "2"
 

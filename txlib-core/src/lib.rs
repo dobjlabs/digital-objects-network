@@ -20,6 +20,8 @@ extern crate alloc;
 pub mod abi;
 pub mod hash;
 pub mod merkle;
+#[cfg(feature = "host")]
+pub mod merkle_store;
 pub mod object;
 pub mod tx;
 pub mod value;

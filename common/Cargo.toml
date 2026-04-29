@@ -4,11 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-pod2_onchain = { git = "https://github.com/0xPARC/pod2-onchain.git", rev = "5f2047752349a0f06665bc8f6ba82f50bc5ad435", default-features = false, features = [
-  "disk_cache",
-], optional = true }
-pod2 = { workspace = true }
-plonky2 = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
 dotenvy = { workspace = true }
@@ -19,10 +14,14 @@ time = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-alloy = { workspace = true  }
-txlib = { path = "../txlib" }
+alloy = { workspace = true }
+
+# New stack
+txlib-core = { path = "../txlib-core" }
+risc0-zkvm = { version = "2.1", default-features = false, features = ["std"] }
+borsh = { version = "1.5", features = ["derive"] }
+bincode = "1.3"
 
 [features]
 default = []
-groth16 = ["pod2_onchain"]
 test-utils = []

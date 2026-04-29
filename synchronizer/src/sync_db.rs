@@ -1,10 +1,10 @@
 use alloy::primitives::B256;
 use anyhow::{anyhow, Context, Result};
-use pod2::middleware::Hash;
 use sqlx::{
     postgres::{PgPoolOptions, PgRow},
     Executor, PgPool, Row,
 };
+use txlib_core::Hash;
 use url::Url;
 
 use crate::{
@@ -359,12 +359,12 @@ async fn ensure_database_exists(database_url: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pod2::middleware::{hash_values, Value};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use txlib_core::hash::sha256;
 
     fn unique_hash(n: i64) -> Hash {
-        hash_values(&[Value::from(n)])
+        sha256(&n.to_le_bytes())
     }
 
     fn unique_head(block_number: u32, marker: i64) -> CanonicalHead {

@@ -2,21 +2,15 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
-};
-use hex::FromHex;
-use pod2::{backends::plonky2::primitives::merkletree::MerkleProof, middleware::Hash};
-use synchronizer::api_types::{
-    GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, MembershipRequest,
-    MembershipResponse, NullifierContainsEntry, NullifierContainsRequest,
-    NullifierContainsResponse, SourceTxProofResponse, StateHeadResponse, SyncProgressResponse,
-    TxContainsEntry, TxContainsRequest, TxContainsResponse, TxStatusResponse,
 };
 use tokio::sync::watch;
 use tracing::info;
+use txlib_core::Hash;
+use txlib_core::merkle::MerkleProof;
 
 use crate::{
     app_db::AppDb,
@@ -24,59 +18,46 @@ use crate::{
     sync_db::{CurrentSnapshot, SyncDb},
 };
 use common::encode_hash_hex;
+use synchronizer::api_types::{
+    GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, MembershipRequest,
+    MembershipResponse, NullifierContainsEntry, NullifierContainsRequest,
+    NullifierContainsResponse, SourceTxProofResponse, StateHeadResponse, SyncProgressResponse,
+    TxContainsEntry, TxContainsRequest, TxContainsResponse, TxStatusResponse,
+};
 
 const MAX_HASH_QUERY_ITEMS: usize = 256;
 
 #[derive(Clone)]
 struct AppState {
-    /// RocksDB-backed read path used for membership checks and Merkle proofs.
     app_db: AppDb,
-    /// Postgres-backed canonical head and sync-progress store.
     sync_db: Arc<SyncDb>,
 }
 
-/// Internal view of head/progress fields shaped for HTTP responses.
 struct HeadSnapshot {
-    /// Last canonical slot fully committed by the synchronizer.
     last_processed_slot: u32,
-    /// Execution block number associated with the last processed slot, if any.
     last_processed_block_number: Option<u32>,
-    /// Current canonical global state root encoded as hex, if one exists.
     current_gsr: Option<String>,
-    /// Execution block number committed inside the current state root, if any.
     current_block_number: Option<i64>,
-    /// Number of accepted transactions in canonical state.
     tx_count: usize,
-    /// Number of spent nullifiers in canonical state.
     nullifier_count: usize,
-    /// Number of GSR entries in canonical history.
     gsr_count: usize,
 }
 
 #[derive(Debug, Clone)]
-/// Membership result anchored to one caller-provided root set.
 struct MembershipSnapshot {
-    /// Per-request transaction membership bits under `roots.transactions`.
     tx_present: Vec<bool>,
-    /// Per-request nullifier membership bits under `roots.nullifiers`.
     nullifier_present: Vec<bool>,
 }
 
 #[derive(Debug, Clone)]
-/// Membership proof for a source transaction against the current transactions set root.
 struct TxMembershipProof {
-    /// Source transaction hash the client asked about.
     tx_hash: Hash,
-    /// Whether the transaction is present in the committed transactions set.
     present: bool,
-    /// Merkle proof against the current transactions set root.
     proof: MerkleProof,
 }
 
 #[derive(Debug, Clone)]
-/// Proof-bearing result used by txlib to ground action execution.
 struct GroundingWitnessSnapshot {
-    /// Per-source transaction membership proofs under the provided roots.
     source_tx_proofs: Vec<TxMembershipProof>,
 }
 
@@ -125,7 +106,6 @@ async fn get_sync_progress(
     State(app_state): State<AppState>,
 ) -> Result<Json<SyncProgressResponse>, (StatusCode, String)> {
     let (last_processed_slot, last_processed_block_number) = load_sync_progress(&app_state).await?;
-
     Ok(Json(SyncProgressResponse {
         last_processed_slot,
         last_processed_block_number,
@@ -159,7 +139,6 @@ async fn post_state_tx_contains(
         membership,
         ..
     } = load_membership_context(&app_state, &body.tx_hashes, no_nullifiers).await?;
-
     Ok(Json(TxContainsResponse {
         last_processed_slot: head.last_processed_slot,
         current_gsr: head.current_gsr,
@@ -178,7 +157,6 @@ async fn post_state_nullifier_contains(
         membership,
         ..
     } = load_membership_context(&app_state, no_tx_hashes, &body.nullifiers).await?;
-
     Ok(Json(NullifierContainsResponse {
         last_processed_slot: head.last_processed_slot,
         current_gsr: head.current_gsr,
@@ -196,7 +174,6 @@ async fn post_state_membership(
         nullifiers,
         membership,
     } = load_membership_context(&app_state, &body.tx_hashes, &body.nullifiers).await?;
-
     Ok(Json(MembershipResponse {
         last_processed_slot: head.last_processed_slot,
         current_gsr: head.current_gsr,
@@ -420,12 +397,25 @@ fn nullifier_contains_entries(
 
 fn parse_hash_hex(value: &str) -> Result<Hash, (StatusCode, String)> {
     let trimmed = value.trim().strip_prefix("0x").unwrap_or(value.trim());
-    Hash::from_hex(trimmed).map_err(|err| {
-        (
+    if trimmed.len() != 64 {
+        return Err((
             StatusCode::BAD_REQUEST,
-            format!("invalid hash `{value}`: {err}"),
-        )
-    })
+            format!(
+                "invalid hash `{value}`: expected 64 hex chars, got {}",
+                trimmed.len()
+            ),
+        ));
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = u8::from_str_radix(&trimmed[2 * i..2 * i + 2], 16).map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid hash `{value}`: {err}"),
+            )
+        })?;
+    }
+    Ok(Hash(out))
 }
 
 fn internal_error(err: anyhow::Error) -> (StatusCode, String) {

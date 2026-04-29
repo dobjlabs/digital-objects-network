@@ -28,6 +28,10 @@ pub struct AppConfig {
     pub fee_bump_after_secs: Option<u64>,
     pub fee_bump_multiplier_pct: u64,
     pub fee_bump_max: u32,
+    /// risc0 guest `image_id` (8 little-endian u32 words). The relayer
+    /// verifies receipts upstream so it can reject garbage before paying for
+    /// blob gas. Set via `GUEST_IMAGE_ID` env var as 64 hex chars.
+    pub guest_image_id: [u32; 8],
 }
 
 pub fn load_config() -> Result<AppConfig> {
@@ -109,6 +113,10 @@ pub fn load_config() -> Result<AppConfig> {
         }
     }
 
+    let guest_image_id = parse_image_id(
+        &dotenvy::var("GUEST_IMAGE_ID").context("GUEST_IMAGE_ID is required")?,
+    )?;
+
     Ok(AppConfig {
         bind,
         db_url,
@@ -125,5 +133,25 @@ pub fn load_config() -> Result<AppConfig> {
         fee_bump_after_secs,
         fee_bump_multiplier_pct,
         fee_bump_max,
+        guest_image_id,
     })
+}
+
+/// Parse a 64-hex-char image id (with optional `0x` prefix) into the 8-word
+/// form risc0 expects.
+fn parse_image_id(raw: &str) -> Result<[u32; 8]> {
+    let trimmed = raw.trim().strip_prefix("0x").unwrap_or(raw.trim());
+    if trimmed.len() != 64 {
+        bail!(
+            "GUEST_IMAGE_ID must be 64 hex chars, got {}",
+            trimmed.len()
+        );
+    }
+    let mut words = [0u32; 8];
+    for i in 0..8 {
+        let chunk = &trimmed[8 * i..8 * (i + 1)];
+        let bytes = u32::from_str_radix(chunk, 16).context("invalid hex in GUEST_IMAGE_ID")?;
+        words[i] = bytes.swap_bytes();
+    }
+    Ok(words)
 }

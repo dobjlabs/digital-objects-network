@@ -1,16 +1,22 @@
-use pod2::middleware::{Hash, EMPTY_HASH};
-use txlib::StateRoot;
+use txlib_core::Hash;
+use txlib_core::merkle_store::empty_root;
+use txlib_core::tx::StateRoot;
 
 /// The Merkle roots that reopen the canonical persistent containers.
+///
+/// `transactions` and `nullifiers` are SMT roots over the
+/// SHA-256 sparse Merkle tree maintained in RocksDB.
+///
+/// `state_root_gsrs` and `gsr_history` track the GSR-history hash chain:
+/// `state_root_gsrs` is the chain hash *before* the current slot's GSR was
+/// appended (committed inside [`StateRoot`] for grounding), and
+/// `gsr_history` is the chain hash *after* the append (advances by one per
+/// canonical slot). The chain recipe is in [`crate::state_machine`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CanonicalRoots {
-    /// Root of the persistent transactions set.
     pub transactions: Hash,
-    /// Root of the persistent spent-nullifiers set.
     pub nullifiers: Hash,
-    /// Root of the prior-GSR array committed inside `txlib::StateRoot`.
     pub state_root_gsrs: Hash,
-    /// Root of the full GSR history array after appending the current GSR.
     pub gsr_history: Hash,
 }
 
@@ -21,28 +27,23 @@ impl Default for CanonicalRoots {
 }
 
 impl CanonicalRoots {
+    /// Empty SMT roots for the sets, zero for the GSR history chain.
     pub fn empty() -> Self {
         Self {
-            transactions: EMPTY_HASH,
-            nullifiers: EMPTY_HASH,
-            state_root_gsrs: EMPTY_HASH,
-            gsr_history: EMPTY_HASH,
+            transactions: empty_root(),
+            nullifiers: empty_root(),
+            state_root_gsrs: Hash::default(),
+            gsr_history: Hash::default(),
         }
     }
 }
 
-/// Non-root metadata tracked alongside the canonical roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HeadMetadata {
-    /// Current canonical global state root for this head, if one exists.
     pub current_gsr: Option<Hash>,
-    /// Execution block number associated with `current_gsr`.
     pub current_block_number: Option<u32>,
-    /// Number of accepted transactions in the canonical state.
     pub tx_count: u64,
-    /// Number of spent nullifiers in the canonical state.
     pub nullifier_count: u64,
-    /// Number of GSR entries in the persistent history array.
     pub gsr_count: u64,
 }
 
@@ -64,15 +65,9 @@ impl HeadMetadata {
     }
 }
 
-/// Canonical head snapshot used across sync, query, and storage code.
-///
-/// `roots` are what reopen the persistent Merkle containers in RocksDB.
-/// `metadata` is the auxiliary canonical state carried alongside those roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CanonicalHead {
-    /// Merkle roots for the canonical persistent containers.
     pub roots: CanonicalRoots,
-    /// Non-root metadata associated with the same canonical head.
     pub metadata: HeadMetadata,
 }
 
@@ -90,6 +85,9 @@ impl CanonicalHead {
         }
     }
 
+    /// Reconstruct the [`StateRoot`] used inside the receipt's grounding
+    /// proof. Returns `None` if no slot has been processed yet
+    /// (`current_block_number` is unset).
     pub fn current_state_root(&self) -> Option<StateRoot> {
         self.metadata.current_block_number.map(|block_number| {
             StateRoot::new(

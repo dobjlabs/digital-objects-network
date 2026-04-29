@@ -18,7 +18,7 @@ mod sync_loop;
 
 use api::run_api_server;
 use app_db::AppDb;
-use common::proof::ProofParser;
+use common::proof::Risc0Verifier;
 use config::load_config;
 use node::Node;
 use state_machine::StateMachine;
@@ -34,7 +34,8 @@ async fn main() -> Result<()> {
     let app_db = AppDb::connect(&cfg.app_state_db_path)?;
     let api_app_db = app_db.clone();
     let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db_url).await?);
-    let state_machine = Arc::new(StateMachine::new(app_db, Arc::new(ProofParser::new()?)));
+    let verifier = Risc0Verifier::from_words(cfg.guest_image_id);
+    let state_machine = Arc::new(StateMachine::new(app_db, Arc::new(verifier)));
     let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine), Arc::clone(&sync_db)).await?);
     let sync_start = initialize_sync(&node, node.config.initial_start_slot).await?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

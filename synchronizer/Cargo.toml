@@ -23,11 +23,8 @@ axum = "0.8.6"
 futures-util = "0.3.31"
 rocksdb = "0.23.0"
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres"] }
-pod2 = { workspace = true }
-plonky2 = { workspace = true }
 common = { path = "../common" }
-txlib = { path = "../txlib" }
-pod2utils = { path = "../pod2utils" }
+txlib-core = { path = "../txlib-core" }
 tempfile = "3"
 
 [dev-dependencies]

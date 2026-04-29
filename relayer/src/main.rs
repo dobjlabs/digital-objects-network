@@ -14,7 +14,7 @@ mod time_utils;
 mod worker;
 
 use api::run_api_server;
-use common::proof::{BlobParser, ProofParser};
+use common::proof::{BlobParser, Risc0Verifier};
 use config::load_config;
 use db::Db;
 use eth::{EthClient, EthGateway};
@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
     let cfg = load_config()?;
 
     let db = Arc::new(Db::connect(&cfg.db_url).await?);
-    let parser: Arc<dyn BlobParser> = Arc::new(ProofParser::new()?);
+    let parser: Arc<dyn BlobParser> = Arc::new(Risc0Verifier::from_words(cfg.guest_image_id));
     let eth_client: Arc<dyn EthGateway> = Arc::new(EthClient::new(&cfg).await?);
 
     let worker_cfg = WorkerConfig {

@@ -269,8 +269,8 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use common::{payload::Payload, payload::PayloadProof};
-    use pod2::middleware::EMPTY_HASH;
+    use common::payload::Payload;
+    use txlib_core::Hash;
     use serde_json::Value as JsonValue;
     use sqlx::{postgres::PgPoolOptions, Executor};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -294,10 +294,10 @@ mod tests {
         fn parse_blob(&self, _blob_bytes: &[u8]) -> anyhow::Result<Option<Payload>> {
             match self.mode {
                 ParseMode::Valid => Ok(Some(Payload {
-                    proof: PayloadProof::Groth16(vec![]),
-                    tx_final: EMPTY_HASH,
-                    state_root_hash: EMPTY_HASH,
+                    tx_final: Hash::default(),
+                    state_root_hash: Hash::default(),
                     nullifiers: vec![],
+                    receipt_bytes: vec![],
                 })),
                 ParseMode::None => Ok(None),
                 ParseMode::Err => Err(anyhow::anyhow!("invalid proof")),

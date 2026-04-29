@@ -38,6 +38,10 @@ pub struct AppConfig {
     pub rpc_url: String,
     pub beacon_url: String,
     pub to_address: Address,
+    /// risc0 guest `image_id`: 8 little-endian u32 words. Pinned at synchronizer
+    /// startup; receipts that prove a different image are rejected.
+    /// Set via `GUEST_IMAGE_ID` env var as 64 hex chars (parsed as 8x u32 LE).
+    pub guest_image_id: [u32; 8],
 }
 
 pub fn load_config() -> Result<AppConfig> {
@@ -94,6 +98,7 @@ pub fn load_config() -> Result<AppConfig> {
     let rpc_url: String = dotenvy::var("RPC_URL")?;
     let beacon_url: String = dotenvy::var("BEACON_URL")?;
     let to_address: Address = Address::from_str(&dotenvy::var("TO_ADDRESS")?)?;
+    let guest_image_id = parse_image_id(&dotenvy::var("GUEST_IMAGE_ID")?)?;
 
     Ok(AppConfig {
         app_state_db_path,
@@ -107,5 +112,26 @@ pub fn load_config() -> Result<AppConfig> {
         rpc_url,
         beacon_url,
         to_address,
+        guest_image_id,
     })
+}
+
+/// Parse a `GUEST_IMAGE_ID` env value into the 8-word form risc0 expects.
+/// Accepts the canonical hex form printed by `risc0-build` (64 hex chars,
+/// optional `0x` prefix). Each consecutive 8 hex chars is one little-endian u32.
+fn parse_image_id(raw: &str) -> Result<[u32; 8]> {
+    let trimmed = raw.trim().strip_prefix("0x").unwrap_or(raw.trim());
+    anyhow::ensure!(
+        trimmed.len() == 64,
+        "GUEST_IMAGE_ID must be 64 hex chars, got {}",
+        trimmed.len()
+    );
+    let mut words = [0u32; 8];
+    for i in 0..8 {
+        let chunk = &trimmed[8 * i..8 * (i + 1)];
+        let bytes = u32::from_str_radix(chunk, 16)?;
+        // risc0 image_id words are little-endian when parsed from hex bytes.
+        words[i] = bytes.swap_bytes();
+    }
+    Ok(words)
 }

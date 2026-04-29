@@ -1,278 +1,95 @@
-use std::io::{Read, Write};
+//! On-chain payload format.
+//!
+//! Wire layout for one EIP-4844 blob (after `blob::decode_simple_blob`):
+//! ```text
+//! | magic (2 bytes LE = 0xd10b) | bincode-encoded risc0 Receipt (rest) |
+//! ```
+//!
+//! The proof header (`tx_final`, `state_root_hash`, `nullifiers`) lives
+//! inside the receipt's journal as a borsh-encoded
+//! [`txlib_core::abi::GuestJournal`]. The synchronizer learns these values
+//! by verifying the receipt and decoding the journal — no redundant header
+//! is carried in the blob.
+//!
+//! [`Payload`] is the *parsed* representation: it holds the journal-derived
+//! `(tx_final, state_root_hash, nullifiers)` plus the raw receipt bytes for
+//! diagnostics. Constructing one is the result of a successful
+//! [`crate::proof::Risc0Verifier::parse_blob`] call.
 
 use anyhow::{Result, anyhow};
-use plonky2::{
-    field::types::{Field, Field64, PrimeField64},
-    plonk::proof::CompressedProof,
-    util::serialization::Buffer,
-};
-use pod2::middleware::{C, CommonCircuitData, D, F, Hash};
+use txlib_core::Hash;
 
-use crate::ProofType;
+pub const PAYLOAD_MAGIC: u16 = 0xd10b;
 
-pub fn write_elems<const N: usize>(bytes: &mut Vec<u8>, elems: &[F; N]) {
-    for elem in elems {
-        bytes
-            .write_all(&elem.to_canonical_u64().to_le_bytes())
-            .expect("vec write");
-    }
-}
-
-pub fn read_elems<const N: usize>(bytes: &mut impl Read) -> Result<[F; N]> {
-    let mut elems = [F::ZERO; N];
-    let mut elem_bytes = [0; 8];
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..N {
-        bytes.read_exact(&mut elem_bytes)?;
-        let n = u64::from_le_bytes(elem_bytes);
-        if n >= F::ORDER {
-            return Err(anyhow!("{n} >= F::ORDER"));
-        }
-        elems[i] = F::from_canonical_u64(n);
-    }
-    Ok(elems)
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(clippy::large_enum_variant)]
+/// A successfully parsed + verified blob payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Payload {
-    pub proof: PayloadProof,
-    /// Commitment of the finalized transaction dictionary `{live, nullifiers, tx_start, tx_end}`.
     pub tx_final: Hash,
     pub state_root_hash: Hash,
     pub nullifiers: Vec<Hash>,
+    /// Raw bincode-serialized risc0 `Receipt`. Held for diagnostics and
+    /// re-broadcast; verification has already happened by the time you
+    /// have a `Payload`.
+    pub receipt_bytes: Vec<u8>,
 }
 
-const PAYLOAD_MAGIC: u16 = 0xd10b;
-
-impl Payload {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buffer = Vec::new();
-        buffer
-            .write_all(&PAYLOAD_MAGIC.to_le_bytes())
-            .expect("vec write");
-        self.proof.write_bytes(&mut buffer);
-        write_elems(&mut buffer, &self.tx_final.0);
-        write_elems(&mut buffer, &self.state_root_hash.0);
-        assert!(self.nullifiers.len() <= 255);
-        buffer
-            .write_all(&(self.nullifiers.len() as u8).to_le_bytes())
-            .expect("vec write");
-        for nullifier in &self.nullifiers {
-            write_elems(&mut buffer, &nullifier.0);
-        }
-        buffer
-    }
-
-    pub fn from_bytes(bytes: &[u8], common_data: &CommonCircuitData) -> Result<Self> {
-        let mut bytes = bytes;
-        let magic = {
-            let mut buffer = [0; 2];
-            bytes.read_exact(&mut buffer)?;
-            u16::from_le_bytes(buffer)
-        };
-        if magic != PAYLOAD_MAGIC {
-            return Err(anyhow!("Invalid payload magic: {magic:04x}"));
-        }
-
-        let (proof, len) = PayloadProof::from_bytes(bytes, common_data)?;
-        bytes = &bytes[len..];
-        let tx_final = Hash(read_elems(&mut bytes)?);
-        let state_root_hash = Hash(read_elems(&mut bytes)?);
-        let nullifiers_len = {
-            let mut buffer = [0; 1];
-            bytes.read_exact(&mut buffer)?;
-            u8::from_le_bytes(buffer)
-        };
-        let mut nullifiers = Vec::with_capacity(nullifiers_len as usize);
-        for _ in 0..nullifiers_len {
-            nullifiers.push(Hash(read_elems(&mut bytes)?));
-        }
-        Ok(Self {
-            proof,
-            tx_final,
-            state_root_hash,
-            nullifiers,
-        })
-    }
+/// Wrap raw receipt bytes in the magic envelope.
+pub fn encode_blob_payload(receipt_bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + receipt_bytes.len());
+    out.extend_from_slice(&PAYLOAD_MAGIC.to_le_bytes());
+    out.extend_from_slice(receipt_bytes);
+    out
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PayloadProof {
-    Plonky2(Box<CompressedProof<F, C, D>>),
-    Groth16(Vec<u8>),
-}
-
-impl PayloadProof {
-    pub fn write_bytes(&self, buffer: &mut Vec<u8>) {
-        match self {
-            PayloadProof::Plonky2(shrunk_main_pod_proof) => {
-                buffer
-                    .write_all(&[ProofType::Plonky2.to_byte()])
-                    .expect("byte write");
-                plonky2::util::serialization::Write::write_compressed_proof(
-                    buffer,
-                    shrunk_main_pod_proof,
-                )
-                .expect("vec write");
-            }
-            PayloadProof::Groth16(b) => {
-                buffer
-                    .write_all(&[ProofType::Groth16.to_byte()])
-                    .expect("byte write");
-                buffer
-                    .write_all(&b.len().to_le_bytes())
-                    .expect("g16 proof bytes length write");
-                buffer.write_all(b).expect("g16 proof bytes write");
-            }
-        }
+/// Strip the magic envelope and return the receipt bytes.
+///
+/// Returns `Ok(None)` if the magic doesn't match — these bytes belong to
+/// some other application's blob and should be silently skipped.
+/// Returns `Err` only on malformed input (too short).
+pub fn decode_blob_envelope(bytes: &[u8]) -> Result<Option<&[u8]>> {
+    if bytes.len() < 2 {
+        return Err(anyhow!(
+            "blob payload too short: {} bytes (need at least 2 for magic)",
+            bytes.len()
+        ));
     }
-    pub fn from_bytes(bytes: &[u8], common_data: &CommonCircuitData) -> Result<(Self, usize)> {
-        let proof_type = ProofType::from_byte(&bytes[0])?;
-        let bytes = &bytes[1..];
-        let (proof, len): (Self, usize) = match proof_type {
-            ProofType::Plonky2 => {
-                let mut buffer = Buffer::new(bytes);
-                let proof = plonky2::util::serialization::Read::read_compressed_proof(
-                    &mut buffer,
-                    common_data,
-                )
-                .map_err(|e| anyhow!("read_compressed_proof: {e}"))?;
-                let len = buffer.pos();
-                (PayloadProof::Plonky2(Box::new(proof)), len)
-            }
-            ProofType::Groth16 => {
-                // get the length
-                let len_bytes: [u8; 8] = bytes[0..8].try_into()?;
-                let len: usize = u64::from_le_bytes(len_bytes) as usize;
-                // return the rest of bytes of the Groth16 proof
-                (PayloadProof::Groth16(bytes[8..8 + len].to_vec()), 8 + len)
-            }
-        };
-
-        // len+1 because at the beginning we used the first byte for the
-        // proof_type
-        Ok((proof, len + 1))
+    let magic = u16::from_le_bytes([bytes[0], bytes[1]]);
+    if magic != PAYLOAD_MAGIC {
+        return Ok(None);
     }
+    Ok(Some(&bytes[2..]))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
-    use plonky2::plonk::proof::CompressedProofWithPublicInputs;
-    use pod2::{
-        backends::plonky2::{
-            basetypes::DEFAULT_VD_SET,
-            mainpod::{Prover, calculate_statements_hash},
-        },
-        frontend::{MainPodBuilder, Operation},
-        middleware::{Params, Statement, Value, containers::Set},
-    };
-
     use super::*;
-    use crate::shrink::{ShrunkMainPodSetup, shrink_compress_pod};
 
     #[test]
-    fn test_payload_roundtrip() {
-        let params = Params::default();
-        let vd_set = &*DEFAULT_VD_SET;
-        let vds_root = vd_set.root();
+    fn envelope_roundtrip() {
+        let receipt = vec![0xde, 0xad, 0xbe, 0xef];
+        let blob = encode_blob_payload(&receipt);
+        assert_eq!(blob.len(), 2 + receipt.len());
+        let decoded = decode_blob_envelope(&blob).unwrap().unwrap();
+        assert_eq!(decoded, receipt.as_slice());
+    }
 
-        let input = r#"
-        TxnFinalized(state_root_hash, tx_final, nullifiers) = AND(
-            Equal(0, 0)
-        )
-        "#;
-        let module = pod2::lang::load_module(input, "txn_finalized", &params, &[]).unwrap();
-        let pred = module.predicate_ref_by_name("TxnFinalized").unwrap();
+    #[test]
+    fn empty_receipt_envelope() {
+        let blob = encode_blob_payload(&[]);
+        assert_eq!(blob.len(), 2);
+        let decoded = decode_blob_envelope(&blob).unwrap().unwrap();
+        assert_eq!(decoded, &[] as &[u8]);
+    }
 
-        println!("ShrunkMainPod setup");
-        let shrunk_main_pod_build = ShrunkMainPodSetup::new(&params).build().unwrap();
-        let common_data = &shrunk_main_pod_build.circuit_data.common;
+    #[test]
+    fn wrong_magic_yields_none() {
+        let blob = vec![0x00, 0x00, 0xff, 0xff];
+        assert!(decode_blob_envelope(&blob).unwrap().is_none());
+    }
 
-        let payload = {
-            let mut builder = MainPodBuilder::new(&params, vd_set);
-            let tx_final = Value::from("dummy_tx_final");
-            let nullifiers = vec![
-                Hash(Value::from(1i64).raw().0),
-                Hash(Value::from(2i64).raw().0),
-                Hash(Value::from(3i64).raw().0),
-            ];
-            let nullifiers_set = Value::from(Set::new(HashSet::from_iter(
-                nullifiers.iter().map(|h| Value::from(*h)),
-            )));
-            let state_root = Value::from("dummy_state_root");
-            let st0 = builder.priv_op(Operation::eq(0, 0)).unwrap();
-            let st_txn_finalized = builder
-                .op(
-                    true,
-                    vec![
-                        (0, state_root.clone()),
-                        (1, tx_final.clone()),
-                        (2, nullifiers_set.clone()),
-                    ],
-                    Operation::custom(pred.clone(), [st0]),
-                )
-                .unwrap();
-            println!("st: {st_txn_finalized:?}");
-
-            println!("MainPod prove");
-            let prover = Prover {};
-            let pod = builder.prove(&prover).unwrap();
-            pod.pod.verify().unwrap();
-
-            println!("MainPod shrink & compress");
-            let shrunk_main_pod_proof =
-                shrink_compress_pod(&shrunk_main_pod_build, pod.clone()).unwrap();
-
-            Payload {
-                proof: PayloadProof::Plonky2(Box::new(shrunk_main_pod_proof.clone())),
-                tx_final: Hash(tx_final.raw().0),
-                state_root_hash: Hash(state_root.raw().0),
-                nullifiers: nullifiers.clone(),
-            }
-        };
-
-        println!("Payload roundtrip");
-        let payload_bytes = payload.to_bytes();
-        let payload_decoded = Payload::from_bytes(&payload_bytes, common_data).unwrap();
-        assert_eq!(payload, payload_decoded);
-
-        println!("Verify shrunk mainPod");
-
-        let nullifiers_set = Value::from(Set::new(HashSet::from_iter(
-            payload.nullifiers.iter().map(|h| Value::from(*h)),
-        )));
-        let st = Statement::Custom(
-            pred,
-            vec![
-                Value::from(payload.state_root_hash).into(),
-                Value::from(payload.tx_final).into(),
-                nullifiers_set.into(),
-            ],
-        );
-        println!("st: {st:?}");
-
-        let sts_hash = calculate_statements_hash(&[st.clone().into()]);
-        let public_inputs = [sts_hash.0, vds_root.0].concat();
-        let shrunk_main_pod_proof = match payload.proof {
-            PayloadProof::Plonky2(proof) => proof,
-            PayloadProof::Groth16(_) => todo!(),
-        };
-        let proof_with_pis = CompressedProofWithPublicInputs {
-            proof: *shrunk_main_pod_proof,
-            public_inputs,
-        };
-        let proof = proof_with_pis
-            .decompress(
-                &shrunk_main_pod_build
-                    .circuit_data
-                    .verifier_only
-                    .circuit_digest,
-                &shrunk_main_pod_build.circuit_data.common,
-            )
-            .unwrap();
-        shrunk_main_pod_build.circuit_data.verify(proof).unwrap();
+    #[test]
+    fn too_short_errors() {
+        assert!(decode_blob_envelope(&[0x0b]).is_err());
+        assert!(decode_blob_envelope(&[]).is_err());
     }
 }
