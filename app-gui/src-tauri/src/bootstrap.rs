@@ -81,9 +81,9 @@ pub async fn load_gui_inventory(
                 id: action.id,
                 emoji: action.emoji,
                 hash: action.hash,
-                input_class_hashes: action.input_class_hashes,
+                input_class_hashes: action.total_input_class_hashes,
                 description: action.description,
-                input_classes: action.input_classes,
+                input_classes: action.total_input_classes,
             })
             .collect();
 

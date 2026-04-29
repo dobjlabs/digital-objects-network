@@ -228,7 +228,7 @@ fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt:
     let other_len = class
         .actions
         .iter()
-        .map(|(action_name, _)| loader.action_by_name(action_name).outputs.len())
+        .map(|(action_name, _)| loader.action_by_name(action_name).local_outputs.len())
         .max()
         .unwrap()
         - 1;
@@ -246,7 +246,7 @@ fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt:
         write!(w, "  {action_name}(")?;
         let action = loader.action_by_name(action_name);
         let mut count = 0;
-        for i in 0..action.outputs.len() {
+        for i in 0..action.local_outputs.len() {
             if i != 0 {
                 write!(w, ", ")?;
             }
