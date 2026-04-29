@@ -66,13 +66,13 @@ impl CraftOps for MockCraftOps {
                 let produced_by = self
                     .actions
                     .iter()
-                    .filter(|a| a.output_classes.contains(&name.to_string()))
+                    .filter(|a| a.total_output_classes.contains(&name.to_string()))
                     .map(|a| a.id.clone())
                     .collect();
                 let consumed_by = self
                     .actions
                     .iter()
-                    .filter(|a| a.input_classes.contains(&name.to_string()))
+                    .filter(|a| a.total_input_classes.contains(&name.to_string()))
                     .map(|a| a.id.clone())
                     .collect();
                 ClassSummary {
@@ -112,12 +112,12 @@ impl CraftOps for MockCraftOps {
         let actions = &self.actions;
         let produced_by = actions
             .iter()
-            .filter(|a| a.output_classes.contains(&class_name.to_string()))
+            .filter(|a| a.total_output_classes.contains(&class_name.to_string()))
             .map(|a| a.id.clone())
             .collect();
         let consumed_by = actions
             .iter()
-            .filter(|a| a.input_classes.contains(&class_name.to_string()))
+            .filter(|a| a.total_input_classes.contains(&class_name.to_string()))
             .map(|a| a.id.clone())
             .collect();
 
@@ -182,7 +182,7 @@ impl CraftOps for MockCraftOps {
         let mut available = Vec::new();
         let mut missing = Vec::new();
 
-        for required_class in &action.input_classes {
+        for required_class in &action.total_input_classes {
             if let Some(obj) = self
                 .inventory
                 .iter()
@@ -318,44 +318,44 @@ fn default_actions() -> Vec<Action> {
         Action {
             id: "FindLog".to_string(),
             description: "Discover a log by proving a short VDF".to_string(),
-            input_classes: vec![],
-            output_classes: vec!["Log".to_string()],
+            total_input_classes: vec![],
+            total_output_classes: vec!["Log".to_string()],
         },
         Action {
             id: "CraftWood".to_string(),
             description: "Refine one log into wood".to_string(),
-            input_classes: vec!["Log".to_string()],
-            output_classes: vec!["Wood".to_string()],
+            total_input_classes: vec!["Log".to_string()],
+            total_output_classes: vec!["Wood".to_string()],
         },
         Action {
             id: "CraftSticks".to_string(),
             description: "Split one wood into two sticks".to_string(),
-            input_classes: vec!["Wood".to_string()],
-            output_classes: vec!["Stick".to_string(), "Stick".to_string()],
+            total_input_classes: vec!["Wood".to_string()],
+            total_output_classes: vec!["Stick".to_string(), "Stick".to_string()],
         },
         Action {
             id: "CraftWoodPick".to_string(),
             description: "Combine wood and stick to craft a wood pickaxe".to_string(),
-            input_classes: vec!["Wood".to_string(), "Stick".to_string()],
-            output_classes: vec!["WoodPick".to_string()],
+            total_input_classes: vec!["Wood".to_string(), "Stick".to_string()],
+            total_output_classes: vec!["WoodPick".to_string()],
         },
         Action {
             id: "CraftStonePick".to_string(),
             description: "Combine stone and stick to craft a stone pickaxe".to_string(),
-            input_classes: vec!["Stone".to_string(), "Stick".to_string()],
-            output_classes: vec!["StonePick".to_string()],
+            total_input_classes: vec!["Stone".to_string(), "Stick".to_string()],
+            total_output_classes: vec!["StonePick".to_string()],
         },
         Action {
             id: "MineStoneWithWoodPick".to_string(),
             description: "Mine stone using a wood pick (consumes durability)".to_string(),
-            input_classes: vec!["WoodPick".to_string()],
-            output_classes: vec!["Stone".to_string(), "WoodPick".to_string()],
+            total_input_classes: vec!["WoodPick".to_string()],
+            total_output_classes: vec!["Stone".to_string(), "WoodPick".to_string()],
         },
         Action {
             id: "MineStoneWithStonePick".to_string(),
             description: "Mine stone using a stone pick (consumes durability)".to_string(),
-            input_classes: vec!["StonePick".to_string()],
-            output_classes: vec!["Stone".to_string(), "StonePick".to_string()],
+            total_input_classes: vec!["StonePick".to_string()],
+            total_output_classes: vec!["Stone".to_string(), "StonePick".to_string()],
         },
     ]
 }

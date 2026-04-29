@@ -876,10 +876,14 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
 #[derive(Debug, Default)]
 pub struct ActionMeta {
     pub name: String,
-    /// List of (object, class) for input/mutate
-    pub inputs: Vec<(String, String)>,
-    /// List of (object, class) for output/mutate
-    pub outputs: Vec<(String, String)>,
+    /// List of (object, class) for input/mutate explicitly declared in this action
+    pub local_inputs: Vec<(String, String)>,
+    /// List of (object, class) for output/mutate explicitly declared in this action
+    pub local_outputs: Vec<(String, String)>,
+    /// List of (object, class) for input/mutate across this action and nested subactions
+    pub total_inputs: Vec<(String, String)>,
+    /// List of (object, class) for output/mutate across this action and nested subactions
+    pub total_outputs: Vec<(String, String)>,
 }
 
 impl ActionMeta {
@@ -896,7 +900,8 @@ impl ActionMeta {
                     class,
                 } => {
                     let obj_name = obj.borrow().as_var().name.clone();
-                    meta.inputs.push((obj_name, class.clone()));
+                    meta.local_inputs.push((obj_name.clone(), class.clone()));
+                    meta.total_inputs.push((obj_name, class.clone()));
                 }
                 Inst::Object {
                     io: ObjectIO::Output,
@@ -904,7 +909,8 @@ impl ActionMeta {
                     class,
                 } => {
                     let obj_name = obj.borrow().as_var().name.clone();
-                    meta.outputs.push((obj_name, class.clone()));
+                    meta.local_outputs.push((obj_name.clone(), class.clone()));
+                    meta.total_outputs.push((obj_name, class.clone()));
                 }
                 Inst::Object {
                     io: ObjectIO::Mutate,
@@ -912,16 +918,21 @@ impl ActionMeta {
                     class,
                 } => {
                     let obj_name = obj.borrow().as_var().name.clone();
-                    meta.inputs.push((obj_name.clone(), class.clone()));
-                    meta.outputs.push((obj_name, class.clone()));
+                    meta.local_inputs.push((obj_name.clone(), class.clone()));
+                    meta.total_inputs.push((obj_name.clone(), class.clone()));
+                    meta.local_outputs.push((obj_name.clone(), class.clone()));
+                    meta.total_outputs.push((obj_name, class.clone()));
                 }
                 Inst::SubAction { action, obj: _ } => {
                     let subaction = actions
                         .iter()
                         .find(|a| &a.name == action)
                         .ok_or_else(|| anyhow!("subaction {action} not defined"))?;
-                    for input in &subaction.inputs {
-                        meta.inputs.push(input.clone());
+                    for input in &subaction.total_inputs {
+                        meta.total_inputs.push(input.clone());
+                    }
+                    for output in &subaction.total_outputs {
+                        meta.total_outputs.push(output.clone());
                     }
                 }
                 _ => {}
@@ -956,7 +967,7 @@ impl Loader {
         let mut classes_ordered: Vec<String> = Vec::new();
         for action in actions {
             let mut classes = Vec::new();
-            for (_obj, class) in &action.outputs {
+            for (_obj, class) in &action.local_outputs {
                 classes.push(class.clone());
                 if !classes_ordered.contains(class) {
                     classes_ordered.push(class.clone());
@@ -1023,7 +1034,7 @@ impl Loader {
         let mut output_index_class_st_index = HashMap::new();
         let mut class_action_count = HashMap::new();
         for action in actions {
-            for (output_index, (_name, class)) in action.outputs.iter().enumerate() {
+            for (output_index, (_name, class)) in action.local_outputs.iter().enumerate() {
                 let class_st_index = class_action_count.entry(class).or_insert(0);
                 output_index_class_st_index
                     .insert((action.name.clone(), output_index), *class_st_index);
@@ -1254,7 +1265,7 @@ impl Executor {
 
         let mut tx_inputs = Vec::new();
         let mut input_class_sts_objs = Vec::with_capacity(inputs.len());
-        for (input, (_class, _name)) in zip_eq(inputs, &action.inputs) {
+        for (input, (_class, _name)) in zip_eq(inputs, &action.total_inputs) {
             tx_inputs.push(input.tx_input());
             let input_pod_sts = input.pod.pod.pub_statements();
             let st_class = input_pod_sts[0].clone();

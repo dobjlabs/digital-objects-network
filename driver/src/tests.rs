@@ -255,7 +255,7 @@ fn test_list_actions_filters_by_input_class() {
     assert!(
         filtered
             .iter()
-            .all(|action| action.input_classes.contains(&"Wood".to_string()))
+            .all(|action| action.total_input_classes.contains(&"Wood".to_string()))
     );
 }
 

@@ -66,9 +66,9 @@ pub struct Action {
     /// Human-readable description
     pub description: String,
     /// Class names required as inputs
-    pub input_classes: Vec<String>,
+    pub total_input_classes: Vec<String>,
     /// Class names produced as outputs
-    pub output_classes: Vec<String>,
+    pub total_output_classes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

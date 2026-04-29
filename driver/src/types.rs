@@ -60,10 +60,10 @@ pub struct ActionSummary {
     pub id: String,
     pub emoji: String,
     pub hash: String,
-    pub input_class_hashes: Vec<String>,
+    pub total_input_class_hashes: Vec<String>,
     pub description: String,
-    pub input_classes: Vec<String>,
-    pub output_classes: Vec<String>,
+    pub total_input_classes: Vec<String>,
+    pub total_output_classes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

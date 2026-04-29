@@ -115,13 +115,19 @@ impl PexeCatalog {
 
             for action in module.actions() {
                 let name = action.name.as_str();
-                let input_classes: Vec<String> =
-                    action.inputs.iter().map(|(_o, c)| c.clone()).collect();
-                let output_classes: Vec<String> =
-                    action.outputs.iter().map(|(_o, c)| c.clone()).collect();
+                let total_input_classes: Vec<String> = action
+                    .total_inputs
+                    .iter()
+                    .map(|(_o, c)| c.clone())
+                    .collect();
+                let total_output_classes: Vec<String> = action
+                    .total_outputs
+                    .iter()
+                    .map(|(_o, c)| c.clone())
+                    .collect();
                 action_signatures.insert(
                     name.to_string(),
-                    (input_classes.clone(), output_classes.clone()),
+                    (total_input_classes.clone(), total_output_classes.clone()),
                 );
 
                 let meta = action_meta_by_name.get(name);
@@ -136,12 +142,12 @@ impl PexeCatalog {
                     id: name.to_string(),
                     emoji: meta.map_or("⚙️", |m| m.emoji.as_str()).to_string(),
                     hash: action_hash,
-                    input_class_hashes: Vec::new(), // filled in a second pass
+                    total_input_class_hashes: Vec::new(), // filled in a second pass
                     description: meta
                         .map_or("Pexe action", |m| m.description.as_str())
                         .to_string(),
-                    input_classes,
-                    output_classes,
+                    total_input_classes,
+                    total_output_classes,
                 });
             }
 
@@ -162,8 +168,8 @@ impl PexeCatalog {
 
         // Second pass: fill in input_class_hashes now that every class hash is known.
         for action in &mut all_actions {
-            action.input_class_hashes = action
-                .input_classes
+            action.total_input_class_hashes = action
+                .total_input_classes
                 .iter()
                 .map(|c| class_hashes.get(c).cloned().unwrap_or_default())
                 .collect();
@@ -188,12 +194,12 @@ impl PexeCatalog {
                     .unwrap_or_else(|| ("📦".to_string(), "Unknown class object".to_string()));
                 let produced_by = all_actions
                     .iter()
-                    .filter(|a| a.output_classes.contains(&class_name))
+                    .filter(|a| a.total_output_classes.contains(&class_name))
                     .map(|a| a.id.clone())
                     .collect();
                 let consumed_by = all_actions
                     .iter()
-                    .filter(|a| a.input_classes.contains(&class_name))
+                    .filter(|a| a.total_input_classes.contains(&class_name))
                     .map(|a| a.id.clone())
                     .collect();
                 let predicate_source =

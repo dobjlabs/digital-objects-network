@@ -108,11 +108,11 @@ pub(crate) fn validate_execute_request(
     input: &ExecuteActionInput,
     action: &ActionSummary,
 ) -> Result<()> {
-    if input.input_objects.len() != action.input_classes.len() {
+    if input.input_objects.len() != action.total_input_classes.len() {
         return Err(anyhow!(
             "{} expects {} inputs, got {}",
             input.action_id,
-            action.input_classes.len(),
+            action.total_input_classes.len(),
             input.input_objects.len()
         ));
     }
@@ -146,7 +146,7 @@ pub(crate) fn resolve_inputs(
 ) -> Result<Vec<ResolvedInput>> {
     let mut resolved_inputs = Vec::new();
     for (slot, selector) in input.input_objects.iter().enumerate() {
-        let expected_class = action.input_classes[slot].as_str();
+        let expected_class = action.total_input_classes[slot].as_str();
         let entry = select_object(entries, selector)?;
         if entry.record.status != ObjectStatus::Live {
             return Err(anyhow!(
@@ -189,17 +189,17 @@ pub(crate) fn save_results(
         .map(|input| input.file_name.clone())
         .collect();
 
-    if spendable_outputs.objs.len() != action.output_classes.len() {
+    if spendable_outputs.objs.len() != action.total_output_classes.len() {
         return Err(anyhow!(
             "action {} output mismatch: descriptor expects {}, engine returned {}",
             action_id,
-            action.output_classes.len(),
+            action.total_output_classes.len(),
             spendable_outputs.objs.len()
         ));
     }
 
     let mut output_files = Vec::new();
-    for (index, class_name) in action.output_classes.iter().enumerate() {
+    for (index, class_name) in action.total_output_classes.iter().enumerate() {
         let spendable = spendable_outputs.obj(index);
         let object_id = format!("{:#}", spendable.obj.commitment());
         let file_name = format!(

@@ -36,8 +36,8 @@ impl CraftOps for AppCraftOps {
             .map(|action| mcp::Action {
                 id: action.id,
                 description: action.description,
-                input_classes: action.input_classes,
-                output_classes: action.output_classes,
+                total_input_classes: action.total_input_classes,
+                total_output_classes: action.total_output_classes,
             })
             .collect())
     }

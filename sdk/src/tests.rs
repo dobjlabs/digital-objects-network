@@ -110,6 +110,58 @@ fn test_sdk_1() {
         .load_module_from_src_actions(craft_src, actions)
         .unwrap();
 
+    fn list(xs: &[(&str, &str)]) -> Vec<(String, String)> {
+        xs.into_iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
+    }
+    let actions = module.actions();
+    // FindLog
+    let action = &actions[0];
+    assert_eq!(action.local_inputs, action.total_inputs);
+    assert_eq!(&action.local_inputs, &[]);
+    assert_eq!(action.local_outputs, action.total_outputs);
+    assert_eq!(action.local_outputs, list(&[("log", "Log")]));
+    // CraftWood
+    let action = &actions[1];
+    assert_eq!(action.local_inputs, action.total_inputs);
+    assert_eq!(action.local_inputs, list(&[("log", "Log")]));
+    assert_eq!(action.local_outputs, action.total_outputs);
+    assert_eq!(action.local_outputs, list(&[("wood", "Wood")]));
+    // CraftSticks
+    let action = &actions[2];
+    assert_eq!(action.local_inputs, action.total_inputs);
+    assert_eq!(action.local_inputs, list(&[("wood", "Wood")]));
+    assert_eq!(action.local_outputs, action.total_outputs);
+    assert_eq!(
+        action.local_outputs,
+        list(&[("stick_a", "Stick"), ("stick_b", "Stick")])
+    );
+    // CraftWoodPick
+    let action = &actions[3];
+    assert_eq!(action.local_inputs, action.total_inputs);
+    assert_eq!(
+        action.local_inputs,
+        list(&[("wood", "Wood"), ("stick", "Stick")])
+    );
+    assert_eq!(action.local_outputs, action.total_outputs);
+    assert_eq!(action.local_outputs, list(&[("pick", "WoodPick")]));
+    // UseWoodPick
+    let action = &actions[4];
+    assert_eq!(action.local_inputs, action.total_inputs);
+    assert_eq!(action.local_inputs, list(&[("wood_pick", "WoodPick")]));
+    assert_eq!(action.local_outputs, action.total_outputs);
+    assert_eq!(action.local_outputs, list(&[("wood_pick", "WoodPick")]));
+    // MineStoneWithWoodPick
+    let action = &actions[5];
+    assert_eq!(action.local_inputs, list(&[]));
+    assert_eq!(action.total_inputs, list(&[("wood_pick", "WoodPick")]));
+    assert_eq!(action.local_outputs, list(&[("stone", "Stone")]));
+    assert_eq!(
+        action.total_outputs,
+        list(&[("wood_pick", "WoodPick"), ("stone", "Stone")])
+    );
+
     println!("{}", module.podlang_src);
 
     let mut state = TestState::default();

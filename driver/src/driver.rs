@@ -205,14 +205,12 @@ impl Driver {
             .filter(|action| {
                 query.is_none_or(|query| {
                     query.name.as_ref().is_none_or(|name| &action.id == name)
-                        && query
-                            .input_class
-                            .as_ref()
-                            .is_none_or(|class_name| action.input_classes.contains(class_name))
-                        && query
-                            .output_class
-                            .as_ref()
-                            .is_none_or(|class_name| action.output_classes.contains(class_name))
+                        && query.input_class.as_ref().is_none_or(|class_name| {
+                            action.total_input_classes.contains(class_name)
+                        })
+                        && query.output_class.as_ref().is_none_or(|class_name| {
+                            action.total_output_classes.contains(class_name)
+                        })
                 })
             })
             .collect())
@@ -272,7 +270,7 @@ impl Driver {
         let mut missing = Vec::new();
         let mut used_ids = HashSet::new();
 
-        for required_class in &action.input_classes {
+        for required_class in &action.total_input_classes {
             if let Some(entry) = live_objects.iter().find(|entry| {
                 &entry.record.class_name == required_class && !used_ids.contains(&entry.record.id)
             }) {
