@@ -16,8 +16,8 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-# Local pod2 checkout — bumped BASE_PARAMS to fit the episode-1 recipe sizes.
-pod2 = { path = "/Users/dhvanipa/Documents/Tenet/0xPARC/pod2", default-features = false, features = [
+# Fork with bumped BASE_PARAMS / extended blinding_gates table for episode-1.
+pod2 = { git = "https://github.com/dhvanipa/pod2", branch = "dhvanipa/episode-1", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
