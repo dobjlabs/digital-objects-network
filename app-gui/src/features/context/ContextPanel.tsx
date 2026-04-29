@@ -4,10 +4,7 @@ import type {
   ActionPayload as Action,
   InventoryObjectPayload as InventoryObject,
 } from "../../shared/api/wireTypes";
-import {
-  pickDobjFilePath,
-  readDobjFile,
-} from "../../shared/api/tauriClient";
+import { pickDobjFilePath, readDobjFile } from "../../shared/api/tauriClient";
 import { truncateDisplayHash } from "../../shared/format";
 import {
   displayPathInObjectsDir,
@@ -290,31 +287,31 @@ export function ContextPanel({
   const renderMethodCard = (config: {
     methodId: string;
     methodName: string;
-    inputClasses: string[];
-    inputClassHashes: string[];
+    totalInputClasses: string[];
+    totalInputClassHashes: string[];
     onRun: (boundArgs: BoundArg[]) => void;
   }) =>
     (() => {
-      const hasInputs = config.inputClasses.length > 0;
-      const boundArgs = config.inputClasses.map(
+      const hasInputs = config.totalInputClasses.length > 0;
+      const boundArgs = config.totalInputClasses.map(
         (_, index) => argBindings[argKey(config.methodId, index)] ?? null,
       );
       const filledCount = boundArgs.filter(
         (value) => value?.objectPath?.trim().length,
       ).length;
       const allArgsBound =
-        !hasInputs || filledCount === config.inputClasses.length;
+        !hasInputs || filledCount === config.totalInputClasses.length;
 
       return (
         <div className="method-card">
           {hasInputs && (
             <div className="method-card-body">
-              {config.inputClasses.map((expectedClassName, index) => {
+              {config.totalInputClasses.map((expectedClassName, index) => {
                 const key = argKey(config.methodId, index);
                 const bound = argBindings[key];
                 const isDropActive = hoverArgKey === key;
                 const err = argErrors[key];
-                const classHash = config.inputClassHashes[index] ?? "";
+                const classHash = config.totalInputClassHashes[index] ?? "";
 
                 return (
                   <div
@@ -512,9 +509,7 @@ export function ContextPanel({
       return <section className="context-panel">Object not found.</section>;
 
     const titleName = object.className;
-    const liveValueRaw = object.status === "live"
-      ? object.id
-      : object.status;
+    const liveValueRaw = object.status === "live" ? object.id : object.status;
     const liveValue = truncateDisplayHash(liveValueRaw);
 
     return (
@@ -601,8 +596,8 @@ export function ContextPanel({
       {renderMethodCard({
         methodId: action.id,
         methodName: action.id,
-        inputClasses: action.inputClasses,
-        inputClassHashes: action.inputClassHashes,
+        totalInputClasses: action.totalInputClasses,
+        totalInputClassHashes: action.totalInputClassHashes,
         onRun: (boundArgs) =>
           onRunProof({
             actionId: action.id,
