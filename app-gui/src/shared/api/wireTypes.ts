@@ -23,9 +23,9 @@ export interface ActionPayload {
   id: string;
   emoji: string;
   hash: string;
-  inputClassHashes: string[];
+  totalInputClassHashes: string[];
   description: string;
-  inputClasses: string[];
+  totalInputClasses: string[];
 }
 
 export interface LoadGuiInventoryResult {

@@ -7,9 +7,8 @@ use std::slice;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use hex::FromHex;
 use itertools::zip_eq;
-use lt_eq_u256_pod::LtEqU256Pod;
+use lt_eq_u256_pod::{LtEqU256Pod, STANDARD_LT_EQ_U256_VD_HASH};
 use pod2::{
     backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
     frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
@@ -23,7 +22,7 @@ use pod2::{
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
 use txlib::{GroundingWitness, Tx, TxBuilder};
-use vdfpod::VdfPod;
+use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 
 mod error;
 mod fmt_podlang;
@@ -998,17 +997,11 @@ impl Loader {
             },
             Dependency::Intro {
                 pred: "Vdf(count, input, output)".to_string(),
-                hash: Hash::from_hex(
-                    "b77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06",
-                )
-                .unwrap(),
+                hash: *STANDARD_VDF_VD_HASH,
             },
             Dependency::Intro {
                 pred: "LtEqU256(lhs, rhs)".to_string(),
-                hash: Hash::from_hex(
-                    "2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529",
-                )
-                .unwrap(),
+                hash: *STANDARD_LT_EQ_U256_VD_HASH,
             },
         ];
         let mut actions_meta = Vec::with_capacity(actions.len());

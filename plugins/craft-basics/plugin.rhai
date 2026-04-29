@@ -51,3 +51,30 @@ fn UseWoodPick(action) {
     var wood_pick = action.mutate("WoodPick");
     use_pick(action, wood_pick, 10);
 }
+
+fn MineStoneWithWoodPick(action) {
+    var pick = action.subaction("UseWoodPick");
+    var stone = action.output("Stone");
+    stone.set([["blueprint", "Stone"]]);
+}
+
+fn CraftStonePick(action) {
+    var stone = action.input("Stone");
+    var stick = action.input("Stick");
+    var pick = action.output("StonePick");
+    pick.set([
+        ["blueprint", "StonePick"],
+        ["durability", 200]
+    ]);
+}
+
+fn UseStonePick(action) {
+    var stone_pick = action.mutate("StonePick");
+    use_pick(action, stone_pick, 5);
+}
+
+fn MineStoneWithStonePick(action) {
+    var pick = action.subaction("UseStonePick");
+    var stone = action.output("Stone");
+    stone.set([["blueprint", "Stone"]]);
+}
