@@ -10,6 +10,7 @@
 //!
 //! Blocking API. GUI callers should spawn-blocking.
 
+pub mod actions;
 pub mod catalog;
 pub mod clients;
 pub mod driver;

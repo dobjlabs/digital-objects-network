@@ -28,7 +28,12 @@ use txlib_core::Hash;
 use txlib_core::abi::{ActionId, InputObject};
 use txlib_core::tx::StateRoot;
 
-use crate::catalog::action_by_id;
+use crate::actions;
+use crate::catalog::{action_by_id, action_by_name};
+use craft_actions::{
+    ACTION_CRAFT_STICKS, ACTION_CRAFT_WOOD, ACTION_CRAFT_WOOD_PICK, ACTION_FIND_LOG,
+    ACTION_USE_WOOD_PICK,
+};
 use crate::clients::{
     HttpRelayerClient, HttpSynchronizerClient, JobStatus, RELAYER_POLL_INTERVAL_MS,
     RELAYER_POLL_TIMEOUT_SECS, RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS,
@@ -133,6 +138,45 @@ impl Driver {
 
     pub fn save_settings(&self) -> Result<()> {
         write_settings(&self.paths, &self.settings)
+    }
+
+    /// One-shot convenience: look up an action by name, read input objects
+    /// by selector, build the right `ActionStaging` for it, and run the
+    /// full lifecycle.
+    ///
+    /// Selector order matters and must match the action's `inputs`
+    /// declaration in [`crate::catalog`] (e.g. `CraftWoodPick` expects
+    /// `[Wood, Stick]` in that order).
+    pub fn execute_named(
+        &self,
+        action_name: &str,
+        input_selectors: Vec<ObjectSelector>,
+    ) -> Result<ExecuteActionResult> {
+        let action = action_by_name(action_name)
+            .ok_or_else(|| anyhow!("unknown action: {action_name}"))?;
+
+        // Resolve all inputs first so we have the records to feed stagers.
+        let resolved: Vec<ResolvedInput> = input_selectors
+            .iter()
+            .map(|s| self.resolve_one(s))
+            .collect::<Result<Vec<_>>>()?;
+
+        let staging = match action.id {
+            ACTION_FIND_LOG => actions::stage_find_log(),
+            ACTION_CRAFT_WOOD => actions::stage_craft_wood(&resolved[0].record),
+            ACTION_CRAFT_STICKS => actions::stage_craft_sticks(&resolved[0].record),
+            ACTION_CRAFT_WOOD_PICK => {
+                actions::stage_craft_wood_pick(&resolved[0].record, &resolved[1].record)
+            }
+            ACTION_USE_WOOD_PICK => actions::stage_use_wood_pick(&resolved[0].record)?,
+            other => return Err(anyhow!("no stager wired for action_id {other}")),
+        };
+
+        self.execute(ExecuteActionInput {
+            action_id: action.id,
+            input_selectors,
+            staging,
+        })
     }
 
     // ------------------------------------------------------------------- read
