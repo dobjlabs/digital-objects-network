@@ -3,29 +3,31 @@ name = "driver"
 version = "0.1.0"
 edition = "2024"
 
+# Headless library: local `.dobj` storage + HTTP clients for synchronizer and
+# relayer + risc0 prover invocation. Used by app-gui (Phase 5) and any other
+# host that wants to drive the craft-basics action set.
+
 [dependencies]
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
-pod2 = { workspace = true }
-plonky2 = { workspace = true }
-log = { workspace = true }
-env_logger = { workspace = true }
-common = { path = "../common" }
-sdk = { path = "../sdk" }
-pexe = { path = "../pexe" }
-pod2utils = { path = "../pod2utils" }
-txlib = { path = "../txlib" }
-vdfpod = { path = "../intro_pods/vdfpod" }
-lt_eq_u256_pod = { path = "../intro_pods/lt_eq_u256_pod" }
-synchronizer = { path = "../synchronizer" }
-relayer = { path = "../relayer" }
+tracing = { workspace = true }
+borsh = { version = "1.5", features = ["derive"] }
+bincode = "1.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 base64 = "0.22"
 dirs = "6.0.0"
+risc0-zkvm = { version = "^3.0.5" }
+
+txlib-core = { path = "../txlib-core" }
+craft-actions = { path = "../craft-actions" }
+craft-methods = { path = "../craft-methods" }
+common = { path = "../common" }
 
 [dev-dependencies]
-common = { path = "../common", features = ["test-utils"] }
 tempfile = "3"
+tracing-subscriber = { workspace = true }
+borsh = { version = "1.5", features = ["derive"] }
+bincode = "1.3"

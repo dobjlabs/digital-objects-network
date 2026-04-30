@@ -1,517 +1,500 @@
-use std::collections::HashSet;
-use std::path::Path;
+//! Top-level [`Driver`] — orchestrates the action lifecycle end to end.
+//!
+//! For each [`Driver::execute`] call:
+//!
+//! 1. Resolve input objects from the local store (by id or filename).
+//! 2. Fetch the canonical state root + per-input grounding proofs from the
+//!    synchronizer.
+//! 3. Build the [`InputObject`]s with their two-level Merkle proofs.
+//! 4. Hand off to the action's host-side preparer ([`crate::actions::*`])
+//!    which constructs the new objects + intro witnesses (VDF, PoW, ...).
+//! 5. Run the risc0 prover via [`crate::execute::prove_action`].
+//! 6. Persist new objects as `.dobj` files (status = `Unknown` until relayer).
+//! 7. Submit the receipt blob to the relayer.
+//! 8. Poll until relayer confirms; flip output statuses to `Pending` then
+//!    eventually `Live` once the synchronizer indexes the tx.
+//! 9. Move consumed inputs to `.nullified`.
+//!
+//! The first three steps are wrapped in [`Driver::build_plan`] so tests can
+//! exercise plan construction without real network calls.
+
 use std::sync::Arc;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use common::encode_hash_hex;
-use pod2::middleware::Hash;
-use sdk::SpendableObjects;
-use txlib::object_nullifier_hash;
+use serde::{Deserialize, Serialize};
+use txlib_core::Hash;
+use txlib_core::abi::{ActionId, InputObject};
+use txlib_core::tx::StateRoot;
 
-use crate::catalog::{ActionCatalog, CatalogClass};
+use crate::catalog::action_by_id;
 use crate::clients::{
-    HttpRelayerClient, HttpSynchronizerClient, RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
-    RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS,
-    SynchronizerClient,
+    HttpRelayerClient, HttpSynchronizerClient, JobStatus, RELAYER_POLL_INTERVAL_MS,
+    RELAYER_POLL_TIMEOUT_SECS, RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS,
+    SYNCHRONIZER_POLL_TIMEOUT_SECS, SynchronizerClient,
 };
-use crate::execute::{
-    build_relayer_payload, reconcile_objects, resolve_inputs, save_results, update_output_files,
-    validate_execute_request,
-};
-use crate::object_record::ObjectStatus;
-use crate::object_record::parse_object_record_file;
-use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, select_object,
-    write_object_file,
-};
-use crate::pexe_catalog::PexeCatalog;
-use crate::settings::{default_settings, read_settings, write_settings};
-use crate::types::{
-    ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
-    DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
-    ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSelector, ObjectSummary,
-};
+use crate::execute::{ExecutionPlan, Prover, Risc0Prover, prove_action};
+use crate::object::{ObjectRecord, ObjectStatus, SourceTxData, sorted_commitments};
+use crate::paths::{DriverPaths, default_paths};
+use crate::settings::{DriverSettings, default_settings, read_settings, write_settings};
+use crate::store;
 
-pub trait PayloadBuilder: Send + Sync {
-    fn build_payload(
-        &self,
-        old_state_root_hash: &Hash,
-        action_output: &SpendableObjects,
-    ) -> Result<Vec<u8>>;
+/// What the caller hands to [`Driver::execute`].
+#[derive(Debug, Clone)]
+pub struct ExecuteActionInput {
+    pub action_id: ActionId,
+    pub input_selectors: Vec<ObjectSelector>,
+    /// Action-specific staging built by the caller (the GUI or test). The
+    /// driver doesn't peek inside — it just feeds it to the prover.
+    pub staging: ActionStaging,
 }
 
-#[derive(Clone, Default)]
-struct DefaultPayloadBuilder;
-
-impl PayloadBuilder for DefaultPayloadBuilder {
-    fn build_payload(
-        &self,
-        old_state_root_hash: &Hash,
-        action_output: &SpendableObjects,
-    ) -> Result<Vec<u8>> {
-        build_relayer_payload(old_state_root_hash, action_output)
-    }
+#[derive(Debug, Clone)]
+pub enum ObjectSelector {
+    FileName(String),
+    Id(String),
 }
 
-#[derive(Clone)]
+/// Pre-prepared `new_objects` + `intro_witnesses` produced by the caller.
+/// Building these is action-specific (PoW grinding, VDF chain) and lives
+/// outside the driver — see `craft-actions::actions` for the validators
+/// each one must satisfy.
+#[derive(Debug, Clone)]
+pub struct ActionStaging {
+    pub new_objects: Vec<txlib_core::Object>,
+    pub intro_witnesses: Vec<txlib_core::abi::IntroWitness>,
+    /// Class names for each new object, in order. Used to name the output
+    /// `.dobj` files. Must have the same length as `new_objects`.
+    pub new_object_classes: Vec<String>,
+}
+
+/// Outcome of a successful end-to-end action execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteActionResult {
+    pub action_id: ActionId,
+    pub action_name: &'static str,
+    pub tx_final: String,
+    pub state_root_hash: String,
+    pub relayer_job_id: String,
+    pub tx_hash: Option<String>,
+    pub block_number: Option<u64>,
+    pub output_files: Vec<String>,
+    pub nullified_files: Vec<String>,
+}
+
+/// Configuration for [`Driver::open`]. The defaults are wired up by
+/// [`Driver::open_default`].
 pub struct DriverDeps {
-    pub catalog: Arc<dyn ActionCatalog>,
     pub synchronizer: Arc<dyn SynchronizerClient>,
     pub relayer: Arc<dyn RelayerClient>,
-    pub payload_builder: Arc<dyn PayloadBuilder>,
+    pub prover: Arc<dyn Prover>,
 }
 
-impl DriverDeps {
-    /// Build deps with a catalog loaded from `paths.actions_dir`.
-    pub fn load(paths: &DriverPaths) -> Result<Self> {
-        let catalog = PexeCatalog::load(&paths.actions_dir)?;
-        if catalog.plugin_count() == 0 {
-            log::warn!(
-                "no .pexe plugins installed in {}; run `just install-plugins`",
-                paths.actions_dir.display()
-            );
-        }
-        Ok(Self {
-            catalog: Arc::new(catalog),
-            synchronizer: Arc::new(HttpSynchronizerClient),
-            relayer: Arc::new(HttpRelayerClient),
-            payload_builder: Arc::new(DefaultPayloadBuilder),
-        })
-    }
-}
-
-#[derive(Clone)]
 pub struct Driver {
-    paths: DriverPaths,
-    deps: DriverDeps,
+    pub paths: DriverPaths,
+    pub settings: DriverSettings,
+    pub deps: DriverDeps,
 }
 
 impl Driver {
+    /// Open with the default `~/.dobj` layout, settings file (or defaults
+    /// if missing), HTTP clients pointed at the URLs in settings, and the
+    /// real risc0 prover.
     pub fn open_default() -> Result<Self> {
-        let paths = crate::paths::default_paths()?;
-        ensure_store_dirs(&paths)?;
-        let deps = DriverDeps::load(&paths)?;
-        Ok(Self { paths, deps })
-    }
-
-    pub fn open(paths: DriverPaths, deps: DriverDeps) -> Result<Self> {
-        ensure_store_dirs(&paths)?;
-        Ok(Self { paths, deps })
-    }
-
-    pub fn paths(&self) -> &DriverPaths {
-        &self.paths
-    }
-
-    pub fn load_settings(&self) -> Result<DriverSettings> {
-        if let Some(settings) = read_settings(&self.paths)? {
-            return Ok(settings);
-        }
-        let settings = default_settings();
-        write_settings(&self.paths, &settings)?;
-        Ok(settings)
-    }
-
-    pub fn save_settings(&self, settings: &DriverSettings) -> Result<DriverSettings> {
-        write_settings(&self.paths, settings)?;
-        Ok(settings.clone())
-    }
-
-    pub fn list_objects(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
-        let entries = load_object_files(&self.paths)?;
-        Ok(entries
-            .iter()
-            .filter(|entry| query.is_none_or(|query| matches_query(entry, query)))
-            .map(|entry| self.object_summary(entry, None))
-            .collect())
-    }
-
-    pub fn read_object(&self, selector: &ObjectSelector) -> Result<ObjectSummary> {
-        let entries = load_object_files(&self.paths)?;
-        let entry = select_object(&entries, selector)?;
-        Ok(self.object_summary(entry, None))
-    }
-
-    pub fn read_object_file(&self, path: &Path) -> Result<ObjectSummary> {
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| anyhow!("invalid input path (missing file name): {}", path.display()))?
-            .to_string();
-        let record = parse_object_record_file(path)?;
-        Ok(self.object_summary(&ObjectFileEntry { file_name, record }, None))
-    }
-
-    pub fn sync_inventory(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
-        let mut entries = load_object_files(&self.paths)?;
-        let settings = self.load_settings()?;
-        let source_tx_hashes = entries
-            .iter()
-            .map(|entry| entry.record.spendable().tx.dict().commitment())
-            .collect::<HashSet<_>>();
-        let all_nullifiers = entries
-            .iter()
-            .filter_map(|entry| object_nullifier_hash(&entry.record.obj).ok())
-            .collect::<HashSet<_>>();
-
-        let membership = self.deps.synchronizer.fetch_membership_with_nullifiers(
-            &settings.synchronizer_api_url,
-            &source_tx_hashes.iter().copied().collect::<Vec<_>>(),
-            &all_nullifiers.iter().copied().collect::<Vec<_>>(),
-        )?;
-
-        reconcile_objects(
-            &self.paths,
-            &mut entries,
-            &membership.grounded_txs,
-            &membership.on_chain_nullifiers,
-        )?;
-
-        // Resolve correct Ethereum tx hashes from the relayer for any
-        // objects whose hash may be stale due to fee-bump replacements.
-        for entry in entries.iter_mut() {
-            if entry.record.status != ObjectStatus::Pending {
-                continue;
-            }
-            let tx_final = encode_hash_hex(&entry.record.tx.dict().commitment());
-            let current_hash = self
-                .deps
-                .relayer
-                .lookup_tx_hash(&settings.relayer_api_url, &tx_final);
-            if let Ok(Some(relayer_hash)) = current_hash
-                && entry.record.tx_hash.as_deref() != Some(&relayer_hash)
-            {
-                entry.record.tx_hash = Some(relayer_hash);
-                let _ = write_object_file(&self.paths, &entry.record, &entry.file_name);
-            }
-        }
-
-        Ok(entries
-            .iter()
-            .filter(|entry| query.is_none_or(|query| matches_query(entry, query)))
-            .map(|entry| {
-                let source_tx_hash = entry.record.spendable().tx.dict().commitment();
-                let grounded = entry.record.is_nullified()
-                    || membership.grounded_txs.contains(&source_tx_hash);
-                self.object_summary(entry, Some(grounded))
-            })
-            .collect())
-    }
-
-    pub fn list_actions(&self, query: Option<&ActionQuery>) -> Result<Vec<ActionSummary>> {
-        let actions = self.deps.catalog.list_actions();
-        Ok(actions
-            .into_iter()
-            .filter(|action| {
-                query.is_none_or(|query| {
-                    query.name.as_ref().is_none_or(|name| &action.id == name)
-                        && query
-                            .input_class
-                            .as_ref()
-                            .is_none_or(|class_name| action.input_classes.contains(class_name))
-                        && query
-                            .output_class
-                            .as_ref()
-                            .is_none_or(|class_name| action.output_classes.contains(class_name))
-                })
-            })
-            .collect())
-    }
-
-    pub fn list_classes(&self) -> Result<Vec<ClassSummary>> {
-        let live_objects = load_object_files(&self.paths)?
-            .into_iter()
-            .filter(|entry| entry.record.status == ObjectStatus::Live)
-            .collect::<Vec<_>>();
-        Ok(self
-            .deps
-            .catalog
-            .list_classes()
-            .into_iter()
-            .map(|class_info| ClassSummary {
-                live_count: live_objects
-                    .iter()
-                    .filter(|entry| entry.record.class_name == class_info.name)
-                    .count(),
-                ..self.class_summary(class_info)
-            })
-            .collect())
-    }
-
-    pub fn get_class(&self, class_name: &str) -> Result<ClassSummary> {
-        let class_info = self
-            .deps
-            .catalog
-            .get_class(class_name)
-            .ok_or_else(|| anyhow!("unknown class: {class_name}"))?;
-        let live_count = load_object_files(&self.paths)?
-            .into_iter()
-            .filter(|entry| {
-                entry.record.status == ObjectStatus::Live && entry.record.class_name == class_name
-            })
-            .count();
-        Ok(ClassSummary {
-            live_count,
-            ..self.class_summary(class_info)
+        let paths = default_paths()?;
+        let settings = read_settings(&paths)?.unwrap_or_else(default_settings);
+        let synchronizer: Arc<dyn SynchronizerClient> = Arc::new(HttpSynchronizerClient::new(
+            settings.synchronizer_api_url.clone(),
+        ));
+        let relayer: Arc<dyn RelayerClient> = Arc::new(HttpRelayerClient::new(
+            settings.relayer_api_url.clone(),
+        ));
+        let prover: Arc<dyn Prover> = Arc::new(Risc0Prover);
+        Ok(Self {
+            paths,
+            settings,
+            deps: DriverDeps {
+                synchronizer,
+                relayer,
+                prover,
+            },
         })
     }
 
-    pub fn check_action(&self, action_id: &str) -> Result<CheckActionReport> {
-        let action = self
-            .deps
-            .catalog
-            .get_action(action_id)
-            .ok_or_else(|| anyhow!("unknown action: {action_id}"))?;
-        let entries = load_object_files(&self.paths)?;
-        let live_objects = entries
+    pub fn open(paths: DriverPaths, settings: DriverSettings, deps: DriverDeps) -> Self {
+        Self {
+            paths,
+            settings,
+            deps,
+        }
+    }
+
+    pub fn save_settings(&self) -> Result<()> {
+        write_settings(&self.paths, &self.settings)
+    }
+
+    // ------------------------------------------------------------------- read
+
+    pub fn list_objects(&self) -> Result<Vec<ObjectRecord>> {
+        store::list_live(&self.paths)?
             .iter()
-            .filter(|entry| entry.record.status == ObjectStatus::Live)
-            .collect::<Vec<_>>();
+            .map(|p| crate::object::parse_object_record_file(p))
+            .collect()
+    }
 
-        let mut available = Vec::new();
-        let mut missing = Vec::new();
-        let mut used_ids = HashSet::new();
+    pub fn read_object(&self, selector: &ObjectSelector) -> Result<ObjectRecord> {
+        let resolved = self.resolve_one(selector)?;
+        Ok(resolved.record)
+    }
 
-        for required_class in &action.input_classes {
-            if let Some(entry) = live_objects.iter().find(|entry| {
-                &entry.record.class_name == required_class && !used_ids.contains(&entry.record.id)
-            }) {
-                used_ids.insert(entry.record.id.clone());
-                available.push(CheckActionCandidate {
-                    class_name: entry.record.class_name.clone(),
-                    object_id: entry.record.id.clone(),
-                    file_name: entry.file_name.clone(),
-                });
-            } else {
-                missing.push(required_class.clone());
-            }
+    // -------------------------------------------------------------- planning
+
+    /// Build the [`ExecutionPlan`] for a given input — resolves object refs,
+    /// fetches grounding proofs from the synchronizer, assembles the inputs
+    /// list. Doesn't run the prover. Useful for tests.
+    pub fn build_plan(&self, input: &ExecuteActionInput) -> Result<(ExecutionPlan, Vec<ResolvedInput>)> {
+        let action = action_by_id(input.action_id)
+            .ok_or_else(|| anyhow!("unknown action_id: {}", input.action_id))?;
+
+        if action.inputs.len() != input.input_selectors.len() {
+            return Err(anyhow!(
+                "action {} expects {} inputs, got {}",
+                action.name,
+                action.inputs.len(),
+                input.input_selectors.len()
+            ));
+        }
+        if action.outputs.len() != input.staging.new_objects.len() {
+            return Err(anyhow!(
+                "action {} expects {} outputs, got {}",
+                action.name,
+                action.outputs.len(),
+                input.staging.new_objects.len()
+            ));
         }
 
-        Ok(CheckActionReport {
-            feasible: missing.is_empty(),
-            action_id: action_id.to_string(),
-            available_inputs: available,
-            missing_inputs: missing,
-        })
+        // Resolve every selector to a local record. Validate class against
+        // the action's expected input class list, in order.
+        let mut resolved: Vec<ResolvedInput> = Vec::with_capacity(input.input_selectors.len());
+        for (i, sel) in input.input_selectors.iter().enumerate() {
+            let r = self.resolve_one(sel)?;
+            let expected_class = action.inputs[i];
+            if r.record.class_name != expected_class {
+                return Err(anyhow!(
+                    "input #{i}: expected class {expected_class}, got {} (file {})",
+                    r.record.class_name,
+                    r.path.display()
+                ));
+            }
+            if r.record.status == ObjectStatus::Nullified {
+                return Err(anyhow!(
+                    "input #{i} ({}) is already nullified",
+                    r.path.display()
+                ));
+            }
+            resolved.push(r);
+        }
+
+        // Fetch grounding witness from the synchronizer in one batched call.
+        let source_tx_finals: Vec<Hash> =
+            resolved.iter().map(|r| r.record.source_tx.tx_final()).collect();
+        let witness = if source_tx_finals.is_empty() {
+            // No inputs → no grounding needed; use the synchronizer's
+            // current state head as the state_root the action grounds against.
+            let head = self.deps.synchronizer.state_head()?;
+            let gsr = head
+                .current_gsr
+                .ok_or_else(|| anyhow!("synchronizer has no canonical GSR yet"))?;
+            // Build a placeholder StateRoot whose hash matches `gsr`. The
+            // synchronizer trusts this on the way back: state_root.hash() is
+            // checked against its recent_gsrs cache. For an inputless action
+            // we don't actually use the transactions_root, but it has to be
+            // consistent.
+            //
+            // Easier: don't use grounding-witness at all — just embed the
+            // recent GSR. For inputs == 0 the guest's grounding loop is
+            // empty so it doesn't matter what transactions_root / gsrs_root
+            // we pass, only that `state_root.hash() == gsr`.
+            //
+            // We can recover the components from another grounding call
+            // with no source txs; the synchronizer returns the canonical
+            // roots regardless.
+            let w = self.deps.synchronizer.grounding_witness(&[])?;
+            // Sanity: the embedded roots must hash to the head's GSR.
+            let sr = StateRoot::new(
+                w.block_number,
+                w.transactions_root,
+                w.nullifiers_root,
+                w.gsrs_root,
+            );
+            if sr.hash() != w.state_root_hash {
+                return Err(anyhow!(
+                    "synchronizer returned inconsistent grounding witness"
+                ));
+            }
+            if sr.hash() != gsr {
+                return Err(anyhow!(
+                    "synchronizer head GSR {} doesn't match grounding witness {}",
+                    gsr,
+                    sr.hash()
+                ));
+            }
+            crate::clients::GroundingWitness {
+                witnesses: Vec::new(),
+                ..w
+            }
+        } else {
+            self.deps
+                .synchronizer
+                .grounding_witness(&source_tx_finals)?
+        };
+
+        // Pair each resolved input with its tx_inclusion_proof, build the
+        // InputObject (which also rebuilds the live_inclusion_proof from
+        // the `.dobj`'s sourceTxLive).
+        let mut inputs: Vec<InputObject> = Vec::with_capacity(resolved.len());
+        for (resolved_input, source_tx_final) in resolved.iter().zip(source_tx_finals.iter()) {
+            let proof = witness
+                .witnesses
+                .iter()
+                .find(|w| w.source_tx_final == *source_tx_final)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "synchronizer grounding witness missing entry for source tx {}",
+                        source_tx_final
+                    )
+                })?;
+            if !proof.present {
+                return Err(anyhow!(
+                    "source tx {} is not in the canonical transactions root",
+                    source_tx_final
+                ));
+            }
+            inputs.push(
+                resolved_input
+                    .record
+                    .to_input_object(proof.tx_inclusion_proof.clone())?,
+            );
+        }
+
+        let state_root = StateRoot::new(
+            witness.block_number,
+            witness.transactions_root,
+            witness.nullifiers_root,
+            witness.gsrs_root,
+        );
+
+        Ok((
+            ExecutionPlan {
+                action_id: input.action_id,
+                state_root,
+                inputs,
+                new_objects: input.staging.new_objects.clone(),
+                intro_witnesses: input.staging.intro_witnesses.clone(),
+            },
+            resolved,
+        ))
     }
 
-    pub fn get_state_root(&self) -> Result<String> {
-        let settings = self.load_settings()?;
-        let head = self
-            .deps
-            .synchronizer
-            .fetch_head(&settings.synchronizer_api_url)?;
-        Ok(encode_hash_hex(&head.current_gsr))
-    }
+    // -------------------------------------------------------------- execution
 
+    /// Run the full action lifecycle: build plan, prove, submit, persist,
+    /// poll, nullify. Blocks for as long as it takes (could be minutes for
+    /// real proving + on-chain confirmation).
     pub fn execute(&self, input: ExecuteActionInput) -> Result<ExecuteActionResult> {
-        self.execute_with_reporter(input, &NoopExecutionReporter)
-    }
+        let action = action_by_id(input.action_id)
+            .ok_or_else(|| anyhow!("unknown action_id"))?;
 
-    pub fn execute_with_reporter<R: ExecutionReporter>(
-        &self,
-        input: ExecuteActionInput,
-        reporter: &R,
-    ) -> Result<ExecuteActionResult> {
-        let settings = self.load_settings()?;
-        let action = self
-            .deps
-            .catalog
-            .get_action(&input.action_id)
-            .ok_or_else(|| anyhow!("unknown action: {}", input.action_id))?;
+        let (plan, resolved) = self.build_plan(&input)?;
 
-        validate_execute_request(&input, &action)?;
+        // Snapshot the new-tx components BEFORE the prover consumes the
+        // plan — the receipt's journal commits to `tx_final` but not the
+        // individual roots, and the output `.dobj` records need them.
+        let nullifiers = craft_actions::tx_build::nullifiers_for(&craft_input_view(&plan));
+        let tx = craft_actions::tx_build::build_tx(&craft_input_view(&plan), &nullifiers);
+        let new_obj_commitments = sorted_commitments(&input.staging.new_objects);
 
-        let no_ctx = ExecutionStepContext::default();
-        reporter.on_step(ExecutionPhase::GenerateProof, "Verifying Inputs", &no_ctx);
-        let entries = load_object_files(&self.paths)?;
-        let resolved_inputs = resolve_inputs(&entries, &input, &action)?;
-        let source_tx_hashes = resolved_inputs
-            .iter()
-            .map(|entry| entry.record.spendable().tx.dict().commitment())
-            .collect::<Vec<_>>();
-        let grounding_witness = self
-            .deps
-            .synchronizer
-            .fetch_grounding_witness(&settings.synchronizer_api_url, &source_tx_hashes)?;
-        let old_root_hash = grounding_witness.state_root.hash();
-        let old_root = encode_hash_hex(&old_root_hash);
+        let proved = prove_action(self.deps.prover.as_ref(), plan)?;
 
-        reporter.on_step(ExecutionPhase::GenerateProof, "Generating proof", &no_ctx);
-        let execution_inputs = resolved_inputs
-            .iter()
-            .map(|input| input.record.spendable())
-            .collect::<Vec<_>>();
-        let spendable_outputs = self.deps.catalog.execute_action(
-            input.action_id.clone(),
-            grounding_witness,
-            execution_inputs,
-        )?;
-        reporter.on_done(ExecutionPhase::GenerateProof, None);
-
-        let commit_ctx = ExecutionStepContext {
-            old_root: Some(old_root.clone()),
+        let source_tx = SourceTxData {
+            action_id: input.action_id,
+            live_root: tx.live_root,
+            nullifiers_root: tx.nullifiers_root,
+            action_nonce: tx.action_nonce,
         };
-        reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &commit_ctx);
-        let payload_bytes = self
-            .deps
-            .payload_builder
-            .build_payload(&old_root_hash, &spendable_outputs)?;
-        let expected_tx_final = spendable_outputs.tx.dict().commitment();
-
-        reporter.on_step(ExecutionPhase::Commit, "Creating files", &commit_ctx);
-        let saved = save_results(
-            &self.paths,
-            &action,
-            &input.action_id,
-            &resolved_inputs,
-            &spendable_outputs,
-        )?;
-
-        // Submit to relayer. Output files are kept as Unknown on failure so
-        // the user can retry submission later without regenerating proofs.
-        reporter.on_step(
-            ExecutionPhase::Commit,
-            "Submitting proof to relayer",
-            &commit_ctx,
+        debug_assert_eq!(
+            tx.tx_final(),
+            proved.tx_final(),
+            "host-built Tx must match the journal-committed tx_final"
         );
-        let submit_response = match self.deps.relayer.submit_proof(
-            &settings.relayer_api_url,
-            &payload_bytes,
-            Some(format!("driver:{}", input.action_id)),
-        ) {
-            Ok(resp) if resp.status == relayer::api_types::JobStatus::Failed => {
-                return Err(anyhow!("relayer rejected job {} immediately", resp.job_id));
-            }
-            Ok(resp) => resp,
-            Err(err) => {
-                return Err(err);
-            }
-        };
 
-        // Past this point the proof has been accepted by the relayer and may
-        // land on-chain at any moment. Output files stay as Unknown until the
-        // relayer broadcasts and we have a tx_hash.
-        let waiting_label = format!("Waiting for relayer job {}", submit_response.job_id);
-        reporter.on_step(ExecutionPhase::Commit, &waiting_label, &commit_ctx);
-
-        // Poll until the relayer has broadcast the tx and we have a tx_hash,
-        // then mark output files as Pending.
-        let eth_tx_hash = self.deps.relayer.wait_for_tx_hash(
-            &settings.relayer_api_url,
-            &submit_response.job_id,
-            RELAYER_POLL_TIMEOUT_SECS,
-            RELAYER_POLL_INTERVAL_MS,
-        )?;
-        update_output_files(
-            &self.paths,
-            &saved.output_files,
-            ObjectStatus::Pending,
-            Some(&eth_tx_hash),
-        )?;
-
-        let confirmation = self.deps.relayer.wait_for_confirmation(
-            &settings.relayer_api_url,
-            &submit_response.job_id,
-            RELAYER_POLL_TIMEOUT_SECS,
-            RELAYER_POLL_INTERVAL_MS,
-        )?;
-
-        // Use the confirmed tx_hash — it may differ from the initial one if
-        // the relayer performed a fee-bump replacement while waiting.
-        let final_tx_hash = confirmation.tx_hash.as_deref().unwrap_or(&eth_tx_hash);
-
-        if final_tx_hash != eth_tx_hash {
-            // Fee bump replaced the original tx; update .dobj files with the
-            // new hash so they point at the on-chain transaction.
-            update_output_files(
-                &self.paths,
-                &saved.output_files,
-                ObjectStatus::Pending,
-                Some(final_tx_hash),
-            )?;
+        let mut output_files = Vec::with_capacity(input.staging.new_objects.len());
+        for (obj, class_name) in input
+            .staging
+            .new_objects
+            .iter()
+            .zip(input.staging.new_object_classes.iter())
+        {
+            let record = ObjectRecord::new(
+                obj.clone(),
+                class_name.clone(),
+                source_tx.clone(),
+                new_obj_commitments.clone(),
+            );
+            let path = store::write_live(&self.paths, &record)?;
+            output_files.push(
+                path.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            );
         }
 
-        reporter.on_step(
-            ExecutionPhase::Commit,
-            "Waiting for synchronizer to observe commit",
-            &commit_ctx,
-        );
-        let sync_head = match self.deps.synchronizer.wait_for_tx(
-            &settings.synchronizer_api_url,
-            expected_tx_final,
-            SYNCHRONIZER_POLL_TIMEOUT_SECS,
-            SYNCHRONIZER_POLL_INTERVAL_MS,
-        ) {
-            Ok(head) => head,
-            Err(err) => {
-                // Sync failed or timed out — revert outputs to Unknown but
-                // keep the txHash so the chain submission can be inspected.
-                // The next sync_inventory will reconcile if the tx lands later.
-                update_output_files(
-                    &self.paths,
-                    &saved.output_files,
-                    ObjectStatus::Unknown,
-                    Some(final_tx_hash),
-                )?;
-                return Err(err);
-            }
-        };
-
-        // Sync confirmed the tx — update output files to Live.
-        update_output_files(
-            &self.paths,
-            &saved.output_files,
-            ObjectStatus::Live,
-            Some(final_tx_hash),
+        // Submit the receipt to the relayer.
+        let submission = self.deps.relayer.submit_payload(
+            &proved.blob_payload,
+            Some(action.name),
         )?;
 
-        let result = ExecuteActionResult {
-            old_root,
-            new_root: encode_hash_hex(&sync_head.current_gsr),
-            output_files: saved.output_files.clone(),
-            nullified_files: saved.nullified_files.clone(),
-            relayer_job_id: confirmation.job_id,
-            tx_hash: Some(final_tx_hash.to_string()),
-            block_number: confirmation.block_number,
-        };
-        reporter.on_done(ExecutionPhase::Commit, Some(&result));
-        Ok(result)
+        // Poll relayer until the blob is confirmed (or timed out).
+        let final_status = self.poll_relayer(&submission.job_id)?;
+        if final_status.status != JobStatus::Confirmed {
+            return Err(anyhow!(
+                "relayer job {} ended in non-confirmed state {:?}: {:?}",
+                final_status.job_id,
+                final_status.status,
+                final_status.last_error
+            ));
+        }
+
+        // Flip output statuses to Pending now that we have an eth tx hash.
+        for obj in &input.staging.new_objects {
+            store::update_by_commitment(&self.paths, obj.commitment(), |r| {
+                r.status = ObjectStatus::Pending;
+                r.tx_hash = final_status.tx_hash.clone();
+            })?;
+        }
+
+        // Wait for synchronizer to index our tx_final.
+        self.poll_synchronizer_for_tx(proved.tx_final())?;
+
+        // Flip to Live.
+        for obj in &input.staging.new_objects {
+            store::update_by_commitment(&self.paths, obj.commitment(), |r| {
+                r.status = ObjectStatus::Live;
+            })?;
+        }
+
+        // Nullify consumed inputs.
+        let mut nullified_files = Vec::with_capacity(resolved.len());
+        for r in resolved {
+            let nullified = store::nullify(&self.paths, &r.path)?;
+            nullified_files.push(
+                nullified
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            );
+        }
+
+        Ok(ExecuteActionResult {
+            action_id: input.action_id,
+            action_name: action.name,
+            tx_final: format!("{}", proved.tx_final()),
+            state_root_hash: format!("{}", proved.journal.state_root_hash),
+            relayer_job_id: submission.job_id,
+            tx_hash: final_status.tx_hash,
+            block_number: final_status.block_number,
+            output_files,
+            nullified_files,
+        })
     }
 
-    pub fn generated_podlang(&self) -> Option<String> {
-        self.deps.catalog.generated_podlang()
-    }
+    // ----------------------------------------------------------------- helpers
 
-    fn object_summary(&self, entry: &ObjectFileEntry, grounded: Option<bool>) -> ObjectSummary {
-        let class_hash = self
-            .deps
-            .catalog
-            .get_class(&entry.record.class_name)
-            .map(|class_info| class_info.hash)
-            .unwrap_or_default();
-        ObjectSummary {
-            id: entry.record.id.clone(),
-            file_name: entry.file_name.clone(),
-            class_name: entry.record.class_name.clone(),
-            class_hash,
-            status: entry.record.status,
-            tx_hash: entry.record.tx_hash.clone(),
-            grounded,
-            fields: entry.record.fields_map(),
+    fn resolve_one(&self, selector: &ObjectSelector) -> Result<ResolvedInput> {
+        match selector {
+            ObjectSelector::Id(id) => {
+                let (path, record) = store::find_by_id(&self.paths, id)?
+                    .ok_or_else(|| anyhow!("no object with id {id}"))?;
+                Ok(ResolvedInput { path, record })
+            }
+            ObjectSelector::FileName(name) => {
+                let (path, record) = store::find_by_file_name(&self.paths, name)?
+                    .ok_or_else(|| anyhow!("no object file named {name}"))?;
+                Ok(ResolvedInput { path, record })
+            }
         }
     }
 
-    fn class_summary(&self, class_info: CatalogClass) -> ClassSummary {
-        ClassSummary {
-            name: class_info.name,
-            emoji: class_info.emoji,
-            hash: class_info.hash,
-            description: class_info.description,
-            live_count: 0,
-            produced_by: class_info.produced_by,
-            consumed_by: class_info.consumed_by,
-            predicate_source: class_info.predicate_source,
+    fn poll_relayer(&self, job_id: &str) -> Result<crate::clients::RelayJobStatus> {
+        let deadline = Instant::now() + Duration::from_secs(RELAYER_POLL_TIMEOUT_SECS);
+        loop {
+            let status = self.deps.relayer.job_status(job_id)?;
+            if status.status.is_terminal() {
+                return Ok(status);
+            }
+            if Instant::now() >= deadline {
+                return Err(anyhow!(
+                    "relayer poll timeout for job {job_id} (last status: {:?})",
+                    status.status
+                ));
+            }
+            sleep(Duration::from_millis(RELAYER_POLL_INTERVAL_MS));
         }
+    }
+
+    fn poll_synchronizer_for_tx(&self, tx_final: Hash) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(SYNCHRONIZER_POLL_TIMEOUT_SECS);
+        loop {
+            if self.deps.synchronizer.tx_present(tx_final)? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(anyhow!(
+                    "synchronizer poll timeout: tx_final {tx_final} not observed"
+                ));
+            }
+            sleep(Duration::from_millis(SYNCHRONIZER_POLL_INTERVAL_MS));
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedInput {
+    pub path: std::path::PathBuf,
+    pub record: ObjectRecord,
+}
+
+/// Borrow an `ExecutionPlan` as the `&GuestInput` view that
+/// `craft_actions::tx_build::build_tx` expects.
+fn craft_input_view(plan: &ExecutionPlan) -> txlib_core::abi::GuestInput {
+    txlib_core::abi::GuestInput {
+        action_id: plan.action_id,
+        state_root: plan.state_root.clone(),
+        inputs: plan.inputs.clone(),
+        new_objects: plan.new_objects.clone(),
+        intro_witnesses: plan.intro_witnesses.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::action_by_name;
+
+    #[test]
+    fn execute_action_input_struct_compiles() {
+        let action = action_by_name("FindLog").unwrap();
+        let _ = ExecuteActionInput {
+            action_id: action.id,
+            input_selectors: vec![],
+            staging: ActionStaging {
+                new_objects: vec![],
+                intro_witnesses: vec![],
+                new_object_classes: vec![],
+            },
+        };
     }
 }

@@ -2,6 +2,8 @@
 members = [
     "common",
     "craft-actions",
+    "craft-methods",
+    "driver",
     "synchronizer",
     "relayer",
     "txlib-core",
@@ -17,7 +19,6 @@ members = [
 exclude = [
     "app-gui/src-tauri",
     "craft-guest",
-    "driver",
     "pod2utils",
     "txlib",
     "sdk",

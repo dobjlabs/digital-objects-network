@@ -25,7 +25,7 @@ name = "craft-guest"
 path = "src/main.rs"
 
 [dependencies]
-risc0-zkvm = { version = "2.1", default-features = false, features = ["std"] }
+risc0-zkvm = { version = "^3.0.5", default-features = false, features = ["std"] }
 craft-actions = { path = "../craft-actions", default-features = false }
 txlib-core = { path = "../txlib-core", default-features = false }
 borsh = { version = "1.5", default-features = false, features = ["derive"] }

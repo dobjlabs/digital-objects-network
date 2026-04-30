@@ -18,7 +18,7 @@ alloy = { workspace = true }
 
 # New stack
 txlib-core = { path = "../txlib-core" }
-risc0-zkvm = { version = "2.1", default-features = false, features = ["std"] }
+risc0-zkvm = { version = "^3.0.5", default-features = false, features = ["std"] }
 borsh = { version = "1.5", features = ["derive"] }
 bincode = "1.3"
 

@@ -24,22 +24,29 @@ pub fn nullifiers_for(input: &GuestInput) -> Vec<Hash> {
         .collect()
 }
 
-pub fn build_journal(input: &GuestInput, nullifiers: Vec<Hash>) -> GuestJournal {
-    let mut new_obj_commitments: Vec<Hash> =
-        input.new_objects.iter().map(|o| o.commitment()).collect();
-    new_obj_commitments.sort();
+/// Sorted commitments of the new objects — canonical order for `live_root` /
+/// `action_nonce` derivation. Reused by both the guest pipeline and the
+/// driver (which needs these to populate output record `source_tx_live`).
+pub fn sorted_new_obj_commitments(input: &GuestInput) -> Vec<Hash> {
+    let mut v: Vec<Hash> = input.new_objects.iter().map(|o| o.commitment()).collect();
+    v.sort();
+    v
+}
 
-    let live_root = set_smt_root(&new_obj_commitments);
-    let nullifiers_root = set_smt_root(&nullifiers);
-    let nonce = action_nonce(input.action_id, &new_obj_commitments);
-
-    let tx = Tx {
+/// Assemble the [`Tx`] this action produces. Caller already has the
+/// nullifier list (typically from [`nullifiers_for`]).
+pub fn build_tx(input: &GuestInput, nullifiers: &[Hash]) -> Tx {
+    let new_obj_commitments = sorted_new_obj_commitments(input);
+    Tx {
         action_id: input.action_id,
-        live_root,
-        nullifiers_root,
-        action_nonce: nonce,
-    };
+        live_root: set_smt_root(&new_obj_commitments),
+        nullifiers_root: set_smt_root(nullifiers),
+        action_nonce: action_nonce(input.action_id, &new_obj_commitments),
+    }
+}
 
+pub fn build_journal(input: &GuestInput, nullifiers: Vec<Hash>) -> GuestJournal {
+    let tx = build_tx(input, &nullifiers);
     GuestJournal {
         state_root_hash: input.state_root.hash(),
         tx_final: tx.tx_final(),
