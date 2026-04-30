@@ -2,7 +2,7 @@ use crate::types::*;
 
 /// The interface the MCP server needs from the host application.
 /// During testing, this is mocked. In production, implemented by
-/// the Tauri app (or a future headless binary).
+/// [`crate::driver_ops::DriverCraftOps`] (which wraps a `driver::Driver`).
 pub trait CraftOps: Send + Sync + 'static {
     fn list_inventory(&self) -> anyhow::Result<Vec<InventoryObject>>;
     fn list_actions(&self) -> anyhow::Result<Vec<Action>>;
@@ -12,10 +12,4 @@ pub trait CraftOps: Send + Sync + 'static {
     fn inspect_class(&self, class_name: &str) -> anyhow::Result<ClassDetail>;
     fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunActionResult>;
     fn check_feasibility(&self, action_id: &str) -> anyhow::Result<FeasibilityReport>;
-
-    /// Returns the generated podlang source for all actions and classes,
-    /// or None if not available (e.g. in mock mode).
-    fn generated_podlang(&self) -> Option<String> {
-        None
-    }
 }

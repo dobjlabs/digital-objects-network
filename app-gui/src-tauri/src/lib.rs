@@ -1,5 +1,5 @@
 //! Tauri app entry point. Wires the new risc0-stack driver into the
-//! frontend and installs the file-watcher + CPU sampler.
+//! frontend and installs the file-watcher + CPU sampler + MCP server.
 
 mod bootstrap;
 mod cpu;
@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use bootstrap::{get_global_state_root, load_gui_inventory};
 use cpu::{CpuMonitor, sample_app_cpu};
+use craft_mcp::{DEFAULT_PORT as MCP_PORT, DriverCraftOps, McpConfig, McpServer};
 use objects::{
     get_objects_dir, open_objects_dir, pick_dobj_file_path, read_dobj_file, start_objects_watcher,
 };
@@ -36,12 +37,17 @@ pub fn run() {
         .manage(CpuMonitor::new())
         .manage(Arc::clone(&driver))
         .setup(|app| {
-            let driver = tauri::Manager::state::<Arc<::driver::Driver>>(app);
+            let driver = tauri::Manager::state::<Arc<::driver::Driver>>(app).inner().clone();
             if let Err(err) =
                 start_objects_watcher(app.handle().clone(), driver.paths.objects_dir.clone())
             {
                 eprintln!("zk-craft: objects watcher disabled: {err}");
             }
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = start_mcp_server(driver).await {
+                    eprintln!("zk-craft: MCP server failed: {err}");
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -58,4 +64,15 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+async fn start_mcp_server(driver: Arc<::driver::Driver>) -> Result<(), Box<dyn std::error::Error>> {
+    let ops = DriverCraftOps::new(driver);
+    let server = McpServer::new(ops, McpConfig::default());
+
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{MCP_PORT}")).await?;
+    eprintln!("zk-craft: MCP server listening on http://127.0.0.1:{MCP_PORT}/mcp");
+
+    server.serve(listener).await?;
+    Ok(())
 }

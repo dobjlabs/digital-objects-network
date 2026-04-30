@@ -104,7 +104,7 @@ impl CraftOps for MockCraftOps {
             status: obj.status.clone(),
             tx_hash: obj.tx_hash.clone(),
             state: obj.fields.clone(),
-            predicate_source: predicate_source_for(&obj.class_name),
+            description: description_for(&obj.class_name),
         })
     }
 
@@ -127,7 +127,7 @@ impl CraftOps for MockCraftOps {
 
         Ok(ClassDetail {
             class_name: class_name.to_string(),
-            predicate_source: predicate_source_for(class_name),
+            description: description_for(class_name),
             produced_by,
             consumed_by,
         })
@@ -366,24 +366,15 @@ fn is_known_class(name: &str) -> bool {
     KNOWN_CLASSES.contains(&name)
 }
 
-fn predicate_source_for(class_name: &str) -> String {
+fn description_for(class_name: &str) -> String {
     match class_name {
-        "Log" => "IsLog(state) = AND(\n  FindLog(state)\n)".to_string(),
-        "Wood" => "IsWood(state) = AND(\n  CraftWood(state, log)\n)".to_string(),
-        "Stick" => "IsStick(state) = AND(\n  CraftSticks(state, wood)\n)".to_string(),
-        "WoodPick" => {
-            "IsWoodPick(state) = OR(\n  CraftWoodPick(state, wood, stick)\n  UseWoodPick(state, prev)\n)"
-                .to_string()
-        }
-        "Stone" => {
-            "IsStone(state) = OR(\n  MineStoneWithWoodPick(state, pick)\n  MineStoneWithStonePick(state, pick)\n)"
-                .to_string()
-        }
-        "StonePick" => {
-            "IsStonePick(state) = OR(\n  CraftStonePick(state, stone, stick)\n  UseStonePick(state, prev)\n)"
-                .to_string()
-        }
-        _ => format!("Is{class_name}(state) = UNKNOWN"),
+        "Log" => "A discovered log that can be refined into wood.".to_string(),
+        "Wood" => "Refined wood used for sticks and basic tools.".to_string(),
+        "Stick" => "A stick used as a handle in tool crafting.".to_string(),
+        "WoodPick" => "A wood pick that can mine stone while durability remains.".to_string(),
+        "Stone" => "Mined stone, raw material for stronger tools.".to_string(),
+        "StonePick" => "A stone pick — sturdier than wood.".to_string(),
+        _ => format!("Class {class_name}"),
     }
 }
 
@@ -409,7 +400,7 @@ mod tests {
         let detail = mock.inspect_object("0xabc1111111111111").unwrap();
         assert_eq!(detail.class_name, "Log");
         assert_eq!(detail.status, "live");
-        assert!(detail.predicate_source.contains("FindLog"));
+        assert!(!detail.description.is_empty());
     }
 
     #[test]

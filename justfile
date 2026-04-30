@@ -1,5 +1,9 @@
 # zk-craft justfile
 # Install just: https://github.com/casey/just
+#
+# Action validators are now baked into the `craft-actions` crate at compile
+# time (committed to the risc0 guest's image_id), so there's no separate
+# plugin install step — `just dev` just runs the three services together.
 
 # Run the synchronizer (loads env from synchronizer/.env if present)
 sync:
@@ -15,21 +19,12 @@ gui:
 
 # Run relayer + synchronizer + gui together via mprocs
 # https://github.com/pvolok/mprocs
-dev: ensure-plugins
+dev:
     mprocs --config mprocs.yaml
 
-# Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
-# `just dev` so a fresh clone (or a `just reset`-ed dev env) boots cleanly.
-ensure-plugins:
-    @mkdir -p ~/.dobj/actions
-    @if [ -z "$(find ~/.dobj/actions -maxdepth 1 -name '*.pexe' -print -quit)" ]; then \
-        echo "No .pexe plugins installed — packaging from plugins/ and installing..."; \
-        just install-plugins; \
-    fi
-
-# Wipe local state (RocksDB + local Postgres DBs + objects)
+# Wipe local state (objects, local Postgres DBs)
 reset:
-    rm -rf data/ ~/.dobj
+    rm -rf ~/.dobj
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
 
@@ -49,10 +44,7 @@ test-e2e:
 build:
     cargo build --workspace
 
-# Build all plugins into target/pexe/*.pexe
-pack-plugins:
-    cargo run -p pexe --release -- build plugins/*
-
-# Build and install plugins into ~/.dobj/actions/
-install-plugins:
-    cargo run -p pexe --release -- build --install plugins/*
+# Print the current GUEST_IMAGE_ID for the compiled craft-guest. Drop this
+# value into synchronizer/.env and relayer/.env when you change craft-actions.
+print-image-id:
+    @cargo run --quiet --release --example print_image_id -p craft-methods

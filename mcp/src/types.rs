@@ -48,7 +48,7 @@ pub struct InventoryObject {
     pub id: String,
     /// Object class name, e.g. "WoodPick"
     pub class_name: String,
-    /// The .dobj filename, e.g. "WoodPick.dobj"
+    /// The .dobj filename, e.g. "WoodPick_0x....dobj"
     pub file_name: String,
     /// Lifecycle status: "unknown", "pending", "live", or "nullified"
     pub status: String,
@@ -93,8 +93,9 @@ pub struct ObjectDetail {
     pub tx_hash: Option<String>,
     /// Application-layer state fields
     pub state: HashMap<String, serde_json::Value>,
-    /// Podlang predicate source for this object's class
-    pub predicate_source: String,
+    /// Free-text description of the class. Post-migration this is the
+    /// catalog's class description (formerly the podlang predicate source).
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -102,8 +103,8 @@ pub struct ObjectDetail {
 pub struct ClassDetail {
     /// Class name
     pub class_name: String,
-    /// Predicate definition in podlang source
-    pub predicate_source: String,
+    /// Free-text description of the class.
+    pub description: String,
     /// Actions that produce objects of this class
     pub produced_by: Vec<String>,
     /// Actions that consume objects of this class
@@ -117,7 +118,7 @@ pub struct ClassDetail {
 pub struct RunActionInput {
     /// The action to execute, e.g. "CraftWoodPick"
     pub action_id: String,
-    /// Paths to .dobj files to use as inputs
+    /// Paths to .dobj files (or bare file names in the objects dir) to use as inputs
     pub input_object_paths: Vec<String>,
 }
 

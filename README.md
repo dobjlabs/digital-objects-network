@@ -5,8 +5,9 @@ Proof-driven digital objects with:
 - a Tauri desktop app
 - a relayer that submits proof payloads as EIP-4844 blob transactions
 - a synchronizer that rebuilds app state from chain data
-- a plugin system (`.pexe` archives) where each plugin ships a Rhai script
-  + TOML manifest that the driver loads at startup
+- a risc0 zkVM guest (`craft-guest`) that proves each action; its action
+  validators live in [`craft-actions`](craft-actions/) and are committed to
+  the guest's `image_id` at compile time
 
 ## Prerequisites
 
@@ -56,12 +57,15 @@ Then fill in the required values:
   - `RPC_URL`
   - `TO_ADDRESS`
   - `PRIVATE_KEY`
+  - `GUEST_IMAGE_ID` — get the current value with `just print-image-id`
 - In `synchronizer/.env`:
   - `RPC_URL`
   - `BEACON_URL`
   - `TO_ADDRESS`
+  - `GUEST_IMAGE_ID` — must match the relayer's value
 
-`TO_ADDRESS` must match in both `synchronizer/.env` and `relayer/.env`.
+`TO_ADDRESS` and `GUEST_IMAGE_ID` must match in both `synchronizer/.env` and
+`relayer/.env`.
 
 If you do not want to create the local `postgres` role, also set:
 
@@ -84,38 +88,29 @@ This runs:
 - `just relayer`
 - `just gui`
 
-It also runs `just ensure-plugins` first, which installs the built-in plugins
-from `plugins/` into `~/.dobj/actions/` if no `.pexe` files are present there.
-On a fresh clone (or after `just reset`) this is how the GUI gets its
-initial catalog of actions.
-
 You can also run each service individually with those commands.
 
-## Plugins
+## Actions and classes
 
-Actions and classes are defined by plugin archives (`.pexe` files) loaded from
-`~/.dobj/actions/`. Each plugin is a zip of:
+The action catalog (5 actions, 4 classes for `craft-basics`) is baked into the
+[`craft-actions`](craft-actions/) crate at compile time. The risc0 guest in
+[`craft-guest`](craft-guest/) is a thin entry point around
+`craft_actions::guest_main`, so the guest's `image_id` commits to the action
+dispatch table directly — no on-disk plugin format, no module-hash bookkeeping.
 
-- `manifest.toml` — plugin metadata (name, version, class descriptions, action
-  names, module hash)
-- `plugin.rhai` — the action logic as a Rhai script
+To add or modify an action:
 
-Plugin sources live in-repo under `plugins/<name>/`. The `pexe` crate provides
-a CLI for packaging them:
+1. Edit `craft-actions/src/actions.rs` (validator) and
+   `craft-actions/src/lib.rs` (action ID, dispatch arm).
+2. Rebuild the workspace. The `craft-methods` build script regenerates the
+   guest binary; the new `image_id` is exposed as `craft_methods::CRAFT_GUEST_ID`.
+3. Update `synchronizer/.env` (`GUEST_IMAGE_ID`) and `relayer/.env`
+   (`GUEST_IMAGE_ID`) to the new hash so they accept proofs from the new guest.
 
-```bash
-just pack-plugins       # build plugins into target/pexe/*.pexe
-just install-plugins    # same, then copy to ~/.dobj/actions/
-```
+The driver's view of the catalog is `driver::all_actions()` /
+`driver::all_classes()` in [`driver/src/catalog.rs`](driver/src/catalog.rs).
 
-`install-plugins` also rewrites the `module_hash` line in each plugin's
-`manifest.toml` to match the hash the compiled pod2 module actually produces,
-so the committed manifest always matches what the driver will accept.
-
-To add or modify a plugin, edit the files under `plugins/<name>/` and
-re-run `just install-plugins`. Restart the GUI to pick up the new catalog.
-
-## Restarting Fresh
+## Restarting fresh
 
 If you want to wipe local state and start over, run:
 
@@ -123,10 +118,8 @@ If you want to wipe local state and start over, run:
 just reset
 ```
 
-This clears local RocksDB state, local object files, local plugin
-installations (`~/.dobj/actions/`), and the local Postgres databases used
-by the synchronizer and relayer. The next `just dev` will re-install
-plugins automatically.
+This clears local object files (`~/.dobj/objects/`) and the local Postgres
+databases used by the synchronizer and relayer.
 
 If you are not using the default local `postgres` role/admin database, either
 adjust the `just reset` command or drop the `synchronizer` and `relayer`

@@ -16,9 +16,13 @@ use crate::ops::CraftOps;
 use crate::types::*;
 
 /// MCP server service that exposes zk-craft operations as tools.
+///
+/// The `tool_router` field looks unused but is read reflectively by the
+/// `#[tool_handler]` macro on the `ServerHandler` impl below.
 #[derive(Clone)]
 pub struct CraftMcpService<T: CraftOps> {
     ops: Arc<T>,
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
 
@@ -53,7 +57,8 @@ pub struct CheckFeasibilityParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadDocParams {
-    /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "txlib.podlang", "time.podlang"
+    /// Document name. Use "list" to see available documents. Currently:
+    /// "object-lifecycle" — walkthrough of object creation/mutation/consumption.
     pub name: String,
 }
 
@@ -156,14 +161,13 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes in this game). Pass \"list\" to see all available documents."
+        description = "Read reference documentation. Currently available: \"object-lifecycle\" (walkthrough of how Digital Objects are created, mutated, consumed). Pass \"list\" to see all available documents."
     )]
     fn read_doc(&self, Parameters(params): Parameters<ReadDocParams>) -> String {
         match params.name.as_str() {
             "list" => {
                 let docs = crate::resources::list();
-                let mut lines: Vec<String> = docs
-                    .iter()
+                docs.iter()
                     .map(|r| {
                         format!(
                             "- {} ({})\n  {}",
@@ -172,25 +176,12 @@ impl<T: CraftOps> CraftMcpService<T> {
                             r.description.as_deref().unwrap_or("")
                         )
                     })
-                    .collect();
-                lines.push(
-                    "- generated.podlang\n  Generated podlang source for all actions and IsClassName predicates in this game instance."
-                        .to_string(),
-                );
-                lines.join("\n")
+                    .collect::<Vec<_>>()
+                    .join("\n")
             }
             _ => {
                 let uri = match params.name.as_str() {
-                    "podlang-reference" => "zk-craft://docs/podlang-reference",
                     "object-lifecycle" => "zk-craft://docs/object-lifecycle",
-                    "txlib.podlang" => "zk-craft://source/txlib.podlang",
-                    "time.podlang" => "zk-craft://source/time.podlang",
-                    "generated.podlang" => {
-                        return self
-                            .ops
-                            .generated_podlang()
-                            .unwrap_or_else(|| "(not available in mock mode)".to_string());
-                    }
                     other => {
                         return format!(
                             "Unknown document: \"{other}\". Use read_doc(\"list\") to see available documents."
@@ -333,7 +324,7 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(detail.class_name, "WoodPick");
-        assert!(detail.predicate_source.contains("CraftWoodPick"));
+        assert!(!detail.description.is_empty());
     }
 
     #[test]

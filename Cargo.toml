@@ -5,6 +5,7 @@ members = [
     "craft-actions",
     "craft-methods",
     "driver",
+    "mcp",
     "synchronizer",
     "relayer",
     "txlib-core",
@@ -25,7 +26,6 @@ exclude = [
     "pexe",
     "intro_pods/vdfpod",
     "intro_pods/lt_eq_u256_pod",
-    "mcp",
     "timelib",
 ]
 resolver = "2"

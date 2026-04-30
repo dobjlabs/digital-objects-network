@@ -1,9 +1,12 @@
+pub mod driver_ops;
 pub mod logging;
 pub mod mock;
 pub mod ops;
 pub mod resources;
 pub mod server;
 pub mod types;
+
+pub use driver_ops::DriverCraftOps;
 
 /// Default port for the MCP server.
 pub const DEFAULT_PORT: u16 = 3001;
@@ -53,13 +56,12 @@ impl<T: CraftOps> McpServer<T> {
         let ops = self.ops;
         let ct = self.config.cancellation_token;
 
+        let mut http_config = StreamableHttpServerConfig::default();
+        http_config.cancellation_token = ct.child_token();
         let service = StreamableHttpService::new(
             move || Ok(CraftMcpService::new(ops.clone())),
             LocalSessionManager::default().into(),
-            StreamableHttpServerConfig {
-                cancellation_token: ct.child_token(),
-                ..Default::default()
-            },
+            http_config,
         );
 
         axum::Router::new().nest_service("/mcp", service)

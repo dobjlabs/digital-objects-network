@@ -35,3 +35,4 @@ common = { path = "../../common" }
 driver = { path = "../../driver" }
 txlib-core = { path = "../../txlib-core" }
 craft-actions = { path = "../../craft-actions" }
+craft-mcp = { path = "../../mcp" }
