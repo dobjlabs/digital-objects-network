@@ -42,15 +42,22 @@ pub struct RunActionResult {
     pub block_number: Option<u64>,
 }
 
+/// Wire shape consumed by the frontend's `applyRunActionProgress` reducer.
+/// `runId` is what the frontend compares against `proof.runActionId` to
+/// decide whether the event applies to the currently-displayed run — for
+/// us that's just the action name (the frontend sets `runActionId =
+/// actionId` when it kicks off a run).
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RunActionProgress {
-    action_id: String,
+    run_id: String,
     phase: &'static str,
     status: &'static str,
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tx_final: Option<String>,
+    old_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_files: Option<Vec<String>>,
 }
@@ -68,11 +75,12 @@ pub async fn run_action(
         emit(
             &app,
             RunActionProgress {
-                action_id: input.action_id.clone(),
+                run_id: input.action_id.clone(),
                 phase: "generateProof",
                 status: "running",
                 message: "Generating proof".to_string(),
-                tx_final: None,
+                old_root: None,
+                new_root: None,
                 output_files: None,
             },
         );
@@ -97,14 +105,29 @@ pub async fn run_action(
 
         let result = driver.execute_named(&input.action_id, input_objects)?;
 
+        // Proof is done; mark the step complete so the panel can advance.
         emit(
             &app,
             RunActionProgress {
-                action_id: input.action_id.clone(),
+                run_id: input.action_id.clone(),
+                phase: "generateProof",
+                status: "done",
+                message: "Proof generated".to_string(),
+                old_root: None,
+                new_root: None,
+                output_files: None,
+            },
+        );
+
+        emit(
+            &app,
+            RunActionProgress {
+                run_id: input.action_id.clone(),
                 phase: "commit",
                 status: "done",
                 message: "Done".to_string(),
-                tx_final: Some(result.tx_final.clone()),
+                old_root: Some(result.state_root_hash.clone()),
+                new_root: Some(result.state_root_hash.clone()),
                 output_files: Some(result.output_files.clone()),
             },
         );
