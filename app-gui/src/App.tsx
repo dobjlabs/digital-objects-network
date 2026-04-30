@@ -1,256 +1,76 @@
-import { useEffect, useState } from "react";
-import { ContextPanel } from "./features/context/ContextPanel";
-import { ActionGrid } from "./features/actions/ActionGrid";
-import { InventoryPanel } from "./features/inventory/InventoryPanel";
-import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listenOpenSettings } from "./shared/api/tauriClient";
 import { SettingsModal } from "./features/settings/SettingsModal";
-import {
-  getGlobalStateRoot,
-  getObjectsDir,
-  listenMcpActionStarted,
-  listenOpenSettings,
-  listenObjectsChanged,
-  listenRunActionProgress,
-  openObjectsDir,
-  sampleAppCpu,
-} from "./shared/api/tauriClient";
-import { useStore } from "./shared/state/store";
 import "./styles/tokens.css";
-import "./styles/base.css";
-import "./styles/layout.css";
-import "./styles/shared.css";
-import "./features/inventory/InventoryPanel.css";
-import "./features/context/ContextPanel.css";
-import "./features/proof-runner/ProofRunnerPanel.css";
-import "./features/actions/ActionGrid.css";
 import "./features/settings/SettingsModal.css";
+import { Equipment } from "./bitcraft/components/Equipment";
+import { Leaderboard } from "./bitcraft/components/Leaderboard";
+import { RecipeRow } from "./bitcraft/components/RecipeRow";
+import { Stockpile } from "./bitcraft/components/Stockpile";
+import { CAT_LABEL, RECIPES } from "./bitcraft/data";
+import { useInventory } from "./bitcraft/hooks/useInventory";
+import { useJobQueue } from "./bitcraft/hooks/useJobQueue";
+import { currentLevel, invCount, isUnlocked } from "./bitcraft/sim";
 
-function App() {
-  const [objectsDirPath, setObjectsDirPath] = useState("~/.dobj/objects");
+export default function App() {
+  const { inv, inventoryRef, loading, refresh } = useInventory();
+  const { jobs, busy, now, startJob } = useJobQueue(inventoryRef, refresh);
+
+  const [tab, setTab] = useState<string>("all");
+  const [presentedScore, setPresentedScore] = useState<number | null>(null);
+  const [presentFlash, setPresentFlash] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [initialHydrationPending, setInitialHydrationPending] = useState(true);
-  const inventory = useStore((state) => state.inventory);
-  const actions = useStore((state) => state.actions);
-  const activeObjectId = useStore((state) => state.activeObjectId);
-  const activeActionId = useStore((state) => state.activeActionId);
-  const contextSelection = useStore((state) => state.contextSelection);
-  const showNullifiedItems = useStore((state) => state.showNullifiedItems);
-  const hydrateData = useStore((state) => state.hydrateData);
-  const selectObject = useStore((state) => state.selectObject);
-  const selectAction = useStore((state) => state.selectAction);
-  const clearSelection = useStore((state) => state.clearSelection);
-  const toggleNullified = useStore((state) => state.toggleNullified);
-  const recordCpuSample = useStore((state) => state.recordCpuSample);
-  const setGlobalStateRoot = useStore((state) => state.setGlobalStateRoot);
-  const applyRunActionProgress = useStore(
-    (state) => state.applyRunActionProgress,
+
+  // Sticky-recipe highlight: once a recipe becomes unlockable we keep showing
+  // it even if the inputs deplete, and we flash it for ~3s on first appearance.
+  const firstSeenRef = useRef<Record<string, number>>(
+    Object.fromEntries(
+      RECIPES.filter((r) => r.cat === "mine" || r.cat === "farm").map((r) => [
+        r.id,
+        0,
+      ]),
+    ),
   );
-  const initProofPanel = useStore((state) => state.initProofPanel);
-  const runProof = useStore((state) => state.runProof);
-  const proofStatus = useStore((state) => state.proof.status);
-  const proofRunning = useStore(
-    (state) =>
-      state.proof.status === "generating" ||
-      state.proof.status === "committing" ||
-      state.proof.status === "summary",
+
+  const lvl = useMemo(() => currentLevel(inv), [inv]);
+  const unlocked = useMemo(
+    () =>
+      RECIPES.filter(
+        (r) => isUnlocked(r, lvl, inv) || r.id in firstSeenRef.current,
+      ),
+    [lvl, inv],
   );
-  const selectedObject =
-    inventory.find((object) => object.id === activeObjectId) ?? null;
+  const cats = useMemo(
+    () => Array.from(new Set(unlocked.map((r) => r.cat))),
+    [unlocked],
+  );
+  const shown = useMemo(
+    () => (tab === "all" ? unlocked : unlocked.filter((r) => r.cat === tab)),
+    [tab, unlocked],
+  );
 
+  // Stamp newly-unlocked recipes for the highlight fade.
   useEffect(() => {
-    let cancelled = false;
-    hydrateData()
-      .catch((error) => {
-        console.error("Failed to load GUI inventory:", error);
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setInitialHydrationPending(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [hydrateData]);
+    const t = Date.now();
+    unlocked.forEach((r) => {
+      if (!(r.id in firstSeenRef.current)) firstSeenRef.current[r.id] = t;
+    });
+  }, [unlocked]);
 
-  useEffect(() => {
-    let cancelled = false;
-    getObjectsDir()
-      .then((path) => {
-        if (!cancelled) setObjectsDirPath(path);
-      })
-      .catch(() => {
-        if (!cancelled) setObjectsDirPath("~/.dobj/objects");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const research = invCount(inv, "rocket");
 
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    listenRunActionProgress((event) => {
-      if (!cancelled) {
-        applyRunActionProgress(event);
-      }
-    })
-      .then((dispose) => {
-        if (cancelled) {
-          dispose();
-          return;
-        }
-        unlisten = dispose;
-      })
-      .catch((error) => {
-        console.error("Failed to subscribe to run-action progress:", error);
-      });
+  const handlePresent = useCallback(() => {
+    setPresentedScore(invCount(inv, "rocket"));
+    setPresentFlash(true);
+    setTimeout(() => setPresentFlash(false), 200);
+  }, [inv]);
 
-    return () => {
-      cancelled = true;
-      if (unlisten) unlisten();
-    };
-  }, [applyRunActionProgress]);
-
-  // Listen for MCP-initiated actions so the proof panel shows progress
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    listenMcpActionStarted((event) => {
-      if (!cancelled) {
-        initProofPanel({ actionId: event.actionId, args: ["(via MCP)"] });
-      }
-    })
-      .then((dispose) => {
-        if (cancelled) {
-          dispose();
-          return;
-        }
-        unlisten = dispose;
-      })
-      .catch((error) => {
-        console.error("Failed to subscribe to mcp-action-started:", error);
-      });
-    return () => {
-      cancelled = true;
-      if (unlisten) unlisten();
-    };
-  }, [initProofPanel]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    let refreshTimer: number | null = null;
-
-    const scheduleRefresh = () => {
-      if (cancelled) return;
-      if (refreshTimer !== null) {
-        window.clearTimeout(refreshTimer);
-      }
-      refreshTimer = window.setTimeout(() => {
-        refreshTimer = null;
-        if (cancelled) return;
-        hydrateData().catch((error) => {
-          if (!cancelled) {
-            console.error("Failed to refresh GUI after objects change:", error);
-          }
-        });
-      }, 120);
-    };
-
-    listenObjectsChanged(() => {
-      scheduleRefresh();
-    })
-      .then((dispose) => {
-        if (cancelled) {
-          dispose();
-          return;
-        }
-        unlisten = dispose;
-      })
-      .catch((error) => {
-        console.error("Failed to subscribe to objects-changed:", error);
-      });
-
-    return () => {
-      cancelled = true;
-      if (refreshTimer !== null) {
-        window.clearTimeout(refreshTimer);
-      }
-      if (unlisten) unlisten();
-    };
-  }, [hydrateData]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const sample = await sampleAppCpu();
-        if (!cancelled) {
-          recordCpuSample(sample.usagePct, sample.totalCpuSecs);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Failed to sample CPU usage:", error);
-        }
-      }
-    };
-
-    void poll();
-    const interval = window.setInterval(() => {
-      void poll();
-    }, 1000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [recordCpuSample]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const root = await getGlobalStateRoot();
-        if (!cancelled) {
-          setGlobalStateRoot(root);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Failed to fetch global state root:", error);
-        }
-      }
-    };
-
-    void poll();
-    const interval = window.setInterval(() => {
-      void poll();
-    }, 4000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [setGlobalStateRoot]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (settingsOpen) return;
-      if (event.key === "Escape") {
-        clearSelection();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clearSelection, settingsOpen]);
-
+  // Tauri menu → "Preferences" opens the settings modal.
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
     listenOpenSettings(() => {
-      if (!cancelled) {
-        setSettingsOpen(true);
-      }
+      if (!cancelled) setSettingsOpen(true);
     })
       .then((dispose) => {
         if (cancelled) {
@@ -259,79 +79,127 @@ function App() {
         }
         unlisten = dispose;
       })
-      .catch((error) => {
-        console.error("Failed to subscribe to open-settings:", error);
-      });
-
+      .catch((err) => console.error("listenOpenSettings failed:", err));
     return () => {
       cancelled = true;
       if (unlisten) unlisten();
     };
   }, []);
 
-  const handleOpenObjectsDir = async () => {
-    try {
-      const dir = await openObjectsDir();
-      setObjectsDirPath(dir);
-    } catch (error) {
-      console.error("Failed to open objects directory:", error);
-    }
-  };
-
   return (
     <>
-      <div className="app-frame">
-        <main className="app-shell" aria-busy={initialHydrationPending}>
-          <InventoryPanel
-            inventory={inventory}
-            objectsDirPath={objectsDirPath}
-            activeObjectId={activeObjectId}
-            showNullifiedItems={showNullifiedItems}
-            onSelectObject={selectObject}
-            onToggleNullified={toggleNullified}
-            onOpenObjectsDir={handleOpenObjectsDir}
-          />
+      <div
+        style={{
+          fontFamily: "system-ui,sans-serif",
+          fontSize: 13,
+          padding: 12,
+          background: "#fff",
+          minHeight: "100vh",
+        }}
+      >
+        <style>{`@keyframes bc-pulse{0%,100%{opacity:0.3}50%{opacity:1}}`}</style>
 
-          <div className="main-column">
-            <ContextPanel
-              selection={contextSelection}
-              inventory={inventory}
-              objectsDirPath={objectsDirPath}
-              actions={actions}
-              onRunProof={runProof}
-              proofRunning={proofRunning}
-              proofStatus={proofStatus}
-              onClearSelection={clearSelection}
-            />
-            <ProofRunnerPanel />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            marginBottom: 12,
+            borderBottom: "1px solid #e8e8e8",
+            paddingBottom: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontWeight: "bold" }}>Bitcraft v0.1</span>
+          {research > 0 && (
+            <span>
+              rockets: <strong>{research}</strong>
+            </span>
+          )}
+          {loading && (
+            <span style={{ fontSize: 11, color: "#bbb" }}>loading…</span>
+          )}
+          <span style={{ flex: 1 }} />
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 200px",
+            gap: 12,
+            alignItems: "start",
+          }}
+        >
+          <div>
+            <div
+              style={{ marginBottom: 8, display: "flex", gap: 4, flexWrap: "wrap" }}
+            >
+              {(["all", ...cats] as string[]).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setTab(t)}
+                  style={{
+                    fontSize: 11,
+                    padding: "2px 10px",
+                    background: tab === t ? "#333" : "transparent",
+                    color: tab === t ? "#fff" : "#666",
+                    border: "1px solid #ccc",
+                    cursor: "pointer",
+                  }}
+                >
+                  {t === "all" ? "all" : (CAT_LABEL[t] ?? t)}
+                </button>
+              ))}
+            </div>
+            {shown.map((r) => (
+              <RecipeRow
+                key={r.id}
+                recipe={r}
+                jobs={jobs[r.id] ?? []}
+                now={now}
+                inv={inv}
+                busy={busy}
+                onStart={startJob}
+                firstSeen={firstSeenRef.current[r.id] ?? 0}
+              />
+            ))}
           </div>
 
-          <div className="right-column">
-            <ActionGrid
-              actions={actions}
-              activeActionId={activeActionId}
-              selectedObject={selectedObject}
-              onSelectAction={selectAction}
-              onClearSelection={clearSelection}
-            />
-          </div>
-        </main>
-
-        {initialHydrationPending && (
-          <div
-            className="app-loading-overlay"
-            role="status"
-            aria-live="polite"
-            aria-label="Loading objects and actions"
-          >
-            <div className="app-loading-card">
-              <span className="app-loading-spinner" aria-hidden="true" />
-              <span className="app-loading-label">
-                Loading objects and actions...
-              </span>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Stockpile inv={inv} />
+            <Equipment inv={inv} busy={busy} />
+            <div>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "#aaa",
+                  marginBottom: 4,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <span>Leaderboard</span>
+                <button
+                  onClick={handlePresent}
+                  style={{
+                    fontSize: 11,
+                    padding: "1px 8px",
+                    background: presentFlash ? "#333" : "transparent",
+                    color: presentFlash ? "#fff" : "#666",
+                    border: "1px solid #ccc",
+                    cursor: "pointer",
+                  }}
+                >
+                  present
+                </button>
+              </div>
+              <div style={{ border: "1px solid #e8e8e8", padding: 4 }}>
+                <Leaderboard presentedScore={presentedScore} />
+              </div>
             </div>
           </div>
-        )}
+        </div>
       </div>
 
       <SettingsModal
@@ -341,5 +209,3 @@ function App() {
     </>
   );
 }
-
-export default App;
