@@ -19,7 +19,7 @@ use pod2::{
 };
 use pod2utils::{macros::BuildContext, map, op, st_custom};
 
-use crate::{ChainEvent, TxStats, build_ctx, ctx_with, record};
+use crate::{ChainEvent, OBJECT_NULLIFIER_VERSION, TxStats, build_ctx, ctx_with, record};
 
 /// Walk the top-level event list and build a `ReplayActions` statement.
 /// Every top-level event must be `ChainEvent::Action` -- the prover
@@ -406,7 +406,7 @@ fn build_replay_mutate(
         Value::from(old.commitment()),
         old.get(&Key::from("key")).unwrap().unwrap(),
     ]);
-    let nul = hash_values(&[Value::from(okh), Value::from("txlib-nullifier-v1")]);
+    let nul = hash_values(&[Value::from(okh), Value::from(OBJECT_NULLIFIER_VERSION)]);
     let mut nn = nullifiers.clone();
     nn.insert(&Value::from(nul)).unwrap();
     let m1 = ctx_with(&bctx, "live", Value::from(nl.clone()));
@@ -419,7 +419,7 @@ fn build_replay_mutate(
         .unwrap();
     let op_h2 = ctx
         .builder
-        .priv_op(op!(HashOf(nul, okh, "txlib-nullifier-v1")))
+        .priv_op(op!(HashOf(nul, okh, OBJECT_NULLIFIER_VERSION)))
         .unwrap();
     let op_si = ctx
         .builder
@@ -509,7 +509,7 @@ fn build_replay_delete(
         Value::from(old.commitment()),
         old.get(&Key::from("key")).unwrap().unwrap(),
     ]);
-    let nul = hash_values(&[Value::from(okh), Value::from("txlib-nullifier-v1")]);
+    let nul = hash_values(&[Value::from(okh), Value::from(OBJECT_NULLIFIER_VERSION)]);
     let mut nn = nullifiers.clone();
     nn.insert(&Value::from(nul)).unwrap();
     let m1 = ctx_with(&bctx, "live", Value::from(nl.clone()));
@@ -522,7 +522,7 @@ fn build_replay_delete(
         .unwrap();
     let op_h2 = ctx
         .builder
-        .priv_op(op!(HashOf(nul, okh, "txlib-nullifier-v1")))
+        .priv_op(op!(HashOf(nul, okh, OBJECT_NULLIFIER_VERSION)))
         .unwrap();
     let op_si = ctx
         .builder

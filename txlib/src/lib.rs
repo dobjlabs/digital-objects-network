@@ -27,21 +27,18 @@
 pub mod predicates;
 mod replay;
 
-use std::{array, collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
-use plonky2::field::types::Field;
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     frontend::Operation,
     middleware::{
-        EMPTY_VALUE, F, Hash, Key, NativeOperation, OperationAux, OperationType, RawValue,
-        Statement, Value,
+        EMPTY_VALUE, Hash, Key, NativeOperation, OperationAux, OperationType, Statement, Value,
         containers::{Dictionary, Set},
         hash_values,
     },
 };
-use pod2utils::{dict, macros::BuildContext, map, op, set, st_custom};
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use pod2utils::{dict, macros::BuildContext, map, op, rand_raw_value, set, st_custom};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // ============================================================================
@@ -176,7 +173,7 @@ impl<'de> Deserialize<'de> for Tx {
     }
 }
 
-const OBJECT_NULLIFIER_VERSION: &str = "txlib-nullifier-v1";
+pub(crate) const OBJECT_NULLIFIER_VERSION: &str = "txlib-nullifier-v1";
 
 pub fn object_key_hash(obj: &Dictionary) -> anyhow::Result<Hash> {
     let key = obj
@@ -200,11 +197,6 @@ pub fn object_nullifier_hash(obj: &Dictionary) -> anyhow::Result<Hash> {
 /// H(H(obj, obj.key), "txlib-nullifier-v1")
 pub fn compute_nullifier(obj: &Dictionary) -> Hash {
     object_nullifier_hash(obj).expect("object missing required key field")
-}
-
-pub fn rand_raw_value() -> RawValue {
-    let mut rng = StdRng::from_os_rng();
-    RawValue(array::from_fn(|_| F::from_noncanonical_u64(rng.next_u64())))
 }
 
 pub fn rekey(obj: &mut Dictionary) {
