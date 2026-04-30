@@ -1,23 +1,22 @@
+//! Tauri app entry point. Wires the new risc0-stack driver into the
+//! frontend and installs the file-watcher + CPU sampler.
+
 mod bootstrap;
 mod cpu;
 mod error;
-mod mcp;
 mod objects;
-mod progress;
 mod run_action;
 mod settings;
 
 use std::sync::Arc;
 
 use bootstrap::{get_global_state_root, load_gui_inventory};
-use cpu::{sample_app_cpu, CpuMonitor};
+use cpu::{CpuMonitor, sample_app_cpu};
 use objects::{
     get_objects_dir, open_objects_dir, pick_dobj_file_path, read_dobj_file, start_objects_watcher,
 };
 use run_action::run_action;
 use settings::{build_app_menu, get_app_settings, handle_settings_menu_event, save_app_settings};
-
-use craft_mcp::DEFAULT_PORT as MCP_PORT;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -39,19 +38,10 @@ pub fn run() {
         .setup(|app| {
             let driver = tauri::Manager::state::<Arc<::driver::Driver>>(app);
             if let Err(err) =
-                start_objects_watcher(app.handle().clone(), driver.paths().objects_dir.clone())
+                start_objects_watcher(app.handle().clone(), driver.paths.objects_dir.clone())
             {
                 eprintln!("zk-craft: objects watcher disabled: {err}");
             }
-
-            // Start MCP server
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(err) = start_mcp_server(handle).await {
-                    eprintln!("zk-craft: MCP server failed: {err}");
-                }
-            });
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -68,19 +58,4 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-async fn start_mcp_server(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let driver = tauri::Manager::state::<Arc<::driver::Driver>>(&app)
-        .inner()
-        .clone();
-    let ops = mcp::AppCraftOps::new(app, driver);
-    let config = craft_mcp::McpConfig::default();
-    let server = craft_mcp::McpServer::new(ops, config);
-
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{MCP_PORT}")).await?;
-    eprintln!("zk-craft: MCP server listening on http://127.0.0.1:{MCP_PORT}/mcp");
-
-    server.serve(listener).await?;
-    Ok(())
 }

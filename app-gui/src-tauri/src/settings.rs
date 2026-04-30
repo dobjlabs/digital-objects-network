@@ -1,9 +1,17 @@
+//! Settings menu (Cmd+,) plus the `get_app_settings` / `save_app_settings`
+//! Tauri commands.
+//!
+//! Saving writes the new settings file to disk. The in-memory `Driver` keeps
+//! the values it loaded at startup until the next launch — restart the app
+//! to pick up changes. (The risc0 stack doesn't need hot-swappable
+//! synchronizer / relayer URLs in normal use.)
+
 use std::sync::Arc;
 
 use crate::error::CommandError;
 use tauri::{
-    menu::{Menu, MenuItem, MenuItemBuilder},
     AppHandle, Emitter, Runtime,
+    menu::{Menu, MenuItem, MenuItemBuilder},
 };
 
 const MENU_OPEN_SETTINGS_ID: &str = "app.open-settings";
@@ -70,7 +78,7 @@ fn append_settings_to_named_submenu<R: Runtime>(
 pub fn get_app_settings(
     driver: tauri::State<'_, Arc<::driver::Driver>>,
 ) -> Result<::driver::DriverSettings, CommandError> {
-    driver.load_settings().map_err(Into::into)
+    Ok(driver.settings.clone())
 }
 
 #[tauri::command]
@@ -78,5 +86,6 @@ pub fn save_app_settings(
     driver: tauri::State<'_, Arc<::driver::Driver>>,
     input: ::driver::DriverSettings,
 ) -> Result<::driver::DriverSettings, CommandError> {
-    driver.save_settings(&input).map_err(Into::into)
+    ::driver::settings::write_settings(&driver.paths, &input).map_err(anyhow::Error::from)?;
+    Ok(input)
 }

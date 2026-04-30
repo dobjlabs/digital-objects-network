@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "app-gui/src-tauri",
     "common",
     "craft-actions",
     "craft-methods",
@@ -17,7 +18,6 @@ members = [
 # - The rest are pre-risc0 crates that still depend on pod2 / plonky2 /
 #   the old txlib. Will be rewritten in Phase 4.
 exclude = [
-    "app-gui/src-tauri",
     "craft-guest",
     "pod2utils",
     "txlib",

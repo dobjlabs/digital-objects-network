@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf, sync::Arc};
 
 use crate::error::CommandError;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use rfd::FileDialog;
 use tauri_plugin_opener::OpenerExt;
 
@@ -9,8 +9,7 @@ use tauri_plugin_opener::OpenerExt;
 pub fn get_objects_dir(
     driver: tauri::State<'_, Arc<::driver::Driver>>,
 ) -> Result<String, CommandError> {
-    let path = driver.paths().objects_dir.clone();
-    Ok(path.to_string_lossy().to_string())
+    Ok(driver.paths.objects_dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -18,7 +17,7 @@ pub fn open_objects_dir(
     app: tauri::AppHandle,
     driver: tauri::State<'_, Arc<::driver::Driver>>,
 ) -> Result<String, CommandError> {
-    let path: PathBuf = driver.paths().objects_dir.clone();
+    let path: PathBuf = driver.paths.objects_dir.clone();
     fs::create_dir_all(&path)
         .map_err(|err| anyhow!("failed to create objects directory: {err}"))?;
     app.opener()
@@ -44,5 +43,5 @@ pub fn read_dobj_file(path: String) -> Result<::driver::ObjectRecord, CommandErr
     if !path.exists() {
         return Err(anyhow!("selected file does not exist: {}", path.display()).into());
     }
-    Ok(::driver::parse_object_record_file(&path)?)
+    Ok(::driver::object::parse_object_record_file(&path)?)
 }

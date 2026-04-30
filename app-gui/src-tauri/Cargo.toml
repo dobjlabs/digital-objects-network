@@ -6,8 +6,6 @@ authors = ["you"]
 edition = "2021"
 default-run = "app-gui"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
@@ -24,22 +22,16 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.37"
-txlib = { path = "../../txlib" }
-common = { path = "../../common" }
-driver = { path = "../../driver" }
-pod2utils = { path = "../../pod2utils" }
-vdfpod = { path = "../../intro_pods/vdfpod" }
-lt_eq_u256_pod = { path = "../../intro_pods/lt_eq_u256_pod" }
-synchronizer = { path = "../../synchronizer" }
-relayer = { path = "../../relayer" }
-reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 hex = "0.4"
-base64 = "0.22"
-pod2 = { workspace = true }
-craft-mcp = { path = "../../mcp" }
-tokio = { version = "1", features = ["net"] }
 notify = "6"
 rfd = "0.14"
+tokio = { version = "1", features = ["net"] }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 env_logger = { workspace = true }
+
+# New stack
+common = { path = "../../common" }
+driver = { path = "../../driver" }
+txlib-core = { path = "../../txlib-core" }
+craft-actions = { path = "../../craft-actions" }
