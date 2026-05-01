@@ -7,12 +7,12 @@ import type {
 import { pickDobjFilePath, readDobjFile } from "../../shared/api/tauriClient";
 import { truncateDisplayHash } from "../../shared/format";
 import {
+  classDisplayLabel,
   displayPathInObjectsDir,
-  displayObjectFileName,
-  isLiveObject,
   isNullifiedObject,
   joinObjectsDirPath,
 } from "../../shared/objectUtils";
+import { useStore } from "../../shared/state/store";
 import { isRecord, normalizePod2Value } from "../../shared/pod2utils";
 import type { ContextSelection } from "../../shared/state/store";
 
@@ -52,6 +52,7 @@ export function ContextPanel({
   const [hoverArgKey, setHoverArgKey] = useState<string | null>(null);
   const [argErrors, setArgErrors] = useState<Record<string, string>>({});
   const previousProofStatusRef = useRef(proofStatus);
+  const nameCollisions = useStore((state) => state.nameCollisions);
   const selectionKey =
     selection.kind === "object"
       ? `object:${selection.objectId}`
@@ -82,33 +83,36 @@ export function ContextPanel({
   ): {
     objectPath?: string;
     name?: string;
-    className?: string;
+    classId?: string;
+    classDisplayName?: string;
   } => {
     try {
       return JSON.parse(raw) as {
         objectPath?: string;
         name?: string;
-        className?: string;
+        classId?: string;
+        classDisplayName?: string;
       };
     } catch {
       return { name: raw };
     }
   };
 
-  const normalizeName = (value: string) => value.trim().toLowerCase();
-
+  /** Compatibility is by qualified class id; bare names alone are ambiguous
+   * across plugins. */
   const isArgCompatible = (
-    expectedClassName: string,
-    droppedClassName?: string,
+    expectedClassId: string,
+    droppedClassId?: string,
   ) => {
-    if (!droppedClassName) return false;
-    return normalizeName(droppedClassName) === normalizeName(expectedClassName);
+    if (!droppedClassId) return false;
+    return droppedClassId === expectedClassId;
   };
 
   const handleDropArg = (
     event: DragEvent<HTMLDivElement>,
     methodId: string,
-    expectedClassName: string,
+    expectedClassId: string,
+    expectedClassDisplay: string,
     index: number,
   ) => {
     if (proofRunning) return;
@@ -126,11 +130,11 @@ export function ContextPanel({
     const droppedName = parsed.name ?? raw;
     const droppedPath = parsed.objectPath?.trim() ?? "";
 
-    if (!isArgCompatible(expectedClassName, parsed.className)) {
-      const got = parsed.className ?? droppedName;
+    if (!isArgCompatible(expectedClassId, parsed.classId)) {
+      const got = parsed.classDisplayName ?? parsed.classId ?? droppedName;
       setArgErrors((prev) => ({
         ...prev,
-        [key]: `Expected ${expectedClassName} but got ${got}`,
+        [key]: `Expected ${expectedClassDisplay} but got ${got}`,
       }));
       return;
     }
@@ -177,7 +181,8 @@ export function ContextPanel({
 
   const handleBrowseArgFile = async (
     methodId: string,
-    expectedClassName: string,
+    expectedClassId: string,
+    expectedClassDisplay: string,
     index: number,
   ) => {
     const key = argKey(methodId, index);
@@ -212,7 +217,7 @@ export function ContextPanel({
     }
 
     let parsed: {
-      className: string;
+      classId: string;
       status: string;
     };
     try {
@@ -225,11 +230,11 @@ export function ContextPanel({
       return;
     }
 
-    const className = parsed.className.trim();
+    const classId = parsed.classId.trim();
     const objectIsLive = parsed.status === "live";
-    const fileLabel = displayObjectFileName(className);
+    const fileLabel = selectedName;
 
-    if (!className) {
+    if (!classId) {
       setArgErrors((prev) => ({
         ...prev,
         [key]: `Missing required fields in .dobj: ${selectedName}`,
@@ -237,10 +242,10 @@ export function ContextPanel({
       return;
     }
 
-    if (!isArgCompatible(expectedClassName, className)) {
+    if (!isArgCompatible(expectedClassId, classId)) {
       setArgErrors((prev) => ({
         ...prev,
-        [key]: `Expected ${expectedClassName} but got ${className}`,
+        [key]: `Expected ${expectedClassDisplay} but got ${classId}`,
       }));
       return;
     }
@@ -287,40 +292,49 @@ export function ContextPanel({
   const renderMethodCard = (config: {
     methodId: string;
     methodName: string;
-    totalInputClasses: string[];
+    totalInputClassIds: string[];
+    totalInputClassNames: string[];
     totalInputClassHashes: string[];
+    pluginName: string;
     onRun: (boundArgs: BoundArg[]) => void;
   }) =>
     (() => {
-      const hasInputs = config.totalInputClasses.length > 0;
-      const boundArgs = config.totalInputClasses.map(
+      const hasInputs = config.totalInputClassIds.length > 0;
+      const boundArgs = config.totalInputClassIds.map(
         (_, index) => argBindings[argKey(config.methodId, index)] ?? null,
       );
       const filledCount = boundArgs.filter(
         (value) => value?.objectPath?.trim().length,
       ).length;
       const allArgsBound =
-        !hasInputs || filledCount === config.totalInputClasses.length;
+        !hasInputs || filledCount === config.totalInputClassIds.length;
 
       return (
         <div className="method-card">
           {hasInputs && (
             <div className="method-card-body">
-              {config.totalInputClasses.map((expectedClassName, index) => {
+              {config.totalInputClassIds.map((expectedClassId, index) => {
                 const key = argKey(config.methodId, index);
                 const bound = argBindings[key];
                 const isDropActive = hoverArgKey === key;
                 const err = argErrors[key];
                 const classHash = config.totalInputClassHashes[index] ?? "";
+                const expectedClassName =
+                  config.totalInputClassNames[index] ?? expectedClassId;
+                const expectedClassLabel = classDisplayLabel(
+                  expectedClassName,
+                  config.pluginName,
+                  nameCollisions,
+                );
 
                 return (
                   <div
-                    key={`${expectedClassName}:${index}`}
+                    key={`${expectedClassId}:${index}`}
                     className="method-arg"
                   >
                     <div className="method-arg-row">
                       <span className="method-arg-label">
-                        {renderClassChip(`# ${expectedClassName}`, classHash)}
+                        {renderClassChip(`# ${expectedClassLabel}`, classHash)}
                       </span>
                       <div
                         className={`method-arg-drop ${bound ? "filled" : ""} ${isDropActive ? "drop-active" : ""} ${err ? "error" : ""}`}
@@ -343,7 +357,8 @@ export function ContextPanel({
                           handleDropArg(
                             event,
                             config.methodId,
-                            expectedClassName,
+                            expectedClassId,
+                            expectedClassLabel,
                             index,
                           )
                         }
@@ -369,7 +384,8 @@ export function ContextPanel({
                           }
                           void handleBrowseArgFile(
                             config.methodId,
-                            expectedClassName,
+                            expectedClassId,
+                            expectedClassLabel,
                             index,
                           );
                         }}
@@ -406,8 +422,7 @@ export function ContextPanel({
     })();
 
   const displayThingPath = (object: InventoryObject) => {
-    const displayName = displayObjectFileName(object.className);
-    const absolutePath = joinObjectsDirPath(objectsDirPath, displayName, {
+    const absolutePath = joinObjectsDirPath(objectsDirPath, object.fileName, {
       nullified: isNullifiedObject(object),
     });
     return displayPathInObjectsDir(absolutePath, objectsDirPath);
@@ -508,7 +523,11 @@ export function ContextPanel({
     if (!object)
       return <section className="context-panel">Object not found.</section>;
 
-    const titleName = object.className;
+    const titleName = classDisplayLabel(
+      object.classDisplayName,
+      object.pluginName,
+      nameCollisions,
+    );
     const liveValueRaw = object.status === "live" ? object.id : object.status;
     const liveValue = truncateDisplayHash(liveValueRaw);
 
@@ -540,7 +559,7 @@ export function ContextPanel({
           )}
           {renderMetaRow(
             "Type",
-            renderClassChip(`# ${object.className}`, object.classHash),
+            renderClassChip(`# ${titleName}`, object.classHash),
           )}
           {renderMetaRow(
             "Path",
@@ -565,12 +584,17 @@ export function ContextPanel({
     return <section className="context-panel">Action not found.</section>;
   const actionHashRaw = action.hash.trim();
   const actionHashDisplay = truncateDisplayHash(actionHashRaw);
+  const actionLabel = classDisplayLabel(
+    action.displayName,
+    action.pluginName,
+    nameCollisions,
+  );
 
   return (
     <section className="context-panel">
       <div className="context-title-row">
         <div className="context-title">
-          {action.emoji} {action.id}
+          {action.emoji} {actionLabel}
         </div>
         <button
           type="button"
@@ -595,9 +619,11 @@ export function ContextPanel({
 
       {renderMethodCard({
         methodId: action.id,
-        methodName: action.id,
-        totalInputClasses: action.totalInputClasses,
+        methodName: actionLabel,
+        totalInputClassIds: action.totalInputClassIds,
+        totalInputClassNames: action.totalInputClassNames,
         totalInputClassHashes: action.totalInputClassHashes,
+        pluginName: action.pluginName,
         onRun: (boundArgs) =>
           onRunProof({
             actionId: action.id,

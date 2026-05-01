@@ -29,13 +29,17 @@ pub struct ClassList {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassSummary {
-    /// Class name, e.g. "WoodPick"
-    pub name: String,
+    /// Qualified class id, e.g. "craft-basics:WoodPick"
+    pub id: String,
+    /// Bare class name, e.g. "WoodPick"
+    pub display_name: String,
+    /// Plugin that declares this class
+    pub plugin_name: String,
     /// Number of live objects of this class in inventory
     pub live_count: usize,
-    /// Actions that produce objects of this class
+    /// Qualified action ids that produce objects of this class
     pub produced_by: Vec<String>,
-    /// Actions that consume objects of this class
+    /// Qualified action ids that consume objects of this class
     pub consumed_by: Vec<String>,
 }
 
@@ -46,9 +50,13 @@ pub struct ClassSummary {
 pub struct InventoryObject {
     /// Unique object identifier (hex hash)
     pub id: String,
-    /// Object class name, e.g. "WoodPick"
-    pub class_name: String,
-    /// The .dobj filename, e.g. "WoodPick.dobj"
+    /// Qualified class id, e.g. "craft-basics:WoodPick"
+    pub class_id: String,
+    /// Bare class name, e.g. "WoodPick"
+    pub class_display_name: String,
+    /// Plugin that declares this object's class
+    pub plugin_name: String,
+    /// The .dobj filename
     pub file_name: String,
     /// Lifecycle status: "unknown", "pending", "live", or "nullified"
     pub status: String,
@@ -61,14 +69,22 @@ pub struct InventoryObject {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Action {
-    /// Action identifier, e.g. "CraftWoodPick"
+    /// Qualified action id, e.g. "craft-basics:CraftWoodPick"
     pub id: String,
+    /// Bare action name, e.g. "CraftWoodPick"
+    pub display_name: String,
+    /// Plugin that provides this action
+    pub plugin_name: String,
     /// Human-readable description
     pub description: String,
-    /// Class names required as inputs
-    pub total_input_classes: Vec<String>,
-    /// Class names produced as outputs
-    pub total_output_classes: Vec<String>,
+    /// Qualified class ids required as inputs
+    pub total_input_class_ids: Vec<String>,
+    /// Bare class names parallel to `total_input_class_ids`
+    pub total_input_class_names: Vec<String>,
+    /// Qualified class ids produced as outputs
+    pub total_output_class_ids: Vec<String>,
+    /// Bare class names parallel to `total_output_class_ids`
+    pub total_output_class_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -85,8 +101,12 @@ pub struct StateRootResponse {
 pub struct ObjectDetail {
     /// Unique object identifier (hex hash)
     pub id: String,
-    /// Object class name
-    pub class_name: String,
+    /// Qualified class id, e.g. "craft-basics:WoodPick"
+    pub class_id: String,
+    /// Bare class name, e.g. "WoodPick"
+    pub class_display_name: String,
+    /// Plugin that declares this object's class
+    pub plugin_name: String,
     /// Lifecycle status: "unknown", "pending", "live", or "nullified"
     pub status: String,
     /// Transaction commitment hash (hex) if this object has been submitted
@@ -100,13 +120,17 @@ pub struct ObjectDetail {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassDetail {
-    /// Class name
-    pub class_name: String,
+    /// Qualified class id, e.g. "craft-basics:WoodPick"
+    pub class_id: String,
+    /// Bare class name
+    pub class_display_name: String,
+    /// Plugin that declares this class
+    pub plugin_name: String,
     /// Predicate definition in podlang source
     pub predicate_source: String,
-    /// Actions that produce objects of this class
+    /// Qualified action ids that produce objects of this class
     pub produced_by: Vec<String>,
-    /// Actions that consume objects of this class
+    /// Qualified action ids that consume objects of this class
     pub consumed_by: Vec<String>,
 }
 
@@ -115,7 +139,7 @@ pub struct ClassDetail {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunActionInput {
-    /// The action to execute, e.g. "CraftWoodPick"
+    /// The qualified action id to execute, e.g. "craft-basics:CraftWoodPick"
     pub action_id: String,
     /// Paths to .dobj files to use as inputs
     pub input_object_paths: Vec<String>,
@@ -139,19 +163,25 @@ pub struct RunActionResult {
 pub struct FeasibilityReport {
     /// Whether the action can be executed with current inventory
     pub feasible: bool,
-    /// The action being checked
+    /// The qualified action id being checked
     pub action_id: String,
     /// Objects available to satisfy input requirements
     pub available_inputs: Vec<FeasibilityInput>,
-    /// Input classes that have no matching object in inventory
-    pub missing_inputs: Vec<String>,
+    /// Qualified class ids that have no matching object in inventory
+    pub missing_input_class_ids: Vec<String>,
+    /// Bare class names parallel to `missing_input_class_ids`
+    pub missing_input_class_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FeasibilityInput {
-    /// Class name of the available object
-    pub class_name: String,
+    /// Qualified class id of the available object
+    pub class_id: String,
+    /// Bare class name
+    pub class_display_name: String,
+    /// Plugin that declares the class
+    pub plugin_name: String,
     /// Object identifier
     pub object_id: String,
     /// The .dobj filename

@@ -1,12 +1,22 @@
 use anyhow::Result;
+use pod2::middleware::Hash;
 use sdk::{SpendableObject, SpendableObjects};
 use txlib::GroundingWitness;
 
 use crate::types::ActionSummary;
 
+/// A class entry surfaced by an [`ActionCatalog`].
+///
+/// The `id` is the qualified `<plugin>:<class>` form used everywhere as the
+/// canonical handle. `display_name` is the bare class name; `plugin_name` is
+/// available for collision-aware UI labels. `hash` is the on-chain
+/// `Is{class}` predicate hash — it disambiguates classes that share a
+/// display name but live in different plugins.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogClass {
-    pub name: String,
+    pub id: String,
+    pub display_name: String,
+    pub plugin_name: String,
     pub emoji: String,
     pub hash: String,
     pub description: String,
@@ -19,7 +29,14 @@ pub trait ActionCatalog: Send + Sync {
     fn list_actions(&self) -> Vec<ActionSummary>;
     fn get_action(&self, action_id: &str) -> Option<ActionSummary>;
     fn list_classes(&self) -> Vec<CatalogClass>;
-    fn get_class(&self, class_name: &str) -> Option<CatalogClass>;
+    fn get_class(&self, class_id: &str) -> Option<CatalogClass>;
+    fn get_class_by_hash(&self, class_hash: &Hash) -> Option<CatalogClass>;
+    /// Bare names that appear in more than one loaded plugin. Callers that
+    /// render a class label can use this to decide when to disambiguate
+    /// (e.g. by appending the plugin name).
+    fn name_collisions(&self) -> Vec<String> {
+        Vec::new()
+    }
     fn execute_action(
         &self,
         action_id: String,

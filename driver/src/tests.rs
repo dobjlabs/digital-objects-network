@@ -81,13 +81,17 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
     ensure_extra_pod_deserializers_registered();
     let catalog = make_catalog();
     let outputs = catalog
-        .execute_action("FindLog".to_string(), dummy_grounding_witness(), vec![])
+        .execute_action(
+            "craft-basics:FindLog".to_string(),
+            dummy_grounding_witness(),
+            vec![],
+        )
         .unwrap();
     let spendable = outputs.obj(0);
     let id = format!("{:#}", spendable.obj.commitment());
     let record = ObjectRecord {
         id,
-        class_name: "Log".to_string(),
+        class_id: "craft-basics:Log".to_string(),
         status: ObjectStatus::Live,
         tx_hash: None,
         pod: spendable.pod,
@@ -248,15 +252,13 @@ fn test_list_actions_filters_by_input_class() {
     let driver = Driver::open_default().unwrap();
     let filtered = driver
         .list_actions(Some(&ActionQuery {
-            input_class: Some("Wood".to_string()),
+            input_class_id: Some("craft-basics:Wood".to_string()),
             ..ActionQuery::default()
         }))
         .unwrap();
-    assert!(
-        filtered
-            .iter()
-            .all(|action| action.total_input_classes.contains(&"Wood".to_string()))
-    );
+    assert!(filtered.iter().all(|action| action
+        .total_input_class_ids
+        .contains(&"craft-basics:Wood".to_string())));
 }
 
 #[test]
@@ -273,7 +275,7 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
 
     let err = driver
         .execute(ExecuteActionInput {
-            action_id: "CraftWood".to_string(),
+            action_id: "craft-basics:CraftWood".to_string(),
             input_objects: vec![ObjectSelector::FileName("log_1.dobj".to_string())],
         })
         .unwrap_err();
@@ -309,7 +311,7 @@ fn test_execute_keeps_files_after_relayer_accepts() {
 
     let err = driver
         .execute(ExecuteActionInput {
-            action_id: "CraftWood".to_string(),
+            action_id: "craft-basics:CraftWood".to_string(),
             input_objects: vec![ObjectSelector::FileName("log_1.dobj".to_string())],
         })
         .unwrap_err();

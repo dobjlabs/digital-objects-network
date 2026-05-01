@@ -54,6 +54,8 @@ export interface AppState {
   showNullifiedItems: boolean;
   inventory: InventoryObject[];
   actions: Action[];
+  /** Bare class/action names that appear in more than one loaded plugin. */
+  nameCollisions: string[];
   proof: ProofState;
   hydrateData: () => Promise<void>;
   selectObject: (objectId: string) => void;
@@ -87,6 +89,7 @@ export const useStore = create<AppState>((set, get) => ({
   ...initialAppState,
   inventory: [],
   actions: [],
+  nameCollisions: [],
   proof: {
     runActionId: null,
     status: "idle",
@@ -109,6 +112,7 @@ export const useStore = create<AppState>((set, get) => ({
       ...prev,
       inventory: data.inventory,
       actions: data.actions,
+      nameCollisions: data.nameCollisions,
     }));
   },
   selectObject: (objectId) =>

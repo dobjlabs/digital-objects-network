@@ -204,12 +204,13 @@ impl Driver {
             .into_iter()
             .filter(|action| {
                 query.is_none_or(|query| {
-                    query.name.as_ref().is_none_or(|name| &action.id == name)
-                        && query.input_class.as_ref().is_none_or(|class_name| {
-                            action.total_input_classes.contains(class_name)
-                        })
-                        && query.output_class.as_ref().is_none_or(|class_name| {
-                            action.total_output_classes.contains(class_name)
+                    query.id.as_ref().is_none_or(|id| &action.id == id)
+                        && query
+                            .input_class_id
+                            .as_ref()
+                            .is_none_or(|class_id| action.total_input_class_ids.contains(class_id))
+                        && query.output_class_id.as_ref().is_none_or(|class_id| {
+                            action.total_output_class_ids.contains(class_id)
                         })
                 })
             })
@@ -229,23 +230,23 @@ impl Driver {
             .map(|class_info| ClassSummary {
                 live_count: live_objects
                     .iter()
-                    .filter(|entry| entry.record.class_name == class_info.name)
+                    .filter(|entry| entry.record.class_id == class_info.id)
                     .count(),
                 ..self.class_summary(class_info)
             })
             .collect())
     }
 
-    pub fn get_class(&self, class_name: &str) -> Result<ClassSummary> {
+    pub fn get_class(&self, class_id: &str) -> Result<ClassSummary> {
         let class_info = self
             .deps
             .catalog
-            .get_class(class_name)
-            .ok_or_else(|| anyhow!("unknown class: {class_name}"))?;
+            .get_class(class_id)
+            .ok_or_else(|| anyhow!("unknown class: {class_id}"))?;
         let live_count = load_object_files(&self.paths)?
             .into_iter()
             .filter(|entry| {
-                entry.record.status == ObjectStatus::Live && entry.record.class_name == class_name
+                entry.record.status == ObjectStatus::Live && entry.record.class_id == class_id
             })
             .count();
         Ok(ClassSummary {
@@ -267,29 +268,41 @@ impl Driver {
             .collect::<Vec<_>>();
 
         let mut available = Vec::new();
-        let mut missing = Vec::new();
+        let mut missing_class_ids = Vec::new();
+        let mut missing_class_names = Vec::new();
         let mut used_ids = HashSet::new();
 
-        for required_class in &action.total_input_classes {
+        for (slot, required_class_id) in action.total_input_class_ids.iter().enumerate() {
             if let Some(entry) = live_objects.iter().find(|entry| {
-                &entry.record.class_name == required_class && !used_ids.contains(&entry.record.id)
+                &entry.record.class_id == required_class_id && !used_ids.contains(&entry.record.id)
             }) {
                 used_ids.insert(entry.record.id.clone());
+                let candidate_class = self.deps.catalog.get_class(&entry.record.class_id);
                 available.push(CheckActionCandidate {
-                    class_name: entry.record.class_name.clone(),
+                    class_id: entry.record.class_id.clone(),
+                    class_display_name: candidate_class
+                        .as_ref()
+                        .map(|c| c.display_name.clone())
+                        .unwrap_or_else(|| entry.record.class_id.clone()),
+                    plugin_name: candidate_class
+                        .as_ref()
+                        .map(|c| c.plugin_name.clone())
+                        .unwrap_or_default(),
                     object_id: entry.record.id.clone(),
                     file_name: entry.file_name.clone(),
                 });
             } else {
-                missing.push(required_class.clone());
+                missing_class_ids.push(required_class_id.clone());
+                missing_class_names.push(action.total_input_class_names[slot].clone());
             }
         }
 
         Ok(CheckActionReport {
-            feasible: missing.is_empty(),
+            feasible: missing_class_ids.is_empty(),
             action_id: action_id.to_string(),
             available_inputs: available,
-            missing_inputs: missing,
+            missing_input_class_ids: missing_class_ids,
+            missing_input_class_names: missing_class_names,
         })
     }
 
@@ -481,17 +494,28 @@ impl Driver {
         self.deps.catalog.generated_podlang()
     }
 
+    /// Bare class/action names that appear in more than one loaded plugin.
+    /// UI callers can use this to decide when a label needs disambiguation.
+    pub fn name_collisions(&self) -> Vec<String> {
+        self.deps.catalog.name_collisions()
+    }
+
     fn object_summary(&self, entry: &ObjectFileEntry, grounded: Option<bool>) -> ObjectSummary {
-        let class_hash = self
-            .deps
-            .catalog
-            .get_class(&entry.record.class_name)
-            .map(|class_info| class_info.hash)
-            .unwrap_or_default();
+        let class_info = self.deps.catalog.get_class(&entry.record.class_id);
+        let (class_hash, display_name, plugin_name) = match class_info {
+            Some(c) => (c.hash, c.display_name, c.plugin_name),
+            None => (
+                String::new(),
+                entry.record.class_id.clone(),
+                String::new(),
+            ),
+        };
         ObjectSummary {
             id: entry.record.id.clone(),
             file_name: entry.file_name.clone(),
-            class_name: entry.record.class_name.clone(),
+            class_id: entry.record.class_id.clone(),
+            class_display_name: display_name,
+            plugin_name,
             class_hash,
             status: entry.record.status,
             tx_hash: entry.record.tx_hash.clone(),
@@ -502,7 +526,9 @@ impl Driver {
 
     fn class_summary(&self, class_info: CatalogClass) -> ClassSummary {
         ClassSummary {
-            name: class_info.name,
+            id: class_info.id,
+            display_name: class_info.display_name,
+            plugin_name: class_info.plugin_name,
             emoji: class_info.emoji,
             hash: class_info.hash,
             description: class_info.description,

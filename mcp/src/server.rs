@@ -41,13 +41,13 @@ pub struct InspectObjectParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct InspectClassParams {
-    /// The class name to inspect, e.g. "WoodPick"
-    pub class_name: String,
+    /// The qualified class id to inspect, e.g. "craft-basics:WoodPick"
+    pub class_id: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CheckFeasibilityParams {
-    /// The action ID to check, e.g. "CraftWoodPick"
+    /// The qualified action id to check, e.g. "craft-basics:CraftWoodPick"
     pub action_id: String,
 }
 
@@ -120,7 +120,7 @@ impl<T: CraftOps> CraftMcpService<T> {
         Parameters(params): Parameters<InspectClassParams>,
     ) -> Result<Json<ClassDetail>, String> {
         self.ops
-            .inspect_class(&params.class_name)
+            .inspect_class(&params.class_id)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -306,7 +306,7 @@ mod tests {
         let service = make_service();
         let Json(list) = service.list_inventory().unwrap();
         assert!(!list.objects.is_empty());
-        assert!(list.objects.iter().any(|o| o.class_name == "Log"));
+        assert!(list.objects.iter().any(|o| o.class_display_name == "Log"));
     }
 
     #[test]
@@ -314,7 +314,11 @@ mod tests {
         let service = make_service();
         let Json(list) = service.list_actions().unwrap();
         assert!(!list.actions.is_empty());
-        assert!(list.actions.iter().any(|a| a.id == "CraftWoodPick"));
+        assert!(
+            list.actions
+                .iter()
+                .any(|a| a.id == "craft-basics:CraftWoodPick")
+        );
     }
 
     #[test]
@@ -332,7 +336,7 @@ mod tests {
                 object_id: "0xabc4444444444444".to_string(),
             }))
             .unwrap();
-        assert_eq!(detail.class_name, "WoodPick");
+        assert_eq!(detail.class_display_name, "WoodPick");
         assert!(detail.predicate_source.contains("CraftWoodPick"));
     }
 
@@ -351,11 +355,15 @@ mod tests {
         let service = make_service();
         let Json(detail) = service
             .inspect_class(Parameters(InspectClassParams {
-                class_name: "Stick".to_string(),
+                class_id: "craft-basics:Stick".to_string(),
             }))
             .unwrap();
-        assert_eq!(detail.class_name, "Stick");
-        assert!(detail.produced_by.contains(&"CraftSticks".to_string()));
+        assert_eq!(detail.class_display_name, "Stick");
+        assert!(
+            detail
+                .produced_by
+                .contains(&"craft-basics:CraftSticks".to_string())
+        );
     }
 
     #[tokio::test]
@@ -363,7 +371,7 @@ mod tests {
         let service = make_service();
         let Json(result) = service
             .run_action(Parameters(RunActionInput {
-                action_id: "FindLog".to_string(),
+                action_id: "craft-basics:FindLog".to_string(),
                 input_object_paths: vec![],
             }))
             .await
@@ -376,7 +384,7 @@ mod tests {
         let service = CraftMcpService::new(Arc::new(MockCraftOps::new().with_action_in_progress()));
         let result = service
             .run_action(Parameters(RunActionInput {
-                action_id: "FindLog".to_string(),
+                action_id: "craft-basics:FindLog".to_string(),
                 input_object_paths: vec![],
             }))
             .await;
@@ -389,7 +397,7 @@ mod tests {
         let service = make_service();
         let Json(report) = service
             .check_feasibility(Parameters(CheckFeasibilityParams {
-                action_id: "CraftWoodPick".to_string(),
+                action_id: "craft-basics:CraftWoodPick".to_string(),
             }))
             .unwrap();
         assert!(report.feasible);
@@ -402,11 +410,11 @@ mod tests {
         let service = CraftMcpService::new(Arc::new(mock));
         let Json(report) = service
             .check_feasibility(Parameters(CheckFeasibilityParams {
-                action_id: "CraftWoodPick".to_string(),
+                action_id: "craft-basics:CraftWoodPick".to_string(),
             }))
             .unwrap();
         assert!(!report.feasible);
-        assert!(!report.missing_inputs.is_empty());
+        assert!(!report.missing_input_class_ids.is_empty());
     }
 
     #[tokio::test]

@@ -6,6 +6,12 @@ use anyhow::{anyhow, bail};
 use crate::ops::CraftOps;
 use crate::types::*;
 
+const PLUGIN: &str = "craft-basics";
+
+fn qid(name: &str) -> String {
+    format!("{PLUGIN}:{name}")
+}
+
 /// Mock implementation of CraftOps for testing.
 /// Returns realistic fixtures matching the zk-craft game.
 pub struct MockCraftOps {
@@ -58,32 +64,35 @@ impl CraftOps for MockCraftOps {
         let mut classes: Vec<ClassSummary> = KNOWN_CLASSES
             .iter()
             .map(|&name| {
+                let class_id = qid(name);
                 let live_count = self
                     .inventory
                     .iter()
-                    .filter(|o| o.class_name == name && o.status == "live")
+                    .filter(|o| o.class_id == class_id && o.status == "live")
                     .count();
                 let produced_by = self
                     .actions
                     .iter()
-                    .filter(|a| a.total_output_classes.contains(&name.to_string()))
+                    .filter(|a| a.total_output_class_ids.contains(&class_id))
                     .map(|a| a.id.clone())
                     .collect();
                 let consumed_by = self
                     .actions
                     .iter()
-                    .filter(|a| a.total_input_classes.contains(&name.to_string()))
+                    .filter(|a| a.total_input_class_ids.contains(&class_id))
                     .map(|a| a.id.clone())
                     .collect();
                 ClassSummary {
-                    name: name.to_string(),
+                    id: class_id,
+                    display_name: name.to_string(),
+                    plugin_name: PLUGIN.to_string(),
                     live_count,
                     produced_by,
                     consumed_by,
                 }
             })
             .collect();
-        classes.sort_by(|a, b| a.name.cmp(&b.name));
+        classes.sort_by(|a, b| a.display_name.cmp(&b.display_name));
         Ok(classes)
     }
 
@@ -100,34 +109,41 @@ impl CraftOps for MockCraftOps {
 
         Ok(ObjectDetail {
             id: obj.id.clone(),
-            class_name: obj.class_name.clone(),
+            class_id: obj.class_id.clone(),
+            class_display_name: obj.class_display_name.clone(),
+            plugin_name: obj.plugin_name.clone(),
             status: obj.status.clone(),
             tx_hash: obj.tx_hash.clone(),
             state: obj.fields.clone(),
-            predicate_source: predicate_source_for(&obj.class_name),
+            predicate_source: predicate_source_for(&obj.class_display_name),
         })
     }
 
-    fn inspect_class(&self, class_name: &str) -> anyhow::Result<ClassDetail> {
+    fn inspect_class(&self, class_id: &str) -> anyhow::Result<ClassDetail> {
         let actions = &self.actions;
         let produced_by = actions
             .iter()
-            .filter(|a| a.total_output_classes.contains(&class_name.to_string()))
+            .filter(|a| a.total_output_class_ids.contains(&class_id.to_string()))
             .map(|a| a.id.clone())
             .collect();
         let consumed_by = actions
             .iter()
-            .filter(|a| a.total_input_classes.contains(&class_name.to_string()))
+            .filter(|a| a.total_input_class_ids.contains(&class_id.to_string()))
             .map(|a| a.id.clone())
             .collect();
 
-        if !is_known_class(class_name) {
-            bail!("unknown class: {class_name}");
+        let display_name = class_id
+            .strip_prefix(&format!("{PLUGIN}:"))
+            .unwrap_or(class_id);
+        if !is_known_class(display_name) {
+            bail!("unknown class: {class_id}");
         }
 
         Ok(ClassDetail {
-            class_name: class_name.to_string(),
-            predicate_source: predicate_source_for(class_name),
+            class_id: class_id.to_string(),
+            class_display_name: display_name.to_string(),
+            plugin_name: PLUGIN.to_string(),
+            predicate_source: predicate_source_for(display_name),
             produced_by,
             consumed_by,
         })
@@ -153,8 +169,10 @@ impl CraftOps for MockCraftOps {
             message: format!("Action {} completed successfully", input.action_id),
             outputs: vec![InventoryObject {
                 id: "0xnew1234567890abcdef".to_string(),
-                class_name: "Wood".to_string(),
-                file_name: "Wood.dobj".to_string(),
+                class_id: qid("Wood"),
+                class_display_name: "Wood".to_string(),
+                plugin_name: PLUGIN.to_string(),
+                file_name: "craft-basics_wood_0xnew.dobj".to_string(),
                 status: "live".to_string(),
                 tx_hash: Some("0xmocktxnew12345678".to_string()),
                 fields: HashMap::from([
@@ -180,183 +198,171 @@ impl CraftOps for MockCraftOps {
             .ok_or_else(|| anyhow!("unknown action: {action_id}"))?;
 
         let mut available = Vec::new();
-        let mut missing = Vec::new();
+        let mut missing_class_ids = Vec::new();
+        let mut missing_class_names = Vec::new();
 
-        for required_class in &action.total_input_classes {
+        for (slot, required_class_id) in action.total_input_class_ids.iter().enumerate() {
             if let Some(obj) = self
                 .inventory
                 .iter()
-                .find(|o| &o.class_name == required_class && o.status == "live")
+                .find(|o| &o.class_id == required_class_id && o.status == "live")
             {
                 available.push(FeasibilityInput {
-                    class_name: obj.class_name.clone(),
+                    class_id: obj.class_id.clone(),
+                    class_display_name: obj.class_display_name.clone(),
+                    plugin_name: obj.plugin_name.clone(),
                     object_id: obj.id.clone(),
                     file_name: obj.file_name.clone(),
                 });
             } else {
-                missing.push(required_class.clone());
+                missing_class_ids.push(required_class_id.clone());
+                missing_class_names
+                    .push(action.total_input_class_names[slot].clone());
             }
         }
 
         Ok(FeasibilityReport {
-            feasible: missing.is_empty(),
+            feasible: missing_class_ids.is_empty(),
             action_id: action_id.to_string(),
             available_inputs: available,
-            missing_inputs: missing,
+            missing_input_class_ids: missing_class_ids,
+            missing_input_class_names: missing_class_names,
         })
+    }
+}
+
+fn make_obj(id: &str, class: &str, file_name: &str, tx_hash: &str, status: &str, extra: Vec<(&str, serde_json::Value)>) -> InventoryObject {
+    let mut fields = HashMap::from([
+        (
+            "blueprint".to_string(),
+            serde_json::Value::String(class.to_string()),
+        ),
+        (
+            "key".to_string(),
+            serde_json::Value::String(id.to_string()),
+        ),
+    ]);
+    for (k, v) in extra {
+        fields.insert(k.to_string(), v);
+    }
+    InventoryObject {
+        id: id.to_string(),
+        class_id: qid(class),
+        class_display_name: class.to_string(),
+        plugin_name: PLUGIN.to_string(),
+        file_name: file_name.to_string(),
+        status: status.to_string(),
+        tx_hash: Some(tx_hash.to_string()),
+        fields,
     }
 }
 
 fn default_inventory() -> Vec<InventoryObject> {
     vec![
-        InventoryObject {
-            id: "0xabc1111111111111".to_string(),
-            class_name: "Log".to_string(),
-            file_name: "Log.dobj".to_string(),
-            status: "live".to_string(),
-            tx_hash: Some("0xmocktx1111111111".to_string()),
-            fields: HashMap::from([
-                (
-                    "blueprint".to_string(),
-                    serde_json::Value::String("Log".to_string()),
-                ),
-                (
-                    "key".to_string(),
-                    serde_json::Value::String("0xabc1111111111111".to_string()),
-                ),
-            ]),
-        },
-        InventoryObject {
-            id: "0xabc2222222222222".to_string(),
-            class_name: "Wood".to_string(),
-            file_name: "Wood.dobj".to_string(),
-            status: "live".to_string(),
-            tx_hash: Some("0xmocktx2222222222".to_string()),
-            fields: HashMap::from([
-                (
-                    "blueprint".to_string(),
-                    serde_json::Value::String("Wood".to_string()),
-                ),
-                (
-                    "key".to_string(),
-                    serde_json::Value::String("0xabc2222222222222".to_string()),
-                ),
-            ]),
-        },
-        InventoryObject {
-            id: "0xabc3333333333333".to_string(),
-            class_name: "Stick".to_string(),
-            file_name: "Stick.dobj".to_string(),
-            status: "live".to_string(),
-            tx_hash: Some("0xmocktx3333333333".to_string()),
-            fields: HashMap::from([
-                (
-                    "blueprint".to_string(),
-                    serde_json::Value::String("Stick".to_string()),
-                ),
-                (
-                    "key".to_string(),
-                    serde_json::Value::String("0xabc3333333333333".to_string()),
-                ),
-            ]),
-        },
-        InventoryObject {
-            id: "0xabc4444444444444".to_string(),
-            class_name: "WoodPick".to_string(),
-            file_name: "WoodPick.dobj".to_string(),
-            status: "live".to_string(),
-            tx_hash: Some("0xmocktx4444444444".to_string()),
-            fields: HashMap::from([
-                (
-                    "blueprint".to_string(),
-                    serde_json::Value::String("WoodPick".to_string()),
-                ),
-                (
-                    "durability".to_string(),
-                    serde_json::Value::Number(3.into()),
-                ),
-                (
-                    "key".to_string(),
-                    serde_json::Value::String("0xabc4444444444444".to_string()),
-                ),
-            ]),
-        },
-        InventoryObject {
-            id: "0xabc5555555555555".to_string(),
-            class_name: "Stone".to_string(),
-            file_name: "Stone.dobj".to_string(),
-            status: "live".to_string(),
-            tx_hash: Some("0xmocktx5555555555".to_string()),
-            fields: HashMap::from([
-                (
-                    "blueprint".to_string(),
-                    serde_json::Value::String("Stone".to_string()),
-                ),
-                (
-                    "key".to_string(),
-                    serde_json::Value::String("0xabc5555555555555".to_string()),
-                ),
-            ]),
-        },
+        make_obj(
+            "0xabc1111111111111",
+            "Log",
+            "craft-basics_log_0xabc1.dobj",
+            "0xmocktx1111111111",
+            "live",
+            vec![],
+        ),
+        make_obj(
+            "0xabc2222222222222",
+            "Wood",
+            "craft-basics_wood_0xabc2.dobj",
+            "0xmocktx2222222222",
+            "live",
+            vec![],
+        ),
+        make_obj(
+            "0xabc3333333333333",
+            "Stick",
+            "craft-basics_stick_0xabc3.dobj",
+            "0xmocktx3333333333",
+            "live",
+            vec![],
+        ),
+        make_obj(
+            "0xabc4444444444444",
+            "WoodPick",
+            "craft-basics_woodpick_0xabc4.dobj",
+            "0xmocktx4444444444",
+            "live",
+            vec![("durability", serde_json::Value::Number(3.into()))],
+        ),
+        make_obj(
+            "0xabc5555555555555",
+            "Stone",
+            "craft-basics_stone_0xabc5.dobj",
+            "0xmocktx5555555555",
+            "live",
+            vec![],
+        ),
         // A nullified object to test liveness filtering
-        InventoryObject {
-            id: "0xdead000000000000".to_string(),
-            class_name: "Log".to_string(),
-            file_name: "Log_old.dobj".to_string(),
-            status: "nullified".to_string(),
-            tx_hash: Some("0xmocktxdead000000".to_string()),
-            fields: HashMap::from([(
-                "blueprint".to_string(),
-                serde_json::Value::String("Log".to_string()),
-            )]),
-        },
+        make_obj(
+            "0xdead000000000000",
+            "Log",
+            "craft-basics_log_0xdead.dobj",
+            "0xmocktxdead000000",
+            "nullified",
+            vec![],
+        ),
     ]
+}
+
+fn make_action(
+    name: &str,
+    description: &str,
+    inputs: &[&str],
+    outputs: &[&str],
+) -> Action {
+    Action {
+        id: qid(name),
+        display_name: name.to_string(),
+        plugin_name: PLUGIN.to_string(),
+        description: description.to_string(),
+        total_input_class_ids: inputs.iter().map(|c| qid(c)).collect(),
+        total_input_class_names: inputs.iter().map(|c| c.to_string()).collect(),
+        total_output_class_ids: outputs.iter().map(|c| qid(c)).collect(),
+        total_output_class_names: outputs.iter().map(|c| c.to_string()).collect(),
+    }
 }
 
 fn default_actions() -> Vec<Action> {
     vec![
-        Action {
-            id: "FindLog".to_string(),
-            description: "Discover a log by proving a short VDF".to_string(),
-            total_input_classes: vec![],
-            total_output_classes: vec!["Log".to_string()],
-        },
-        Action {
-            id: "CraftWood".to_string(),
-            description: "Refine one log into wood".to_string(),
-            total_input_classes: vec!["Log".to_string()],
-            total_output_classes: vec!["Wood".to_string()],
-        },
-        Action {
-            id: "CraftSticks".to_string(),
-            description: "Split one wood into two sticks".to_string(),
-            total_input_classes: vec!["Wood".to_string()],
-            total_output_classes: vec!["Stick".to_string(), "Stick".to_string()],
-        },
-        Action {
-            id: "CraftWoodPick".to_string(),
-            description: "Combine wood and stick to craft a wood pickaxe".to_string(),
-            total_input_classes: vec!["Wood".to_string(), "Stick".to_string()],
-            total_output_classes: vec!["WoodPick".to_string()],
-        },
-        Action {
-            id: "CraftStonePick".to_string(),
-            description: "Combine stone and stick to craft a stone pickaxe".to_string(),
-            total_input_classes: vec!["Stone".to_string(), "Stick".to_string()],
-            total_output_classes: vec!["StonePick".to_string()],
-        },
-        Action {
-            id: "MineStoneWithWoodPick".to_string(),
-            description: "Mine stone using a wood pick (consumes durability)".to_string(),
-            total_input_classes: vec!["WoodPick".to_string()],
-            total_output_classes: vec!["Stone".to_string(), "WoodPick".to_string()],
-        },
-        Action {
-            id: "MineStoneWithStonePick".to_string(),
-            description: "Mine stone using a stone pick (consumes durability)".to_string(),
-            total_input_classes: vec!["StonePick".to_string()],
-            total_output_classes: vec!["Stone".to_string(), "StonePick".to_string()],
-        },
+        make_action("FindLog", "Discover a log by proving a short VDF", &[], &["Log"]),
+        make_action("CraftWood", "Refine one log into wood", &["Log"], &["Wood"]),
+        make_action(
+            "CraftSticks",
+            "Split one wood into two sticks",
+            &["Wood"],
+            &["Stick", "Stick"],
+        ),
+        make_action(
+            "CraftWoodPick",
+            "Combine wood and stick to craft a wood pickaxe",
+            &["Wood", "Stick"],
+            &["WoodPick"],
+        ),
+        make_action(
+            "CraftStonePick",
+            "Combine stone and stick to craft a stone pickaxe",
+            &["Stone", "Stick"],
+            &["StonePick"],
+        ),
+        make_action(
+            "MineStoneWithWoodPick",
+            "Mine stone using a wood pick (consumes durability)",
+            &["WoodPick"],
+            &["Stone", "WoodPick"],
+        ),
+        make_action(
+            "MineStoneWithStonePick",
+            "Mine stone using a stone pick (consumes durability)",
+            &["StonePick"],
+            &["Stone", "StonePick"],
+        ),
     ]
 }
 
@@ -395,19 +401,19 @@ mod tests {
     fn test_default_inventory_has_all_classes() {
         let mock = MockCraftOps::new();
         let inv = mock.list_inventory().unwrap();
-        let classes: Vec<&str> = inv.iter().map(|o| o.class_name.as_str()).collect();
-        assert!(classes.contains(&"Log"));
-        assert!(classes.contains(&"Wood"));
-        assert!(classes.contains(&"Stick"));
-        assert!(classes.contains(&"WoodPick"));
-        assert!(classes.contains(&"Stone"));
+        let names: Vec<&str> = inv.iter().map(|o| o.class_display_name.as_str()).collect();
+        assert!(names.contains(&"Log"));
+        assert!(names.contains(&"Wood"));
+        assert!(names.contains(&"Stick"));
+        assert!(names.contains(&"WoodPick"));
+        assert!(names.contains(&"Stone"));
     }
 
     #[test]
     fn test_inspect_object_found() {
         let mock = MockCraftOps::new();
         let detail = mock.inspect_object("0xabc1111111111111").unwrap();
-        assert_eq!(detail.class_name, "Log");
+        assert_eq!(detail.class_display_name, "Log");
         assert_eq!(detail.status, "live");
         assert!(detail.predicate_source.contains("FindLog"));
     }
@@ -421,31 +427,31 @@ mod tests {
     #[test]
     fn test_inspect_class() {
         let mock = MockCraftOps::new();
-        let detail = mock.inspect_class("Wood").unwrap();
-        assert!(detail.produced_by.contains(&"CraftWood".to_string()));
-        assert!(detail.consumed_by.contains(&"CraftSticks".to_string()));
-        assert!(detail.consumed_by.contains(&"CraftWoodPick".to_string()));
+        let detail = mock.inspect_class("craft-basics:Wood").unwrap();
+        assert!(detail.produced_by.contains(&qid("CraftWood")));
+        assert!(detail.consumed_by.contains(&qid("CraftSticks")));
+        assert!(detail.consumed_by.contains(&qid("CraftWoodPick")));
     }
 
     #[test]
     fn test_inspect_unknown_class() {
         let mock = MockCraftOps::new();
-        assert!(mock.inspect_class("Diamond").is_err());
+        assert!(mock.inspect_class("craft-basics:Diamond").is_err());
     }
 
     #[test]
     fn test_check_feasibility_feasible() {
         let mock = MockCraftOps::new();
-        let report = mock.check_feasibility("CraftWoodPick").unwrap();
+        let report = mock.check_feasibility(&qid("CraftWoodPick")).unwrap();
         assert!(report.feasible);
-        assert!(report.missing_inputs.is_empty());
+        assert!(report.missing_input_class_ids.is_empty());
         assert_eq!(report.available_inputs.len(), 2);
     }
 
     #[test]
     fn test_check_feasibility_missing() {
         let mock = MockCraftOps::new();
-        let report = mock.check_feasibility("CraftStonePick").unwrap();
+        let report = mock.check_feasibility(&qid("CraftStonePick")).unwrap();
         // We have Stone and Stick, so this should be feasible
         assert!(report.feasible);
     }
@@ -453,7 +459,7 @@ mod tests {
     #[test]
     fn test_check_feasibility_unknown_action() {
         let mock = MockCraftOps::new();
-        assert!(mock.check_feasibility("CraftDiamond").is_err());
+        assert!(mock.check_feasibility(&qid("CraftDiamond")).is_err());
     }
 
     #[test]
@@ -461,8 +467,8 @@ mod tests {
         let mock = MockCraftOps::new();
         let result = mock
             .run_action(RunActionInput {
-                action_id: "CraftWood".to_string(),
-                input_object_paths: vec!["Log.dobj".to_string()],
+                action_id: qid("CraftWood"),
+                input_object_paths: vec!["craft-basics_log_0xabc1.dobj".to_string()],
             })
             .unwrap();
         assert!(result.success);
@@ -472,8 +478,8 @@ mod tests {
     fn test_run_action_already_in_progress() {
         let mock = MockCraftOps::new().with_action_in_progress();
         let result = mock.run_action(RunActionInput {
-            action_id: "CraftWood".to_string(),
-            input_object_paths: vec!["Log.dobj".to_string()],
+            action_id: qid("CraftWood"),
+            input_object_paths: vec!["craft-basics_log_0xabc1.dobj".to_string()],
         });
         assert!(result.is_err());
         assert!(
@@ -488,7 +494,7 @@ mod tests {
     fn test_run_action_unknown() {
         let mock = MockCraftOps::new();
         let result = mock.run_action(RunActionInput {
-            action_id: "CraftDiamond".to_string(),
+            action_id: qid("CraftDiamond"),
             input_object_paths: vec![],
         });
         assert!(result.is_err());

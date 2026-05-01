@@ -35,9 +35,13 @@ impl CraftOps for AppCraftOps {
             .into_iter()
             .map(|action| mcp::Action {
                 id: action.id,
+                display_name: action.display_name,
+                plugin_name: action.plugin_name,
                 description: action.description,
-                total_input_classes: action.total_input_classes,
-                total_output_classes: action.total_output_classes,
+                total_input_class_ids: action.total_input_class_ids,
+                total_input_class_names: action.total_input_class_names,
+                total_output_class_ids: action.total_output_class_ids,
+                total_output_class_names: action.total_output_class_names,
             })
             .collect())
     }
@@ -48,7 +52,9 @@ impl CraftOps for AppCraftOps {
             .list_classes()?
             .into_iter()
             .map(|class_info| mcp::ClassSummary {
-                name: class_info.name,
+                id: class_info.id,
+                display_name: class_info.display_name,
+                plugin_name: class_info.plugin_name,
                 live_count: class_info.live_count,
                 produced_by: class_info.produced_by,
                 consumed_by: class_info.consumed_by,
@@ -66,12 +72,14 @@ impl CraftOps for AppCraftOps {
             .read_object(&::driver::ObjectSelector::ObjectId(object_id.to_string()))?;
         let predicate_source = self
             .driver
-            .get_class(&object.class_name)
+            .get_class(&object.class_id)
             .map(|c| c.predicate_source)
             .unwrap_or_default();
         Ok(mcp::ObjectDetail {
             id: object.id,
-            class_name: object.class_name,
+            class_id: object.class_id,
+            class_display_name: object.class_display_name,
+            plugin_name: object.plugin_name,
             status: status_string(object.status),
             tx_hash: object.tx_hash,
             state: object.fields,
@@ -79,10 +87,12 @@ impl CraftOps for AppCraftOps {
         })
     }
 
-    fn inspect_class(&self, class_name: &str) -> anyhow::Result<mcp::ClassDetail> {
-        let class_info = self.driver.get_class(class_name)?;
+    fn inspect_class(&self, class_id: &str) -> anyhow::Result<mcp::ClassDetail> {
+        let class_info = self.driver.get_class(class_id)?;
         Ok(mcp::ClassDetail {
-            class_name: class_info.name,
+            class_id: class_info.id,
+            class_display_name: class_info.display_name,
+            plugin_name: class_info.plugin_name,
             predicate_source: class_info.predicate_source,
             produced_by: class_info.produced_by,
             consumed_by: class_info.consumed_by,
@@ -131,7 +141,9 @@ impl CraftOps for AppCraftOps {
                     .read_object(&::driver::ObjectSelector::FileName(file_name.clone()))?;
                 Ok(mcp::InventoryObject {
                     id: detail.id,
-                    class_name: detail.class_name,
+                    class_id: detail.class_id,
+                    class_display_name: detail.class_display_name,
+                    plugin_name: detail.plugin_name,
                     file_name: detail.file_name,
                     status: status_string(detail.status),
                     tx_hash: detail.tx_hash,
@@ -160,12 +172,15 @@ impl CraftOps for AppCraftOps {
                 .available_inputs
                 .into_iter()
                 .map(|candidate| mcp::FeasibilityInput {
-                    class_name: candidate.class_name,
+                    class_id: candidate.class_id,
+                    class_display_name: candidate.class_display_name,
+                    plugin_name: candidate.plugin_name,
                     object_id: candidate.object_id,
                     file_name: candidate.file_name,
                 })
                 .collect(),
-            missing_inputs: report.missing_inputs,
+            missing_input_class_ids: report.missing_input_class_ids,
+            missing_input_class_names: report.missing_input_class_names,
         })
     }
 
@@ -187,7 +202,9 @@ fn status_string(status: ::driver::ObjectStatus) -> String {
 fn to_mcp_inventory_object(object: ::driver::ObjectSummary) -> mcp::InventoryObject {
     mcp::InventoryObject {
         id: object.id,
-        class_name: object.class_name,
+        class_id: object.class_id,
+        class_display_name: object.class_display_name,
+        plugin_name: object.plugin_name,
         file_name: object.file_name,
         status: status_string(object.status),
         tx_hash: object.tx_hash,

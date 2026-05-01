@@ -3,12 +3,13 @@ import type { DragEvent } from "react";
 import type { InventoryObjectPayload as InventoryObject } from "../../shared/api/wireTypes";
 import { truncateDisplayHash } from "../../shared/format";
 import {
+  classDisplayLabel,
   displayPathInObjectsDir,
-  displayObjectFileName,
   isLiveObject,
   isNullifiedObject,
   joinObjectsDirPath,
 } from "../../shared/objectUtils";
+import { useStore } from "../../shared/state/store";
 
 interface InventoryPanelProps {
   inventory: InventoryObject[];
@@ -30,6 +31,7 @@ export function InventoryPanel({
   onOpenObjectsDir,
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
+  const nameCollisions = useStore((state) => state.nameCollisions);
 
   const isUsable = (object: InventoryObject) => isLiveObject(object);
 
@@ -42,16 +44,21 @@ export function InventoryPanel({
       return;
     }
     const objectPath = joinObjectsDirPath(objectsDirPath, object.fileName);
-    const displayName = displayObjectFileName(object.className);
+    const displayLabel = classDisplayLabel(
+      object.classDisplayName,
+      object.pluginName,
+      nameCollisions,
+    );
 
     const payload = JSON.stringify({
       objectPath,
-      name: displayName,
-      className: object.className,
+      name: displayLabel,
+      classId: object.classId,
+      classDisplayName: object.classDisplayName,
     });
     event.dataTransfer.setData("application/x-zkcraft-object", payload);
-    event.dataTransfer.setData("text/plain", displayName);
-    event.dataTransfer.setData("text", displayName);
+    event.dataTransfer.setData("text/plain", displayLabel);
+    event.dataTransfer.setData("text", displayLabel);
     event.dataTransfer.effectAllowed = "copy";
     isDraggingRef.current = true;
   };
@@ -69,7 +76,11 @@ export function InventoryPanel({
   const nullifiedObjects = inventory.filter((object) => isNullifiedObject(object));
 
   const renderInventoryObject = (object: InventoryObject) => {
-    const displayName = displayObjectFileName(object.className);
+    const displayName = classDisplayLabel(
+      object.classDisplayName,
+      object.pluginName,
+      nameCollisions,
+    );
     const hashLineRaw = object.status === "live"
       ? object.id
       : object.status;

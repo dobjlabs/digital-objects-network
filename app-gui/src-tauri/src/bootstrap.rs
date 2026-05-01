@@ -9,7 +9,9 @@ use serde::Serialize;
 pub struct InventoryObject {
     pub id: String,
     pub file_name: String,
-    pub class_name: String,
+    pub class_id: String,
+    pub class_display_name: String,
+    pub plugin_name: String,
     pub class_hash: String,
     pub emoji: String,
     pub status: driver::ObjectStatus,
@@ -23,11 +25,14 @@ pub struct InventoryObject {
 #[serde(rename_all = "camelCase")]
 pub struct Action {
     pub id: String,
+    pub display_name: String,
+    pub plugin_name: String,
     pub emoji: String,
     pub hash: String,
+    pub total_input_class_ids: Vec<String>,
+    pub total_input_class_names: Vec<String>,
     pub total_input_class_hashes: Vec<String>,
     pub description: String,
-    pub total_input_classes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,6 +40,9 @@ pub struct Action {
 pub struct LoadGuiInventoryResult {
     pub inventory: Vec<InventoryObject>,
     pub actions: Vec<Action>,
+    /// Bare class/action names that appear in more than one plugin. UI uses
+    /// this to decide when to append a plugin disambiguator to a label.
+    pub name_collisions: Vec<String>,
 }
 
 #[tauri::command]
@@ -46,7 +54,7 @@ pub async fn load_gui_inventory(
         let classes = driver
             .list_classes()?
             .into_iter()
-            .map(|class_info| (class_info.name.clone(), class_info))
+            .map(|class_info| (class_info.id.clone(), class_info))
             .collect::<HashMap<_, _>>();
         let inventory = driver
             .sync_inventory(None)
@@ -56,11 +64,13 @@ pub async fn load_gui_inventory(
             })
             .into_iter()
             .map(|object| {
-                let class_info = classes.get(&object.class_name);
+                let class_info = classes.get(&object.class_id);
                 InventoryObject {
                     id: object.id,
                     file_name: object.file_name,
-                    class_name: object.class_name.clone(),
+                    class_id: object.class_id.clone(),
+                    class_display_name: object.class_display_name,
+                    plugin_name: object.plugin_name,
                     class_hash: object.class_hash,
                     emoji: class_info
                         .map(|class_info| class_info.emoji.clone())
@@ -79,15 +89,24 @@ pub async fn load_gui_inventory(
             .into_iter()
             .map(|action| Action {
                 id: action.id,
+                display_name: action.display_name,
+                plugin_name: action.plugin_name,
                 emoji: action.emoji,
                 hash: action.hash,
+                total_input_class_ids: action.total_input_class_ids,
+                total_input_class_names: action.total_input_class_names,
                 total_input_class_hashes: action.total_input_class_hashes,
                 description: action.description,
-                total_input_classes: action.total_input_classes,
             })
             .collect();
 
-        Ok::<_, anyhow::Error>(LoadGuiInventoryResult { inventory, actions })
+        let name_collisions = driver.name_collisions();
+
+        Ok::<_, anyhow::Error>(LoadGuiInventoryResult {
+            inventory,
+            actions,
+            name_collisions,
+        })
     })
     .await
     .map_err(|err| anyhow::anyhow!("failed to load inventory task: {err}"))?

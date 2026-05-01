@@ -9,7 +9,11 @@ export type ObjectStatus = "unknown" | "pending" | "live" | "nullified";
 export interface InventoryObjectPayload {
   id: string;
   fileName: string;
-  className: string;
+  /** Qualified class id (`<plugin>:<class>`). */
+  classId: string;
+  /** Bare class name from the plugin manifest. */
+  classDisplayName: string;
+  pluginName: string;
   classHash: string;
   emoji: string;
   status: ObjectStatus;
@@ -20,17 +24,24 @@ export interface InventoryObjectPayload {
 }
 
 export interface ActionPayload {
+  /** Qualified action id (`<plugin>:<action>`). */
   id: string;
+  /** Bare action name from the plugin manifest. */
+  displayName: string;
+  pluginName: string;
   emoji: string;
   hash: string;
+  totalInputClassIds: string[];
+  totalInputClassNames: string[];
   totalInputClassHashes: string[];
   description: string;
-  totalInputClasses: string[];
 }
 
 export interface LoadGuiInventoryResult {
   inventory: InventoryObjectPayload[];
   actions: ActionPayload[];
+  /** Bare class/action names that appear in more than one loaded plugin. */
+  nameCollisions: string[];
 }
 
 export interface RunActionInput {
@@ -48,7 +59,8 @@ export interface RunActionResult {
 
 export interface ObjectRecordPayload {
   id: string;
-  className: string;
+  /** Qualified class id (`<plugin>:<class>`). */
+  classId: string;
   status: ObjectStatus;
   txHash: string | null;
   pod: unknown;

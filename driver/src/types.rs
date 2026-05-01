@@ -28,7 +28,8 @@ pub enum ObjectSelector {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ObjectQuery {
-    pub class_name: Option<String>,
+    /// Qualified class id (`<plugin>:<class>`).
+    pub class_id: Option<String>,
     pub status: Option<ObjectStatus>,
     pub id: Option<String>,
     pub file_name: Option<String>,
@@ -36,9 +37,12 @@ pub struct ObjectQuery {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActionQuery {
-    pub name: Option<String>,
-    pub input_class: Option<String>,
-    pub output_class: Option<String>,
+    /// Qualified action id (`<plugin>:<action>`).
+    pub id: Option<String>,
+    /// Qualified class id (`<plugin>:<class>`).
+    pub input_class_id: Option<String>,
+    /// Qualified class id (`<plugin>:<class>`).
+    pub output_class_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,7 +50,11 @@ pub struct ActionQuery {
 pub struct ObjectSummary {
     pub id: String,
     pub file_name: String,
-    pub class_name: String,
+    /// Qualified class id (`<plugin>:<class>`).
+    pub class_id: String,
+    /// Bare class name from the producing plugin's manifest.
+    pub class_display_name: String,
+    pub plugin_name: String,
     pub class_hash: String,
     pub status: ObjectStatus,
     pub tx_hash: Option<String>,
@@ -57,19 +65,28 @@ pub struct ObjectSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionSummary {
+    /// Qualified action id (`<plugin>:<action>`).
     pub id: String,
+    pub display_name: String,
+    pub plugin_name: String,
     pub emoji: String,
     pub hash: String,
-    pub total_input_class_hashes: Vec<String>,
     pub description: String,
-    pub total_input_classes: Vec<String>,
-    pub total_output_classes: Vec<String>,
+    pub total_input_class_ids: Vec<String>,
+    pub total_input_class_names: Vec<String>,
+    pub total_input_class_hashes: Vec<String>,
+    pub total_output_class_ids: Vec<String>,
+    pub total_output_class_names: Vec<String>,
+    pub total_output_class_hashes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassSummary {
-    pub name: String,
+    /// Qualified class id (`<plugin>:<class>`).
+    pub id: String,
+    pub display_name: String,
+    pub plugin_name: String,
     pub emoji: String,
     pub hash: String,
     pub description: String,
@@ -82,7 +99,9 @@ pub struct ClassSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckActionCandidate {
-    pub class_name: String,
+    pub class_id: String,
+    pub class_display_name: String,
+    pub plugin_name: String,
     pub object_id: String,
     pub file_name: String,
 }
@@ -91,9 +110,13 @@ pub struct CheckActionCandidate {
 #[serde(rename_all = "camelCase")]
 pub struct CheckActionReport {
     pub feasible: bool,
+    /// Qualified action id (`<plugin>:<action>`).
     pub action_id: String,
     pub available_inputs: Vec<CheckActionCandidate>,
-    pub missing_inputs: Vec<String>,
+    /// Qualified class ids that have no live object in inventory.
+    pub missing_input_class_ids: Vec<String>,
+    /// Bare class names parallel to `missing_input_class_ids`.
+    pub missing_input_class_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
