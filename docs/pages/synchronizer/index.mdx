@@ -1,0 +1,95 @@
+---
+title: What the synchronizer does
+description: A blind Merkle accumulator anchored to Ethereum blob data availability.
+---
+
+# What the synchronizer does
+
+The **synchronizer** is a long-running Rust service that watches Ethereum for digital object blob transactions, validates them, and maintains the canonical state of all transactions and nullifiers in a set of Merkle trees. It is the source of truth for the canonical chain state, providing membership queries and Merkle proofs over HTTP.
+
+## Two callers
+
+- **The driver** queries it during action execution to fetch grounding witnesses (Merkle proofs that input objects exist in the canonical state) and during inventory sync to check which transactions have landed and which objects have been nullified.
+- **Operators** use its health and progress endpoints to monitor sync status.
+
+## What it doesn't know
+
+The synchronizer does **not** know about digital objects, classes, or actions. It only knows about transaction hashes, nullifiers, and state roots. The semantic layer lives in the driver; the synchronizer is a content-addressed Merkle accumulator anchored to Ethereum's blob data availability layer.
+
+## Where it sits
+
+```text
+   Driver
+     │
+     ├── POST /v1/txlib/grounding-witness   (before proving)
+     ├── POST /v1/state/membership          (during sync_inventory)
+     └── GET  /v1/state/head                (current state root)
+                  │
+                  ▼
+           Synchronizer
+                  │
+                  ├── reads beacon chain (consensus layer)
+                  ├── reads execution layer (EL)
+                  └── filters blob txs sent to TO_ADDRESS
+                        │
+                        ▼
+                   Ethereum L1
+```
+
+The relayer submits proofs as EIP-4844 blobs to a target contract address. The synchronizer watches that same address for _all_ blobs, regardless of which relayer sent them. Multiple relayers can coexist, and any user with at least one running synchronizer keeps the network alive.
+
+## Concepts
+
+### Global state root (GSR)
+
+A **global state root** is a hash derived from four values:
+
+```
+GSR = hash(block_number, transactions_root, nullifiers_root, gsrs_root)
+```
+
+| Field               | Meaning                                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `block_number`      | execution layer block number                                                                         |
+| `transactions_root` | Merkle root of all accepted `tx_final` hashes                                                        |
+| `nullifiers_root`   | Merkle root of all spent nullifier hashes                                                            |
+| `gsrs_root`         | Merkle root of all prior GSR entries (the GSR-history array root _before_ appending the current GSR) |
+
+A new GSR is produced for every canonical beacon slot that has a block, even if that slot contains zero application transactions. This means the GSR history grows monotonically with the chain.
+
+### Persistent containers
+
+The synchronizer maintains three Merkle-backed containers:
+
+| Container        | Type  | Contents                                |
+| ---------------- | ----- | --------------------------------------- |
+| **transactions** | Set   | All accepted `tx_final` hashes          |
+| **nullifiers**   | Set   | All spent nullifier hashes              |
+| **GSR history**  | Array | Ordered list of every GSR ever produced |
+
+These are pod2 persistent containers backed by RocksDB. Each container is identified by its Merkle root hash. "Opening" a container means loading the tree from RocksDB starting at that root. Mutating a container materializes new Merkle nodes in RocksDB but does not change any canonical state until the resulting root is committed in Postgres.
+
+### Canonical head
+
+The **canonical head** (`CanonicalHead`) is the compact snapshot that fully describes the current app state.
+
+`CanonicalRoots` — Merkle roots that reopen the persistent containers:
+
+- `transactions` — root of the transactions set
+- `nullifiers` — root of the nullifiers set
+- `state_root_gsrs` — the prior-GSR array root committed inside the `StateRoot` (used in GSR computation)
+- `gsr_history` — root of the full GSR history array (after appending the latest GSR)
+
+`HeadMetadata` — non-root state carried alongside:
+
+- `current_gsr` — the latest GSR hash
+- `current_block_number` — execution block number in the latest GSR
+- `tx_count`, `nullifier_count`, `gsr_count` — cardinalities
+
+Postgres is the **sole source** of the canonical head. There is no in-memory cache. Every slot derivation and every API read loads the current head from Postgres, then reopens the needed containers from RocksDB using the roots.
+
+## Read next
+
+- [Slot derivation](/synchronizer/slot-derivation) — the per-slot ingest pipeline, per-blob validation, and GSR computation.
+- [Storage model](/synchronizer/storage) — how RocksDB and Postgres divide responsibility, and the crash semantics.
+- [HTTP API](/synchronizer/api) — endpoints for head state, membership, and grounding witnesses.

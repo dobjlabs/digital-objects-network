@@ -1,0 +1,51 @@
+---
+title: ZK stack overview
+description: Plonky2, pod2, and MainPod — the three layers of the cryptographic stack.
+---
+
+# ZK stack overview
+
+Every claim zk-craft makes — that a state transition was valid, that an object exists in canonical state, that a nullifier was correctly derived — bottoms out in a single Plonky2 proof. This section walks through how the cryptographic stack is layered.
+
+## The layers
+
+```text
+   ┌─────────────────────────────────────────────────────┐
+   │  txlib::TxFinalized   (a domain predicate)          │
+   │   — proves a Tx is well-formed and grounded         │
+   ├─────────────────────────────────────────────────────┤
+   │  pod2 MainPod         (predicate proof container)   │
+   │   — combines custom predicates + intro pods         │
+   ├─────────────────────────────────────────────────────┤
+   │  Shrunk MainPod       (one extra recursive wrapper) │
+   │   — re-exposes the same public inputs               │
+   │   — produces a much smaller compressed proof        │
+   ├─────────────────────────────────────────────────────┤
+   │  Plonky2              (the proof system)            │
+   │   — Goldilocks field, Poseidon hash, FRI            │
+   │   — recursive proof composition                     │
+   └─────────────────────────────────────────────────────┘
+```
+
+Each layer adds something the layer below doesn't have:
+
+- **Plonky2** gives you fast recursive SNARKs over the Goldilocks field, but no application semantics.
+- **pod2** wraps Plonky2 with a vocabulary of custom predicates, dictionaries, sets, arrays, and a combined `MainPod` that proves a conjunction of statements over them.
+- **`TxFinalized`** is a `txlib` custom predicate that captures "this transaction is a valid hash-chain replay of a well-formed event tree, and its inputs are grounded in the canonical state." See [Transactions](/actions/transactions) for the full state-machine model.
+- **The shrunk MainPod** is an additional Plonky2 wrapper circuit whose only job is to re-prove a MainPod proof in a smaller circuit, so the resulting compressed proof fits in an EIP-4844 blob.
+
+## What ends up on chain
+
+A finalized transaction's blob carries a small fixed-shape payload — see [Objects → Blob payload](/objects/structure#blob-payload) for the byte layout. The relevant field for this section is `proof`: the **shrunk MainPod's compressed Plonky2 proof**. The synchronizer's `ProofParser` decompresses it, then verifies it against:
+
+- the shrunk wrapper's `verifier_circuit_data`
+- the canonical statement that the MainPod was supposed to prove (specifically, that `TxFinalized(tx_final, state_root_hash, nullifiers)` holds against the synchronizer's canonical state).
+
+If verification passes, the transaction enters the canonical Merkle trees. There is no smart contract, no on-chain verifier — the synchronizer is the verifier, and any user can run one to check.
+
+## Read next
+
+- [Plonky2](/zk-stack/plonky2) — the proof system and field choice.
+- [pod2](/zk-stack/pod2) — predicates, statements, the MainPod, and the persistent containers used by the synchronizer.
+- [MainPod & shrinking](/zk-stack/mainpod) — how a MainPod is structured and how the shrink wrapper produces the blob-sized proof.
+  For the state-machine layer above pod2 — the rules that define what a valid transaction is — see [Transactions (the state machine)](/actions/transactions) under Actions.

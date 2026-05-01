@@ -1,0 +1,141 @@
+---
+title: Glossary
+description: Every term zk-craft uses, defined once.
+---
+
+# Glossary
+
+A single reference for the vocabulary used throughout these docs. Linked from the rest of the site whenever a term first appears.
+
+## Action
+
+A state transition. An action consumes zero or more input objects and produces one or more output objects. Defined as a Rhai function inside a `.pexe` plugin, with rules that constrain both inputs and outputs. Running an action generates a proof; the proof is what reaches the chain.
+
+## Blob (EIP-4844 blob)
+
+The way a zk-craft transaction reaches Ethereum. A blob is a 128 KiB chunk of data attached to a special transaction type that goes into Ethereum's data availability layer (not the execution state). zk-craft puts a single proof plus its identifying hashes into one blob. See [Blob payload](/objects/structure#blob-payload).
+
+## Canonical state
+
+The single agreed-upon snapshot of every transaction and nullifier the network has accepted. Maintained by the synchronizer as a set of Merkle trees rooted in a [GSR](/glossary#gsr-global-state-root). Every running synchronizer derives the same canonical state from the same chain.
+
+## Class
+
+A type of digital object. A class defines:
+
+- the fields the object carries,
+- which actions can produce or consume it,
+- the rules its fields must satisfy.
+
+Each class compiles to an `Is<Class>` rule (e.g. `IsWoodPick`) whose hash becomes the canonical class guard, stored inside the object as the `type` field.
+
+## Driver
+
+The headless Rust library every client (GUI, CLI, MCP server) is built on. Owns the local `~/.dobj/` store, runs actions end-to-end, and reconciles local state against the synchronizer. Not a daemon — a blocking library the caller schedules however it wants.
+
+## First-writer-wins
+
+The conflict resolution rule. If two transactions try to consume the same object, both proofs are valid and both blobs may land on Ethereum, but only the **first nullifier accepted into the canonical nullifier set wins**. The second is rejected. There is no merge — Ethereum slot ordering settles which is "first." See [Lifecycle → Conflict resolution](/objects/lifecycle#conflict-resolution).
+
+## GSR (Global State Root)
+
+A single hash that summarizes the entire network's state at one Ethereum slot. Derived from:
+
+```
+GSR = hash(block_number, transactions_root, nullifiers_root, gsrs_root)
+```
+
+A new GSR is produced for every canonical beacon slot with a block, even one with zero application transactions. The GSR history grows monotonically with the chain. See [Synchronizer → GSR](/synchronizer#global-state-root-gsr).
+
+## Grounded
+
+An object whose source transaction is in the synchronizer's canonical transactions Merkle tree — i.e. its `tx_final` has been ingested and accepted. **Grounded ≡ [`live`](/objects/lifecycle#the-four-statuses)**: same condition, two names. "Grounded" is the verb-form used by driver and synchronizer code ("the tx grounded", "proof grounded against state root X"); `live` is the noun-form lifecycle status.
+
+## Grounding witness
+
+A bundle of Merkle proofs the driver fetches from the synchronizer **before generating an action's proof**. It contains:
+
+- the current state root and its underlying roots (`transactions`, `nullifiers`, `gsrs`),
+- a Merkle inclusion proof for each input object's source transaction.
+
+The action's proof circuit consumes the grounding witness to prove "every input I'm consuming is in the canonical state." Without a grounding witness, an action couldn't reference the canonical chain — its inputs would be unanchored. See [Synchronizer API → Grounding witness](/synchronizer/api#grounding-witness).
+
+## Intro pod
+
+A small auxiliary proof attached to a [`MainPod`](/glossary#mainpod) that contributes one specific fact — for example, "this VDF was correctly evaluated for N iterations over this object," or "this 256-bit number is `<=` that one." Used for proof-of-work checks and similar primitives. Each intro pod is itself a small Plonky2 circuit; its output statement is consumed by the parent MainPod.
+
+## MainPod
+
+The main composable proof container in pod2. A MainPod bundles a Plonky2 proof with the public statements it commits to, plus the metadata a verifier needs. Every `.dobj` file embeds a MainPod (its `pod` field), and every blob payload's `proof` field is a [shrunk](/glossary#shrunk-mainpod) form of one. The proof is constant-size regardless of how many sub-pods it composes. See [ZK Stack → MainPod](/zk-stack/mainpod).
+
+## Nullifier
+
+A hash published on chain when an object is consumed. Derived from the object's secret `key` field:
+
+```
+key_hash  = hash(commitment(obj), obj["key"])
+nullifier = hash(key_hash, "txlib-nullifier-v1")
+```
+
+Because the nullifier depends on the key, an observer who sees the nullifier on-chain cannot determine which object was spent. The set of all published nullifiers prevents double-spends.
+
+## Pexe (`.pexe`)
+
+A plugin archive. A zip containing exactly two files:
+
+- `manifest.toml` — metadata (name, version, module hash, classes, actions),
+- `plugin.rhai` — action logic as a Rhai script.
+
+Drop one into `~/.dobj/actions/` to register new classes and actions with the driver. See [The .pexe archive format](/actions/pexe-format).
+
+## Plonky2
+
+The proof system at the bottom of the zk-craft stack. SNARK-flavored, fast recursive composition, uses the Goldilocks field and Poseidon hash. zk-craft consumes Plonky2 through pod2 — most code never touches Plonky2 directly. See [ZK Stack → Plonky2](/zk-stack/plonky2).
+
+## pod2
+
+The library that turns Plonky2 from "a SNARK library" into a vocabulary for typed predicates, dictionaries, sets, arrays, and combined `MainPod` proofs. All zk-craft rules compile to pod2 custom predicates. See [ZK Stack → pod2](/zk-stack/pod2).
+
+## Predicate
+
+Synonym for [rule](/glossary#rule), inherited from pod2's API surface. The docs prefer "rule" for end-user-facing prose; "predicate" appears where pod2 itself is on display (`CustomPredicateBatch`, "custom predicate", `apply_custom_pred_*`). They mean the same thing.
+
+## Relayer
+
+Convenience HTTP service that takes a proof payload from the driver and submits it to Ethereum as an [EIP-4844 blob transaction](/glossary#blob-eip-4844-blob). Not an authority — anyone who runs an Ethereum node can submit blobs themselves and skip the relayer.
+
+## Rule
+
+A constraint over digital-object state. Each [class](/glossary#class) compiles to an `Is<Class>` rule (e.g. `IsWoodPick`); each [action](/glossary#action) compiles to a rule that constrains its inputs and outputs; the top-level [`TxFinalized`](/glossary#txfinalized) is itself a rule. Rules are the things ZK proofs prove — a `MainPod` is a proof that some conjunction of rules holds. In pod2's API surface they are called custom predicates; see [Predicate](/glossary#predicate).
+
+## Shrunk MainPod
+
+A recursive Plonky2 wrapper that re-proves a [`MainPod`](/glossary#mainpod) inside a smaller circuit, producing a much smaller compressed proof. This is what actually fits in a blob. See [ZK Stack → MainPod & shrinking](/zk-stack/mainpod#why-shrink).
+
+## Synchronizer
+
+The blind Merkle accumulator. Watches Ethereum blob transactions sent to a configured address, validates each transaction's proof, maintains the canonical Merkle trees of accepted transactions and nullifiers, and serves membership and grounding queries over HTTP. Does not know about classes, actions, or object state — only about hashes. Anyone can run one; the network is alive as long as at least one is running. See [What the synchronizer does](/synchronizer).
+
+## txlib
+
+The Rust crate that defines zk-craft's transaction model. It provides:
+
+- `Tx` and the building blocks of a transaction (`live`, `nullifiers`, `ctx`, `stateRoot`),
+- `TxBuilder` — the API actions use to record events (`insert`, `mutate`, `delete`, `set_guard`, `begin_action`, `end_action`),
+- the [`TxFinalized`](/glossary#txfinalized) rule itself.
+
+txlib sits between the [SDK](/actions/sdk) (for plugin authors) and pod2 (for the proof primitives). Every action's proof is a `TxFinalized` proof.
+
+## TxFinalized
+
+The top-level rule a finalized transaction satisfies. Captures: "this transaction is a valid hash-chain replay of a well-formed event tree, every input is grounded in the canonical state, and `tx_final` is the hash of `tx.ctx`." It is the rule whose proof gets shrunk and posted to the chain.
+
+## `tx_final`
+
+The canonical handle for a transaction — defined as the hash of `tx.ctx` (the transaction's after-context dictionary, which bundles `live` and `nullifiers`). `tx_final` is:
+
+- what the relayer publishes inside the blob payload,
+- what the synchronizer indexes into the canonical transactions Merkle tree,
+- what the chain "sees" for any given transaction.
+
+Distinct from `txHash`, which is the Ethereum transaction hash of the blob that carried `tx_final`.

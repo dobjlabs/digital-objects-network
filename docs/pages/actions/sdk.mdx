@@ -1,0 +1,185 @@
+---
+title: Writing an action (SDK)
+description: The host API exposed to Rhai, var/unsafe syntax, and the two-phase Load/Execute model.
+---
+
+# Writing an action
+
+Action scripts run on top of the **SDK**, a small Rust library that wraps the [Rhai](https://rhai.rs) scripting engine and exposes a host API for declaring inputs/outputs, emitting rule statements, and attaching auxiliary intro pods.
+
+A collection of actions defined together in one script is a **module** — and one module is exactly what one `.pexe` archive ships.
+
+## The two-phase model
+
+The same script is evaluated **twice** by the SDK, in two distinct phases. The split is what makes the script both a rule definition and an executable.
+
+**Both phases run on every `Driver::execute` call** — the driver doesn't keep a compiled module around between runs. Each action invocation re-parses the plugin's script, re-runs Load to derive the rule structure, then runs Execute against the real inputs.
+
+### Why two phases?
+
+A ZK rule has to be fixed in shape — the same circuit, the same constraints, the same sequence of statements — before any specific input is known. But the rule is also expressed as plain Rhai code that wants to read input values directly. The two-phase split lets one script serve both roles:
+
+- **Load** runs symbolically with no real inputs and records the _shape_ of the rule: which events fire, which statements get emitted, which wildcards exist.
+- **Execute** runs the same code with real inputs to fill in the _values_ the rule expects.
+
+If shape and values were entangled in a single pass, the rule's hash (the [module hash](/actions/pexe-format#module-hash)) would depend on the inputs — there would be no fixed identity for "this action." Splitting them gives you a stable rule definition (compiled once, hashed into the manifest) and a per-invocation execution that fills it in.
+
+### Load phase
+
+The script is evaluated symbolically, with no real inputs. The SDK's `Loader` walks each declared action function and records:
+
+- the structure of `var` bindings (wildcards in pod2 terms),
+- the sequence of host calls,
+- the resulting rule statements.
+
+The output is an `SdkModule` holding the generated podlang and the compiled pod2 `CustomPredicateBatch`. The batch's id is the **module hash** stored in `manifest.toml`.
+
+### Execute phase
+
+When `Driver::execute` runs an action, the SDK re-evaluates the same action function, but with the **real input objects** supplied. Now host calls actually mutate the live `TxBuilder` and emit txlib events; `intro_vdf` runs an actual VDF and produces an intro pod; `pow_obj_grind` runs a real grind. The result is a `MainPod` proof plus the produced object dictionaries.
+
+Both phases share `ActionContext` state. The Load phase's recorded rule structure is what the Execute phase has to fill in — if the live execution emits an event sequence that doesn't match the recorded shape, the proof solver will fail.
+
+## Literals vs. variables
+
+The action needs to compile to a rule that uses a mix of literal embedded values and variables (called _wildcards_ in pod2). The SDK extends Rhai with two custom syntaxes to make this distinction explicit:
+
+```rust
+let target = action.top_limb_u256(9007199254740992);   // literal
+var key    = action.pow_obj_grind(wood, target);       // wildcard
+```
+
+- **`var <ident> = <expr>`** declares a wildcard — a value the rule solver fills in. Wildcard values are evaluated symbolically at Load time and concretely at Execute time. Operations involving a wildcard automatically generate the constraining statements.
+- **`let <ident> = <expr>`** is plain Rhai — a literal known at both Load and Execute time. Operations on literals do not generate statements.
+
+Both are stored in the same scripting variable (the SDK's `Ref` type wraps a shared `VarOrValue`); the syntax is what tells the loader which is which.
+
+## `unsafe` blocks
+
+By default, every operation involving a wildcard generates a constraining statement. Sometimes this is undesirable — you want to _compute_ a witness value without constraining it, then enforce its correctness via a separate statement you emit afterwards.
+
+Concretely: the prover computes the value, but the verifier doesn't check the computation. **You must follow up with an explicit `action.st_*` call to constrain the result**, otherwise the value is free-floating and a malicious prover could put anything there.
+
+```rust
+action.st_gt(pick.durability, 0);
+var durability = unsafe { pick.durability - 1 };  // witness — no constraint
+action.st_sum_of(pick.durability, durability, 1); // enforce: old = new + 1
+pick.update("durability", durability);
+```
+
+The `unsafe { ... }` block runs wildcard arithmetic without emitting constraints. Pair it with an explicit `st_*` call that proves whatever invariant the witness should satisfy.
+
+## Host API: action handle
+
+Available on the `action` parameter every action function takes:
+
+| Call                                   | Effect                                                                                                                           |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `action.input(class)`                  | Declare an input object of the given class. Returns an object handle.                                                            |
+| `action.output(class)`                 | Declare an output object of the given class. Returns an object handle pre-populated with `type` (the class rule hash) and `key`. |
+| `action.mutate(class)`                 | Declare an input that will be mutated in place (consume the old, emit a new with updated fields).                                |
+| `action.subaction(name)`               | Invoke another action defined in the same plugin as a sub-action; its events are nested inside this action's tx scope.           |
+| `action.random()`                      | Fresh random witness value. Useful for re-keying objects on mutation.                                                            |
+| `action.st_gt(a, b)`                   | Emit a `Gt(a, b)` statement.                                                                                                     |
+| `action.st_sum_of(a, b, c)`            | Emit a `SumOf(a, b, c)` statement (proves `a == b + c`).                                                                         |
+| `action.intro_vdf(iters, obj)`         | Run a VDF with `iters` iterations over `obj`, attach a `Vdf` intro pod, and return the work output.                              |
+| `action.intro_lt_eq_u256(obj, target)` | Attach a `LtEqU256` intro pod proving `obj <= target` as 256-bit values.                                                         |
+| `action.pow_obj_grind(obj, target)`    | Find a key such that the resulting object dictionary's `RawValue` is `<= target`. Witness-only — pair with `intro_lt_eq_u256`.   |
+| `action.top_limb_u256(n)`              | Build a `RawValue` with `n` in the top limb and zeros elsewhere — the standard form for "top limb ≤ N" difficulty targets.       |
+
+## Host API: object handle
+
+Available on object handles returned by `input` / `output` / `mutate`:
+
+| Call                     | Effect                                                                  |
+| ------------------------ | ----------------------------------------------------------------------- |
+| `obj.set([[k, v], ...])` | Set literal key/value pairs (compiled into `DictContains` statements).  |
+| `obj.update(k, v)`       | Update field `k` to `v` in the object's new state (emits `DictUpdate`). |
+| `obj.get(k)`             | Read field `k`.                                                         |
+| `obj.<field>`            | Indexer-style read for the same effect.                                 |
+
+### `set` vs. `update`
+
+Both write fields, but they fit different moments in the script:
+
+- **`obj.set([[k, v], ...])`** is the up-front initializer — use it once per object to install literal fields known at the moment you declare the output (e.g. `blueprint`, `type`).
+- **`obj.update(k, v)`** writes a single field whose value is computed _later in the script_, typically after a wildcard binding or an intro pod. Use it when the value comes from `action.random()`, an `intro_vdf`, a `pow_obj_grind`, or any other operation that produces a witness.
+
+In the `FindLog` example, `set` installs the literal `blueprint`, then `update` writes the VDF output once it's been computed.
+
+## What you can and can't do in a script
+
+A few constraints follow from how the [two-phase model](#the-two-phase-model) works:
+
+- **The event tree must be the same shape every run.** The Load phase records the structure of `insert` / `mutate` / `delete` calls plus their guards. If a script's control flow caused different runs to emit different sequences of events, the proof solver would fail. This means `if` / `else` branching that produces _different events_ on different inputs is not supported. (Branching that only computes wildcard values is fine — see `unsafe { ... }`.)
+- **No I/O, no `eval`, no FFI.** Rhai is sandboxed; scripts can only call host functions the SDK explicitly registers.
+- **One module per `.pexe`.** A script cannot reference rules from other plugins. Anything that needs to share rules must ship in the same archive.
+
+## Patterns
+
+### Pure output
+
+`FindLog` produces a `Log` from nothing:
+
+```rust
+fn FindLog(action) {
+    var log = action.output("Log");
+    log.set([["blueprint", "Log"]]);
+    var work = action.intro_vdf(3, log);
+    log.update("work", work);
+}
+```
+
+The VDF intro pod attaches a small proof-of-work to the new object, gating creation by CPU spend.
+
+### Input → output transformation
+
+`CraftWood` takes a `Log`, grinds for a key, and proves the resulting commitment satisfies a difficulty target:
+
+```rust
+fn CraftWood(action) {
+    var log = action.input("Log");
+    var wood = action.output("Wood");
+    wood.set([["blueprint", "Wood"]]);
+    let target = action.top_limb_u256(9007199254740992);
+    var key = action.pow_obj_grind(wood, target);
+    wood.update("key", key);
+    action.intro_lt_eq_u256(wood, target);
+}
+```
+
+### Mutation with a guarded counter
+
+`UseWoodPick` mutates a `WoodPick`, decrementing durability and re-keying:
+
+```rust
+fn use_pick(action, pick, vdf_iters) {
+    action.st_gt(pick.durability, 0);
+    var durability = unsafe { pick.durability - 1 };
+    action.st_sum_of(pick.durability, durability, 1);
+    pick.update("durability", durability);
+    var key = action.random();
+    pick.update("key", key);
+    var work = action.intro_vdf(vdf_iters, pick);
+    pick.update("work", work);
+}
+
+fn UseWoodPick(action) {
+    var wood_pick = action.mutate("WoodPick");
+    use_pick(action, wood_pick, 10);
+}
+```
+
+### Composition via sub-actions
+
+`MineStoneWithWoodPick` invokes `UseWoodPick` as a sub-action and adds an output of its own:
+
+```rust
+fn MineStoneWithWoodPick(action) {
+    var pick = action.subaction("UseWoodPick");
+    var stone = action.output("Stone");
+    stone.set([["blueprint", "Stone"]]);
+}
+```
+
+The sub-action's events are nested inside the parent's transaction scope. The parent's `TxFinalized` proof covers everything — the user only needs to supply one `WoodPick` input to mine stone, even though that's two logical actions composed.

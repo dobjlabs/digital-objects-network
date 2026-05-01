@@ -1,0 +1,97 @@
+---
+title: Lifecycle & validity
+description: How an object moves from unknown to live to nullified, and the three checks that make it valid.
+---
+
+# Lifecycle & validity
+
+## The four statuses
+
+Every object is in one of four states:
+
+```text
+   unknown ──submit──▶ pending ──ingest──▶ live ──consume──▶ nullified
+       ▲                  │                                       │
+       │                  │                                       │
+       ├──rejected/dropped┘                                       │
+       └────restore (consuming tx never landed)───────────────────┘
+```
+
+| Status      | Meaning                                                                                                                    |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `unknown`   | The object's on-chain status has not been determined. May have a `txHash` if a submission was attempted but not confirmed. |
+| `pending`   | The blob transaction is confirmed on Ethereum (has a `txHash`), but the synchronizer has not yet indexed it.               |
+| `live`      | The object's source transaction is in the canonical transactions Merkle tree. The object is spendable.                     |
+| `nullified` | The object has been consumed by an action. Its nullifier has been published to the global nullifier set on-chain.          |
+
+> **Naming note:** `live` is the noun-form status; **grounded** is the verb-form used by driver and synchronizer code for the same condition. See [Glossary → Grounded](/glossary#grounded).
+
+## End-to-end flow
+
+### 1. Creation
+
+You run an action that adds, changes, or removes objects. Each step is recorded along with a check that the affected object is the right type (e.g. that the input you're consuming really is a `WoodPick`).
+
+When the action finishes, a single proof is produced covering everything that happened, and a new `.dobj` file is written for each output. At this point the files exist locally but have not yet reached Ethereum — their status is `unknown`.
+
+### 2. Submission
+
+The driver hands the proof + payload to the relayer, which submits it as an EIP-4844 blob. Each output file stays `unknown` until the relayer confirms the Ethereum transaction. On confirmation, the driver sets `status: "pending"` and writes the Ethereum `txHash`.
+
+### 3. Live
+
+The synchronizer ingests the blob, verifies the proof, and inserts `tx_final` into the canonical transactions Merkle tree (and the new nullifiers into the canonical nullifier set). The driver's `sync_inventory` queries the synchronizer for membership; objects whose `tx.ctx` commitment is in the canonical transactions set are promoted to `live`.
+
+### 4. Consumption / mutation
+
+A later action uses this object as input. Before generating the proof, the driver first fetches a **grounding witness** from the synchronizer: a bundle of Merkle inclusion proofs that asserts every input object's source transaction really is in the canonical transactions tree, evaluated against a specific recent GSR.
+
+Without a grounding witness, the action's proof would have nothing to anchor against. Anyone can write a `.dobj` file with a plausible-looking `tx.ctx`; what makes it _real_ is that its `tx.ctx` hash is in the synchronizer's canonical transactions set. The witness is what carries that fact into the proof circuit. The action's circuit verifies each Merkle inclusion proof against the GSR's `transactionsRoot` and commits to the GSR's hash as a public output — so the resulting proof is bound to "as of state root X, all my inputs were live."
+
+With the witness in hand, the action's proof shows that:
+
+- the input object's `pod` proof is valid,
+- its source transaction (`tx.ctx`) is in the canonical transactions tree (verified in-circuit using the witness's Merkle proofs),
+- the object's commitment is in `tx.live`,
+
+and emits the object's nullifier as part of the new transaction's `nullifiers` set.
+
+For the over-the-wire shape of the witness, see [Synchronizer API → Grounding witness](/synchronizer/api#grounding-witness).
+
+### 5. Nullification
+
+Once the consuming transaction lands and `sync_inventory` sees the nullifier on-chain, the driver sets `status: "nullified"` and moves the file to `objects/.nullified/`.
+
+### Failure recovery
+
+If the synchronizer never confirms a pending transaction (blob dropped, proof rejected, etc.), the driver demotes affected objects: outputs revert to `unknown` (with `txHash` preserved for diagnostics), and any locally-nullified inputs whose nullifier never landed on-chain are restored to `unknown` too. They cannot be used as action inputs again until a subsequent sync promotes them back to `live`.
+
+## What makes an object valid
+
+An object is valid if all of the following hold:
+
+1. **Proof verifies.** The `pod` proof is cryptographically valid.
+2. **Source transaction grounded.** The commitment of `tx.ctx` is in the synchronizer's canonical transactions Merkle tree.
+3. **Not nullified.** The object's nullifier is not in the canonical nullifiers set.
+
+The driver checks (2) and (3) via the synchronizer's `/v1/state/membership` API during `sync_inventory`. The synchronizer checks (1) when ingesting blob payloads. Together, these guarantee that every `live` object in a user's inventory is backed by a verified proof anchored to the canonical chain.
+
+## How a transaction is built
+
+A transaction is the record of one action being run. As the action plays out, each step it takes — adding, changing, or removing an object — is logged as an event, along with a check that the object involved is the right type. Actions can call other actions; in that case the inner steps are nested under the outer ones, but it all becomes one transaction.
+
+When the action finishes, the whole sequence is summarized into a single hash and a single proof. That hash is the **only thing** about the transaction that ever reaches Ethereum — none of the individual steps, the object data, or who ran the action is visible on chain.
+
+For the full state-machine model — events, action scopes, hash-chain replay, and the `TxFinalized` rule — see [Transactions](/actions/transactions).
+
+## Conflict resolution
+
+If two users both try to consume the same object, both proofs are valid and both blobs may land on Ethereum. Only the **first nullifier accepted into the canonical nullifier set wins** — the second is rejected by the synchronizer's per-blob duplicate-nullifier check.
+
+The losing user's local copy will still have a `txHash` and may be `pending` for a moment, but on the next `sync_inventory` the driver sees the nullifier was never accepted and restores the input objects to `unknown`. The output objects of the losing transaction are demoted too, since their source transaction never grounded.
+
+This is **first-writer-wins**, settled by Ethereum slot ordering — there is no merge semantics, no retry queue, no waitlist.
+
+## Where consumed objects go
+
+Live (and pre-live) `.dobj` files sit in `~/.dobj/objects/`. When an object is consumed, its status flips to `nullified` and the file moves to `~/.dobj/objects/.nullified/`, where it is kept for auditability and can be pruned later. See [Driver → Local store layout](/driver/local-store) for the full directory structure.

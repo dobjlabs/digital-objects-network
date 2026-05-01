@@ -1,0 +1,103 @@
+---
+title: zk-craft
+description: A network for stateful, verifiable, privately-held objects on the open Internet.
+---
+
+# zk-craft
+
+zk-craft is the reference implementation of the **Digital Objects Network**: a way for mutually untrusting users on the open Internet to create, mutate, and exchange stateful objects whose integrity and consistency hold across trust boundaries — without a central authority.
+
+## What is a digital object?
+
+The solution is a **digital object**: a self-contained file with three components.
+
+- **Data** — its current state.
+- **Code** — rules for how the state can change.
+- **Proof** — a cryptographic guarantee that all past changes followed the rules.
+
+Anyone holding a digital object can **verify its legitimacy on the spot** and **run its code** to update its state.
+
+When state changes, a new hash and proof commit to a global broadcast channel (Ethereum blobspace) and the old state is nullified. **Only the object's holder sees its data; everyone else sees only the hash.**
+
+## 30-second vocabulary
+
+The architecture diagram and the rest of these docs use a few terms repeatedly. Here's the one-line version of each — the [glossary](/glossary) has more detail.
+
+| Term                                                           | One-liner                                                                                                               |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| [**Object**](/glossary#class)                                  | A typed file with data, code, and proof — the unit of state.                                                            |
+| [**Action**](/glossary#action)                                 | A function that consumes some objects and produces others, subject to rules.                                            |
+| [**Transaction**](/glossary#tx_final)                          | The result of running one action: a bundle of created/consumed objects, hashed to `tx_final`.                           |
+| [**Nullifier**](/glossary#nullifier)                           | A hash published when an object is consumed, so the chain can prevent double-spends. Reveals nothing about the object.  |
+| [**GSR**](/glossary#gsr-global-state-root) (Global State Root) | A single hash summarizing the entire network's state at one Ethereum slot.                                              |
+| [**Grounding witness**](/glossary#grounding-witness)           | A bundle of Merkle proofs the action's circuit consumes to prove "every input I'm consuming is in the canonical state." |
+| [**Blob**](/glossary#blob-eip-4844-blob)                       | The way a transaction reaches Ethereum — an EIP-4844 data-availability blob carrying the proof and hashes.              |
+
+## Architecture
+
+```
+   ┌──────────────────────┐                ┌─────────────────────┐
+   │  Tauri desktop GUI   │                │   MCP server        │
+   │  (React + Rust)      │                │  (for AI agents)    │
+   └──────────┬───────────┘                └──────────┬──────────┘
+              │                                       │
+              └───────────────┬───────────────────────┘
+                              │
+                  ┌───────────▼────────────┐
+                  │        Driver          │       ~/.dobj/
+                  │  (headless Rust lib)   │  ┌──────────────────┐
+                  │                        │──│ objects/*.dobj   │
+                  │  • action catalog      │  │ actions/*.pexe   │
+                  │  • execute pipeline    │  │ settings.json    │
+                  │  • inventory sync      │  └──────────────────┘
+                  └─────┬─────────────┬────┘
+                        │             │
+            POST proof  │             │ GET grounding witness,
+            payload     │             │ POST membership query,
+                        │             │ GET state root
+                        ▼             ▼
+              ┌──────────────┐  ┌──────────────────┐
+              │   Relayer    │  │  Synchronizer    │
+              │ (HTTP / Rust)│  │  (HTTP / Rust)   │
+              │              │  │                  │
+              │ wraps proofs │  │ ingests blobs,   │
+              │ as EIP-4844  │  │ verifies proofs, │
+              │ blob txs     │  │ maintains canon. │
+              │              │  │ Merkle trees     │
+              └──────┬───────┘  └────────▲─────────┘
+                     │                   │
+                     │   blob tx         │ beacon + EL RPC
+                     ▼                   │
+              ┌─────────────────────────────────────┐
+              │             Ethereum L1             │
+              │   (blob data availability layer)    │
+              └─────────────────────────────────────┘
+```
+
+## How a state transition happens
+
+1. **GUI** (or a CLI, or an MCP tool) asks the **driver** to run an action — say `CraftWoodPick`, consuming one `Wood` and one `Stick`.
+2. The driver fetches a **grounding witness** from the synchronizer — proofs that the input objects' source transactions are part of the canonical state.
+3. The driver loads the action's plugin, runs its code with the chosen inputs, and **generates a proof** of the transition.
+4. Output object files are written locally, awaiting on-chain confirmation.
+5. The proof is submitted to the **relayer**, which packages it into an **EIP-4844 blob transaction** to Ethereum.
+6. The **synchronizer** sees the blob, verifies the proof, and folds the transaction into the canonical state.
+7. The driver reconciles its local view: outputs become spendable, consumed inputs are marked nullified.
+
+## Why this shape?
+
+- **Privacy by default.** Object state never leaves your machine. The chain only ever sees opaque hashes.
+- **Validity is local and self-contained.** Anyone holding an object's file can verify it by checking the embedded proof and confirming its source transaction is in the synchronizer's canonical state.
+- **Programmable, typed transitions.** Each class of object ships its own rules. New classes and actions land as plugin archives, with no changes to the core software.
+- **[First-writer-wins conflict resolution.](/objects/lifecycle#conflict-resolution)** Two attempts to consume the same object both produce valid proofs; only the first one accepted on chain wins. The loser is reconciled automatically on the next sync.
+- **Trust-minimized infrastructure.** The relayer and synchronizer are convenience services, not authorities. Anyone can run a synchronizer, and the network stays live as long as at least one user is doing so.
+
+## Read next
+
+The sections below can be read in any order. If you only read one, start with **Objects** — that's where most of the core vocabulary is introduced. The **[Glossary](/glossary)** is also worth opening in a side tab; it defines every term used here exactly once.
+
+- **[Objects & their structure](/objects)** — what's inside an object file, how mutation works, the lifecycle states.
+- **[Actions & pexes](/actions)** — how new classes and rules are defined and packaged.
+- **[Driver](/driver)** — the local library every client is built on top of: object store, action catalog, end-to-end execution.
+- **[Synchronizer](/synchronizer)** — how transactions are ingested from Ethereum and folded into canonical state.
+- **[ZK stack](/zk-stack)** — the proof system, the rule language, and how proofs are kept small enough to fit in a blob.

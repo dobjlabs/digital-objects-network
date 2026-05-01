@@ -1,0 +1,174 @@
+---
+title: The .pexe archive format
+description: Manifest schema, script structure, module hash, and the pexe CLI.
+---
+
+# The `.pexe` archive format
+
+A **pexe** (portable executable) is the on-disk format for a zk-craft plugin: one zip archive that defines a set of digital-object classes and the actions that produce or consume them.
+
+## Archive contents
+
+A `.pexe` is a `.zip` (deflate) with exactly two entries:
+
+| Entry           | Contents                                                              |
+| --------------- | --------------------------------------------------------------------- |
+| `manifest.toml` | Static metadata — plugin name, version, module hash, classes, actions |
+| `plugin.rhai`   | Action logic as a Rhai script using the SDK's host API                |
+
+## Manifest
+
+```toml
+[plugin]
+name = "craft-basics"
+version = "0.1.0"
+module_hash = "62525b9696c1402d3b37fbad775e7d3cc915aec4346f231b0fcb57d37ef451b9"
+
+[[classes]]
+name = "Log"
+emoji = "🌲"
+description = "A discovered log that can be refined into wood."
+
+[[actions]]
+name = "FindLog"
+emoji = "🌲"
+description = "Discover a log object by proving a short VDF."
+
+[[actions]]
+name = "UseWoodPick"
+emoji = "⛏️"
+description = "Internal durability/work update for wood pick usage."
+hidden = true
+```
+
+Schema:
+
+- **`[plugin]`** — `name`, `version`, `module_hash` (hex). The hash is the pod2 `CustomPredicateBatch` id of the compiled script.
+- **`[[classes]]`** — one entry per class the plugin defines: `name`, `emoji`, `description`. Used to render the GUI.
+- **`[[actions]]`** — one entry per action: `name`, `emoji`, `description`, optional `hidden = true` (defaults to `false`). Hidden actions are filtered out of `list_actions` but can still be invoked as sub-actions from other actions' Rhai bodies.
+
+There is no `imports` field. Each `.pexe` produces one self-contained pod2 module — every class and action shipped together must live in the same plugin.
+
+## Script
+
+`plugin.rhai` defines one Rhai function per `[[actions]]` entry, named exactly like the manifest entry. Functions take a single `action` handle.
+
+A minimal example:
+
+```rust
+fn FindLog(action) {
+    var log = action.output("Log");
+    log.set([["blueprint", "Log"]]);
+    var work = action.intro_vdf(3, log);
+    log.update("work", work);
+}
+```
+
+For the full host API (`action.input`, `action.output`, `action.mutate`, `action.intro_vdf`, sub-actions, `var` and `unsafe` syntax), worked patterns, and more examples, see [Writing an action (SDK)](/actions/sdk).
+
+## Module hash
+
+`module_hash` in the manifest is the hex-encoded pod2 `CustomPredicateBatch` id of the compiled module. It is the **canonical identity of the plugin's rule set** — any change to the script (or to pod2 itself) that affects rule construction produces a different hash.
+
+The driver refuses to load a `.pexe` whose declared `module_hash` doesn't match the hash it computes when compiling the script. This means:
+
+- The committed manifest in a plugin's source directory must stay in sync with its script.
+- A modified or corrupted archive will not load.
+
+The `pexe build` CLI keeps the source manifest in sync automatically.
+
+## CLI
+
+The `pexe` crate ships a single binary, `pexe`:
+
+```bash
+cargo run -p pexe --release -- <subcommand>
+```
+
+### `build`
+
+Compiles one or more plugin source directories into `.pexe` archives.
+
+```bash
+# Build into target/pexe/*.pexe (default)
+cargo run -p pexe --release -- build plugins/*
+
+# Build and install into ~/.dobj/actions/
+cargo run -p pexe --release -- build --install plugins/*
+
+# Install into a custom directory
+cargo run -p pexe --release -- build --install \
+    --install-dir /path/to/actions plugins/craft-basics
+
+# Fail if the manifest's module_hash doesn't match the compiled hash
+cargo run -p pexe --release -- build --check plugins/*
+```
+
+For each source directory, `build`:
+
+1. Reads `manifest.toml` and `plugin.rhai` from the directory.
+2. Compiles the script through `Sdk::load_module_from_src_actions` to derive the canonical module hash.
+3. Compares the declared `module_hash` to the compiled one. If they differ, by default rewrites the source `manifest.toml` in place to match; under `--check`, errors out instead.
+4. Zips `manifest.toml` + `plugin.rhai` into `<plugin.name>.pexe` under `--out-dir` (default `target/pexe`).
+5. With `--install`, also copies the archive into `--install-dir` (default `~/.dobj/actions/`).
+
+### `dump`
+
+Inspect a `.pexe` without installing:
+
+```bash
+cargo run -p pexe --release -- dump ~/.dobj/actions/craft-basics.pexe
+```
+
+Prints the parsed manifest and the full `plugin.rhai` source.
+
+## Driver integration
+
+The driver's `PexeCatalog` is the canonical consumer:
+
+1. On `Driver::open`, it scans `~/.dobj/actions/` for `.pexe` files.
+2. For each archive, it calls `pexe::unpack` to recover the manifest + script, then `Sdk::load_module_from_src_manifest` to compile the script and verify the manifest's `module_hash` against the compiled batch id and the manifest's class set against the module's classes.
+3. It collects every plugin's actions and classes into a single `ActionCatalog`. Hidden actions are filtered out at this point. Class hashes from all plugins are pooled so cross-plugin lookups (e.g. an `Is<Class>` reference) resolve.
+
+The compiled module itself is not retained between calls. Each `execute_action` call re-parses the plugin's script through the SDK to build a fresh executor.
+
+## Author workflow
+
+There is no scaffold tool today. The convention is to put a plugin's source files in their own directory:
+
+```text
+my-plugin/
+├── manifest.toml
+└── plugin.rhai
+```
+
+Then build and install with:
+
+```bash
+cargo run -p pexe --release -- build --install my-plugin
+```
+
+The first build will rewrite `module_hash` to whatever the compiled script produces; subsequent edits that change rule structure trigger another rewrite, keeping the committed manifest self-consistent.
+
+To pick up a new plugin, restart the driver so it re-scans `~/.dobj/actions/`.
+
+## Security model
+
+### Sandbox
+
+Rhai is sandboxed by construction:
+
+- **No I/O.** No filesystem, network, or syscalls. Scripts can only call functions the SDK explicitly registers.
+- **No `eval`.** Dynamic code evaluation is disabled, so no in-script code injection.
+- **No FFI.** Scripts can't reach into native code or raw memory.
+- **Inspectable.** `pexe dump` (or any zip tool) reveals the full source.
+
+### Trust boundary
+
+A `.pexe` can produce invalid proofs or burn the user's CPU on a pathological VDF, but it cannot compromise canonical state — the synchronizer verifies every proof against the canonical state root and rejects anything that doesn't check out. The trust required to install a plugin is therefore "I'm willing to spend CPU on this script's actions," not "I trust this script with my object data."
+
+### What is not yet implemented
+
+- **No author signing.** The archive carries no signature; provenance is by whatever channel the user obtained the `.pexe` from.
+- **No registry.** Plugins are distributed by hand.
+- **No cross-plugin imports.** A `.pexe` cannot reference a rule from another plugin; everything that needs to share a rule must live in the same archive.

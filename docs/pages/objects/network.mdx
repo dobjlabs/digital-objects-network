@@ -1,0 +1,74 @@
+---
+title: Network & privacy model
+description: The Digital Objects Network — what it is, what users can do, and what it takes to keep it live.
+---
+
+# Network & privacy model
+
+## Global vs. local state
+
+Two kinds of state coexist in zk-craft, and keeping them straight is the key to understanding everything else.
+
+|                       | Global / public                                                                                                    | Local / private                                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| **Where it lives**    | The synchronizer's RocksDB + Postgres, anchored to Ethereum                                                        | Your `~/.dobj/objects/` directory                                                                          |
+| **What it contains**  | Three Merkle trees — accepted transactions, spent nullifiers, GSR history — plus the current GSR                   | `.dobj` files: object data, code, proof, and chain anchoring                                               |
+| **Who can see it**    | Anyone — by running a synchronizer or querying one over HTTP                                                       | Only the holder of the file (and anyone they explicitly send it to)                                        |
+| **What it reveals**   | Opaque hashes only: `tx_final`, nullifiers, state roots. No object data, no types, no IDs, no identities           | Everything you hold: the typed state, code, and proof of every object in your collection                   |
+| **How it stays true** | Reconstructed from Ethereum by every running synchronizer; all derive the same canonical state from the same chain | Reconciled against the global state via the driver's `sync_inventory` — and verifiable any time on its own |
+
+**The link between them.** Every `.dobj` file carries a `tx_final` and a `stateRoot`, plus Merkle proofs that anchor it to the global state. Running an action publishes new hashes to the global state — a new transaction commitment, a new nullifier — and produces new local files. The global state therefore knows _that_ some transaction happened, but never _what_ it was about.
+
+This split is what makes the network privacy-preserving: the public layer is a content-addressed Merkle accumulator anyone can verify, and the private layer is a per-user collection of files that never has to leave your machine.
+
+## Capabilities
+
+Any digital entity — a person, a business, a bot, an LLM agent — can be a user of the network as long as they have:
+
+- an Internet connection, and
+- the capability to perform a handful of cryptographic operations (hashing and ZK proof generation, doable in seconds on a modern consumer laptop).
+
+A user who satisfies those requirements can:
+
+| Capability  | Description                                                                                                                                                                                                      |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Create**  | Bring a new digital object into existence by running an action that inserts it.                                                                                                                                  |
+| **Execute** | Run the state transition function of an object (or a group of objects, if their rules require multi-object transactions).                                                                                        |
+| **Destroy** | Delete a digital object, provided they meet the conditions for destruction in the object's code.                                                                                                                 |
+| **Receive** | Accept an encoding of an object's state and code from another user. The receiver then has full ability to execute, destroy, or send it — and can revoke those abilities from the original sender by mutating it. |
+| **Send**    | Hand off an object's state and code to another user.                                                                                                                                                             |
+| **Resolve** | Check an object they possess for integrity and consistency.                                                                                                                                                      |
+| **Present** | Respond to queries about an object with cryptographically-verifiable answers.                                                                                                                                    |
+
+Users with limited connectivity or limited cryptographic capabilities can still participate partially — e.g. creating and presenting objects offline, or receiving and resolving objects they don't fully verify.
+
+## Privacy properties
+
+Because object state never goes on-chain:
+
+- **Possessing the contents of an object** (its state and code) is sufficient to use it. A single person on the network holding the object's `.dobj` file can execute, mutate, or transfer it.
+- **Not possessing the contents** of an object means knowing nothing about it at all — not its contents, not its type, not its state transition function, not even its existence. The chain only sees transaction commitments, nullifier hashes, and state roots; object IDs themselves are never published.
+
+Sharing an object with another user is therefore an **opt-in** act of sending them the file. There is no way for a third party to enumerate or scrape objects.
+
+## Conflict resolution
+
+Every object has, at any given time, a single canonical state. If there is ever a dispute between two users about the state of a particular object, that dispute can always be unambiguously resolved from an objective network-level point of view — requiring and leaking no special permissions or information — within about sixty seconds (one Ethereum slot rollover and one synchronizer poll cycle).
+
+The mechanism is [first-writer-wins, settled by Ethereum slot ordering](/objects/lifecycle#conflict-resolution).
+
+## Network requirements
+
+For the network to remain live and operational, two things must be true:
+
+**1. The Ethereum data availability network must be live.** zk-craft uses Ethereum **blobspace** (EIP-4844) as a publicly-accessible broadcast channel for proof commitments.
+
+**2. At least one user must be running a synchronizer.** The synchronizer is the piece of infrastructure that ingests blobs, verifies proofs, and maintains the canonical Merkle trees that ground every object.
+
+Operating a synchronizer is **not a permissioned role** and confers no special privileges. It is roughly analogous to running an Ethereum full node (not a validator): anyone can run one, the network is alive as long as at least one is up, multiple synchronizers running in parallel cause no conflicts, and the hardware requirements land in a similar place — upper-end consumer hardware. Like a full node, a synchronizer **actively processes and validates** every transaction it ingests.
+
+## Trust boundaries
+
+A `.pexe` plugin can produce invalid proofs or burn the user's CPU, but it cannot compromise canonical state — the synchronizer verifies every proof against the canonical state root and rejects anything that doesn't check out. The trust required to install a plugin is therefore "I'm willing to spend CPU on this script's actions," not "I trust this script with my object data."
+
+Likewise, the relayer is a convenience for not having to run an Ethereum node; if you'd rather submit blob transactions directly to your own RPC endpoint, the system is designed to allow that.

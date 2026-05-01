@@ -1,0 +1,195 @@
+---
+title: API surface
+description: The five categories of driver calls — lifecycle, inventory, catalog, execution, status.
+---
+
+# API surface
+
+The driver's API is organized into five categories: **lifecycle**, **inventory**, **catalog**, **execution**, and **status**. All calls are blocking; callers schedule them however they want.
+
+## Lifecycle
+
+### `open`
+
+```rust
+Driver::open_default() -> Result<Driver>
+Driver::open(paths: DriverPaths, deps: DriverDeps) -> Result<Driver>
+```
+
+Opens the object store at the configured path, validates that the directories exist (creating them if needed), and initializes the action catalog. This is fast — it does not load or verify every object file eagerly.
+
+`DriverDeps` allows injecting mock implementations of the synchronizer client, relayer client, payload builder, and action catalog for testing.
+
+### `load_settings` / `save_settings`
+
+```rust
+driver.load_settings() -> Result<DriverSettings>
+driver.save_settings(settings: &DriverSettings) -> Result<DriverSettings>
+```
+
+Read and write the settings file. Settings are lazily created with defaults on first access.
+
+## Inventory
+
+### `list_objects`
+
+```rust
+driver.list_objects(query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>>
+```
+
+List all objects in the local store, optionally filtered. Filters include:
+
+- `class_name` — only objects of this class
+- `status` — filter by lifecycle status (`unknown`, `pending`, `live`, or `nullified`)
+- `id` — exact object ID match
+- `file_name` — exact file name match
+
+Returns `ObjectSummary` for each match: ID, file name, class, fields, status, and grounded status (if synced).
+
+### `read_object`
+
+```rust
+driver.read_object(selector: &ObjectSelector) -> Result<ObjectSummary>
+```
+
+Read a single object by file name or object ID.
+
+### `read_object_file`
+
+```rust
+driver.read_object_file(path: &Path) -> Result<ObjectSummary>
+```
+
+Read a `.dobj` file from an arbitrary path (not necessarily in the managed store). Useful for inspecting objects received from others or for debugging.
+
+### `sync_inventory`
+
+```rust
+driver.sync_inventory(query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>>
+```
+
+Reconcile local object state against the canonical chain. This:
+
+1. Loads all local objects.
+2. Collects all source transaction hashes and nullifier hashes from the local collection.
+3. Queries the synchronizer for membership status of those transactions and nullifiers in a single batch call.
+4. Reconciles statuses in three passes:
+   - **Nullify** — non-nullified objects whose nullifier appears on-chain → `nullified`
+   - **Restore** — locally-nullified objects whose nullifier is _not_ on-chain → `unknown` (handles the case where a consuming action's proof failed and the nullifier never landed)
+   - **Ground** — non-nullified, non-live objects whose source transaction is in the canonical grounded set → `live`
+5. Returns the updated inventory (filtered by `query` if provided).
+
+This is the mechanism for detecting **conflicts**: if two users both try to consume the same object, the loser's local copy gets nullified here. It also recovers objects stuck in `unknown` or `pending` after a timeout or crash during `execute`.
+
+## Catalog
+
+### `list_actions`
+
+```rust
+driver.list_actions(query: Option<&ActionQuery>) -> Result<Vec<ActionSummary>>
+```
+
+List all available actions, optionally filtered. `ActionSummary` includes:
+
+- `id` — action name (e.g., `"CraftWood"`)
+- `emoji` — display icon
+- `hash` — the action rule's hash
+- `description` — human-readable description
+- `total_input_classes` / `total_output_classes` — every class the action and its sub-actions consume or produce, in declaration order
+- `total_input_class_hashes` — rule hashes for the input classes (parallel to `total_input_classes`)
+
+Hidden actions (internal sub-steps like `UseWoodPick`) are declared with `hidden = true` in the plugin manifest and are excluded from listings, but can still be invoked as sub-actions from other actions' Rhai bodies.
+
+### `list_classes` / `get_class`
+
+```rust
+driver.list_classes() -> Result<Vec<ClassSummary>>
+driver.get_class(name: &str) -> Result<ClassSummary>
+```
+
+`ClassSummary` includes `name`, `emoji`, `description`, the rule `hash`, the local `live_count`, the actions that produce or consume it, and the rule's podlang source.
+
+### `check_action`
+
+```rust
+driver.check_action(action_id: &str) -> Result<CheckActionReport>
+```
+
+Check whether an action can be executed with the current local inventory, **without actually executing it**. Returns:
+
+- `feasible` — true if all required inputs are available
+- `available_inputs` — input classes that are satisfied, with candidate object IDs
+- `missing_inputs` — input classes that have no available objects
+
+This is a dry-run check. It does not generate proofs or contact the network.
+
+## Execution
+
+### `execute`
+
+```rust
+driver.execute(input: ExecuteActionInput) -> Result<ExecuteActionResult>
+```
+
+Execute an action end-to-end. This is the most important command. It is **synchronous**: it either fully succeeds (proof generated, submitted, confirmed on-chain, local files updated) or returns an error.
+
+```rust
+ExecuteActionInput {
+    action_id: String,                   // e.g., "CraftWood"
+    input_objects: Vec<ObjectSelector>,  // objects to consume
+}
+
+ExecuteActionResult {
+    old_root: String,                    // state root before this action
+    new_root: String,                    // state root after this action
+    output_files: Vec<String>,           // newly created .dobj file names
+    nullified_files: Vec<String>,        // input .dobj file names
+    relayer_job_id: String,
+    tx_hash: Option<String>,             // Ethereum tx hash (if confirmed)
+    block_number: Option<i64>,
+}
+```
+
+The caller specifies all inputs explicitly. The driver does not auto-select inputs — that is a UI/UX concern for the calling layer (the GUI's action grid, or the MCP server's `check_feasibility` tool, can suggest inputs).
+
+See [Action execution flow](/driver/execution) for what happens during a call.
+
+### `execute_with_reporter`
+
+```rust
+driver.execute_with_reporter(
+    input: ExecuteActionInput,
+    reporter: &R,
+) -> Result<ExecuteActionResult>
+```
+
+Same as `execute`, but with progress callbacks. The reporter receives `on_step(phase, message, context)` notifications as execution moves through phases (`GenerateProof`, `Commit`), and `on_done(phase, result)` when a phase completes.
+
+### Concurrency
+
+Multiple actions can execute in parallel. Each call to `execute` is independent — it resolves its own inputs, fetches its own grounding witness, and writes its own output files. If two concurrent actions consume different objects, they proceed without interference. If two consume the same object, both proofs will submit, but only one nullifier will land on-chain — `sync_inventory` reconciles the loser. The caller is responsible for managing parallelism (thread pools, task limits) since proof generation is CPU-intensive.
+
+## Status
+
+### `get_state_root`
+
+```rust
+driver.get_state_root() -> Result<String>
+```
+
+Fetch the current global state root from the synchronizer. This is the canonical commitment to all transactions and nullifiers observed on-chain.
+
+## Dependency injection
+
+The driver is designed for testability via the `DriverDeps` struct:
+
+```rust
+DriverDeps {
+    catalog: Arc<dyn ActionCatalog>,           // action/class definitions
+    synchronizer: Arc<dyn SynchronizerClient>, // state queries
+    relayer: Arc<dyn RelayerClient>,           // proof submission
+    payload_builder: Arc<dyn PayloadBuilder>,  // proof compression
+}
+```
+
+In production these use real HTTP clients and the built-in catalog. In tests they can be replaced with mocks that return canned responses, allowing fast integration tests that don't require a running synchronizer or relayer, and don't generate real proofs.

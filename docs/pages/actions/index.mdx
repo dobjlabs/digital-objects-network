@@ -1,0 +1,64 @@
+---
+title: Actions, classes, and pexes
+description: How state transitions are defined, packaged, and loaded by the driver.
+---
+
+# Actions, classes, and pexes
+
+## Three concepts
+
+**A class** is a type of digital object — see [Objects → Classes](/objects#classes). Each class compiles to an `Is<Class>` rule (like `IsWoodPick`) whose hash is the canonical class guard.
+
+**An action** is a state transition: it consumes zero or more input objects and produces one or more output objects, subject to rules that constrain both. Each action also declares:
+
+- **Input classes** — what types of objects it consumes,
+- **Output classes** — what types of objects it produces,
+- **Dependencies** — other actions that must execute as sub-steps (e.g. `MineStoneWithWoodPick` depends on `UseWoodPick`).
+
+Executing an action means generating a ZK proof that the state transition is valid, submitting that proof to the relayer, and waiting for the synchronizer to observe it on-chain.
+
+**A pexe** (`.pexe` archive) is the on-disk format that bundles a set of classes and the actions over them — a zip containing a metadata manifest and the action code as a Rhai script. See [The .pexe archive format](/actions/pexe-format) for the full schema.
+
+The driver scans `~/.dobj/actions/*.pexe` at startup, compiles each one through the SDK, and exposes the union of their actions and classes as its `ActionCatalog`. New classes and actions land by dropping a `.pexe` into the actions directory and restarting the driver — no rebuild of the GUI.
+
+## Action vs. transaction
+
+The word _action_ is doing two jobs in these docs, so it's worth pinning down:
+
+- An **action** in the catalog is a _definition_ — a Rhai function with declared inputs, outputs, and rules.
+- An **action invocation** is one _call_ of that function with concrete inputs, run end-to-end by the driver.
+
+Each invocation produces exactly **one transaction**, even if the action invokes sub-actions internally. Sub-action events nest under the parent's scope; the entire tree gets summarized into a single hash chain, hashed once into [`tx_final`](/glossary#tx_final), and proven once with a single [`TxFinalized`](/glossary#txfinalized) proof. That one proof is what reaches the chain.
+
+So the rule of thumb is: **one outer-action invocation = one transaction = one proof = one blob**.
+
+## The shipped example: craft-basics
+
+The repo ships one plugin, `craft-basics`, with this catalog:
+
+| Action                   | Inputs           | Outputs                                                          |
+| ------------------------ | ---------------- | ---------------------------------------------------------------- |
+| `FindLog`                | none             | `Log` (with VDF work)                                            |
+| `CraftWood`              | `Log`            | `Wood` (with PoW key)                                            |
+| `CraftSticks`            | `Wood`           | `Stick`, `Stick`                                                 |
+| `CraftWoodPick`          | `Wood`, `Stick`  | `WoodPick` (durability initialized)                              |
+| `MineStoneWithWoodPick`  | `WoodPick`       | mutated `WoodPick` (durability − 1, new key, fresh VDF), `Stone` |
+| `CraftStonePick`         | `Stone`, `Stick` | `StonePick`                                                      |
+| `MineStoneWithStonePick` | `StonePick`      | mutated `StonePick`, `Stone`                                     |
+
+Plus two _hidden_ sub-actions, `UseWoodPick` and `UseStonePick`, which encapsulate the durability/key/work update logic and are invoked by the user-facing mining actions.
+
+## Why pexes?
+
+| Goal                                 | How pexes deliver it                                                                                                                                     |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Swappable plugins, single binary** | The driver doesn't know any classes or actions natively — it loads everything from `~/.dobj/actions/`.                                                   |
+| **Inspectable**                      | The script source ships inside the archive. `pexe dump foo.pexe` (or any zip tool) reveals the full Rhai source.                                         |
+| **Content-addressable**              | Each archive carries the canonical hash of its compiled rules. The driver refuses to load a script whose compiled batch doesn't match what was packaged. |
+| **Sandboxed**                        | Rhai has no I/O, no `eval`, no FFI. A plugin can burn CPU but cannot exfiltrate data or compromise canonical state.                                      |
+
+## Read next
+
+- [Transactions (the state machine)](/actions/transactions) — what an action becomes when run: events, action scopes, hash-chain replay, and the `TxFinalized` rule.
+- [The .pexe archive format](/actions/pexe-format) — the manifest schema, the script structure, the module hash invariant, and the `pexe build` CLI.
+- [Writing an action (SDK)](/actions/sdk) — the host API exposed to Rhai scripts: `action.input`, `action.output`, `action.intro_vdf`, `var` and `unsafe`, and the two-phase Load/Execute model.

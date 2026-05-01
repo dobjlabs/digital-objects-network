@@ -1,0 +1,94 @@
+---
+title: Action execution flow
+description: What happens during execute — validate, prove, commit, reconcile.
+---
+
+# Action execution flow
+
+`Driver::execute` is the most consequential call the driver makes. It blocks for 30 seconds to several minutes (proof generation dominates), and either fully succeeds or returns an error. This page walks through what it actually does.
+
+## Phases
+
+```text
+   ┌──────────┐   ┌────────────────┐   ┌──────────────────────────────┐
+   │ Validate │──▶│ Generate proof │──▶│           Commit             │
+   └──────────┘   └────────────────┘   │  ├─ stage output files       │
+                                       │  ├─ submit to relayer        │
+                                       │  ├─ wait for blob confirm    │
+                                       │  └─ wait for sync observe    │
+                                       └──────────────────────────────┘
+```
+
+### 1. Validate
+
+- Check the input count matches what the action requires.
+- Check there are no duplicate input selectors.
+- Resolve each `ObjectSelector` (file name or object ID) to a concrete `.dobj` file on disk.
+
+If any input is missing or ambiguous, the call returns an error before doing any expensive work.
+
+### 2. Generate proof
+
+- Fetch a **grounding witness** from the synchronizer — Merkle inclusion proofs that each input object's source transaction is in the canonical transactions tree.
+- Load the action's `.pexe` plugin (re-parses the script — see [SDK two-phase model](/actions/sdk#the-two-phase-model)).
+- Run the action's Rhai function, which drives a `txlib::TxBuilder`. Each `insert` / `mutate` / `delete` records an event; class guards bind each event to its `Is<Class>` rule.
+- Finalize: walk the event tree, replay the hash chain, build the `TxFinalized` rule, and run the pod2 prover.
+
+Concretely, this step produces **three kinds of pods**:
+
+1. An internal pod that bundles the action's predicate proof together with the `TxFinalized` statement. Not exposed to callers — it exists so the per-output pods can reference the action's statement when proving each output's class.
+2. **One `Is<Class>` pod per output object** (e.g. `IsWoodPick`, `IsStone`). Each is built from the internal pod and gets embedded into the corresponding `.dobj` file as its `pod` field.
+3. **One `tx_pod`** — a thin wrapper that exposes only the `TxFinalized` statement. This is what gets shrunk, compressed, and posted to the chain via the relayer.
+
+This step is CPU-intensive — typically 5–45 seconds depending on the action.
+
+### 3. Commit
+
+This is the most failure-prone phase. There is no true rollback — instead, output files are written in a `unknown` state up front and only promoted forward as each external system confirms. If a step fails, the files just stay in whatever status they're in, and the next `sync_inventory` reconciles them. See [Failure handling](/driver/execution#failure-handling) below.
+
+1. **Shrink and compress** the proof payload. The full MainPod proof is too big for a blob; the system uses a recursive wrapper circuit ("shrunk MainPod") plus Plonky2's compressed-proof serialization. See [ZK stack → MainPod & shrinking](/zk-stack/mainpod).
+2. **Write new output files** to disk with `status: "unknown"`. The objects exist locally but have no chain anchoring yet.
+3. **Submit payload to the relayer.** On submission failure, output files are kept as `unknown` so the user can retry submission without regenerating the proof.
+4. **Poll the relayer** for confirmation that the blob transaction was included on Ethereum. On success, update output files to `pending` with `txHash`.
+5. **Poll the synchronizer** until the transaction is observed in the canonical state. On success, update output files to `live`. On timeout, revert output files to `unknown` (keeping `txHash` for inspection) — the next `sync_inventory` will reconcile if the tx lands later.
+
+Input objects are **not nullified locally during execution**. Their nullification happens when `sync_inventory` observes the nullifier on-chain. This means if the consuming transaction's blob is dropped, the inputs are still usable.
+
+## Why synchronous?
+
+The choice to make `execute` blocking — rather than spawning a background task — is deliberate.
+
+- **Simplicity.** Callers get a clear success/failure result. No background processes, no orphaned state.
+- **Safe partial failure.** If the synchronizer times out after the relayer accepted the blob, output files stay as `unknown` with their `txHash`. The next `sync_inventory` call will reconcile them to `live` once the tx is observed.
+- **Callers can layer on optimism.** A GUI can show a spinner during execution and display optimistic results. An MCP server can report progress. But the driver itself doesn't need to model optimistic state.
+
+The tradeoff is that `execute` blocks for 30 seconds to 3+ minutes. This is acceptable because:
+
+- The caller controls threading (the GUI uses `spawn_blocking`, a CLI can show a progress bar).
+- Proof generation is inherently CPU-intensive; there's no way to make it "feel instant."
+- The `ExecutionReporter` trait provides progress callbacks for UX.
+
+## Network integration timeouts
+
+| Client                            | Default timeout | Default poll interval |
+| --------------------------------- | --------------- | --------------------- |
+| Synchronizer (`wait_for_tx`)      | 120 s           | 1.2 s                 |
+| Relayer (`wait_for_confirmation`) | 180 s           | 1.5 s                 |
+
+Both are configurable via `DriverDeps` or settings.
+
+## Failure handling
+
+The driver does not "roll back" on failure. Instead, every output file gets a status that reflects exactly what's been confirmed, and `sync_inventory` reconciles whatever state is reachable later. This means there is no compensating-write logic to get wrong: the worst that happens to a `.dobj` file is it stays in `unknown`.
+
+| Failure                                       | What happens locally                                                                      |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Input file missing                            | Validate returns error. No state change.                                                  |
+| Synchronizer unreachable during witness fetch | Generate-proof returns error. No state change.                                            |
+| Proof generation fails                        | Generate-proof returns error. No state change.                                            |
+| Relayer rejects payload                       | Commit returns error. Output files left as `unknown`; user can retry submission.          |
+| Relayer accepts but blob never confirms       | Output files left as `unknown` with `txHash`. `sync_inventory` will reconcile or restore. |
+| Synchronizer never grounds the tx             | Output files revert to `unknown`. `sync_inventory` will reconcile if the tx lands later.  |
+| Conflicting transaction wins on chain         | This action's outputs and inputs both restored to `unknown` on next `sync_inventory`.     |
+
+The driver never _deletes_ a `.dobj` file as part of `execute`.

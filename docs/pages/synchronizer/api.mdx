@@ -1,0 +1,146 @@
+---
+title: HTTP API
+description: Endpoints for head state, membership, and grounding witnesses.
+---
+
+# HTTP API
+
+All endpoints read a single Postgres snapshot at the start of the request, then use that exact canonical head for all RocksDB operations in the response. Hash inputs accept `0x`-prefixed or raw hex; responses normalize to lowercase `0x...`. Maximum **256 items per query** (across `tx_hashes` + `nullifiers` combined for membership endpoints).
+
+## Health and progress
+
+```http
+GET /healthz
+→ { "ok": true }
+```
+
+```http
+GET /sync-progress
+→ { "last_processed_slot", "last_processed_block_number" }
+```
+
+## Head state
+
+```http
+GET /v1/state/head
+→ {
+    "last_processed_slot",
+    "last_processed_block_number",
+    "current_gsr",
+    "current_block_number",
+    "tx_count",
+    "nullifier_count",
+    "gsr_count"
+  }
+```
+
+## Membership queries
+
+### Batch membership
+
+Check transactions and nullifiers in a single consistent snapshot:
+
+```http
+POST /v1/state/membership
+Body: { "tx_hashes": [...], "nullifiers": [...] }
+→ {
+    "last_processed_slot",
+    "current_gsr",
+    "tx_results": [{ "tx_hash", "present" }],
+    "nullifier_results": [{ "nullifier", "present" }]
+  }
+```
+
+This is the endpoint the driver calls during `sync_inventory`.
+
+### Transaction-only
+
+```http
+POST /v1/state/tx/contains
+Body: { "tx_hashes": [...] }
+→ { "last_processed_slot", "current_gsr", "results": [{ "tx_hash", "present" }] }
+```
+
+### Nullifier-only
+
+```http
+POST /v1/state/nullifier/contains
+Body: { "nullifiers": [...] }
+→ { "last_processed_slot", "current_gsr", "results": [{ "nullifier", "present" }] }
+```
+
+### Single transaction lookup
+
+```http
+GET /v1/state/tx/{tx_hash}
+→ { "tx_hash", "present", "last_processed_slot", "current_gsr" }
+```
+
+## Grounding witness
+
+The driver calls this **before generating a proof**. The response is fed into the action's ZK circuit as a _grounding witness_: a bundle of cryptographic evidence that lets the circuit prove "every input I'm consuming is in the canonical state, as of this state root."
+
+### What's in the response
+
+```http
+POST /v1/txlib/grounding-witness
+Body: { "sourceTxHashes": [...] }
+→ {
+    "stateRootHash",       // the GSR everything below is computed against
+    "blockNumber",         // EL block number inside the GSR
+    "transactionsRoot",    // Merkle root of the canonical transactions set
+    "nullifiersRoot",      // Merkle root of the canonical nullifier set
+    "gsrsRoot",            // Merkle root of the prior-GSR history array
+    "sourceTxProofs": [{
+      "txHash",            // one entry per requested source tx
+      "present",           // whether it's actually in the canonical set
+      "proof": <MerkleProof>  // Merkle inclusion proof against transactionsRoot
+    }]
+  }
+```
+
+The four root fields together reconstruct the GSR (`stateRootHash`). Each `sourceTxProofs[i].proof` is an inclusion proof against `transactionsRoot` showing that the corresponding input object's source `tx_final` is in the canonical transactions set.
+
+### How the driver uses it
+
+1. **Driver collects** the source `tx_final` of every input object the action will consume.
+2. **Driver POSTs** them to this endpoint and gets back the grounding witness.
+3. **Driver passes the witness into the action's proof circuit** as private inputs. The circuit verifies each Merkle inclusion proof against `transactionsRoot`, then commits to `stateRootHash` as a public output.
+4. **The new transaction's payload** carries `state_root_hash = stateRootHash` so the synchronizer can later check, on ingest, that the proof was grounded against a recent and known GSR (within `MAX_GSR_AGE_BLOCKS`).
+
+Without a grounding witness, an action couldn't prove that its inputs really exist in canonical state — they'd just be `.dobj` files anyone could fabricate. The grounding witness is what makes a local proof verifiable against the public chain.
+
+### Errors
+
+If the synchronizer has no canonical grounded state yet (no GSR has been produced), this endpoint returns `HTTP 409 Conflict`.
+
+## Configuration
+
+### Required env vars
+
+| Variable     | Purpose                                             |
+| ------------ | --------------------------------------------------- |
+| `RPC_URL`    | Execution layer JSON-RPC endpoint                   |
+| `BEACON_URL` | Beacon chain REST API base URL                      |
+| `TO_ADDRESS` | Target contract address to filter blob transactions |
+
+### Optional env vars
+
+| Variable               | Default                                           | Purpose                                    |
+| ---------------------- | ------------------------------------------------- | ------------------------------------------ |
+| `APP_STATE_DB_PATH`    | `data/synchronizer-db`                            | RocksDB directory                          |
+| `SYNC_METADATA_DB_URL` | `postgres://postgres@localhost:5432/synchronizer` | Postgres connection URL                    |
+| `HTTP_BIND`            | `127.0.0.1:3000`                                  | HTTP server bind address                   |
+| `RPC_RETRIES`          | `6`                                               | Max RPC retry attempts                     |
+| `RPC_RETRY_MS`         | `1000`                                            | Delay between retries (ms)                 |
+| `INITIAL_START_SLOT`   | current head                                      | Beacon slot to start syncing from          |
+| `SYNC_DELAY_MS`        | `173` (derived)                                   | Delay between single-slot processing (ms)  |
+| `CATCHUP_BATCH_SIZE`   | `7` (derived)                                     | Slots fetched concurrently during catch-up |
+
+## Running
+
+```bash
+RUST_LOG=info cargo run --release --bin synchronizer
+```
+
+The synchronizer reads its `.env` file from `synchronizer/.env`. Requires a running Postgres instance.

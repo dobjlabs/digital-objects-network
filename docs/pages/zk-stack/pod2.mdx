@@ -1,0 +1,125 @@
+---
+title: pod2
+description: Predicates, statements, dictionaries, sets, arrays — the vocabulary zk-craft proofs are written in.
+---
+
+# pod2
+
+[pod2](https://github.com/0xPARC/pod2) is the layer that turns Plonky2 from "a SNARK library" into "a way to prove statements over typed data." Every zk-craft proof is a pod2 `MainPod`, and every domain predicate (object class guards, `TxFinalized`, the `Is<Class>` predicates) is a pod2 custom predicate.
+
+zk-craft pins a specific pod2 revision in `Cargo.toml`:
+
+```toml
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "70cf88dd...",
+         default-features = false,
+         features = ["backend_plonky2", "disk_cache", "zk"] }
+```
+
+The `backend_plonky2` feature is what selects Goldilocks + Poseidon as the underlying field/hash. `disk_cache` is what enables the persistent circuit-data cache in the OS user-cache directory (`~/Library/Caches/pod2/` on macOS, `~/.cache/pod2/` on Linux). `zk` enables the privacy-preserving variants of pod2's predicates.
+
+## Core types
+
+### `Hash` and `RawValue`
+
+```rust
+pub const HASH_SIZE: usize = 4;
+pub const VALUE_SIZE: usize = 4;
+
+pub struct RawValue(pub [F; VALUE_SIZE]);
+pub struct Hash(pub [F; HASH_SIZE]);
+```
+
+Both are 4 Goldilocks field elements (~32 bytes). Object IDs, nullifiers, transaction commitments, Merkle roots, and predicate hashes are all `Hash`. Object field values are `RawValue`.
+
+### `Statement`
+
+A `Statement` is a single predicate application, e.g. `Gt(a, b)`, `DictContains(dict, key, value)`, or a custom predicate like `IsWoodPick(obj)`. Statements are what the SDK's `action.st_*` calls emit.
+
+### `CustomPredicateBatch`
+
+A bundle of related custom predicates compiled together. The batch's id is a `Hash` derived from the predicates' definitions — this is the **module hash** that gets written into a pexe manifest.
+
+Each `.pexe` plugin compiles to one `CustomPredicateBatch`. Cross-batch references aren't supported — every predicate a plugin uses must live in the same batch.
+
+### Persistent containers
+
+pod2 ships three Merkle-committed containers that the synchronizer uses for canonical state:
+
+| Container      | Use in zk-craft                                                                                                |
+| -------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Dictionary** | The `obj` field of a `.dobj` file. The object ID is its commitment.                                            |
+| **Set**        | The transactions set (all accepted `tx_final`), the nullifiers set, an action's `tx.live` and `tx.nullifiers`. |
+| **Array**      | The GSR history.                                                                                               |
+
+Each container is content-addressed: its commitment is the Merkle root over its contents. "Persistent" means a mutation produces a new container with a new commitment, with the underlying nodes shared structurally with the old one — like a persistent data structure in a functional language. This is what lets the synchronizer materialize new state in RocksDB without copying the whole tree.
+
+## How a class guard is compiled
+
+When the SDK loads `craft-basics`, every class declared in the manifest gets an auto-generated `Is<Class>` predicate. For `WoodPick`, the predicate roughly says:
+
+> "There exists an object dictionary with `type = hash(IsWoodPick)`, `blueprint = "WoodPick"`, a `key` field, and a `durability` field whose value is a non-negative integer."
+
+The pexe build computes the hash of this predicate, and that hash becomes both:
+
+- the value stored in `obj["type"]` for every WoodPick object, and
+- the canonical class identifier referenced by other predicates that talk about WoodPicks.
+
+## Statements vs. operations
+
+The SDK distinguishes:
+
+- **Operations** — pod2 calls that compute a value but don't constrain anything. `pod_grind` and the witness arithmetic inside `unsafe { ... }` blocks are operations.
+- **Statements** — pod2 calls that commit a predicate to the proof's public outputs. `st_gt`, `st_sum_of`, `intro_lt_eq_u256`, and the auto-emitted `DictContains` from `obj.set(...)` are statements.
+
+A MainPod proves the conjunction of all the statements emitted in its scope.
+
+## MultiPodBuilder
+
+pod2 lets you split a proof across multiple sub-pods that get composed via recursion. The SDK uses a `MultiPodBuilder` so that, for example, a transaction with N output objects can be proven as N separate `Is<Class>` proofs plus one `TxFinalized` proof, all combined into a single MainPod.
+
+This matters because each sub-pod can be much smaller than a monolithic proof — and pod2's recursion machinery makes the combining cheap.
+
+## Intro pods
+
+An **intro pod** (full pod2 name: _introduction pod_) is a small auxiliary proof attached to a MainPod that contributes a fact the standard pod2 vocabulary cannot express directly. Each intro pod is its own Plonky2 circuit; its output is an **introduction statement** — a statement that embeds the verifying key of the circuit that produced it, so the parent MainPod can verify the intro pod recursively just like any other sub-pod.
+
+zk-craft's intro pods live in the `intro_pods/` workspace:
+
+| Intro pod        | What it proves                                                                                   | Used by                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| `vdfpod`         | A VDF (verifiable delay function) was correctly evaluated for `iters` iterations over an object. | `action.intro_vdf` — `FindLog`, `UseWoodPick`, `UseStonePick` |
+| `lt_eq_u256_pod` | A 256-bit value `a` is `<=` another 256-bit value `b`.                                           | `action.intro_lt_eq_u256` — `CraftWood`'s PoW gate            |
+
+The user-facing host calls (`action.intro_vdf`, `action.intro_lt_eq_u256`) hide the intro-pod construction entirely.
+
+### Why a separate pod and not just a statement in the MainPod?
+
+A MainPod is a single Plonky2 circuit with a fixed configuration (gate set, FRI parameters, public-input layout). Custom predicates and standard ops fit inside that configuration cleanly — that's the whole point of the MainPod. But some computations don't:
+
+- **Different circuit shape.** A primitive may need a gate set, recursion arity, or FRI configuration that the MainPod's standard config doesn't allow. Iterated VDF squaring chains and 256-bit arithmetic both fall here — they want different circuit ergonomics than pod2's standard predicate vocabulary provides.
+- **Self-contained verifier.** Some primitives (signature schemes are the textbook case) have their own verification logic that you want to bake into a dedicated circuit, not re-derive every time you write a custom predicate.
+
+The intro pod is the escape hatch. It runs as a separate prove step in its own circuit configuration, then a thin wrapper layer "converges" its proof into the standard recursion shape so the MainPod can verify it. The end result is that an intro pod's claim can be combined with custom predicates and other intro pods inside one MainPod — but each intro pod gets to use whatever circuit shape its primitive actually needs.
+
+### When to write a new intro pod
+
+You need a new intro pod when:
+
+- you're proving something that pod2 doesn't natively express (signature verification, hash preimages outside the supported hash, range proofs over wider integers, anything iterative-arithmetic-heavy), **and**
+- you've decided the standard pod2 predicate vocabulary won't fit it without a different circuit configuration.
+
+If your fact can be expressed as a conjunction of standard pod2 statements (`Gt`, `SumOf`, `DictContains`, custom predicates over Goldilocks values), just emit it via `action.st_*` — no intro pod needed. Reach for an intro pod only when the underlying primitive can't cleanly live inside the MainPod's circuit shape.
+
+For more, see pod2's [introduction-pods documentation](https://github.com/0xPARC/pod2/blob/main/book/src/introductionpods.md).
+
+## Why pod2 specifically
+
+A few alternatives one might consider:
+
+| Alternative                 | Why not (for this use case)                                                                                                                 |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hand-write Plonky2 circuits | Possible, but every class would be a bespoke circuit. No vocabulary for "this thing is a member of that set" reused across actions.         |
+| Halo2 / arkworks            | Different field choice, slower recursion, no out-of-the-box persistent-container library.                                                   |
+| Cairo / Noir / circom       | DSL-based circuit languages. Excellent for some workloads but don't ship the predicate-conjunction model that lets actions compose cleanly. |
+
+pod2's specific value for zk-craft is the combination of (1) a typed predicate language, (2) Merkle-committed persistent containers that the synchronizer can use natively, and (3) `MainPod` as a single composable proof container. Plus it's developed by the same team as the rest of the system.

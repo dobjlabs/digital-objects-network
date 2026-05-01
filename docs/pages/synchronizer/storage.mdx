@@ -1,0 +1,100 @@
+---
+title: Storage model
+description: How RocksDB and Postgres divide responsibility, and the crash semantics.
+---
+
+# Storage model
+
+The synchronizer's state is split across two stores with very different roles:
+
+| Store        | Role                                                                                                     |
+| ------------ | -------------------------------------------------------------------------------------------------------- |
+| **RocksDB**  | Append-only content-addressed Merkle node storage. _Not_ the source of canonical truth.                  |
+| **Postgres** | The single source of canonical truth. Stores one row per beacon slot, with the `CanonicalHead` snapshot. |
+
+This split is what makes crash recovery and reorg handling clean.
+
+## RocksDB — persistent Merkle backing store
+
+RocksDB stores content-addressed Merkle tree data:
+
+| Key        | Value                                    |
+| ---------- | ---------------------------------------- |
+| `n/<hash>` | Merkle tree node (binary tree structure) |
+| `v/<hash>` | pod2 value (leaf data)                   |
+
+RocksDB is **not** the source of canonical truth. It is an append-only backing store. During slot derivation, new Merkle nodes may be materialized that never become canonical (e.g., if the process crashes before the Postgres commit, or if a reorg discards a previously canonical branch). These orphaned nodes are harmless — they are simply never referenced by any future canonical head.
+
+Because every key is the content hash of its value, RocksDB writes are **idempotent**. The synchronizer doesn't need transactional semantics around RocksDB; the Postgres commit alone determines what's canonical.
+
+The whole point of this design is that **the synchronizer never loads a full Merkle tree into memory**. To check membership, generate an inclusion proof, or compute a new root, the synchronizer reads the current root from Postgres and then walks `O(log N)` RocksDB lookups along the relevant path — touching only the nodes it actually needs. Mutations reuse every unchanged subtree (structural sharing) and write only the new nodes along the modified path. Trees with millions of entries cost the same per-query as trees with thousands; the working set stays tiny regardless of the canonical state's size.
+
+## Postgres — canonical heads and sync metadata
+
+Postgres stores one row per canonical slot in the `canonical_slots` table:
+
+| Column                   | Purpose                                      |
+| ------------------------ | -------------------------------------------- |
+| `slot`                   | Beacon slot number (primary key)             |
+| `block_root`             | Beacon block root (`NULL` for empty slots)   |
+| `parent_root`            | Beacon parent root (`NULL` for empty slots)  |
+| `execution_block_number` | EL block number (`NULL` for empty slots)     |
+| `current_gsr`            | GSR at this slot (`NULL` for empty slots)    |
+| `is_empty`               | Whether this was a skipped beacon slot       |
+| `head_*` columns         | Full `CanonicalHead` normalized into the row |
+
+The **highest committed slot is the current canonical head**. On first initialization, a bootstrap row is inserted at `start_slot - 1` with empty container roots and no GSR.
+
+## Crash semantics
+
+The two-store split makes crash recovery trivial:
+
+- **Crash before Postgres commit:** The old canonical head remains in force. Any RocksDB nodes materialized during the aborted derivation are orphaned but harmless.
+- **Crash after Postgres commit:** The published canonical head is durable. RocksDB nodes are already materialized. No recovery needed.
+
+This works because RocksDB writes are idempotent (content-addressed) and the Postgres commit is the single atomic publication step. There is no need for write-ahead logs, distributed transactions, or any other coordination between the two stores.
+
+## Per-request consistency
+
+All HTTP endpoints read a single Postgres snapshot at the start of the request, then use that exact canonical head for all RocksDB operations in the response. This ensures consistency within a single response: a `/v1/state/membership` call cannot return some results from one head and others from a newer one.
+
+## Component layout
+
+```text
+   ┌─────────────────────────────────────────────────────┐
+   │                      main.rs                        │
+   │  Loads config, initializes stores, spawns tasks     │
+   └──────────┬──────────────────────┬───────────────────┘
+              │                      │
+       ┌──────▼──────┐        ┌──────▼──────┐
+       │  sync_loop  │        │   api.rs    │
+       │  (tokio)    │        │   (axum)    │
+       └──────┬──────┘        └──────┬──────┘
+              │                      │
+       ┌──────▼──────────────────────▼──────┐
+       │              node.rs               │
+       │  Network integration layer         │
+       │  Beacon client + EL provider       │
+       │  Blob fetching + slot derivation   │
+       └──────────────┬─────────────────────┘
+                      │
+       ┌──────────────▼─────────────────────┐
+       │         state_machine.rs           │
+       │  Pure derivation logic             │
+       │  Blob validation + GSR computation │
+       └──────┬──────────────┬──────────────┘
+              │              │
+       ┌──────▼──────┐ ┌─────▼──────┐
+       │  app_db.rs  │ │ sync_db.rs │
+       │  (RocksDB)  │ │ (Postgres) │
+       └─────────────┘ └────────────┘
+```
+
+| Component          | Responsibility                                                                                                                                                                                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `state_machine.rs` | Pure state derivation with no network dependencies. Takes a base `CanonicalHead`, recent GSRs, and decoded blob bytes; returns a candidate `CanonicalHead`. Callers supply all inputs; the state machine never reads from Postgres or the network. Directly testable. |
+| `node.rs`          | Network integration layer. Connects beacon/execution clients to the state machine. Handles RPC retries with exponential backoff. Produces `ProcessedSlot` values ready to commit.                                                                                     |
+| `sync_loop.rs`     | Orchestrates the slot-by-slot processing loop. Manages head tracking via SSE subscription + polling fallback. Detects and handles reorgs. Controls batch vs single-slot mode.                                                                                         |
+| `api.rs`           | HTTP server. Reads canonical state from Postgres, generates Merkle proofs from RocksDB. Stateless per-request (no server-side session).                                                                                                                               |
+| `app_db.rs`        | RocksDB wrapper. Opens persistent containers by root, checks membership, generates Merkle proofs.                                                                                                                                                                     |
+| `sync_db.rs`       | Postgres wrapper. Commits canonical slots, queries canonical heads, handles reorg rollbacks.                                                                                                                                                                          |

@@ -1,0 +1,104 @@
+---
+title: What is a digital object?
+description: The core unit of state in zk-craft — a self-contained, content-addressed, ZK-anchored file.
+---
+
+# What is a digital object?
+
+A **digital object** is a self-contained `.dobj` file with three components:
+
+- **Data** — its current state, a typed dictionary of fields.
+- **Code** — the rules for how that state can change, supplied by the object's type.
+- **Proof** — a cryptographic guarantee that all past changes followed those rules, paired with a public record on Ethereum showing the object is still valid (the current version, not already used).
+
+Anyone holding the file can verify it on the spot and run the code to update its state. The chain only sees opaque hashes — never the data itself.
+
+## An object as a zk state machine
+
+The **code** part of a digital object defines a state machine. Each state of an object is a distinct file with its own id; running an action consumes the old state (publishing a nullifier on chain) and produces a new file with updated data and a fresh proof. The chain sees only the hashes that anchor each transition — never the states themselves.
+
+```text
+              ┌────────────────────────────────────────┐
+              │  WoodPick #abc...           ← state₁   │
+              │                                        │
+              │   data    durability = 3               │
+              │           key = 0xa1b2…                │
+              │   code    rules (e.g. UseWoodPick:     │
+              │             dur > 0, dur' = dur − 1)   │
+              │   proof   "every past change           │
+              │            followed the rules"         │
+              └─────────────────┬──────────────────────┘
+                                │
+                                │  run UseWoodPick:
+                                │   1. check rules against state₁
+                                │   2. compute state₂
+                                │   3. produce a new proof
+                                ▼
+              ┌────────────────────────────────────────┐
+              │  WoodPick #def...           ← state₂   │
+              │                                        │
+              │   data    durability = 2     ← changed │
+              │           key = 0xc3d4…      ← new key │
+              │   code    (same rules)                 │
+              │   proof   certifies state₂ is valid    │
+              └─────────────────┬──────────────────────┘
+                                │
+                                │  anchor on chain
+                                ▼
+   ┌──────────────────────────────────────────────────────────┐
+   │                     Ethereum (blob)                      │
+   │                                                          │
+   │     tx_final            hash of this transition          │
+   │     nullifier(#abc...)  marks state₁ as consumed         │
+   │     state root          updated GSR after this slot      │
+   │                                                          │
+   │     ↑ all opaque hashes — no data, no rules, no identity │
+   └──────────────────────────────────────────────────────────┘
+```
+
+Three things to take away from this picture:
+
+- **State₁ and state₂ are different files.** They share a code definition (the same rules, the same class), but the data has changed, so the id has changed.
+- **The new proof doesn't just attest to state₂ in isolation.** It attests that state₂ was produced by following the rules starting from state₁ — which itself had a valid proof. The chain of proofs is what makes the object's history trustworthy.
+- **Old state is destroyed by publication.** Once state₁'s nullifier is on chain, no one can ever spend state₁ again — even if they still have a copy of the file.
+
+## Three core properties
+
+**1. Immutable.** A `.dobj` file is created once and never modified in place. A "mutation" is modeled as nullifying the old object (publishing its nullifier on chain) and producing a new one with updated fields. Every file on disk is a permanent snapshot of one specific object state.
+
+**2. Content-addressed.** The object's `id` is a hash of its state — same data, same id; any change to a field produces a different id. The file name encodes both the type and that hash — `woodpick_0x1a2b3c…dobj`. Two files with the same content always have the same name.
+
+**3. Self-contained.** A `.dobj` carries its own ZK proof, its state, and the chain anchoring data. You can verify it without trusting whoever gave it to you — check the proof, then confirm its source transaction is in the synchronizer's canonical Merkle tree. There is no remote object database to consult.
+
+## Classes
+
+Each object has a **class** — `Log`, `Wood`, `WoodPick`, `StonePick`, etc. The class determines:
+
+- what fields the object carries,
+- which actions can produce or consume it,
+- the rules its fields must satisfy.
+
+Classes come from `.pexe` plugin archives installed under `~/.dobj/actions/`. The `craft-basics` plugin used as the running example throughout these docs defines a small Minecraft-flavored hierarchy:
+
+| Class       | Description                                                              |
+| ----------- | ------------------------------------------------------------------------ |
+| `Log`       | A discovered log, refined into wood. Carries a VDF proof-of-work output. |
+| `Wood`      | Refined wood used for sticks and basic tools.                            |
+| `Stick`     | A handle for tools.                                                      |
+| `Stone`     | Mined stone for stronger tools.                                          |
+| `WoodPick`  | A wood pick — `durability` decrements per use.                           |
+| `StonePick` | A stone pick — same as wood pick, but stronger.                          |
+
+Each class is identified by a hash of its rule definition (e.g. the rule `IsWoodPick`), stored inside the object as the `type` field. The human-readable `className` in the file is just a label — the rule hash is what binds the object to its class cryptographically.
+
+## What the chain sees vs. what you hold
+
+The central privacy property: an observer of the chain sees only opaque hashes — transaction commitments, nullifiers, state roots — and cannot determine what an object is, who holds it, or what transition was performed. They can only observe that _some_ valid transition happened. Everything semantic — types, fields, code, proofs, identities — lives in `.dobj` files on the holder's machine.
+
+For the full breakdown of what each side contains and how they stay in sync, see [Network & privacy → Global vs. local state](/objects/network#global-vs-local-state).
+
+## Read next
+
+- [File structure](/objects/structure) — every field of a `.dobj` file, in detail.
+- [Lifecycle & validity](/objects/lifecycle) — the four statuses (`unknown → pending → live → nullified`) and the three checks that make an object valid.
+- [Network & privacy model](/objects/network) — the broader Digital Objects Network this fits into, and what it takes to keep it live.

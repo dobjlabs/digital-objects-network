@@ -1,0 +1,76 @@
+---
+title: MainPod & shrinking
+description: How a MainPod is structured, why it gets wrapped in a shrink circuit, and what ends up in the blob.
+---
+
+# MainPod & shrinking
+
+A **MainPod** is the main composable proof container in pod2. Every `.dobj` file's `pod` field is a MainPod, and every blob payload's `proof` field is a wrapped, shrunk version of one.
+
+## What's in a MainPod
+
+A MainPod bundles:
+
+| Field                       | Purpose                                                                                                     |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **A Plonky2 proof**         | Recursively verifies a tree of sub-pods.                                                                    |
+| **Revealed statements**     | The public outputs the verifier checks against — e.g. `TxFinalized(tx_final, state_root_hash, nullifiers)`. |
+| **Backend metadata**        | The `CommonCircuitData` and `VerifierOnlyCircuitData` needed to verify the proof.                           |
+| **Verification parameters** | pod2 `Params` — degree bounds, recursion arity, etc.                                                        |
+
+The proof is **constant-size** in the sense that wrapping more sub-pods into a MainPod doesn't grow the final proof — pod2's recursion folds them into a fixed-size top-level circuit. (The circuit's _capacity_ for sub-pods is bounded; if a transaction needs more sub-pods than the configured params allow, that's a configuration problem, not a runtime one.)
+
+## How an action becomes a MainPod
+
+For a single execute, the SDK's `Executor`:
+
+1. **Loads the pre-compiled module** from the plugin (the same `CustomPredicateBatch` that the Load phase emitted).
+2. **Re-runs the action's Rhai function** with real inputs. Each `action.input` / `output` / `mutate` registers an event with `txlib::TxBuilder`. Each `st_*` call records a statement to be proved. Each `intro_*` call runs an intro pod and registers its output as a statement consumed by the main proof.
+3. **For each output object**, generates a small `MainPod` proving its `Is<Class>` predicate against the input object pods (this is `prove_is_x_pod`).
+4. **Finalizes the transaction** via `TxBuilder::finalize`, which:
+   - walks the event tree,
+   - replays the hash chain,
+   - binds the chain endpoints to the transaction's `live` and `nullifiers` sets,
+   - proves source-tx inclusion using the `GroundingWitness`,
+   - emits a `TxFinalized(tx_final, state_root_hash, nullifiers)` statement.
+5. **Combines everything** through a `MultiPodBuilder` and a `MainPodProver` into one final MainPod.
+
+The result is a `(tx_pod: MainPod, obj_pods: Vec<MainPod>)`:
+
+- `obj_pods` go into the new `.dobj` files (each output gets its own `Is<Class>` MainPod).
+- `tx_pod` is what gets shrunk and pushed to the chain.
+
+## Why shrink?
+
+A raw MainPod proof is on the order of hundreds of KB. An EIP-4844 blob is 128 KiB. We need a proof that fits, with room for the rest of the payload.
+
+The trick is **one extra recursive proof**. The shrunk wrapper (`common::shrink`) is a Plonky2 circuit whose only job is:
+
+1. **Accept the original MainPod's proof as a virtual input.**
+2. **Verify it inside the wrapper circuit** (`verify_proof::<C>(...)`).
+3. **Re-expose the original public inputs unchanged** — so the wrapper proves the exact same statement the inner MainPod did.
+4. **Build with smaller circuit parameters** so the wrapper's own proof is much smaller.
+
+The shrunk proof is then **compressed** via Plonky2's `CompressedProof` encoding (which reconstructs FRI query openings from challenges instead of re-sending them), giving a final on-wire size that fits easily into a blob.
+
+## What the synchronizer verifies
+
+When a blob arrives, the synchronizer's `ProofParser`:
+
+1. Parses the [blob payload](/objects/structure#blob-payload) into its fields.
+2. Decompresses the `Plonky2(CompressedProof)` into a `Proof` against the cached shrunk-wrapper `CommonCircuitData`.
+3. Verifies the proof against the cached shrunk-wrapper `VerifierCircuitData`, with public inputs derived from `tx_final`, `state_root_hash`, and `nullifiers`.
+4. If verification passes, the synchronizer treats the payload as a valid `TxFinalized` claim: `tx_final` enters the canonical transactions Merkle tree and each nullifier enters the canonical nullifier set.
+
+Note: **the synchronizer does not re-execute the action**. It does not know what `WoodPick` or `Stone` is. It only knows that there exists a Plonky2 proof certifying that the transaction is well-formed and grounded against a known GSR.
+
+## Performance characteristics
+
+| Operation                                          | Order of magnitude                     |
+| -------------------------------------------------- | -------------------------------------- |
+| Building the shrink wrapper circuit (first run)    | tens of seconds — cached afterwards    |
+| Generating an action's MainPod                     | 5–45 s depending on action complexity  |
+| Shrinking + compressing the MainPod                | 1–3 s                                  |
+| Verifying a shrunk compressed proof (synchronizer) | sub-second once circuit data is cached |
+
+These are the dominant costs of `Driver::execute`. The user-visible latency is dominated by the original MainPod proving step, which is why the GUI shows a progress spinner during action execution.

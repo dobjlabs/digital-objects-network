@@ -1,0 +1,127 @@
+---
+title: File structure
+description: Every field of a .dobj file, in detail.
+---
+
+# `.dobj` file structure
+
+A `.dobj` file is a JSON document with seven top-level fields:
+
+```json
+{
+  "id": "0x1a2b3c...",
+  "className": "WoodPick",
+  "status": "live",
+  "txHash": "0xdef789...",
+  "pod": { ... },
+  "obj": { ... },
+  "tx": { ... }
+}
+```
+
+## `id`
+
+The hex-encoded commitment of the `obj` dictionary — a content-addressed hash of all the object's fields. It changes whenever the object's fields change, so it identifies a specific state snapshot, not the object across its lifetime.
+
+## `className`
+
+The plugin-declared class name (e.g. `"Log"`, `"WoodPick"`). The class determines what actions can consume or produce this object, and what rules constrain its fields. The class name in the file is the human-readable label; the on-chain guard uses the hash of the class's rule definition, stored inside `obj` as the `type` field.
+
+## `status`
+
+The object's current lifecycle state — one of `unknown`, `pending`, `live`, or `nullified`. See [Lifecycle & validity](/objects/lifecycle) for the full description of each state and how an object moves between them.
+
+When an object is consumed, its [nullifier](/glossary#nullifier) is computed from the object's state and published on-chain. The driver detects this and moves the file from `objects/` to `objects/.nullified/`. The `key` field inside `obj` acts as a secret known only to the file holder, so an observer who sees the nullifier on-chain cannot determine which object was spent.
+
+## `txHash`
+
+The Ethereum transaction hash of the blob that anchored this object on-chain. Set once the relayer confirms the blob transaction has been included. `null` (or absent) before on-chain confirmation.
+
+This is the L1 transaction hash you would look up on a block explorer to verify the chain submission. It is distinct from [`tx_final`](/glossary#tx_final), which is the hash of `tx.ctx` — what the synchronizer indexes.
+
+## `pod`
+
+The ZK proof (`MainPod`) that certifies this object — a self-contained proof container; see [ZK Stack](/zk-stack) for what's inside. Concretely a pod2 proof structure containing:
+
+- The Plonky2 circuit proof
+- Revealed statements — the public outputs the verifier checks
+- Backend metadata and verification parameters
+
+The proof is **constant-size** regardless of how many prior objects were involved in producing this one. It proves that all class rules were satisfied — field constraints, input validity, transaction structure — without revealing anything beyond the revealed statements. See the [ZK stack](/zk-stack) for what's inside.
+
+## `obj`
+
+The object's state — a map of key-value pairs whose hash is the object's `id`.
+
+Two fields are structurally required:
+
+| Field  | Description                                                                                                                                    |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`  | A random 256-bit value. Used to derive the nullifier. Regenerated on every mutation to prevent nullifier linkability across state transitions. |
+| `type` | The hash of the class's `Is<Class>` rule (e.g. `IsWoodPick`). Used inside txlib as the canonical class-guard field at insert/mutate/delete.    |
+
+Class-specific fields are added by the action that produces the object — for example, a `WoodPick` carries a `durability` integer.
+
+## `tx`
+
+The source transaction this object originated in — a `txlib::Tx` value with four fields:
+
+```json
+{
+  "live": [ ... ],
+  "nullifiers": [ ... ],
+  "ctx": { ... },
+  "stateRoot": {
+    "blockNumber": 12345,
+    "transactionsRoot": "0xaaa...",
+    "nullifiersRoot": "0xbbb...",
+    "gsrsRoot": "0xccc..."
+  }
+}
+```
+
+| Field        | Description                                                                                                                                                                                                         |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `live`       | The set of all objects that are live (not consumed) at the end of this transaction. The current object's `id` is a member of this set. Mirrored from inside `ctx` for direct access — see below.                    |
+| `nullifiers` | The set of nullifiers published by this transaction — one per consumed input. Empty if the action only inserted objects. Mirrored from inside `ctx`.                                                                |
+| `ctx`        | A 4-field dictionary — `{ live, nullifiers, tx_start, tx_end }` — whose hash is `tx_final` (the value the relayer publishes and the synchronizer indexes). See "Why is `ctx` separate?" below.                      |
+| `stateRoot`  | The [Global State Root (GSR)](/glossary#gsr-global-state-root) this transaction was grounded against — block number plus the Merkle roots of the canonical transactions set, nullifiers set, and prior-GSR history. |
+
+### Why is `ctx` separate?
+
+`ctx` exists as its own field because it is the **canonical commitment form** of the transaction. The hash of `ctx` is `tx_final`, the single value that travels with the proof onto the chain. Two design points fall out of this:
+
+- **Fixed shape.** `ctx` always has exactly four keys — `live`, `nullifiers`, `tx_start`, `tx_end` — regardless of how many events the transaction emitted internally. `tx_start` and `tx_end` are the chain endpoints used during hash-chain replay; they are zeroed at finalization. This means every finalized transaction's `ctx` hashes the same way: a stable, fixed-arity dictionary, not a variable-shape record.
+- **Convenient access.** `live` and `nullifiers` are duplicated at the top level of `tx` so the driver and synchronizer can read them directly without descending into the dictionary and parsing it. The duplication is a serialization affordance, not a semantic one — the values are identical to the ones inside `ctx`.
+
+So `ctx` is the bytes the chain commits to; the top-level `live` and `nullifiers` are the application-level views of those same sets.
+
+## File naming
+
+Files are named `<lower_class>_<commitment_hex>.dobj`. For example:
+
+```text
+log_0x1a2b3c4d5e6f...dobj
+wood_0x7890abcdef01...dobj
+woodpick_0x23456789ab...dobj
+```
+
+The name is deterministic given the object's state — two files with the same content always have the same name. File names are not user-chosen.
+
+## Blob payload
+
+Object state never goes on-chain. Each EIP-4844 blob carries:
+
+```text
+PAYLOAD_MAGIC (0xd10b) | proof_type | proof | tx_final | state_root_hash | nullifiers[]
+```
+
+| Field             | Description                                               |
+| ----------------- | --------------------------------------------------------- |
+| `proof_type`      | `0x00` (Plonky2 compressed)                               |
+| `proof`           | The serialized ZK proof                                   |
+| `tx_final`        | The hash of `tx.ctx` — see [Glossary](/glossary#tx_final) |
+| `state_root_hash` | The GSR this transaction was grounded against             |
+| `nullifiers[]`    | The hashes of nullifiers consumed by this transaction     |
+
+The full object state (`obj` dictionary, fields, class) stays local in the `.dobj` file. On-chain, only opaque hashes appear.

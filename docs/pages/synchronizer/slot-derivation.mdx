@@ -1,0 +1,111 @@
+---
+title: Slot derivation
+description: The per-slot ingest pipeline, per-blob validation, and GSR computation.
+---
+
+# Slot derivation
+
+The synchronizer's job is to walk the beacon chain slot-by-slot, find blobs sent to the configured target address, validate them, and roll the state forward.
+
+## Per-slot pipeline
+
+For each beacon slot with a block, the synchronizer:
+
+1. Fetches the beacon block header and full block.
+2. Extracts the execution payload (block number, block hash, timestamp).
+3. Checks for blob KZG commitments.
+4. If blobs exist: fetches the execution block, filters for blob transactions sent to `TO_ADDRESS`, fetches matching blob sidecars from the beacon node, and decodes each blob.
+5. Processes each decoded blob through the state machine.
+6. Computes a new GSR and appends it to the history array.
+7. Commits the new canonical head to Postgres.
+
+## Per-blob validation
+
+Each blob is processed independently with **fail-soft semantics** — a malformed or invalid blob is skipped without aborting the slot. The validation pipeline, in order:
+
+1. **Parse.** Decode the blob bytes into a `TxFinalized` payload via the proof parser. Invalid or non-proof blobs are skipped.
+2. **Grounding check.** Verify that the payload's `state_root_hash` exists in the recent canonical GSR history. Reject if unknown.
+3. **Age check.** Verify that the grounding GSR is not older than `MAX_GSR_AGE_BLOCKS` (300 blocks, ~1 hour). Reject if too old.
+4. **Duplicate transaction.** Check if `tx_final` is already in the in-progress transactions set (which starts from canonical state and includes earlier accepted blobs in the same slot). Reject if duplicate.
+5. **Duplicate nullifiers.** Check each nullifier both within the payload (no self-duplicates) and against the in-progress nullifiers set. Reject the entire payload if any nullifier collides.
+
+If all checks pass, the blob's `tx_final` and nullifiers are inserted into the in-progress container handles.
+
+The proof itself is verified during step 1 (parse), against the shrunk-MainPod verifier circuit data — see [ZK stack → MainPod & shrinking](/zk-stack/mainpod).
+
+### TxFinalized payload structure
+
+Each blob carries a binary payload — see [Objects → Blob payload](/objects/structure#blob-payload) for the canonical byte layout. From the synchronizer's point of view it parses out four things: a proof, a `tx_final` hash, a `state_root_hash`, and a list of nullifier hashes.
+
+## GSR computation
+
+After processing all blobs in a slot, the synchronizer computes:
+
+```rust
+new_gsr = StateRoot::new(
+    block_number,
+    transactions_set.commitment(),    // updated root
+    nullifiers_set.commitment(),      // updated root
+    prior_gsr_history_root            // unchanged from base head
+).hash()
+```
+
+Then appends `new_gsr` to the GSR history array.
+
+The distinction between `state_root_gsrs` (the prior-GSR root used _inside_ the `StateRoot` hash) and `gsr_history` (the full history root _after_ appending) matters: the former is what gets hashed into the GSR; the latter is what gets stored for the next slot to use as its base.
+
+Empty or fully-rejected slots **still produce a new GSR**. The transactions and nullifiers roots stay the same, but a new history entry is appended for the slot's execution block number. This keeps the GSR history in lockstep with the chain.
+
+## Sync loop modes
+
+The sync loop runs in one of two modes depending on how far behind it is.
+
+**Batch catch-up** — when `slots_behind >= batch_size` (default 7), the synchronizer fetches headers and blocks for up to `batch_size` slots concurrently, then processes them sequentially. This maximizes throughput during initial sync or after downtime, while staying under the RPC rate limit.
+
+**Single-slot at head** — when near the beacon head, the synchronizer subscribes to beacon head SSE events (with a 12-second polling fallback) and processes one slot at a time. A configurable delay (`sync_delay`, default ~173 ms) is applied between slots to stay under the RPC rate limit.
+
+### Bootstrap
+
+On first startup:
+
+1. Fetch the beacon chain spec (network config).
+2. Fetch the current beacon head.
+3. Determine start slot from `INITIAL_START_SLOT` env var (or current head if not set).
+4. Insert a bootstrap row at `start_slot - 1` in Postgres with empty container roots.
+5. Begin syncing from `start_slot`.
+
+If the synchronizer restarts and Postgres already has canonical rows, it resumes from the last committed slot.
+
+### Reorg handling
+
+The synchronizer detects four reorg scenarios:
+
+| Scenario                                 | Detection                                                              |
+| ---------------------------------------- | ---------------------------------------------------------------------- |
+| Previously canonical slot is now missing | `slot_root(slot)` returns `Some(...)` but beacon returns no header     |
+| Previously empty slot now has a block    | Slot was committed as `is_empty` but beacon now returns a header       |
+| Block root changed for a slot            | Stored `block_root` differs from beacon header's root                  |
+| Parent linkage mismatch                  | Beacon header's `parent_root` doesn't match stored root for `slot - 1` |
+
+On detection, the synchronizer **rewinds**:
+
+1. Walk backwards slot-by-slot from the divergent slot.
+2. At each slot, compare the stored block root against the beacon's current root.
+3. Stop when they match — this is the last common ancestor.
+4. Delete all `canonical_slots` rows after the ancestor in Postgres.
+5. Resume syncing from the first divergent slot.
+
+Reorg rollback **does not modify RocksDB**. The surviving Postgres canonical head determines which Merkle roots are canonical after rewind. Orphaned RocksDB nodes from the discarded branch are simply never referenced again.
+
+### Empty slots
+
+Beacon slots without a block (skipped proposer) are committed as empty rows in Postgres. This keeps the slot history contiguous and simplifies reorg detection — a gap in the sequence would be ambiguous between "not yet processed" and "empty slot."
+
+## Rate limiting
+
+The synchronizer assumes a 15 RPC calls/second rate limit and auto-tunes its parameters:
+
+- **Batch catch-up:** ~7 slots/batch (each slot needs ~2 RPC calls for header + block).
+- **Single-slot at head:** ~173 ms between slots (2 calls per slot with 30% safety margin).
+
+Both `SYNC_DELAY_MS` and `CATCHUP_BATCH_SIZE` can be overridden via env vars, but a warning is logged to remind the operator to check rate limit compliance.

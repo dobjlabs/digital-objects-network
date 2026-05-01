@@ -1,0 +1,73 @@
+---
+title: What the driver does
+description: The headless Rust library every zk-craft client is built on top of.
+---
+
+# What the driver does
+
+The **driver** is a headless Rust library for working with a local collection of digital objects. It is the single entry point for any client — GUI, CLI, MCP server, or test harness — to read, query, and transform digital objects.
+
+The driver is **not a daemon**, **not a CLI**, and **not long-running**. It is a library that opens a local store, provides a blocking API, and lets the caller decide how to schedule work:
+
+- the Tauri GUI runs it on `spawn_blocking`,
+- a future CLI would call it synchronously,
+- the MCP server wraps it behind an async trait.
+
+## Responsibilities
+
+The driver owns:
+
+- Local object storage under `~/.dobj/objects/`
+- Settings loading and saving
+- The action and class catalog (loaded from `.pexe` plugins in `~/.dobj/actions/`)
+- Synchronizer and relayer HTTP integration
+- Synchronous action execution and rollback
+
+What the driver gives callers:
+
+- A blocking API for opening the default local store
+- Listing and reading `.dobj` files
+- Listing actions and classes from the loaded plugin catalog
+- Checking whether an action is feasible with the current local inventory
+- Syncing local inventory state against the synchronizer
+- Executing an action end-to-end:
+  - resolve inputs,
+  - fetch grounding witness from the synchronizer,
+  - generate proof,
+  - build relayer payload,
+  - stage output and nullified files,
+  - submit to the relayer,
+  - wait for relayer confirmation,
+  - wait for synchronizer observation,
+  - roll back staged files if any step fails.
+
+## Where it sits
+
+```text
+   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+   │   Tauri GUI      │  │   MCP server     │  │   Future CLI     │
+   └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘
+            │                     │                     │
+            └─────────────────────┼─────────────────────┘
+                                  │
+                       ┌──────────▼──────────┐
+                       │       Driver        │
+                       │  (blocking Rust)    │
+                       └──┬─────────┬─────┬──┘
+                          │         │     │
+       ┌──────────────────┘         │     └────────────────┐
+       │                            │                      │
+       ▼                            ▼                      ▼
+ ┌──────────┐              ┌──────────────┐      ┌──────────────────┐
+ │ ~/.dobj/ │              │ Synchronizer │      │     Relayer      │
+ │ on disk  │              │   (HTTP)     │      │     (HTTP)       │
+ └──────────┘              └──────────────┘      └──────────────────┘
+```
+
+The driver is the only component that holds the user's `.dobj` files. The synchronizer and relayer are blind — they see only opaque hashes.
+
+## Read next
+
+- [Local store layout](/driver/local-store) — what `~/.dobj/` contains, how settings, objects, and actions are organized.
+- [API surface](/driver/api) — the five categories of driver calls: lifecycle, inventory, catalog, execution, and status.
+- [Action execution flow](/driver/execution) — what happens during `execute`: validate, generate proof, commit, reconcile.

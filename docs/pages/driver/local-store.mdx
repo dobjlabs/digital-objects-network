@@ -1,0 +1,58 @@
+---
+title: Local store layout
+description: What lives under ~/.dobj/ and how the driver manages it.
+---
+
+# Local store layout
+
+Everything the driver manages lives under a single directory: **`~/.dobj/`**. This is the driver's home directory, analogous to `~/.claude` for Claude Code or `~/.config/git` for git.
+
+```text
+~/.dobj/
+├── settings.json               # driver configuration
+├── objects/                    # live (and pre-live) digital objects
+│   ├── log_0xabc123.dobj
+│   ├── wood_0xdef456.dobj
+│   ├── woodpick_0x789abc.dobj
+│   └── .nullified/             # consumed objects (audit trail)
+│       ├── log_0x111222.dobj
+│       └── stick_0x333444.dobj
+└── actions/                    # installed .pexe plugin archives
+    └── craft-basics.pexe
+```
+
+The driver manages three categories of data within this directory.
+
+## Settings
+
+`~/.dobj/settings.json` contains:
+
+- `synchronizer_api_url` — where to fetch state roots and grounding witnesses
+- `relayer_api_url` — where to submit proofs
+
+These default to `localhost` for development. Environment variables can override the defaults.
+
+Settings are lazily created with defaults on first access. There is currently no concept of user identity or signing keys — the system is pseudonymous; identity is "whoever holds the `.dobj` files."
+
+## Digital object collection
+
+The `~/.dobj/objects/` directory contains:
+
+- `.dobj` files — live (or pre-live) objects,
+- `.nullified/*.dobj` — consumed objects, kept for auditability and prunable later.
+
+File naming convention: `<lower_class>_<commitment_hex>.dobj`. The name is deterministic from the object's state — two files with the same content always have the same name.
+
+Each `.dobj` file is a JSON document containing the object's class, fields, source transaction, proof pod, and lifecycle status. The format is defined by the `ObjectRecord` type in the driver. See [Objects → File structure](/objects/structure) for the full schema.
+
+The filesystem **is the index**. There is no separate database; `list_objects` reads the directory and deserializes each file. This is fast for hundreds of objects. If collections grow to thousands, a lightweight local index (SQLite or similar) could be added — but this is not a near-term concern.
+
+## Action catalog
+
+The set of available actions and classes is loaded from `.pexe` plugin archives installed in `~/.dobj/actions/`. On startup the driver scans that directory, loads each plugin's `manifest.toml` and `plugin.rhai`, and exposes the union of their actions and classes as its catalog.
+
+The catalog is abstracted behind the `ActionCatalog` trait — `PexeCatalog` is the production implementation, and tests can substitute their own.
+
+### Installing a plugin
+
+To add a plugin you've authored or received, drop its `.pexe` archive into `~/.dobj/actions/` and restart the driver. See [the `.pexe` archive format](/actions/pexe-format) for how to build one.

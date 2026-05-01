@@ -1,0 +1,110 @@
+---
+title: Transactions
+description: The state machine of zk-craft — what a transaction is, how events compose, and the TxFinalized rule.
+---
+
+# Transactions
+
+A **transaction** in zk-craft is what an [action](/actions) becomes when you submit it: a sequence of events plus a single proof that those events follow the rules.
+
+The Rust crate that defines this is called **`txlib`** — it is **the state machine of zk-craft**, the layer that says what a _valid state transition over digital objects_ looks like.
+
+txlib defines what a transaction _is_, what events make one up, how those events compose, and what it takes to seal them into a single proof. Above it sit the SDK, action scripts, and the driver — the layers that feed events into txlib. Below it sits the cryptographic machinery (covered in [ZK Stack](/zk-stack)) that turns txlib's invariants into a verifiable proof.
+
+## The one rule
+
+There is exactly one top-level rule txlib defines: [`TxFinalized`](/glossary#txfinalized). Every action's proof — every blob that reaches the chain — is a `TxFinalized` proof. Informally, `TxFinalized` says:
+
+> "I have a sequence of events (inserts, mutations, deletions) grouped into action scopes. Each event passed its type check. The events compose into a hash chain. The hash chain's start hash is zero, its end hash equals my published `tx_final`, my consumed inputs are all in the canonical state via Merkle-inclusion proofs, and my published nullifiers correspond exactly to the inputs I consumed."
+
+If a transaction can prove all of those, it's accepted. If not, the synchronizer rejects it during ingest.
+
+## What a transaction is, mechanically
+
+A transaction in txlib is built incrementally — there's no "transaction object" you fill in once. Instead, you stream events into a builder, group them into action scopes, and then ask the builder to seal everything.
+
+```
+   ┌──────────────────────────────────────────────┐
+   │              transaction (Tx)                │
+   │                                              │
+   │   ┌──────────────── event chain ──────────┐  │
+   │   │                                       │  │
+   │   │  [ action scope: outer action ]       │  │
+   │   │     insert(WoodPick) + IsWoodPick     │  │
+   │   │     mutate(Wood)     + IsWood         │  │
+   │   │                                       │  │
+   │   │  [ action scope: sub-action ]         │  │
+   │   │     mutate(Pick)     + IsWoodPick     │  │
+   │   │                                       │  │
+   │   └───────────────────────────────────────┘  │
+   │                                              │
+   │   live  = { everything not consumed }        │
+   │   nulls = { hash(consumed inputs) }          │
+   │   ctx   = { live, nullifiers, ... }          │
+   │   tx_final = hash(ctx)                       │
+   └──────────────────────────────────────────────┘
+```
+
+The four ingredients:
+
+| Ingredient                | What it is                                                                                                                                                                                                     | Who uses it                                                                                                    |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Events**                | A linear log of `insert`, `mutate`, `delete` calls. Each event names the affected object's state and carries a guard statement (e.g. `IsWoodPick(new_obj)`) proving the object is the type its action expects. | The hash chain replays them; `live` and `nullifiers` are derived from them.                                    |
+| **Action scopes**         | A way to group events by which action emitted them. Scopes can nest — a sub-action's events appear nested under its parent. The whole tree is proven as one transaction.                                       | The replay walks the tree; this is what makes "sub-action" different from "called function in the same scope." |
+| **`live` / `nullifiers`** | The two sets that summarize the transaction's effect. `live` is every object that exists at the end (carryovers + new outputs); `nullifiers` is the hash of every consumed input.                              | Anyone verifying the transaction; the synchronizer indexes nullifiers to prevent double-spends.                |
+| **`tx_final`**            | The hash of `ctx` (the dictionary bundling `live` and `nullifiers`). The single value that travels with the proof to the chain.                                                                                | The synchronizer indexes it; later transactions reference it via grounding witnesses.                          |
+
+## How events compose: the hash chain
+
+Each event extends a running hash. The chain starts at zero, and every `insert` / `mutate` / `delete` emits a new chain hash:
+
+```
+chain_0 = 0
+chain_1 = hash(chain_0, event_1)
+chain_2 = hash(chain_1, event_2)
+...
+chain_n = hash(chain_{n-1}, event_n)
+```
+
+When the action scope closes, the recorded chain endpoints are bound to `live` and `nullifiers` — proving that the events you logged are exactly the events that produced the published sets. Sub-action scopes get their own sub-chains that nest into the parent; the replay walks the whole tree at finalize.
+
+This structure is what makes txlib auditable inside a ZK proof: instead of inventing an arbitrary state-transition relation, you commit to a strict event log and prove every event's effect via the chain.
+
+## Grounding: how a transaction connects to the chain
+
+A new transaction is always built relative to a known [GSR](/glossary#gsr-global-state-root). Before construction, the driver fetches a [grounding witness](/glossary#grounding-witness) from the synchronizer — Merkle inclusion proofs that each input object's source `tx_final` is in the canonical transactions tree. txlib carries those proofs into the `TxFinalized` rule, which verifies them in-circuit and binds the resulting transaction to that GSR.
+
+Without a grounding witness, an action couldn't reference the canonical chain — its inputs would be unanchored hashes. With one, the proof is anchored: "as of state root X, all my inputs were live and all my nullifier publications are first-time."
+
+## What txlib does _not_ know about
+
+txlib is **type-agnostic from the chain's point of view**. It does not know:
+
+- what a `WoodPick` is,
+- what fields a class has,
+- what an action means semantically.
+
+It only knows: events have an attached guard statement (some hash, plus evidence that it's true of the affected object), and the hash chain is consistent. The semantic layer — what each guard means, what fields a class requires — is supplied by classes (compiled to `Is<Class>` rules) and by actions' rule definitions. txlib enforces _that the guard exists and is provable_; the SDK and class definitions decide _which guard_.
+
+This separation is what lets new classes ship as plugins without changing txlib: the state machine never sees the type system, only the typed witnesses produced from it.
+
+## How txlib fits in
+
+txlib sits between the action-authoring layer above and the proof layer below:
+
+```
+   txlib::TxFinalized   ← what this page is about
+   ─────────────────
+   pod2 MainPod         ← the proof container that carries TxFinalized
+   ─────────────────
+   shrunk MainPod       ← wrapper that makes the proof small enough for a blob
+   ─────────────────
+   Plonky2              ← the proof system itself
+```
+
+- The [SDK](/actions/sdk) gives plugin authors a Rhai-friendly surface for _generating_ events.
+- **txlib** consumes those events, groups them into scopes, replays them as a hash chain, and emits `TxFinalized`.
+- [pod2](/zk-stack/pod2) provides the predicate vocabulary so `TxFinalized` can be expressed as a provable rule.
+- [Plonky2](/zk-stack/plonky2) generates the actual proof.
+
+The driver's `execute` flow ([Action execution flow](/driver/execution)) is what physically runs the SDK script that drives the txlib builder, then hands its `TxFinalized` proof to the relayer. For what happens to the proof from there — the shrink wrapper, blob compression, on-chain verification — see [ZK Stack](/zk-stack).
