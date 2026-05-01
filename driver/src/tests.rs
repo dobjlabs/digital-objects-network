@@ -249,13 +249,24 @@ impl RelayerClient for MockRelayer {
 
 #[test]
 fn test_list_actions_filters_by_input_class() {
-    let driver = Driver::open_default().unwrap();
+    // Use the in-memory test catalog so the assertion does not depend on
+    // whatever pexe plugins happen to live under ~/.dobj/actions/.
+    let paths = temp_paths();
+    ensure_store_dirs(&paths).unwrap();
+    let deps = DriverDeps {
+        catalog: Arc::new(make_catalog()),
+        synchronizer: Arc::new(MockSynchronizer::default()),
+        relayer: Arc::new(MockRelayer::default()),
+        payload_builder: Arc::new(MockPayloadBuilder),
+    };
+    let driver = Driver::open(paths, deps).unwrap();
     let filtered = driver
         .list_actions(Some(&ActionQuery {
             input_class_id: Some("craft-basics:Wood".to_string()),
             ..ActionQuery::default()
         }))
         .unwrap();
+    assert!(!filtered.is_empty(), "expected at least one Wood-consuming action");
     assert!(filtered.iter().all(|action| action
         .total_input_class_ids
         .contains(&"craft-basics:Wood".to_string())));
