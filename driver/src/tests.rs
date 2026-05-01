@@ -308,6 +308,37 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
     assert_eq!(output.record.status, ObjectStatus::Unknown);
 }
 
+/// A `.dobj` whose `class_id` text matches what an action expects must STILL
+/// be rejected when its on-chain `obj["type"]` predicate hash disagrees. This
+/// is the regression test for the original collision bug: if two plugins
+/// declared a class `Wood`, the bare-name check used to let the wrong
+/// `IsWood@A` object satisfy `IsWood@B`'s requirement and proof generation
+/// would burn minutes before the prover failed.
+#[test]
+fn test_execute_rejects_class_hash_mismatch_with_matching_class_id() {
+    // A real Log object (obj["type"] = IsLog hash) written to disk with a
+    // forged class_id of "craft-basics:Wood". CraftSticks consumes a Wood,
+    // so the bare-id check passes; the cryptographic hash check then fires.
+    let (mut entry, deps) = make_input_record("forged_wood.dobj");
+    entry.record.class_id = "craft-basics:Wood".to_string();
+    let paths = temp_paths();
+    ensure_store_dirs(&paths).unwrap();
+    write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
+    let driver = Driver::open(paths.clone(), deps).unwrap();
+
+    let err = driver
+        .execute(ExecuteActionInput {
+            action_id: "craft-basics:CraftSticks".to_string(),
+            input_objects: vec![ObjectSelector::FileName("forged_wood.dobj".to_string())],
+        })
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("class hash mismatch"),
+        "expected hash-mismatch error, got: {msg}"
+    );
+}
+
 #[test]
 fn test_execute_keeps_files_after_relayer_accepts() {
     let (entry, mut deps) = make_input_record("log_1.dobj");

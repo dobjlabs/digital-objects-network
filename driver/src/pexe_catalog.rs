@@ -500,4 +500,266 @@ mod tests {
             ),
         }
     }
+
+    // --- Synthetic two-plugin fixtures ---------------------------------------
+    //
+    // `alpha` and `beta` both declare classes named `Foo` and `Bar` and actions
+    // named `MakeFoo` and `ConsumeFoo`. The class names collide; the script
+    // bodies differ (`blueprint = "FooA"` vs `"FooB"`), which gives each
+    // plugin a different `CustomPredicateBatch` id and therefore different
+    // class/action predicate hashes. This is the exact shape the catalog
+    // collision bug used to mishandle.
+
+    // Each action introduces a private `key` wildcard so the compiled
+    // podlang has a non-empty `private:` clause (an empty one is a syntax
+    // error). The literal blueprint string ("FooA" vs "FooB", "BarA" vs
+    // "BarB") makes the two modules' predicate batches differ.
+
+    const ALPHA_SCRIPT: &str = r#"
+fn MakeFoo(action) {
+    var foo = action.output("Foo");
+    foo.set([["blueprint", "FooA"]]);
+    var key = action.random();
+    foo.update("key", key);
+}
+
+fn ConsumeFoo(action) {
+    var foo = action.input("Foo");
+    var bar = action.output("Bar");
+    bar.set([["blueprint", "BarA"]]);
+    var key = action.random();
+    bar.update("key", key);
+}
+"#;
+
+    const BETA_SCRIPT: &str = r#"
+fn MakeFoo(action) {
+    var foo = action.output("Foo");
+    foo.set([["blueprint", "FooB"]]);
+    var key = action.random();
+    foo.update("key", key);
+}
+
+fn ConsumeFoo(action) {
+    var foo = action.input("Foo");
+    var bar = action.output("Bar");
+    bar.set([["blueprint", "BarB"]]);
+    var key = action.random();
+    bar.update("key", key);
+}
+"#;
+
+    fn synthetic_plugin_bytes(plugin_name: &str, script: &str) -> Vec<u8> {
+        // Manifest with a placeholder hash; we rewrite it to the real
+        // compiled hash below before packing so the catalog's
+        // `load_module_from_src_manifest` validation passes.
+        let template = format!(
+            r#"[plugin]
+name = "{plugin_name}"
+version = "0.1.0"
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[classes]]
+name = "Foo"
+emoji = "F"
+description = "test class Foo"
+
+[[classes]]
+name = "Bar"
+emoji = "B"
+description = "test class Bar"
+
+[[actions]]
+name = "MakeFoo"
+emoji = "F"
+description = "make a Foo"
+
+[[actions]]
+name = "ConsumeFoo"
+emoji = "B"
+description = "consume a Foo to make a Bar"
+"#
+        );
+        let manifest: sdk::manifest::Manifest =
+            toml::from_str(&template).expect("synthetic manifest parses");
+        let real_hash =
+            pexe::compile_module_hash(&manifest, script).expect("synthetic script compiles");
+        let with_hash =
+            pexe::set_manifest_hash(&template, &real_hash).expect("rewrite module_hash");
+        pexe::pack(&with_hash, script).expect("pack synthetic plugin")
+    }
+
+    fn alpha_beta_catalog() -> PexeCatalog {
+        let alpha = synthetic_plugin_bytes("alpha", ALPHA_SCRIPT);
+        let beta = synthetic_plugin_bytes("beta", BETA_SCRIPT);
+        PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("alpha.pexe"), alpha),
+                (PathBuf::from("beta.pexe"), beta),
+            ],
+            true,
+        )
+        .expect("alpha + beta catalog loads")
+    }
+
+    #[test]
+    fn test_two_plugins_same_class_name_keeps_distinct_hashes() {
+        let catalog = alpha_beta_catalog();
+        let foo_alpha = catalog
+            .get_class("alpha:Foo")
+            .expect("alpha:Foo present");
+        let foo_beta = catalog
+            .get_class("beta:Foo")
+            .expect("beta:Foo present");
+        assert_eq!(foo_alpha.display_name, "Foo");
+        assert_eq!(foo_beta.display_name, "Foo");
+        assert_eq!(foo_alpha.plugin_name, "alpha");
+        assert_eq!(foo_beta.plugin_name, "beta");
+        assert_ne!(
+            foo_alpha.hash, foo_beta.hash,
+            "Foo from two different modules must have different IsFoo predicate hashes"
+        );
+        // And the bare-name collision is reported so the GUI can disambiguate.
+        let collisions = catalog.name_collisions();
+        assert!(
+            collisions.contains(&"Foo".to_string()),
+            "expected name_collisions to include Foo, got {collisions:?}"
+        );
+        assert!(
+            collisions.contains(&"Bar".to_string()),
+            "expected name_collisions to include Bar, got {collisions:?}"
+        );
+        assert!(
+            collisions.contains(&"MakeFoo".to_string()),
+            "expected name_collisions to include MakeFoo, got {collisions:?}"
+        );
+    }
+
+    #[test]
+    fn test_two_plugins_same_action_name_routes_to_correct_module() {
+        let catalog = alpha_beta_catalog();
+
+        // Each plugin's MakeFoo produces an output whose obj["type"] is *that
+        // plugin's* IsFoo predicate hash. If the catalog routed the wrong
+        // script, the type field would be the other plugin's hash.
+        let alpha_foo = catalog
+            .get_class("alpha:Foo")
+            .expect("alpha:Foo present");
+        let beta_foo = catalog.get_class("beta:Foo").expect("beta:Foo present");
+        let alpha_hash = parse_hash_hex(&alpha_foo.hash).expect("alpha:Foo hash parses");
+        let beta_hash = parse_hash_hex(&beta_foo.hash).expect("beta:Foo hash parses");
+
+        let alpha_out = catalog
+            .execute_action(
+                "alpha:MakeFoo".to_string(),
+                dummy_grounding_witness(),
+                vec![],
+            )
+            .expect("alpha:MakeFoo runs");
+        let alpha_type = obj_type_hash_for_test(&alpha_out.obj(0).obj)
+            .expect("alpha output has type");
+        assert_eq!(
+            alpha_type, alpha_hash,
+            "alpha:MakeFoo output type should be alpha's IsFoo hash"
+        );
+
+        let beta_out = catalog
+            .execute_action(
+                "beta:MakeFoo".to_string(),
+                dummy_grounding_witness(),
+                vec![],
+            )
+            .expect("beta:MakeFoo runs");
+        let beta_type = obj_type_hash_for_test(&beta_out.obj(0).obj)
+            .expect("beta output has type");
+        assert_eq!(
+            beta_type, beta_hash,
+            "beta:MakeFoo output type should be beta's IsFoo hash"
+        );
+    }
+
+    #[test]
+    fn test_action_input_class_hash_is_module_scoped() {
+        let catalog = alpha_beta_catalog();
+        let alpha_foo = catalog.get_class("alpha:Foo").unwrap();
+        let beta_foo = catalog.get_class("beta:Foo").unwrap();
+        assert_ne!(alpha_foo.hash, beta_foo.hash);
+
+        let alpha_consume = catalog
+            .get_action("alpha:ConsumeFoo")
+            .expect("alpha:ConsumeFoo present");
+        let beta_consume = catalog
+            .get_action("beta:ConsumeFoo")
+            .expect("beta:ConsumeFoo present");
+
+        assert_eq!(alpha_consume.total_input_class_ids, vec!["alpha:Foo"]);
+        assert_eq!(beta_consume.total_input_class_ids, vec!["beta:Foo"]);
+        assert_eq!(
+            alpha_consume.total_input_class_hashes,
+            vec![alpha_foo.hash.clone()],
+            "alpha:ConsumeFoo's required input hash must be alpha's IsFoo hash"
+        );
+        assert_eq!(
+            beta_consume.total_input_class_hashes,
+            vec![beta_foo.hash.clone()],
+            "beta:ConsumeFoo's required input hash must be beta's IsFoo hash"
+        );
+    }
+
+    #[test]
+    fn test_class_cross_references_are_per_plugin() {
+        // Each class's `produced_by` / `consumed_by` must list only the
+        // actions from its own plugin. If the catalog conflated entries by
+        // bare name, alpha:Foo's `produced_by` could end up containing
+        // `beta:MakeFoo` (and vice versa), which would mis-route GUI
+        // suggestions and feasibility checks.
+        let catalog = alpha_beta_catalog();
+        let alpha_foo = catalog.get_class("alpha:Foo").unwrap();
+        let beta_foo = catalog.get_class("beta:Foo").unwrap();
+
+        assert_eq!(
+            alpha_foo.produced_by,
+            vec!["alpha:MakeFoo".to_string()],
+            "alpha:Foo should only be produced by alpha:MakeFoo"
+        );
+        assert_eq!(
+            alpha_foo.consumed_by,
+            vec!["alpha:ConsumeFoo".to_string()],
+            "alpha:Foo should only be consumed by alpha:ConsumeFoo"
+        );
+        assert_eq!(beta_foo.produced_by, vec!["beta:MakeFoo".to_string()]);
+        assert_eq!(beta_foo.consumed_by, vec!["beta:ConsumeFoo".to_string()]);
+
+        // The predicate source string is also non-empty and looks like an
+        // IsFoo predicate. (The IsFoo body itself is the same shape in both
+        // plugins, so we don't compare it across plugins — the cryptographic
+        // identity is captured by `hash`, not the printed source.)
+        assert!(
+            alpha_foo.predicate_source.contains("IsFoo"),
+            "alpha IsFoo source should mention IsFoo; got {}",
+            alpha_foo.predicate_source
+        );
+        assert!(
+            beta_foo.predicate_source.contains("IsFoo"),
+            "beta IsFoo source should mention IsFoo; got {}",
+            beta_foo.predicate_source
+        );
+    }
+
+    fn dummy_grounding_witness() -> txlib::GroundingWitness {
+        txlib::GroundingWitness::new(
+            txlib::StateRoot::new(
+                1,
+                pod2::middleware::EMPTY_HASH,
+                pod2::middleware::EMPTY_HASH,
+                pod2::middleware::EMPTY_HASH,
+            ),
+            std::collections::HashMap::new(),
+        )
+    }
+
+    fn obj_type_hash_for_test(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {
+        let value = obj.get(&pod2::middleware::Key::from("type")).ok()??;
+        Some(Hash(value.raw().0))
+    }
 }
