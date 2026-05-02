@@ -126,8 +126,8 @@ The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
     - [ ] ProductOf
     - [ ] MaxOf
     - [ ] HashOf
-    - [ ] PublicKeyOf
-    - [ ] SignedBy
+    - [x] PublicKeyOf
+    - [x] SignedBy
     - [ ] ContainerInsert
     - [ ] ContainerUpdate
     - [ ] ContainerDelete

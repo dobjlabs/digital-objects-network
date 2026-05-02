@@ -208,6 +208,95 @@ fn test_sdk_1() {
     apply_tx(&mut state, &stone.tx);
 }
 
+/// Round-trip a `signed_by` assertion: load a script that asserts
+/// `SignedBy(subsidy, GOVT_PK)`, register the matching SecretKey on the
+/// executor, run the action, and confirm the produced spendable's pod
+/// verifies. Exercises the new Rhai bindings end-to-end against the
+/// mock prover.
+#[test]
+fn test_signed_by() {
+    use pod2::middleware::SecretKey;
+
+    let sk = SecretKey::new_rand();
+    let pk = sk.public_key();
+    let pk_b58 = format!("{}", pk);
+
+    let src = format!(
+        r#"
+        fn IssueSubsidy(action) {{
+            var subsidy = action.output("Subsidy");
+            subsidy.set([
+                ["blueprint", "Subsidy"],
+                ["max_bags", 5],
+                ["bags_remaining", 5]
+            ]);
+            let GOVT_PK = action.public_key("{pk_b58}");
+            action.signed_by(subsidy, GOVT_PK);
+        }}
+"#
+    );
+
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(&src, &["IssueSubsidy"])
+        .unwrap();
+    println!("{}", module.podlang_src);
+    assert!(
+        module.podlang_src.contains("SignedBy(subsidy, PublicKey("),
+        "rendered podlang missing SignedBy clause:\n{}",
+        module.podlang_src
+    );
+
+    let state = TestState::default();
+    let mut executor = module.executor(true, grounding_witness(&state, &[]));
+    executor.add_signer(sk);
+    let [subsidy] = executor
+        .action("IssueSubsidy", vec![])
+        .unwrap()
+        .objs();
+    subsidy.pod.pod.verify().unwrap();
+}
+
+/// Negative case: if no signer is registered for the script's public
+/// key, `signed_by` must fail with a clear error rather than panicking
+/// or emitting a malformed pod.
+#[test]
+fn test_signed_by_missing_signer() {
+    use pod2::middleware::SecretKey;
+
+    let sk = SecretKey::new_rand();
+    let pk_b58 = format!("{}", sk.public_key());
+
+    let src = format!(
+        r#"
+        fn IssueSubsidy(action) {{
+            var subsidy = action.output("Subsidy");
+            subsidy.set([["blueprint", "Subsidy"]]);
+            let GOVT_PK = action.public_key("{pk_b58}");
+            action.signed_by(subsidy, GOVT_PK);
+        }}
+"#
+    );
+
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(&src, &["IssueSubsidy"])
+        .unwrap();
+
+    let state = TestState::default();
+    // Don't register any signer — execution should fail at signed_by.
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let err = executor
+        .action("IssueSubsidy", vec![])
+        .err()
+        .expect("expected signed_by to fail without a registered signer");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("no signer registered"),
+        "unexpected error: {msg}"
+    );
+}
+
 #[allow(clippy::cloned_ref_to_slice_refs)]
 #[test]
 fn test_sdk_2() {

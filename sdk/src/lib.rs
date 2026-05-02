@@ -9,12 +9,16 @@ use anyhow::{Result, anyhow};
 use itertools::zip_eq;
 use lt_eq_u256_pod::{LtEqU256Pod, STANDARD_LT_EQ_U256_VD_HASH};
 use pod2::{
-    backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
+    backends::plonky2::{
+        basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver,
+        signer::Signer as PodSigner,
+    },
     frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
     lang::{Module, load_module},
     middleware::{
         EMPTY_VALUE, F, Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType,
-        Params, Pod, Predicate, RawValue, Statement, VDSet, Value,
+        Params, Pod, Predicate, PublicKey, RawValue, SecretKey, Signer as _, Statement, VDSet,
+        Value,
         containers::{Array, Dictionary, Set},
     },
 };
@@ -130,6 +134,8 @@ enum Type {
     Raw,
     Int,
     Dict,
+    PublicKey,
+    SecretKey,
 }
 
 impl fmt::Display for Type {
@@ -177,6 +183,8 @@ impl VarOrValue {
                 Type::Raw => Some(()),
                 Type::Int => v.as_int().map(|_| ()),
                 Type::Dict => v.as_dictionary().map(|_| ()),
+                Type::PublicKey => v.as_public_key().map(|_| ()),
+                Type::SecretKey => v.as_secret_key().map(|_| ()),
             }
             .ok_or_else(|| format!("type check: expected {}", typ).into()),
             Self::Var(Var {
@@ -770,6 +778,89 @@ impl ActionHandle {
             args: vec![n_iters, input, work.clone()],
         });
         Ok(ArgHandle::new(self.clone(), work))
+    }
+    /// Build a literal `PublicKey` value from a base58 string. Use to
+    /// embed a known issuer pubkey as a `let` constant in a plugin
+    /// script:
+    ///
+    /// ```rhai
+    /// let GOVT_PK = action.public_key("base58_pk_here");
+    /// action.signed_by(subsidy, GOVT_PK);
+    /// ```
+    ///
+    /// The emitted podlang renders it as a `PublicKey(<base58>)` literal.
+    fn public_key(self, b58: String) -> RuntimeResult<ArgHandle> {
+        use std::str::FromStr;
+        let pk = PublicKey::from_str(&b58)
+            .map_err(|e| -> Box<EvalAltResult> { format!("public_key: {e}").into() })?;
+        Ok(ArgHandle::literal(self.clone(), Value::from(pk)))
+    }
+    /// Declare a `SignedBy(msg, pk)` constraint. `msg` is typically a
+    /// dict-typed var (an action input/mutate/output object); `pk` is
+    /// typically a literal `PublicKey` (e.g. an issuer's known key).
+    ///
+    /// At Execute time the prover must hold the secret key for `pk` —
+    /// register it via [`Executor::add_signer`] before calling the
+    /// action. The signature is generated on `msg`'s dict commitment and
+    /// attached as `OperationAux::Signature`.
+    fn signed_by(self, msg: Dynamic, pk: Dynamic) -> RuntimeResult<()> {
+        let [msg, pk] = validate_args([(msg, Type::Dict), (pk, Type::PublicKey)])?;
+        let mut ctx = self.0.borrow_mut();
+        ctx.assert_unsafe(false)?;
+        let st = ctx.exe_ctx.as_ref().map(|exe_rc| -> RuntimeResult<Statement> {
+            let mut exe_ctx = exe_rc.borrow_mut();
+            let msg_value = msg.borrow().as_value();
+            let pk_value = pk.borrow().as_value();
+            let pk_pod = pk_value
+                .as_public_key()
+                .ok_or::<Box<EvalAltResult>>("signed_by: pk is not a PublicKey".into())?;
+            let sk = exe_ctx
+                .signers
+                .get(&pk_value.raw())
+                .cloned()
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!(
+                        "signed_by: no signer registered for PublicKey({}); call Executor::add_signer first",
+                        pk_pod
+                    )
+                    .into()
+                })?;
+            let dict = msg_value
+                .as_dictionary()
+                .ok_or::<Box<EvalAltResult>>("signed_by: msg is not a Dictionary".into())?;
+            let msg_raw = RawValue::from(dict.commitment());
+            let signer = PodSigner(sk);
+            let sig = signer.sign(msg_raw);
+            let st = exe_ctx
+                .bld
+                .builder
+                .priv_op(Operation(
+                    OperationType::Native(native_pred_to_op(NativePredicate::SignedBy)),
+                    vec![
+                        OperationArg::Literal(msg_value),
+                        OperationArg::Literal(pk_value),
+                    ],
+                    OperationAux::Signature(sig),
+                ))
+                .map_err(|e| -> Box<EvalAltResult> { format!("signed_by: {e}").into() })?;
+            Ok(st)
+        });
+        if let Some(st) = st {
+            ctx.sts.push(st?);
+        }
+        ctx.insts.push(Inst::Statement {
+            pred: NativePredicate::SignedBy,
+            args: vec![msg, pk],
+        });
+        Ok(())
+    }
+    /// Declare a `PublicKeyOf(pk, sk)` constraint, asserting that `pk`
+    /// is the public key derived from `sk`. Both args are resolved at
+    /// Execute time; no extra witness is needed beyond the values
+    /// themselves.
+    fn public_key_of(self, pk: Dynamic, sk: Dynamic) -> RuntimeResult<()> {
+        let [pk, sk] = validate_args([(pk, Type::PublicKey), (sk, Type::SecretKey)])?;
+        self.native_st(NativePredicate::PublicKeyOf, vec![pk, sk])
     }
     fn intro_lt_eq_u256(self, lhs: Dynamic, rhs: Dynamic) -> RuntimeResult<()> {
         let [lhs, rhs] = validate_args([(lhs, Type::Raw), (rhs, Type::Raw)])?;
@@ -1391,6 +1482,9 @@ pub struct Executor {
     prover: Box<dyn MainPodProver>,
     pod_modules: Vec<Arc<Module>>,
     module: Rc<SdkModule>,
+    // Prover-held secret keys, keyed by `RawValue::from(pk)`. Looked up
+    // by `signed_by` to sign action-time messages.
+    signers: HashMap<RawValue, SecretKey>,
 }
 
 /// This context is available via ActionContext at Execution time.  It keeps the state of the
@@ -1414,6 +1508,10 @@ struct ExeContext {
     // `SpendableObjects`. Sub-actions append into this same vec so the
     // top-level call sees them in declaration order.
     outputs: Vec<PerOutput>,
+    // Prover-held secret keys keyed by `RawValue::from(pk)`. Snapshot
+    // of `Executor::signers` at action start so `signed_by` can sign
+    // its message without going back through the executor.
+    signers: HashMap<RawValue, SecretKey>,
 }
 
 impl ExeContext {
@@ -1458,7 +1556,18 @@ impl Executor {
             prover,
             pod_modules: modules,
             module,
+            signers: HashMap::new(),
         }
+    }
+
+    /// Register a `SecretKey` so `signed_by(msg, pk)` calls in the
+    /// next action invocation can sign with it, where `pk` is the
+    /// derived public key. Repeated calls overwrite. Builder-style:
+    /// chain or use as `&mut`.
+    pub fn add_signer(&mut self, sk: SecretKey) -> &mut Self {
+        let pk = Value::from(sk.public_key()).raw();
+        self.signers.insert(pk, sk);
+        self
     }
     fn new_builder(&self) -> MultiPodBuilder {
         MultiPodBuilder::new(&self.params, &self.vd_set)
@@ -1526,6 +1635,7 @@ impl Executor {
             tx_builder,
             module: self.module.clone(),
             outputs: Vec::new(),
+            signers: self.signers.clone(),
         }));
         let action_handle = ActionHandle::new(action_name.clone(), Some(exe_rc.clone()));
         let st_action = action_handle.exe_action()?;
@@ -1675,6 +1785,9 @@ fn new_engine() -> Engine {
         .register_fn("intro_lt_eq_u256", ActionHandle::intro_lt_eq_u256)
         .register_fn("pow_obj_grind", ActionHandle::pow_obj_grind)
         .register_fn("top_limb_u256", ActionHandle::top_limb_u256)
+        .register_fn("public_key", ActionHandle::public_key)
+        .register_fn("signed_by", ActionHandle::signed_by)
+        .register_fn("public_key_of", ActionHandle::public_key_of)
         .register_type_with_name::<ArgHandle>("ArgContext")
         .register_fn("set", ArgHandle::set)
         .register_fn("get", ArgHandle::get)
