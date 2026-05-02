@@ -13,7 +13,7 @@ use pod2::{
         basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver,
         signer::Signer as PodSigner,
     },
-    frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
+    frontend::{MainPod, MultiPodBuilder, Operation, OperationArg, SignedDict},
     lang::{Module, load_module},
     middleware::{
         EMPTY_VALUE, F, Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType,
@@ -854,6 +854,78 @@ impl ActionHandle {
         });
         Ok(())
     }
+    /// Introduce an externally-signed dictionary as a private witness.
+    /// Pops the next [`SignedDict`] from the executor's queue (see
+    /// [`Executor::add_signed_input`]), verifies it was signed by `pk`,
+    /// and binds it to a fresh dict-typed wildcard. Use to consume
+    /// credentials issued out-of-band — e.g. an income statement
+    /// signed by an employer:
+    ///
+    /// ```rhai
+    /// let EMPLOYER_PK = action.public_key("...");
+    /// var income = action.input_signed_dict(EMPLOYER_PK);
+    /// // income.income, income.recipient_pk, ... are now usable
+    /// ```
+    ///
+    /// Renders as `SignedBy(income, PublicKey(<base58>))` in the
+    /// emitted podlang. The dict var stays private (no chain event,
+    /// no public arg).
+    fn input_signed_dict(self, pk: Dynamic) -> RuntimeResult<ArgHandle> {
+        let [pk] = validate_args([(pk, Type::PublicKey)])?;
+        let dict_ref = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
+        let mut ctx = self.0.borrow_mut();
+        ctx.assert_unsafe(false)?;
+        let st = ctx
+            .exe_ctx
+            .as_ref()
+            .map(|exe_rc| -> RuntimeResult<Statement> {
+                let mut exe_ctx = exe_rc.borrow_mut();
+                let pk_value = pk.borrow().as_value();
+                let pk_pod = pk_value
+                    .as_public_key()
+                    .ok_or::<Box<EvalAltResult>>("input_signed_dict: pk is not a PublicKey".into())?;
+                let signed = exe_ctx.signed_inputs.pop().ok_or_else::<Box<EvalAltResult>, _>(
+                    || {
+                        format!(
+                            "input_signed_dict: no SignedDict queued for PublicKey({}); call Executor::add_signed_input first",
+                            pk_pod
+                        )
+                        .into()
+                    },
+                )?;
+                if signed.public_key != pk_pod {
+                    return Err(format!(
+                        "input_signed_dict: queued SignedDict was signed by PublicKey({}), expected PublicKey({})",
+                        signed.public_key, pk_pod
+                    )
+                    .into());
+                }
+                signed
+                    .verify()
+                    .map_err(|e| -> Box<EvalAltResult> {
+                        format!("input_signed_dict: signature verification failed: {e}").into()
+                    })?;
+                dict_ref
+                    .borrow_mut()
+                    .set_value(Value::from(signed.dict.clone()));
+                let st = exe_ctx
+                    .bld
+                    .builder
+                    .priv_op(Operation::dict_signed_by(&signed))
+                    .map_err(|e| -> Box<EvalAltResult> {
+                        format!("input_signed_dict: {e}").into()
+                    })?;
+                Ok(st)
+            });
+        if let Some(st) = st {
+            ctx.sts.push(st?);
+        }
+        ctx.insts.push(Inst::Statement {
+            pred: NativePredicate::SignedBy,
+            args: vec![dict_ref.clone(), pk],
+        });
+        Ok(ArgHandle::new(self.clone(), dict_ref))
+    }
     /// Declare a `PublicKeyOf(pk, sk)` constraint, asserting that `pk`
     /// is the public key derived from `sk`. Both args are resolved at
     /// Execute time; no extra witness is needed beyond the values
@@ -1485,6 +1557,9 @@ pub struct Executor {
     // Prover-held secret keys, keyed by `RawValue::from(pk)`. Looked up
     // by `signed_by` to sign action-time messages.
     signers: HashMap<RawValue, SecretKey>,
+    // Externally-signed dicts queued for `input_signed_dict` to consume
+    // in declaration order. Each call pops the next entry.
+    signed_inputs: Vec<SignedDict>,
 }
 
 /// This context is available via ActionContext at Execution time.  It keeps the state of the
@@ -1512,6 +1587,10 @@ struct ExeContext {
     // of `Executor::signers` at action start so `signed_by` can sign
     // its message without going back through the executor.
     signers: HashMap<RawValue, SecretKey>,
+    // Pending externally-signed dicts (snapshot of
+    // `Executor::signed_inputs`). `input_signed_dict` pops in
+    // declaration order — last entry is at the top of the stack.
+    signed_inputs: Vec<SignedDict>,
 }
 
 impl ExeContext {
@@ -1557,6 +1636,7 @@ impl Executor {
             pod_modules: modules,
             module,
             signers: HashMap::new(),
+            signed_inputs: Vec::new(),
         }
     }
 
@@ -1567,6 +1647,15 @@ impl Executor {
     pub fn add_signer(&mut self, sk: SecretKey) -> &mut Self {
         let pk = Value::from(sk.public_key()).raw();
         self.signers.insert(pk, sk);
+        self
+    }
+
+    /// Queue a `SignedDict` to be consumed by the next
+    /// `input_signed_dict(pk)` call in declaration order. Use to
+    /// supply externally-issued credentials (e.g. an income statement
+    /// signed by an employer) as witnesses to the action's predicate.
+    pub fn add_signed_input(&mut self, signed: SignedDict) -> &mut Self {
+        self.signed_inputs.push(signed);
         self
     }
     fn new_builder(&self) -> MultiPodBuilder {
@@ -1626,6 +1715,10 @@ impl Executor {
         rhai_input_objs.reverse();
 
         let tx_builder = self.new_tx_builder(&mut bld, &tx_inputs);
+        // Declaration order pops from the end; reverse so the first
+        // queued SignedDict is the first one rhai sees.
+        let mut signed_inputs = self.signed_inputs.clone();
+        signed_inputs.reverse();
         let exe_rc = Rc::new(RefCell::new(ExeContext {
             mock: self.mock,
             params: self.params.clone(),
@@ -1636,6 +1729,7 @@ impl Executor {
             module: self.module.clone(),
             outputs: Vec::new(),
             signers: self.signers.clone(),
+            signed_inputs,
         }));
         let action_handle = ActionHandle::new(action_name.clone(), Some(exe_rc.clone()));
         let st_action = action_handle.exe_action()?;
@@ -1788,6 +1882,7 @@ fn new_engine() -> Engine {
         .register_fn("public_key", ActionHandle::public_key)
         .register_fn("signed_by", ActionHandle::signed_by)
         .register_fn("public_key_of", ActionHandle::public_key_of)
+        .register_fn("input_signed_dict", ActionHandle::input_signed_dict)
         .register_type_with_name::<ArgHandle>("ArgContext")
         .register_fn("set", ArgHandle::set)
         .register_fn("get", ArgHandle::get)

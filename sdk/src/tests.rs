@@ -257,6 +257,71 @@ fn test_signed_by() {
     subsidy.pod.pod.verify().unwrap();
 }
 
+/// End-to-end subsidy-issuance flow exercising both new bindings:
+/// - employer issues a `SignedDict` income credential off-band
+/// - the action consumes it via `input_signed_dict(EMPLOYER_PK)`
+/// - the action mints a Subsidy and signs it via `signed_by(subsidy, GOVT_PK)`
+///
+/// Mirrors the structure of `IssueSubsidy` from the subsidy demo plan
+/// and confirms a single action can verify an external credential and
+/// produce a freshly-signed object in one shot.
+#[test]
+fn test_input_signed_dict_issue_subsidy() {
+    use pod2::{
+        frontend::SignedDictBuilder,
+        middleware::{Params, SecretKey},
+    };
+    use pod2::backends::plonky2::signer::Signer as PodSigner;
+
+    let employer_sk = SecretKey::new_rand();
+    let employer_pk_b58 = format!("{}", employer_sk.public_key());
+    let govt_sk = SecretKey::new_rand();
+    let govt_pk_b58 = format!("{}", govt_sk.public_key());
+
+    let src = format!(
+        r#"
+        fn IssueSubsidy(action) {{
+            let EMPLOYER_PK = action.public_key("{employer_pk_b58}");
+            let GOVT_PK = action.public_key("{govt_pk_b58}");
+            var income = action.input_signed_dict(EMPLOYER_PK);
+            var subsidy = action.output("Subsidy");
+            subsidy.set([
+                ["blueprint", "Subsidy"],
+                ["max_bags", 5],
+                ["bags_remaining", 5]
+            ]);
+            action.signed_by(subsidy, GOVT_PK);
+        }}
+"#
+    );
+
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(&src, &["IssueSubsidy"])
+        .unwrap();
+    println!("{}", module.podlang_src);
+    assert!(module.podlang_src.contains("SignedBy(income,"));
+    assert!(module.podlang_src.contains("SignedBy(subsidy,"));
+
+    // Employer signs an income credential off-band.
+    let params = Params::default();
+    let mut income = SignedDictBuilder::new(&params);
+    income.insert("income", 30000_i64);
+    income.insert("year", 2026_i64);
+    let income_signed = income.sign(&PodSigner(employer_sk)).unwrap();
+
+    let state = TestState::default();
+    let mut executor = module.executor(true, grounding_witness(&state, &[]));
+    executor.add_signer(govt_sk);
+    executor.add_signed_input(income_signed);
+
+    let [subsidy] = executor
+        .action("IssueSubsidy", vec![])
+        .unwrap()
+        .objs();
+    subsidy.pod.pod.verify().unwrap();
+}
+
 /// Negative case: if no signer is registered for the script's public
 /// key, `signed_by` must fail with a clear error rather than panicking
 /// or emitting a malformed pod.
