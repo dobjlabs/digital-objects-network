@@ -257,6 +257,26 @@ fn test_signed_by() {
     subsidy.pod.pod.verify().unwrap();
 }
 
+/// One-shot helper: generates two keypairs and prints them so the
+/// subsidy-demo plugin can embed the public keys and the test fixtures
+/// can hold the secret keys. Run with:
+///
+/// ```text
+/// cargo test -p sdk --release --lib gen_demo_keys -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn gen_demo_keys() {
+    use pod2::middleware::SecretKey;
+    for label in ["EMPLOYER", "GOVT"] {
+        let sk = SecretKey::new_rand();
+        let pk_b58 = format!("{}", sk.public_key());
+        let sk_json = serde_json::to_string(&sk).unwrap();
+        println!("{label}_PK_B58 = {pk_b58}");
+        println!("{label}_SK_JSON = {sk_json}");
+    }
+}
+
 /// End-to-end subsidy-issuance flow exercising both new bindings:
 /// - employer issues a `SignedDict` income credential off-band
 /// - the action consumes it via `input_signed_dict(EMPLOYER_PK)`
@@ -320,6 +340,135 @@ fn test_input_signed_dict_issue_subsidy() {
         .unwrap()
         .objs();
     subsidy.pod.pod.verify().unwrap();
+}
+
+/// Black-box demo flow: load the on-disk `plugins/subsidy-demo` plugin
+/// (manifest + script), validate it against the committed module_hash,
+/// and walk through the full subsidy lifecycle:
+///
+///   1. Employer signs an income credential (off-chain).
+///   2. Govt runs `IssueSubsidy` → Subsidy with 5 bags.
+///   3. Farmer runs `RedeemGrainBag` 3× → Subsidy(2 bags) + 3 Grains.
+///   4. Merchant runs `ConsumeGrain` on the first Grain (receipt).
+///   5. Drain remaining 2 bags; the 6th `RedeemGrainBag` must fail at
+///      `Gt(bags_remaining, 0)`.
+///
+/// Uses the demo-keypair fixtures (matching pubkeys are baked into
+/// `plugin.rhai`).
+#[test]
+fn test_subsidy_demo_plugin_e2e() {
+    use pod2::{
+        backends::plonky2::signer::Signer as PodSigner,
+        frontend::SignedDictBuilder,
+        middleware::{Params, SecretKey},
+    };
+    use std::path::PathBuf;
+
+    let plugin_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("plugins/subsidy-demo");
+    let manifest_toml = std::fs::read_to_string(plugin_dir.join("manifest.toml")).unwrap();
+    let script = std::fs::read_to_string(plugin_dir.join("plugin.rhai")).unwrap();
+    let manifest: Manifest = toml::from_str(&manifest_toml).unwrap();
+
+    // Demo SKs (matching pubkeys are committed into plugin.rhai). Regenerate via
+    // `cargo test -p sdk gen_demo_keys -- --ignored --nocapture`.
+    let employer_sk: SecretKey =
+        serde_json::from_str(r#""Y3+yrQr+17yQqSZWTxPmyZNXDFzxIk45kX2xHA52QCQ9jAj39Jigfw==""#)
+            .unwrap();
+    let govt_sk: SecretKey =
+        serde_json::from_str(r#""XSi0uGplfaoiH1g47EyR6YMZRFd8VE8OhMo7HB23TXn3othmbneoEA==""#)
+            .unwrap();
+
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_manifest(&script, &manifest)
+        .unwrap();
+    println!("{}", module.podlang_src);
+
+    // 1. Employer signs an income credential off-band.
+    let params = Params::default();
+    let mut income = SignedDictBuilder::new(&params);
+    income.insert("income", 30000_i64);
+    income.insert("year", 2026_i64);
+    let income_signed = income.sign(&PodSigner(employer_sk)).unwrap();
+
+    let mut state = TestState::default();
+
+    // 2. Govt issues the subsidy.
+    let mut executor = module.executor(true, grounding_witness(&state, &[]));
+    executor.add_signer(govt_sk);
+    executor.add_signed_input(income_signed);
+    let [subsidy] = executor.action("IssueSubsidy", vec![]).unwrap().objs();
+    apply_tx(&mut state, &subsidy.tx);
+    assert_eq!(
+        subsidy
+            .obj
+            .get(&"bags_remaining".into())
+            .unwrap()
+            .unwrap()
+            .as_int()
+            .unwrap(),
+        5
+    );
+
+    // 3. Farmer redeems 3 bags. Each call mutates the subsidy and
+    //    produces a Grain. Carry the mutated subsidy forward.
+    let mut subsidy = subsidy;
+    let mut grains = Vec::new();
+    for expected_remaining in [4, 3, 2] {
+        let executor = module.executor(true, grounding_witness(&state, &[subsidy.tx.clone()]));
+        let [next_subsidy, grain] = executor
+            .action("RedeemGrainBag", vec![subsidy.clone()])
+            .unwrap()
+            .objs();
+        apply_tx(&mut state, &next_subsidy.tx);
+        assert_eq!(
+            next_subsidy
+                .obj
+                .get(&"bags_remaining".into())
+                .unwrap()
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            expected_remaining
+        );
+        subsidy = next_subsidy;
+        grains.push(grain);
+    }
+
+    // 4. Merchant consumes the first grain (receipt).
+    let first_grain = grains.remove(0);
+    let executor = module.executor(true, grounding_witness(&state, &[first_grain.tx.clone()]));
+    let _ = executor.action("ConsumeGrain", vec![first_grain]).unwrap();
+
+    // 5. Drain remaining 2 bags, then verify the 6th call fails.
+    for expected_remaining in [1, 0] {
+        let executor = module.executor(true, grounding_witness(&state, &[subsidy.tx.clone()]));
+        let [next_subsidy, _grain] = executor
+            .action("RedeemGrainBag", vec![subsidy.clone()])
+            .unwrap()
+            .objs();
+        apply_tx(&mut state, &next_subsidy.tx);
+        assert_eq!(
+            next_subsidy
+                .obj
+                .get(&"bags_remaining".into())
+                .unwrap()
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            expected_remaining
+        );
+        subsidy = next_subsidy;
+    }
+    let executor = module.executor(true, grounding_witness(&state, &[subsidy.tx.clone()]));
+    let exhausted = executor.action("RedeemGrainBag", vec![subsidy]);
+    assert!(
+        exhausted.is_err(),
+        "RedeemGrainBag should fail once bags_remaining hits 0"
+    );
 }
 
 /// Negative case: if no signer is registered for the script's public

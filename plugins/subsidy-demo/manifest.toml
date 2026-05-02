@@ -1,0 +1,36 @@
+[plugin]
+name = "subsidy-demo"
+version = "0.1.0"
+# Rewritten by `cargo run -p pexe -- build plugins/subsidy-demo`.
+module_hash = "e39348543e23bcffd6cc30afc2c8e3018e7e233c22e2869e2867235cde8c5614"
+
+[[classes]]
+name = "Subsidy"
+emoji = "🎟️"
+description = "Govt-signed grain subsidy entitling the recipient to a fixed number of free bags."
+
+[[classes]]
+name = "Grain"
+emoji = "🌾"
+description = "A redeemed bag of grain — handed off to a merchant and consumed for reimbursement."
+
+[[actions]]
+name = "IssueSubsidy"
+emoji = "🎟️"
+description = "Govt verifies an employer-signed income credential and mints a 5-bag subsidy."
+
+[[actions]]
+name = "DecrementSubsidy"
+emoji = "🎟️"
+description = "Internal: decrement an active subsidy's remaining bags by 1."
+hidden = true
+
+[[actions]]
+name = "RedeemGrainBag"
+emoji = "🌾"
+description = "Farmer redeems one bag of grain against an active subsidy (decrements remaining bags)."
+
+[[actions]]
+name = "ConsumeGrain"
+emoji = "🧾"
+description = "Merchant consumes a redeemed grain bag (records receipt on-chain)."

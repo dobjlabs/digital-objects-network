@@ -611,17 +611,20 @@ impl ActionHandle {
         let op_type = OperationType::Native(op);
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
-        let st = ctx.exe_ctx.as_ref().map(|exe_rc| {
-            let mut exe_ctx = exe_rc.borrow_mut();
-            let op_args = args.iter().map(|v| v.borrow().as_op_arg()).collect();
-            exe_ctx
-                .bld
-                .builder
-                .priv_op(Operation(op_type.clone(), op_args, OperationAux::None))
-                .unwrap()
-        });
+        let st = ctx
+            .exe_ctx
+            .as_ref()
+            .map(|exe_rc| -> RuntimeResult<Statement> {
+                let mut exe_ctx = exe_rc.borrow_mut();
+                let op_args = args.iter().map(|v| v.borrow().as_op_arg()).collect();
+                exe_ctx
+                    .bld
+                    .builder
+                    .priv_op(Operation(op_type.clone(), op_args, OperationAux::None))
+                    .map_err(|e| -> Box<EvalAltResult> { format!("{pred:?}: {e}").into() })
+            });
         if let Some(st) = st {
-            ctx.sts.push(st);
+            ctx.sts.push(st?);
         }
         ctx.insts.push(Inst::Statement { pred, args });
         Ok(())
