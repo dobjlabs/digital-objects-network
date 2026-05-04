@@ -7,6 +7,7 @@ import {
   isLiveObject,
   isNullifiedObject,
   joinObjectsDirPath,
+  pluginScopedLabel,
 } from "../../shared/objectUtils";
 
 interface InventoryPanelProps {
@@ -41,7 +42,7 @@ export function InventoryPanel({
       return;
     }
     const objectPath = joinObjectsDirPath(objectsDirPath, object.fileName);
-    const displayLabel = object.classDisplayName;
+    const displayLabel = pluginScopedLabel(object.classDisplayName, object.pluginName);
 
     const payload = JSON.stringify({
       objectPath,
@@ -69,7 +70,7 @@ export function InventoryPanel({
   const nullifiedObjects = inventory.filter((object) => isNullifiedObject(object));
 
   const renderInventoryObject = (object: InventoryObject) => {
-    const displayName = object.classDisplayName;
+    const displayName = pluginScopedLabel(object.classDisplayName, object.pluginName);
     const hashLineRaw = object.status === "live"
       ? object.id
       : object.status;

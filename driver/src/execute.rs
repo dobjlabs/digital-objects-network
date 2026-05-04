@@ -192,12 +192,12 @@ pub(crate) fn resolve_inputs(
     Ok(resolved_inputs)
 }
 
-fn parse_class_hash_hex(s: &str) -> Option<Hash> {
+pub(crate) fn parse_class_hash_hex(s: &str) -> Option<Hash> {
     let trimmed = s.strip_prefix("0x").unwrap_or(s);
     Hash::from_hex(trimmed).ok()
 }
 
-fn obj_type_hash(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {
+pub(crate) fn obj_type_hash(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {
     let value = obj.get(&Key::from("type")).ok()??;
     Some(Hash(value.raw().0))
 }

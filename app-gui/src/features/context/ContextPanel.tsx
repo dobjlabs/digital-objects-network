@@ -10,6 +10,7 @@ import {
   displayPathInObjectsDir,
   isNullifiedObject,
   joinObjectsDirPath,
+  pluginScopedLabel,
 } from "../../shared/objectUtils";
 import { isRecord, normalizePod2Value } from "../../shared/pod2utils";
 import type { ContextSelection } from "../../shared/state/store";
@@ -289,6 +290,7 @@ export function ContextPanel({
   const renderMethodCard = (config: {
     methodId: string;
     methodName: string;
+    pluginName: string;
     totalInputClassIds: string[];
     totalInputClassNames: string[];
     totalInputClassHashes: string[];
@@ -315,8 +317,12 @@ export function ContextPanel({
                 const isDropActive = hoverArgKey === key;
                 const err = argErrors[key];
                 const classHash = config.totalInputClassHashes[index] ?? "";
-                const expectedClassLabel =
+                const expectedClassName =
                   config.totalInputClassNames[index] ?? expectedClassId;
+                const expectedClassLabel = pluginScopedLabel(
+                  expectedClassName,
+                  config.pluginName,
+                );
 
                 return (
                   <div
@@ -514,7 +520,7 @@ export function ContextPanel({
     if (!object)
       return <section className="context-panel">Object not found.</section>;
 
-    const titleName = object.classDisplayName;
+    const titleName = pluginScopedLabel(object.classDisplayName, object.pluginName);
     const liveValueRaw = object.status === "live" ? object.id : object.status;
     const liveValue = truncateDisplayHash(liveValueRaw);
 
@@ -571,7 +577,7 @@ export function ContextPanel({
     return <section className="context-panel">Action not found.</section>;
   const actionHashRaw = action.hash.trim();
   const actionHashDisplay = truncateDisplayHash(actionHashRaw);
-  const actionLabel = action.displayName;
+  const actionLabel = pluginScopedLabel(action.displayName, action.pluginName);
 
   return (
     <section className="context-panel">
@@ -603,6 +609,7 @@ export function ContextPanel({
       {renderMethodCard({
         methodId: action.id,
         methodName: actionLabel,
+        pluginName: action.pluginName,
         totalInputClassIds: action.totalInputClassIds,
         totalInputClassNames: action.totalInputClassNames,
         totalInputClassHashes: action.totalInputClassHashes,

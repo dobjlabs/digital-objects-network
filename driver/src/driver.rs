@@ -15,8 +15,8 @@ use crate::clients::{
     SynchronizerClient,
 };
 use crate::execute::{
-    build_relayer_payload, reconcile_objects, resolve_inputs, save_results, update_output_files,
-    validate_execute_request,
+    build_relayer_payload, obj_type_hash, parse_class_hash_hex, reconcile_objects, resolve_inputs,
+    save_results, update_output_files, validate_execute_request,
 };
 use crate::object_record::ObjectStatus;
 use crate::object_record::parse_object_record_file;
@@ -273,28 +273,39 @@ impl Driver {
         let mut missing_class_names = Vec::new();
         let mut used_ids = HashSet::new();
 
+        // Apply the same cryptographic check that `resolve_inputs` runs at
+        // execute time: a candidate must match by qualified class id AND its
+        // on-chain `obj["type"]` predicate hash must equal the action's
+        // required class hash. Without the hash check, a tampered or
+        // stale-migration .dobj would be reported as feasible here and then
+        // rejected at execute, wasting proof-generation time.
         for (slot, required_class_id) in action.total_input_class_ids.iter().enumerate() {
-            if let Some(entry) = live_objects.iter().find(|entry| {
-                &entry.record.class_id == required_class_id && !used_ids.contains(&entry.record.id)
-            }) {
+            let required_class_name = action.total_input_class_names[slot].as_str();
+            let expected_hash =
+                parse_class_hash_hex(action.total_input_class_hashes[slot].as_str());
+            let candidate = live_objects.iter().find(|entry| {
+                &entry.record.class_id == required_class_id
+                    && !used_ids.contains(&entry.record.id)
+                    && matches!(
+                        (expected_hash, obj_type_hash(&entry.record.obj)),
+                        (Some(expected), Some(actual)) if expected == actual
+                    )
+            });
+            if let Some(entry) = candidate {
                 used_ids.insert(entry.record.id.clone());
-                let candidate_class = self.deps.catalog.get_class(&entry.record.class_id);
+                // Cross-plugin class refs are rejected at catalog load, so
+                // the action's plugin owns its input classes. No catalog
+                // round-trip needed.
                 available.push(CheckActionCandidate {
-                    class_id: entry.record.class_id.clone(),
-                    class_display_name: candidate_class
-                        .as_ref()
-                        .map(|c| c.display_name.clone())
-                        .unwrap_or_else(|| entry.record.class_id.clone()),
-                    plugin_name: candidate_class
-                        .as_ref()
-                        .map(|c| c.plugin_name.clone())
-                        .unwrap_or_default(),
+                    class_id: required_class_id.clone(),
+                    class_display_name: required_class_name.to_string(),
+                    plugin_name: action.plugin_name.clone(),
                     object_id: entry.record.id.clone(),
                     file_name: entry.file_name.clone(),
                 });
             } else {
                 missing_class_ids.push(required_class_id.clone());
-                missing_class_names.push(action.total_input_class_names[slot].clone());
+                missing_class_names.push(required_class_name.to_string());
             }
         }
 

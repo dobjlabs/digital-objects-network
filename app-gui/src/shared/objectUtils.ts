@@ -10,8 +10,16 @@ export function isNullifiedObject(object: ObjectLike): boolean {
   return object.status === "nullified";
 }
 
-export function displayObjectFileName(className: string): string {
-  return `${className}.dobj`;
+/**
+ * Format a class or action label that includes the originating plugin name,
+ * so two plugins that expose the same bare name (e.g. `Wood` or `MakeFoo`)
+ * stay visually distinguishable in lists, headers, and slot chips.
+ */
+export function pluginScopedLabel(
+  displayName: string,
+  pluginName: string,
+): string {
+  return pluginName ? `${displayName} (${pluginName})` : displayName;
 }
 
 function normalizeObjectsDir(objectsDirPath: string): string {

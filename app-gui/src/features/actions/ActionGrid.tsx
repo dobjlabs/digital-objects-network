@@ -4,6 +4,7 @@ import type {
   InventoryObjectPayload as InventoryObject,
 } from "../../shared/api/wireTypes";
 import { truncateDisplayHash } from "../../shared/format";
+import { pluginScopedLabel } from "../../shared/objectUtils";
 
 interface ActionGridProps {
   actions: Action[];
@@ -44,7 +45,9 @@ export function ActionGrid({
     });
   }, [compatibilityFiltered, search, selectedObject]);
 
-  const selectedObjectLabel = selectedObject?.classDisplayName ?? "";
+  const selectedObjectLabel = selectedObject
+    ? pluginScopedLabel(selectedObject.classDisplayName, selectedObject.pluginName)
+    : "";
   const filterLabel = selectedObject
     ? visibleActions.length > 0
       ? `accepts # ${selectedObjectLabel}`
@@ -88,7 +91,7 @@ export function ActionGrid({
       </div>
       <div className="action-list">
         {visibleActions.map((action) => {
-          const label = action.displayName;
+          const label = pluginScopedLabel(action.displayName, action.pluginName);
           return (
             <button
               key={action.id}
