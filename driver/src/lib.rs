@@ -22,7 +22,8 @@ pub use crate::object_record::parse_object_record_file;
 pub use crate::object_record::{ObjectRecord, ObjectStatus};
 pub use crate::pexe_catalog::PexeCatalog;
 pub use crate::types::{
-    ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
-    DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
-    ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSelector, ObjectSummary,
+    ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassRef, ClassSummary,
+    DriverPaths, DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase,
+    ExecutionReporter, ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSelector,
+    ObjectSummary,
 };

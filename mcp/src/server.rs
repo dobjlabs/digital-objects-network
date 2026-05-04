@@ -414,7 +414,7 @@ mod tests {
             }))
             .unwrap();
         assert!(!report.feasible);
-        assert!(!report.missing_input_class_ids.is_empty());
+        assert!(!report.missing_inputs.is_empty());
     }
 
     #[tokio::test]

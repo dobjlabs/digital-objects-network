@@ -109,11 +109,11 @@ pub(crate) fn validate_execute_request(
     input: &ExecuteActionInput,
     action: &ActionSummary,
 ) -> Result<()> {
-    if input.input_objects.len() != action.total_input_class_ids.len() {
+    if input.input_objects.len() != action.total_inputs.len() {
         return Err(anyhow!(
             "{} expects {} inputs, got {}",
             input.action_id,
-            action.total_input_class_ids.len(),
+            action.total_inputs.len(),
             input.input_objects.len()
         ));
     }
@@ -146,11 +146,9 @@ pub(crate) fn resolve_inputs(
     action: &ActionSummary,
 ) -> Result<Vec<ResolvedInput>> {
     let mut resolved_inputs = Vec::new();
-    for (slot, selector) in input.input_objects.iter().enumerate() {
-        let expected_class_id = action.total_input_class_ids[slot].as_str();
-        let expected_class_hash_hex = action.total_input_class_hashes[slot].as_str();
-        let expected_class_hash = parse_class_hash_hex(expected_class_hash_hex)
-            .ok_or_else(|| anyhow!("invalid expected class hash {expected_class_hash_hex:?}"))?;
+    for (selector, required) in input.input_objects.iter().zip(action.total_inputs.iter()) {
+        let expected_class_hash = parse_class_hash_hex(required.hash.as_str())
+            .ok_or_else(|| anyhow!("invalid expected class hash {:?}", required.hash))?;
 
         let entry = select_object(entries, selector)?;
         if entry.record.status != ObjectStatus::Live {
@@ -164,10 +162,11 @@ pub(crate) fn resolve_inputs(
         // disk AND the on-chain `obj["type"]` predicate hash. Mismatch on
         // either is fatal — the second check catches files whose class_id
         // text drifted from the actual pod-level identity.
-        if entry.record.class_id != expected_class_id {
+        if entry.record.class_id != required.id {
             return Err(anyhow!(
-                "input class mismatch for {}: expected {expected_class_id}, got {}",
+                "input class mismatch for {}: expected {}, got {}",
                 entry.record.id,
+                required.id,
                 entry.record.class_id
             ));
         }
@@ -179,9 +178,10 @@ pub(crate) fn resolve_inputs(
         })?;
         if actual_class_hash != expected_class_hash {
             return Err(anyhow!(
-                "input class hash mismatch for {}: pod 'type' = {:#}, action expects {expected_class_hash_hex}",
+                "input class hash mismatch for {}: pod 'type' = {:#}, action expects {}",
                 entry.record.id,
                 actual_class_hash,
+                required.hash,
             ));
         }
         resolved_inputs.push(ResolvedInput {
@@ -227,17 +227,18 @@ pub(crate) fn save_results(
         .map(|input| input.file_name.clone())
         .collect();
 
-    if spendable_outputs.objs.len() != action.total_output_class_ids.len() {
+    if spendable_outputs.objs.len() != action.total_outputs.len() {
         return Err(anyhow!(
             "action {} output mismatch: descriptor expects {}, engine returned {}",
             action_id,
-            action.total_output_class_ids.len(),
+            action.total_outputs.len(),
             spendable_outputs.objs.len()
         ));
     }
 
     let mut output_files = Vec::new();
-    for (index, class_id) in action.total_output_class_ids.iter().enumerate() {
+    for (index, output) in action.total_outputs.iter().enumerate() {
+        let class_id = &output.id;
         let spendable = spendable_outputs.obj(index);
         let object_id = format!("{:#}", spendable.obj.commitment());
         let file_name = format!(

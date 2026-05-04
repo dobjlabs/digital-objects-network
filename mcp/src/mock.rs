@@ -73,13 +73,13 @@ impl CraftOps for MockCraftOps {
                 let produced_by = self
                     .actions
                     .iter()
-                    .filter(|a| a.total_output_class_ids.contains(&class_id))
+                    .filter(|a| a.total_outputs.iter().any(|r| r.id == class_id))
                     .map(|a| a.id.clone())
                     .collect();
                 let consumed_by = self
                     .actions
                     .iter()
-                    .filter(|a| a.total_input_class_ids.contains(&class_id))
+                    .filter(|a| a.total_inputs.iter().any(|r| r.id == class_id))
                     .map(|a| a.id.clone())
                     .collect();
                 ClassSummary {
@@ -123,12 +123,12 @@ impl CraftOps for MockCraftOps {
         let actions = &self.actions;
         let produced_by = actions
             .iter()
-            .filter(|a| a.total_output_class_ids.contains(&class_id.to_string()))
+            .filter(|a| a.total_outputs.iter().any(|r| r.id == class_id))
             .map(|a| a.id.clone())
             .collect();
         let consumed_by = actions
             .iter()
-            .filter(|a| a.total_input_class_ids.contains(&class_id.to_string()))
+            .filter(|a| a.total_inputs.iter().any(|r| r.id == class_id))
             .map(|a| a.id.clone())
             .collect();
 
@@ -198,14 +198,13 @@ impl CraftOps for MockCraftOps {
             .ok_or_else(|| anyhow!("unknown action: {action_id}"))?;
 
         let mut available = Vec::new();
-        let mut missing_class_ids = Vec::new();
-        let mut missing_class_names = Vec::new();
+        let mut missing_inputs = Vec::new();
 
-        for (slot, required_class_id) in action.total_input_class_ids.iter().enumerate() {
+        for required in &action.total_inputs {
             if let Some(obj) = self
                 .inventory
                 .iter()
-                .find(|o| &o.class_id == required_class_id && o.status == "live")
+                .find(|o| o.class_id == required.id && o.status == "live")
             {
                 available.push(FeasibilityInput {
                     class_id: obj.class_id.clone(),
@@ -215,17 +214,15 @@ impl CraftOps for MockCraftOps {
                     file_name: obj.file_name.clone(),
                 });
             } else {
-                missing_class_ids.push(required_class_id.clone());
-                missing_class_names.push(action.total_input_class_names[slot].clone());
+                missing_inputs.push(required.clone());
             }
         }
 
         Ok(FeasibilityReport {
-            feasible: missing_class_ids.is_empty(),
+            feasible: missing_inputs.is_empty(),
             action_id: action_id.to_string(),
             available_inputs: available,
-            missing_input_class_ids: missing_class_ids,
-            missing_input_class_names: missing_class_names,
+            missing_inputs,
         })
     }
 }
@@ -315,15 +312,23 @@ fn default_inventory() -> Vec<InventoryObject> {
 }
 
 fn make_action(name: &str, description: &str, inputs: &[&str], outputs: &[&str]) -> Action {
+    let to_refs = |classes: &[&str]| -> Vec<ClassRef> {
+        classes
+            .iter()
+            .map(|c| ClassRef {
+                id: qid(c),
+                display_name: c.to_string(),
+                hash: format!("0x{}", "0".repeat(64)),
+            })
+            .collect()
+    };
     Action {
         id: qid(name),
         display_name: name.to_string(),
         plugin_name: PLUGIN.to_string(),
         description: description.to_string(),
-        total_input_class_ids: inputs.iter().map(|c| qid(c)).collect(),
-        total_input_class_names: inputs.iter().map(|c| c.to_string()).collect(),
-        total_output_class_ids: outputs.iter().map(|c| qid(c)).collect(),
-        total_output_class_names: outputs.iter().map(|c| c.to_string()).collect(),
+        total_inputs: to_refs(inputs),
+        total_outputs: to_refs(outputs),
     }
 }
 
@@ -447,7 +452,7 @@ mod tests {
         let mock = MockCraftOps::new();
         let report = mock.check_feasibility(&qid("CraftWoodPick")).unwrap();
         assert!(report.feasible);
-        assert!(report.missing_input_class_ids.is_empty());
+        assert!(report.missing_inputs.is_empty());
         assert_eq!(report.available_inputs.len(), 2);
     }
 

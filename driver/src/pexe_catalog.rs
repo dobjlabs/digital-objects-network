@@ -27,7 +27,7 @@ use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
 use txlib::GroundingWitness;
 
 use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
-use crate::types::ActionSummary;
+use crate::types::{ActionSummary, ClassRef};
 
 struct Plugin {
     #[allow(dead_code)]
@@ -177,7 +177,7 @@ impl PexeCatalog {
                 }
 
                 let meta = action_meta_by_name.get(bare.as_str());
-                let resolve_class = |class_name: &str| -> Result<(String, String, String)> {
+                let resolve_class = |class_name: &str| -> Result<ClassRef> {
                     let hash = class_hashes.get(class_name).ok_or_else(|| {
                         anyhow!(
                             "plugin {plugin_name}: action {bare} references class {class_name:?} \
@@ -185,32 +185,21 @@ impl PexeCatalog {
                              references are not supported yet)"
                         )
                     })?;
-                    Ok((
-                        qualified_id(&plugin_name, class_name),
-                        class_name.to_string(),
-                        format!("{:#}", hash),
-                    ))
+                    Ok(ClassRef {
+                        id: qualified_id(&plugin_name, class_name),
+                        display_name: class_name.to_string(),
+                        hash: format!("{:#}", hash),
+                    })
                 };
 
-                let mut total_input_class_ids = Vec::new();
-                let mut total_input_class_names = Vec::new();
-                let mut total_input_class_hashes = Vec::new();
-                for r in action.total_inputs() {
-                    let (id, name, hash) = resolve_class(&r.class)?;
-                    total_input_class_ids.push(id);
-                    total_input_class_names.push(name);
-                    total_input_class_hashes.push(hash);
-                }
-
-                let mut total_output_class_ids = Vec::new();
-                let mut total_output_class_names = Vec::new();
-                let mut total_output_class_hashes = Vec::new();
-                for r in action.total_outputs() {
-                    let (id, name, hash) = resolve_class(&r.class)?;
-                    total_output_class_ids.push(id);
-                    total_output_class_names.push(name);
-                    total_output_class_hashes.push(hash);
-                }
+                let total_inputs = action
+                    .total_inputs()
+                    .map(|r| resolve_class(&r.class))
+                    .collect::<Result<Vec<_>>>()?;
+                let total_outputs = action
+                    .total_outputs()
+                    .map(|r| resolve_class(&r.class))
+                    .collect::<Result<Vec<_>>>()?;
 
                 if meta.is_some_and(|m| m.hidden) {
                     continue;
@@ -229,12 +218,8 @@ impl PexeCatalog {
                     description: meta
                         .map_or("Pexe action", |m| m.description.as_str())
                         .to_string(),
-                    total_input_class_ids,
-                    total_input_class_names,
-                    total_input_class_hashes,
-                    total_output_class_ids,
-                    total_output_class_names,
-                    total_output_class_hashes,
+                    total_inputs,
+                    total_outputs,
                 });
             }
 
@@ -246,12 +231,12 @@ impl PexeCatalog {
         for class in classes_in_order.iter_mut() {
             class.produced_by = all_actions
                 .iter()
-                .filter(|a| a.total_output_class_ids.contains(&class.id))
+                .filter(|a| a.total_outputs.iter().any(|r| r.id == class.id))
                 .map(|a| a.id.clone())
                 .collect();
             class.consumed_by = all_actions
                 .iter()
-                .filter(|a| a.total_input_class_ids.contains(&class.id))
+                .filter(|a| a.total_inputs.iter().any(|r| r.id == class.id))
                 .map(|a| a.id.clone())
                 .collect();
         }
@@ -648,16 +633,16 @@ description = "consume a Foo to make a Bar"
             .get_action("beta:ConsumeFoo")
             .expect("beta:ConsumeFoo present");
 
-        assert_eq!(alpha_consume.total_input_class_ids, vec!["alpha:Foo"]);
-        assert_eq!(beta_consume.total_input_class_ids, vec!["beta:Foo"]);
+        let alpha_input = &alpha_consume.total_inputs[0];
+        let beta_input = &beta_consume.total_inputs[0];
+        assert_eq!(alpha_input.id, "alpha:Foo");
+        assert_eq!(beta_input.id, "beta:Foo");
         assert_eq!(
-            alpha_consume.total_input_class_hashes,
-            vec![alpha_foo.hash.clone()],
+            alpha_input.hash, alpha_foo.hash,
             "alpha:ConsumeFoo's required input hash must be alpha's IsFoo hash"
         );
         assert_eq!(
-            beta_consume.total_input_class_hashes,
-            vec![beta_foo.hash.clone()],
+            beta_input.hash, beta_foo.hash,
             "beta:ConsumeFoo's required input hash must be beta's IsFoo hash"
         );
     }

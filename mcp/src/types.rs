@@ -68,6 +68,17 @@ pub struct InventoryObject {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct ClassRef {
+    /// Qualified class id, e.g. "craft-basics:WoodPick"
+    pub id: String,
+    /// Bare class name, e.g. "WoodPick"
+    pub display_name: String,
+    /// Hex-encoded `Is{class}` predicate hash
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct Action {
     /// Qualified action id, e.g. "craft-basics:CraftWoodPick"
     pub id: String,
@@ -77,14 +88,10 @@ pub struct Action {
     pub plugin_name: String,
     /// Human-readable description
     pub description: String,
-    /// Qualified class ids required as inputs
-    pub total_input_class_ids: Vec<String>,
-    /// Bare class names parallel to `total_input_class_ids`
-    pub total_input_class_names: Vec<String>,
-    /// Qualified class ids produced as outputs
-    pub total_output_class_ids: Vec<String>,
-    /// Bare class names parallel to `total_output_class_ids`
-    pub total_output_class_names: Vec<String>,
+    /// Classes required as inputs
+    pub total_inputs: Vec<ClassRef>,
+    /// Classes produced as outputs
+    pub total_outputs: Vec<ClassRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -167,10 +174,8 @@ pub struct FeasibilityReport {
     pub action_id: String,
     /// Objects available to satisfy input requirements
     pub available_inputs: Vec<FeasibilityInput>,
-    /// Qualified class ids that have no matching object in inventory
-    pub missing_input_class_ids: Vec<String>,
-    /// Bare class names parallel to `missing_input_class_ids`
-    pub missing_input_class_names: Vec<String>,
+    /// Slots that had no eligible object in inventory
+    pub missing_inputs: Vec<ClassRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -29,9 +29,7 @@ pub struct Action {
     pub plugin_name: String,
     pub emoji: String,
     pub hash: String,
-    pub total_input_class_ids: Vec<String>,
-    pub total_input_class_names: Vec<String>,
-    pub total_input_class_hashes: Vec<String>,
+    pub total_inputs: Vec<::driver::ClassRef>,
     pub description: String,
 }
 
@@ -90,9 +88,7 @@ pub async fn load_gui_inventory(
                 plugin_name: action.plugin_name,
                 emoji: action.emoji,
                 hash: action.hash,
-                total_input_class_ids: action.total_input_class_ids,
-                total_input_class_names: action.total_input_class_names,
-                total_input_class_hashes: action.total_input_class_hashes,
+                total_inputs: action.total_inputs,
                 description: action.description,
             })
             .collect();

@@ -38,10 +38,16 @@ impl CraftOps for AppCraftOps {
                 display_name: action.display_name,
                 plugin_name: action.plugin_name,
                 description: action.description,
-                total_input_class_ids: action.total_input_class_ids,
-                total_input_class_names: action.total_input_class_names,
-                total_output_class_ids: action.total_output_class_ids,
-                total_output_class_names: action.total_output_class_names,
+                total_inputs: action
+                    .total_inputs
+                    .into_iter()
+                    .map(to_mcp_class_ref)
+                    .collect(),
+                total_outputs: action
+                    .total_outputs
+                    .into_iter()
+                    .map(to_mcp_class_ref)
+                    .collect(),
             })
             .collect())
     }
@@ -179,8 +185,11 @@ impl CraftOps for AppCraftOps {
                     file_name: candidate.file_name,
                 })
                 .collect(),
-            missing_input_class_ids: report.missing_input_class_ids,
-            missing_input_class_names: report.missing_input_class_names,
+            missing_inputs: report
+                .missing_inputs
+                .into_iter()
+                .map(to_mcp_class_ref)
+                .collect(),
         })
     }
 
@@ -209,5 +218,13 @@ fn to_mcp_inventory_object(object: ::driver::ObjectSummary) -> mcp::InventoryObj
         status: status_string(object.status),
         tx_hash: object.tx_hash,
         fields: object.fields,
+    }
+}
+
+fn to_mcp_class_ref(r: ::driver::ClassRef) -> mcp::ClassRef {
+    mcp::ClassRef {
+        id: r.id,
+        display_name: r.display_name,
+        hash: r.hash,
     }
 }

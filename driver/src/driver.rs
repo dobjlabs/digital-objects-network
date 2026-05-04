@@ -205,14 +205,12 @@ impl Driver {
             .filter(|action| {
                 query.is_none_or(|query| {
                     query.id.as_ref().is_none_or(|id| &action.id == id)
-                        && query
-                            .input_class_id
-                            .as_ref()
-                            .is_none_or(|class_id| action.total_input_class_ids.contains(class_id))
-                        && query
-                            .output_class_id
-                            .as_ref()
-                            .is_none_or(|class_id| action.total_output_class_ids.contains(class_id))
+                        && query.input_class_id.as_ref().is_none_or(|class_id| {
+                            action.total_inputs.iter().any(|r| &r.id == class_id)
+                        })
+                        && query.output_class_id.as_ref().is_none_or(|class_id| {
+                            action.total_outputs.iter().any(|r| &r.id == class_id)
+                        })
                 })
             })
             .collect())
@@ -269,8 +267,7 @@ impl Driver {
             .collect::<Vec<_>>();
 
         let mut available = Vec::new();
-        let mut missing_class_ids = Vec::new();
-        let mut missing_class_names = Vec::new();
+        let mut missing_inputs = Vec::new();
         let mut used_ids = HashSet::new();
 
         // Apply the same cryptographic check that `resolve_inputs` runs at
@@ -279,12 +276,10 @@ impl Driver {
         // required class hash. Without the hash check, a tampered or
         // stale-migration .dobj would be reported as feasible here and then
         // rejected at execute, wasting proof-generation time.
-        for (slot, required_class_id) in action.total_input_class_ids.iter().enumerate() {
-            let required_class_name = action.total_input_class_names[slot].as_str();
-            let expected_hash =
-                parse_class_hash_hex(action.total_input_class_hashes[slot].as_str());
+        for required in &action.total_inputs {
+            let expected_hash = parse_class_hash_hex(required.hash.as_str());
             let candidate = live_objects.iter().find(|entry| {
-                &entry.record.class_id == required_class_id
+                entry.record.class_id == required.id
                     && !used_ids.contains(&entry.record.id)
                     && matches!(
                         (expected_hash, obj_type_hash(&entry.record.obj)),
@@ -297,24 +292,22 @@ impl Driver {
                 // the action's plugin owns its input classes. No catalog
                 // round-trip needed.
                 available.push(CheckActionCandidate {
-                    class_id: required_class_id.clone(),
-                    class_display_name: required_class_name.to_string(),
+                    class_id: required.id.clone(),
+                    class_display_name: required.display_name.clone(),
                     plugin_name: action.plugin_name.clone(),
                     object_id: entry.record.id.clone(),
                     file_name: entry.file_name.clone(),
                 });
             } else {
-                missing_class_ids.push(required_class_id.clone());
-                missing_class_names.push(required_class_name.to_string());
+                missing_inputs.push(required.clone());
             }
         }
 
         Ok(CheckActionReport {
-            feasible: missing_class_ids.is_empty(),
+            feasible: missing_inputs.is_empty(),
             action_id: action_id.to_string(),
             available_inputs: available,
-            missing_input_class_ids: missing_class_ids,
-            missing_input_class_names: missing_class_names,
+            missing_inputs,
         })
     }
 

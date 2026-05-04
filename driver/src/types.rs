@@ -62,6 +62,22 @@ pub struct ObjectSummary {
     pub fields: HashMap<String, serde_json::Value>,
 }
 
+/// One entry in an action's input/output slot list, or a missing-slot entry
+/// in a feasibility report. Bundles the qualified id, the bare display name,
+/// and the on-chain `Is{class}` predicate hash so callers don't have to keep
+/// three parallel `Vec<String>`s in sync.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassRef {
+    /// Qualified class id (`<plugin>:<class>`).
+    pub id: String,
+    /// Bare class name from the producing plugin's manifest.
+    pub display_name: String,
+    /// Hex-encoded `Is{class}` predicate hash. Empty if the catalog could
+    /// not derive it (shouldn't happen for compiled modules).
+    pub hash: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionSummary {
@@ -72,12 +88,8 @@ pub struct ActionSummary {
     pub emoji: String,
     pub hash: String,
     pub description: String,
-    pub total_input_class_ids: Vec<String>,
-    pub total_input_class_names: Vec<String>,
-    pub total_input_class_hashes: Vec<String>,
-    pub total_output_class_ids: Vec<String>,
-    pub total_output_class_names: Vec<String>,
-    pub total_output_class_hashes: Vec<String>,
+    pub total_inputs: Vec<ClassRef>,
+    pub total_outputs: Vec<ClassRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -113,10 +125,8 @@ pub struct CheckActionReport {
     /// Qualified action id (`<plugin>:<action>`).
     pub action_id: String,
     pub available_inputs: Vec<CheckActionCandidate>,
-    /// Qualified class ids that have no live object in inventory.
-    pub missing_input_class_ids: Vec<String>,
-    /// Bare class names parallel to `missing_input_class_ids`.
-    pub missing_input_class_names: Vec<String>,
+    /// Slots that had no eligible live object in inventory.
+    pub missing_inputs: Vec<ClassRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

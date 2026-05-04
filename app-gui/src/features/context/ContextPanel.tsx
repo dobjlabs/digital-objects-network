@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DragEvent } from "react";
 import type {
   ActionPayload as Action,
+  ClassRefPayload,
   InventoryObjectPayload as InventoryObject,
 } from "../../shared/api/wireTypes";
 import { pickDobjFilePath, readDobjFile } from "../../shared/api/tauriClient";
@@ -291,36 +292,33 @@ export function ContextPanel({
     methodId: string;
     methodName: string;
     pluginName: string;
-    totalInputClassIds: string[];
-    totalInputClassNames: string[];
-    totalInputClassHashes: string[];
+    totalInputs: ClassRefPayload[];
     onRun: (boundArgs: BoundArg[]) => void;
   }) =>
     (() => {
-      const hasInputs = config.totalInputClassIds.length > 0;
-      const boundArgs = config.totalInputClassIds.map(
+      const hasInputs = config.totalInputs.length > 0;
+      const boundArgs = config.totalInputs.map(
         (_, index) => argBindings[argKey(config.methodId, index)] ?? null,
       );
       const filledCount = boundArgs.filter(
         (value) => value?.objectPath?.trim().length,
       ).length;
       const allArgsBound =
-        !hasInputs || filledCount === config.totalInputClassIds.length;
+        !hasInputs || filledCount === config.totalInputs.length;
 
       return (
         <div className="method-card">
           {hasInputs && (
             <div className="method-card-body">
-              {config.totalInputClassIds.map((expectedClassId, index) => {
+              {config.totalInputs.map((required, index) => {
                 const key = argKey(config.methodId, index);
                 const bound = argBindings[key];
                 const isDropActive = hoverArgKey === key;
                 const err = argErrors[key];
-                const classHash = config.totalInputClassHashes[index] ?? "";
-                const expectedClassName =
-                  config.totalInputClassNames[index] ?? expectedClassId;
+                const expectedClassId = required.id;
+                const classHash = required.hash;
                 const expectedClassLabel = pluginScopedLabel(
-                  expectedClassName,
+                  required.displayName,
                   config.pluginName,
                 );
 
@@ -610,9 +608,7 @@ export function ContextPanel({
         methodId: action.id,
         methodName: actionLabel,
         pluginName: action.pluginName,
-        totalInputClassIds: action.totalInputClassIds,
-        totalInputClassNames: action.totalInputClassNames,
-        totalInputClassHashes: action.totalInputClassHashes,
+        totalInputs: action.totalInputs,
         onRun: (boundArgs) =>
           onRunProof({
             actionId: action.id,

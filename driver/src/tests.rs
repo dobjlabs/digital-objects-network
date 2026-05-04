@@ -272,8 +272,9 @@ fn test_list_actions_filters_by_input_class() {
     );
     assert!(filtered.iter().all(|action| {
         action
-            .total_input_class_ids
-            .contains(&"craft-basics:Wood".to_string())
+            .total_inputs
+            .iter()
+            .any(|r| r.id == "craft-basics:Wood")
     }));
 }
 

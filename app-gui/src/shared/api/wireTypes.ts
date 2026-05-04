@@ -23,6 +23,15 @@ export interface InventoryObjectPayload {
   obj: unknown;
 }
 
+export interface ClassRefPayload {
+  /** Qualified class id (`<plugin>:<class>`). */
+  id: string;
+  /** Bare class name from the producing plugin's manifest. */
+  displayName: string;
+  /** Hex-encoded `Is{class}` predicate hash. */
+  hash: string;
+}
+
 export interface ActionPayload {
   /** Qualified action id (`<plugin>:<action>`). */
   id: string;
@@ -31,9 +40,7 @@ export interface ActionPayload {
   pluginName: string;
   emoji: string;
   hash: string;
-  totalInputClassIds: string[];
-  totalInputClassNames: string[];
-  totalInputClassHashes: string[];
+  totalInputs: ClassRefPayload[];
   description: string;
 }
 

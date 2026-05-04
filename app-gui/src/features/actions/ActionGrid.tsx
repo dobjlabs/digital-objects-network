@@ -26,9 +26,7 @@ export function ActionGrid({
   const compatibilityFiltered = useMemo(() => {
     if (!selectedObject) return actions;
     return actions.filter((action) =>
-      action.totalInputClassIds.some(
-        (classId) => classId === selectedObject.classId,
-      ),
+      action.totalInputs.some((ref) => ref.id === selectedObject.classId),
     );
   }, [actions, selectedObject]);
 
