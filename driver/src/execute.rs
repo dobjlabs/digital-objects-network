@@ -2,10 +2,10 @@ use std::collections::HashSet;
 
 use anyhow::{Result, anyhow};
 use common::{
+    decode_hash_hex,
     payload::{Payload, PayloadProof},
     shrink::{ShrunkMainPodSetup, shrink_compress_pod},
 };
-use hex::FromHex;
 use pod2::middleware::{Hash, Key, Params};
 use sdk::SpendableObjects;
 use txlib::object_nullifier_hash;
@@ -147,8 +147,7 @@ pub(crate) fn resolve_inputs(
 ) -> Result<Vec<ResolvedInput>> {
     let mut resolved_inputs = Vec::new();
     for (selector, required) in input.input_objects.iter().zip(action.total_inputs.iter()) {
-        let expected_class_hash = parse_class_hash_hex(required.hash.as_str())
-            .ok_or_else(|| anyhow!("invalid expected class hash {:?}", required.hash))?;
+        let expected_class_hash = decode_hash_hex(required.hash.as_str())?;
 
         let entry = select_object(entries, selector)?;
         if entry.record.status != ObjectStatus::Live {
@@ -190,11 +189,6 @@ pub(crate) fn resolve_inputs(
         });
     }
     Ok(resolved_inputs)
-}
-
-pub(crate) fn parse_class_hash_hex(s: &str) -> Option<Hash> {
-    let trimmed = s.strip_prefix("0x").unwrap_or(s);
-    Hash::from_hex(trimmed).ok()
 }
 
 pub(crate) fn obj_type_hash(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {

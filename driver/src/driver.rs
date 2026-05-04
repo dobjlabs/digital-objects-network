@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use common::encode_hash_hex;
+use common::{decode_hash_hex, encode_hash_hex};
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
 use txlib::object_nullifier_hash;
@@ -15,8 +15,8 @@ use crate::clients::{
     SynchronizerClient,
 };
 use crate::execute::{
-    build_relayer_payload, obj_type_hash, parse_class_hash_hex, reconcile_objects, resolve_inputs,
-    save_results, update_output_files, validate_execute_request,
+    build_relayer_payload, obj_type_hash, reconcile_objects, resolve_inputs, save_results,
+    update_output_files, validate_execute_request,
 };
 use crate::object_record::ObjectStatus;
 use crate::object_record::parse_object_record_file;
@@ -277,7 +277,7 @@ impl Driver {
         // stale-migration .dobj would be reported as feasible here and then
         // rejected at execute, wasting proof-generation time.
         for required in &action.total_inputs {
-            let expected_hash = parse_class_hash_hex(required.hash.as_str());
+            let expected_hash = decode_hash_hex(required.hash.as_str()).ok();
             let candidate = live_objects.iter().find(|entry| {
                 entry.record.class_id == required.id
                     && !used_ids.contains(&entry.record.id)

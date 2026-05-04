@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
-use hex::FromHex;
+use common::decode_hash_hex;
 use pod2::middleware::Hash;
 use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
 use txlib::GroundingWitness;
@@ -270,7 +270,7 @@ impl PexeCatalog {
         let classes_by_hash: HashMap<Hash, String> = classes_in_order
             .iter()
             .filter_map(|c| {
-                parse_hash_hex(&c.hash)
+                decode_hash_hex(&c.hash)
                     .ok()
                     .map(|hash| (hash, c.id.clone()))
             })
@@ -404,20 +404,10 @@ fn validate_plugin_name(name: &str) -> Result<()> {
 }
 
 fn bare_action_name<'a>(qualified_id: &'a str, plugin_name: &str) -> Option<&'a str> {
-    let prefix_len = plugin_name.len();
-    if qualified_id.len() <= prefix_len + 1 {
-        return None;
-    }
-    let (head, rest) = qualified_id.split_at(prefix_len);
-    if head != plugin_name || !rest.starts_with(':') {
-        return None;
-    }
-    Some(&rest[1..])
-}
-
-fn parse_hash_hex(s: &str) -> Result<Hash> {
-    let trimmed = s.strip_prefix("0x").unwrap_or(s);
-    Hash::from_hex(trimmed).map_err(|err| anyhow!("invalid hash hex {s:?}: {err}"))
+    qualified_id
+        .strip_prefix(plugin_name)
+        .and_then(|rest| rest.strip_prefix(':'))
+        .filter(|rest| !rest.is_empty())
 }
 
 #[cfg(test)]
@@ -470,7 +460,7 @@ mod tests {
         let log = catalog
             .get_class("craft-basics:Log")
             .expect("Log class present");
-        let by_hash = parse_hash_hex(&log.hash)
+        let by_hash = decode_hash_hex(&log.hash)
             .ok()
             .and_then(|h| catalog.get_class_by_hash(&h))
             .expect("class hash resolves back");
@@ -675,8 +665,8 @@ description = "consume a Foo to make a Bar"
         // script, the type field would be the other plugin's hash.
         let alpha_foo = catalog.get_class("alpha:Foo").expect("alpha:Foo present");
         let beta_foo = catalog.get_class("beta:Foo").expect("beta:Foo present");
-        let alpha_hash = parse_hash_hex(&alpha_foo.hash).expect("alpha:Foo hash parses");
-        let beta_hash = parse_hash_hex(&beta_foo.hash).expect("beta:Foo hash parses");
+        let alpha_hash = decode_hash_hex(&alpha_foo.hash).expect("alpha:Foo hash parses");
+        let beta_hash = decode_hash_hex(&beta_foo.hash).expect("beta:Foo hash parses");
 
         let alpha_out = catalog
             .execute_action(

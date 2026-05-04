@@ -44,27 +44,20 @@ struct MockProofJson {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-pub fn parse_hex_hash(s: &str) -> Result<Hash> {
-    use anyhow::Context;
-
-    let hex = s.strip_prefix("0x").unwrap_or(s);
-    <Hash as hex::FromHex>::from_hex(hex).context("Invalid Hash hex")
-}
-
-#[cfg(any(test, feature = "test-utils"))]
 impl BlobParser for MockBlobParser {
     fn parse_blob(&self, blob_bytes: &[u8]) -> Result<Option<Payload>> {
+        use crate::decode_hash_hex;
         let json: MockProofJson = match serde_json::from_slice(blob_bytes) {
             Ok(j) => j,
             Err(_) => return Ok(None),
         };
-        let tx_final = parse_hex_hash(&json.tx_final)?;
+        let tx_final = decode_hash_hex(&json.tx_final)?;
         let nullifiers = json
             .nullifiers
             .iter()
-            .map(|s| parse_hex_hash(s))
+            .map(|s| decode_hash_hex(s))
             .collect::<Result<Vec<_>>>()?;
-        let state_root_hash = parse_hex_hash(&json.state_root_hash)?;
+        let state_root_hash = decode_hash_hex(&json.state_root_hash)?;
         Ok(Some(Payload {
             proof: PayloadProof::Groth16(vec![]),
             tx_final,
