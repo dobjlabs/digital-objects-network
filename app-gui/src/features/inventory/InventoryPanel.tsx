@@ -3,13 +3,11 @@ import type { DragEvent } from "react";
 import type { InventoryObjectPayload as InventoryObject } from "../../shared/api/wireTypes";
 import { truncateDisplayHash } from "../../shared/format";
 import {
-  classDisplayLabel,
   displayPathInObjectsDir,
   isLiveObject,
   isNullifiedObject,
   joinObjectsDirPath,
 } from "../../shared/objectUtils";
-import { useStore } from "../../shared/state/store";
 
 interface InventoryPanelProps {
   inventory: InventoryObject[];
@@ -31,7 +29,6 @@ export function InventoryPanel({
   onOpenObjectsDir,
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
-  const nameCollisions = useStore((state) => state.nameCollisions);
 
   const isUsable = (object: InventoryObject) => isLiveObject(object);
 
@@ -44,11 +41,7 @@ export function InventoryPanel({
       return;
     }
     const objectPath = joinObjectsDirPath(objectsDirPath, object.fileName);
-    const displayLabel = classDisplayLabel(
-      object.classDisplayName,
-      object.pluginName,
-      nameCollisions,
-    );
+    const displayLabel = object.classDisplayName;
 
     const payload = JSON.stringify({
       objectPath,
@@ -76,11 +69,7 @@ export function InventoryPanel({
   const nullifiedObjects = inventory.filter((object) => isNullifiedObject(object));
 
   const renderInventoryObject = (object: InventoryObject) => {
-    const displayName = classDisplayLabel(
-      object.classDisplayName,
-      object.pluginName,
-      nameCollisions,
-    );
+    const displayName = object.classDisplayName;
     const hashLineRaw = object.status === "live"
       ? object.id
       : object.status;

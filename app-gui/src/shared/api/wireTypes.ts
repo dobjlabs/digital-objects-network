@@ -40,8 +40,6 @@ export interface ActionPayload {
 export interface LoadGuiInventoryResult {
   inventory: InventoryObjectPayload[];
   actions: ActionPayload[];
-  /** Bare class/action names that appear in more than one loaded plugin. */
-  nameCollisions: string[];
 }
 
 export interface RunActionInput {

@@ -16,7 +16,7 @@
 //! therefore `!Send`. `execute_action` re-loads the script from its stored bytes
 //! on demand, matching the per-call pattern used before.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -48,8 +48,6 @@ pub struct PexeCatalog {
     classes: Vec<CatalogClass>,
     classes_by_id: HashMap<String, CatalogClass>,
     classes_by_hash: HashMap<Hash, String>,
-    /// Bare class/action names that appear in more than one plugin.
-    name_collisions: Vec<String>,
     combined_podlang_src: String,
     mock_proofs: bool,
 }
@@ -97,11 +95,7 @@ impl PexeCatalog {
         let mut all_actions: Vec<ActionSummary> = Vec::new();
         let mut classes_in_order: Vec<CatalogClass> = Vec::new();
         let mut combined_podlang = String::new();
-        // Track class hash by bare class name within each plugin so we can
-        // resolve action input/output class refs without consulting other
-        // plugins. (Within one module, bare class names are unique.)
         let mut enriched_plugins: Vec<Plugin> = Vec::with_capacity(plugins.len());
-        let mut bare_name_counts: BTreeMap<String, usize> = BTreeMap::new();
         let mut action_plugin_idx: HashMap<String, usize> = HashMap::new();
 
         for mut plugin in plugins {
@@ -139,7 +133,6 @@ impl PexeCatalog {
 
             for class in module.classes() {
                 let bare = &class.name;
-                *bare_name_counts.entry(bare.clone()).or_insert(0) += 1;
                 let qid = qualified_id(&plugin_name, bare);
                 let class_hash = class_hashes[bare];
                 let meta = class_meta_by_name.get(bare.as_str());
@@ -175,7 +168,6 @@ impl PexeCatalog {
 
             for action in module.actions() {
                 let bare = action.name.clone();
-                *bare_name_counts.entry(bare.clone()).or_insert(0) += 1;
                 let qid = qualified_id(&plugin_name, &bare);
                 plugin_action_ids.push(qid.clone());
                 if let Some(prior) = action_plugin_idx.insert(qid.clone(), plugin_idx) {
@@ -287,10 +279,6 @@ impl PexeCatalog {
                     .map(|hash| (hash, c.id.clone()))
             })
             .collect();
-        let name_collisions: Vec<String> = bare_name_counts
-            .into_iter()
-            .filter_map(|(name, count)| (count > 1).then_some(name))
-            .collect();
 
         Ok(Self {
             plugins: enriched_plugins,
@@ -300,7 +288,6 @@ impl PexeCatalog {
             classes: classes_in_order,
             classes_by_id,
             classes_by_hash,
-            name_collisions,
             combined_podlang_src: combined_podlang,
             mock_proofs,
         })
@@ -331,10 +318,6 @@ impl ActionCatalog for PexeCatalog {
     fn get_class_by_hash(&self, class_hash: &Hash) -> Option<CatalogClass> {
         let id = self.classes_by_hash.get(class_hash)?;
         self.classes_by_id.get(id).cloned()
-    }
-
-    fn name_collisions(&self) -> Vec<String> {
-        self.name_collisions.clone()
     }
 
     fn execute_action(
@@ -478,12 +461,6 @@ mod tests {
     }
 
     #[test]
-    fn test_no_collisions_for_single_plugin() {
-        let catalog = test_catalog();
-        assert!(catalog.name_collisions().is_empty());
-    }
-
-    #[test]
     fn test_duplicate_plugin_name_rejected() {
         let result = PexeCatalog::from_bytes(
             [
@@ -614,20 +591,6 @@ description = "consume a Foo to make a Bar"
         assert_ne!(
             foo_alpha.hash, foo_beta.hash,
             "Foo from two different modules must have different IsFoo predicate hashes"
-        );
-        // And the bare-name collision is reported so the GUI can disambiguate.
-        let collisions = catalog.name_collisions();
-        assert!(
-            collisions.contains(&"Foo".to_string()),
-            "expected name_collisions to include Foo, got {collisions:?}"
-        );
-        assert!(
-            collisions.contains(&"Bar".to_string()),
-            "expected name_collisions to include Bar, got {collisions:?}"
-        );
-        assert!(
-            collisions.contains(&"MakeFoo".to_string()),
-            "expected name_collisions to include MakeFoo, got {collisions:?}"
         );
     }
 

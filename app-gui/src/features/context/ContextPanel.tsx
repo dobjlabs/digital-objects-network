@@ -7,12 +7,10 @@ import type {
 import { pickDobjFilePath, readDobjFile } from "../../shared/api/tauriClient";
 import { truncateDisplayHash } from "../../shared/format";
 import {
-  classDisplayLabel,
   displayPathInObjectsDir,
   isNullifiedObject,
   joinObjectsDirPath,
 } from "../../shared/objectUtils";
-import { useStore } from "../../shared/state/store";
 import { isRecord, normalizePod2Value } from "../../shared/pod2utils";
 import type { ContextSelection } from "../../shared/state/store";
 
@@ -52,7 +50,6 @@ export function ContextPanel({
   const [hoverArgKey, setHoverArgKey] = useState<string | null>(null);
   const [argErrors, setArgErrors] = useState<Record<string, string>>({});
   const previousProofStatusRef = useRef(proofStatus);
-  const nameCollisions = useStore((state) => state.nameCollisions);
   const selectionKey =
     selection.kind === "object"
       ? `object:${selection.objectId}`
@@ -295,7 +292,6 @@ export function ContextPanel({
     totalInputClassIds: string[];
     totalInputClassNames: string[];
     totalInputClassHashes: string[];
-    pluginName: string;
     onRun: (boundArgs: BoundArg[]) => void;
   }) =>
     (() => {
@@ -319,13 +315,8 @@ export function ContextPanel({
                 const isDropActive = hoverArgKey === key;
                 const err = argErrors[key];
                 const classHash = config.totalInputClassHashes[index] ?? "";
-                const expectedClassName =
+                const expectedClassLabel =
                   config.totalInputClassNames[index] ?? expectedClassId;
-                const expectedClassLabel = classDisplayLabel(
-                  expectedClassName,
-                  config.pluginName,
-                  nameCollisions,
-                );
 
                 return (
                   <div
@@ -523,11 +514,7 @@ export function ContextPanel({
     if (!object)
       return <section className="context-panel">Object not found.</section>;
 
-    const titleName = classDisplayLabel(
-      object.classDisplayName,
-      object.pluginName,
-      nameCollisions,
-    );
+    const titleName = object.classDisplayName;
     const liveValueRaw = object.status === "live" ? object.id : object.status;
     const liveValue = truncateDisplayHash(liveValueRaw);
 
@@ -584,11 +571,7 @@ export function ContextPanel({
     return <section className="context-panel">Action not found.</section>;
   const actionHashRaw = action.hash.trim();
   const actionHashDisplay = truncateDisplayHash(actionHashRaw);
-  const actionLabel = classDisplayLabel(
-    action.displayName,
-    action.pluginName,
-    nameCollisions,
-  );
+  const actionLabel = action.displayName;
 
   return (
     <section className="context-panel">
@@ -623,7 +606,6 @@ export function ContextPanel({
         totalInputClassIds: action.totalInputClassIds,
         totalInputClassNames: action.totalInputClassNames,
         totalInputClassHashes: action.totalInputClassHashes,
-        pluginName: action.pluginName,
         onRun: (boundArgs) =>
           onRunProof({
             actionId: action.id,

@@ -4,8 +4,6 @@ import type {
   InventoryObjectPayload as InventoryObject,
 } from "../../shared/api/wireTypes";
 import { truncateDisplayHash } from "../../shared/format";
-import { classDisplayLabel } from "../../shared/objectUtils";
-import { useStore } from "../../shared/state/store";
 
 interface ActionGridProps {
   actions: Action[];
@@ -23,7 +21,6 @@ export function ActionGrid({
   onClearSelection,
 }: ActionGridProps) {
   const [search, setSearch] = useState("");
-  const nameCollisions = useStore((state) => state.nameCollisions);
 
   const compatibilityFiltered = useMemo(() => {
     if (!selectedObject) return actions;
@@ -47,13 +44,7 @@ export function ActionGrid({
     });
   }, [compatibilityFiltered, search, selectedObject]);
 
-  const selectedObjectLabel = selectedObject
-    ? classDisplayLabel(
-        selectedObject.classDisplayName,
-        selectedObject.pluginName,
-        nameCollisions,
-      )
-    : "";
+  const selectedObjectLabel = selectedObject?.classDisplayName ?? "";
   const filterLabel = selectedObject
     ? visibleActions.length > 0
       ? `accepts # ${selectedObjectLabel}`
@@ -97,11 +88,7 @@ export function ActionGrid({
       </div>
       <div className="action-list">
         {visibleActions.map((action) => {
-          const label = classDisplayLabel(
-            action.displayName,
-            action.pluginName,
-            nameCollisions,
-          );
+          const label = action.displayName;
           return (
             <button
               key={action.id}

@@ -495,12 +495,6 @@ impl Driver {
         self.deps.catalog.generated_podlang()
     }
 
-    /// Bare class/action names that appear in more than one loaded plugin.
-    /// UI callers can use this to decide when a label needs disambiguation.
-    pub fn name_collisions(&self) -> Vec<String> {
-        self.deps.catalog.name_collisions()
-    }
-
     fn object_summary(&self, entry: &ObjectFileEntry, grounded: Option<bool>) -> ObjectSummary {
         let class_info = self.deps.catalog.get_class(&entry.record.class_id);
         let (class_hash, display_name, plugin_name) = match class_info {

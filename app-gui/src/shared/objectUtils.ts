@@ -14,33 +14,6 @@ export function displayObjectFileName(className: string): string {
   return `${className}.dobj`;
 }
 
-/**
- * Render a class label that includes a plugin disambiguator only when the
- * bare class name collides with another loaded plugin. Keeps the common
- * single-plugin case clean.
- */
-export function classDisplayLabel(
-  displayName: string,
-  pluginName: string,
-  nameCollisions: string[],
-): string {
-  if (!pluginName || !nameCollisions.includes(displayName)) {
-    return displayName;
-  }
-  return `${displayName} (${pluginName})`;
-}
-
-/**
- * Render an action label with the same collision rule.
- */
-export function actionDisplayLabel(
-  displayName: string,
-  pluginName: string,
-  nameCollisions: string[],
-): string {
-  return classDisplayLabel(displayName, pluginName, nameCollisions);
-}
-
 function normalizeObjectsDir(objectsDirPath: string): string {
   return objectsDirPath.replace(/[\\/]+$/, "");
 }

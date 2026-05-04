@@ -31,12 +31,6 @@ pub trait ActionCatalog: Send + Sync {
     fn list_classes(&self) -> Vec<CatalogClass>;
     fn get_class(&self, class_id: &str) -> Option<CatalogClass>;
     fn get_class_by_hash(&self, class_hash: &Hash) -> Option<CatalogClass>;
-    /// Bare names that appear in more than one loaded plugin. Callers that
-    /// render a class label can use this to decide when to disambiguate
-    /// (e.g. by appending the plugin name).
-    fn name_collisions(&self) -> Vec<String> {
-        Vec::new()
-    }
     fn execute_action(
         &self,
         action_id: String,

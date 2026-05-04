@@ -40,9 +40,6 @@ pub struct Action {
 pub struct LoadGuiInventoryResult {
     pub inventory: Vec<InventoryObject>,
     pub actions: Vec<Action>,
-    /// Bare class/action names that appear in more than one plugin. UI uses
-    /// this to decide when to append a plugin disambiguator to a label.
-    pub name_collisions: Vec<String>,
 }
 
 #[tauri::command]
@@ -100,13 +97,7 @@ pub async fn load_gui_inventory(
             })
             .collect();
 
-        let name_collisions = driver.name_collisions();
-
-        Ok::<_, anyhow::Error>(LoadGuiInventoryResult {
-            inventory,
-            actions,
-            name_collisions,
-        })
+        Ok::<_, anyhow::Error>(LoadGuiInventoryResult { inventory, actions })
     })
     .await
     .map_err(|err| anyhow::anyhow!("failed to load inventory task: {err}"))?
