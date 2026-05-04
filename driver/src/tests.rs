@@ -266,10 +266,15 @@ fn test_list_actions_filters_by_input_class() {
             ..ActionQuery::default()
         }))
         .unwrap();
-    assert!(!filtered.is_empty(), "expected at least one Wood-consuming action");
-    assert!(filtered.iter().all(|action| action
-        .total_input_class_ids
-        .contains(&"craft-basics:Wood".to_string())));
+    assert!(
+        !filtered.is_empty(),
+        "expected at least one Wood-consuming action"
+    );
+    assert!(filtered.iter().all(|action| {
+        action
+            .total_input_class_ids
+            .contains(&"craft-basics:Wood".to_string())
+    }));
 }
 
 #[test]

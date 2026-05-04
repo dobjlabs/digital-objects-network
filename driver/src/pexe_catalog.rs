@@ -605,12 +605,8 @@ description = "consume a Foo to make a Bar"
     #[test]
     fn test_two_plugins_same_class_name_keeps_distinct_hashes() {
         let catalog = alpha_beta_catalog();
-        let foo_alpha = catalog
-            .get_class("alpha:Foo")
-            .expect("alpha:Foo present");
-        let foo_beta = catalog
-            .get_class("beta:Foo")
-            .expect("beta:Foo present");
+        let foo_alpha = catalog.get_class("alpha:Foo").expect("alpha:Foo present");
+        let foo_beta = catalog.get_class("beta:Foo").expect("beta:Foo present");
         assert_eq!(foo_alpha.display_name, "Foo");
         assert_eq!(foo_beta.display_name, "Foo");
         assert_eq!(foo_alpha.plugin_name, "alpha");
@@ -642,9 +638,7 @@ description = "consume a Foo to make a Bar"
         // Each plugin's MakeFoo produces an output whose obj["type"] is *that
         // plugin's* IsFoo predicate hash. If the catalog routed the wrong
         // script, the type field would be the other plugin's hash.
-        let alpha_foo = catalog
-            .get_class("alpha:Foo")
-            .expect("alpha:Foo present");
+        let alpha_foo = catalog.get_class("alpha:Foo").expect("alpha:Foo present");
         let beta_foo = catalog.get_class("beta:Foo").expect("beta:Foo present");
         let alpha_hash = parse_hash_hex(&alpha_foo.hash).expect("alpha:Foo hash parses");
         let beta_hash = parse_hash_hex(&beta_foo.hash).expect("beta:Foo hash parses");
@@ -656,8 +650,8 @@ description = "consume a Foo to make a Bar"
                 vec![],
             )
             .expect("alpha:MakeFoo runs");
-        let alpha_type = obj_type_hash_for_test(&alpha_out.obj(0).obj)
-            .expect("alpha output has type");
+        let alpha_type =
+            obj_type_hash_for_test(&alpha_out.obj(0).obj).expect("alpha output has type");
         assert_eq!(
             alpha_type, alpha_hash,
             "alpha:MakeFoo output type should be alpha's IsFoo hash"
@@ -670,8 +664,7 @@ description = "consume a Foo to make a Bar"
                 vec![],
             )
             .expect("beta:MakeFoo runs");
-        let beta_type = obj_type_hash_for_test(&beta_out.obj(0).obj)
-            .expect("beta output has type");
+        let beta_type = obj_type_hash_for_test(&beta_out.obj(0).obj).expect("beta output has type");
         assert_eq!(
             beta_type, beta_hash,
             "beta:MakeFoo output type should be beta's IsFoo hash"

@@ -75,10 +75,7 @@ impl ObjectRecord {
     fn to_file_value(&self) -> Result<Value, String> {
         let mut fields = serde_json::Map::new();
         fields.insert("id".to_string(), Value::String(self.id.clone()));
-        fields.insert(
-            "classId".to_string(),
-            Value::String(self.class_id.clone()),
-        );
+        fields.insert("classId".to_string(), Value::String(self.class_id.clone()));
         fields.insert(
             "status".to_string(),
             serde_json::to_value(self.status)

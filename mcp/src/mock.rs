@@ -216,8 +216,7 @@ impl CraftOps for MockCraftOps {
                 });
             } else {
                 missing_class_ids.push(required_class_id.clone());
-                missing_class_names
-                    .push(action.total_input_class_names[slot].clone());
+                missing_class_names.push(action.total_input_class_names[slot].clone());
             }
         }
 
@@ -231,16 +230,20 @@ impl CraftOps for MockCraftOps {
     }
 }
 
-fn make_obj(id: &str, class: &str, file_name: &str, tx_hash: &str, status: &str, extra: Vec<(&str, serde_json::Value)>) -> InventoryObject {
+fn make_obj(
+    id: &str,
+    class: &str,
+    file_name: &str,
+    tx_hash: &str,
+    status: &str,
+    extra: Vec<(&str, serde_json::Value)>,
+) -> InventoryObject {
     let mut fields = HashMap::from([
         (
             "blueprint".to_string(),
             serde_json::Value::String(class.to_string()),
         ),
-        (
-            "key".to_string(),
-            serde_json::Value::String(id.to_string()),
-        ),
+        ("key".to_string(), serde_json::Value::String(id.to_string())),
     ]);
     for (k, v) in extra {
         fields.insert(k.to_string(), v);
@@ -311,12 +314,7 @@ fn default_inventory() -> Vec<InventoryObject> {
     ]
 }
 
-fn make_action(
-    name: &str,
-    description: &str,
-    inputs: &[&str],
-    outputs: &[&str],
-) -> Action {
+fn make_action(name: &str, description: &str, inputs: &[&str], outputs: &[&str]) -> Action {
     Action {
         id: qid(name),
         display_name: name.to_string(),
@@ -331,7 +329,12 @@ fn make_action(
 
 fn default_actions() -> Vec<Action> {
     vec![
-        make_action("FindLog", "Discover a log by proving a short VDF", &[], &["Log"]),
+        make_action(
+            "FindLog",
+            "Discover a log by proving a short VDF",
+            &[],
+            &["Log"],
+        ),
         make_action("CraftWood", "Refine one log into wood", &["Log"], &["Wood"]),
         make_action(
             "CraftSticks",

@@ -209,9 +209,10 @@ impl Driver {
                             .input_class_id
                             .as_ref()
                             .is_none_or(|class_id| action.total_input_class_ids.contains(class_id))
-                        && query.output_class_id.as_ref().is_none_or(|class_id| {
-                            action.total_output_class_ids.contains(class_id)
-                        })
+                        && query
+                            .output_class_id
+                            .as_ref()
+                            .is_none_or(|class_id| action.total_output_class_ids.contains(class_id))
                 })
             })
             .collect())
@@ -504,11 +505,7 @@ impl Driver {
         let class_info = self.deps.catalog.get_class(&entry.record.class_id);
         let (class_hash, display_name, plugin_name) = match class_info {
             Some(c) => (c.hash, c.display_name, c.plugin_name),
-            None => (
-                String::new(),
-                entry.record.class_id.clone(),
-                String::new(),
-            ),
+            None => (String::new(), entry.record.class_id.clone(), String::new()),
         };
         ObjectSummary {
             id: entry.record.id.clone(),
