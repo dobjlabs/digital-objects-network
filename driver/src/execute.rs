@@ -203,10 +203,24 @@ pub(crate) fn obj_type_hash(obj: &pod2::middleware::containers::Dictionary) -> O
 }
 
 /// Build the lowercase filename prefix for a `.dobj` of the given qualified
-/// class id (`<plugin>:<class>`). The colon is replaced with `_` so the
-/// result is filename-safe on every OS we target.
+/// class id (`<plugin>:<class>`). Plugin names are already restricted to
+/// `[A-Za-z0-9_-]` at catalog load, but class names come from arbitrary
+/// rhai string literals (e.g. `action.output("…")`) so they could in
+/// principle contain path-significant characters. To keep written files
+/// inside `~/.dobj/objects/`, every char outside the allowlist
+/// `[a-z0-9_-]` (after lowercasing) is replaced with `_`.
 pub(crate) fn file_prefix_for_class(class_id: &str) -> String {
-    class_id.to_ascii_lowercase().replace(':', "_")
+    class_id
+        .chars()
+        .map(|c| {
+            let lower = c.to_ascii_lowercase();
+            if lower.is_ascii_alphanumeric() || lower == '-' || lower == '_' {
+                lower
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug)]

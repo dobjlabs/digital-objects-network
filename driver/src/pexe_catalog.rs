@@ -77,11 +77,22 @@ impl PexeCatalog {
     }
 
     fn from_plugins(plugins: Vec<Plugin>, mock_proofs: bool) -> Result<Self> {
-        // Reject duplicate plugin.name early: qualified ids are
-        // `<plugin>:<name>` and would otherwise collide silently.
+        // Validate plugin.name early: it ends up in qualified ids
+        // (`<plugin>:<name>`), in `.dobj` filename prefixes, and in GUI
+        // labels. The allowlist is filename-safe on every OS we target
+        // and rules out the `:` separator (which would break
+        // `bare_action_name`'s split) and any path-significant chars
+        // (`/`, `\`, `..`) that could otherwise let a malicious or
+        // misconfigured plugin escape the objects directory.
         let mut seen_plugin_names: HashMap<String, usize> = HashMap::new();
         for (idx, plugin) in plugins.iter().enumerate() {
             let name = &plugin.manifest.plugin.name;
+            validate_plugin_name(name).map_err(|err| {
+                anyhow!(
+                    "invalid plugin name {name:?} in {}: {err}",
+                    plugin.path.display()
+                )
+            })?;
             if let Some(prior) = seen_plugin_names.insert(name.clone(), idx) {
                 return Err(anyhow!(
                     "duplicate plugin name {name:?}: already registered by {} (other entry at index {prior})",
@@ -371,6 +382,27 @@ fn load_plugin_from_bytes(path: PathBuf, bytes: &[u8]) -> Result<Plugin> {
     })
 }
 
+/// Allowlist for `manifest.plugin.name`. Must be non-empty and contain only
+/// ASCII alphanumerics, `-`, or `_`. Rules out the qualified-id separator
+/// `:`, every path-significant character (`/`, `\`, `.`), whitespace, and
+/// any reserved/control characters that would otherwise leak into filenames
+/// or split qualified ids unexpectedly.
+fn validate_plugin_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(anyhow!("plugin name must be non-empty"));
+    }
+    if let Some(bad) = name
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || *c == '-' || *c == '_'))
+    {
+        return Err(anyhow!(
+            "plugin name may only contain ASCII letters, digits, '-', and '_'; \
+             rejected character {bad:?}"
+        ));
+    }
+    Ok(())
+}
+
 fn bare_action_name<'a>(qualified_id: &'a str, plugin_name: &str) -> Option<&'a str> {
     let prefix_len = plugin_name.len();
     if qualified_id.len() <= prefix_len + 1 {
@@ -443,6 +475,61 @@ mod tests {
             .and_then(|h| catalog.get_class_by_hash(&h))
             .expect("class hash resolves back");
         assert_eq!(by_hash.id, log.id);
+    }
+
+    #[test]
+    fn test_invalid_plugin_name_rejected() {
+        // Each of these would either break qualified-id parsing or escape
+        // the objects directory when used as a filename prefix.
+        let cases = [
+            ("weird:plugin", "':' in plugin name"),
+            ("foo/bar", "'/' in plugin name"),
+            ("foo\\bar", "'\\' in plugin name"),
+            ("..", "'..' as plugin name"),
+            ("with space", "whitespace in plugin name"),
+            ("", "empty plugin name"),
+        ];
+        for (name, label) in cases {
+            let bytes = synthetic_plugin_bytes(name, ALPHA_SCRIPT);
+            let result = PexeCatalog::from_bytes(
+                std::iter::once((PathBuf::from(format!("{name}.pexe")), bytes)),
+                true,
+            );
+            match result {
+                Ok(_) => panic!("expected catalog to reject {label}, but load succeeded"),
+                Err(err) => {
+                    let msg = err.to_string();
+                    assert!(
+                        msg.contains("invalid plugin name") || msg.contains("plugin name"),
+                        "unexpected error for {label}: {msg}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_file_prefix_for_class_sanitizes_path_chars() {
+        use crate::execute::file_prefix_for_class;
+        // Plugin names are validated upstream so the colon here is the
+        // only legitimate `:` in a real qualified id, but if a class name
+        // ever contained a path-significant character the prefix must
+        // still stay confined to a single filename component.
+        assert_eq!(
+            file_prefix_for_class("craft-basics:Wood"),
+            "craft-basics_wood"
+        );
+        assert_eq!(
+            file_prefix_for_class("plugin:weird/class"),
+            "plugin_weird_class"
+        );
+        // `:`, `.`, `.`, `\` all become `_`
+        assert_eq!(file_prefix_for_class("plugin:..\\Stone"), "plugin____stone");
+        let prefix = file_prefix_for_class("p:c");
+        assert!(
+            !prefix.contains('/') && !prefix.contains('\\') && !prefix.contains(':'),
+            "prefix {prefix:?} must be path-safe"
+        );
     }
 
     #[test]
