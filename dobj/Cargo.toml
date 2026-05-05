@@ -17,3 +17,5 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 reqwest-eventsource = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 futures-util = "0.3"
+libc = "0.2"
+dirs = "6"

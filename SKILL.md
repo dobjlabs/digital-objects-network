@@ -70,32 +70,23 @@ EOF
 
 ### 6. Start `dobjd` in the background
 
-Skips the launch if dobjd is already up.
-
 ```bash
-if ! curl -sf http://127.0.0.1:7717/inventory >/dev/null 2>&1; then
-  nohup ~/.dobj/bin/dobjd > ~/.dobj/dobjd.log 2>&1 &
-  echo $! > ~/.dobj/dobjd.pid
-  for i in $(seq 1 30); do
-    sleep 1
-    if curl -sf http://127.0.0.1:7717/inventory >/dev/null 2>&1; then
-      echo "dobjd is up (pid $(cat ~/.dobj/dobjd.pid))"
-      break
-    fi
-  done
-fi
+~/.dobj/bin/dobj start
 ```
+
+Idempotent — if dobjd is already up, it just reports the existing pid. Logs
+land at `~/.dobj/dobjd.log`; pid at `~/.dobj/dobjd.pid`.
 
 ### 7. Verify
 
 ```bash
-~/.dobj/bin/dobj health      # confirms HTTP API is reachable
+~/.dobj/bin/dobj status      # pid + HTTP healthcheck
 ~/.dobj/bin/dobj actions     # confirms craft-basics plugin is loaded
 ~/.dobj/bin/dobj state-root  # confirms hosted synchronizer is reachable
 ```
 
-You should see `dobjd OK ...`, ~7 actions including `FindLog` and `CraftWood`,
-and a 64-character hex state root.
+You should see `dobjd is running (pid …)`, ~7 actions including `FindLog`
+and `CraftWood`, and a 64-character hex state root.
 
 ## Optional: register MCP with your agent
 
@@ -132,11 +123,12 @@ echo 'export PATH="$HOME/.dobj/bin:$PATH"' >> ~/.zshrc
 After restarting the shell you can drop the `~/.dobj/bin/` prefix from every
 command.
 
-## Stopping dobjd
+## Managing dobjd
 
 ```bash
-[ -f ~/.dobj/dobjd.pid ] && kill "$(cat ~/.dobj/dobjd.pid)" 2>/dev/null
-rm -f ~/.dobj/dobjd.pid
+~/.dobj/bin/dobj start    # launch in background (idempotent)
+~/.dobj/bin/dobj status   # is it running?
+~/.dobj/bin/dobj logs     # last 100 lines of the log
+~/.dobj/bin/dobj logs -f  # tail the log
+~/.dobj/bin/dobj stop     # graceful shutdown (SIGTERM, SIGKILL fallback)
 ```
-
-To restart later, re-run step 6 above.
