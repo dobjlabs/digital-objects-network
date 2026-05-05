@@ -61,10 +61,10 @@ enum Cmd {
         quiet: bool,
     },
     /// Stream every dobjd event (object changes, action progress, MCP
-    /// activity) as JSON lines until interrupted.
-    Watch,
-    /// Verify that dobjd is reachable.
-    Health,
+    /// activity) as JSON lines until interrupted. This is the broadcast
+    /// hub every client shares — useful for seeing what the desktop, web,
+    /// or MCP are doing in real time.
+    Events,
     /// Start dobjd in the background. Idempotent — safe to run when
     /// dobjd is already up.
     Start,
@@ -116,8 +116,7 @@ async fn main() -> Result<()> {
             inputs,
             quiet,
         } => commands::run(&client, action_id, inputs, quiet).await,
-        Cmd::Watch => commands::watch(&client).await,
-        Cmd::Health => commands::health(&client).await,
+        Cmd::Events => commands::events(&client).await,
         Cmd::Start => daemon::start(&client).await,
         Cmd::Stop => daemon::stop().await,
         Cmd::Status => daemon::status(&client).await,
