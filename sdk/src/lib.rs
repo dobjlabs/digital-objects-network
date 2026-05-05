@@ -1494,14 +1494,13 @@ impl Executor {
         inputs: Vec<SpendableObject>,
     ) -> Result<SpendableObjects, SdkError> {
         // TODO: In this function: return errors instead of panic from unwrap.
-        let action_name = self.module.action_by_name(action).name.clone();
         let builder = self.new_builder();
         let mut bld = BuildContext {
             builder,
             modules: self.pod_modules.clone(),
         };
 
-        let total = &self.module.action_by_name(&action_name).total_inputs;
+        let total = &self.module.action_by_name(action).total_inputs;
 
         let mut tx_inputs = Vec::new();
         let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
@@ -1527,7 +1526,7 @@ impl Executor {
             outputs: Vec::new(),
             sts: Vec::new(),
         }));
-        let action_handle = ActionHandle::new(action_name.clone(), Some(exe_rc.clone()));
+        let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
         let st_action = action_handle.exe_action()?;
 
         // Release the handle's Rc clone so `exe_rc` has a unique
