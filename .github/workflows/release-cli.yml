@@ -1,0 +1,189 @@
+name: Release CLI binaries
+
+# Builds dobjd + dobj per target plus the platform-independent
+# craft-basics.pexe and uploads them to the release for the same tag the
+# desktop workflow uses. Triggered together with release.yml on a `v*` tag,
+# so a single tag push produces every artifact SKILL.md expects.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag to publish (e.g. v0.1.0)"
+        required: true
+        type: string
+
+jobs:
+  # Same CI gate as release.yml: refuse to publish if Clippy / Tests / Rustfmt
+  # haven't passed for this commit.
+  check-ci:
+    if: github.event_name != 'workflow_dispatch' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check CI status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflows = [
+              { name: 'Clippy Check', file: 'clippy.yml' },
+              { name: 'Rust Tests', file: 'rust_tests.yml' },
+              { name: 'Rustfmt Check', file: 'rustfmt.yml' },
+            ];
+            for (const workflow of workflows) {
+              const runs = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflow.file,
+                head_sha: context.sha,
+                status: 'completed',
+              });
+              const latestRun = runs.data.workflow_runs[0];
+              if (!latestRun || latestRun.conclusion !== 'success') {
+                core.setFailed(`Workflow "${workflow.name}" has not passed for this commit`);
+                return;
+              }
+            }
+
+  cli:
+    needs:
+      - check-ci
+    if: |
+      always() &&
+      (needs.check-ci.result == 'success' || needs.check-ci.result == 'skipped')
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            scip_glob: libscip*.dylib
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            scip_glob: libscip*.dylib
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            scip_glob: "libscip.so*"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-01-25
+          target: ${{ matrix.target }}
+          cache-shared-key: cli-${{ matrix.target }}
+          cache-workspace-crates: true
+
+      - name: Build dobjd
+        run: cargo build --release --locked -p dobjd --target ${{ matrix.target }}
+        env:
+          # Bake hosted defaults into the binary so SKILL.md's settings.json
+          # write is belt-and-suspenders rather than load-bearing.
+          DEFAULT_SYNCHRONIZER_API_URL: http://18.119.100.201:3000
+          DEFAULT_RELAYER_API_URL: http://18.119.100.201:3200
+
+      - name: Build dobj
+        run: cargo build --release --locked -p dobj --target ${{ matrix.target }}
+
+      - name: Stage dobjd tarball (with libscip)
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="target/${{ matrix.target }}/release"
+          STAGE=$(mktemp -d)
+
+          cp "$OUT/dobjd" "$STAGE/"
+
+          # Locate the SCIP install dir produced by scip-sys's build script.
+          # There can be multiple stale build hashes on a cached runner; pick
+          # the most recently-modified one.
+          SCIP_DIR=$(find "$OUT/build" -type d -path '*scip-sys-*/out/scip_install/lib' \
+                     -exec stat -f '%m %N' {} \; 2>/dev/null \
+                     | sort -rn | head -1 | awk '{print $2}')
+          if [ -z "$SCIP_DIR" ]; then
+            # GNU stat fallback for Linux runners.
+            SCIP_DIR=$(find "$OUT/build" -type d -path '*scip-sys-*/out/scip_install/lib' \
+                       -printf '%T@ %p\n' 2>/dev/null \
+                       | sort -rn | head -1 | awk '{print $2}')
+          fi
+          if [ -z "$SCIP_DIR" ] || [ ! -d "$SCIP_DIR" ]; then
+            echo "::error::could not locate scip_install/lib under $OUT/build"
+            exit 1
+          fi
+          echo "scip dir: $SCIP_DIR"
+
+          # Copy the libscip shared libraries (preserve symlinks).
+          cp -P "$SCIP_DIR"/${{ matrix.scip_glob }} "$STAGE/"
+
+          ls -la "$STAGE"
+
+          tar -czf "dobjd-${{ matrix.target }}.tar.gz" -C "$STAGE" .
+          rm -rf "$STAGE"
+
+      - name: Stage dobj tarball
+        shell: bash
+        run: |
+          tar -czf "dobj-${{ matrix.target }}.tar.gz" \
+              -C "target/${{ matrix.target }}/release" dobj
+
+      - name: Upload to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dobjd-${{ matrix.target }}.tar.gz
+            dobj-${{ matrix.target }}.tar.gz
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+          draft: true
+          fail_on_unmatched_files: true
+
+  plugin:
+    needs:
+      - check-ci
+    if: |
+      always() &&
+      (needs.check-ci.result == 'success' || needs.check-ci.result == 'skipped')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-01-25
+          cache-shared-key: cli-plugin
+
+      - name: Build craft-basics.pexe
+        run: cargo run --release --locked -p pexe -- build plugins/craft-basics
+
+      - name: Locate artifact
+        id: find
+        shell: bash
+        run: |
+          PEXE=$(find target -path '*pexe*' -name 'craft-basics*.pexe' | head -1)
+          if [ -z "$PEXE" ]; then
+            echo "::error::craft-basics.pexe not produced"
+            exit 1
+          fi
+          echo "pexe=$PEXE" >> "$GITHUB_OUTPUT"
+          echo "found: $PEXE"
+
+      - name: Upload to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.find.outputs.pexe }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+          draft: true
+          fail_on_unmatched_files: true
