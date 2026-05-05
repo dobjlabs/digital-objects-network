@@ -116,39 +116,69 @@ fn test_sdk_1() {
     let actions = module.actions();
     // FindLog
     let action = &actions[0];
-    assert_eq!(classes(action.inputs()), classes(action.total_inputs()));
-    assert_eq!(classes(action.inputs()), Vec::<&str>::new());
-    assert_eq!(classes(action.outputs()), classes(action.total_outputs()));
-    assert_eq!(classes(action.outputs()), vec!["Log"]);
+    assert_eq!(
+        classes(action.local_inputs()),
+        classes(action.total_inputs())
+    );
+    assert_eq!(classes(action.local_inputs()), Vec::<&str>::new());
+    assert_eq!(
+        classes(action.local_outputs()),
+        classes(action.total_outputs())
+    );
+    assert_eq!(classes(action.local_outputs()), vec!["Log"]);
     // CraftWood
     let action = &actions[1];
-    assert_eq!(classes(action.inputs()), classes(action.total_inputs()));
-    assert_eq!(classes(action.inputs()), vec!["Log"]);
-    assert_eq!(classes(action.outputs()), classes(action.total_outputs()));
-    assert_eq!(classes(action.outputs()), vec!["Wood"]);
+    assert_eq!(
+        classes(action.local_inputs()),
+        classes(action.total_inputs())
+    );
+    assert_eq!(classes(action.local_inputs()), vec!["Log"]);
+    assert_eq!(
+        classes(action.local_outputs()),
+        classes(action.total_outputs())
+    );
+    assert_eq!(classes(action.local_outputs()), vec!["Wood"]);
     // CraftSticks
     let action = &actions[2];
-    assert_eq!(classes(action.inputs()), classes(action.total_inputs()));
-    assert_eq!(classes(action.inputs()), vec!["Wood"]);
-    assert_eq!(classes(action.outputs()), classes(action.total_outputs()));
-    assert_eq!(classes(action.outputs()), vec!["Stick", "Stick"]);
+    assert_eq!(
+        classes(action.local_inputs()),
+        classes(action.total_inputs())
+    );
+    assert_eq!(classes(action.local_inputs()), vec!["Wood"]);
+    assert_eq!(
+        classes(action.local_outputs()),
+        classes(action.total_outputs())
+    );
+    assert_eq!(classes(action.local_outputs()), vec!["Stick", "Stick"]);
     // CraftWoodPick
     let action = &actions[3];
-    assert_eq!(classes(action.inputs()), classes(action.total_inputs()));
-    assert_eq!(classes(action.inputs()), vec!["Wood", "Stick"]);
-    assert_eq!(classes(action.outputs()), classes(action.total_outputs()));
-    assert_eq!(classes(action.outputs()), vec!["WoodPick"]);
+    assert_eq!(
+        classes(action.local_inputs()),
+        classes(action.total_inputs())
+    );
+    assert_eq!(classes(action.local_inputs()), vec!["Wood", "Stick"]);
+    assert_eq!(
+        classes(action.local_outputs()),
+        classes(action.total_outputs())
+    );
+    assert_eq!(classes(action.local_outputs()), vec!["WoodPick"]);
     // UseWoodPick
     let action = &actions[4];
-    assert_eq!(classes(action.inputs()), classes(action.total_inputs()));
-    assert_eq!(classes(action.inputs()), vec!["WoodPick"]);
-    assert_eq!(classes(action.outputs()), classes(action.total_outputs()));
-    assert_eq!(classes(action.outputs()), vec!["WoodPick"]);
+    assert_eq!(
+        classes(action.local_inputs()),
+        classes(action.total_inputs())
+    );
+    assert_eq!(classes(action.local_inputs()), vec!["WoodPick"]);
+    assert_eq!(
+        classes(action.local_outputs()),
+        classes(action.total_outputs())
+    );
+    assert_eq!(classes(action.local_outputs()), vec!["WoodPick"]);
     // MineStoneWithWoodPick
     let action = &actions[5];
-    assert_eq!(classes(action.inputs()), Vec::<&str>::new());
+    assert_eq!(classes(action.local_inputs()), Vec::<&str>::new());
     assert_eq!(classes(action.total_inputs()), vec!["WoodPick"]);
-    assert_eq!(classes(action.outputs()), vec!["Stone"]);
+    assert_eq!(classes(action.local_outputs()), vec!["Stone"]);
     assert_eq!(classes(action.total_outputs()), vec!["WoodPick", "Stone"]);
 
     println!("{}", module.podlang_src);

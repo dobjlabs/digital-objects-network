@@ -1045,27 +1045,30 @@ pub struct ActionObjectRef {
 ///
 /// `object_refs` lists the action's direct Object instructions in
 /// declaration order, matching the action predicate's public-arg
-/// ordering. `aggregated_inputs` / `aggregated_outputs` flatten this
-/// action's plus all transitively-called sub-actions' inputs/outputs —
-/// `aggregated_inputs` is used by `Executor::action` to zip against
-/// caller-supplied inputs, and both are surfaced via the `total_*`
-/// helpers for driver/GUI signature reporting.
+/// ordering. `total_inputs` / `total_outputs` flatten this action's
+/// plus all transitively-called sub-actions' inputs/outputs.
+/// `total_inputs` is used by `Executor::action` to zip against
+/// caller-supplied inputs, and both are surfaced via the
+/// `total_inputs()` / `total_outputs()` helpers for driver/GUI
+/// signature reporting.
 #[derive(Debug, Default)]
 pub struct ActionMeta {
     pub name: String,
     object_refs: Vec<ActionObjectRef>,
-    aggregated_inputs: Vec<ActionObjectRef>,
-    aggregated_outputs: Vec<ActionObjectRef>,
+    total_inputs: Vec<ActionObjectRef>,
+    total_outputs: Vec<ActionObjectRef>,
 }
 
 impl ActionMeta {
-    /// Direct object refs that this action consumes (Inputs + Mutates).
-    pub fn inputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
+    /// Object refs consumed locally by this action (Inputs + Mutates),
+    /// excluding any transitively-called sub-actions.
+    pub fn local_inputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
         self.object_refs.iter().filter(|r| r.io.consumes())
     }
 
-    /// Direct object refs that this action produces (Outputs + Mutates).
-    pub fn outputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
+    /// Object refs produced locally by this action (Outputs + Mutates),
+    /// excluding any transitively-called sub-actions.
+    pub fn local_outputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
         self.object_refs.iter().filter(|r| r.io.produces())
     }
 
@@ -1073,19 +1076,19 @@ impl ActionMeta {
     /// sub-actions, in declaration order. Used for tx-input zipping and
     /// for action-signature reporting.
     pub fn total_inputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
-        self.aggregated_inputs.iter()
+        self.total_inputs.iter()
     }
 
     /// Object refs produced by this action plus any transitively-called
     /// sub-actions, in declaration order. Used for action-signature
     /// reporting and output-slot validation by the driver.
     pub fn total_outputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
-        self.aggregated_outputs.iter()
+        self.total_outputs.iter()
     }
 
     /// Build from a Load-time `ActionContext`, splicing in each
-    /// sub-action's already-computed `aggregated_inputs`/`aggregated_outputs`
-    /// at the point of its `subaction` call. `prior` must contain entries
+    /// sub-action's already-computed `total_inputs`/`total_outputs` at
+    /// the point of its `subaction` call. `prior` must contain entries
     /// for every sub-action this one references.
     fn from_action_ctx(prior: &[ActionMeta], ctx: &ActionContext) -> Result<Self> {
         let mut meta = Self {
@@ -1100,10 +1103,10 @@ impl ActionMeta {
                         class: class.clone(),
                     };
                     if io.consumes() {
-                        meta.aggregated_inputs.push(r.clone());
+                        meta.total_inputs.push(r.clone());
                     }
                     if io.produces() {
-                        meta.aggregated_outputs.push(r.clone());
+                        meta.total_outputs.push(r.clone());
                     }
                     meta.object_refs.push(r);
                 }
@@ -1112,10 +1115,8 @@ impl ActionMeta {
                         .iter()
                         .find(|a| &a.name == action)
                         .ok_or_else(|| anyhow!("subaction {action} not defined"))?;
-                    meta.aggregated_inputs
-                        .extend(sub.aggregated_inputs.iter().cloned());
-                    meta.aggregated_outputs
-                        .extend(sub.aggregated_outputs.iter().cloned());
+                    meta.total_inputs.extend(sub.total_inputs.iter().cloned());
+                    meta.total_outputs.extend(sub.total_outputs.iter().cloned());
                 }
                 _ => {}
             }
@@ -1500,11 +1501,11 @@ impl Executor {
             modules: self.pod_modules.clone(),
         };
 
-        let aggregated = &self.module.action_by_name(&action_name).aggregated_inputs;
+        let total = &self.module.action_by_name(&action_name).total_inputs;
 
         let mut tx_inputs = Vec::new();
         let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
-        for (input, _ref) in zip_eq(inputs, aggregated.iter()) {
+        for (input, _ref) in zip_eq(inputs, total.iter()) {
             tx_inputs.push(input.tx_input());
             bld.builder
                 .add_pod(input.pod)
