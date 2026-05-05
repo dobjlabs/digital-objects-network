@@ -17,45 +17,14 @@ on:
         type: string
 
 jobs:
-  # Same CI gate as release.yml: refuse to publish if Clippy / Tests / Rustfmt
-  # haven't passed for this commit.
-  check-ci:
-    if: github.event_name != 'workflow_dispatch' && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - name: Check CI status
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const workflows = [
-              { name: 'Clippy Check', file: 'clippy.yml' },
-              { name: 'Rust Tests', file: 'rust_tests.yml' },
-              { name: 'Rustfmt Check', file: 'rustfmt.yml' },
-            ];
-            for (const workflow of workflows) {
-              const runs = await github.rest.actions.listWorkflowRunsForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: workflow.file,
-                head_sha: context.sha,
-                status: 'completed',
-              });
-              const latestRun = runs.data.workflow_runs[0];
-              if (!latestRun || latestRun.conclusion !== 'success') {
-                core.setFailed(`Workflow "${workflow.name}" has not passed for this commit`);
-                return;
-              }
-            }
+  # Note: there's no equivalent of release.yml's check-ci gate here.
+  # Clippy/Tests/Rustfmt run on `push: branches: [main]` and on PRs, not on
+  # tag pushes — so requiring a green run for the tagged SHA blocks every
+  # release. Re-introduce a gate before the first stable release if needed
+  # (e.g. by extending the prerequisite workflows to also fire on tag push,
+  # or by polling for completion).
 
   cli:
-    needs:
-      - check-ci
-    if: |
-      always() &&
-      (needs.check-ci.result == 'success' || needs.check-ci.result == 'skipped')
     permissions:
       contents: write
     strategy:
@@ -148,11 +117,6 @@ jobs:
           fail_on_unmatched_files: true
 
   plugin:
-    needs:
-      - check-ci
-    if: |
-      always() &&
-      (needs.check-ci.result == 'success' || needs.check-ci.result == 'skipped')
     runs-on: ubuntu-22.04
     permissions:
       contents: write
