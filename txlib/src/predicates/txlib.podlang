@@ -328,13 +328,19 @@ InputsGroundedRecursive(inputs, state_root_hash,
 // live set and chain are private. The top-level walker is
 // ReplayActions, so every top-level event is guaranteed to be an
 // action (no bare events can escape an action's guard dispatch).
-// The `nullifiers = {}` check on `before_ctx` prevents a tx from
-// inheriting nullifiers it did not emit itself.
+//
+// The DictInsert clause pins the full schema of `before_ctx`:
+// `nullifiers = {}` prevents a tx from inheriting nullifiers it did
+// not emit itself, and `tx_start = tx_end = 0` removes the
+// malleability that would otherwise let the prover witness arbitrary
+// values for those two fields (they pass through ReplayActions
+// verbatim into `tx_final`, since ReplayAction only updates the
+// `live` and `nullifiers` keys).
 TxFinalized(state_root_hash, tx_final, nullifiers,
     private: before_ctx, chain_start, chain_final) = AND(
   InputsGrounded(before_ctx.live, state_root_hash)
   HashOf(chain_start, before_ctx.live, 0)
-  DictContains(before_ctx, "nullifiers", {})
+  DictInsert(before_ctx, {"nullifiers": {}, "tx_start": 0, "tx_end": 0}, "live", before_ctx.live)
   DictContains(tx_final, "nullifiers", nullifiers)
   ReplayActions(before_ctx, tx_final, chain_start, chain_final)
 )

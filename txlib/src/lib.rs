@@ -729,9 +729,31 @@ impl TxBuilder {
                 st_hash,
             ))
             .unwrap();
-        let st_dc_null_before = ctx
+        // Pin the full schema of `before_ctx` (nullifiers={}, tx_start=0,
+        // tx_end=0, live=inputs_set) in a single DictInsert clause. This
+        // closes the malleability where the prover could otherwise witness
+        // arbitrary tx_start/tx_end values that pass through ReplayActions
+        // verbatim into tx_final.
+        let scope_dict = dict!({
+            "nullifiers" => set!(),
+            "tx_start" => zero,
+            "tx_end" => zero
+        });
+        let st_dict_insert_lit = ctx
             .builder
-            .priv_op(op!(DictContains(before_ctx, "nullifiers", set!())))
+            .priv_op(op!(DictInsert(
+                before_ctx,
+                scope_dict,
+                "live",
+                self.inputs_set
+            )))
+            .unwrap();
+        let st_dict_insert = ctx
+            .builder
+            .priv_op(Operation::replace_value_with_entry(
+                vec![None, None, None, Some((&before_ctx, "live"))],
+                st_dict_insert_lit,
+            ))
             .unwrap();
         let st_dc_null_after = ctx
             .builder
@@ -744,7 +766,7 @@ impl TxBuilder {
                 vec![
                     st_inputs_rebound,
                     st_hash_rebound,
-                    st_dc_null_before,
+                    st_dict_insert,
                     st_dc_null_after,
                     st_replay,
                 ],
