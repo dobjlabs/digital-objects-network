@@ -118,20 +118,25 @@ fn fmt_action_pub_vars(action: &ActionContext) -> Vec<String> {
 fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
     write!(w, "{}(", action.name)?;
     let pub_var_names = fmt_action_pub_vars(action);
-    for var in &pub_var_names {
-        write!(w, "{var}, ")?;
-    }
-    write!(w, "private: ")?;
-    let var_names = fmt_action_vars(action);
-    for (i, var) in var_names
-        .iter()
-        .filter(|v| !pub_var_names.contains(v))
-        .enumerate()
-    {
+    for (i, var) in pub_var_names.iter().enumerate() {
         if i != 0 {
             write!(w, ", ")?;
         }
         write!(w, "{var}")?;
+    }
+    let var_names = fmt_action_vars(action);
+    let private_var_names: Vec<&String> = var_names
+        .iter()
+        .filter(|v| !pub_var_names.contains(v))
+        .collect();
+    if !private_var_names.is_empty() {
+        write!(w, ", private: ")?;
+        for (i, var) in private_var_names.iter().enumerate() {
+            if i != 0 {
+                write!(w, ", ")?;
+            }
+            write!(w, "{var}")?;
+        }
     }
     let mut vars: HashMap<&str, VarNameFmt> = action
         .vars

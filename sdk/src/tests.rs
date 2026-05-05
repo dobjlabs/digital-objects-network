@@ -237,7 +237,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "de4c54fe9c16582ff3152a170d947b25e4745885e11b260fcdfc60240b5152d8"
+        module_hash = "dfdfe47fc253c9c6476ef676acff642dca81506b8b19a1ca69bc1525e1a0a203"
 
         [[classes]]
         name = "Log"
@@ -285,4 +285,27 @@ fn test_sdk_2() {
         .unwrap();
 
     println!("{}", module.podlang_src);
+}
+
+// An action with one chain step and no `update()` calls produces zero
+// private vars. The signature must omit `private:` entirely; emitting
+// `..., private: ) = AND(` makes the pod2 parser reject the module.
+#[test]
+fn test_action_no_private_args() {
+    let craft_src = r#"
+        fn JustOutput(action) {
+            var x = action.output("Foo");
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["JustOutput"])
+        .unwrap();
+    assert!(
+        module
+            .podlang_src
+            .contains("JustOutput(x, chain0, chain) = AND("),
+        "expected no `private:` clause for zero-private-var action; got:\n{}",
+        module.podlang_src
+    );
 }
