@@ -100,9 +100,9 @@ export function getObjectsDir(): Promise<string> {
 }
 
 export function openObjectsDir(): Promise<string> {
-  // No native "open in OS file manager" route through dobjd. The desktop app
-  // could keep a Tauri command for this if we want it back later — for now,
-  // return the path so the UI can show it.
+  if (isTauri) return invoke<string>("open_objects_dir");
+  // Browsers can't reveal native folders. Fall back to returning the path
+  // so the UI can show / copy it.
   return getObjectsDir();
 }
 
