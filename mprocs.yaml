@@ -3,5 +3,9 @@ procs:
     shell: just sync
   relayer:
     shell: just relayer
-  gui:
-    shell: just gui
+  dobjd:
+    shell: just dobjd
+  web:
+    shell: just web
+  desktop:
+    shell: just desktop-shell

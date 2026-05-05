@@ -1,24 +1,33 @@
+//! MCP (Model Context Protocol) operations backed by the same `Arc<Driver>`
+//! and broadcast hub used by the HTTP routes.
+//!
+//! Ported from `app-gui/src-tauri/src/mcp.rs` — the only differences are:
+//! - emits `mcp-action-started` over the SSE event hub instead of Tauri's
+//!   per-window event channel
+//! - uses [`SseProgressReporter`] instead of `TauriProgressReporter` for
+//!   action execution progress.
+
 use std::path::Path;
 use std::sync::Arc;
 
 use craft_mcp::ops::CraftOps;
 use craft_mcp::types as mcp;
-use tauri::Emitter;
 
-use crate::progress::TauriProgressReporter;
+use crate::events::{Event, EventTx};
+use crate::progress::SseProgressReporter;
 
-pub(crate) struct AppCraftOps {
-    app: tauri::AppHandle,
+pub struct DobjdCraftOps {
     driver: Arc<::driver::Driver>,
+    events: EventTx,
 }
 
-impl AppCraftOps {
-    pub(crate) fn new(app: tauri::AppHandle, driver: Arc<::driver::Driver>) -> Self {
-        Self { app, driver }
+impl DobjdCraftOps {
+    pub fn new(driver: Arc<::driver::Driver>, events: EventTx) -> Self {
+        Self { driver, events }
     }
 }
 
-impl CraftOps for AppCraftOps {
+impl CraftOps for DobjdCraftOps {
     fn list_inventory(&self) -> anyhow::Result<Vec<mcp::InventoryObject>> {
         Ok(self
             .driver
@@ -108,12 +117,11 @@ impl CraftOps for AppCraftOps {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        let _ = self.app.emit(
-            "mcp-action-started",
-            serde_json::json!({ "actionId": input.action_id }),
-        );
+        let _ = self.events.send(Event::McpActionStarted {
+            action_id: input.action_id.clone(),
+        });
 
-        let reporter = TauriProgressReporter::new(self.app.clone(), input.action_id.clone());
+        let reporter = SseProgressReporter::new(self.events.clone(), input.action_id.clone());
         let result = self.driver.execute_with_reporter(
             ::driver::ExecuteActionInput {
                 action_id: input.action_id.clone(),

@@ -1,0 +1,105 @@
+//! `dobj` — terminal client for `dobjd`.
+//!
+//! Thin HTTP wrapper around the same `dobjd` HTTP server that powers the
+//! desktop GUI, the website, and the MCP transport. Run `dobjd` first; this
+//! CLI talks to it.
+
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+
+mod client;
+mod commands;
+mod types;
+
+use client::DobjdClient;
+
+const DEFAULT_URL: &str = "http://127.0.0.1:7717";
+
+#[derive(Parser)]
+#[command(
+    name = "dobj",
+    about = "Talk to your local dobjd driver process",
+    version
+)]
+struct Cli {
+    /// Base URL of the dobjd HTTP server. Defaults to http://127.0.0.1:7717
+    /// (the dobjd default), or `DOBJD_URL` if set.
+    #[arg(long, global = true, env = "DOBJD_URL", default_value = DEFAULT_URL)]
+    url: String,
+
+    /// Emit machine-readable JSON instead of human output where applicable.
+    #[arg(long, global = true)]
+    json: bool,
+
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Show every object the driver knows about.
+    Inventory,
+    /// Show every action the action catalog exposes.
+    Actions,
+    /// Print the current global state root.
+    StateRoot,
+    /// Print the local objects directory path (`~/.dobj/objects/`).
+    ObjectsDir,
+    /// Read or write driver settings (synchronizer / relayer URLs).
+    #[command(subcommand)]
+    Settings(SettingsCmd),
+    /// Execute an action. Streams progress to stderr; result on stdout.
+    Run {
+        /// Action id (e.g. `FindLog`, `CraftWoodPick`). See `dobj actions`.
+        action_id: String,
+        /// Input object filenames or paths. Filenames must exist in
+        /// `~/.dobj/objects/` (the driver looks them up by basename).
+        inputs: Vec<String>,
+        /// Don't print per-step progress messages.
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Stream every dobjd event (object changes, action progress, MCP
+    /// activity) as JSON lines until interrupted.
+    Watch,
+    /// Verify that dobjd is reachable.
+    Health,
+}
+
+#[derive(Subcommand)]
+enum SettingsCmd {
+    /// Print current settings.
+    Get,
+    /// Update one or both URLs. Omitted flags are left unchanged.
+    Set {
+        #[arg(long)]
+        synchronizer: Option<String>,
+        #[arg(long)]
+        relayer: Option<String>,
+    },
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let client = DobjdClient::new(cli.url);
+
+    match cli.cmd {
+        Cmd::Inventory => commands::inventory(&client, cli.json).await,
+        Cmd::Actions => commands::actions(&client, cli.json).await,
+        Cmd::StateRoot => commands::state_root(&client).await,
+        Cmd::ObjectsDir => commands::objects_dir(&client).await,
+        Cmd::Settings(SettingsCmd::Get) => commands::settings_get(&client, cli.json).await,
+        Cmd::Settings(SettingsCmd::Set {
+            synchronizer,
+            relayer,
+        }) => commands::settings_set(&client, synchronizer, relayer).await,
+        Cmd::Run {
+            action_id,
+            inputs,
+            quiet,
+        } => commands::run(&client, action_id, inputs, quiet).await,
+        Cmd::Watch => commands::watch(&client).await,
+        Cmd::Health => commands::health(&client).await,
+    }
+}

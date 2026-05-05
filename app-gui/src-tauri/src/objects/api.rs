@@ -1,32 +1,12 @@
-use std::{fs, path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use crate::error::CommandError;
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use rfd::FileDialog;
-use tauri_plugin_opener::OpenerExt;
 
-#[tauri::command]
-pub fn get_objects_dir(
-    driver: tauri::State<'_, Arc<::driver::Driver>>,
-) -> Result<String, CommandError> {
-    let path = driver.paths().objects_dir.clone();
-    Ok(path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-pub fn open_objects_dir(
-    app: tauri::AppHandle,
-    driver: tauri::State<'_, Arc<::driver::Driver>>,
-) -> Result<String, CommandError> {
-    let path: PathBuf = driver.paths().objects_dir.clone();
-    fs::create_dir_all(&path)
-        .map_err(|err| anyhow!("failed to create objects directory: {err}"))?;
-    app.opener()
-        .open_path(path.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|err| anyhow!("failed to open objects directory: {err}"))?;
-    Ok(path.to_string_lossy().to_string())
-}
-
+/// Native file picker for `.dobj` files. Returns the absolute path of the
+/// chosen file. Desktop-only convenience — the website uses drag-and-drop
+/// against `dobjd`'s `POST /objects/parse` endpoint instead.
 #[tauri::command]
 pub fn pick_dobj_file_path() -> Result<String, CommandError> {
     let Some(path) = FileDialog::new()
@@ -38,6 +18,9 @@ pub fn pick_dobj_file_path() -> Result<String, CommandError> {
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Parse a `.dobj` file from disk, without going through the driver
+/// process. Used by the desktop GUI to inspect a freshly-picked file before
+/// passing its name to a `runAction` call (which still goes through dobjd).
 #[tauri::command]
 pub fn read_dobj_file(path: String) -> Result<::driver::ObjectRecord, CommandError> {
     let path = PathBuf::from(path.trim());
