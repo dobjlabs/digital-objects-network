@@ -187,7 +187,12 @@ pub async fn run(
     Ok(())
 }
 
-pub async fn watch(client: &DobjdClient) -> Result<()> {
+/// Stream every event flowing through dobjd's broadcast hub as JSON
+/// lines: `objects-changed`, `run-action-progress`, `mcp-action-started`.
+/// Each event prints once across all connected clients, so this is the
+/// single place to see activity from the desktop, web UI, MCP, and
+/// other CLI invocations at the same time.
+pub async fn events(client: &DobjdClient) -> Result<()> {
     let url = format!("{}/events", client.base_url());
     let mut es = EventSource::get(&url);
     eprintln!("dobj: streaming {url} (Ctrl+C to stop)");
@@ -205,19 +210,6 @@ pub async fn watch(client: &DobjdClient) -> Result<()> {
             }
         }
     }
-    Ok(())
-}
-
-pub async fn health(client: &DobjdClient) -> Result<()> {
-    // /inventory is always cheap on the dobjd side and forces a real
-    // round-trip to the driver — good liveness probe.
-    let result: LoadGuiInventoryResult = client.get_json("/inventory").await?;
-    println!(
-        "dobjd OK ({}) — {} object(s), {} action(s) catalog",
-        client.base_url(),
-        result.inventory.len(),
-        result.actions.len(),
-    );
     Ok(())
 }
 
