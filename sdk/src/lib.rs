@@ -526,6 +526,34 @@ impl ActionHandle {
                 } = inst
                 {
                     let obj_dict = obj.borrow().to_dict();
+                    // Emit the class type guard. Run after rhai so the
+                    // dict is in its final state for Outputs (with
+                    // .set/.update applied) and Inputs. Mutate guards
+                    // the pre-mutation dict, which the obj's predicate
+                    // template references at ts=0.
+                    let guard_dict = match io {
+                        ObjectIO::Mutate => original
+                            .as_ref()
+                            .expect("Mutate records a pre-mutation dict")
+                            .clone(),
+                        _ => obj_dict.clone(),
+                    };
+                    let class_hash = exe_ctx
+                        .module
+                        .class_hashes
+                        .get(class.as_str())
+                        .copied()
+                        .unwrap_or_else(|| panic!("no Is{class} predicate hash registered"));
+                    let st_type = exe_ctx
+                        .bld
+                        .builder
+                        .priv_op(Operation::dict_contains(
+                            guard_dict,
+                            "type",
+                            Value::from(class_hash),
+                        ))
+                        .unwrap();
+                    event_sts.push(st_type);
                     let (st, handle) = match io {
                         ObjectIO::Output => exe_ctx.tx_builder.insert(&mut exe_ctx.bld, &obj_dict),
                         ObjectIO::Input => exe_ctx.tx_builder.delete(&mut exe_ctx.bld, &obj_dict),

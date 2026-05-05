@@ -40,7 +40,6 @@ fn test_sdk_1() {
     let craft_src = r#"
         fn FindLog(action) {
             var log = action.output("Log");
-            log.set([["blueprint", "Log"]]);
             var work = action.intro_vdf(3, log);
             log.update("work", work);
         }
@@ -48,7 +47,6 @@ fn test_sdk_1() {
         fn CraftWood(action) {
             var log = action.input("Log");
             var wood = action.output("Wood");
-            wood.set([["blueprint", "Wood"]]);
             let target = action.top_limb_u256(9007199254740992);
             var key = action.pow_obj_grind(wood, target);
             wood.update("key", key);
@@ -59,18 +57,13 @@ fn test_sdk_1() {
             var wood = action.input("Wood");
             var stick_a = action.output("Stick");
             var stick_b = action.output("Stick");
-            stick_a.set([["blueprint", "Stick"]]);
-            stick_b.set([["blueprint", "Stick"]]);
         }
 
         fn CraftWoodPick(action) {
             var wood = action.input("Wood");
             var stick = action.input("Stick");
             var pick = action.output("WoodPick");
-            pick.set([
-                ["blueprint", "WoodPick"],
-                ["durability", 100]
-            ]);
+            pick.set([["durability", 100]]);
         }
 
         fn use_pick(action, pick, vdf_iters) {
@@ -92,7 +85,6 @@ fn test_sdk_1() {
         fn MineStoneWithWoodPick(action) {
             var pick = action.subaction("UseWoodPick");
             var stone = action.output("Stone");
-            stone.set([["blueprint", "Stone"]]);
         }
 "#;
 
@@ -245,7 +237,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "89186d51b500e63c74bc8b797f2f9268ed9e883f6c5525138bfd3f4cc6ba4cf6"
+        module_hash = "de4c54fe9c16582ff3152a170d947b25e4745885e11b260fcdfc60240b5152d8"
 
         [[classes]]
         name = "Log"
@@ -271,7 +263,6 @@ fn test_sdk_2() {
     let craft_src = r#"
         fn FindLog(action) {
             var log = action.output("Log");
-            log.set([["blueprint", "Log"]]);
             var work = action.intro_vdf(3, log);
             log.update("work", work);
         }
@@ -279,7 +270,6 @@ fn test_sdk_2() {
         fn CraftWood(action) {
             var log = action.input("Log");
             var wood = action.output("Wood");
-            wood.set([["blueprint", "Wood"]]);
             let target = action.top_limb_u256(9007199254740992);
             var key = action.pow_obj_grind(wood, target);
             wood.update("key", key);

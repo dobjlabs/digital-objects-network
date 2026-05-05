@@ -186,12 +186,9 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
     let mut objs = Vec::new();
     for inst in &action.insts {
         match inst {
-            Inst::Object { io, obj, .. } => {
-                // Input/Mutate type-guards are enforced at replay time by
-                // the new txlib (ReplayDelete/ReplayMutate call the obj's
-                // type predicate). Nothing to emit inline.
-                let obj = obj.borrow();
-                objs.push((io, obj.var_name().to_string()));
+            Inst::Object { io, obj, class, .. } => {
+                let obj_name = obj.borrow().var_name().to_string();
+                objs.push((io, obj_name, class.clone()));
             }
             Inst::Set { obj, kvs } => {
                 let obj = &vars[obj.as_str()];
@@ -241,7 +238,22 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
             }
         }
     }
-    for (io, obj) in &objs {
+    for (io, obj, class) in &objs {
+        // Bind the obj's "type" key to the class's IsX predicate hash.
+        // For Output / Input we reference the bare obj name (final
+        // form for Outputs that may have been further mutated by
+        // .set/.update; the underlying "type" key is preserved). For
+        // Mutate we reference the ts=0 form so the guard checks the
+        // pre-mutation dict, matching the priv_op in `exe_action`.
+        let max_ts = action.var_state[obj.as_str()].ts;
+        let guard_obj = match io {
+            ObjectIO::Mutate => fmt_var_at(obj, 0, max_ts),
+            _ => obj.clone(),
+        };
+        writeln!(
+            w,
+            r#"  DictContains({guard_obj}, "type", @self_predicate(Is{class}))"#
+        )?;
         let chain_next = chain.next();
         match io {
             ObjectIO::Input => writeln!(w, "  tx::TxDeleted({chain_next}, {chain}, {obj})")?,
