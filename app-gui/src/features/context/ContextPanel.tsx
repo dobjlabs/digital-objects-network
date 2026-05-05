@@ -9,7 +9,6 @@ import { truncateDisplayHash } from "../../shared/format";
 import {
   displayPathInObjectsDir,
   displayObjectFileName,
-  isLiveObject,
   isNullifiedObject,
   joinObjectsDirPath,
 } from "../../shared/objectUtils";

@@ -21,7 +21,7 @@ mod objects;
 mod settings;
 
 use cpu::{sample_app_cpu, CpuMonitor};
-use objects::{pick_dobj_file_path, read_dobj_file};
+use objects::{open_objects_dir, pick_dobj_file_path, read_dobj_file};
 use settings::{build_app_menu, handle_settings_menu_event};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -41,7 +41,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sample_app_cpu,
             pick_dobj_file_path,
-            read_dobj_file
+            read_dobj_file,
+            open_objects_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
