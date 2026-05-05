@@ -1,0 +1,27 @@
+[package]
+name = "dobjd"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "dobjd"
+path = "src/main.rs"
+
+[dependencies]
+driver = { path = "../driver" }
+common = { path = "../common" }
+craft-mcp = { path = "../mcp" }
+
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+
+axum = { version = "0.8.8", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+futures-util = "0.3"
+notify = "6"
