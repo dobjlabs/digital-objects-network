@@ -43,8 +43,7 @@ pub fn open_objects_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
     let paths = ::driver::paths::default_paths()
         .map_err(|err| anyhow!("failed to resolve objects directory: {err}"))?;
     let dir = paths.objects_dir;
-    fs::create_dir_all(&dir)
-        .map_err(|err| anyhow!("failed to create objects directory: {err}"))?;
+    fs::create_dir_all(&dir).map_err(|err| anyhow!("failed to create objects directory: {err}"))?;
     app.opener()
         .open_path(dir.to_string_lossy().to_string(), None::<&str>)
         .map_err(|err| anyhow!("failed to open objects directory: {err}"))?;
