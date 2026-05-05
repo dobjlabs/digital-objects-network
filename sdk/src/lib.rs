@@ -686,10 +686,6 @@ impl ActionHandle {
                 exe_ctx.sts.push(st_sub);
             }
 
-            // Drop the sub handle's shared exe_ctx so it doesn't pin
-            // the shared ExeContext past this call.
-            sub_handle.0.borrow_mut().exe_ctx = None;
-
             // Alias the parent's binding to the sub-action's first
             // producing object Ref, or a fresh placeholder if the sub
             // produces nothing.
