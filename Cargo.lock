@@ -2735,7 +2735,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "dirs",
  "futures-util",
+ "libc",
  "reqwest 0.12.28",
  "reqwest-eventsource",
  "serde",

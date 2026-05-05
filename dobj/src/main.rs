@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 
 mod client;
 mod commands;
+mod daemon;
 mod types;
 
 use client::DobjdClient;
@@ -64,6 +65,22 @@ enum Cmd {
     Watch,
     /// Verify that dobjd is reachable.
     Health,
+    /// Start dobjd in the background. Idempotent — safe to run when
+    /// dobjd is already up.
+    Start,
+    /// Stop the dobjd process started by `dobj start`.
+    Stop,
+    /// Show whether dobjd is running and reachable.
+    Status,
+    /// Print the dobjd log. Defaults to the last 100 lines.
+    Logs {
+        /// Follow the log as it grows (Ctrl+C to stop).
+        #[arg(short, long)]
+        follow: bool,
+        /// Number of lines to print from the end of the log.
+        #[arg(short = 'n', long, default_value_t = 100)]
+        lines: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -101,5 +118,9 @@ async fn main() -> Result<()> {
         } => commands::run(&client, action_id, inputs, quiet).await,
         Cmd::Watch => commands::watch(&client).await,
         Cmd::Health => commands::health(&client).await,
+        Cmd::Start => daemon::start(&client).await,
+        Cmd::Stop => daemon::stop().await,
+        Cmd::Status => daemon::status(&client).await,
+        Cmd::Logs { follow, lines } => daemon::logs(follow, lines),
     }
 }
