@@ -336,29 +336,28 @@ struct ActionHandle(Rc<RefCell<ActionContext>>);
 struct ActionContext {
     name: String,
     insts: Vec<Inst>,
-    /// User-defined vars (objects, intro outputs, temporaries). The
-    /// txlib chain var is tracked separately in `chain_ts` because its
-    /// rendering follows a different (protocol-defined) naming scheme.
+    /// User-defined vars (objects, intro outputs, temporaries) plus
+    /// the txlib chain var, registered as `"chain"` so it shares the
+    /// same SSA timestamp machinery.
     vars: Vec<String>,
     var_state: HashMap<String, VarState>,
-    /// Timestamp of the txlib chain var. Bumped once per direct event
-    /// (insert/delete/mutate) and once per sub-action call.
-    chain_ts: usize,
     exe_ctx: Option<Rc<RefCell<ExeContext>>>,
     unsafe_block: bool,
 }
 
 impl ActionContext {
     fn new(name: String, exe_ctx: Option<Rc<RefCell<ExeContext>>>) -> Self {
-        Self {
+        let mut ctx = Self {
             name,
             insts: Vec::new(),
             vars: Vec::new(),
             var_state: HashMap::new(),
-            chain_ts: 0,
             exe_ctx,
             unsafe_block: false,
-        }
+        };
+        ctx.add_var("chain".to_string())
+            .expect("chain not yet defined");
+        ctx
     }
     fn add_var(&mut self, var: String) -> RuntimeResult<()> {
         if self.var_state.contains_key(&var) {
@@ -372,9 +371,6 @@ impl ActionContext {
         let state = self.var_state.get_mut(var).expect("var {var} exists");
         state.ts += 1;
         Ok(())
-    }
-    fn inc_chain(&mut self) {
-        self.chain_ts += 1;
     }
     fn assert_unsafe(&self, unsafe_block: bool) -> RuntimeResult<()> {
         if self.unsafe_block != unsafe_block {
@@ -441,7 +437,7 @@ impl ActionHandle {
             class,
             original,
         });
-        ctx.inc_chain();
+        ctx.inc_t_var("chain").expect("chain exists");
         Ok(ArgHandle::new(self.clone(), arg))
     }
     fn set_unsafe(&self, unsafe_block: bool) -> RuntimeResult<()> {
@@ -488,11 +484,12 @@ impl ActionHandle {
             (self.clone(),),
         )?;
 
-        // Phase 2: walk the recorded insts and emit Object events
-        // directly into the open action scope. Append event statements
-        // to `sts` so the predicate's clause order matches
-        // `fmt_podlang::fmt_action` (non-Object clauses first, then
-        // the txlib events).
+        // Phase 2: walk the recorded insts and, for each Object,
+        // emit a class type guard followed by the txlib event into
+        // the open action scope. Append both statements (in that
+        // order) to `event_sts` so the predicate's clause order
+        // matches `fmt_podlang::fmt_action` (non-Object clauses
+        // first, then per-Object {type guard, txlib event} pairs).
         let exe_rc = self.0.borrow().exe_ctx.clone().expect("exe phase");
 
         struct EventData {
@@ -585,9 +582,10 @@ impl ActionHandle {
             }
         }
 
-        // Compose the action predicate: pre-existing non-Object sts
-        // (eagerly accumulated during Rhai) followed by the Object
-        // event statements, mirroring fmt_action's clause emission.
+        // Compose the action predicate: non-Object sts (eagerly
+        // accumulated during Rhai) followed by per-Object {type
+        // guard, txlib event} pairs, mirroring fmt_action's clause
+        // emission.
         let mut sts = exe_rc.borrow_mut().sts.split_off(sts_start);
         sts.extend(event_sts);
 
@@ -712,7 +710,7 @@ impl ActionHandle {
             action,
             obj: arg.clone(),
         });
-        ctx.inc_chain();
+        ctx.inc_t_var("chain").expect("chain exists");
         Ok(ArgHandle::new(self.clone(), arg))
     }
     fn random(self) -> RuntimeResult<ArgHandle> {
@@ -744,8 +742,8 @@ impl ActionHandle {
         Ok(ArgHandle::new(self.clone(), key))
     }
     /// Build a u256 with `n` in the most-significant limb and zeros elsewhere.
-    /// Useful as a difficulty target for [`pow_obj_grind`] and [`intro_lt_eq_u256`]
-    /// — a u256 `x` satisfies `x <= top_limb_u256(n)` iff the top limb of `x` is
+    /// Useful as a difficulty target for [`pow_obj_grind`] and [`intro_lt_eq_u256`]:
+    /// a u256 `x` satisfies `x <= top_limb_u256(n)` iff the top limb of `x` is
     /// `<= n` (with all lower limbs of `x` implicitly bounded by the zeros).
     fn top_limb_u256(self, n: Dynamic) -> RuntimeResult<ArgHandle> {
         let [n] = validate_args([(n, Type::Int)])?;
@@ -1057,8 +1055,8 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
 }
 
 /// One object reference in an action, in declaration order. Only
-/// `class` is exposed; `io` is internal — used by the
-/// `inputs()`/`outputs()` filters.
+/// `class` is exposed; `io` is internal, used by the
+/// `local_inputs()` / `local_outputs()` filters.
 #[derive(Debug, Clone)]
 pub struct ActionObjectRef {
     io: ObjectIO,
@@ -1298,8 +1296,10 @@ pub struct SdkModule {
     module: Arc<Module>,
     engine: Rc<Engine>,
     ast: AST,
-    // Cached Is{class} predicate hashes, stamped onto new objects at
-    // exe time so txlib replay can dispatch the type guard.
+    // Cached Is{class} predicate hashes. Stamped onto new objects'
+    // "type" key in `new_obj` and used by `exe_action`'s phase 2 to
+    // build the `DictContains(obj, "type", ...)` guard priv_op for
+    // every Object inst.
     class_hashes: HashMap<String, Hash>,
 }
 

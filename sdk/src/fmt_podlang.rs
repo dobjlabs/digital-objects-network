@@ -27,25 +27,12 @@ impl fmt::Display for Intro {
     }
 }
 
-/// Public-arg labels for the chain var endpoints. Hard-coupled to the
-/// txlib's `TxFinalized` / `ReplayActions` predicate signatures.
-const CHAIN_START: &str = "chain_start";
-const CHAIN_END: &str = "chain_end";
-
-/// Render the txlib chain var at a given timestamp. The naming scheme
-/// is a protocol concern: the txlib's `TxFinalized` and `ReplayActions`
-/// predicates expect those literal labels for the chain endpoints.
-fn fmt_chain_at(ts: usize, max_ts: usize) -> String {
-    match ts {
-        0 => CHAIN_START.to_string(),
-        t if t == max_ts => CHAIN_END.to_string(),
-        t => format!("chain_{t}"),
-    }
-}
-
-/// Render a user-defined var at a given timestamp. Final ts renders as
-/// the bare name; intermediate timestamps suffix the index. SSA-style
-/// disambiguation for vars rewritten by mutations.
+/// Render a var at a given timestamp. Final ts renders as the bare
+/// name; intermediate timestamps suffix the index. SSA-style
+/// disambiguation for vars rewritten by mutations. The txlib chain
+/// var (registered as `"chain"`) flows through the same machinery; its
+/// pub-arg labels in action signatures are `chain` (final, ts=max) and
+/// `chain0` (initial, ts=0).
 fn fmt_var_at(name: &str, ts: usize, max_ts: usize) -> String {
     if ts == max_ts {
         name.to_string()
@@ -54,45 +41,28 @@ fn fmt_var_at(name: &str, ts: usize, max_ts: usize) -> String {
     }
 }
 
-/// Two variants encode the protocol/implementation split between
-/// `fmt_chain_at` and `fmt_var_at` so dispatch is at the type level
-/// instead of by string comparison.
-enum VarNameFmt<'a> {
-    Chain {
-        ts: usize,
-        max_ts: usize,
-    },
-    Var {
-        name: &'a str,
-        ts: usize,
-        max_ts: usize,
-    },
+#[derive(Clone, Copy)]
+struct VarNameFmt<'a> {
+    name: &'a str,
+    ts: usize,
+    max_ts: usize,
 }
 
 impl<'a> VarNameFmt<'a> {
     fn inc(&mut self) {
-        match self {
-            Self::Chain { ts, .. } | Self::Var { ts, .. } => *ts += 1,
-        }
+        self.ts += 1;
     }
     fn next(&self) -> Self {
-        match *self {
-            Self::Chain { ts, max_ts } => Self::Chain { ts: ts + 1, max_ts },
-            Self::Var { name, ts, max_ts } => Self::Var {
-                name,
-                ts: ts + 1,
-                max_ts,
-            },
+        Self {
+            ts: self.ts + 1,
+            ..*self
         }
     }
 }
 
 impl<'a> fmt::Display for VarNameFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Chain { ts, max_ts } => write!(f, "{}", fmt_chain_at(*ts, *max_ts)),
-            Self::Var { name, ts, max_ts } => write!(f, "{}", fmt_var_at(name, *ts, *max_ts)),
-        }
+        write!(f, "{}", fmt_var_at(self.name, self.ts, self.max_ts))
     }
 }
 
@@ -117,9 +87,6 @@ impl<'a> fmt::Display for ArgFmt<'a> {
 
 fn fmt_action_vars(action: &ActionContext) -> Vec<String> {
     let mut vars = Vec::new();
-    for i in 0..=action.chain_ts {
-        vars.push(fmt_chain_at(i, action.chain_ts));
-    }
     for var in &action.vars {
         let state = &action.var_state[var];
         for i in 0..=state.ts {
@@ -135,14 +102,16 @@ fn fmt_action_pub_vars(action: &ActionContext) -> Vec<String> {
         // Every direct Object inst is public: Inputs (deletes),
         // Outputs (inserts), and Mutates all become arguments so the
         // class's IsX OR can dispatch on any of them at replay time.
-        // Sub-action references stay private — a sub-action's I/O
+        // Sub-action references stay private. A sub-action's I/O
         // appears in the sub-action's own predicate signature, and
         // its output is a private witness within the parent.
         if let Inst::Object { obj, .. } = inst {
             vars.push(obj.borrow().var_name().to_string());
         }
     }
-    vars.extend_from_slice(&[CHAIN_START.to_string(), CHAIN_END.to_string()]);
+    let chain_max_ts = action.var_state["chain"].ts;
+    vars.push(fmt_var_at("chain", 0, chain_max_ts));
+    vars.push(fmt_var_at("chain", chain_max_ts, chain_max_ts));
     vars
 }
 
@@ -170,7 +139,7 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
         .map(|v| {
             (
                 v.as_str(),
-                VarNameFmt::Var {
+                VarNameFmt {
                     name: v,
                     ts: 0,
                     max_ts: action.var_state[v].ts,
@@ -178,10 +147,6 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
             )
         })
         .collect();
-    let mut chain = VarNameFmt::Chain {
-        ts: 0,
-        max_ts: action.chain_ts,
-    };
     writeln!(w, ") = AND(")?;
     let mut objs = Vec::new();
     for inst in &action.insts {
@@ -228,13 +193,14 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
             Inst::SubAction { action, obj } => {
                 // The sub-action's ReplayAction encapsulates all its
                 // events as one chain step from the parent's view.
+                let chain = vars["chain"];
                 let chain_next = chain.next();
                 writeln!(
                     w,
                     "  {action}({obj}, {chain}, {chain_next})",
                     obj = ArgFmt(&vars, obj)
                 )?;
-                chain.inc();
+                vars.get_mut("chain").expect("chain exists").inc();
             }
         }
     }
@@ -254,6 +220,7 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
             w,
             r#"  DictContains({guard_obj}, "type", @self_predicate(Is{class}))"#
         )?;
+        let chain = vars["chain"];
         let chain_next = chain.next();
         match io {
             ObjectIO::Input => writeln!(w, "  tx::TxDeleted({chain_next}, {chain}, {obj})")?,
@@ -262,7 +229,7 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                 writeln!(w, "  tx::TxMutated({chain_next}, {chain}, {obj}, {obj}0)")?
             }
         }
-        chain.inc();
+        vars.get_mut("chain").expect("chain exists").inc();
     }
     writeln!(w, ")")?;
     Ok(())
@@ -270,7 +237,7 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
 
 fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt::Result {
     let name = &class.name;
-    write!(w, "Is{name}(state, chain_start, chain_end")?;
+    write!(w, "Is{name}(state, chain0, chain")?;
 
     let other_len = class
         .actions
@@ -304,7 +271,7 @@ fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt:
                 count += 1;
             }
         }
-        writeln!(w, ", chain_start, chain_end)")?;
+        writeln!(w, ", chain0, chain)")?;
     }
     writeln!(w, ")")?;
     Ok(())
