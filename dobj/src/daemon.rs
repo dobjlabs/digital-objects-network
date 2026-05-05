@@ -72,12 +72,12 @@ fn find_dobjd_binary(paths: &DaemonPaths) -> OsString {
     if in_dobj_home.exists() {
         return in_dobj_home.into_os_string();
     }
-    if let Ok(self_exe) = std::env::current_exe() {
-        if let Some(dir) = self_exe.parent() {
-            let sibling = dir.join("dobjd");
-            if sibling.exists() {
-                return sibling.into_os_string();
-            }
+    if let Ok(self_exe) = std::env::current_exe()
+        && let Some(dir) = self_exe.parent()
+    {
+        let sibling = dir.join("dobjd");
+        if sibling.exists() {
+            return sibling.into_os_string();
         }
     }
     OsString::from("dobjd")
