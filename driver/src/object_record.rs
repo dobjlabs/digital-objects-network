@@ -144,6 +144,13 @@ pub fn parse_object_record_file(path: &Path) -> anyhow::Result<ObjectRecord> {
         .map_err(|err| anyhow::anyhow!("failed to parse {file_name} as object file: {err}"))
 }
 
+/// Parse a `.dobj` from in-memory bytes. Used by the HTTP server when the
+/// frontend uploads a dropped file for inspection without a disk write.
+pub fn parse_object_record_bytes(bytes: &[u8]) -> anyhow::Result<ObjectRecord> {
+    serde_json::from_slice::<ObjectRecord>(bytes)
+        .map_err(|err| anyhow::anyhow!("failed to parse object bytes as object file: {err}"))
+}
+
 #[cfg(test)]
 pub(crate) fn ensure_extra_pod_deserializers_registered() {
     use std::sync::Once;

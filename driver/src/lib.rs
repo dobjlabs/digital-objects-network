@@ -18,7 +18,7 @@ pub use crate::clients::{
     SYNCHRONIZER_POLL_TIMEOUT_SECS,
 };
 pub use crate::driver::{Driver, DriverDeps, PayloadBuilder};
-pub use crate::object_record::parse_object_record_file;
+pub use crate::object_record::{parse_object_record_bytes, parse_object_record_file};
 pub use crate::object_record::{ObjectRecord, ObjectStatus};
 pub use crate::pexe_catalog::PexeCatalog;
 pub use crate::types::{

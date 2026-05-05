@@ -13,10 +13,30 @@ relayer:
 gui:
     cd app-gui && RUST_LOG=info pnpm tauri dev --release
 
+# Run the headless HTTP server that exposes the driver API to the web UI
+# (and to anything else that wants to talk to the driver over HTTP).
+dobjd:
+    RUST_LOG=info cargo run -p dobjd --release
+
+# Run dobjd with the React app served from app-gui/dist as a single binary.
+# Requires `pnpm --dir app-gui build` to have produced the bundle.
+dobjd-web:
+    DOBJD_STATIC_DIR={{justfile_directory()}}/app-gui/dist RUST_LOG=info cargo run -p dobjd --release
+
+# Run the Vite dev server for the React app, talking to dobjd at :7717.
+# Pair with `just dobjd` (or `just dev-web`) for full hot-reload web mode.
+web-dev:
+    cd app-gui && pnpm dev
+
 # Run relayer + synchronizer + gui together via mprocs
 # https://github.com/pvolok/mprocs
 dev: ensure-plugins
     mprocs --config mprocs.yaml
+
+# Web mode: relayer + synchronizer + dobjd + Vite (no Tauri).
+# Open http://localhost:1420 once everything is up.
+dev-web: ensure-plugins
+    mprocs --config mprocs.web.yaml
 
 # Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
 # `just dev` so a fresh clone (or a `just reset`-ed dev env) boots cleanly.
