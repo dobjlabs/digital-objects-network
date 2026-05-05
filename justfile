@@ -9,12 +9,26 @@ sync:
 relayer:
     RUST_LOG=info cargo run -p relayer --release
 
-# Run the gui
-gui:
+# Run the desktop app standalone (Tauri spawns its own Vite on :1420).
+# Use this when you only want the desktop window. Inside `just dev` we use
+# `desktop-shell` instead so a shared Vite serves both desktop and browser.
+desktop:
     cd app-gui && RUST_LOG=info pnpm tauri dev --release
 
-# Run the headless HTTP server that exposes the driver API to the web UI
-# (and to anything else that wants to talk to the driver over HTTP).
+# Run the Tauri shell pointing at an *already-running* Vite at :1420.
+# Skips Tauri's `beforeDevCommand` so it doesn't fight the standalone web
+# pane for the port. Pair with `just web`.
+desktop-shell:
+    cd app-gui && RUST_LOG=info pnpm tauri dev --release -c '{"build":{"beforeDevCommand":""}}'
+
+# Run the Vite dev server alone on :1420. Reachable from any browser tab
+# or from the Tauri shell. Talks to dobjd at :7717 over HTTP for everything
+# driver-related.
+web:
+    cd app-gui && pnpm dev
+
+# Run the headless HTTP server that exposes the driver API to every client
+# (desktop window, browser tab, MCP, dobj CLI).
 dobjd:
     RUST_LOG=info cargo run -p dobjd --release
 
@@ -23,20 +37,12 @@ dobjd:
 dobjd-web:
     DOBJD_STATIC_DIR={{justfile_directory()}}/app-gui/dist RUST_LOG=info cargo run -p dobjd --release
 
-# Run the Vite dev server for the React app, talking to dobjd at :7717.
-# Pair with `just dobjd` (or `just dev-web`) for full hot-reload web mode.
-web-dev:
-    cd app-gui && pnpm dev
-
-# Run relayer + synchronizer + gui together via mprocs
+# Bring up everything: synchronizer, relayer, dobjd, Vite, and the Tauri
+# shell — all backed by one dobjd process. Open http://localhost:1420 in a
+# browser to use the website client; the desktop window opens automatically.
 # https://github.com/pvolok/mprocs
 dev: ensure-plugins
     mprocs --config mprocs.yaml
-
-# Web mode: relayer + synchronizer + dobjd + Vite (no Tauri).
-# Open http://localhost:1420 once everything is up.
-dev-web: ensure-plugins
-    mprocs --config mprocs.web.yaml
 
 # Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
 # `just dev` so a fresh clone (or a `just reset`-ed dev env) boots cleanly.

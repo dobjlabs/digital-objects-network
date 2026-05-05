@@ -31,6 +31,12 @@ pub enum Event {
         #[serde(rename = "outputFiles")]
         output_files: Option<Vec<String>>,
     },
+    /// Emitted when an MCP client kicks off an action so other clients
+    /// (the desktop GUI / website) can highlight it as in-flight.
+    McpActionStarted {
+        #[serde(rename = "actionId")]
+        action_id: String,
+    },
 }
 
 /// Channel capacity for the broadcast hub. Slow subscribers get lagged events

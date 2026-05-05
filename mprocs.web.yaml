@@ -1,9 +1,0 @@
-procs:
-  synchronizer:
-    shell: just sync
-  relayer:
-    shell: just relayer
-  dobjd:
-    shell: just dobjd
-  web:
-    shell: just web-dev

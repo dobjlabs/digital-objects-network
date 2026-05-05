@@ -972,7 +972,6 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "common",
- "craft-mcp",
  "driver",
  "env_logger",
  "hex",
@@ -2728,6 +2727,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "dobj"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "futures-util",
+ "reqwest 0.12.28",
+ "reqwest-eventsource",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
