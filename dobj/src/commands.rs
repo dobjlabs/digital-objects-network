@@ -14,12 +14,15 @@ const TARGET_RUN_ACTION_PROGRESS: &str = "run-action-progress";
 pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
     let result: LoadGuiInventoryResult = client.get_json("/inventory").await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "inventory": result.inventory.iter().map(|o| serde_json::json!({
-                "id": o.id, "fileName": o.file_name, "className": o.class_name,
-                "status": o.status, "txHash": o.tx_hash, "grounded": o.grounded,
-            })).collect::<Vec<_>>(),
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "inventory": result.inventory.iter().map(|o| serde_json::json!({
+                    "id": o.id, "fileName": o.file_name, "className": o.class_name,
+                    "status": o.status, "txHash": o.tx_hash, "grounded": o.grounded,
+                })).collect::<Vec<_>>(),
+            }))?
+        );
         return Ok(());
     }
 
@@ -31,7 +34,11 @@ pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
         let grounded = if obj.grounded { "✓" } else { " " };
         println!(
             "[{:<10}] {} {} {:<14} id={}",
-            obj.status, grounded, obj.emoji, obj.class_name, short_hex(&obj.id),
+            obj.status,
+            grounded,
+            obj.emoji,
+            obj.class_name,
+            short_hex(&obj.id),
         );
     }
     Ok(())
@@ -40,9 +47,18 @@ pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
 pub async fn actions(client: &DobjdClient, json: bool) -> Result<()> {
     let result: LoadGuiInventoryResult = client.get_json("/inventory").await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&result.actions.iter().map(|a| serde_json::json!({
-            "id": a.id, "description": a.description, "inputs": a.total_input_classes,
-        })).collect::<Vec<_>>())?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &result
+                    .actions
+                    .iter()
+                    .map(|a| serde_json::json!({
+                        "id": a.id, "description": a.description, "inputs": a.total_input_classes,
+                    }))
+                    .collect::<Vec<_>>()
+            )?
+        );
         return Ok(());
     }
     for action in &result.actions {
@@ -131,18 +147,9 @@ pub async fn run(
                     if quiet {
                         continue;
                     }
-                    let phase = value
-                        .get("phase")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    let status = value
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    let message = value
-                        .get("message")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let phase = value.get("phase").and_then(|v| v.as_str()).unwrap_or("?");
+                    let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                    let message = value.get("message").and_then(|v| v.as_str()).unwrap_or("");
                     eprintln!("[{phase}/{status}] {message}");
                 }
                 Err(_) => break,

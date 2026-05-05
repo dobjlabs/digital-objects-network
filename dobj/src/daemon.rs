@@ -132,10 +132,7 @@ async fn wait_until_ready(client: &DobjdClient, pid: i32, timeout: Duration) -> 
             return Ok(());
         }
         if Instant::now() >= deadline {
-            bail!(
-                "dobjd did not become ready within {}s",
-                timeout.as_secs()
-            );
+            bail!("dobjd did not become ready within {}s", timeout.as_secs());
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
@@ -200,7 +197,10 @@ pub async fn start(client: &DobjdClient) -> Result<()> {
     // Don't reap the child — we want it to keep running after we exit.
     std::mem::forget(child);
 
-    println!("starting dobjd (pid {pid}, log {})…", paths.log_file.display());
+    println!(
+        "starting dobjd (pid {pid}, log {})…",
+        paths.log_file.display()
+    );
     wait_until_ready(client, pid, READY_TIMEOUT).await?;
     println!("dobjd is up");
     Ok(())
@@ -319,8 +319,8 @@ pub fn logs(follow: bool, lines: usize) -> Result<()> {
 /// log isn't expected to grow beyond a few MB before the user rotates it
 /// manually, so a single full read is fine.
 fn read_tail(path: &Path, n: usize) -> Result<String> {
-    let contents = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let mut lines: Vec<&str> = contents.lines().collect();
     if lines.len() > n {
         lines.drain(0..lines.len() - n);
