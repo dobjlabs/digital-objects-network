@@ -94,10 +94,10 @@ async fn decode_json<T: DeserializeOwned>(res: reqwest::Response) -> Result<T> {
 async fn decode_error(res: reqwest::Response) -> anyhow::Error {
     let status = res.status();
     let text = res.text().await.unwrap_or_default();
-    if let Ok(body) = serde_json::from_str::<serde_json::Value>(&text) {
-        if let Some(msg) = body.get("error").and_then(|v| v.as_str()) {
-            return anyhow!("dobjd error ({status}): {msg}");
-        }
+    if let Ok(body) = serde_json::from_str::<serde_json::Value>(&text)
+        && let Some(msg) = body.get("error").and_then(|v| v.as_str())
+    {
+        return anyhow!("dobjd error ({status}): {msg}");
     }
     anyhow!("dobjd error ({status}): {text}")
 }
