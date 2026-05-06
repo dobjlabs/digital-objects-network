@@ -38,6 +38,6 @@ name = "craft-mcp-stdio"
 path = "src/bin/mock_stdio.rs"
 
 [[bin]]
-name = "craft-mcp-proxy"
+name = "bitcraft-mcp-proxy"
 path = "src/bin/proxy_stdio.rs"
 required-features = ["proxy"]
