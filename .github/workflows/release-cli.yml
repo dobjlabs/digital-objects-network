@@ -102,16 +102,12 @@ jobs:
           # Search the whole target/ tree (not just $OUT/build) — cargo with
           # --target {triple} sometimes places build outputs in a different
           # subdir than expected, especially when host == target.
-
-          # GNU find first (Linux runners), then BSD stat fallback (macOS).
-          SCIP_DIR=$(find target -type d -path '*scip-sys-*/out/scip_install/lib' \
-                     -printf '%T@ %p\n' 2>/dev/null \
-                     | sort -rn | head -1 | awk '{print $2}')
-          if [ -z "$SCIP_DIR" ]; then
-            SCIP_DIR=$(find target -type d -path '*scip-sys-*/out/scip_install/lib' \
-                       -exec stat -f '%m %N' {} \; 2>/dev/null \
-                       | sort -rn | head -1 | awk '{print $2}')
-          fi
+          #
+          # Multiple scip-sys-* build hashes can coexist (one per Cargo.lock
+          # state), but they all install the same SCIP version, so the first
+          # match is fine — no need to pick the freshest.
+          SCIP_DIR=$(find target -type d -path '*scip-sys-*/out/scip_install/lib' 2>/dev/null \
+                     | head -1)
 
           if [ -n "$SCIP_DIR" ] && [ -d "$SCIP_DIR" ]; then
             echo "scip dir: $SCIP_DIR"
