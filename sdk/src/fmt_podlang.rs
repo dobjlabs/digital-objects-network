@@ -296,6 +296,73 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     Ok(())
 }
 
+/// One sub-action call in the parent's body, with its synthesized
+/// private wildcard names + record-shape info for the call.
+struct SubActionCall {
+    sub_name: String,
+    /// Name of the parent's synthesized private wildcard for the sub's
+    /// `in` record (None if the sub has no in record).
+    sub_in_var: Option<String>,
+    /// Same, for the sub's `out` record.
+    sub_out_var: Option<String>,
+    /// Script-side alias name (the `pick` in `var pick = action.subaction(...)`).
+    /// `None` if the user didn't bind via `var`. Used to skip the alias from
+    /// the parent's private wildcards list.
+    alias: Option<String>,
+}
+
+/// Walk the parent action's Insts and gather one `SubActionCall` per
+/// `Inst::SubAction`. Looks up each sub's record shape from the loader's
+/// `actions_meta`.
+fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubActionCall> {
+    let mut calls = Vec::new();
+    let mut idx_counter: HashMap<String, usize> = HashMap::new();
+    for inst in &action.insts {
+        if let Inst::SubAction {
+            action: sub_name,
+            obj,
+        } = inst
+        {
+            let sub_meta = loader
+                .actions_meta
+                .iter()
+                .find(|m| &m.name == sub_name)
+                .unwrap_or_else(|| panic!("sub-action {sub_name} not in loader.actions_meta"));
+            let has_in = sub_meta.local_inputs().count() > 0;
+            let has_out = sub_meta.local_outputs().count() > 0;
+
+            let idx = *idx_counter.entry(sub_name.clone()).or_insert(0);
+            *idx_counter.get_mut(sub_name).unwrap() += 1;
+
+            let sub_in_var = if has_in {
+                Some(format!("_{}_in_{}", sub_name, idx))
+            } else {
+                None
+            };
+            let sub_out_var = if has_out {
+                Some(format!("_{}_out_{}", sub_name, idx))
+            } else {
+                None
+            };
+
+            let alias_name = obj.borrow().var_name().to_string();
+            let alias = if alias_name == "?" {
+                None
+            } else {
+                Some(alias_name)
+            };
+
+            calls.push(SubActionCall {
+                sub_name: sub_name.clone(),
+                sub_in_var,
+                sub_out_var,
+                alias,
+            });
+        }
+    }
+    calls
+}
+
 /// Compute the witness-absorption rewrite map for an action.
 ///
 /// For each `Inst::Update { obj, key, value: Var{ name: V, key: None } }`
@@ -362,10 +429,17 @@ fn compute_witness_rewrites(action: &ActionContext) -> HashMap<String, String> {
 /// for non-bridged Objects; bridged Objects get a leading `ArrayContains`
 /// clause and the body keeps using flat SSA wildcards. Witness vars
 /// bound by a single DictUpdate are absorbed via 1-level AK on the
-/// post-update SSA wildcard.
-fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
+/// post-update SSA wildcard. Sub-action calls are emitted with
+/// synthesized typed-private wildcards `_<Sub>_in_<n>` / `_<Sub>_out_<n>`
+/// matching the sub's record schemas.
+fn fmt_action(
+    action: &ActionContext,
+    loader: &Loader,
+    w: &mut dyn fmt::Write,
+) -> fmt::Result {
     let info = collect_action_info(action);
     let witness_rewrites = compute_witness_rewrites(action);
+    let sub_calls = collect_sub_action_calls(action, loader);
 
     // Build the AKE rewrite map: non-bridged Objects only.
     let mut obj_ake: HashMap<String, ObjAke> = HashMap::new();
@@ -406,9 +480,20 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
     }
     write!(w, "chain0, chain")?;
 
+    // Sub-action aliases: parent vars that hold a sub's first producing
+    // Object Ref. They're not real wildcards in the parent's predicate
+    // (the binding is structural to the script, not the proof) so we
+    // skip them from the private list. Also block them from witness
+    // absorption (compute_witness_rewrites already does this via
+    // object_var_names, but aliases aren't Objects -- explicit skip here).
+    let alias_names: std::collections::HashSet<String> = sub_calls
+        .iter()
+        .filter_map(|c| c.alias.clone())
+        .collect();
+
     // Private wildcards: every (var, ts) except those rewritten to AKE,
-    // those absorbed via witness rewrites, and except the chain's
-    // ts=0/max (which are public as chain0/chain).
+    // those absorbed via witness rewrites, sub-action aliases, and
+    // except the chain's ts=0/max (which are public as chain0/chain).
     let mut private_vars: Vec<String> = Vec::new();
     for var in &action.vars {
         if obj_ake.contains_key(var.as_str()) {
@@ -419,6 +504,11 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
             // Absorbed witness: lives on as `<obj>.<key>` AK form.
             continue;
         }
+        if alias_names.contains(var.as_str()) {
+            // Sub-action alias: replaced by the synthesized sub_in/sub_out
+            // wildcards added below.
+            continue;
+        }
         let max_ts = action.var_state[var].ts;
         for i in 0..=max_ts {
             // Skip the chain's public timestamps.
@@ -426,6 +516,23 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                 continue;
             }
             private_vars.push(fmt_var_at(var, i, max_ts));
+        }
+    }
+    // Append synthesized sub-action typed privates after the regular
+    // SSA/witness ones, matching the order users typically expect
+    // (non-typed first, typed last).
+    for c in &sub_calls {
+        if let Some(name) = &c.sub_in_var {
+            private_vars.push(format!(
+                "{name} {}",
+                schema_name(&c.sub_name, Side::In)
+            ));
+        }
+        if let Some(name) = &c.sub_out_var {
+            private_vars.push(format!(
+                "{name} {}",
+                schema_name(&c.sub_name, Side::Out)
+            ));
         }
     }
     if !private_vars.is_empty() {
@@ -508,6 +615,7 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
 
     // ---- Body (Insts other than Object) ----
     let mut objs: Vec<(ObjectIO, String, String, bool)> = Vec::new();
+    let mut sub_call_idx: usize = 0;
     for inst in &action.insts {
         match inst {
             Inst::Object { io, obj, class, .. } => {
@@ -587,19 +695,23 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                 }
                 writeln!(w, ")")?;
             }
-            Inst::SubAction { action, obj } => {
+            Inst::SubAction {
+                action: sub_name, ..
+            } => {
+                let call = &sub_calls[sub_call_idx];
+                sub_call_idx += 1;
                 let chain = vars["chain"];
                 let chain_next = chain.next();
-                writeln!(
-                    w,
-                    "  {action}({obj}, {chain}, {chain_next})",
-                    obj = ArgFmt {
-                        vars: &vars,
-                        obj_ake: &obj_ake,
-                        witness_rewrites: &witness_rewrites,
-                        arg: obj,
-                    }
-                )?;
+                let mut args: Vec<String> = Vec::new();
+                if let Some(name) = &call.sub_in_var {
+                    args.push(name.clone());
+                }
+                if let Some(name) = &call.sub_out_var {
+                    args.push(name.clone());
+                }
+                args.push(format!("{chain}"));
+                args.push(format!("{chain_next}"));
+                writeln!(w, "  {sub_name}({})", args.join(", "))?;
                 vars.get_mut("chain").expect("chain exists").inc();
             }
         }
@@ -746,7 +858,7 @@ pub(crate) fn fmt(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     fmt_record_decls(loader, w)?;
     writeln!(w, "\n// Actions\n")?;
     for action in &loader.actions {
-        fmt_action(&action.0.borrow(), w)?;
+        fmt_action(&action.0.borrow(), loader, w)?;
         writeln!(w)?;
     }
     writeln!(w, "// Bridges\n")?;

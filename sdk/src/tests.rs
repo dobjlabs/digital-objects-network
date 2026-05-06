@@ -416,6 +416,64 @@ IsWood(state, chain0, chain) = OR(
     );
 }
 
+/// Phase 2C snapshot: parent action calls a sub-action.
+/// - sub-action `UseFoo` (mutate) keeps its own records (`UseFooIn`/`UseFooOut`).
+/// - parent `MineBar` synthesizes private `_UseFoo_in_0`/`_UseFoo_out_0`
+///   wildcards typed against the sub's record schemas; emits the call with
+///   those names + the parent's chain.
+/// - the script-side alias `foo = action.subaction("UseFoo")` doesn't appear
+///   in the parent's predicate since it's not referenced in the parent body.
+#[test]
+fn test_records_form_subaction() {
+    let craft_src = r#"
+        fn UseFoo(action) {
+            var foo = action.mutate("Foo");
+            action.st_gt(foo.durability, 0);
+            var dur = unsafe { foo.durability - 1 };
+            action.st_sum_of(foo.durability, dur, 1);
+            foo.update("durability", dur);
+        }
+
+        fn MineBar(action) {
+            var foo = action.subaction("UseFoo");
+            var bar = action.output("Bar");
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["UseFoo", "MineBar"])
+        .unwrap();
+
+    // Parent action signature + sub-action call body.
+    let expected_parent = r#"MineBar(out MineBarOut, chain0, chain, private: chain1, _UseFoo_in_0 UseFooIn, _UseFoo_out_0 UseFooOut) = AND(
+  UseFoo(_UseFoo_in_0, _UseFoo_out_0, chain0, chain1)
+  DictContains(out.bar, "type", @self_predicate(IsBar))
+  tx::TxInsert(chain, chain1, out.bar)
+)
+"#;
+    assert!(
+        module.podlang_src.contains(expected_parent),
+        "MineBar records-form mismatch.\nexpected:\n{expected_parent}\nactual:\n{}",
+        module.podlang_src
+    );
+
+    // The bridge for MineBar's direct output (`bar`) should exist.
+    assert!(
+        module
+            .podlang_src
+            .contains("IsBarFromMineBar(state, chain0, chain, private: out MineBarOut) = AND("),
+        "missing IsBarFromMineBar bridge:\n{}",
+        module.podlang_src
+    );
+    // Sub-action's own bridge (IsFooFromUseFoo) should also exist; sub-action
+    // objects don't propagate into the parent's IsX dispatch.
+    assert!(
+        module.podlang_src.contains("IsFooFromUseFoo("),
+        "missing IsFooFromUseFoo bridge:\n{}",
+        module.podlang_src
+    );
+}
+
 /// Phase 2B snapshot: mutate with sub-field access + witness absorption.
 /// Exercises:
 /// - mutate input bridge (`pick0` flat, `ArrayContains(in, ...)` boundary)
