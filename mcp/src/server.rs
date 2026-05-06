@@ -41,13 +41,13 @@ pub struct InspectObjectParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct InspectClassParams {
-    /// The qualified class id to inspect, e.g. "craft-basics:WoodPick"
+    /// The qualified class id to inspect, e.g. "craft-basics::WoodPick"
     pub class_id: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CheckFeasibilityParams {
-    /// The qualified action id to check, e.g. "craft-basics:CraftWoodPick"
+    /// The qualified action id to check, e.g. "craft-basics::CraftWoodPick"
     pub action_id: String,
 }
 
@@ -317,7 +317,7 @@ mod tests {
         assert!(
             list.actions
                 .iter()
-                .any(|a| a.id == "craft-basics:CraftWoodPick")
+                .any(|a| a.id == "craft-basics::CraftWoodPick")
         );
     }
 
@@ -355,14 +355,14 @@ mod tests {
         let service = make_service();
         let Json(detail) = service
             .inspect_class(Parameters(InspectClassParams {
-                class_id: "craft-basics:Stick".to_string(),
+                class_id: "craft-basics::Stick".to_string(),
             }))
             .unwrap();
         assert_eq!(detail.class_display_name, "Stick");
         assert!(
             detail
                 .produced_by
-                .contains(&"craft-basics:CraftSticks".to_string())
+                .contains(&"craft-basics::CraftSticks".to_string())
         );
     }
 
@@ -371,7 +371,7 @@ mod tests {
         let service = make_service();
         let Json(result) = service
             .run_action(Parameters(RunActionInput {
-                action_id: "craft-basics:FindLog".to_string(),
+                action_id: "craft-basics::FindLog".to_string(),
                 input_object_paths: vec![],
             }))
             .await
@@ -384,7 +384,7 @@ mod tests {
         let service = CraftMcpService::new(Arc::new(MockCraftOps::new().with_action_in_progress()));
         let result = service
             .run_action(Parameters(RunActionInput {
-                action_id: "craft-basics:FindLog".to_string(),
+                action_id: "craft-basics::FindLog".to_string(),
                 input_object_paths: vec![],
             }))
             .await;
@@ -397,7 +397,7 @@ mod tests {
         let service = make_service();
         let Json(report) = service
             .check_feasibility(Parameters(CheckFeasibilityParams {
-                action_id: "craft-basics:CraftWoodPick".to_string(),
+                action_id: "craft-basics::CraftWoodPick".to_string(),
             }))
             .unwrap();
         assert!(report.feasible);
@@ -410,7 +410,7 @@ mod tests {
         let service = CraftMcpService::new(Arc::new(mock));
         let Json(report) = service
             .check_feasibility(Parameters(CheckFeasibilityParams {
-                action_id: "craft-basics:CraftWoodPick".to_string(),
+                action_id: "craft-basics::CraftWoodPick".to_string(),
             }))
             .unwrap();
         assert!(!report.feasible);

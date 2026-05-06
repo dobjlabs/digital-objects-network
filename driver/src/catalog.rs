@@ -7,7 +7,7 @@ use crate::types::ActionSummary;
 
 /// A class entry surfaced by an [`ActionCatalog`].
 ///
-/// The `id` is the qualified `<plugin>:<class>` form used everywhere as the
+/// The `id` is the qualified `<plugin>::<class>` form used everywhere as the
 /// canonical handle. `display_name` is the bare class name; `plugin_name` is
 /// available for collision-aware UI labels. `hash` is the on-chain
 /// `Is{class}` predicate hash — it disambiguates classes that share a

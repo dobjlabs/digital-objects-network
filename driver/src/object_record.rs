@@ -19,7 +19,7 @@ pub enum ObjectStatus {
 #[derive(Debug, Clone)]
 pub struct ObjectRecord {
     pub id: String,
-    /// Qualified class id (`<plugin>:<class>`). The bare display name and
+    /// Qualified class id (`<plugin>::<class>`). The bare display name and
     /// human description are recovered from the catalog at read time.
     pub class_id: String,
     /// Lifecycle status of this object.

@@ -29,7 +29,7 @@ pub struct ClassList {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassSummary {
-    /// Qualified class id, e.g. "craft-basics:WoodPick"
+    /// Qualified class id, e.g. "craft-basics::WoodPick"
     pub id: String,
     /// Bare class name, e.g. "WoodPick"
     pub display_name: String,
@@ -50,7 +50,7 @@ pub struct ClassSummary {
 pub struct InventoryObject {
     /// Unique object identifier (hex hash)
     pub id: String,
-    /// Qualified class id, e.g. "craft-basics:WoodPick"
+    /// Qualified class id, e.g. "craft-basics::WoodPick"
     pub class_id: String,
     /// Bare class name, e.g. "WoodPick"
     pub class_display_name: String,
@@ -69,7 +69,7 @@ pub struct InventoryObject {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassRef {
-    /// Qualified class id, e.g. "craft-basics:WoodPick"
+    /// Qualified class id, e.g. "craft-basics::WoodPick"
     pub id: String,
     /// Bare class name, e.g. "WoodPick"
     pub display_name: String,
@@ -80,7 +80,7 @@ pub struct ClassRef {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Action {
-    /// Qualified action id, e.g. "craft-basics:CraftWoodPick"
+    /// Qualified action id, e.g. "craft-basics::CraftWoodPick"
     pub id: String,
     /// Bare action name, e.g. "CraftWoodPick"
     pub display_name: String,
@@ -108,7 +108,7 @@ pub struct StateRootResponse {
 pub struct ObjectDetail {
     /// Unique object identifier (hex hash)
     pub id: String,
-    /// Qualified class id, e.g. "craft-basics:WoodPick"
+    /// Qualified class id, e.g. "craft-basics::WoodPick"
     pub class_id: String,
     /// Bare class name, e.g. "WoodPick"
     pub class_display_name: String,
@@ -127,7 +127,7 @@ pub struct ObjectDetail {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassDetail {
-    /// Qualified class id, e.g. "craft-basics:WoodPick"
+    /// Qualified class id, e.g. "craft-basics::WoodPick"
     pub class_id: String,
     /// Bare class name
     pub class_display_name: String,
@@ -146,7 +146,7 @@ pub struct ClassDetail {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunActionInput {
-    /// The qualified action id to execute, e.g. "craft-basics:CraftWoodPick"
+    /// The qualified action id to execute, e.g. "craft-basics::CraftWoodPick"
     pub action_id: String,
     /// Paths to .dobj files to use as inputs
     pub input_object_paths: Vec<String>,

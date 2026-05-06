@@ -197,7 +197,7 @@ pub(crate) fn obj_type_hash(obj: &pod2::middleware::containers::Dictionary) -> O
 }
 
 /// Build the lowercase filename prefix for a `.dobj` of the given qualified
-/// class id (`<plugin>:<class>`). Plugin names are already restricted to
+/// class id (`<plugin>::<class>`). Plugin names are already restricted to
 /// `[A-Za-z0-9_-]` at catalog load, but class names come from arbitrary
 /// rhai string literals (e.g. `action.output("…")`) so they could in
 /// principle contain path-significant characters. To keep written files

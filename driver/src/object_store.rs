@@ -241,7 +241,7 @@ mod tests {
         .unwrap();
         let outputs = catalog
             .execute_action(
-                "craft-basics:FindLog".to_string(),
+                "craft-basics::FindLog".to_string(),
                 dummy_grounding_witness(),
                 vec![],
             )
@@ -249,7 +249,7 @@ mod tests {
         let spendable = outputs.obj(0);
         ObjectRecord {
             id: format!("{:#}", spendable.obj.commitment()),
-            class_id: "craft-basics:Log".to_string(),
+            class_id: "craft-basics::Log".to_string(),
             status: ObjectStatus::Live,
             tx_hash: None,
             pod: spendable.pod,

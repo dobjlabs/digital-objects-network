@@ -9,7 +9,7 @@ use crate::types::*;
 const PLUGIN: &str = "craft-basics";
 
 fn qid(name: &str) -> String {
-    format!("{PLUGIN}:{name}")
+    format!("{PLUGIN}::{name}")
 }
 
 /// Mock implementation of CraftOps for testing.
@@ -133,7 +133,7 @@ impl CraftOps for MockCraftOps {
             .collect();
 
         let display_name = class_id
-            .strip_prefix(&format!("{PLUGIN}:"))
+            .strip_prefix(&format!("{PLUGIN}::"))
             .unwrap_or(class_id);
         if !is_known_class(display_name) {
             bail!("unknown class: {class_id}");
@@ -172,7 +172,7 @@ impl CraftOps for MockCraftOps {
                 class_id: qid("Wood"),
                 class_display_name: "Wood".to_string(),
                 plugin_name: PLUGIN.to_string(),
-                file_name: "craft-basics_wood_0xnew.dobj".to_string(),
+                file_name: "craft-basics__wood_0xnew.dobj".to_string(),
                 status: "live".to_string(),
                 tx_hash: Some("0xmocktxnew12345678".to_string()),
                 fields: HashMap::from([
@@ -262,7 +262,7 @@ fn default_inventory() -> Vec<InventoryObject> {
         make_obj(
             "0xabc1111111111111",
             "Log",
-            "craft-basics_log_0xabc1.dobj",
+            "craft-basics__log_0xabc1.dobj",
             "0xmocktx1111111111",
             "live",
             vec![],
@@ -270,7 +270,7 @@ fn default_inventory() -> Vec<InventoryObject> {
         make_obj(
             "0xabc2222222222222",
             "Wood",
-            "craft-basics_wood_0xabc2.dobj",
+            "craft-basics__wood_0xabc2.dobj",
             "0xmocktx2222222222",
             "live",
             vec![],
@@ -278,7 +278,7 @@ fn default_inventory() -> Vec<InventoryObject> {
         make_obj(
             "0xabc3333333333333",
             "Stick",
-            "craft-basics_stick_0xabc3.dobj",
+            "craft-basics__stick_0xabc3.dobj",
             "0xmocktx3333333333",
             "live",
             vec![],
@@ -286,7 +286,7 @@ fn default_inventory() -> Vec<InventoryObject> {
         make_obj(
             "0xabc4444444444444",
             "WoodPick",
-            "craft-basics_woodpick_0xabc4.dobj",
+            "craft-basics__woodpick_0xabc4.dobj",
             "0xmocktx4444444444",
             "live",
             vec![("durability", serde_json::Value::Number(3.into()))],
@@ -294,7 +294,7 @@ fn default_inventory() -> Vec<InventoryObject> {
         make_obj(
             "0xabc5555555555555",
             "Stone",
-            "craft-basics_stone_0xabc5.dobj",
+            "craft-basics__stone_0xabc5.dobj",
             "0xmocktx5555555555",
             "live",
             vec![],
@@ -303,7 +303,7 @@ fn default_inventory() -> Vec<InventoryObject> {
         make_obj(
             "0xdead000000000000",
             "Log",
-            "craft-basics_log_0xdead.dobj",
+            "craft-basics__log_0xdead.dobj",
             "0xmocktxdead000000",
             "nullified",
             vec![],
@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn test_inspect_class() {
         let mock = MockCraftOps::new();
-        let detail = mock.inspect_class("craft-basics:Wood").unwrap();
+        let detail = mock.inspect_class("craft-basics::Wood").unwrap();
         assert!(detail.produced_by.contains(&qid("CraftWood")));
         assert!(detail.consumed_by.contains(&qid("CraftSticks")));
         assert!(detail.consumed_by.contains(&qid("CraftWoodPick")));
@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn test_inspect_unknown_class() {
         let mock = MockCraftOps::new();
-        assert!(mock.inspect_class("craft-basics:Diamond").is_err());
+        assert!(mock.inspect_class("craft-basics::Diamond").is_err());
     }
 
     #[test]
@@ -476,7 +476,7 @@ mod tests {
         let result = mock
             .run_action(RunActionInput {
                 action_id: qid("CraftWood"),
-                input_object_paths: vec!["craft-basics_log_0xabc1.dobj".to_string()],
+                input_object_paths: vec!["craft-basics__log_0xabc1.dobj".to_string()],
             })
             .unwrap();
         assert!(result.success);
@@ -487,7 +487,7 @@ mod tests {
         let mock = MockCraftOps::new().with_action_in_progress();
         let result = mock.run_action(RunActionInput {
             action_id: qid("CraftWood"),
-            input_object_paths: vec!["craft-basics_log_0xabc1.dobj".to_string()],
+            input_object_paths: vec!["craft-basics__log_0xabc1.dobj".to_string()],
         });
         assert!(result.is_err());
         assert!(

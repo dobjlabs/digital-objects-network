@@ -28,7 +28,7 @@ pub enum ObjectSelector {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ObjectQuery {
-    /// Qualified class id (`<plugin>:<class>`).
+    /// Qualified class id (`<plugin>::<class>`).
     pub class_id: Option<String>,
     pub status: Option<ObjectStatus>,
     pub id: Option<String>,
@@ -37,11 +37,11 @@ pub struct ObjectQuery {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActionQuery {
-    /// Qualified action id (`<plugin>:<action>`).
+    /// Qualified action id (`<plugin>::<action>`).
     pub id: Option<String>,
-    /// Qualified class id (`<plugin>:<class>`).
+    /// Qualified class id (`<plugin>::<class>`).
     pub input_class_id: Option<String>,
-    /// Qualified class id (`<plugin>:<class>`).
+    /// Qualified class id (`<plugin>::<class>`).
     pub output_class_id: Option<String>,
 }
 
@@ -50,7 +50,7 @@ pub struct ActionQuery {
 pub struct ObjectSummary {
     pub id: String,
     pub file_name: String,
-    /// Qualified class id (`<plugin>:<class>`).
+    /// Qualified class id (`<plugin>::<class>`).
     pub class_id: String,
     /// Bare class name from the producing plugin's manifest.
     pub class_display_name: String,
@@ -69,7 +69,7 @@ pub struct ObjectSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassRef {
-    /// Qualified class id (`<plugin>:<class>`).
+    /// Qualified class id (`<plugin>::<class>`).
     pub id: String,
     /// Bare class name from the producing plugin's manifest.
     pub display_name: String,
@@ -81,7 +81,7 @@ pub struct ClassRef {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionSummary {
-    /// Qualified action id (`<plugin>:<action>`).
+    /// Qualified action id (`<plugin>::<action>`).
     pub id: String,
     pub display_name: String,
     pub plugin_name: String,
@@ -95,7 +95,7 @@ pub struct ActionSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassSummary {
-    /// Qualified class id (`<plugin>:<class>`).
+    /// Qualified class id (`<plugin>::<class>`).
     pub id: String,
     pub display_name: String,
     pub plugin_name: String,
@@ -122,7 +122,7 @@ pub struct CheckActionCandidate {
 #[serde(rename_all = "camelCase")]
 pub struct CheckActionReport {
     pub feasible: bool,
-    /// Qualified action id (`<plugin>:<action>`).
+    /// Qualified action id (`<plugin>::<action>`).
     pub action_id: String,
     pub available_inputs: Vec<CheckActionCandidate>,
     /// Slots that had no eligible live object in inventory.

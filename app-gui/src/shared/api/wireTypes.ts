@@ -9,7 +9,7 @@ export type ObjectStatus = "unknown" | "pending" | "live" | "nullified";
 export interface InventoryObjectPayload {
   id: string;
   fileName: string;
-  /** Qualified class id (`<plugin>:<class>`). */
+  /** Qualified class id (`<plugin>::<class>`). */
   classId: string;
   /** Bare class name from the plugin manifest. */
   classDisplayName: string;
@@ -24,7 +24,7 @@ export interface InventoryObjectPayload {
 }
 
 export interface ClassRefPayload {
-  /** Qualified class id (`<plugin>:<class>`). */
+  /** Qualified class id (`<plugin>::<class>`). */
   id: string;
   /** Bare class name from the producing plugin's manifest. */
   displayName: string;
@@ -33,7 +33,7 @@ export interface ClassRefPayload {
 }
 
 export interface ActionPayload {
-  /** Qualified action id (`<plugin>:<action>`). */
+  /** Qualified action id (`<plugin>::<action>`). */
   id: string;
   /** Bare action name from the plugin manifest. */
   displayName: string;
@@ -64,7 +64,7 @@ export interface RunActionResult {
 
 export interface ObjectRecordPayload {
   id: string;
-  /** Qualified class id (`<plugin>:<class>`). */
+  /** Qualified class id (`<plugin>::<class>`). */
   classId: string;
   status: ObjectStatus;
   txHash: string | null;
