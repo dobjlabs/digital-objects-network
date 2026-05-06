@@ -65,6 +65,43 @@ jobs:
           cache-shared-key: cli-${{ matrix.target }}
           cache-workspace-crates: true
 
+      - name: Install x86_64 Homebrew + gcc@13 (cross-compile prerequisite)
+        # Cross-compiling SCIP from an arm64 runner to x86_64 needs x86_64
+        # GCC to link Fortran libraries against. Without this, scip-sys's
+        # cmake step writes /usr/local/opt/gcc@13/... paths into libscip's
+        # install_names but the actual libs aren't on disk, so we can't
+        # bundle them and the resulting tarball is broken at runtime.
+        #
+        # Installing x86_64 Homebrew under Rosetta gives us a real
+        # /usr/local/opt/gcc@13 with x86_64 libs that match the paths
+        # cmake would write, so the build links cleanly and the bundle
+        # has the right binaries.
+        if: matrix.target == 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Make sure Rosetta 2 is installed so we can run x86_64 binaries.
+          # `softwareupdate --install-rosetta` is idempotent.
+          sudo softwareupdate --install-rosetta --agree-to-license
+
+          # Install x86_64 Homebrew at /usr/local (the canonical Intel
+          # Homebrew prefix) under Rosetta. NONINTERACTIVE=1 skips the
+          # confirmation prompt.
+          if [ ! -x /usr/local/bin/brew ]; then
+            echo "installing x86_64 Homebrew under Rosetta"
+            NONINTERACTIVE=1 arch -x86_64 /bin/bash -c \
+              "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          fi
+
+          # gcc@13 specifically — that's the formula scip-sys's cmake links
+          # against (per the install_name paths in libscip). Bottles are
+          # pre-compiled, so this is a download not a build.
+          arch -x86_64 /usr/local/bin/brew install gcc@13
+
+          echo "--- /usr/local/opt/gcc@13/lib/gcc/13 ---"
+          ls -la /usr/local/opt/gcc@13/lib/gcc/13 | head -30
+
       - name: Build dobjd
         run: cargo build --release --locked -p dobjd --target ${{ matrix.target }}
         env:
@@ -248,43 +285,37 @@ jobs:
           # Logic mirrors app-gui/src-tauri/build.rs's copy_mac_gcc_runtime_libs
           # + rewrite_mac_dylib_ids.
 
-          # Bundle GCC runtime libs only on **native** builds. Cross-compile
-          # (arm64 host → x86_64 target) can't pull x86_64 Homebrew libs from
-          # the arm64 runner, and copying arm64 libs into an x86_64 tarball
-          # ships a binary that fails to load. Strategy:
+          # Bundle GCC runtime libs (libgfortran/libquadmath/libgcc_s, plus
+          # whatever the install_name walk pulls in transitively, e.g.
+          # libstdc++) for the target architecture.
           #
-          #   - native build:    bundle from /opt/homebrew or /usr/local
-          #   - cross-compile:   skip bundling; assert libscip doesn't need
-          #                      GCC runtime libs (cmake usually drops Fortran
-          #                      when no cross-compatible Fortran toolchain is
-          #                      available, in which case libscip is
-          #                      self-sufficient).
-          #
-          # If the assert fails on cross-compile, we'd need x86_64 Homebrew
-          # under Rosetta — left as a follow-up.
-          HOST_ARCH=$(uname -m)
-          TARGET_ARCH=$(echo "${{ matrix.target }}" | sed 's/-.*//; s/aarch64/arm64/')
-          BUNDLE_GCC=false
-          if [ "$HOST_ARCH" = "$TARGET_ARCH" ]; then
-            BUNDLE_GCC=true
-            echo "native build ($HOST_ARCH); will bundle GCC runtime libs"
-          else
-            echo "cross-compile $HOST_ARCH -> $TARGET_ARCH; skipping GCC runtime bundling"
-          fi
+          # arm64 build: native, libs from /opt/homebrew (latest gcc).
+          # x86_64 build: cross-compile, libs from x86_64 Homebrew at
+          # /usr/local/opt/gcc@13 (installed via Rosetta in an earlier step).
+          # Picking gcc@13 specifically matches the install_names baked
+          # into the cross-compiled libscip.
+          GCC_RUNTIME_NAMES=(libgfortran.5.dylib libquadmath.0.dylib libgcc_s.1.1.dylib)
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              GCC_ROOTS=(/opt/homebrew/opt/gcc/lib/gcc/current)
+              ;;
+            x86_64-apple-darwin)
+              GCC_ROOTS=(/usr/local/opt/gcc@13/lib/gcc/13)
+              ;;
+            *)
+              GCC_ROOTS=()
+              ;;
+          esac
 
-          if [ "$BUNDLE_GCC" = true ]; then
-            GCC_RUNTIME_NAMES=(libgfortran.5.dylib libquadmath.0.dylib libgcc_s.1.1.dylib)
-            GCC_ROOTS=(/opt/homebrew/opt/gcc/lib/gcc/current /usr/local/opt/gcc/lib/gcc/current)
-            for root in "${GCC_ROOTS[@]}"; do
-              [ -d "$root" ] || continue
-              for name in "${GCC_RUNTIME_NAMES[@]}"; do
-                src="$root/$name"
-                [ -e "$src" ] || continue
-                cp -P "$src" "$DOBJD_LIBS/$name"
-                chmod u+w "$DOBJD_LIBS/$name"
-              done
+          for root in "${GCC_ROOTS[@]}"; do
+            [ -d "$root" ] || continue
+            for name in "${GCC_RUNTIME_NAMES[@]}"; do
+              src="$root/$name"
+              [ -e "$src" ] || continue
+              cp -P "$src" "$DOBJD_LIBS/$name"
+              chmod u+w "$DOBJD_LIBS/$name"
             done
-          fi
+          done
 
           # Walk every dylib transitively, rewriting:
           #   - its own LC_ID_DYLIB to @rpath/<basename>
@@ -330,23 +361,21 @@ jobs:
             done < <(otool -L "$lib" | tail -n +2 | awk '{print $1}')
           done
 
-          # If we skipped GCC bundling because of cross-compile, assert that
-          # libscip doesn't actually need GCC runtime. If it does, we shipped
-          # a broken bundle — fail loudly.
-          if [ "$BUNDLE_GCC" = false ]; then
-            for lib in "$DOBJD_LIBS"/libscip*.dylib; do
-              [ -L "$lib" ] && continue
-              if otool -L "$lib" | grep -qE 'libgfortran|libgcc_s|libquadmath'; then
-                echo "::error::cross-compiled libscip transitively links GCC runtime,"
-                echo "::error::but no x86_64 GCC libs are available on this arm64 runner."
-                echo "::error::Fix options: install x86_64 Homebrew + GCC under Rosetta,"
-                echo "::error::or use a paid x86_64 runner (macos-13-large)."
-                otool -L "$lib"
-                exit 1
-              fi
-            done
-            echo "✓ libscip is self-sufficient (no GCC runtime deps); cross-compile bundle is sound"
-          fi
+          # Sanity check: every /opt/homebrew/* or /usr/local/* dep
+          # libscip references should have been rewritten to @rpath/<name>
+          # by the walk above, and the corresponding lib should exist in
+          # .libs/. If any absolute Homebrew path remains in libscip's deps
+          # we'd ship a broken bundle.
+          for lib in "$DOBJD_LIBS"/libscip*.dylib; do
+            [ -L "$lib" ] && continue
+            if otool -L "$lib" | tail -n +2 | awk '{print $1}' \
+               | grep -E '^(/opt/homebrew|/usr/local)/'; then
+              echo "::error::libscip still has absolute Homebrew references after install_name rewrite"
+              echo "::error::expected the GCC runtime libs to be present at the paths above"
+              otool -L "$lib"
+              exit 1
+            fi
+          done
 
           echo "--- final bundle ---"
           ls -la "$DOBJD_STAGE" "$DOBJD_LIBS"
