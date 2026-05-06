@@ -237,7 +237,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "e0a3963f76d01a1ba7138c327c583e955ef5bc1e94e5b56edca41ab800e3f6d1"
+        module_hash = "a760304b42cd082d91aaa65ece8b9c7223bae6d71644ae0a2b0fcaa3fc525f9e"
 
         [[classes]]
         name = "Log"
@@ -287,32 +287,9 @@ fn test_sdk_2() {
     println!("{}", module.podlang_src);
 }
 
-// An action with one chain step and no `update()` calls produces zero
-// private vars. The signature must omit `private:` entirely; emitting
-// `..., private: ) = AND(` makes the pod2 parser reject the module.
-#[test]
-fn test_action_no_private_args() {
-    let craft_src = r#"
-        fn JustOutput(action) {
-            var x = action.output("Foo");
-        }
-"#;
-    let sdk = Sdk::default();
-    let module = sdk
-        .load_module_from_src_actions(craft_src, &["JustOutput"])
-        .unwrap();
-    assert!(
-        module
-            .podlang_src
-            .contains("JustOutput(out JustOutputOut, chain0, chain) = AND("),
-        "expected no `private:` clause for zero-private-var action; got:\n{}",
-        module.podlang_src
-    );
-}
-
-/// Phase 2A snapshot: simplest records-form output. One output, no `.update`,
-/// no `.set` on the output, no inputs. The output references resolve directly
-/// to `out.x` (no bridge wildcard).
+/// Phase 2A/2D snapshot: simplest records-form output. One output, no
+/// `.update`. Always-bridge: emit a flat `x` wildcard plus an
+/// `ArrayContains` boundary; body uses `x` directly.
 #[test]
 fn test_records_form_just_output() {
     let craft_src = r#"
@@ -329,9 +306,10 @@ fn test_records_form_just_output() {
 
 // Actions
 
-JustOutput(out JustOutputOut, chain0, chain) = AND(
-  DictContains(out.x, "type", @self_predicate(IsFoo))
-  tx::TxInsert(chain, chain0, out.x)
+JustOutput(out JustOutputOut, chain0, chain, private: x) = AND(
+  ArrayContains(out, JustOutputOut::x, x)
+  DictContains(x, "type", @self_predicate(IsFoo))
+  tx::TxInsert(chain, chain0, x)
 )
 
 // Bridges
@@ -354,9 +332,9 @@ IsFoo(state, chain0, chain) = OR(
     );
 }
 
-/// Phase 2A/2B snapshot: 1 input + 1 output with `.update`. Exercises:
-/// - input AKE-direct (`in.log`, no bridge)
-/// - output bridge wildcard (`wood` flat, `ArrayContains` boundary)
+/// Phase 2A/2B/2D snapshot: 1 input + 1 output with `.update`. Exercises:
+/// - input bridge (`log` flat, `ArrayContains(in, ...)` boundary)
+/// - output bridge wildcard (`wood` flat, `ArrayContains(out, ...)` boundary)
 /// - witness absorption (`key` → `wood.key`, no separate wildcard)
 #[test]
 fn test_records_form_input_output_update() {
@@ -378,11 +356,12 @@ record LogToWoodOut = (wood)
 
 // Actions
 
-LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, wood0, wood) = AND(
+LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, log, wood0, wood) = AND(
+  ArrayContains(in, LogToWoodIn::log, log)
   ArrayContains(out, LogToWoodOut::wood, wood)
   DictUpdate(wood, wood0, "key", wood.key)
-  DictContains(in.log, "type", @self_predicate(IsLog))
-  tx::TxDelete(chain1, chain0, in.log)
+  DictContains(log, "type", @self_predicate(IsLog))
+  tx::TxDelete(chain1, chain0, log)
   DictContains(wood, "type", @self_predicate(IsWood))
   tx::TxInsert(chain, chain1, wood)
 )
@@ -445,10 +424,11 @@ fn test_records_form_subaction() {
         .unwrap();
 
     // Parent action signature + sub-action call body.
-    let expected_parent = r#"MineBar(out MineBarOut, chain0, chain, private: chain1, _UseFoo_in_0 UseFooIn, _UseFoo_out_0 UseFooOut) = AND(
+    let expected_parent = r#"MineBar(out MineBarOut, chain0, chain, private: chain1, bar, _UseFoo_in_0 UseFooIn, _UseFoo_out_0 UseFooOut) = AND(
+  ArrayContains(out, MineBarOut::bar, bar)
   UseFoo(_UseFoo_in_0, _UseFoo_out_0, chain0, chain1)
-  DictContains(out.bar, "type", @self_predicate(IsBar))
-  tx::TxInsert(chain, chain1, out.bar)
+  DictContains(bar, "type", @self_predicate(IsBar))
+  tx::TxInsert(chain, chain1, bar)
 )
 "#;
     assert!(
@@ -474,12 +454,12 @@ fn test_records_form_subaction() {
     );
 }
 
-/// Phase 2B snapshot: mutate with sub-field access + witness absorption.
+/// Phase 2B/2D snapshot: mutate with sub-field access + witness absorption.
 /// Exercises:
-/// - mutate input bridge (`pick0` flat, `ArrayContains(in, ...)` boundary)
-/// - mutate output bridge (`pick` flat, `ArrayContains(out, ...)` boundary)
-/// - 2-level-AK avoidance via input bridge (`pick0.durability`)
-/// - witness absorption (`durability` witness → `pick.durability` AK,
+/// - mutate input bridge (`foo0` flat, `ArrayContains(in, ...)` boundary)
+/// - mutate output bridge (`foo` flat, `ArrayContains(out, ...)` boundary)
+/// - 2-level-AK avoidance via input bridge (`foo0.durability`)
+/// - witness absorption (`dur` witness → `foo.durability` AK,
 ///   appearing in both SumOf and DictUpdate)
 #[test]
 fn test_records_form_mutate() {
