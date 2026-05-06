@@ -19,7 +19,7 @@ use pod2::{
 };
 use pod2utils::{macros::BuildContext, map, op, st_custom};
 
-use crate::{ChainEvent, OBJECT_NULLIFIER_VERSION, TxStats, build_ctx, ctx_with, record};
+use crate::{ChainEvent, OBJECT_NULLIFIER_VERSION, TxStats, build_tx, record, tx_with};
 
 /// Walk the top-level event list and build a `ReplayActions` statement.
 /// Every top-level event must be `ChainEvent::Action` -- the prover
@@ -33,12 +33,12 @@ pub(crate) fn build_replay_actions(
     chain: Hash,
     live: &Set,
     nullifiers: &Set,
-    tx_start: Hash,
-    tx_end: Hash,
+    chain_start: Hash,
+    chain_end: Hash,
 ) -> (Statement, Hash, Set, Set) {
     if events.is_empty() {
         // Done: reuse ReplayContentsDone.
-        let d = build_ctx(live, nullifiers, tx_start, tx_end);
+        let d = build_tx(live, nullifiers, chain_start, chain_end);
         let st_done = st_custom!(
             ctx,
             ReplayContentsDone() = (Equal(d, d), Equal(chain, chain))
@@ -57,7 +57,14 @@ pub(crate) fn build_replay_actions(
     if events.len() == 1 {
         // Single action: no step wrapping.
         let (st_action, c, l, n) = build_top_level_action(
-            ctx, stats, &events[0], chain, live, nullifiers, tx_start, tx_end,
+            ctx,
+            stats,
+            &events[0],
+            chain,
+            live,
+            nullifiers,
+            chain_start,
+            chain_end,
         );
         let st = st_custom!(
             ctx,
@@ -70,9 +77,18 @@ pub(crate) fn build_replay_actions(
 
     // Step: first action + recursive tail.
     let (first, rest) = events.split_first().unwrap();
-    let (st_action, c, l, n) =
-        build_top_level_action(ctx, stats, first, chain, live, nullifiers, tx_start, tx_end);
-    let (st_rest, c2, l2, n2) = build_replay_actions(ctx, stats, rest, c, &l, &n, tx_start, tx_end);
+    let (st_action, c, l, n) = build_top_level_action(
+        ctx,
+        stats,
+        first,
+        chain,
+        live,
+        nullifiers,
+        chain_start,
+        chain_end,
+    );
+    let (st_rest, c2, l2, n2) =
+        build_replay_actions(ctx, stats, rest, c, &l, &n, chain_start, chain_end);
     let st_step = st_custom!(ctx, ReplayActionsStep() = (st_action, st_rest)).unwrap();
     record(stats, "ReplayActionsStep");
     let st = st_custom!(
@@ -94,8 +110,8 @@ fn build_top_level_action(
     chain: Hash,
     live: &Set,
     nullifiers: &Set,
-    tx_start: Hash,
-    tx_end: Hash,
+    chain_start: Hash,
+    chain_end: Hash,
 ) -> (Statement, Hash, Set, Set) {
     match event {
         ChainEvent::Action {
@@ -109,8 +125,8 @@ fn build_top_level_action(
                 chain,
                 live,
                 nullifiers,
-                tx_start,
-                tx_end,
+                chain_start,
+                chain_end,
                 *chain_after,
             );
             (st, *chain_after, new_live, new_null)
@@ -132,12 +148,12 @@ pub(crate) fn build_replay_contents(
     chain: Hash,
     live: &Set,
     nullifiers: &Set,
-    tx_start: Hash,
-    tx_end: Hash,
+    chain_start: Hash,
+    chain_end: Hash,
 ) -> (Statement, Hash, Set, Set) {
     if events.is_empty() {
-        // Done: before_ctx = after_ctx AND before_chain = after_chain
-        let d = build_ctx(live, nullifiers, tx_start, tx_end);
+        // Done: before_tx = after_tx AND before_chain = after_chain
+        let d = build_tx(live, nullifiers, chain_start, chain_end);
         let st_done = st_custom!(
             ctx,
             ReplayContentsDone() = (Equal(d, d), Equal(chain, chain))
@@ -156,7 +172,14 @@ pub(crate) fn build_replay_contents(
     if events.len() == 1 {
         // Single branch: exactly one element, skip Step + Done overhead
         let (st_elem, c, l, n) = build_replay_element(
-            ctx, stats, &events[0], chain, live, nullifiers, tx_start, tx_end,
+            ctx,
+            stats,
+            &events[0],
+            chain,
+            live,
+            nullifiers,
+            chain_start,
+            chain_end,
         );
         let st = st_custom!(
             ctx,
@@ -170,10 +193,17 @@ pub(crate) fn build_replay_contents(
     if events.len() == 2 {
         // Pair branch: exactly two elements, skip Step + recursive Contents
         let (st_elem1, c1, l1, n1) = build_replay_element(
-            ctx, stats, &events[0], chain, live, nullifiers, tx_start, tx_end,
+            ctx,
+            stats,
+            &events[0],
+            chain,
+            live,
+            nullifiers,
+            chain_start,
+            chain_end,
         );
         let (st_elem2, c2, l2, n2) =
-            build_replay_element(ctx, stats, &events[1], c1, &l1, &n1, tx_start, tx_end);
+            build_replay_element(ctx, stats, &events[1], c1, &l1, &n1, chain_start, chain_end);
         let st_pair = st_custom!(ctx, ReplayContentsPair() = (st_elem1, st_elem2)).unwrap();
         record(stats, "ReplayContentsPair");
         let st = st_custom!(
@@ -187,10 +217,18 @@ pub(crate) fn build_replay_contents(
 
     // Step branch: 3+ elements, peel off first and recurse
     let (first, rest) = events.split_first().unwrap();
-    let (st_elem, c, l, n) =
-        build_replay_element(ctx, stats, first, chain, live, nullifiers, tx_start, tx_end);
+    let (st_elem, c, l, n) = build_replay_element(
+        ctx,
+        stats,
+        first,
+        chain,
+        live,
+        nullifiers,
+        chain_start,
+        chain_end,
+    );
     let (st_rest, c2, l2, n2) =
-        build_replay_contents(ctx, stats, rest, c, &l, &n, tx_start, tx_end);
+        build_replay_contents(ctx, stats, rest, c, &l, &n, chain_start, chain_end);
 
     let st_step = st_custom!(ctx, ReplayContentsStep() = (st_elem, st_rest)).unwrap();
     record(stats, "ReplayContentsStep");
@@ -211,8 +249,8 @@ fn build_replay_element(
     chain: Hash,
     live: &Set,
     nullifiers: &Set,
-    tx_start: Hash,
-    tx_end: Hash,
+    chain_start: Hash,
+    chain_end: Hash,
 ) -> (Statement, Hash, Set, Set) {
     match event {
         ChainEvent::Insert {
@@ -231,8 +269,8 @@ fn build_replay_element(
                 new,
                 live,
                 nullifiers,
-                tx_start,
-                tx_end,
+                chain_start,
+                chain_end,
                 tx_stmt.clone(),
                 evidence,
             );
@@ -262,8 +300,8 @@ fn build_replay_element(
                 old,
                 live,
                 nullifiers,
-                tx_start,
-                tx_end,
+                chain_start,
+                chain_end,
                 tx_stmt.clone(),
                 evidence,
             );
@@ -291,8 +329,8 @@ fn build_replay_element(
                 old,
                 live,
                 nullifiers,
-                tx_start,
-                tx_end,
+                chain_start,
+                chain_end,
                 tx_stmt.clone(),
                 evidence,
             );
@@ -316,8 +354,8 @@ fn build_replay_element(
                 chain,
                 live,
                 nullifiers,
-                tx_start,
-                tx_end,
+                chain_start,
+                chain_end,
                 *chain_after,
             );
             let st = st_custom!(
@@ -338,24 +376,24 @@ fn build_replay_insert(
     new: &Dictionary,
     live: &Set,
     nullifiers: &Set,
-    tx_start: Hash,
-    tx_end: Hash,
+    chain_start: Hash,
+    chain_end: Hash,
     tx_stmt: Statement,
     guard_evidence: Statement,
 ) -> (Statement, Set) {
-    let bctx = build_ctx(live, nullifiers, tx_start, tx_end);
+    let btx = build_tx(live, nullifiers, chain_start, chain_end);
     let mut nl = live.clone();
     nl.insert(&Value::from(new.clone())).unwrap();
-    let actx = ctx_with(&bctx, "live", Value::from(nl.clone()));
+    let atx = tx_with(&btx, "live", Value::from(nl.clone()));
 
-    // ReplayInsert: TxInserted (from record time) + state update + guard.
+    // ReplayInsert: TxInsert (from record time) + state update + guard.
     let op_si = ctx
         .builder
-        .priv_op(op!(SetInsert(nl, (&bctx, "live"), new)))
+        .priv_op(op!(SetInsert(nl, (&btx, "live"), new)))
         .unwrap();
     let op_du = ctx
         .builder
-        .priv_op(op!(DictUpdate(actx, bctx, "live", nl)))
+        .priv_op(op!(DictUpdate(atx, btx, "live", nl)))
         .unwrap();
     let guard = new
         .get(&Key::from("type"))
@@ -368,7 +406,7 @@ fn build_replay_insert(
     let rebound_evidence = ctx
         .builder
         .priv_op(Operation::replace_value_with_entry(
-            vec![None, Some((&bctx, "tx_start")), Some((&bctx, "tx_end"))],
+            vec![None, Some((&btx, "chain_start")), Some((&btx, "chain_end"))],
             guard_evidence,
         ))
         .unwrap();
@@ -391,12 +429,12 @@ fn build_replay_mutate(
     old: &Dictionary,
     live: &Set,
     nullifiers: &Set,
-    tx_start: Hash,
-    tx_end: Hash,
+    chain_start: Hash,
+    chain_end: Hash,
     tx_stmt: Statement,
     guard_evidence: Statement,
 ) -> (Statement, Set, Set) {
-    let bctx = build_ctx(live, nullifiers, tx_start, tx_end);
+    let btx = build_tx(live, nullifiers, chain_start, chain_end);
 
     let mut lm = live.clone();
     lm.delete(&Value::from(old.commitment())).unwrap();
@@ -409,8 +447,8 @@ fn build_replay_mutate(
     let nul = hash_values(&[Value::from(okh), Value::from(OBJECT_NULLIFIER_VERSION)]);
     let mut nn = nullifiers.clone();
     nn.insert(&Value::from(nul)).unwrap();
-    let m1 = ctx_with(&bctx, "live", Value::from(nl.clone()));
-    let actx = ctx_with(&m1, "nullifiers", Value::from(nn.clone()));
+    let m1 = tx_with(&btx, "live", Value::from(nl.clone()));
+    let atx = tx_with(&m1, "nullifiers", Value::from(nn.clone()));
 
     // ReplayNullify (called inside ReplayMutateEvent)
     let op_h1 = ctx
@@ -427,7 +465,7 @@ fn build_replay_mutate(
         .unwrap();
     let op_du_null = ctx
         .builder
-        .priv_op(op!(DictUpdate(actx, m1, "nullifiers", nn)))
+        .priv_op(op!(DictUpdate(atx, m1, "nullifiers", nn)))
         .unwrap();
     let st_nullify = ctx
         .apply_custom_pred_simple(
@@ -439,15 +477,15 @@ fn build_replay_mutate(
     record(stats, "ReplayNullify");
 
     // ReplayMutateEvent (live swap + nullify; chain/event-hash work is
-    // delegated to the TxMutated statement referenced by ReplayMutate).
+    // delegated to the TxMutate statement referenced by ReplayMutate).
     let op_sd = ctx
         .builder
-        .priv_op(op!(SetDelete(lm, (&bctx, "live"), old)))
+        .priv_op(op!(SetDelete(lm, (&btx, "live"), old)))
         .unwrap();
     let op_si = ctx.builder.priv_op(op!(SetInsert(nl, lm, new))).unwrap();
     let op_du_live = ctx
         .builder
-        .priv_op(op!(DictUpdate(m1, bctx, "live", nl)))
+        .priv_op(op!(DictUpdate(m1, btx, "live", nl)))
         .unwrap();
     let st_event = ctx
         .apply_custom_pred_simple(
@@ -458,7 +496,7 @@ fn build_replay_mutate(
         .unwrap();
     record(stats, "ReplayMutateEvent");
 
-    // ReplayMutate (type-preserve + TxMutated ref + event + guard).
+    // ReplayMutate (type-preserve + TxMutate ref + event + guard).
     let op_eq = ctx
         .builder
         .priv_op(op!(Equal((old, "type"), (new, "type"))))
@@ -474,7 +512,7 @@ fn build_replay_mutate(
     let rebound_evidence = ctx
         .builder
         .priv_op(Operation::replace_value_with_entry(
-            vec![None, Some((&bctx, "tx_start")), Some((&bctx, "tx_end"))],
+            vec![None, Some((&btx, "chain_start")), Some((&btx, "chain_end"))],
             guard_evidence,
         ))
         .unwrap();
@@ -496,12 +534,12 @@ fn build_replay_delete(
     old: &Dictionary,
     live: &Set,
     nullifiers: &Set,
-    tx_start: Hash,
-    tx_end: Hash,
+    chain_start: Hash,
+    chain_end: Hash,
     tx_stmt: Statement,
     guard_evidence: Statement,
 ) -> (Statement, Set, Set) {
-    let bctx = build_ctx(live, nullifiers, tx_start, tx_end);
+    let btx = build_tx(live, nullifiers, chain_start, chain_end);
 
     let mut nl = live.clone();
     nl.delete(&Value::from(old.commitment())).unwrap();
@@ -512,8 +550,8 @@ fn build_replay_delete(
     let nul = hash_values(&[Value::from(okh), Value::from(OBJECT_NULLIFIER_VERSION)]);
     let mut nn = nullifiers.clone();
     nn.insert(&Value::from(nul)).unwrap();
-    let m1 = ctx_with(&bctx, "live", Value::from(nl.clone()));
-    let actx = ctx_with(&m1, "nullifiers", Value::from(nn.clone()));
+    let m1 = tx_with(&btx, "live", Value::from(nl.clone()));
+    let atx = tx_with(&m1, "nullifiers", Value::from(nn.clone()));
 
     // ReplayNullify (called inside ReplayDeleteEvent)
     let op_h1 = ctx
@@ -530,7 +568,7 @@ fn build_replay_delete(
         .unwrap();
     let op_du_null = ctx
         .builder
-        .priv_op(op!(DictUpdate(actx, m1, "nullifiers", nn)))
+        .priv_op(op!(DictUpdate(atx, m1, "nullifiers", nn)))
         .unwrap();
     let st_nullify = ctx
         .apply_custom_pred_simple(
@@ -542,14 +580,14 @@ fn build_replay_delete(
     record(stats, "ReplayNullify");
 
     // ReplayDeleteEvent (live removal + nullify; chain/event-hash work is
-    // delegated to the TxDeleted statement referenced by ReplayDelete).
+    // delegated to the TxDelete statement referenced by ReplayDelete).
     let op_sd = ctx
         .builder
-        .priv_op(op!(SetDelete(nl, (&bctx, "live"), old)))
+        .priv_op(op!(SetDelete(nl, (&btx, "live"), old)))
         .unwrap();
     let op_du_live = ctx
         .builder
-        .priv_op(op!(DictUpdate(m1, bctx, "live", nl)))
+        .priv_op(op!(DictUpdate(m1, btx, "live", nl)))
         .unwrap();
     let st_event = ctx
         .apply_custom_pred_simple(
@@ -560,7 +598,7 @@ fn build_replay_delete(
         .unwrap();
     record(stats, "ReplayDeleteEvent");
 
-    // ReplayDelete (TxDeleted ref + event + guard inline).
+    // ReplayDelete (TxDelete ref + event + guard inline).
     let guard = old
         .get(&Key::from("type"))
         .unwrap()
@@ -572,7 +610,7 @@ fn build_replay_delete(
     let rebound_evidence = ctx
         .builder
         .priv_op(Operation::replace_value_with_entry(
-            vec![None, Some((&bctx, "tx_start")), Some((&bctx, "tx_end"))],
+            vec![None, Some((&btx, "chain_start")), Some((&btx, "chain_end"))],
             guard_evidence,
         ))
         .unwrap();
@@ -595,14 +633,14 @@ fn build_replay_action(
     chain: Hash,
     live: &Set,
     nullifiers: &Set,
-    parent_tx_start: Hash,
-    parent_tx_end: Hash,
+    parent_chain_start: Hash,
+    parent_chain_end: Hash,
     chain_after: Hash,
 ) -> (Statement, Set, Set) {
-    let bctx = build_ctx(live, nullifiers, parent_tx_start, parent_tx_end);
+    let btx = build_tx(live, nullifiers, parent_chain_start, parent_chain_end);
 
-    let ms = ctx_with(&bctx, "tx_start", Value::from(chain));
-    let ictx = ctx_with(&ms, "tx_end", Value::from(chain_after));
+    let ms = tx_with(&btx, "chain_start", Value::from(chain));
+    let itx = tx_with(&ms, "chain_end", Value::from(chain_after));
 
     let (st_contents, _ce, le, ne) = build_replay_contents(
         ctx,
@@ -615,38 +653,38 @@ fn build_replay_action(
         chain_after,
     );
 
-    let ectx = build_ctx(&le, &ne, chain, chain_after);
+    let etx = build_tx(&le, &ne, chain, chain_after);
 
-    let fm1 = ctx_with(&bctx, "live", Value::from(le.clone()));
-    let actx = ctx_with(&fm1, "nullifiers", Value::from(ne.clone()));
+    let fm1 = tx_with(&btx, "live", Value::from(le.clone()));
+    let atx = tx_with(&fm1, "nullifiers", Value::from(ne.clone()));
 
     // ReplayAction (scope setup + contents + live/nullifier copy-back)
     let op_scope1 = ctx
         .builder
-        .priv_op(op!(DictUpdate(ms, bctx, "tx_start", chain)))
+        .priv_op(op!(DictUpdate(ms, btx, "chain_start", chain)))
         .unwrap();
     let op_scope2 = ctx
         .builder
-        .priv_op(op!(DictUpdate(ictx, ms, "tx_end", chain_after)))
+        .priv_op(op!(DictUpdate(itx, ms, "chain_end", chain_after)))
         .unwrap();
     let op_du1 = ctx
         .builder
-        .priv_op(op!(DictUpdate(fm1, bctx, "live", (&ectx, "live"))))
+        .priv_op(op!(DictUpdate(fm1, btx, "live", (&etx, "live"))))
         .unwrap();
     let op_du2 = ctx
         .builder
         .priv_op(op!(DictUpdate(
-            actx,
+            atx,
             fm1,
             "nullifiers",
-            (&ectx, "nullifiers")
+            (&etx, "nullifiers")
         )))
         .unwrap();
     let st = ctx
         .apply_custom_pred(
             false,
             "ReplayAction",
-            map!({"before_ctx" => bctx.clone(), "after_ctx" => actx.clone(), "before_chain" => chain, "after_chain" => chain_after}),
+            map!({"before_tx" => btx.clone(), "after_tx" => atx.clone(), "before_chain" => chain, "after_chain" => chain_after}),
             vec![op_scope1, op_scope2, st_contents, op_du1, op_du2],
         )
         .unwrap();

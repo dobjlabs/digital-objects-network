@@ -21,7 +21,7 @@ pub fn list() -> Vec<Resource> {
             RawResource::new(TXLIB_PREDICATES_URI, "txlib.podlang")
                 .with_description(
                     "Core transaction-model predicates: StateRoot, TxInit, \
-                     TxInserted, TxMutated, TxDeleted, TxFinalized, and \
+                     TxInsert, TxMutate, TxDelete, TxFinalized, and \
                      nullifier logic. This is the foundation all actions build on.",
                 )
                 .with_mime_type("text/plain"),

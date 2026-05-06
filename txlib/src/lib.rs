@@ -119,9 +119,9 @@ impl GroundingWitness {
 pub struct Tx {
     pub live: Set,
     pub nullifiers: Set,
-    /// The after_ctx dictionary. Its commitment is tx_final (stored in
+    /// The after_tx dictionary. Its commitment is tx_final (stored in
     /// the state root's transactions set). Contains live, nullifiers,
-    /// tx_start, tx_end.
+    /// chain_start, chain_end.
     pub ctx: Dictionary,
     pub state_root: Arc<StateRoot>,
 }
@@ -219,7 +219,7 @@ pub(crate) enum ChainEvent {
     Insert {
         new: Dictionary,
         chain_after: Hash,
-        /// The TxInserted statement emitted at record time. Replay
+        /// The TxInsert statement emitted at record time. Replay
         /// references this directly instead of re-proving the chain
         /// step's hash equations.
         tx_stmt: Statement,
@@ -229,14 +229,14 @@ pub(crate) enum ChainEvent {
         new: Dictionary,
         old: Dictionary,
         chain_after: Hash,
-        /// The TxMutated statement emitted at record time.
+        /// The TxMutate statement emitted at record time.
         tx_stmt: Statement,
         guard_evidence: Option<Statement>,
     },
     Delete {
         old: Dictionary,
         chain_after: Hash,
-        /// The TxDeleted statement emitted at record time.
+        /// The TxDelete statement emitted at record time.
         tx_stmt: Statement,
         guard_evidence: Option<Statement>,
     },
@@ -263,22 +263,27 @@ pub struct EventHandle {
 }
 
 // ============================================================================
-// Replay context helpers
+// Replay tx-dict helpers
 // ============================================================================
 
-/// Build a replay context dict with all 4 keys (chain is separate).
-pub(crate) fn build_ctx(live: &Set, nullifiers: &Set, tx_start: Hash, tx_end: Hash) -> Dictionary {
+/// Build a replay tx dict with all 4 keys (chain is separate).
+pub(crate) fn build_tx(
+    live: &Set,
+    nullifiers: &Set,
+    chain_start: Hash,
+    chain_end: Hash,
+) -> Dictionary {
     dict!({
         "live" => live.clone(),
         "nullifiers" => nullifiers.clone(),
-        "tx_start" => tx_start,
-        "tx_end" => tx_end
+        "chain_start" => chain_start,
+        "chain_end" => chain_end
     })
 }
 
-/// Return a clone of `ctx` with one field replaced.
-pub(crate) fn ctx_with(ctx: &Dictionary, key: &str, value: Value) -> Dictionary {
-    let mut result = ctx.clone();
+/// Return a clone of `tx` with one field replaced.
+pub(crate) fn tx_with(tx: &Dictionary, key: &str, value: Value) -> Dictionary {
+    let mut result = tx.clone();
     result.update(&Key::from(key), &value).unwrap();
     result
 }
@@ -546,9 +551,9 @@ impl TxBuilder {
         }
     }
 
-    /// Record an insertion. Emits TxInserted, updates live set.
+    /// Record an insertion. Emits TxInsert, updates live set.
     /// Must be called inside an open action scope. Returns the
-    /// TxInserted statement (for composition into the action's
+    /// TxInsert statement (for composition into the action's
     /// predicate) and a handle used to attach guard evidence via
     /// `set_guard`.
     pub fn insert(&mut self, ctx: &mut BuildContext, new: &Dictionary) -> (Statement, EventHandle) {
@@ -572,12 +577,12 @@ impl TxBuilder {
         let st = ctx
             .apply_custom_pred(
                 false,
-                "TxInserted",
+                "TxInsert",
                 map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone()}),
                 vec![st_h1, st_h2],
             )
             .unwrap();
-        record(&mut self.stats, "TxInserted");
+        record(&mut self.stats, "TxInsert");
 
         self.push_event(ChainEvent::Insert {
             new: new.clone(),
@@ -589,9 +594,9 @@ impl TxBuilder {
         (st, handle)
     }
 
-    /// Record a mutation. Emits TxMutated, updates live set and nullifiers.
+    /// Record a mutation. Emits TxMutate, updates live set and nullifiers.
     /// Must be called inside an open action scope. Returns the
-    /// TxMutated statement and a handle for guard attachment.
+    /// TxMutate statement and a handle for guard attachment.
     pub fn mutate(
         &mut self,
         ctx: &mut BuildContext,
@@ -622,12 +627,12 @@ impl TxBuilder {
         let st = ctx
             .apply_custom_pred(
                 false,
-                "TxMutated",
+                "TxMutate",
                 map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "old" => old.clone()}),
                 vec![st_h1, st_h2],
             )
             .unwrap();
-        record(&mut self.stats, "TxMutated");
+        record(&mut self.stats, "TxMutate");
 
         self.push_event(ChainEvent::Mutate {
             new: new.clone(),
@@ -640,9 +645,9 @@ impl TxBuilder {
         (st, handle)
     }
 
-    /// Record a deletion. Emits TxDeleted, updates live set and nullifiers.
+    /// Record a deletion. Emits TxDelete, updates live set and nullifiers.
     /// Must be called inside an open action scope. Returns the
-    /// TxDeleted statement and a handle for guard attachment.
+    /// TxDelete statement and a handle for guard attachment.
     pub fn delete(&mut self, ctx: &mut BuildContext, old: &Dictionary) -> (Statement, EventHandle) {
         assert!(
             !self.action_stack.is_empty(),
@@ -667,12 +672,12 @@ impl TxBuilder {
         let st = ctx
             .apply_custom_pred(
                 false,
-                "TxDeleted",
+                "TxDelete",
                 map!({"chain" => self.chain, "prev_chain" => prev, "old" => old.clone()}),
                 vec![st_h1, st_h2],
             )
             .unwrap();
-        record(&mut self.stats, "TxDeleted");
+        record(&mut self.stats, "TxDelete");
 
         self.push_event(ChainEvent::Delete {
             old: old.clone(),
@@ -691,8 +696,8 @@ impl TxBuilder {
         let mut stats = self.stats;
         let zero: Hash = EMPTY_VALUE.into();
 
-        let before_ctx = build_ctx(&self.inputs_set, &set!(), zero, zero);
-        let after_ctx = build_ctx(&self.live, &self.nullifiers, zero, zero);
+        let before_tx = build_tx(&self.inputs_set, &set!(), zero, zero);
+        let after_tx = build_tx(&self.live, &self.nullifiers, zero, zero);
 
         // Replay the top-level action sequence. Every top-level event
         // is guaranteed to be a ChainEvent::Action (enforced by the
@@ -710,11 +715,11 @@ impl TxBuilder {
         );
 
         // TxFinalized -- rebind inputs_grounded and chain_start hash
-        // to reference before_ctx.live instead of a literal inputs set.
+        // to reference before_tx.live instead of a literal inputs set.
         let st_inputs_rebound = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![Some((&before_ctx, "live")), None],
+                vec![Some((&before_tx, "live")), None],
                 self.st_inputs_grounded.clone(),
             ))
             .unwrap();
@@ -725,24 +730,24 @@ impl TxBuilder {
         let st_hash_rebound = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![None, Some((&before_ctx, "live")), None],
+                vec![None, Some((&before_tx, "live")), None],
                 st_hash,
             ))
             .unwrap();
-        // Pin the full schema of `before_ctx` (nullifiers={}, tx_start=0,
-        // tx_end=0, live=inputs_set) in a single DictInsert clause. This
+        // Pin the full schema of `before_tx` (nullifiers={}, chain_start=0,
+        // chain_end=0, live=inputs_set) in a single DictInsert clause. This
         // closes the malleability where the prover could otherwise witness
-        // arbitrary tx_start/tx_end values that pass through ReplayActions
+        // arbitrary chain_start/chain_end values that pass through ReplayActions
         // verbatim into tx_final.
         let scope_dict = dict!({
             "nullifiers" => set!(),
-            "tx_start" => zero,
-            "tx_end" => zero
+            "chain_start" => zero,
+            "chain_end" => zero
         });
         let st_dict_insert_lit = ctx
             .builder
             .priv_op(op!(DictInsert(
-                before_ctx,
+                before_tx,
                 scope_dict,
                 "live",
                 self.inputs_set
@@ -751,13 +756,13 @@ impl TxBuilder {
         let st_dict_insert = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![None, None, None, Some((&before_ctx, "live"))],
+                vec![None, None, None, Some((&before_tx, "live"))],
                 st_dict_insert_lit,
             ))
             .unwrap();
         let st_dc_null_after = ctx
             .builder
-            .priv_op(op!(DictContains(after_ctx, "nullifiers", self.nullifiers)))
+            .priv_op(op!(DictContains(after_tx, "nullifiers", self.nullifiers)))
             .unwrap();
         let st = ctx
             .apply_custom_pred_simple(
@@ -777,7 +782,7 @@ impl TxBuilder {
         let tx = Tx {
             live: self.live,
             nullifiers: self.nullifiers,
-            ctx: after_ctx,
+            ctx: after_tx,
             state_root: self.state_root,
         };
         (st, tx, stats)
@@ -846,12 +851,12 @@ impl TxBuilder {
 
         if inputs.len() == 1 {
             // Single-input fast path: InputsGroundedSingle avoids recursion.
-            let (obj, source_tx) = &inputs[0];
-            let source_ctx = source_tx.ctx.clone();
+            let (obj, prior_tx) = &inputs[0];
+            let source_tx = prior_tx.ctx.clone();
             let mut inputs_set = set!();
             inputs_set.insert(&Value::from(obj.clone())).unwrap();
             let st_tx_membership =
-                prove_source_tx_membership(ctx, grounding, transactions_root, &source_ctx);
+                prove_source_tx_membership(ctx, grounding, transactions_root, &source_tx);
             let st_tx_in_sr = st_custom!(
                 ctx,
                 TxInStateRoot() = (
@@ -867,7 +872,7 @@ impl TxBuilder {
                 ctx,
                 InputsGroundedSingle() = (
                     st_tx_in_sr,
-                    SetContains((&source_ctx, "live"), obj),
+                    SetContains((&source_tx, "live"), obj),
                     SetInsert(inputs_set, set!(), obj)
                 )
             )
@@ -891,12 +896,12 @@ impl TxBuilder {
         .unwrap();
         record(&mut stats, "InputsGrounded");
         let mut prev_set = set!();
-        for (obj, source_tx) in inputs {
-            let source_ctx = source_tx.ctx.clone();
+        for (obj, prior_tx) in inputs {
+            let source_tx = prior_tx.ctx.clone();
             let mut next_set = prev_set.clone();
             next_set.insert(&Value::from(obj.clone())).unwrap();
             let st_tx_membership =
-                prove_source_tx_membership(ctx, grounding, transactions_root, &source_ctx);
+                prove_source_tx_membership(ctx, grounding, transactions_root, &source_tx);
             let st_tx_in_sr = st_custom!(
                 ctx,
                 TxInStateRoot() = (
@@ -912,7 +917,7 @@ impl TxBuilder {
                 ctx,
                 InputsGroundedRecursive() = (
                     st_tx_in_sr,
-                    SetContains((&source_ctx, "live"), obj),
+                    SetContains((&source_tx, "live"), obj),
                     SetInsert(next_set, prev_set, obj),
                     st
                 )
@@ -931,23 +936,23 @@ impl TxBuilder {
     }
 }
 
-/// Prove `SetContains(transactions_root, source_ctx)` using a Merkle proof
+/// Prove `SetContains(transactions_root, source_tx)` using a Merkle proof
 /// supplied by the grounding witness.
 fn prove_source_tx_membership(
     ctx: &mut BuildContext,
     grounding: &GroundingWitness,
     transactions_root: Hash,
-    source_ctx: &Dictionary,
+    source_tx: &Dictionary,
 ) -> Statement {
     let proof = grounding
         .source_tx_proofs
-        .get(&source_ctx.commitment())
+        .get(&source_tx.commitment())
         .cloned()
         .expect("missing source tx proof in grounding witness");
     ctx.builder
         .priv_op(Operation(
             OperationType::Native(NativeOperation::SetContainsFromEntries),
-            vec![transactions_root.into(), source_ctx.clone().into()],
+            vec![transactions_root.into(), source_tx.clone().into()],
             OperationAux::MerkleProof(proof),
         ))
         .unwrap()
@@ -1463,7 +1468,7 @@ mod tests {
             )
             .unwrap();
 
-        // stick_a: IsStick branch 2 = CraftSticks(obj, other, tx_start, tx_end)
+        // stick_a: IsStick branch 2 = CraftSticks(obj, other, chain_start, chain_end)
         let st_is_stick_a = ctx
             .apply_custom_pred_simple(
                 false,
@@ -1473,7 +1478,7 @@ mod tests {
             .unwrap();
         tx3.set_guard(h_a, st_is_stick_a);
 
-        // stick_b: IsStick branch 3 = CraftSticks(other, obj, tx_start, tx_end)
+        // stick_b: IsStick branch 3 = CraftSticks(other, obj, chain_start, chain_end)
         let st_is_stick_b = ctx
             .apply_custom_pred_simple(
                 false,

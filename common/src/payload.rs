@@ -37,7 +37,7 @@ pub fn read_elems<const N: usize>(bytes: &mut impl Read) -> Result<[F; N]> {
 #[allow(clippy::large_enum_variant)]
 pub struct Payload {
     pub proof: PayloadProof,
-    /// Commitment of the finalized transaction dictionary `{live, nullifiers, tx_start, tx_end}`.
+    /// Commitment of the finalized transaction dictionary `{live, nullifiers, chain_start, chain_end}`.
     pub tx_final: Hash,
     pub state_root_hash: Hash,
     pub nullifiers: Vec<Hash>,

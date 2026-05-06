@@ -55,9 +55,9 @@ mod tests {
         println!("txlib id: {:#}", module.batch.id());
 
         // Chain primitives
-        module.predicate_ref_by_name("TxInserted").unwrap();
-        module.predicate_ref_by_name("TxMutated").unwrap();
-        module.predicate_ref_by_name("TxDeleted").unwrap();
+        module.predicate_ref_by_name("TxInsert").unwrap();
+        module.predicate_ref_by_name("TxMutate").unwrap();
+        module.predicate_ref_by_name("TxDelete").unwrap();
 
         // Replay structure
         module.predicate_ref_by_name("ReplayActions").unwrap();

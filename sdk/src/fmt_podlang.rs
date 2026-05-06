@@ -228,10 +228,10 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
         let chain = vars["chain"];
         let chain_next = chain.next();
         match io {
-            ObjectIO::Input => writeln!(w, "  tx::TxDeleted({chain_next}, {chain}, {obj})")?,
-            ObjectIO::Output => writeln!(w, "  tx::TxInserted({chain_next}, {chain}, {obj})")?,
+            ObjectIO::Input => writeln!(w, "  tx::TxDelete({chain_next}, {chain}, {obj})")?,
+            ObjectIO::Output => writeln!(w, "  tx::TxInsert({chain_next}, {chain}, {obj})")?,
             ObjectIO::Mutate => {
-                writeln!(w, "  tx::TxMutated({chain_next}, {chain}, {obj}, {obj}0)")?
+                writeln!(w, "  tx::TxMutate({chain_next}, {chain}, {obj}, {obj}0)")?
             }
         }
         vars.get_mut("chain").expect("chain exists").inc();
