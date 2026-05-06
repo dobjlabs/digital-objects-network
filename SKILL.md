@@ -16,13 +16,8 @@ every client (CLI, agents via MCP, and optional desktop / web GUIs).
 
 ## Prerequisites
 
-- macOS arm64 (Apple Silicon, M1/M2/M3/M4) or Linux x86_64
+- macOS (arm64 or x86_64) or Linux (x86_64)
 - `curl`, `tar`, and a POSIX shell
-
-> **Intel Mac note**: `x86_64-apple-darwin` binaries aren't currently
-> published — GitHub deprecated free Intel runners at end of 2025. Intel
-> Mac users need to compile from source for now:
-> `cargo install --git https://github.com/dobjlabs/zk-craft dobjd dobj`
 
 ## Steps
 
@@ -33,12 +28,8 @@ Run these in order. Each is idempotent — safe to re-run.
 ```bash
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)   TARGET=aarch64-apple-darwin ;;
+  Darwin-x86_64)  TARGET=x86_64-apple-darwin ;;
   Linux-x86_64)   TARGET=x86_64-unknown-linux-gnu ;;
-  Darwin-x86_64)
-    echo "Intel Macs aren't supported by the published binaries yet."
-    echo "Compile from source instead:"
-    echo "  cargo install --git https://github.com/dobjlabs/zk-craft dobjd dobj"
-    exit 1 ;;
   *) echo "unsupported platform: $(uname -sm)"; exit 1 ;;
 esac
 echo "target: $TARGET"
