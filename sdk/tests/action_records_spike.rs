@@ -84,7 +84,10 @@ fn records_form_compiles_under_default_params() {
 
     let module = match load_module(&src, "spike", &params, &[txlib_mod]) {
         Ok(m) => m,
-        Err(e) => panic!("records-form module failed to load:\n{}\n\nsource:\n{}", e, src),
+        Err(e) => panic!(
+            "records-form module failed to load:\n{}\n\nsource:\n{}",
+            e, src
+        ),
     };
 
     // The three named predicates exist. There may be additional auto-generated
@@ -411,8 +414,7 @@ fn records_form_replays_through_tx_finalized() {
     let src = use_wood_pick_src(txlib_mod.id());
     let params = Params::default();
     let module = Arc::new(
-        load_module(&src, "spike", &params, &[txlib_mod.clone()])
-            .expect("module compiles"),
+        load_module(&src, "spike", &params, &[txlib_mod.clone()]).expect("module compiles"),
     );
 
     let is_wood_pick_hash = Predicate::Custom(
@@ -469,10 +471,7 @@ fn records_form_replays_through_tx_finalized() {
     let source_tx_ctx = Dictionary::new(
         [
             (StrKey::from("live"), Value::from(source_tx_live.clone())),
-            (
-                StrKey::from("nullifiers"),
-                Value::from(empty_set.clone()),
-            ),
+            (StrKey::from("nullifiers"), Value::from(empty_set.clone())),
             (StrKey::from("chain_start"), Value::from(zero)),
             (StrKey::from("chain_end"), Value::from(zero)),
         ]
@@ -492,8 +491,7 @@ fn records_form_replays_through_tx_finalized() {
         .expect("prove source_tx in transactions");
     let mut source_tx_proofs = HashMap::new();
     source_tx_proofs.insert(source_tx_ctx.commitment(), source_tx_proof);
-    let grounding =
-        Arc::new(GroundingWitness::new(state_root.clone(), source_tx_proofs));
+    let grounding = Arc::new(GroundingWitness::new(state_root.clone(), source_tx_proofs));
 
     let source_tx = Tx {
         live: source_tx_live,

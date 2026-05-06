@@ -304,8 +304,114 @@ fn test_action_no_private_args() {
     assert!(
         module
             .podlang_src
-            .contains("JustOutput(x, chain0, chain) = AND("),
+            .contains("JustOutput(out JustOutputOut, chain0, chain) = AND("),
         "expected no `private:` clause for zero-private-var action; got:\n{}",
+        module.podlang_src
+    );
+}
+
+/// Phase 2A snapshot: simplest records-form output. One output, no `.update`,
+/// no `.set` on the output, no inputs. The output references resolve directly
+/// to `out.x` (no bridge wildcard).
+#[test]
+fn test_records_form_just_output() {
+    let craft_src = r#"
+        fn JustOutput(action) {
+            var x = action.output("Foo");
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["JustOutput"])
+        .unwrap();
+
+    let expected = r#"record JustOutputOut = (x)
+
+// Actions
+
+JustOutput(out JustOutputOut, chain0, chain) = AND(
+  DictContains(out.x, "type", @self_predicate(IsFoo))
+  tx::TxInsert(chain, chain0, out.x)
+)
+
+// Bridges
+
+IsFooFromJustOutput(state, chain0, chain, private: out JustOutputOut) = AND(
+  ArrayContains(out, JustOutputOut::x, state)
+  JustOutput(out, chain0, chain)
+)
+
+// Classes
+
+IsFoo(state, chain0, chain) = OR(
+  IsFooFromJustOutput(state, chain0, chain)
+)
+"#;
+    assert!(
+        module.podlang_src.contains(expected),
+        "records-form mismatch.\nexpected fragment:\n{expected}\nactual:\n{}",
+        module.podlang_src
+    );
+}
+
+/// Phase 2A snapshot: 1 input + 1 output with `.update`. Exercises:
+/// - input AKE-direct (`in.log`, no bridge)
+/// - output bridge wildcard (`wood` flat, `ArrayContains` boundary)
+/// - witness wildcard (`key`) preserved as flat private
+#[test]
+fn test_records_form_input_output_update() {
+    let craft_src = r#"
+        fn LogToWood(action) {
+            var log = action.input("Log");
+            var wood = action.output("Wood");
+            var key = action.random();
+            wood.update("key", key);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["LogToWood"])
+        .unwrap();
+
+    let expected = r#"record LogToWoodIn = (log)
+record LogToWoodOut = (wood)
+
+// Actions
+
+LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, wood0, wood, key) = AND(
+  ArrayContains(out, LogToWoodOut::wood, wood)
+  DictUpdate(wood, wood0, "key", key)
+  DictContains(in.log, "type", @self_predicate(IsLog))
+  tx::TxDelete(chain1, chain0, in.log)
+  DictContains(wood, "type", @self_predicate(IsWood))
+  tx::TxInsert(chain, chain1, wood)
+)
+
+// Bridges
+
+IsLogFromLogToWood(state, chain0, chain, private: in LogToWoodIn, out LogToWoodOut) = AND(
+  ArrayContains(in, LogToWoodIn::log, state)
+  LogToWood(in, out, chain0, chain)
+)
+
+IsWoodFromLogToWood(state, chain0, chain, private: in LogToWoodIn, out LogToWoodOut) = AND(
+  ArrayContains(out, LogToWoodOut::wood, state)
+  LogToWood(in, out, chain0, chain)
+)
+
+// Classes
+
+IsLog(state, chain0, chain) = OR(
+  IsLogFromLogToWood(state, chain0, chain)
+)
+
+IsWood(state, chain0, chain) = OR(
+  IsWoodFromLogToWood(state, chain0, chain)
+)
+"#;
+    assert!(
+        module.podlang_src.contains(expected),
+        "records-form mismatch.\nexpected fragment:\n{expected}\nactual:\n{}",
         module.podlang_src
     );
 }
