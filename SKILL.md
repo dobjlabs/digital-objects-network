@@ -16,8 +16,13 @@ every client (CLI, agents via MCP, and optional desktop / web GUIs).
 
 ## Prerequisites
 
-- macOS (arm64 or x86_64) or Linux (x86_64)
+- macOS arm64 (Apple Silicon, M1/M2/M3/M4) or Linux x86_64
 - `curl`, `tar`, and a POSIX shell
+
+> **Intel Mac note**: `x86_64-apple-darwin` binaries aren't currently
+> published — GitHub deprecated free Intel runners at end of 2025. Intel
+> Mac users need to compile from source for now:
+> `cargo install --git https://github.com/dobjlabs/zk-craft dobjd dobj`
 
 ## Steps
 
@@ -28,8 +33,12 @@ Run these in order. Each is idempotent — safe to re-run.
 ```bash
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)   TARGET=aarch64-apple-darwin ;;
-  Darwin-x86_64)  TARGET=x86_64-apple-darwin ;;
   Linux-x86_64)   TARGET=x86_64-unknown-linux-gnu ;;
+  Darwin-x86_64)
+    echo "Intel Macs aren't supported by the published binaries yet."
+    echo "Compile from source instead:"
+    echo "  cargo install --git https://github.com/dobjlabs/zk-craft dobjd dobj"
+    exit 1 ;;
   *) echo "unsupported platform: $(uname -sm)"; exit 1 ;;
 esac
 echo "target: $TARGET"
@@ -62,8 +71,8 @@ curl -fsSL "$RELEASE/craft-basics.pexe" \
 ```bash
 cat > ~/.dobj/settings.json <<'EOF'
 {
-  "synchronizerApiUrl": "http://18.119.100.201:3000",
-  "relayerApiUrl": "http://18.119.100.201:3200"
+  "synchronizerApiUrl": "http://18.191.91.161:3000",
+  "relayerApiUrl": "http://18.191.91.161:3200"
 }
 EOF
 ```
@@ -145,18 +154,6 @@ Then quit Claude Desktop fully (Cmd+Q) and reopen.
 For **other agents** (Cursor, Aider, Continue, etc.), point their MCP
 configuration at `http://127.0.0.1:7718/mcp` via whatever UI / config
 file they use.
-
-## Optional: full chain round-trip
-
-This produces a real on-chain transaction (one EIP-4844 blob via the
-relayer). Run it to verify the end-to-end stack works:
-
-```bash
-~/.dobj/bin/dobj run FindLog
-```
-
-After it lands you'll see a `craft-basics_log_*.dobj` in `~/.dobj/objects/`.
-The CLI streams progress events to stderr while it's running.
 
 ## Optional: add `dobj` to your PATH
 
