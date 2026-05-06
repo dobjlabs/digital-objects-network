@@ -4,6 +4,11 @@ name: Release CLI binaries
 # craft-basics.pexe and uploads them to the release for the same tag the
 # desktop workflow uses. Triggered together with release.yml on a `v*` tag,
 # so a single tag push produces every artifact SKILL.md expects.
+#
+# On macOS, the binaries are codesigned + notarized using the same Apple
+# Developer credentials the desktop release uses. macOS users get an
+# online verification on first run instead of the "could not verify
+# 'dobj' is free of malware" Gatekeeper dialog.
 
 on:
   push:
@@ -65,14 +70,20 @@ jobs:
       - name: Build dobj
         run: cargo build --release --locked -p dobj --target ${{ matrix.target }}
 
-      - name: Stage dobjd tarball (with libscip)
+      - name: Stage tarball directories
         shell: bash
         run: |
           set -euo pipefail
           OUT="target/${{ matrix.target }}/release"
-          STAGE=$(mktemp -d)
 
-          cp "$OUT/dobjd" "$STAGE/"
+          # Use deterministic paths under the workspace so subsequent steps
+          # (codesign, notarize, tar) can find them by env var.
+          DOBJD_STAGE="$GITHUB_WORKSPACE/staging/dobjd"
+          DOBJ_STAGE="$GITHUB_WORKSPACE/staging/dobj"
+          mkdir -p "$DOBJD_STAGE" "$DOBJ_STAGE"
+
+          cp "$OUT/dobjd" "$DOBJD_STAGE/"
+          cp "$OUT/dobj"  "$DOBJ_STAGE/"
 
           # Locate the SCIP install dir produced by scip-sys's build script.
           # There can be multiple stale build hashes on a cached runner; pick
@@ -92,19 +103,134 @@ jobs:
           fi
           echo "scip dir: $SCIP_DIR"
 
-          # Copy the libscip shared libraries (preserve symlinks).
-          cp -P "$SCIP_DIR"/${{ matrix.scip_glob }} "$STAGE/"
+          cp -P "$SCIP_DIR"/${{ matrix.scip_glob }} "$DOBJD_STAGE/"
 
-          ls -la "$STAGE"
+          ls -la "$DOBJD_STAGE" "$DOBJ_STAGE"
 
-          tar -czf "dobjd-${{ matrix.target }}.tar.gz" -C "$STAGE" .
-          rm -rf "$STAGE"
+          echo "DOBJD_STAGE=$DOBJD_STAGE" >> "$GITHUB_ENV"
+          echo "DOBJ_STAGE=$DOBJ_STAGE"   >> "$GITHUB_ENV"
 
-      - name: Stage dobj tarball
+      # ---------- macOS codesign + notarize -----------------------------------
+      #
+      # Mirrors release.yml's signing flow. The inputs are the same secrets
+      # the desktop release uses, so adding new secrets isn't required.
+
+      - name: Validate macOS signing secrets
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY_SECRET KEYCHAIN_PASSWORD APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_CONTENT; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing required macOS signing/notarization secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Prepare macOS signing assets
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/apple-certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -t 3600 -u "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "MACOS_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY_SECRET" >> "$GITHUB_ENV"
+
+          # App Store Connect API key (used by xcrun notarytool).
+          APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY.p8"
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY_PATH"
+          echo "APPLE_API_KEY_ID=$APPLE_API_KEY"     >> "$GITHUB_ENV"
+          echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"  >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY_PATH=$APPLE_API_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Codesign macOS binaries
+        if: runner.os == 'macOS'
         shell: bash
         run: |
-          tar -czf "dobj-${{ matrix.target }}.tar.gz" \
-              -C "target/${{ matrix.target }}/release" dobj
+          set -euo pipefail
+          IDENTITY="${MACOS_SIGNING_IDENTITY}"
+
+          # Sign dylibs first — dobjd's signature includes hashes of the
+          # libraries it loads, so signing dylibs after the binary would
+          # invalidate the binary's signature.
+          for f in "$DOBJD_STAGE"/libscip*.dylib; do
+            if [ -L "$f" ]; then continue; fi   # skip symlinks
+            codesign --force --sign "$IDENTITY" \
+              --options runtime --timestamp "$f"
+          done
+
+          codesign --force --sign "$IDENTITY" \
+            --options runtime --timestamp "$DOBJD_STAGE/dobjd"
+          codesign --force --sign "$IDENTITY" \
+            --options runtime --timestamp "$DOBJ_STAGE/dobj"
+
+          # Verify each one. `codesign --verify` exits non-zero if anything's
+          # off — we want the workflow to fail loudly here rather than ship
+          # broken signatures.
+          codesign --verify --verbose=2 "$DOBJD_STAGE/dobjd"
+          codesign --verify --verbose=2 "$DOBJ_STAGE/dobj"
+          for f in "$DOBJD_STAGE"/libscip*.dylib; do
+            if [ -L "$f" ]; then continue; fi
+            codesign --verify --verbose=2 "$f"
+          done
+
+      - name: Notarize macOS binaries
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # `xcrun notarytool` accepts a single .zip / .dmg / .pkg per
+          # submission. Bundle dobjd + dobj together and submit once.
+          BUNDLE="$RUNNER_TEMP/cli-${{ matrix.target }}.zip"
+          (cd "$GITHUB_WORKSPACE/staging" && /usr/bin/zip -ry "$BUNDLE" .)
+
+          xcrun notarytool submit "$BUNDLE" \
+            --key      "$APPLE_API_KEY_PATH" \
+            --key-id   "$APPLE_API_KEY_ID" \
+            --issuer   "$APPLE_API_ISSUER" \
+            --wait \
+            --timeout 30m
+
+          # No `stapler staple` step — Apple doesn't support stapling raw
+          # Mach-O binaries (only .app, .dmg, .pkg). macOS does an online
+          # ticket lookup the first time the user runs the binary; that
+          # check passes because notarytool above registered the hashes.
+
+      # ---------- Tarball + upload --------------------------------------------
+
+      - name: Stage tarballs
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf "dobjd-${{ matrix.target }}.tar.gz" -C "$DOBJD_STAGE" .
+          tar -czf "dobj-${{ matrix.target }}.tar.gz"  -C "$DOBJ_STAGE"  .
 
       - name: Upload to draft release
         uses: softprops/action-gh-release@v2
