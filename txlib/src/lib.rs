@@ -33,7 +33,7 @@ use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     frontend::Operation,
     middleware::{
-        EMPTY_VALUE, Hash, Key, NativeOperation, OperationAux, OperationType, Statement, Value,
+        EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
         containers::{Dictionary, Set},
         hash_values,
     },
@@ -177,7 +177,7 @@ pub(crate) const OBJECT_NULLIFIER_VERSION: &str = "txlib-nullifier-v1";
 
 pub fn object_key_hash(obj: &Dictionary) -> anyhow::Result<Hash> {
     let key = obj
-        .get(&Key::from("key"))?
+        .get(&StrKey::from("key"))?
         .ok_or_else(|| anyhow::anyhow!("object missing required key field"))?;
     Ok(hash_values(&[Value::from(obj.commitment()), key]))
 }
@@ -200,14 +200,14 @@ pub fn compute_nullifier(obj: &Dictionary) -> Hash {
 }
 
 pub fn rekey(obj: &mut Dictionary) {
-    obj.update(&Key::from("key"), &Value::from(rand_raw_value()))
+    obj.update(&StrKey::from("key"), &Value::from(rand_raw_value()))
         .unwrap();
 }
 
 pub fn new_obj() -> Dictionary {
     let mut map = HashMap::new();
-    map.insert(Key::from("key"), Value::from(rand_raw_value()));
-    map.insert(Key::from("work"), Value::from(EMPTY_VALUE));
+    map.insert(StrKey::from("key"), Value::from(rand_raw_value()));
+    map.insert(StrKey::from("work"), Value::from(EMPTY_VALUE));
     Dictionary::new(map)
 }
 
@@ -284,7 +284,7 @@ pub(crate) fn build_tx(
 /// Return a clone of `tx` with one field replaced.
 pub(crate) fn tx_with(tx: &Dictionary, key: &str, value: Value) -> Dictionary {
     let mut result = tx.clone();
-    result.update(&Key::from(key), &value).unwrap();
+    result.update(&StrKey::from(key), &value).unwrap();
     result
 }
 
@@ -356,7 +356,7 @@ fn mutation_diff(old: &Dictionary, new: &Dictionary) -> String {
         if k == "type" {
             continue;
         }
-        let old_val = old.get(&Key::from(&k)).ok().flatten();
+        let old_val = old.get(&StrKey::from(&k)).ok().flatten();
         match old_val {
             Some(ov) if ov.raw() != new_val.raw() => {
                 diffs.push(format!("{k}: {ov} -> {new_val}"));
@@ -1047,7 +1047,7 @@ mod tests {
             "key" => rand_raw_value()
         });
         for (k, v) in fields {
-            d.insert(&Key::from(*k), v).unwrap();
+            d.insert(&StrKey::from(*k), v).unwrap();
         }
         d
     }
@@ -1068,7 +1068,7 @@ mod tests {
     #[test]
     fn object_nullifier_hash_errors_without_key() {
         let mut obj = new_obj();
-        obj.delete(&Key::from("key")).unwrap();
+        obj.delete(&StrKey::from("key")).unwrap();
         let err = object_nullifier_hash(&obj).expect_err("missing key must fail");
         assert!(format!("{err}").contains("missing required key field"));
     }
@@ -1210,7 +1210,7 @@ mod tests {
 
         let mut pick_new = pick.clone();
         pick_new
-            .update(&Key::from("durability"), &Value::from(99_i64))
+            .update(&StrKey::from("durability"), &Value::from(99_i64))
             .unwrap();
         let stone = make_object(is_stone.clone(), &[]);
 
@@ -1224,7 +1224,7 @@ mod tests {
         let st_use_wp = {
             let scope_sub = tx2.begin_action();
             let (st_mutate, h_sub) = tx2.mutate(&mut ctx, &pick_new, &pick);
-            let pick_type = pick.get(&Key::from("type")).unwrap().unwrap();
+            let pick_type = pick.get(&StrKey::from("type")).unwrap().unwrap();
             let op_type = ctx
                 .builder
                 .priv_op(op!(DictContains(pick, "type", pick_type)))
@@ -1368,7 +1368,7 @@ mod tests {
         let st_del_log = {
             let scope_sub = tx2.begin_action();
             let (st_del, h_sub) = tx2.delete(&mut ctx, &log);
-            let log_type = log.get(&Key::from("type")).unwrap().unwrap();
+            let log_type = log.get(&StrKey::from("type")).unwrap().unwrap();
             let op_type = ctx
                 .builder
                 .priv_op(op!(DictContains(log, "type", log_type)))
@@ -1429,7 +1429,7 @@ mod tests {
         let st_del_wood = {
             let scope_sub = tx3.begin_action();
             let (st_del, h_sub) = tx3.delete(&mut ctx, &wood);
-            let wood_type = wood.get(&Key::from("type")).unwrap().unwrap();
+            let wood_type = wood.get(&StrKey::from("type")).unwrap().unwrap();
             let op_type = ctx
                 .builder
                 .priv_op(op!(DictContains(wood, "type", wood_type)))
@@ -1447,7 +1447,7 @@ mod tests {
 
         // Direct: insert stick_a
         let (st_ins_a, h_a) = tx3.insert(&mut ctx, &stick_a);
-        let stick_type = stick_a.get(&Key::from("type")).unwrap().unwrap();
+        let stick_type = stick_a.get(&StrKey::from("type")).unwrap().unwrap();
         let op_type_a = ctx
             .builder
             .priv_op(op!(DictContains(stick_a, "type", stick_type.clone())))

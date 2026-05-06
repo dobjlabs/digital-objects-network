@@ -12,7 +12,7 @@
 use pod2::{
     frontend::Operation,
     middleware::{
-        Hash, Key, Statement, Value,
+        Hash, Statement, StrKey, Value,
         containers::{Dictionary, Set},
         hash_values,
     },
@@ -396,7 +396,7 @@ fn build_replay_insert(
         .priv_op(op!(DictUpdate(atx, btx, "live", nl)))
         .unwrap();
     let guard = new
-        .get(&Key::from("type"))
+        .get(&StrKey::from("type"))
         .unwrap()
         .expect("object missing 'type' field");
     let op_dc = ctx
@@ -442,7 +442,7 @@ fn build_replay_mutate(
     nl.insert(&Value::from(new.clone())).unwrap();
     let okh = hash_values(&[
         Value::from(old.commitment()),
-        old.get(&Key::from("key")).unwrap().unwrap(),
+        old.get(&StrKey::from("key")).unwrap().unwrap(),
     ]);
     let nul = hash_values(&[Value::from(okh), Value::from(OBJECT_NULLIFIER_VERSION)]);
     let mut nn = nullifiers.clone();
@@ -502,7 +502,7 @@ fn build_replay_mutate(
         .priv_op(op!(Equal((old, "type"), (new, "type"))))
         .unwrap();
     let guard = new
-        .get(&Key::from("type"))
+        .get(&StrKey::from("type"))
         .unwrap()
         .expect("object missing 'type' field");
     let op_dc = ctx
@@ -545,7 +545,7 @@ fn build_replay_delete(
     nl.delete(&Value::from(old.commitment())).unwrap();
     let okh = hash_values(&[
         Value::from(old.commitment()),
-        old.get(&Key::from("key")).unwrap().unwrap(),
+        old.get(&StrKey::from("key")).unwrap().unwrap(),
     ]);
     let nul = hash_values(&[Value::from(okh), Value::from(OBJECT_NULLIFIER_VERSION)]);
     let mut nn = nullifiers.clone();
@@ -600,7 +600,7 @@ fn build_replay_delete(
 
     // ReplayDelete (TxDelete ref + event + guard inline).
     let guard = old
-        .get(&Key::from("type"))
+        .get(&StrKey::from("type"))
         .unwrap()
         .expect("object missing 'type' field");
     let op_dc = ctx

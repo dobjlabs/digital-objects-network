@@ -13,8 +13,8 @@ use pod2::{
     frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
     lang::{Module, load_module},
     middleware::{
-        EMPTY_VALUE, F, Hash, Key, MainPodProver, NativePredicate, OperationAux, OperationType,
-        Params, Pod, Predicate, RawValue, Statement, VDSet, Value,
+        EMPTY_VALUE, F, Hash, MainPodProver, NativePredicate, OperationAux, OperationType, Params,
+        Pod, Predicate, RawValue, Statement, StrKey, VDSet, Value,
         containers::{Array, Dictionary, Set},
     },
 };
@@ -240,7 +240,7 @@ impl VarOrValue {
                     .expect("has value at exec time")
                     .as_dictionary()
                     .expect("dict");
-                dict.get(&Key::from(key)).unwrap().expect("key exists")
+                dict.get(&StrKey::from(key)).unwrap().expect("key exists")
             }
         }
     }
@@ -734,7 +734,7 @@ impl ActionHandle {
             if !exe_ctx.mock {
                 while u256_gt(&RawValue::from(obj.commitment()), &target_raw) {
                     k = exe_ctx.rand_value();
-                    obj.update(&Key::from("key"), &k).unwrap();
+                    obj.update(&StrKey::from("key"), &k).unwrap();
                 }
             }
             key.borrow_mut().set_value(k);
@@ -892,7 +892,7 @@ impl ArgHandle {
                 for (key, value) in &kvs {
                     let value = value.borrow().as_value().clone();
                     arg.mut_dict(|obj| {
-                        obj.insert(&Key::from(key), &value).expect("TODO");
+                        obj.insert(&StrKey::from(key), &value).expect("TODO");
                     });
                     obj_set_list.push((key, value));
                 }
@@ -921,7 +921,7 @@ impl ArgHandle {
         // let ctx = self.ctx.0.borrow();
         // if ctx.exe_ctx.is_some() {
         //     let obj = self.arg.borrow().as_value().as_dictionary().expect("dict");
-        //     let v = obj.get(&Key::from(key)).expect("TODO").expect("TODO");
+        //     let v = obj.get(&StrKey::from(key)).expect("TODO").expect("TODO");
         //     value.borrow_mut().set_value(v);
         // }
         // Ok(ArgHandle::new(self.ctx.clone(), value))
@@ -939,7 +939,7 @@ impl ArgHandle {
                 let v = value.borrow().as_value().clone();
                 let (obj0, obj) = arg.mut_dict(|obj| {
                     let obj0 = obj.clone();
-                    obj.update(&Key::from(&key), &v).expect("TODO");
+                    obj.update(&StrKey::from(&key), &v).expect("TODO");
                     (obj0, obj.clone())
                 });
                 let st = exe_ctx

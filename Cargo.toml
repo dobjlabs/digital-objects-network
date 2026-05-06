@@ -16,9 +16,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-# Branch `next/2026-03-30.a`: Includes:
-# - bump params wildcards to 9
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "448b6608fc0e39e644ee36435ad977c2d4e122bb", default-features = false, features = [
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "78ff134011a4c127a6e225132676873a704b0d7d", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
