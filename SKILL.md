@@ -44,7 +44,7 @@ mkdir -p ~/.dobj/bin ~/.dobj/actions
 ### 3. Download `dobjd` and `dobj`
 
 ```bash
-RELEASE=https://bitcraft.s3.us-east-2.amazonaws.com/v0.1.0-rc.7
+RELEASE=https://bitcraft.s3.us-east-2.amazonaws.com/v0.1.0-rc.9
 curl -fsSL "$RELEASE/dobjd-$TARGET.tar.gz" | tar -xz -C ~/.dobj/bin
 curl -fsSL "$RELEASE/dobj-$TARGET.tar.gz"  | tar -xz -C ~/.dobj/bin
 chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj
