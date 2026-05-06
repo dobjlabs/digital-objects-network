@@ -341,6 +341,30 @@ impl BuildContext {
         }
         panic!("predicate not found");
     }
+
+    /// Apply a custom predicate without wildcard value hints.
+    /// Safe for both split and unsplit predicates -- the operations
+    /// alone determine all wildcard values.
+    pub fn apply_custom_pred_simple(
+        &mut self,
+        public: bool,
+        name: &str,
+        statements: Vec<Statement>,
+    ) -> anyhow::Result<Statement> {
+        for module in &self.modules {
+            if module.predicate_ref_by_name(name).is_some() {
+                return module.apply_predicate_with(
+                    name,
+                    statements,
+                    public,
+                    |is_public, op| -> anyhow::Result<Statement> {
+                        Ok(self.builder.op(is_public, vec![], op)?)
+                    },
+                );
+            }
+        }
+        panic!("predicate {name} not found");
+    }
 }
 
 /// Argument types:

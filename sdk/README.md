@@ -159,85 +159,89 @@ The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
 The example in the test `test_sdk_1` produces the following podlang code:
 
 ```
-use module 0x94ac3a36e50a41d0ad361b0b3eaabb335212fac001ea13dcccc6db40183e2551 as tx
+use module 0x3a76c2f1f39cd4e3e58c2f52f09e9bf6d28310197dc479a4a6f176eb2271ab7d as tx
 use intro Vdf(count, input, output) from 0xb77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06
 use intro LtEqU256(lhs, rhs) from 0x2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529
 
 // Actions
 
-FindLog(log, tx, tx0, private: log0, work) = AND(
-  DictContains(log0, "blueprint", "Log")
+FindLog(log, chain0, chain, private: log0, work) = AND(
   Vdf(3, log0, work)
   DictUpdate(log, log0, "work", work)
-  tx::TxInserted(tx, tx0, log)
+  DictContains(log, "type", @self_predicate(IsLog))
+  tx::TxInserted(chain, chain0, log)
 )
 
-CraftWood(wood, tx, tx0, private: tx1, log, wood0, key) = AND(
-  IsLog(log)
-  DictContains(wood0, "blueprint", "Wood")
+CraftWood(log, wood, chain0, chain, private: chain1, wood0, key) = AND(
   DictUpdate(wood, wood0, "key", key)
   LtEqU256(wood, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))
-  tx::TxDeleted(tx1, tx0, log)
-  tx::TxInserted(tx, tx1, wood)
+  DictContains(log, "type", @self_predicate(IsLog))
+  tx::TxDeleted(chain1, chain0, log)
+  DictContains(wood, "type", @self_predicate(IsWood))
+  tx::TxInserted(chain, chain1, wood)
 )
 
-CraftSticks(stick_a, stick_b, tx, tx0, private: tx1, tx2, wood) = AND(
-  IsWood(wood)
-  DictContains(stick_a, "blueprint", "Stick")
-  DictContains(stick_b, "blueprint", "Stick")
-  tx::TxDeleted(tx1, tx0, wood)
-  tx::TxInserted(tx2, tx1, stick_a)
-  tx::TxInserted(tx, tx2, stick_b)
+CraftSticks(wood, stick_a, stick_b, chain0, chain, private: chain1, chain2) = AND(
+  DictContains(wood, "type", @self_predicate(IsWood))
+  tx::TxDeleted(chain1, chain0, wood)
+  DictContains(stick_a, "type", @self_predicate(IsStick))
+  tx::TxInserted(chain2, chain1, stick_a)
+  DictContains(stick_b, "type", @self_predicate(IsStick))
+  tx::TxInserted(chain, chain2, stick_b)
 )
 
-CraftWoodPick(pick, tx, tx0, private: tx1, tx2, wood, stick) = AND(
-  IsWood(wood)
-  IsStick(stick)
-  DictContains(pick, "blueprint", "WoodPick")
+CraftWoodPick(wood, stick, pick, chain0, chain, private: chain1, chain2) = AND(
   DictContains(pick, "durability", 100)
-  tx::TxDeleted(tx1, tx0, wood)
-  tx::TxDeleted(tx2, tx1, stick)
-  tx::TxInserted(tx, tx2, pick)
+  DictContains(wood, "type", @self_predicate(IsWood))
+  tx::TxDeleted(chain1, chain0, wood)
+  DictContains(stick, "type", @self_predicate(IsStick))
+  tx::TxDeleted(chain2, chain1, stick)
+  DictContains(pick, "type", @self_predicate(IsWoodPick))
+  tx::TxInserted(chain, chain2, pick)
 )
 
-UseWoodPick(wood_pick, tx, tx0, private: wood_pick0, wood_pick1, wood_pick2, durability, key, work) = AND(
-  IsWoodPick(wood_pick0)
+UseWoodPick(wood_pick, chain0, chain, private: wood_pick0, wood_pick1, wood_pick2, durability, key, work) = AND(
   Gt(wood_pick0.durability, 0)
   SumOf(wood_pick0.durability, durability, 1)
   DictUpdate(wood_pick1, wood_pick0, "durability", durability)
   DictUpdate(wood_pick2, wood_pick1, "key", key)
   Vdf(10, wood_pick2, work)
   DictUpdate(wood_pick, wood_pick2, "work", work)
-  tx::TxMutated(tx, tx0, wood_pick, wood_pick0)
+  DictContains(wood_pick0, "type", @self_predicate(IsWoodPick))
+  tx::TxMutated(chain, chain0, wood_pick, wood_pick0)
 )
 
-MineStoneWithWoodPick(stone, tx, tx0, private: tx1, pick) = AND(
-  UseWoodPick(pick, tx1, tx0)
-  DictContains(stone, "blueprint", "Stone")
-  tx::TxInserted(tx, tx1, stone)
+MineStoneWithWoodPick(stone, chain0, chain, private: chain1, pick) = AND(
+  UseWoodPick(pick, chain0, chain1)
+  DictContains(stone, "type", @self_predicate(IsStone))
+  tx::TxInserted(chain, chain1, stone)
 )
 
 // Classes
 
-IsLog(state, private: tx, tx0) = OR(
-  FindLog(state, tx, tx0)
+IsLog(state, chain0, chain, private: _other_0) = OR(
+  FindLog(state, chain0, chain)
+  CraftWood(state, _other_0, chain0, chain)
 )
 
-IsWood(state, private: tx, tx0) = OR(
-  CraftWood(state, tx, tx0)
+IsWood(state, chain0, chain, private: _other_0, _other_1) = OR(
+  CraftWood(_other_0, state, chain0, chain)
+  CraftSticks(state, _other_0, _other_1, chain0, chain)
+  CraftWoodPick(state, _other_0, _other_1, chain0, chain)
 )
 
-IsStick(state, private: tx, tx0, _other_0) = OR(
-  CraftSticks(state, _other_0, tx, tx0)
-  CraftSticks(_other_0, state, tx, tx0)
+IsStick(state, chain0, chain, private: _other_0, _other_1) = OR(
+  CraftSticks(_other_0, state, _other_1, chain0, chain)
+  CraftSticks(_other_0, _other_1, state, chain0, chain)
+  CraftWoodPick(_other_0, state, _other_1, chain0, chain)
 )
 
-IsWoodPick(state, private: tx, tx0) = OR(
-  CraftWoodPick(state, tx, tx0)
-  UseWoodPick(state, tx, tx0)
+IsWoodPick(state, chain0, chain, private: _other_0, _other_1) = OR(
+  CraftWoodPick(_other_0, _other_1, state, chain0, chain)
+  UseWoodPick(state, chain0, chain)
 )
 
-IsStone(state, private: tx, tx0) = OR(
-  MineStoneWithWoodPick(state, tx, tx0)
+IsStone(state, chain0, chain) = OR(
+  MineStoneWithWoodPick(state, chain0, chain)
 )
 ```

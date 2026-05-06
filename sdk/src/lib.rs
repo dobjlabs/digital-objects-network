@@ -1,7 +1,6 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::mem;
 use std::rc::Rc;
 use std::slice;
 use std::sync::Arc;
@@ -21,7 +20,7 @@ use pod2::{
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
-use txlib::{GroundingWitness, Tx, TxBuilder};
+use txlib::{EventHandle, GroundingWitness, Tx, TxBuilder};
 use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 
 mod error;
@@ -54,33 +53,53 @@ enum Intro {
     LtEqU256, // (lhs, rhs)
 }
 
-#[derive(Debug)]
-enum ObjectIO {
+#[derive(Debug, Clone)]
+pub enum ObjectIO {
     Input,
     Mutate,
     Output,
 }
 
-/// An instruction corresponds to some operations that happen in an action.  Each instruction has
-/// associated constraints (expressed via statement templates in the action predicate).
-#[derive(Debug)]
+impl ObjectIO {
+    /// True if the action consumes an object in this position (delete
+    /// or mutate).
+    pub fn consumes(&self) -> bool {
+        matches!(self, Self::Input | Self::Mutate)
+    }
+
+    /// True if the action produces an object in this position (insert
+    /// or mutate).
+    pub fn produces(&self) -> bool {
+        matches!(self, Self::Output | Self::Mutate)
+    }
+}
+
+/// Name of a class's generated type-guard predicate.
+fn class_predicate_name(class: &str) -> String {
+    format!("Is{class}")
+}
+
+/// An instruction records the structural shape of one rhai-level
+/// operation. Pure Load-time data, enough to render podlang and to
+/// derive metadata. Statement-producing operations push their
+/// statement onto `ExeContext.sts` eagerly during Rhai; the only
+/// state attached to an `Inst` is the pre-mutation dict for `Mutate`,
+/// which is stashed here at Rhai time so emit can recover the `old`
+/// arg after the rhai body has updated `obj` in place.
 enum Inst {
     Object {
         io: ObjectIO,
         obj: Ref,
         class: String,
+        /// Pre-mutation dict for Mutate (Some), None for Input/Output.
+        /// Populated at exe time inside `obj_io`; left None at Load.
+        original: Option<Dictionary>,
     },
-    SubAction {
-        action: String,
-        obj: Ref,
-    },
-    /// Update a key of the object
     Update {
         obj: String,
         key: String,
         value: Ref,
     },
-    /// Set a list of keys values that the object must have
     Set {
         obj: String,
         kvs: Vec<(String, Ref)>,
@@ -92,6 +111,15 @@ enum Inst {
     Intro {
         pred: Intro,
         args: Vec<Ref>,
+    },
+    /// Reference to another action executed as a sub-action. The
+    /// sub-action's events are emitted live during Rhai (inside
+    /// `subaction()`); only the structural reference is recorded here.
+    SubAction {
+        action: String,
+        /// Aliases the sub-action's first producing object Ref so
+        /// parent scripts can bind it via `var foo = subaction(...)`.
+        obj: Ref,
     },
 }
 
@@ -300,26 +328,36 @@ struct VarState {
 #[derive(Clone)]
 struct ActionHandle(Rc<RefCell<ActionContext>>);
 
-/// Holds the state of an action being defined.
-#[derive(Default)]
+/// Holds the state of an action being defined. `insts` is the
+/// structural shape (always populated). `exe_ctx` is shared by Rc so
+/// parent and sub-action handles see the same builder / input queue /
+/// tx_builder, and accumulate non-Object statement clauses into the
+/// shared `ExeContext.sts`.
 struct ActionContext {
     name: String,
     insts: Vec<Inst>,
+    /// User-defined vars (objects, intro outputs, temporaries) plus
+    /// the txlib chain var, registered as `"chain"` so it shares the
+    /// same SSA timestamp machinery.
     vars: Vec<String>,
     var_state: HashMap<String, VarState>,
-    exe_ctx: Option<ExeContext>,
+    exe_ctx: Option<Rc<RefCell<ExeContext>>>,
     unsafe_block: bool,
 }
 
 impl ActionContext {
-    fn new(name: String, exe_ctx: Option<ExeContext>) -> Self {
-        let mut c = Self {
+    fn new(name: String, exe_ctx: Option<Rc<RefCell<ExeContext>>>) -> Self {
+        let mut ctx = Self {
             name,
+            insts: Vec::new(),
+            vars: Vec::new(),
+            var_state: HashMap::new(),
             exe_ctx,
-            ..Default::default()
+            unsafe_block: false,
         };
-        c.add_var("tx".to_string()).expect("tx not yet defined");
-        c
+        ctx.add_var("chain".to_string())
+            .expect("chain not yet defined");
+        ctx
     }
     fn add_var(&mut self, var: String) -> RuntimeResult<()> {
         if self.var_state.contains_key(&var) {
@@ -344,38 +382,52 @@ impl ActionContext {
         }
         Ok(())
     }
+    /// Borrow the shared `ExeContext` immutably. Returns None at Load
+    /// time (no `exe_ctx` set).
+    fn exe_ref(&self) -> Option<std::cell::Ref<'_, ExeContext>> {
+        self.exe_ctx.as_ref().map(|rc| rc.borrow())
+    }
 }
 
 impl ActionHandle {
     //
     // Internal methods
     //
-    fn new(name: String, exe_ctx: Option<ExeContext>) -> Self {
+    fn new(name: String, exe_ctx: Option<Rc<RefCell<ExeContext>>>) -> Self {
         Self(Rc::new(RefCell::new(ActionContext::new(name, exe_ctx))))
     }
-    fn new_obj(exe_ctx: &ExeContext) -> Dictionary {
-        dict!({"work" => EMPTY_VALUE, "key" => exe_ctx.rand_value()})
+    fn new_obj(exe_ctx: &ExeContext, class: &str) -> Dictionary {
+        let type_hash = exe_ctx
+            .module
+            .class_hashes
+            .get(class)
+            .copied()
+            .unwrap_or_else(|| panic!("no Is{class} predicate hash registered"));
+        dict!({
+            "type" => type_hash,
+            "work" => EMPTY_VALUE,
+            "key" => exe_ctx.rand_value()
+        })
     }
     fn obj_io(self, io: ObjectIO, class: String) -> RuntimeResult<ArgHandle> {
         let arg = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
         let mut ctx = self.0.borrow_mut();
-        if let Some(exe_ctx) = &mut ctx.exe_ctx {
+        let mut original: Option<Dictionary> = None;
+        if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
+            let mut exe_ctx = exe_rc.borrow_mut();
             match io {
                 ObjectIO::Output => {
                     arg.borrow_mut()
-                        .set_value(Value::from(Self::new_obj(exe_ctx)));
+                        .set_value(Value::from(Self::new_obj(&exe_ctx, &class)));
                 }
                 ObjectIO::Input => {
-                    let (st_class, obj) = exe_ctx.inputs[exe_ctx.input_index].clone();
-                    exe_ctx.input_index += 1;
-                    exe_ctx.sts.push(st_class);
+                    let obj = exe_ctx.inputs.pop().expect("exists");
                     arg.borrow_mut().set_value(Value::from(obj));
                 }
                 ObjectIO::Mutate => {
-                    let (st_class, obj) = exe_ctx.inputs[exe_ctx.input_index].clone();
-                    exe_ctx.input_index += 1;
-                    exe_ctx.sts.push(st_class);
-                    arg.borrow_mut().set_value(Value::from(obj));
+                    let obj = exe_ctx.inputs.pop().expect("exists");
+                    arg.borrow_mut().set_value(Value::from(obj.clone()));
+                    original = Some(obj);
                 }
             }
         }
@@ -383,8 +435,9 @@ impl ActionHandle {
             io,
             obj: arg.clone(),
             class,
+            original,
         });
-        ctx.inc_t_var("tx").expect("tx exists");
+        ctx.inc_t_var("chain").expect("chain exists");
         Ok(ArgHandle::new(self.clone(), arg))
     }
     fn set_unsafe(&self, unsafe_block: bool) -> RuntimeResult<()> {
@@ -396,17 +449,33 @@ impl ActionHandle {
             Ok(())
         }
     }
-    // Execute an action (assumes Execution phase), returns the Action statement
-    fn exe_action(&self, action: &str) -> RuntimeResult<Statement> {
-        let module = {
+    /// Open an action scope, run the action's rhai body, emit its
+    /// txlib events, build its predicate, attach guards, and close
+    /// the scope. Sub-actions invoked from the rhai body recurse here
+    /// and stack their scope on top of this one.
+    fn exe_action(&self) -> RuntimeResult<Statement> {
+        // `sts_start` marks our slot in the shared `ExeContext.sts`.
+        // Statements pushed during this action's rhai (and any nested
+        // sub-action's whole exe_action) land at this index or later;
+        // we `split_off(sts_start)` after Phase 2 to take exactly our
+        // frame.
+        let (module, scope_id, action, sts_start) = {
             let ctx = self.0.borrow();
-            ctx.exe_ctx.as_ref().expect("Some").module.clone()
+            let exe_rc = ctx.exe_ctx.as_ref().expect("exe phase").clone();
+            let mut exe_ctx = exe_rc.borrow_mut();
+            let scope_id = exe_ctx.tx_builder.begin_action();
+            let sts_start = exe_ctx.sts.len();
+            (
+                exe_ctx.module.clone(),
+                scope_id,
+                ctx.name.clone(),
+                sts_start,
+            )
         };
-        let options = CallFnOptions::new().with_tag(self.clone());
-        // Execute the action rhai code
         let mut scope = Scope::new();
-        // We're passing a clone of `self` here which may have its ActionContext borrow-ed or
-        // borrow_mut-ed, so we need to make sure the ActionContext is not borrowed at this point.
+        let options = CallFnOptions::new().with_tag(self.clone());
+        // The handle's ActionContext must not be borrowed across this
+        // call: rhai host functions reborrow it freely.
         let _result = module.engine.call_fn_with_options::<Dynamic>(
             options,
             &mut scope,
@@ -414,65 +483,146 @@ impl ActionHandle {
             &action,
             (self.clone(),),
         )?;
-        let mut ctx = self.0.borrow_mut();
-        let mut exe_ctx = ctx.exe_ctx.take().expect("Some"); // Take ExeContext from ActionContext
 
-        // Add the transaction predicates
-        let mut output_objs = Vec::new();
-        let insts = mem::take(&mut ctx.insts); // ctx.insts is cleared for the next action
-        for inst in &insts {
-            if let Inst::Object { io, obj, class } = inst {
-                let obj = obj.borrow().to_dict();
-                let st = match io {
-                    ObjectIO::Output => {
-                        output_objs.push(OutputData {
+        // Phase 2: walk the recorded insts and, for each Object,
+        // emit a class type guard followed by the txlib event into
+        // the open action scope. Append both statements (in that
+        // order) to `event_sts` so the predicate's clause order
+        // matches `fmt_podlang::fmt_action` (non-Object clauses
+        // first, then per-Object {type guard, txlib event} pairs).
+        let exe_rc = self.0.borrow().exe_ctx.clone().expect("exe phase");
+
+        struct EventData {
+            handle: EventHandle,
+            class: String,
+            object_refs_index: usize,
+        }
+        let mut events: Vec<EventData> = Vec::new();
+        // Indices into `exe_ctx.outputs` for entries this action's
+        // direct Objects pushed; we backfill `action_st` on these
+        // after building `st_action`.
+        let mut direct_outputs: Vec<usize> = Vec::new();
+        let mut event_sts: Vec<Statement> = Vec::new();
+        let mut obj_refs_index: usize = 0;
+
+        // Borrow exe_ctx while iterating insts. Sub-actions don't run
+        // during this loop (their rhai already finished inside the
+        // subaction host), so the parent's exe_ctx borrow held here
+        // doesn't conflict with anything.
+        {
+            let mut exe_ctx = exe_rc.borrow_mut();
+            let exe_ctx = &mut *exe_ctx;
+            // Take a stable view of insts for iteration.
+            let ctx = self.0.borrow();
+            for inst in &ctx.insts {
+                if let Inst::Object {
+                    io,
+                    obj,
+                    class,
+                    original,
+                } = inst
+                {
+                    let obj_dict = obj.borrow().to_dict();
+                    // Emit the class type guard. Run after rhai so the
+                    // dict is in its final state for Outputs (with
+                    // .set/.update applied) and Inputs. Mutate guards
+                    // the pre-mutation dict, which the obj's predicate
+                    // template references at ts=0.
+                    let guard_dict = match io {
+                        ObjectIO::Mutate => original
+                            .as_ref()
+                            .expect("Mutate records a pre-mutation dict")
+                            .clone(),
+                        _ => obj_dict.clone(),
+                    };
+                    let class_hash = exe_ctx
+                        .module
+                        .class_hashes
+                        .get(class.as_str())
+                        .copied()
+                        .unwrap_or_else(|| panic!("no Is{class} predicate hash registered"));
+                    let st_type = exe_ctx
+                        .bld
+                        .builder
+                        .priv_op(Operation::dict_contains(
+                            guard_dict,
+                            "type",
+                            Value::from(class_hash),
+                        ))
+                        .unwrap();
+                    event_sts.push(st_type);
+                    let (st, handle) = match io {
+                        ObjectIO::Output => exe_ctx.tx_builder.insert(&mut exe_ctx.bld, &obj_dict),
+                        ObjectIO::Input => exe_ctx.tx_builder.delete(&mut exe_ctx.bld, &obj_dict),
+                        ObjectIO::Mutate => {
+                            let obj0 = original
+                                .as_ref()
+                                .expect("Mutate records a pre-mutation dict");
+                            exe_ctx.tx_builder.mutate(&mut exe_ctx.bld, &obj_dict, obj0)
+                        }
+                    };
+                    if io.produces() {
+                        direct_outputs.push(exe_ctx.outputs.len());
+                        exe_ctx.outputs.push(PerOutput {
                             class: class.clone(),
-                            obj: obj.clone(),
+                            obj: obj_dict,
+                            action_name: action.clone(),
+                            object_refs_index: obj_refs_index,
+                            action_st: Statement::None,
                         });
-                        exe_ctx.tx_builder.insert(&mut exe_ctx.bld, obj)
                     }
-                    ObjectIO::Input => {
-                        exe_ctx.inputs.pop_front().expect("exists");
-                        exe_ctx.tx_builder.delete(&mut exe_ctx.bld, obj)
-                    }
-                    ObjectIO::Mutate => {
-                        let obj0 = exe_ctx.inputs.pop_front().expect("exists").1;
-                        output_objs.push(OutputData {
-                            class: class.clone(),
-                            obj: obj.clone(),
-                        });
-                        exe_ctx.tx_builder.mutate(&mut exe_ctx.bld, obj, obj0)
-                    }
-                };
-                exe_ctx.sts.push(st);
+                    events.push(EventData {
+                        handle,
+                        class: class.clone(),
+                        object_refs_index: obj_refs_index,
+                    });
+                    obj_refs_index += 1;
+                    event_sts.push(st);
+                }
             }
         }
-        exe_ctx.input_index = 0; // Reset input index for consumption by object IO operations
 
-        // Action statement
-        let sts = mem::take(&mut exe_ctx.sts); // exe_ctx.sts is cleared for the next action
-        let st_action = exe_ctx
-            .bld
-            .apply_custom_pred(false, action, HashMap::new(), sts)
-            .unwrap();
-        // Reveal the action in the internal pod that just outputs action statements.
-        exe_ctx.bld.builder.reveal(&st_action).unwrap();
+        // Compose the action predicate: non-Object sts (eagerly
+        // accumulated during Rhai) followed by per-Object {type
+        // guard, txlib event} pairs, mirroring fmt_action's clause
+        // emission.
+        let mut sts = exe_rc.borrow_mut().sts.split_off(sts_start);
+        sts.extend(event_sts);
 
-        for (index, OutputData { class, obj: _ }) in output_objs.iter().enumerate() {
-            let class = module.class_by_name(class);
-            let mut sts = vec![Statement::None; class.actions.len()];
-            let class_st_index = module.output_index_class_st_index[&(action.to_string(), index)];
-            sts[class_st_index] = st_action.clone();
-            let pred = format!("Is{}", class.name);
-            // We delay the creation of the class statement until we have created all actions
-            // because the class statements go to different pods.
-            exe_ctx.output_objs_st_class_data.push((pred, sts));
+        let st_action = {
+            let mut exe_ctx = exe_rc.borrow_mut();
+            exe_ctx
+                .bld
+                .apply_custom_pred_simple(false, &action, sts)
+                .unwrap()
+        };
+
+        // Backfill action_st on each direct PerOutput, then attach an
+        // IsX guard to every event in this scope.
+        {
+            let mut exe_ctx = exe_rc.borrow_mut();
+            let exe_ctx = &mut *exe_ctx;
+            for idx in &direct_outputs {
+                exe_ctx.outputs[*idx].action_st = st_action.clone();
+            }
+            let module = exe_ctx.module.clone();
+            for EventData {
+                handle,
+                class,
+                object_refs_index,
+            } in events
+            {
+                let st_is_x = module.build_is_x(
+                    &mut exe_ctx.bld,
+                    &action,
+                    &class,
+                    object_refs_index,
+                    st_action.clone(),
+                );
+                exe_ctx.tx_builder.set_guard(handle, st_is_x);
+            }
+            exe_ctx.tx_builder.end_action(scope_id);
         }
-        exe_ctx
-            .outputs
-            .extend(output_objs.into_iter().map(|o| o.obj));
-
-        ctx.exe_ctx = Some(exe_ctx); // Put ExeContext back into ActionContext
         Ok(st_action)
     }
     //
@@ -483,12 +633,13 @@ impl ActionHandle {
         let op_type = OperationType::Native(op);
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
-        if let Some(exe_ctx) = &mut ctx.exe_ctx {
-            let args = args.iter().map(|v| v.borrow().as_op_arg()).collect();
+        if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
+            let mut exe_ctx = exe_rc.borrow_mut();
+            let op_args = args.iter().map(|v| v.borrow().as_op_arg()).collect();
             let st = exe_ctx
                 .bld
                 .builder
-                .priv_op(Operation(op_type.clone(), args, OperationAux::None))
+                .priv_op(Operation(op_type, op_args, OperationAux::None))
                 .unwrap();
             exe_ctx.sts.push(st);
         }
@@ -507,36 +658,64 @@ impl ActionHandle {
     fn mutate(self, class: String) -> RuntimeResult<ArgHandle> {
         self.obj_io(ObjectIO::Mutate, class)
     }
+    /// Reference another action as a sub-action. At Execute time we
+    /// open a nested action scope, run the sub-action's rhai body
+    /// (sharing the parent's `ExeContext`), emit its events, build
+    /// its predicate, attach guards, and close the scope, all live,
+    /// before this call returns. The sub-action's predicate statement
+    /// is then composed into the parent's predicate via `exe_ctx.sts`.
+    /// The returned `ArgHandle` aliases the sub's first producing
+    /// object so parent scripts can bind it via
+    /// `var foo = subaction("X")`.
     fn subaction(self, action: String) -> RuntimeResult<ArgHandle> {
-        // For now assume that a subaction returns a single output object.
-        // If we want multiple outputs we need to extend the `var` syntax to declare multiple
-        // variables.  We could define the var syntax with destructuring of arrays with
-        // `engine.register_custom_syntax_with_state_raw`
-        let arg = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
-        // We don't borrow the ActionContext here because exe_action requires exclusive access to
-        // it so that it can execute the Rhai code that calls hosts functions which borrow and
-        // borrow_mut the ActionContext.
-        let is_exe_phase = self.0.borrow().exe_ctx.is_some();
-        let st_action = if is_exe_phase {
-            self.exe_action(&action)?
+        let exe_rc_opt = self.0.borrow().exe_ctx.clone();
+        let arg_placeholder = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
+
+        let arg = if let Some(exe_rc) = exe_rc_opt {
+            let sub_handle = ActionHandle::new(action.clone(), Some(exe_rc.clone()));
+            let st_sub = sub_handle.exe_action()?;
+
+            {
+                let mut exe_ctx = exe_rc.borrow_mut();
+                // Reveal so per-output IsX pods can reference the
+                // sub-action's Action statement via the internal pod.
+                exe_ctx.bld.builder.reveal(&st_sub).unwrap();
+                // Compose sub-action predicate into parent's clause list.
+                exe_ctx.sts.push(st_sub);
+            }
+
+            // Alias the parent's binding to the sub-action's first
+            // producing object Ref, or a fresh placeholder if the sub
+            // produces nothing.
+            sub_handle
+                .0
+                .borrow()
+                .insts
+                .iter()
+                .find_map(|i| match i {
+                    Inst::Object {
+                        io: ObjectIO::Output | ObjectIO::Mutate,
+                        obj,
+                        ..
+                    } => Some(obj.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| arg_placeholder.clone())
         } else {
-            Statement::None // placeholder
+            arg_placeholder
         };
+
         let mut ctx = self.0.borrow_mut();
-        if let Some(exe_ctx) = &mut ctx.exe_ctx {
-            exe_ctx.sts.push(st_action);
-        }
         ctx.insts.push(Inst::SubAction {
             action,
             obj: arg.clone(),
         });
-        ctx.inc_t_var("tx").expect("tx exists");
+        ctx.inc_t_var("chain").expect("chain exists");
         Ok(ArgHandle::new(self.clone(), arg))
     }
     fn random(self) -> RuntimeResult<ArgHandle> {
         let value = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
-        let mut ctx = self.0.borrow_mut();
-        if let Some(exe_ctx) = &mut ctx.exe_ctx {
+        if let Some(exe_ctx) = self.0.borrow().exe_ref() {
             value.borrow_mut().set_value(exe_ctx.rand_value());
         }
         Ok(ArgHandle::new(self.clone(), value))
@@ -547,8 +726,7 @@ impl ActionHandle {
         let [obj, target] = validate_args([(obj, Type::Dict), (target, Type::Raw)])?;
         // For now we assume that obj is var, and thus return a key that is also var
         let key = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
-        let mut ctx = self.0.borrow_mut();
-        if let Some(exe_ctx) = &mut ctx.exe_ctx {
+        if let Some(exe_ctx) = self.0.borrow().exe_ref() {
             // This is a copy of the object, we don't modify the obj argument.
             let mut obj = obj.borrow().to_dict();
             let target_raw = target.borrow().as_value().raw();
@@ -564,8 +742,8 @@ impl ActionHandle {
         Ok(ArgHandle::new(self.clone(), key))
     }
     /// Build a u256 with `n` in the most-significant limb and zeros elsewhere.
-    /// Useful as a difficulty target for [`pow_obj_grind`] and [`intro_lt_eq_u256`]
-    /// — a u256 `x` satisfies `x <= top_limb_u256(n)` iff the top limb of `x` is
+    /// Useful as a difficulty target for [`pow_obj_grind`] and [`intro_lt_eq_u256`]:
+    /// a u256 `x` satisfies `x <= top_limb_u256(n)` iff the top limb of `x` is
     /// `<= n` (with all lower limbs of `x` implicitly bounded by the zeros).
     fn top_limb_u256(self, n: Dynamic) -> RuntimeResult<ArgHandle> {
         let [n] = validate_args([(n, Type::Int)])?;
@@ -594,24 +772,19 @@ impl ActionHandle {
         let work = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
-        if let Some(exe_ctx) = &mut ctx.exe_ctx {
-            let n_iters = n_iters.borrow().as_value().as_int().expect("int") as usize;
-            let input = input.borrow().as_value().raw();
-            let vdf_pod = if exe_ctx.mock {
-                VdfPod::new_boxed_mock(&exe_ctx.params, exe_ctx.vd_set.clone(), n_iters, input)
+        if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
+            let mut exe_ctx = exe_rc.borrow_mut();
+            let n = n_iters.borrow().as_value().as_int().expect("int") as usize;
+            let inp = input.borrow().as_value().raw();
+            let pod = if exe_ctx.mock {
+                VdfPod::new_boxed_mock(&exe_ctx.params, exe_ctx.vd_set.clone(), n, inp)
             } else {
-                VdfPod::new_boxed(&exe_ctx.params, exe_ctx.vd_set.clone(), n_iters, input)
+                VdfPod::new_boxed(&exe_ctx.params, exe_ctx.vd_set.clone(), n, inp)
             }
             .unwrap();
-            let st_vdf = vdf_pod.pub_statements()[0].clone();
-            let work_value = st_vdf.args()[2].literal().unwrap();
-            exe_ctx
-                .bld
-                .builder
-                .add_pod(exe_ctx.main_pod(vdf_pod))
-                .unwrap();
-            exe_ctx.sts.push(st_vdf);
-            work.borrow_mut().set_value(work_value);
+            let st = add_intro_pod(&mut exe_ctx, pod);
+            work.borrow_mut().set_value(st.args()[2].literal().unwrap());
+            exe_ctx.sts.push(st);
         }
         ctx.insts.push(Inst::Intro {
             pred: Intro::Vdf,
@@ -623,22 +796,18 @@ impl ActionHandle {
         let [lhs, rhs] = validate_args([(lhs, Type::Raw), (rhs, Type::Raw)])?;
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
-        if let Some(exe_ctx) = &mut ctx.exe_ctx {
-            let lhs = lhs.borrow().as_value().raw();
-            let rhs = rhs.borrow().as_value().raw();
-            let lt_eq_u256_pod = if exe_ctx.mock {
-                LtEqU256Pod::new_boxed_mock(&exe_ctx.params, exe_ctx.vd_set.clone(), lhs, rhs)
+        if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
+            let mut exe_ctx = exe_rc.borrow_mut();
+            let l = lhs.borrow().as_value().raw();
+            let r = rhs.borrow().as_value().raw();
+            let pod = if exe_ctx.mock {
+                LtEqU256Pod::new_boxed_mock(&exe_ctx.params, exe_ctx.vd_set.clone(), l, r)
             } else {
-                LtEqU256Pod::new_boxed(&exe_ctx.params, exe_ctx.vd_set.clone(), lhs, rhs)
+                LtEqU256Pod::new_boxed(&exe_ctx.params, exe_ctx.vd_set.clone(), l, r)
             }
             .unwrap();
-            let st_lt_eq_u256 = lt_eq_u256_pod.pub_statements()[0].clone();
-            exe_ctx
-                .bld
-                .builder
-                .add_pod(exe_ctx.main_pod(lt_eq_u256_pod))
-                .unwrap();
-            exe_ctx.sts.push(st_lt_eq_u256);
+            let st = add_intro_pod(&mut exe_ctx, pod);
+            exe_ctx.sts.push(st);
         }
         ctx.insts.push(Inst::Intro {
             pred: Intro::LtEqU256,
@@ -646,6 +815,15 @@ impl ActionHandle {
         });
         Ok(())
     }
+}
+
+/// Attach an intro pod (VDF, LtEqU256, etc.) to the builder and
+/// return its first public statement.
+fn add_intro_pod(exe_ctx: &mut ExeContext, pod: Box<dyn Pod>) -> Statement {
+    let st = pod.pub_statements()[0].clone();
+    let main = exe_ctx.main_pod(pod);
+    exe_ctx.bld.builder.add_pod(main).unwrap();
+    st
 }
 
 /// Lexicographic (little-endian limb order) u256 `>` comparison on `RawValue`.
@@ -708,7 +886,8 @@ impl ArgHandle {
             let var_name = var.name.clone();
             let mut ctx = self.ctx.0.borrow_mut();
             ctx.assert_unsafe(false)?;
-            if let Some(exe_ctx) = &mut ctx.exe_ctx {
+            if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
+                let mut exe_ctx = exe_rc.borrow_mut();
                 let mut obj_set_list = Vec::new();
                 for (key, value) in &kvs {
                     let value = value.borrow().as_value().clone();
@@ -717,12 +896,15 @@ impl ArgHandle {
                     });
                     obj_set_list.push((key, value));
                 }
+                // Two passes: the dict is fully built first, then each
+                // DictContains references the final dict so podlang's
+                // single-`obj` rendering matches the proved statements.
                 for (key, value) in obj_set_list {
                     let obj = arg.to_dict();
                     let st = exe_ctx
                         .bld
                         .builder
-                        .priv_op(Operation::dict_contains(obj.clone(), key.clone(), value))
+                        .priv_op(Operation::dict_contains(obj, key.clone(), value))
                         .unwrap();
                     exe_ctx.sts.push(st);
                 }
@@ -752,17 +934,18 @@ impl ArgHandle {
             let value = try_ref_from_dynamic(value)?;
             let mut ctx = self.ctx.0.borrow_mut();
             ctx.assert_unsafe(false)?;
-            if let Some(exe_ctx) = &mut ctx.exe_ctx {
-                let value = value.borrow().as_value().clone();
+            if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
+                let mut exe_ctx = exe_rc.borrow_mut();
+                let v = value.borrow().as_value().clone();
                 let (obj0, obj) = arg.mut_dict(|obj| {
                     let obj0 = obj.clone();
-                    obj.update(&Key::from(&key), &value).expect("TODO");
+                    obj.update(&Key::from(&key), &v).expect("TODO");
                     (obj0, obj.clone())
                 });
                 let st = exe_ctx
                     .bld
                     .builder
-                    .priv_op(Operation::dict_update(obj, obj0, key.clone(), value))
+                    .priv_op(Operation::dict_update(obj, obj0, key.clone(), v))
                     .unwrap();
                 exe_ctx.sts.push(st);
             }
@@ -871,68 +1054,91 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
     Err(format!("invalid value type: {}", v.type_name()).into())
 }
 
-/// Collected metadata that declares an Action
+/// One object reference in an action, in declaration order. Only
+/// `class` is exposed; `io` is internal, used by the
+/// `local_inputs()` / `local_outputs()` filters.
+#[derive(Debug, Clone)]
+pub struct ActionObjectRef {
+    io: ObjectIO,
+    pub class: String,
+}
+
+/// Collected metadata that declares an Action.
+///
+/// `object_refs` lists the action's direct Object instructions in
+/// declaration order, matching the action predicate's public-arg
+/// ordering. `total_inputs` / `total_outputs` flatten this action's
+/// plus all transitively-called sub-actions' inputs/outputs.
+/// `total_inputs` is used by `Executor::action` to zip against
+/// caller-supplied inputs, and both are surfaced via the
+/// `total_inputs()` / `total_outputs()` helpers for driver/GUI
+/// signature reporting.
 #[derive(Debug, Default)]
 pub struct ActionMeta {
     pub name: String,
-    /// List of (object, class) for input/mutate explicitly declared in this action
-    pub local_inputs: Vec<(String, String)>,
-    /// List of (object, class) for output/mutate explicitly declared in this action
-    pub local_outputs: Vec<(String, String)>,
-    /// List of (object, class) for input/mutate across this action and nested subactions
-    pub total_inputs: Vec<(String, String)>,
-    /// List of (object, class) for output/mutate across this action and nested subactions
-    pub total_outputs: Vec<(String, String)>,
+    object_refs: Vec<ActionObjectRef>,
+    total_inputs: Vec<ActionObjectRef>,
+    total_outputs: Vec<ActionObjectRef>,
 }
 
 impl ActionMeta {
-    fn from_action_ctx(actions: &[ActionMeta], action_ctx: &ActionContext) -> Result<ActionMeta> {
+    /// Object refs consumed locally by this action (Inputs + Mutates),
+    /// excluding any transitively-called sub-actions.
+    pub fn local_inputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
+        self.object_refs.iter().filter(|r| r.io.consumes())
+    }
+
+    /// Object refs produced locally by this action (Outputs + Mutates),
+    /// excluding any transitively-called sub-actions.
+    pub fn local_outputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
+        self.object_refs.iter().filter(|r| r.io.produces())
+    }
+
+    /// Object refs consumed by this action plus any transitively-called
+    /// sub-actions, in declaration order. Used for tx-input zipping and
+    /// for action-signature reporting.
+    pub fn total_inputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
+        self.total_inputs.iter()
+    }
+
+    /// Object refs produced by this action plus any transitively-called
+    /// sub-actions, in declaration order. Used for action-signature
+    /// reporting and output-slot validation by the driver.
+    pub fn total_outputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
+        self.total_outputs.iter()
+    }
+
+    /// Build from a Load-time `ActionContext`, splicing in each
+    /// sub-action's already-computed `total_inputs`/`total_outputs` at
+    /// the point of its `subaction` call. `prior` must contain entries
+    /// for every sub-action this one references.
+    fn from_action_ctx(prior: &[ActionMeta], ctx: &ActionContext) -> Result<Self> {
         let mut meta = Self {
-            name: action_ctx.name.clone(),
+            name: ctx.name.clone(),
             ..Self::default()
         };
-        for inst in &action_ctx.insts {
+        for inst in &ctx.insts {
             match inst {
-                Inst::Object {
-                    io: ObjectIO::Input,
-                    obj,
-                    class,
-                } => {
-                    let obj_name = obj.borrow().as_var().name.clone();
-                    meta.local_inputs.push((obj_name.clone(), class.clone()));
-                    meta.total_inputs.push((obj_name, class.clone()));
+                Inst::Object { io, class, .. } => {
+                    let r = ActionObjectRef {
+                        io: io.clone(),
+                        class: class.clone(),
+                    };
+                    if io.consumes() {
+                        meta.total_inputs.push(r.clone());
+                    }
+                    if io.produces() {
+                        meta.total_outputs.push(r.clone());
+                    }
+                    meta.object_refs.push(r);
                 }
-                Inst::Object {
-                    io: ObjectIO::Output,
-                    obj,
-                    class,
-                } => {
-                    let obj_name = obj.borrow().as_var().name.clone();
-                    meta.local_outputs.push((obj_name.clone(), class.clone()));
-                    meta.total_outputs.push((obj_name, class.clone()));
-                }
-                Inst::Object {
-                    io: ObjectIO::Mutate,
-                    obj,
-                    class,
-                } => {
-                    let obj_name = obj.borrow().as_var().name.clone();
-                    meta.local_inputs.push((obj_name.clone(), class.clone()));
-                    meta.total_inputs.push((obj_name.clone(), class.clone()));
-                    meta.local_outputs.push((obj_name.clone(), class.clone()));
-                    meta.total_outputs.push((obj_name, class.clone()));
-                }
-                Inst::SubAction { action, obj: _ } => {
-                    let subaction = actions
+                Inst::SubAction { action, .. } => {
+                    let sub = prior
                         .iter()
                         .find(|a| &a.name == action)
                         .ok_or_else(|| anyhow!("subaction {action} not defined"))?;
-                    for input in &subaction.total_inputs {
-                        meta.total_inputs.push(input.clone());
-                    }
-                    for output in &subaction.total_outputs {
-                        meta.total_outputs.push(output.clone());
-                    }
+                    meta.total_inputs.extend(sub.total_inputs.iter().cloned());
+                    meta.total_outputs.extend(sub.total_outputs.iter().cloned());
                 }
                 _ => {}
             }
@@ -964,17 +1170,17 @@ impl Loader {
     fn actions_to_classes(actions: &[ActionMeta]) -> Vec<ClassMeta> {
         let mut class_to_actions: HashMap<String, Vec<(String, usize)>> = HashMap::new();
         let mut classes_ordered: Vec<String> = Vec::new();
+        // Iterate every Object inst (inputs, outputs, mutates) in
+        // declaration order. Each object contributes one public arg at
+        // the same position, so the IsX OR branch for this object uses
+        // that position as the state slot.
         for action in actions {
-            let mut classes = Vec::new();
-            for (_obj, class) in &action.local_outputs {
-                classes.push(class.clone());
-                if !classes_ordered.contains(class) {
-                    classes_ordered.push(class.clone());
+            for (obj_index, obj_ref) in action.object_refs.iter().enumerate() {
+                if !classes_ordered.contains(&obj_ref.class) {
+                    classes_ordered.push(obj_ref.class.clone());
                 }
-            }
-            for (i, class) in classes.iter().enumerate() {
-                let actions = class_to_actions.entry(class.clone()).or_default();
-                actions.push((action.name.clone(), i));
+                let entries = class_to_actions.entry(obj_ref.class.clone()).or_default();
+                entries.push((action.name.clone(), obj_index));
             }
         }
         let mut classes = Vec::new();
@@ -1005,9 +1211,9 @@ impl Loader {
             },
         ];
         let mut actions_meta = Vec::with_capacity(actions.len());
-        for action in &actions {
-            let action_meta = ActionMeta::from_action_ctx(&actions_meta, &action.0.borrow())?;
-            actions_meta.push(action_meta);
+        for handle in &actions {
+            let meta = ActionMeta::from_action_ctx(&actions_meta, &handle.0.borrow())?;
+            actions_meta.push(meta);
         }
         let classes = Self::actions_to_classes(&actions_meta);
         Ok(Self {
@@ -1023,18 +1229,21 @@ impl Loader {
         self.actions_meta.iter().find(|a| a.name == name).unwrap()
     }
 
-    fn output_index_class_st_index(actions: &[ActionMeta]) -> HashMap<(String, usize), usize> {
-        let mut output_index_class_st_index = HashMap::new();
-        let mut class_action_count = HashMap::new();
+    /// Map (action_name, object_index) -> index of that action's branch
+    /// in the class's IsX OR, matching the order in which branches are
+    /// emitted by `fmt_class`. `object_index` is the 0-based position of
+    /// the Object inst within the action (covers inputs, outputs, mutates).
+    fn object_index_class_st_index(actions: &[ActionMeta]) -> HashMap<(String, usize), usize> {
+        let mut result = HashMap::new();
+        let mut class_action_count: HashMap<String, usize> = HashMap::new();
         for action in actions {
-            for (output_index, (_name, class)) in action.local_outputs.iter().enumerate() {
-                let class_st_index = class_action_count.entry(class).or_insert(0);
-                output_index_class_st_index
-                    .insert((action.name.clone(), output_index), *class_st_index);
+            for (obj_index, obj_ref) in action.object_refs.iter().enumerate() {
+                let class_st_index = class_action_count.entry(obj_ref.class.clone()).or_insert(0);
+                result.insert((action.name.clone(), obj_index), *class_st_index);
                 *class_st_index += 1;
             }
         }
-        output_index_class_st_index
+        result
     }
 
     fn module(self, engine: Rc<Engine>, ast: AST) -> SdkModule {
@@ -1051,16 +1260,26 @@ impl Loader {
             )
             .expect("compiles"),
         );
-        let output_index_class_st_index = Self::output_index_class_st_index(&self.actions_meta);
+        let object_index_class_st_index = Self::object_index_class_st_index(&self.actions_meta);
+        let class_hashes: HashMap<String, Hash> = self
+            .classes
+            .iter()
+            .filter_map(|c| {
+                module
+                    .predicate_ref_by_name(&class_predicate_name(&c.name))
+                    .map(|p| (c.name.clone(), Predicate::Custom(p).hash()))
+            })
+            .collect();
         SdkModule {
             txlib_mod: self.txlib_mod,
             podlang_src,
             actions: self.actions_meta,
             classes: self.classes,
-            output_index_class_st_index,
+            object_index_class_st_index,
             module,
             engine,
             ast,
+            class_hashes,
         }
     }
 }
@@ -1071,11 +1290,17 @@ pub struct SdkModule {
     podlang_src: String,
     actions: Vec<ActionMeta>,
     classes: Vec<ClassMeta>,
-    // Maps from output index in the Action to statement index in the Class predicate
-    output_index_class_st_index: HashMap<(String, usize), usize>,
+    // Maps (action_name, object_inst_index) -> that branch's index in
+    // the class's IsX OR, matching fmt_class's emission order.
+    object_index_class_st_index: HashMap<(String, usize), usize>,
     module: Arc<Module>,
     engine: Rc<Engine>,
     ast: AST,
+    // Cached Is{class} predicate hashes. Stamped onto new objects'
+    // "type" key in `new_obj` and used by `exe_action`'s phase 2 to
+    // build the `DictContains(obj, "type", ...)` guard priv_op for
+    // every Object inst.
+    class_hashes: HashMap<String, Hash>,
 }
 
 impl SdkModule {
@@ -1106,11 +1331,7 @@ impl SdkModule {
     }
     /// Hash of the `Is{class_name}` custom predicate in the loaded module.
     pub fn class_hash(&self, class_name: &str) -> Option<Hash> {
-        let pred_name = format!("Is{class_name}");
-        self.module
-            .predicate_ref_by_name(pred_name.as_str())
-            .map(Predicate::Custom)
-            .map(|p| p.hash())
+        self.class_hashes.get(class_name).copied()
     }
     pub fn executor(
         self: &Rc<Self>,
@@ -1118,6 +1339,28 @@ impl SdkModule {
         grounding_witness: Arc<GroundingWitness>,
     ) -> Executor {
         Executor::new(self.clone(), mock, grounding_witness)
+    }
+
+    /// Build an `Is{class}` statement whose OR branch matches
+    /// `(action_name, object_refs_index)` and uses `st_action` as that
+    /// branch's proof. All other branches are `Statement::None`. Used
+    /// both to attach guard evidence during action emission and to
+    /// construct per-output spendable certificates in separate pods.
+    fn build_is_x(
+        &self,
+        bld: &mut BuildContext,
+        action_name: &str,
+        class: &str,
+        object_refs_index: usize,
+        st_action: Statement,
+    ) -> Statement {
+        let class_meta = self.class_by_name(class);
+        let mut branch_sts = vec![Statement::None; class_meta.actions.len()];
+        let class_st_index =
+            self.object_index_class_st_index[&(action_name.to_string(), object_refs_index)];
+        branch_sts[class_st_index] = st_action;
+        bld.apply_custom_pred_simple(false, &class_predicate_name(class), branch_sts)
+            .unwrap()
     }
 }
 
@@ -1174,16 +1417,25 @@ struct ExeContext {
     vd_set: VDSet,
     tx_builder: TxBuilder,
     bld: BuildContext,
+    // Input objects to be consumed by input/mutate (pre-popped stack).
+    // Shared across the parent action and any nested sub-actions, which
+    // pop in their rhai-call order.
+    inputs: Vec<Dictionary>,
+    // Shared module handle. `ActionHandle::subaction` uses it to
+    // re-enter a sub-action's rhai body inline, and `new_obj` reads
+    // cached class hashes off it.
     module: Rc<SdkModule>,
-    // -- Consumed during execution --
-    // Input (class statement, object) to be consumed by input/mutate
-    input_index: usize,
-    inputs: VecDeque<(Statement, Dictionary)>,
-    // -- Generated during execution --
-    outputs: Vec<Dictionary>,
-    // Data necessary to make each output object' class statement: (predicate name, statements)
-    output_objs_st_class_data: Vec<(String, Vec<Statement>)>,
-    // Statements used to build the Action custom statement
+    // Accumulated produced (Output/Mutate) objects across the whole
+    // action call tree. Each entry becomes one obj_pod in the returned
+    // `SpendableObjects`. Sub-actions append into this same vec so the
+    // top-level call sees them in declaration order.
+    outputs: Vec<PerOutput>,
+    // Non-Object statement clauses accumulated eagerly during Rhai for
+    // every active action's predicate. Pushed by native_st / intro_* /
+    // ArgHandle::set / subaction. Each `exe_action` invocation captures
+    // the length on entry and `split_off`s its frame on exit, which
+    // gives parent and sub-action calls non-overlapping slices without
+    // an explicit frame stack.
     sts: Vec<Statement>,
 }
 
@@ -1201,11 +1453,6 @@ impl ExeContext {
         // nonce that persists
         Value::from(rand_raw_value())
     }
-}
-
-struct OutputData {
-    class: String,
-    obj: Dictionary,
 }
 
 fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
@@ -1242,6 +1489,28 @@ impl Executor {
     fn new_tx_builder(&self, ctx: &mut BuildContext, inputs: &[(Dictionary, Tx)]) -> TxBuilder {
         TxBuilder::new(ctx, inputs, self.grounding_witness.clone())
     }
+    /// Prove a pod that reveals a single `Is{class}` statement for one
+    /// produced output, referencing `source` (the internal pod that
+    /// exposes the originating action statement).
+    fn prove_is_x_pod(&self, source: &MainPod, out: &PerOutput) -> MainPod {
+        let builder = self.new_builder();
+        let mut bld = BuildContext {
+            builder,
+            modules: self.pod_modules.clone(),
+        };
+        bld.builder.add_pod(source.clone()).unwrap();
+        let st_class = self.module.build_is_x(
+            &mut bld,
+            &out.action_name,
+            &out.class,
+            out.object_refs_index,
+            out.action_st.clone(),
+        );
+        bld.builder.reveal(&st_class).unwrap();
+        let pod = prove(bld.builder, &*self.prover);
+        pod.pod.verify().unwrap();
+        pod
+    }
     /// Execute an action that consumes some input objects and produces some output objects
     pub fn action(
         &self,
@@ -1249,94 +1518,111 @@ impl Executor {
         inputs: Vec<SpendableObject>,
     ) -> Result<SpendableObjects, SdkError> {
         // TODO: In this function: return errors instead of panic from unwrap.
-        let action = self.module.action_by_name(action);
         let builder = self.new_builder();
         let mut bld = BuildContext {
             builder,
             modules: self.pod_modules.clone(),
         };
 
+        let total = &self.module.action_by_name(action).total_inputs;
+
         let mut tx_inputs = Vec::new();
-        let mut input_class_sts_objs = Vec::with_capacity(inputs.len());
-        for (input, (_class, _name)) in zip_eq(inputs, &action.total_inputs) {
+        let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
+        for (input, _ref) in zip_eq(inputs, total.iter()) {
             tx_inputs.push(input.tx_input());
-            let input_pod_sts = input.pod.pod.pub_statements();
-            let st_class = input_pod_sts[0].clone();
             bld.builder
                 .add_pod(input.pod)
                 .expect("MultiPodBuilder is unlimited");
-            input_class_sts_objs.push((st_class, input.obj));
+            rhai_input_objs.push(input.obj);
         }
+        // Reverse so rhai pops in declaration order (last-declared on top).
+        rhai_input_objs.reverse();
 
         let tx_builder = self.new_tx_builder(&mut bld, &tx_inputs);
-
-        let exe_ctx = ExeContext {
+        let exe_rc = Rc::new(RefCell::new(ExeContext {
             mock: self.mock,
             params: self.params.clone(),
             vd_set: self.vd_set.clone(),
-            tx_builder,
+            inputs: rhai_input_objs,
             bld,
+            tx_builder,
             module: self.module.clone(),
-            input_index: 0,
-            inputs: VecDeque::from(input_class_sts_objs),
             outputs: Vec::new(),
-            output_objs_st_class_data: Vec::new(),
             sts: Vec::new(),
-        };
-        let action_handle = ActionHandle::new(action.name.clone(), Some(exe_ctx));
-        action_handle.exe_action(&action.name)?;
+        }));
+        let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
+        let st_action = action_handle.exe_action()?;
 
-        let mut ctx = action_handle.0.borrow_mut();
-        let mut exe_ctx = ctx.exe_ctx.take().expect("Some");
+        // Release the handle's Rc clone so `exe_rc` has a unique
+        // owner for the `try_unwrap` below.
+        action_handle.0.borrow_mut().exe_ctx = None;
+        let ExeContext {
+            tx_builder,
+            mut bld,
+            outputs,
+            ..
+        } = Rc::try_unwrap(exe_rc)
+            .ok()
+            .expect("unique ExeContext reference after rhai")
+            .into_inner();
 
-        // Prove a pod with the class statements and the last tx statement
-        exe_ctx
-            .bld
-            .builder
-            .reveal(exe_ctx.tx_builder.st_tx())
-            .unwrap();
-        let pod = prove(exe_ctx.bld.builder, &*self.prover);
-        pod.pod.verify().unwrap();
+        bld.builder.reveal(&st_action).unwrap();
 
-        // Finalize tx and prove it in another pod
-        let tx = exe_ctx.tx_builder.tx;
-
-        let builder = self.new_builder();
-        let mut bld = BuildContext {
-            builder,
-            modules: self.pod_modules.clone(),
-        };
-
-        bld.builder.add_pod(pod.clone()).unwrap();
-        let tx_builder = TxBuilder::new_from_tx(&bld, tx);
-        let (st_tx_finalize, tx) = tx_builder.finalize(&mut bld);
+        let (st_tx_finalize, tx, _stats) = tx_builder.finalize(&mut bld);
         bld.builder.reveal(&st_tx_finalize).unwrap();
 
-        let tx_pod = prove(bld.builder, &*self.prover);
-        tx_pod.pod.verify().unwrap();
+        // Internal pod carries both statements so obj_pods can
+        // reference st_action. It's not exposed to callers.
+        let internal_pod = prove(bld.builder, &*self.prover);
+        internal_pod.pod.verify().unwrap();
 
-        // Make one pod for each object with just the corresponding class statement.
-        let mut obj_pods = Vec::new();
-        for (pred, sts) in exe_ctx.output_objs_st_class_data {
-            bld.builder = self.new_builder();
-            bld.builder.add_pod(pod.clone()).unwrap();
-            let st_class = bld
-                .apply_custom_pred(false, &pred, HashMap::new(), sts)
+        // User-facing tx_pod: thin wrapper that exposes only the
+        // TxFinalized statement. The relayer / synchronizer's
+        // `ProofParser` verifies a single-statement hash, so tx_pod
+        // must contain exactly one public statement.
+        // `Operation::copy` re-materializes the statement from
+        // `internal_pod` into this builder so it can be revealed as
+        // our own public output.
+        let tx_pod = {
+            let builder = self.new_builder();
+            let mut bld = BuildContext {
+                builder,
+                modules: self.pod_modules.clone(),
+            };
+            bld.builder.add_pod(internal_pod.clone()).unwrap();
+            bld.builder
+                .pub_op(Operation::copy(st_tx_finalize.clone()))
                 .unwrap();
-            bld.builder.reveal(&st_class).unwrap();
+            let pod = prove(bld.builder, &*self.prover);
+            pod.pod.verify().unwrap();
+            pod
+        };
 
-            let obj_pod = prove(bld.builder, &*self.prover);
-            obj_pod.pod.verify().unwrap();
-            obj_pods.push(obj_pod);
-        }
+        let obj_pods: Vec<MainPod> = outputs
+            .iter()
+            .map(|out| self.prove_is_x_pod(&internal_pod, out))
+            .collect();
 
+        let objs = outputs.into_iter().map(|out| out.obj).collect();
         Ok(SpendableObjects {
             tx_pod,
             obj_pods,
-            objs: exe_ctx.outputs,
+            objs,
             tx,
         })
     }
+}
+
+/// One produced (Output/Mutate) object from a top-level
+/// `Executor::action` call. Each becomes one `SpendableObject` in the
+/// returned `objs`, with an accompanying `Is{class}` pod built from
+/// the originating action's OR branch.
+struct PerOutput {
+    class: String,
+    obj: Dictionary,
+    action_name: String,
+    object_refs_index: usize,
+    action_st: Statement,
 }
 
 /// The Sdk is the main entrypoint of this crate.  It's used to load modules from manifests and

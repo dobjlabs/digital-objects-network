@@ -37,7 +37,7 @@ pub fn read_elems<const N: usize>(bytes: &mut impl Read) -> Result<[F; N]> {
 #[allow(clippy::large_enum_variant)]
 pub struct Payload {
     pub proof: PayloadProof,
-    /// Commitment of the finalized transaction dictionary `{live, nullifiers, state_root_hash}`.
+    /// Commitment of the finalized transaction dictionary `{live, nullifiers, chain_start, chain_end}`.
     pub tx_final: Hash,
     pub state_root_hash: Hash,
     pub nullifiers: Vec<Hash>,
@@ -180,7 +180,7 @@ mod tests {
         let vds_root = vd_set.root();
 
         let input = r#"
-        TxnFinalized(tx_final, nullifiers, state_root) = AND(
+        TxnFinalized(state_root_hash, tx_final, nullifiers) = AND(
             Equal(0, 0)
         )
         "#;
@@ -208,9 +208,9 @@ mod tests {
                 .op(
                     true,
                     vec![
-                        (0, tx_final.clone()),
-                        (1, nullifiers_set.clone()),
-                        (2, state_root.clone()),
+                        (0, state_root.clone()),
+                        (1, tx_final.clone()),
+                        (2, nullifiers_set.clone()),
                     ],
                     Operation::custom(pred.clone(), [st0]),
                 )
@@ -247,9 +247,9 @@ mod tests {
         let st = Statement::Custom(
             pred,
             vec![
-                Value::from(payload.tx_final),
-                nullifiers_set,
-                Value::from(payload.state_root_hash),
+                Value::from(payload.state_root_hash).into(),
+                Value::from(payload.tx_final).into(),
+                nullifiers_set.into(),
             ],
         );
         println!("st: {st:?}");

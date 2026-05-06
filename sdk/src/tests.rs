@@ -40,7 +40,6 @@ fn test_sdk_1() {
     let craft_src = r#"
         fn FindLog(action) {
             var log = action.output("Log");
-            log.set([["blueprint", "Log"]]);
             var work = action.intro_vdf(3, log);
             log.update("work", work);
         }
@@ -48,7 +47,6 @@ fn test_sdk_1() {
         fn CraftWood(action) {
             var log = action.input("Log");
             var wood = action.output("Wood");
-            wood.set([["blueprint", "Wood"]]);
             let target = action.top_limb_u256(9007199254740992);
             var key = action.pow_obj_grind(wood, target);
             wood.update("key", key);
@@ -59,18 +57,13 @@ fn test_sdk_1() {
             var wood = action.input("Wood");
             var stick_a = action.output("Stick");
             var stick_b = action.output("Stick");
-            stick_a.set([["blueprint", "Stick"]]);
-            stick_b.set([["blueprint", "Stick"]]);
         }
 
         fn CraftWoodPick(action) {
             var wood = action.input("Wood");
             var stick = action.input("Stick");
             var pick = action.output("WoodPick");
-            pick.set([
-                ["blueprint", "WoodPick"],
-                ["durability", 100]
-            ]);
+            pick.set([["durability", 100]]);
         }
 
         fn use_pick(action, pick, vdf_iters) {
@@ -92,7 +85,6 @@ fn test_sdk_1() {
         fn MineStoneWithWoodPick(action) {
             var pick = action.subaction("UseWoodPick");
             var stone = action.output("Stone");
-            stone.set([["blueprint", "Stone"]]);
         }
 "#;
 
@@ -110,57 +102,76 @@ fn test_sdk_1() {
         .load_module_from_src_actions(craft_src, actions)
         .unwrap();
 
-    fn list(xs: &[(&str, &str)]) -> Vec<(String, String)> {
-        xs.into_iter()
-            .map(|(a, b)| (a.to_string(), b.to_string()))
-            .collect()
+    fn classes<'a>(refs: impl Iterator<Item = &'a ActionObjectRef>) -> Vec<&'a str> {
+        refs.map(|r| r.class.as_str()).collect()
     }
     let actions = module.actions();
     // FindLog
     let action = &actions[0];
-    assert_eq!(action.local_inputs, action.total_inputs);
-    assert_eq!(&action.local_inputs, &[]);
-    assert_eq!(action.local_outputs, action.total_outputs);
-    assert_eq!(action.local_outputs, list(&[("log", "Log")]));
+    assert_eq!(
+        classes(action.local_inputs()),
+        classes(action.total_inputs())
+    );
+    assert_eq!(classes(action.local_inputs()), Vec::<&str>::new());
+    assert_eq!(
+        classes(action.local_outputs()),
+        classes(action.total_outputs())
+    );
+    assert_eq!(classes(action.local_outputs()), vec!["Log"]);
     // CraftWood
     let action = &actions[1];
-    assert_eq!(action.local_inputs, action.total_inputs);
-    assert_eq!(action.local_inputs, list(&[("log", "Log")]));
-    assert_eq!(action.local_outputs, action.total_outputs);
-    assert_eq!(action.local_outputs, list(&[("wood", "Wood")]));
+    assert_eq!(
+        classes(action.local_inputs()),
+        classes(action.total_inputs())
+    );
+    assert_eq!(classes(action.local_inputs()), vec!["Log"]);
+    assert_eq!(
+        classes(action.local_outputs()),
+        classes(action.total_outputs())
+    );
+    assert_eq!(classes(action.local_outputs()), vec!["Wood"]);
     // CraftSticks
     let action = &actions[2];
-    assert_eq!(action.local_inputs, action.total_inputs);
-    assert_eq!(action.local_inputs, list(&[("wood", "Wood")]));
-    assert_eq!(action.local_outputs, action.total_outputs);
     assert_eq!(
-        action.local_outputs,
-        list(&[("stick_a", "Stick"), ("stick_b", "Stick")])
+        classes(action.local_inputs()),
+        classes(action.total_inputs())
     );
+    assert_eq!(classes(action.local_inputs()), vec!["Wood"]);
+    assert_eq!(
+        classes(action.local_outputs()),
+        classes(action.total_outputs())
+    );
+    assert_eq!(classes(action.local_outputs()), vec!["Stick", "Stick"]);
     // CraftWoodPick
     let action = &actions[3];
-    assert_eq!(action.local_inputs, action.total_inputs);
     assert_eq!(
-        action.local_inputs,
-        list(&[("wood", "Wood"), ("stick", "Stick")])
+        classes(action.local_inputs()),
+        classes(action.total_inputs())
     );
-    assert_eq!(action.local_outputs, action.total_outputs);
-    assert_eq!(action.local_outputs, list(&[("pick", "WoodPick")]));
+    assert_eq!(classes(action.local_inputs()), vec!["Wood", "Stick"]);
+    assert_eq!(
+        classes(action.local_outputs()),
+        classes(action.total_outputs())
+    );
+    assert_eq!(classes(action.local_outputs()), vec!["WoodPick"]);
     // UseWoodPick
     let action = &actions[4];
-    assert_eq!(action.local_inputs, action.total_inputs);
-    assert_eq!(action.local_inputs, list(&[("wood_pick", "WoodPick")]));
-    assert_eq!(action.local_outputs, action.total_outputs);
-    assert_eq!(action.local_outputs, list(&[("wood_pick", "WoodPick")]));
+    assert_eq!(
+        classes(action.local_inputs()),
+        classes(action.total_inputs())
+    );
+    assert_eq!(classes(action.local_inputs()), vec!["WoodPick"]);
+    assert_eq!(
+        classes(action.local_outputs()),
+        classes(action.total_outputs())
+    );
+    assert_eq!(classes(action.local_outputs()), vec!["WoodPick"]);
     // MineStoneWithWoodPick
     let action = &actions[5];
-    assert_eq!(action.local_inputs, list(&[]));
-    assert_eq!(action.total_inputs, list(&[("wood_pick", "WoodPick")]));
-    assert_eq!(action.local_outputs, list(&[("stone", "Stone")]));
-    assert_eq!(
-        action.total_outputs,
-        list(&[("wood_pick", "WoodPick"), ("stone", "Stone")])
-    );
+    assert_eq!(classes(action.local_inputs()), Vec::<&str>::new());
+    assert_eq!(classes(action.total_inputs()), vec!["WoodPick"]);
+    assert_eq!(classes(action.local_outputs()), vec!["Stone"]);
+    assert_eq!(classes(action.total_outputs()), vec!["WoodPick", "Stone"]);
 
     println!("{}", module.podlang_src);
 
@@ -226,7 +237,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "b837ea9d1c477c9668d4ebfcedc60f86c47a2669642738428f344cc68ff721ba"
+        module_hash = "e0a3963f76d01a1ba7138c327c583e955ef5bc1e94e5b56edca41ab800e3f6d1"
 
         [[classes]]
         name = "Log"
@@ -252,7 +263,6 @@ fn test_sdk_2() {
     let craft_src = r#"
         fn FindLog(action) {
             var log = action.output("Log");
-            log.set([["blueprint", "Log"]]);
             var work = action.intro_vdf(3, log);
             log.update("work", work);
         }
@@ -260,7 +270,6 @@ fn test_sdk_2() {
         fn CraftWood(action) {
             var log = action.input("Log");
             var wood = action.output("Wood");
-            wood.set([["blueprint", "Wood"]]);
             let target = action.top_limb_u256(9007199254740992);
             var key = action.pow_obj_grind(wood, target);
             wood.update("key", key);
@@ -276,4 +285,27 @@ fn test_sdk_2() {
         .unwrap();
 
     println!("{}", module.podlang_src);
+}
+
+// An action with one chain step and no `update()` calls produces zero
+// private vars. The signature must omit `private:` entirely; emitting
+// `..., private: ) = AND(` makes the pod2 parser reject the module.
+#[test]
+fn test_action_no_private_args() {
+    let craft_src = r#"
+        fn JustOutput(action) {
+            var x = action.output("Foo");
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["JustOutput"])
+        .unwrap();
+    assert!(
+        module
+            .podlang_src
+            .contains("JustOutput(x, chain0, chain) = AND("),
+        "expected no `private:` clause for zero-private-var action; got:\n{}",
+        module.podlang_src
+    );
 }
