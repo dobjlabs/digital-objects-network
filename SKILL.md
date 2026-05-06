@@ -109,7 +109,8 @@ and reopen the chat, or restart the CLI).
 
 For **Claude Desktop** users, dobjd's HTTP MCP can't be registered
 directly — Claude Desktop only speaks stdio. Use the bundled
-`craft-mcp-proxy` binary (installed in step 3) as a stdio↔HTTP bridge.
+`bitcraft-mcp-proxy` binary (installed alongside `dobjd` in step 3) as a
+stdio↔HTTP bridge.
 
 Idempotent shell merge — uses `jq` (preinstalled on most macOS machines;
 `brew install jq` otherwise) so it doesn't clobber other MCP servers
@@ -119,7 +120,7 @@ already in the config:
 CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 mkdir -p "$(dirname "$CONFIG")"
 [ -f "$CONFIG" ] || echo '{}' > "$CONFIG"
-jq --arg cmd "$HOME/.dobj/bin/craft-mcp-proxy" \
+jq --arg cmd "$HOME/.dobj/bin/bitcraft-mcp-proxy" \
    '.mcpServers.bitcraft = {command: $cmd, args: ["--port", "7718"]}' \
    "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
 ```
@@ -132,7 +133,7 @@ e.g. `/Users/alice`):
 {
   "mcpServers": {
     "bitcraft": {
-      "command": "<HOME>/.dobj/bin/craft-mcp-proxy",
+      "command": "<HOME>/.dobj/bin/bitcraft-mcp-proxy",
       "args": ["--port", "7718"]
     }
   }

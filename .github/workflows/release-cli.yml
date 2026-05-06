@@ -70,13 +70,13 @@ jobs:
       - name: Build dobj
         run: cargo build --release --locked -p dobj --target ${{ matrix.target }}
 
-      - name: Build craft-mcp-proxy
+      - name: Build bitcraft-mcp-proxy
         # Stdio↔HTTP bridge that Claude Desktop launches as a child process
         # to reach dobjd's MCP endpoint. Ships in the dobjd tarball because
         # it's a companion to the MCP server inside dobjd — anyone running
         # the daemon can wire it into Claude Desktop without also needing
         # the dobj CLI.
-        run: cargo build --release --locked -p craft-mcp --bin craft-mcp-proxy --features proxy --target ${{ matrix.target }}
+        run: cargo build --release --locked -p craft-mcp --bin bitcraft-mcp-proxy --features proxy --target ${{ matrix.target }}
 
       - name: Stage tarball directories
         shell: bash
@@ -86,13 +86,24 @@ jobs:
 
           # Use deterministic paths under the workspace so subsequent steps
           # (codesign, notarize, tar) can find them by env var.
+          #
+          # Final layout inside dobjd-{target}.tar.gz:
+          #   dobjd
+          #   bitcraft-mcp-proxy
+          #   .libs/{libscip*, libgfortran*, libquadmath*, libgcc_s*}
+          #
+          # The `.libs/` subdir keeps `~/.dobj/bin/` clean — only the three
+          # user-facing executables show up in `ls`. dobjd's RPATH is baked
+          # to `@loader_path/.libs` (mac) / `$ORIGIN/.libs` (linux) so the
+          # libs resolve at runtime without env vars.
           DOBJD_STAGE="$GITHUB_WORKSPACE/staging/dobjd"
+          DOBJD_LIBS="$DOBJD_STAGE/.libs"
           DOBJ_STAGE="$GITHUB_WORKSPACE/staging/dobj"
-          mkdir -p "$DOBJD_STAGE" "$DOBJ_STAGE"
+          mkdir -p "$DOBJD_STAGE" "$DOBJD_LIBS" "$DOBJ_STAGE"
 
-          cp "$OUT/dobjd"            "$DOBJD_STAGE/"
-          cp "$OUT/craft-mcp-proxy"  "$DOBJD_STAGE/"
-          cp "$OUT/dobj"             "$DOBJ_STAGE/"
+          cp "$OUT/dobjd"               "$DOBJD_STAGE/"
+          cp "$OUT/bitcraft-mcp-proxy"  "$DOBJD_STAGE/"
+          cp "$OUT/dobj"                "$DOBJ_STAGE/"
 
           # ---- Diagnostics ---------------------------------------------------
           # If anything's off, the logs show the actual layout cargo produced.
@@ -120,7 +131,7 @@ jobs:
 
           if [ -n "$SCIP_DIR" ] && [ -d "$SCIP_DIR" ]; then
             echo "scip dir: $SCIP_DIR"
-            cp -P "$SCIP_DIR"/${{ matrix.scip_glob }} "$DOBJD_STAGE/" 2>/dev/null || true
+            cp -P "$SCIP_DIR"/${{ matrix.scip_glob }} "$DOBJD_LIBS/" 2>/dev/null || true
           else
             # No scip_install/lib found. This is fine if dobjd statically
             # linked SCIP — the binary is self-contained in that case. If it
@@ -133,23 +144,24 @@ jobs:
           case "${{ matrix.target }}" in
             *-apple-darwin)
               if otool -L "$DOBJD_STAGE/dobjd" | grep -q 'libscip' \
-                 && ! ls "$DOBJD_STAGE"/libscip*.dylib >/dev/null 2>&1; then
-                echo "::error::dobjd dynamic-links libscip but no dylib was bundled"
+                 && ! ls "$DOBJD_LIBS"/libscip*.dylib >/dev/null 2>&1; then
+                echo "::error::dobjd dynamic-links libscip but no dylib was bundled in .libs/"
                 exit 1
               fi
               ;;
             *-linux-*)
               if ldd "$DOBJD_STAGE/dobjd" | grep -q 'libscip' \
-                 && ! ls "$DOBJD_STAGE"/libscip.so* >/dev/null 2>&1; then
-                echo "::error::dobjd dynamic-links libscip but no .so was bundled"
+                 && ! ls "$DOBJD_LIBS"/libscip.so* >/dev/null 2>&1; then
+                echo "::error::dobjd dynamic-links libscip but no .so was bundled in .libs/"
                 exit 1
               fi
               ;;
           esac
 
-          ls -la "$DOBJD_STAGE" "$DOBJ_STAGE"
+          ls -la "$DOBJD_STAGE" "$DOBJD_LIBS" "$DOBJ_STAGE"
 
           echo "DOBJD_STAGE=$DOBJD_STAGE" >> "$GITHUB_ENV"
+          echo "DOBJD_LIBS=$DOBJD_LIBS"   >> "$GITHUB_ENV"
           echo "DOBJ_STAGE=$DOBJ_STAGE"   >> "$GITHUB_ENV"
 
       # ---------- macOS codesign + notarize -----------------------------------
@@ -238,19 +250,19 @@ jobs:
             for name in "${GCC_RUNTIME_NAMES[@]}"; do
               src="$root/$name"
               [ -e "$src" ] || continue
-              cp -P "$src" "$DOBJD_STAGE/$name"
-              chmod u+w "$DOBJD_STAGE/$name"
+              cp -P "$src" "$DOBJD_LIBS/$name"
+              chmod u+w "$DOBJD_LIBS/$name"
             done
           done
 
           # Walk every dylib transitively, rewriting:
           #   - its own LC_ID_DYLIB to @rpath/<basename>
           #   - any dependency under /opt/homebrew or /usr/local to
-          #     @rpath/<basename>, copying the dep into the bundle if it
-          #     isn't already there
+          #     @rpath/<basename>, copying the dep into .libs/ if it isn't
+          #     already there
           declare -A SEEN
           QUEUE=()
-          for f in "$DOBJD_STAGE"/*.dylib; do
+          for f in "$DOBJD_LIBS"/*.dylib; do
             [ -L "$f" ] && continue
             QUEUE+=("$f")
           done
@@ -269,7 +281,7 @@ jobs:
               case "$dep" in
                 /opt/homebrew/*|/usr/local/*)
                   dep_name=$(basename "$dep")
-                  dep_dest="$DOBJD_STAGE/$dep_name"
+                  dep_dest="$DOBJD_LIBS/$dep_name"
                   if [ ! -e "$dep_dest" ]; then
                     cp -P "$dep" "$dep_dest"
                     chmod u+w "$dep_dest"
@@ -282,8 +294,8 @@ jobs:
           done
 
           echo "--- final bundle ---"
-          ls -la "$DOBJD_STAGE"
-          for f in "$DOBJD_STAGE"/*.dylib; do
+          ls -la "$DOBJD_STAGE" "$DOBJD_LIBS"
+          for f in "$DOBJD_LIBS"/*.dylib; do
             [ -L "$f" ] && continue
             echo "--- $(basename "$f") deps ---"
             otool -L "$f" | tail -n +2
@@ -296,10 +308,10 @@ jobs:
           set -euo pipefail
           IDENTITY="${MACOS_SIGNING_IDENTITY}"
 
-          # Sign every dylib in the bundle (libscip + GCC runtime deps + any
+          # Sign every dylib in .libs/ (libscip + GCC runtime deps + any
           # transitives we pulled in). Sign dylibs before binaries because
           # dobjd's signature includes hashes of its load-time deps.
-          for f in "$DOBJD_STAGE"/*.dylib; do
+          for f in "$DOBJD_LIBS"/*.dylib; do
             [ -L "$f" ] && continue
             codesign --force --sign "$IDENTITY" \
               --options runtime --timestamp "$f"
@@ -308,7 +320,7 @@ jobs:
           codesign --force --sign "$IDENTITY" \
             --options runtime --timestamp "$DOBJD_STAGE/dobjd"
           codesign --force --sign "$IDENTITY" \
-            --options runtime --timestamp "$DOBJD_STAGE/craft-mcp-proxy"
+            --options runtime --timestamp "$DOBJD_STAGE/bitcraft-mcp-proxy"
           codesign --force --sign "$IDENTITY" \
             --options runtime --timestamp "$DOBJ_STAGE/dobj"
 
@@ -316,9 +328,9 @@ jobs:
           # off — we want the workflow to fail loudly here rather than ship
           # broken signatures.
           codesign --verify --verbose=2 "$DOBJD_STAGE/dobjd"
-          codesign --verify --verbose=2 "$DOBJD_STAGE/craft-mcp-proxy"
+          codesign --verify --verbose=2 "$DOBJD_STAGE/bitcraft-mcp-proxy"
           codesign --verify --verbose=2 "$DOBJ_STAGE/dobj"
-          for f in "$DOBJD_STAGE"/*.dylib; do
+          for f in "$DOBJD_LIBS"/*.dylib; do
             [ -L "$f" ] && continue
             codesign --verify --verbose=2 "$f"
           done
