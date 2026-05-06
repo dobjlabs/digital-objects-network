@@ -106,33 +106,65 @@ fn signal(pid: i32, sig: libc::c_int) -> Result<()> {
     }
 }
 
+/// How long a single liveness GET is allowed to hang. Short — we'd rather
+/// fail fast and retry on the next loop tick than block forever on a
+/// listener that ate the connection but never replied.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Probe whether dobjd's HTTP listener is up.
 ///
 /// Uses `/objects/dir` because it's the cheapest local endpoint —
 /// `/inventory` and `/state-root` round-trip to the synchronizer and can
 /// hang for 30s when it's unreachable, which is useless for a liveness
-/// probe.
+/// probe. We also wrap the request in a per-call timeout so a stuck server
+/// can't hang the loop forever.
 async fn http_alive(client: &DobjdClient) -> bool {
-    client
-        .get_json::<serde_json::Value>("/objects/dir")
+    let url = format!("{}/objects/dir", client.base_url());
+    reqwest::Client::new()
+        .get(&url)
+        .timeout(PROBE_TIMEOUT)
+        .send()
         .await
-        .is_ok()
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
 }
 
 /// Block until the HTTP API responds, the process dies, or the timeout
-/// elapses. Polls with a short interval — startup is multi-second on cold
-/// load (plugin compile, RocksDB open) but fast on warm reload.
+/// elapses. Prints a dot every couple seconds so the user knows we're
+/// still working — cold start can take 15-30s while plugins compile and
+/// RocksDB initializes.
 async fn wait_until_ready(client: &DobjdClient, pid: i32, timeout: Duration) -> Result<()> {
-    let deadline = Instant::now() + timeout;
+    use std::io::Write as _;
+
+    let start = Instant::now();
+    let deadline = start + timeout;
+    let mut last_dot = start;
+    let mut printed_dots = false;
+
     loop {
         if !process_alive(pid) {
+            if printed_dots {
+                println!();
+            }
             bail!("dobjd exited before becoming ready (check `dobj logs`)");
         }
         if http_alive(client).await {
+            if printed_dots {
+                println!();
+            }
             return Ok(());
         }
         if Instant::now() >= deadline {
+            if printed_dots {
+                println!();
+            }
             bail!("dobjd did not become ready within {}s", timeout.as_secs());
+        }
+        if last_dot.elapsed() >= Duration::from_secs(2) {
+            print!(".");
+            let _ = std::io::stdout().flush();
+            last_dot = Instant::now();
+            printed_dots = true;
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
