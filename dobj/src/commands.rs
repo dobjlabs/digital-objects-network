@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use crate::client::DobjdClient;
 use crate::types::{
-    AppSettings, LoadGuiInventoryResult, ObjectsDir, RunActionInput, RunActionRequest,
-    RunActionResult,
+    AppSettings, CheckActionReport, ClassSummary, LoadGuiInventoryResult, ObjectSummary,
+    ObjectsDir, RunActionInput, RunActionRequest, RunActionResult,
 };
 
 const TARGET_RUN_ACTION_PROGRESS: &str = "run-action-progress";
@@ -215,6 +215,141 @@ pub async fn events(client: &DobjdClient) -> Result<()> {
                 eprintln!("event-stream error: {err}");
                 break;
             }
+        }
+    }
+    Ok(())
+}
+
+pub async fn inspect_object(client: &DobjdClient, id: String, json: bool) -> Result<()> {
+    // Object IDs are URL-safe (hex), but be defensive in case someone pastes
+    // a raw filename that contains underscores etc.
+    let path = format!("/objects/{}", urlencoding::encode(&id));
+    let obj: ObjectSummary = client.get_json(&path).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": obj.id, "fileName": obj.file_name, "className": obj.class_name,
+                "status": obj.status, "txHash": obj.tx_hash, "grounded": obj.grounded,
+                "fields": obj.fields,
+            }))?
+        );
+        return Ok(());
+    }
+    println!("id:        {}", obj.id);
+    println!("class:     {}", obj.class_name);
+    println!("status:    {}", obj.status);
+    println!("file:      {}", obj.file_name);
+    if let Some(tx) = obj.tx_hash {
+        println!("tx hash:   {tx}");
+    }
+    if let Some(grounded) = obj.grounded {
+        println!("grounded:  {grounded}");
+    }
+    println!("fields:");
+    println!("{}", serde_json::to_string_pretty(&obj.fields)?);
+    Ok(())
+}
+
+pub async fn classes(client: &DobjdClient, json: bool) -> Result<()> {
+    let classes: Vec<ClassSummary> = client.get_json("/classes").await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &classes
+                    .iter()
+                    .map(|c| serde_json::json!({
+                        "name": c.name, "liveCount": c.live_count,
+                        "producedBy": c.produced_by, "consumedBy": c.consumed_by,
+                        "description": c.description,
+                    }))
+                    .collect::<Vec<_>>()
+            )?
+        );
+        return Ok(());
+    }
+    if classes.is_empty() {
+        println!("(no classes — no plugin loaded?)");
+        return Ok(());
+    }
+    for class in &classes {
+        println!(
+            "{} {:<14} (live: {})  — {}",
+            class.emoji, class.name, class.live_count, class.description,
+        );
+    }
+    Ok(())
+}
+
+pub async fn inspect_class(client: &DobjdClient, name: String, json: bool) -> Result<()> {
+    let path = format!("/classes/{}", urlencoding::encode(&name));
+    let class: ClassSummary = client.get_json(&path).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "name": class.name, "hash": class.hash, "description": class.description,
+                "liveCount": class.live_count,
+                "producedBy": class.produced_by, "consumedBy": class.consumed_by,
+                "predicateSource": class.predicate_source,
+            }))?
+        );
+        return Ok(());
+    }
+    println!("class:        {} {}", class.emoji, class.name);
+    println!("hash:         {}", class.hash);
+    println!("description:  {}", class.description);
+    println!("live count:   {}", class.live_count);
+    if !class.produced_by.is_empty() {
+        println!("produced by:  {}", class.produced_by.join(", "));
+    }
+    if !class.consumed_by.is_empty() {
+        println!("consumed by:  {}", class.consumed_by.join(", "));
+    }
+    if !class.predicate_source.is_empty() {
+        println!("predicate source:");
+        for line in class.predicate_source.lines() {
+            println!("  {line}");
+        }
+    }
+    Ok(())
+}
+
+pub async fn feasibility(client: &DobjdClient, action_id: String, json: bool) -> Result<()> {
+    let path = format!("/actions/{}/feasibility", urlencoding::encode(&action_id));
+    let report: CheckActionReport = client.get_json(&path).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "actionId": report.action_id,
+                "feasible": report.feasible,
+                "availableInputs": report.available_inputs.iter().map(|c| serde_json::json!({
+                    "className": c.class_name, "objectId": c.object_id, "fileName": c.file_name,
+                })).collect::<Vec<_>>(),
+                "missingInputs": report.missing_inputs,
+            }))?
+        );
+        return Ok(());
+    }
+    let mark = if report.feasible { "✓" } else { "✗" };
+    println!("{mark}  {}", report.action_id);
+    if !report.available_inputs.is_empty() {
+        println!("available inputs:");
+        for c in &report.available_inputs {
+            println!(
+                "  • {} {} ({})",
+                c.class_name,
+                short_hex(&c.object_id),
+                c.file_name
+            );
+        }
+    }
+    if !report.missing_inputs.is_empty() {
+        println!("missing inputs:");
+        for class in &report.missing_inputs {
+            println!("  • {class}");
         }
     }
     Ok(())

@@ -157,3 +157,23 @@ pub struct FeasibilityInput {
     /// The .dobj filename
     pub file_name: String,
 }
+
+/// Driver configuration — the URLs of the hosted synchronizer + relayer.
+/// Mirrors `driver::DriverSettings`; the MCP layer keeps its own type to
+/// stay decoupled from the driver crate.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DriverSettings {
+    /// Synchronizer base URL (e.g. `http://18.119.100.201:3000`).
+    pub synchronizer_api_url: String,
+    /// Relayer base URL (e.g. `http://18.119.100.201:3200`).
+    pub relayer_api_url: String,
+}
+
+/// Filesystem location of the local objects directory.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectsDirInfo {
+    /// Absolute path to `~/.dobj/objects/`.
+    pub path: String,
+}

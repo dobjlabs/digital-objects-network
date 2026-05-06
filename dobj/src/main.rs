@@ -42,6 +42,23 @@ enum Cmd {
     Inventory,
     /// Show every action the action catalog exposes.
     Actions,
+    /// Show every class the action catalog defines.
+    Classes,
+    /// Inspect a single object by its content-addressed id.
+    InspectObject {
+        /// Hex-encoded object id (e.g. `0xabc…`).
+        id: String,
+    },
+    /// Inspect a single class by name (with predicate source).
+    InspectClass {
+        /// Class name (e.g. `Wood`, `WoodPick`). See `dobj classes`.
+        name: String,
+    },
+    /// Check whether an action can run with the current inventory.
+    Feasibility {
+        /// Action id to check (e.g. `CraftWood`). See `dobj actions`.
+        action_id: String,
+    },
     /// Print the current global state root.
     StateRoot,
     /// Print the local objects directory path (`~/.dobj/objects/`).
@@ -104,6 +121,10 @@ async fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Inventory => commands::inventory(&client, cli.json).await,
         Cmd::Actions => commands::actions(&client, cli.json).await,
+        Cmd::Classes => commands::classes(&client, cli.json).await,
+        Cmd::InspectObject { id } => commands::inspect_object(&client, id, cli.json).await,
+        Cmd::InspectClass { name } => commands::inspect_class(&client, name, cli.json).await,
+        Cmd::Feasibility { action_id } => commands::feasibility(&client, action_id, cli.json).await,
         Cmd::StateRoot => commands::state_root(&client).await,
         Cmd::ObjectsDir => commands::objects_dir(&client).await,
         Cmd::Settings(SettingsCmd::Get) => commands::settings_get(&client, cli.json).await,

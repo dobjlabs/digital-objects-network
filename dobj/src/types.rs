@@ -68,3 +68,45 @@ pub struct AppSettings {
 pub struct ObjectsDir {
     pub path: String,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectSummary {
+    pub id: String,
+    pub file_name: String,
+    pub class_name: String,
+    pub status: String,
+    pub tx_hash: Option<String>,
+    pub grounded: Option<bool>,
+    pub fields: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassSummary {
+    pub name: String,
+    pub emoji: String,
+    pub hash: String,
+    pub description: String,
+    pub live_count: usize,
+    pub produced_by: Vec<String>,
+    pub consumed_by: Vec<String>,
+    pub predicate_source: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckActionCandidate {
+    pub class_name: String,
+    pub object_id: String,
+    pub file_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckActionReport {
+    pub feasible: bool,
+    pub action_id: String,
+    pub available_inputs: Vec<CheckActionCandidate>,
+    pub missing_inputs: Vec<String>,
+}

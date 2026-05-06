@@ -1,7 +1,11 @@
-use std::path::Path;
+use std::path::Path as FsPath;
 
 use anyhow::{Result, anyhow};
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::{Path, State},
+};
+use driver::CheckActionReport;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ApiResult;
@@ -45,8 +49,8 @@ pub async fn run_action(
             .iter()
             .map(|path| {
                 let path = path.trim();
-                let file_name = if Path::new(path).is_absolute() {
-                    Path::new(path)
+                let file_name = if FsPath::new(path).is_absolute() {
+                    FsPath::new(path)
                         .file_name()
                         .and_then(|name| name.to_str())
                         .ok_or_else(|| anyhow!("invalid input path: {path}"))?
@@ -79,4 +83,19 @@ pub async fn run_action(
     .map_err(|err| anyhow!("run_action task panicked: {err}"))??;
 
     Ok(Json(result))
+}
+
+/// `GET /actions/{id}/feasibility` — does the local inventory have what
+/// this action needs? Returns the report shape `Driver::check_action`
+/// produces: `feasible` flag, the candidate objects we'd use, and any
+/// missing input class names.
+pub async fn check_feasibility(
+    State(state): State<AppState>,
+    Path(action_id): Path<String>,
+) -> ApiResult<Json<CheckActionReport>> {
+    let driver = state.driver.clone();
+    let report = tokio::task::spawn_blocking(move || driver.check_action(&action_id))
+        .await
+        .map_err(|err| anyhow!("check_feasibility task panicked: {err}"))??;
+    Ok(Json(report))
 }

@@ -155,6 +155,37 @@ impl<T: CraftOps> CraftMcpService<T> {
             .map_err(|e| e.to_string())
     }
 
+    #[tool(description = "Read the driver's current configuration: synchronizer + relayer URLs.")]
+    fn read_settings(&self) -> Result<Json<DriverSettings>, String> {
+        self.ops
+            .read_settings()
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Update the driver's configuration. Both synchronizer and relayer URLs are required — pass the current value for whichever you don't want to change. Most callers will read_settings first, mutate, then write_settings."
+    )]
+    fn write_settings(
+        &self,
+        Parameters(params): Parameters<DriverSettings>,
+    ) -> Result<Json<DriverSettings>, String> {
+        self.ops
+            .write_settings(params)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Filesystem path to the local objects directory (~/.dobj/objects/). Returned as a string the user can paste into a file manager."
+    )]
+    fn get_objects_dir(&self) -> Result<Json<ObjectsDirInfo>, String> {
+        self.ops
+            .get_objects_dir()
+            .map(|path| Json(ObjectsDirInfo { path }))
+            .map_err(|e| e.to_string())
+    }
+
     #[tool(
         description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes in this game). Pass \"list\" to see all available documents."
     )]

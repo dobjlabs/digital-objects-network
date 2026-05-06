@@ -1,5 +1,8 @@
-use axum::{Json, extract::Multipart, extract::State};
-use driver::{ObjectRecord, parse_object_record_bytes};
+use axum::{
+    Json,
+    extract::{Multipart, Path, State},
+};
+use driver::{ObjectRecord, ObjectSelector, ObjectSummary, parse_object_record_bytes};
 use serde::Serialize;
 
 use crate::error::{ApiError, ApiResult};
@@ -16,6 +19,20 @@ pub async fn get_objects_dir(State(state): State<AppState>) -> ApiResult<Json<Ob
     Ok(Json(ObjectsDirResponse {
         path: path.to_string_lossy().to_string(),
     }))
+}
+
+/// `GET /objects/{id}` — read a single object by its content-addressed id.
+/// Routes a hex commitment (e.g. `0xabc...`) into `Driver::read_object`.
+pub async fn inspect_object(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ObjectSummary>> {
+    let driver = state.driver.clone();
+    let summary =
+        tokio::task::spawn_blocking(move || driver.read_object(&ObjectSelector::ObjectId(id)))
+            .await
+            .map_err(|err| anyhow::anyhow!("inspect_object task panicked: {err}"))??;
+    Ok(Json(summary))
 }
 
 /// Parse an uploaded `.dobj` file in-memory and return the resulting

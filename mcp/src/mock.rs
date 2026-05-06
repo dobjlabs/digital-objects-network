@@ -205,6 +205,22 @@ impl CraftOps for MockCraftOps {
             missing_inputs: missing,
         })
     }
+
+    fn read_settings(&self) -> anyhow::Result<DriverSettings> {
+        Ok(DriverSettings {
+            synchronizer_api_url: "http://127.0.0.1:3000".to_string(),
+            relayer_api_url: "http://127.0.0.1:3200".to_string(),
+        })
+    }
+
+    fn write_settings(&self, settings: DriverSettings) -> anyhow::Result<DriverSettings> {
+        // Mock is read-only — just echo back what was passed in.
+        Ok(settings)
+    }
+
+    fn get_objects_dir(&self) -> anyhow::Result<String> {
+        Ok("/tmp/mock-dobj-objects".to_string())
+    }
 }
 
 fn default_inventory() -> Vec<InventoryObject> {

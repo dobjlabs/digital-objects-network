@@ -177,6 +177,34 @@ impl CraftOps for DobjdCraftOps {
         })
     }
 
+    fn read_settings(&self) -> anyhow::Result<mcp::DriverSettings> {
+        let s = self.driver.load_settings()?;
+        Ok(mcp::DriverSettings {
+            synchronizer_api_url: s.synchronizer_api_url,
+            relayer_api_url: s.relayer_api_url,
+        })
+    }
+
+    fn write_settings(&self, settings: mcp::DriverSettings) -> anyhow::Result<mcp::DriverSettings> {
+        let saved = self.driver.save_settings(&::driver::DriverSettings {
+            synchronizer_api_url: settings.synchronizer_api_url,
+            relayer_api_url: settings.relayer_api_url,
+        })?;
+        Ok(mcp::DriverSettings {
+            synchronizer_api_url: saved.synchronizer_api_url,
+            relayer_api_url: saved.relayer_api_url,
+        })
+    }
+
+    fn get_objects_dir(&self) -> anyhow::Result<String> {
+        Ok(self
+            .driver
+            .paths()
+            .objects_dir
+            .to_string_lossy()
+            .to_string())
+    }
+
     fn generated_podlang(&self) -> Option<String> {
         self.driver.generated_podlang()
     }
