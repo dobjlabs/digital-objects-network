@@ -202,6 +202,84 @@ jobs:
           echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"  >> "$GITHUB_ENV"
           echo "APPLE_API_KEY_PATH=$APPLE_API_KEY_PATH" >> "$GITHUB_ENV"
 
+      - name: Bundle macOS GCC runtime deps
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # libscip on macOS dynamically links to GCC's libgfortran, which in
+          # turn pulls in libquadmath and libgcc_s. Apple's hardened runtime
+          # (which we enable via `--options runtime` for notarization) refuses
+          # to load any dylib not signed by our team, so we must:
+          #
+          # 1. Copy libgfortran/libquadmath/libgcc_s next to libscip
+          # 2. Rewrite their install_names to @rpath so they resolve via the
+          #    same `@loader_path` that libscip uses
+          # 3. Re-sign them with our team identity (later step)
+          #
+          # Logic mirrors app-gui/src-tauri/build.rs's copy_mac_gcc_runtime_libs
+          # + rewrite_mac_dylib_ids.
+
+          GCC_RUNTIME_NAMES=(libgfortran.5.dylib libquadmath.0.dylib libgcc_s.1.1.dylib)
+          GCC_ROOTS=(/opt/homebrew/opt/gcc/lib/gcc/current /usr/local/opt/gcc/lib/gcc/current)
+
+          for root in "${GCC_ROOTS[@]}"; do
+            [ -d "$root" ] || continue
+            for name in "${GCC_RUNTIME_NAMES[@]}"; do
+              src="$root/$name"
+              [ -e "$src" ] || continue
+              cp -P "$src" "$DOBJD_STAGE/$name"
+              chmod u+w "$DOBJD_STAGE/$name"
+            done
+          done
+
+          # Walk every dylib transitively, rewriting:
+          #   - its own LC_ID_DYLIB to @rpath/<basename>
+          #   - any dependency under /opt/homebrew or /usr/local to
+          #     @rpath/<basename>, copying the dep into the bundle if it
+          #     isn't already there
+          declare -A SEEN
+          QUEUE=()
+          for f in "$DOBJD_STAGE"/*.dylib; do
+            [ -L "$f" ] && continue
+            QUEUE+=("$f")
+          done
+
+          while [ ${#QUEUE[@]} -gt 0 ]; do
+            lib="${QUEUE[0]}"
+            QUEUE=("${QUEUE[@]:1}")
+            [ -n "${SEEN[$lib]:-}" ] && continue
+            SEEN[$lib]=1
+
+            base=$(basename "$lib")
+            install_name_tool -id "@rpath/$base" "$lib"
+
+            # Each `otool -L` line after the header is "    <path> (compat …)".
+            while read -r dep; do
+              case "$dep" in
+                /opt/homebrew/*|/usr/local/*)
+                  dep_name=$(basename "$dep")
+                  dep_dest="$DOBJD_STAGE/$dep_name"
+                  if [ ! -e "$dep_dest" ]; then
+                    cp -P "$dep" "$dep_dest"
+                    chmod u+w "$dep_dest"
+                    QUEUE+=("$dep_dest")
+                  fi
+                  install_name_tool -change "$dep" "@rpath/$dep_name" "$lib"
+                  ;;
+              esac
+            done < <(otool -L "$lib" | tail -n +2 | awk '{print $1}')
+          done
+
+          echo "--- final bundle ---"
+          ls -la "$DOBJD_STAGE"
+          for f in "$DOBJD_STAGE"/*.dylib; do
+            [ -L "$f" ] && continue
+            echo "--- $(basename "$f") deps ---"
+            otool -L "$f" | tail -n +2
+          done
+
       - name: Codesign macOS binaries
         if: runner.os == 'macOS'
         shell: bash
@@ -209,11 +287,11 @@ jobs:
           set -euo pipefail
           IDENTITY="${MACOS_SIGNING_IDENTITY}"
 
-          # Sign dylibs first — dobjd's signature includes hashes of the
-          # libraries it loads, so signing dylibs after the binary would
-          # invalidate the binary's signature.
-          for f in "$DOBJD_STAGE"/libscip*.dylib; do
-            if [ -L "$f" ]; then continue; fi   # skip symlinks
+          # Sign every dylib in the bundle (libscip + GCC runtime deps + any
+          # transitives we pulled in). Sign dylibs before binaries because
+          # dobjd's signature includes hashes of its load-time deps.
+          for f in "$DOBJD_STAGE"/*.dylib; do
+            [ -L "$f" ] && continue
             codesign --force --sign "$IDENTITY" \
               --options runtime --timestamp "$f"
           done
@@ -228,8 +306,8 @@ jobs:
           # broken signatures.
           codesign --verify --verbose=2 "$DOBJD_STAGE/dobjd"
           codesign --verify --verbose=2 "$DOBJ_STAGE/dobj"
-          for f in "$DOBJD_STAGE"/libscip*.dylib; do
-            if [ -L "$f" ]; then continue; fi
+          for f in "$DOBJD_STAGE"/*.dylib; do
+            [ -L "$f" ] && continue
             codesign --verify --verbose=2 "$f"
           done
 
