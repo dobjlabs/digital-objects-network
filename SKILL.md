@@ -88,18 +88,62 @@ land at `~/.dobj/dobjd.log`; pid at `~/.dobj/dobjd.pid`.
 You should see `dobjd is running (pid …)`, ~7 actions including `FindLog`
 and `CraftWood`, and a 64-character hex state root.
 
-## Optional: register MCP with your agent
+### 8. Register MCP with the agent
 
-dobjd exposes MCP at `http://127.0.0.1:7718/mcp`. Add it via your agent's
-normal MCP config:
+dobjd exposes MCP at `http://127.0.0.1:7718/mcp` so this same agent can
+drive bitcraft directly (list inventory, run actions, inspect classes).
+
+If `claude` (Claude Code) is on the PATH, register the server now —
+idempotent, safe to re-run:
 
 ```bash
-# Claude Code:
-claude mcp add bitcraft http://127.0.0.1:7718/mcp
-
-# Other agents: paste http://127.0.0.1:7718/mcp into the MCP server field
-# in your agent's settings.
+if command -v claude >/dev/null 2>&1; then
+  claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp \
+    || claude mcp remove bitcraft 2>/dev/null \
+    && claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp
+fi
 ```
+
+The new MCP server takes effect on the next Claude Code session (close
+and reopen the chat, or restart the CLI).
+
+For **Claude Desktop** users, dobjd's HTTP MCP can't be registered
+directly — Claude Desktop only speaks stdio. Use the bundled
+`craft-mcp-proxy` binary (installed in step 3) as a stdio↔HTTP bridge.
+
+Idempotent shell merge — uses `jq` (preinstalled on most macOS machines;
+`brew install jq` otherwise) so it doesn't clobber other MCP servers
+already in the config:
+
+```bash
+CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+mkdir -p "$(dirname "$CONFIG")"
+[ -f "$CONFIG" ] || echo '{}' > "$CONFIG"
+jq --arg cmd "$HOME/.dobj/bin/craft-mcp-proxy" \
+   '.mcpServers.bitcraft = {command: $cmd, args: ["--port", "7718"]}' \
+   "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+```
+
+Or hand-edit `~/Library/Application Support/Claude/claude_desktop_config.json`
+and merge with existing `mcpServers` (replace `<HOME>` with your home dir,
+e.g. `/Users/alice`):
+
+```json
+{
+  "mcpServers": {
+    "bitcraft": {
+      "command": "<HOME>/.dobj/bin/craft-mcp-proxy",
+      "args": ["--port", "7718"]
+    }
+  }
+}
+```
+
+Then quit Claude Desktop fully (Cmd+Q) and reopen.
+
+For **other agents** (Cursor, Aider, Continue, etc.), point their MCP
+configuration at `http://127.0.0.1:7718/mcp` via whatever UI / config
+file they use.
 
 ## Optional: full chain round-trip
 
