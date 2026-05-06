@@ -354,10 +354,10 @@ IsFoo(state, chain0, chain) = OR(
     );
 }
 
-/// Phase 2A snapshot: 1 input + 1 output with `.update`. Exercises:
+/// Phase 2A/2B snapshot: 1 input + 1 output with `.update`. Exercises:
 /// - input AKE-direct (`in.log`, no bridge)
 /// - output bridge wildcard (`wood` flat, `ArrayContains` boundary)
-/// - witness wildcard (`key`) preserved as flat private
+/// - witness absorption (`key` → `wood.key`, no separate wildcard)
 #[test]
 fn test_records_form_input_output_update() {
     let craft_src = r#"
@@ -378,9 +378,9 @@ record LogToWoodOut = (wood)
 
 // Actions
 
-LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, wood0, wood, key) = AND(
+LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, wood0, wood) = AND(
   ArrayContains(out, LogToWoodOut::wood, wood)
-  DictUpdate(wood, wood0, "key", key)
+  DictUpdate(wood, wood0, "key", wood.key)
   DictContains(in.log, "type", @self_predicate(IsLog))
   tx::TxDelete(chain1, chain0, in.log)
   DictContains(wood, "type", @self_predicate(IsWood))
@@ -407,6 +407,64 @@ IsLog(state, chain0, chain) = OR(
 
 IsWood(state, chain0, chain) = OR(
   IsWoodFromLogToWood(state, chain0, chain)
+)
+"#;
+    assert!(
+        module.podlang_src.contains(expected),
+        "records-form mismatch.\nexpected fragment:\n{expected}\nactual:\n{}",
+        module.podlang_src
+    );
+}
+
+/// Phase 2B snapshot: mutate with sub-field access + witness absorption.
+/// Exercises:
+/// - mutate input bridge (`pick0` flat, `ArrayContains(in, ...)` boundary)
+/// - mutate output bridge (`pick` flat, `ArrayContains(out, ...)` boundary)
+/// - 2-level-AK avoidance via input bridge (`pick0.durability`)
+/// - witness absorption (`durability` witness → `pick.durability` AK,
+///   appearing in both SumOf and DictUpdate)
+#[test]
+fn test_records_form_mutate() {
+    let craft_src = r#"
+        fn UseFoo(action) {
+            var foo = action.mutate("Foo");
+            action.st_gt(foo.durability, 0);
+            var dur = unsafe { foo.durability - 1 };
+            action.st_sum_of(foo.durability, dur, 1);
+            foo.update("durability", dur);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["UseFoo"])
+        .unwrap();
+
+    let expected = r#"record UseFooIn = (foo)
+record UseFooOut = (foo)
+
+// Actions
+
+UseFoo(in UseFooIn, out UseFooOut, chain0, chain, private: foo0, foo) = AND(
+  ArrayContains(in, UseFooIn::foo, foo0)
+  ArrayContains(out, UseFooOut::foo, foo)
+  Gt(foo0.durability, 0)
+  SumOf(foo0.durability, foo.durability, 1)
+  DictUpdate(foo, foo0, "durability", foo.durability)
+  DictContains(foo0, "type", @self_predicate(IsFoo))
+  tx::TxMutate(chain, chain0, foo, foo0)
+)
+
+// Bridges
+
+IsFooFromUseFoo(state, chain0, chain, private: in UseFooIn, out UseFooOut) = AND(
+  ArrayContains(out, UseFooOut::foo, state)
+  UseFoo(in, out, chain0, chain)
+)
+
+// Classes
+
+IsFoo(state, chain0, chain) = OR(
+  IsFooFromUseFoo(state, chain0, chain)
 )
 "#;
     assert!(

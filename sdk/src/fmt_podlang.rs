@@ -106,10 +106,11 @@ struct ObjAke {
     entry: String,
 }
 
-/// Render a Var arg, accounting for AKE rewrites.
+/// Render a Var arg, accounting for AKE and witness-absorption rewrites.
 struct ArgFmt<'a> {
     vars: &'a HashMap<&'a str, VarNameFmt<'a>>,
     obj_ake: &'a HashMap<String, ObjAke>,
+    witness_rewrites: &'a HashMap<String, String>,
     arg: &'a Ref,
 }
 
@@ -120,7 +121,9 @@ impl<'a> fmt::Display for ArgFmt<'a> {
             VarOrValue::Var(Var {
                 name, key: None, ..
             }) => {
-                if let Some(ake) = self.obj_ake.get(name) {
+                if let Some(rewrite) = self.witness_rewrites.get(name) {
+                    write!(f, "{rewrite}")
+                } else if let Some(ake) = self.obj_ake.get(name) {
                     write!(f, "{}.{}", ake.side.arg_name(), ake.entry)
                 } else {
                     write!(f, "{}", self.vars[name.as_str()])
@@ -293,11 +296,76 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     Ok(())
 }
 
+/// Compute the witness-absorption rewrite map for an action.
+///
+/// For each `Inst::Update { obj, key, value: Var{ name: V, key: None } }`
+/// where `V` is not itself an Object var, the witness `V` semantically
+/// equals `<obj_post_update_ssa>.<key>` (DictUpdate's contract makes
+/// new[key] == value). If `V` is bound by exactly one such Update, we
+/// can replace every reference to `V` with that AK form and eliminate
+/// `V` from the predicate's wildcard list.
+///
+/// Returns `name → AK rewrite string` (e.g. `"key" → "wood.key"`).
+fn compute_witness_rewrites(action: &ActionContext) -> HashMap<String, String> {
+    let object_var_names: std::collections::HashSet<String> = action
+        .insts
+        .iter()
+        .filter_map(|inst| match inst {
+            Inst::Object { obj, .. } => Some(obj.borrow().var_name().to_string()),
+            _ => None,
+        })
+        .collect();
+
+    let mut current_ts: HashMap<String, usize> = HashMap::new();
+    for var in &action.vars {
+        current_ts.insert(var.clone(), 0);
+    }
+
+    let mut bind_count: HashMap<String, usize> = HashMap::new();
+    let mut candidates: HashMap<String, String> = HashMap::new();
+
+    for inst in &action.insts {
+        if let Inst::Update { obj, key, value } = inst {
+            let obj_name = obj.as_str();
+            let pre_ts = *current_ts.get(obj_name).unwrap_or(&0);
+            let post_ts = pre_ts + 1;
+            let max_ts = action.var_state[obj_name].ts;
+            let post_ssa = fmt_var_at(obj_name, post_ts, max_ts);
+
+            let value_borrow = value.borrow();
+            if let VarOrValue::Var(Var {
+                name,
+                key: None,
+                ..
+            }) = &*value_borrow
+            {
+                if !object_var_names.contains(name) && name != "chain" {
+                    let count = bind_count.entry(name.clone()).or_insert(0);
+                    *count += 1;
+                    if *count == 1 {
+                        candidates.insert(name.clone(), format!("{post_ssa}.{key}"));
+                    } else {
+                        // Multiple Updates bind the same witness; ambiguous
+                        // because the rewrite would differ per binding.
+                        candidates.remove(name);
+                    }
+                }
+            }
+
+            current_ts.insert(obj_name.to_string(), post_ts);
+        }
+    }
+    candidates
+}
+
 /// Emit one action predicate. Body uses `in.<entry>`/`out.<entry>` AKE
 /// for non-bridged Objects; bridged Objects get a leading `ArrayContains`
-/// clause and the body keeps using flat SSA wildcards.
+/// clause and the body keeps using flat SSA wildcards. Witness vars
+/// bound by a single DictUpdate are absorbed via 1-level AK on the
+/// post-update SSA wildcard.
 fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
     let info = collect_action_info(action);
+    let witness_rewrites = compute_witness_rewrites(action);
 
     // Build the AKE rewrite map: non-bridged Objects only.
     let mut obj_ake: HashMap<String, ObjAke> = HashMap::new();
@@ -338,12 +406,17 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
     }
     write!(w, "chain0, chain")?;
 
-    // Private wildcards: every (var, ts) except those rewritten to AKE
-    // and except the chain's ts=0/max (which are public as chain0/chain).
+    // Private wildcards: every (var, ts) except those rewritten to AKE,
+    // those absorbed via witness rewrites, and except the chain's
+    // ts=0/max (which are public as chain0/chain).
     let mut private_vars: Vec<String> = Vec::new();
     for var in &action.vars {
         if obj_ake.contains_key(var.as_str()) {
             // Non-bridged Object: never appears as a wildcard.
+            continue;
+        }
+        if witness_rewrites.contains_key(var.as_str()) {
+            // Absorbed witness: lives on as `<obj>.<key>` AK form.
             continue;
         }
         let max_ts = action.var_state[var].ts;
@@ -384,24 +457,53 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
         .collect();
 
     // ---- ArrayContains bridges (for bridged Objects) ----
+    //
+    // Output:  ArrayContains(out, <Schema>Out::<entry>, <var_post_ssa>)
+    // Input:   ArrayContains(in,  <Schema>In::<entry>,  <var_pre_ssa>)
+    // Mutate:  emit both. Pre-form is ts=0; post-form is ts=max.
     for o in &info.objects {
         if !o.bridged {
             continue;
         }
-        let side = dispatch_side(&o.io);
         let max_ts = action.var_state[&o.varname].ts;
-        let bridge_var = fmt_var_at(&o.varname, max_ts, max_ts);
-        // Output: bridge wildcard is the FINAL SSA form (ts=max). For mutate
-        // (Phase 2A's forced-bridge fallback) we emit the same way; refining
-        // to in0/out_final separation is Phase 2B.
-        writeln!(
-            w,
-            "  ArrayContains({}, {}::{}, {})",
-            side.arg_name(),
-            schema_name(&action.name, side),
-            o.varname,
-            bridge_var,
-        )?;
+        let pre_ssa = fmt_var_at(&o.varname, 0, max_ts);
+        let post_ssa = fmt_var_at(&o.varname, max_ts, max_ts);
+        match o.io {
+            ObjectIO::Output => {
+                writeln!(
+                    w,
+                    "  ArrayContains(out, {}::{}, {})",
+                    schema_name(&action.name, Side::Out),
+                    o.varname,
+                    post_ssa,
+                )?;
+            }
+            ObjectIO::Input => {
+                writeln!(
+                    w,
+                    "  ArrayContains(in, {}::{}, {})",
+                    schema_name(&action.name, Side::In),
+                    o.varname,
+                    pre_ssa,
+                )?;
+            }
+            ObjectIO::Mutate => {
+                writeln!(
+                    w,
+                    "  ArrayContains(in, {}::{}, {})",
+                    schema_name(&action.name, Side::In),
+                    o.varname,
+                    pre_ssa,
+                )?;
+                writeln!(
+                    w,
+                    "  ArrayContains(out, {}::{}, {})",
+                    schema_name(&action.name, Side::Out),
+                    o.varname,
+                    post_ssa,
+                )?;
+            }
+        }
     }
 
     // ---- Body (Insts other than Object) ----
@@ -425,6 +527,7 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                     let value = ArgFmt {
                         vars: &vars,
                         obj_ake: &obj_ake,
+                        witness_rewrites: &witness_rewrites,
                         arg: value,
                     };
                     writeln!(w, r#"  DictContains({obj_str}, "{key}", {value})"#,)?;
@@ -437,6 +540,7 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                 let value = ArgFmt {
                     vars: &vars,
                     obj_ake: &obj_ake,
+                    witness_rewrites: &witness_rewrites,
                     arg: value,
                 };
                 writeln!(
@@ -457,7 +561,8 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                         ArgFmt {
                             vars: &vars,
                             obj_ake: &obj_ake,
-                            arg
+                            witness_rewrites: &witness_rewrites,
+                            arg,
                         }
                     )?;
                 }
@@ -475,7 +580,8 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                         ArgFmt {
                             vars: &vars,
                             obj_ake: &obj_ake,
-                            arg
+                            witness_rewrites: &witness_rewrites,
+                            arg,
                         }
                     )?;
                 }
@@ -490,7 +596,8 @@ fn fmt_action(action: &ActionContext, w: &mut dyn fmt::Write) -> fmt::Result {
                     obj = ArgFmt {
                         vars: &vars,
                         obj_ake: &obj_ake,
-                        arg: obj
+                        witness_rewrites: &witness_rewrites,
+                        arg: obj,
                     }
                 )?;
                 vars.get_mut("chain").expect("chain exists").inc();
