@@ -85,25 +85,62 @@ jobs:
           cp "$OUT/dobjd" "$DOBJD_STAGE/"
           cp "$OUT/dobj"  "$DOBJ_STAGE/"
 
-          # Locate the SCIP install dir produced by scip-sys's build script.
-          # There can be multiple stale build hashes on a cached runner; pick
-          # the most recently-modified one.
-          SCIP_DIR=$(find "$OUT/build" -type d -path '*scip-sys-*/out/scip_install/lib' \
-                     -exec stat -f '%m %N' {} \; 2>/dev/null \
+          # ---- Diagnostics ---------------------------------------------------
+          # If anything's off, the logs show the actual layout cargo produced.
+
+          echo "--- scip-sys build directories anywhere in target/ ---"
+          find target -type d -name 'scip-sys-*' 2>/dev/null | head -20 || true
+          echo "--- libscip files anywhere in target/ ---"
+          find target -name 'libscip*' 2>/dev/null | head -20 || true
+          echo "--- dobjd dynamic deps ---"
+          case "${{ matrix.target }}" in
+            *-apple-darwin) otool -L "$DOBJD_STAGE/dobjd" || true ;;
+            *-linux-*)      ldd        "$DOBJD_STAGE/dobjd" || true ;;
+          esac
+
+          # ---- Locate scip_install/lib --------------------------------------
+          # Search the whole target/ tree (not just $OUT/build) — cargo with
+          # --target {triple} sometimes places build outputs in a different
+          # subdir than expected, especially when host == target.
+
+          # GNU find first (Linux runners), then BSD stat fallback (macOS).
+          SCIP_DIR=$(find target -type d -path '*scip-sys-*/out/scip_install/lib' \
+                     -printf '%T@ %p\n' 2>/dev/null \
                      | sort -rn | head -1 | awk '{print $2}')
           if [ -z "$SCIP_DIR" ]; then
-            # GNU stat fallback for Linux runners.
-            SCIP_DIR=$(find "$OUT/build" -type d -path '*scip-sys-*/out/scip_install/lib' \
-                       -printf '%T@ %p\n' 2>/dev/null \
+            SCIP_DIR=$(find target -type d -path '*scip-sys-*/out/scip_install/lib' \
+                       -exec stat -f '%m %N' {} \; 2>/dev/null \
                        | sort -rn | head -1 | awk '{print $2}')
           fi
-          if [ -z "$SCIP_DIR" ] || [ ! -d "$SCIP_DIR" ]; then
-            echo "::error::could not locate scip_install/lib under $OUT/build"
-            exit 1
-          fi
-          echo "scip dir: $SCIP_DIR"
 
-          cp -P "$SCIP_DIR"/${{ matrix.scip_glob }} "$DOBJD_STAGE/"
+          if [ -n "$SCIP_DIR" ] && [ -d "$SCIP_DIR" ]; then
+            echo "scip dir: $SCIP_DIR"
+            cp -P "$SCIP_DIR"/${{ matrix.scip_glob }} "$DOBJD_STAGE/" 2>/dev/null || true
+          else
+            # No scip_install/lib found. This is fine if dobjd statically
+            # linked SCIP — the binary is self-contained in that case. If it
+            # didn't, the dynamic-deps log above will show libscip and the
+            # binary will fail to run; treat that as a CI failure below.
+            echo "::warning::no scip_install/lib found in target/; assuming static linkage"
+          fi
+
+          # ---- Sanity check: dobjd must not have unresolved libscip refs ----
+          case "${{ matrix.target }}" in
+            *-apple-darwin)
+              if otool -L "$DOBJD_STAGE/dobjd" | grep -q 'libscip' \
+                 && ! ls "$DOBJD_STAGE"/libscip*.dylib >/dev/null 2>&1; then
+                echo "::error::dobjd dynamic-links libscip but no dylib was bundled"
+                exit 1
+              fi
+              ;;
+            *-linux-*)
+              if ldd "$DOBJD_STAGE/dobjd" | grep -q 'libscip' \
+                 && ! ls "$DOBJD_STAGE"/libscip.so* >/dev/null 2>&1; then
+                echo "::error::dobjd dynamic-links libscip but no .so was bundled"
+                exit 1
+              fi
+              ;;
+          esac
 
           ls -la "$DOBJD_STAGE" "$DOBJ_STAGE"
 
