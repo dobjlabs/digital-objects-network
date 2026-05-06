@@ -478,9 +478,9 @@ impl ActionHandle {
             (self.clone(),),
         )?;
 
-        // ---- Phase 2A: build in/out record arrays from the action's
-        // direct Object insts. Each Object contributes one entry to
-        // its dispatch side's array (Mutate contributes to both).
+        // ---- Build in/out record arrays from the action's direct
+        // Object insts. Each Object contributes one entry to its
+        // dispatch side's array (Mutate contributes to both).
         let exe_rc = self.0.borrow().exe_ctx.clone().expect("exe phase");
         let mut in_dicts: Vec<Value> = Vec::new();
         let mut out_dicts: Vec<Value> = Vec::new();
@@ -521,9 +521,9 @@ impl ActionHandle {
         let in_array = Array::new(in_dicts);
         let out_array = Array::new(out_dicts);
 
-        // ---- Phase 2B: emit ArrayContains bridges for each Object,
-        // matching `fmt_podlang::fmt_action`'s emission order (in
-        // declaration order, with Mutate emitting in then out).
+        // ---- Emit ArrayContains bridges for each Object, matching
+        // `fmt_podlang::fmt_action`'s emission order (declaration
+        // order, with Mutate emitting in then out).
         let mut bridges_sts: Vec<Statement> = Vec::new();
         {
             let mut exe_ctx = exe_rc.borrow_mut();
@@ -592,8 +592,8 @@ impl ActionHandle {
             }
         }
 
-        // ---- Phase 2C: walk insts again to emit each Object's type
-        // guard + Tx event. Same order as `fmt_action`'s second loop.
+        // ---- Per-Object type guard + Tx event. Same order as
+        // `fmt_action`'s second loop.
         struct EventData {
             handle: EventHandle,
             class: String,
@@ -677,25 +677,14 @@ impl ActionHandle {
             }
         }
 
-        // ---- Phase 2D: rewrite eager body statements for absorbed
-        // witnesses. Each absorbed witness `w` is bound by exactly one
-        // `Inst::Update { obj, key, value: w }`; the witness equals the
-        // post-update obj's `key` entry, so all literal-form references
-        // to `w` get lifted to AK form via `ReplaceValueWithEntry`.
-        let eager_sts = exe_rc.borrow_mut().sts.split_off(sts_start);
-        let rewritten_eager_sts = {
-            let mut exe_ctx = exe_rc.borrow_mut();
-            let ctx = self.0.borrow();
-            rewrite_absorbed_witnesses(&mut exe_ctx, &ctx, eager_sts)
-        };
-
-        // ---- Phase 3: compose the action predicate's sub-statements,
-        // matching fmt_action's emission order:
+        // ---- Compose the action predicate's sub-statements, matching
+        // fmt_action's emission order:
         //   bridges (per-Object ArrayContains)
         //   eager body (Inst::Update / Statement / Intro / SubAction)
         //   per-Object {type guard, tx event} pairs
+        let body_sts = exe_rc.borrow_mut().sts.split_off(sts_start);
         let mut sts = bridges_sts;
-        sts.extend(rewritten_eager_sts);
+        sts.extend(body_sts);
         sts.extend(event_sts);
 
         let st_action = {
@@ -706,8 +695,8 @@ impl ActionHandle {
                 .unwrap()
         };
 
-        // ---- Phase 4: backfill action_st on direct outputs + attach
-        // IsX guard to each event via the bridge predicate.
+        // ---- Backfill action_st on direct outputs + attach IsX
+        // guard to each event via the bridge predicate.
         {
             let mut exe_ctx = exe_rc.borrow_mut();
             let exe_ctx = &mut *exe_ctx;
@@ -722,18 +711,14 @@ impl ActionHandle {
                 obj_dict,
             } in events
             {
-                // For replay's mutate guard dispatch, the focused dict
-                // is the post-mutation form. For inserts/deletes, the
-                // post == pre == obj_dict. The bridge dispatches on
-                // out (for Output/Mutate) or in (for Input).
+                // For inserts/deletes, post == pre == obj_dict, so it
+                // doesn't matter which form we hand the bridge.
                 let action_meta = module.action_by_name(&action);
                 let obj_ref = &action_meta.object_refs[object_refs_index];
                 let varname = &obj_ref.varname;
-                let (bridge_array, entry_idx) = match obj_ref.io {
-                    ObjectIO::Input => (in_array.clone(), in_entry_idx[varname]),
-                    ObjectIO::Output | ObjectIO::Mutate => {
-                        (out_array.clone(), out_entry_idx[varname])
-                    }
+                let (bridge_array, entry_idx) = match fmt_podlang::dispatch_side(&obj_ref.io) {
+                    fmt_podlang::Side::In => (in_array.clone(), in_entry_idx[varname]),
+                    fmt_podlang::Side::Out => (out_array.clone(), out_entry_idx[varname]),
                 };
                 let st_is_x = module.build_is_x(
                     &mut exe_ctx.bld,
@@ -950,160 +935,6 @@ fn add_intro_pod(exe_ctx: &mut ExeContext, pod: Box<dyn Pod>) -> Statement {
     let main = exe_ctx.main_pod(pod);
     exe_ctx.bld.builder.add_pod(main).unwrap();
     st
-}
-
-/// Walk the action's body Insts in lockstep with the eagerly-emitted
-/// Statements; for each Inst whose args reference an absorbed witness,
-/// replace the corresponding Statement's literal arg slots with AK
-/// form via `Operation::replace_value_with_entry`.
-///
-/// The Contains entry that the rewrite needs is `Contains(obj_post,
-/// key, witness_value)`, where `obj_post` is the post-update dict
-/// from the binding `Inst::Update`. We extract `obj_post` from the
-/// binding DictUpdate Statement's first arg (its post-update form is
-/// always the first literal).
-fn rewrite_absorbed_witnesses(
-    exe_ctx: &mut ExeContext,
-    ctx: &ActionContext,
-    eager_sts: Vec<Statement>,
-) -> Vec<Statement> {
-    let witness_rewrites = fmt_podlang::compute_witness_rewrites(ctx);
-    if witness_rewrites.is_empty() {
-        return eager_sts;
-    }
-
-    // Number of statements each Inst contributes to `eager_sts`.
-    fn st_count(inst: &Inst) -> usize {
-        match inst {
-            Inst::Object { .. } => 0, // emitted in Phase 2C, not in eager_sts
-            Inst::Set { kvs, .. } => kvs.len(),
-            Inst::Update { .. }
-            | Inst::Statement { .. }
-            | Inst::Intro { .. }
-            | Inst::SubAction { .. } => 1,
-        }
-    }
-
-    // Pass 1: walk Insts in lockstep with eager_sts to pull out the
-    // post-update dict for each absorbed witness's binding DictUpdate.
-    let mut absorbed_bindings: HashMap<String, (Dictionary, String)> = HashMap::new();
-    let mut idx = 0;
-    for inst in &ctx.insts {
-        let n = st_count(inst);
-        if let Inst::Update { key, value, .. } = inst {
-            let st = &eager_sts[idx];
-            let v = value.borrow();
-            if let VarOrValue::Var(Var {
-                name, key: None, ..
-            }) = &*v
-            {
-                if witness_rewrites.contains_key(name) {
-                    // st = DictUpdate(post, pre, key_lit, value_lit).
-                    // The first arg is the post-update dict.
-                    let post_dict = st
-                        .args()
-                        .first()
-                        .and_then(|a| match a {
-                            pod2::middleware::StatementArg::Literal(v) => v.as_dictionary(),
-                            _ => None,
-                        })
-                        .expect("DictUpdate's post-arg is a literal Dict");
-                    absorbed_bindings.insert(name.clone(), (post_dict, key.clone()));
-                }
-            }
-        }
-        idx += n;
-    }
-
-    // Pass 2: walk again, rewriting each Statement's literal arg slots
-    // that reference absorbed witnesses. For each, build a single
-    // `ReplaceValueWithEntry` priv_op.
-    let mut rewritten = Vec::with_capacity(eager_sts.len());
-    let mut idx = 0;
-    for inst in &ctx.insts {
-        let n = st_count(inst);
-        match inst {
-            Inst::Object { .. } => {
-                // No Statement to rewrite.
-            }
-            Inst::Set { kvs, .. } => {
-                // Each kv produces a DictContains(obj, key_lit, value)
-                // Statement. Slot 2 (the value) might be an absorbed
-                // witness.
-                for (slot_offset, (_key, value_ref)) in kvs.iter().enumerate() {
-                    let st = eager_sts[idx + slot_offset].clone();
-                    let new_st = rewrite_one_st(exe_ctx, st, &[(2, value_ref)], &absorbed_bindings);
-                    rewritten.push(new_st);
-                }
-            }
-            Inst::Update { value, .. } => {
-                let st = eager_sts[idx].clone();
-                // DictUpdate(post, pre, key_lit, value). Slot 3 is the
-                // value position.
-                let new_st = rewrite_one_st(exe_ctx, st, &[(3, value)], &absorbed_bindings);
-                rewritten.push(new_st);
-            }
-            Inst::Statement { args, .. } | Inst::Intro { args, .. } => {
-                let st = eager_sts[idx].clone();
-                let slots: Vec<(usize, &Ref)> =
-                    args.iter().enumerate().map(|(i, a)| (i, a)).collect();
-                let new_st = rewrite_one_st(exe_ctx, st, &slots, &absorbed_bindings);
-                rewritten.push(new_st);
-            }
-            Inst::SubAction { .. } => {
-                // SubAction's discharged Statement is the sub's own
-                // Custom statement; the sub's discharge handled its
-                // internals. Pass through.
-                rewritten.push(eager_sts[idx].clone());
-            }
-        }
-        idx += n;
-    }
-
-    rewritten
-}
-
-/// Rewrite a single Statement's literal arg slots that match absorbed
-/// witnesses, returning the lifted AK-form Statement (or the original
-/// if no slots need rewriting).
-fn rewrite_one_st(
-    exe_ctx: &mut ExeContext,
-    st: Statement,
-    slot_refs: &[(usize, &Ref)],
-    absorbed_bindings: &HashMap<String, (Dictionary, String)>,
-) -> Statement {
-    let max_args = pod2::middleware::Params::max_statement_args();
-    let mut entries: Vec<Option<(Dictionary, String)>> = vec![None; max_args];
-    let mut needs_rewrite = false;
-    for (slot, value_ref) in slot_refs {
-        if *slot >= max_args {
-            continue;
-        }
-        let v = value_ref.borrow();
-        if let VarOrValue::Var(Var {
-            name, key: None, ..
-        }) = &*v
-        {
-            if let Some((post_dict, key)) = absorbed_bindings.get(name) {
-                entries[*slot] = Some((post_dict.clone(), key.clone()));
-                needs_rewrite = true;
-            }
-        }
-    }
-    if !needs_rewrite {
-        return st;
-    }
-    // ReplaceValueWithEntry takes Vec<Option<(&Dictionary, &str)>>;
-    // build references into our owned `entries`.
-    let arg_refs: Vec<Option<(&Dictionary, &str)>> = entries
-        .iter()
-        .map(|o| o.as_ref().map(|(d, k)| (d, k.as_str())))
-        .collect();
-    exe_ctx
-        .bld
-        .builder
-        .priv_op(Operation::replace_value_with_entry(arg_refs, st))
-        .expect("ReplaceValueWithEntry for absorbed witness")
 }
 
 /// Lexicographic (little-endian limb order) u256 `>` comparison on `RawValue`.
@@ -1455,9 +1286,9 @@ impl Loader {
         let mut class_to_actions: HashMap<String, Vec<(String, usize)>> = HashMap::new();
         let mut classes_ordered: Vec<String> = Vec::new();
         // Iterate every Object inst (inputs, outputs, mutates) in
-        // declaration order. Each object contributes one public arg at
-        // the same position, so the IsX OR branch for this object uses
-        // that position as the state slot.
+        // declaration order. Each contributes one branch to its
+        // class's IsX OR, dispatched via the bridge predicate named
+        // by `bridge_predicate_name(class, action, varname, multi)`.
         for action in actions {
             for (obj_index, obj_ref) in action.object_refs.iter().enumerate() {
                 if !classes_ordered.contains(&obj_ref.class) {
@@ -1507,10 +1338,6 @@ impl Loader {
             actions_meta,
             classes,
         })
-    }
-
-    fn action_by_name(&self, name: &str) -> &ActionMeta {
-        self.actions_meta.iter().find(|a| a.name == name).unwrap()
     }
 
     /// Map (action_name, object_index) -> index of that action's branch
@@ -1626,8 +1453,11 @@ impl SdkModule {
     }
 
     /// Compute the records-form bridge predicate name for
-    /// `(action_name, object_refs_index)`. Mirrors
-    /// `fmt_podlang::bridge_predicate_name`.
+    /// `(action_name, object_refs_index)`. Delegates to
+    /// `fmt_podlang::bridge_predicate_name` so the naming convention has
+    /// a single source of truth. Multi-detection counts objects of the
+    /// same class within the action regardless of side, since the
+    /// IsX OR enumerates one branch per `(action, object-of-class)`.
     pub(crate) fn bridge_predicate_name(
         &self,
         action_name: &str,
@@ -1635,26 +1465,12 @@ impl SdkModule {
     ) -> String {
         let action = self.action_by_name(action_name);
         let obj = &action.object_refs[object_refs_index];
-        let side = match obj.io {
-            ObjectIO::Input => "in",
-            ObjectIO::Output | ObjectIO::Mutate => "out",
-        };
         let count = action
             .object_refs
             .iter()
-            .filter(|o| {
-                let o_side = match o.io {
-                    ObjectIO::Input => "in",
-                    ObjectIO::Output | ObjectIO::Mutate => "out",
-                };
-                o_side == side && o.class == obj.class
-            })
+            .filter(|o| o.class == obj.class)
             .count();
-        if count > 1 {
-            format!("Is{}From{}_{}", obj.class, action_name, obj.varname)
-        } else {
-            format!("Is{}From{}", obj.class, action_name)
-        }
+        fmt_podlang::bridge_predicate_name(&obj.class, action_name, &obj.varname, count > 1)
     }
 
     /// Build an `Is{class}` statement whose OR branch matches

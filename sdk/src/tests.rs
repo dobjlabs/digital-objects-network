@@ -237,7 +237,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "a760304b42cd082d91aaa65ece8b9c7223bae6d71644ae0a2b0fcaa3fc525f9e"
+        module_hash = "311828ddfce99aa562060221ceccb8d07972d9cafdcbe23764e9cd64a01ede17"
 
         [[classes]]
         name = "Log"
@@ -287,9 +287,9 @@ fn test_sdk_2() {
     println!("{}", module.podlang_src);
 }
 
-/// Phase 2A/2D snapshot: simplest records-form output. One output, no
-/// `.update`. Always-bridge: emit a flat `x` wildcard plus an
-/// `ArrayContains` boundary; body uses `x` directly.
+/// Simplest records-form output: one output, no `.update`. Emits a
+/// flat `x` wildcard plus an `ArrayContains` boundary; body uses `x`
+/// directly.
 #[test]
 fn test_records_form_just_output() {
     let craft_src = r#"
@@ -332,10 +332,10 @@ IsFoo(state, chain0, chain) = OR(
     );
 }
 
-/// Phase 2A/2B/2D snapshot: 1 input + 1 output with `.update`. Exercises:
+/// 1 input + 1 output with `.update`. Exercises:
 /// - input bridge (`log` flat, `ArrayContains(in, ...)` boundary)
 /// - output bridge wildcard (`wood` flat, `ArrayContains(out, ...)` boundary)
-/// - witness absorption (`key` → `wood.key`, no separate wildcard)
+/// - witness wildcard (`key` appears in both private list and DictUpdate body)
 #[test]
 fn test_records_form_input_output_update() {
     let craft_src = r#"
@@ -356,10 +356,10 @@ record LogToWoodOut = (wood)
 
 // Actions
 
-LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, log, wood0, wood) = AND(
+LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, log, wood0, wood, key) = AND(
   ArrayContains(in, LogToWoodIn::log, log)
   ArrayContains(out, LogToWoodOut::wood, wood)
-  DictUpdate(wood, wood0, "key", wood.key)
+  DictUpdate(wood, wood0, "key", key)
   DictContains(log, "type", @self_predicate(IsLog))
   tx::TxDelete(chain1, chain0, log)
   DictContains(wood, "type", @self_predicate(IsWood))
@@ -395,7 +395,7 @@ IsWood(state, chain0, chain) = OR(
     );
 }
 
-/// Phase 2C snapshot: parent action calls a sub-action.
+/// Parent action calls a sub-action.
 /// - sub-action `UseFoo` (mutate) keeps its own records (`UseFooIn`/`UseFooOut`).
 /// - parent `MineBar` synthesizes private `_UseFoo_in_0`/`_UseFoo_out_0`
 ///   wildcards typed against the sub's record schemas; emits the call with
@@ -454,13 +454,12 @@ fn test_records_form_subaction() {
     );
 }
 
-/// Phase 2B/2D snapshot: mutate with sub-field access + witness absorption.
-/// Exercises:
+/// Mutate with sub-field access. Exercises:
 /// - mutate input bridge (`foo0` flat, `ArrayContains(in, ...)` boundary)
 /// - mutate output bridge (`foo` flat, `ArrayContains(out, ...)` boundary)
 /// - 2-level-AK avoidance via input bridge (`foo0.durability`)
-/// - witness absorption (`dur` witness → `foo.durability` AK,
-///   appearing in both SumOf and DictUpdate)
+/// - witness wildcard (`dur` appears in private list and in both SumOf
+///   and DictUpdate body slots)
 #[test]
 fn test_records_form_mutate() {
     let craft_src = r#"
@@ -482,12 +481,12 @@ record UseFooOut = (foo)
 
 // Actions
 
-UseFoo(in UseFooIn, out UseFooOut, chain0, chain, private: foo0, foo) = AND(
+UseFoo(in UseFooIn, out UseFooOut, chain0, chain, private: foo0, foo, dur) = AND(
   ArrayContains(in, UseFooIn::foo, foo0)
   ArrayContains(out, UseFooOut::foo, foo)
   Gt(foo0.durability, 0)
-  SumOf(foo0.durability, foo.durability, 1)
-  DictUpdate(foo, foo0, "durability", foo.durability)
+  SumOf(foo0.durability, dur, 1)
+  DictUpdate(foo, foo0, "durability", dur)
   DictContains(foo0, "type", @self_predicate(IsFoo))
   tx::TxMutate(chain, chain0, foo, foo0)
 )

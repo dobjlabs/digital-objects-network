@@ -76,13 +76,13 @@ impl<'a> fmt::Display for VarNameFmt<'a> {
 }
 
 #[derive(Clone, Copy)]
-enum Side {
+pub(crate) enum Side {
     In,
     Out,
 }
 
 impl Side {
-    fn arg_name(self) -> &'static str {
+    pub(crate) fn arg_name(self) -> &'static str {
         match self {
             Side::In => "in",
             Side::Out => "out",
@@ -96,21 +96,11 @@ impl Side {
     }
 }
 
-/// AKE rewrite: a script-side var name maps to `<side>.<entry>` instead
-/// of a flat wildcard. Populated for non-bridged Object insts (output
-/// without `.update`, input without sub-field access). The `entry`
-/// equals the var name; we keep both fields for clarity.
-#[derive(Clone)]
-struct ObjAke {
-    side: Side,
-    entry: String,
-}
-
-/// Render a Var arg, accounting for AKE and witness-absorption rewrites.
+/// Render a Var arg as podlang text. Bare-named Vars become their
+/// SSA-rendered name; `var.key` becomes `<rendered>.<key>`; concrete
+/// values render literally.
 struct ArgFmt<'a> {
     vars: &'a HashMap<&'a str, VarNameFmt<'a>>,
-    obj_ake: &'a HashMap<String, ObjAke>,
-    witness_rewrites: &'a HashMap<String, String>,
     arg: &'a Ref,
 }
 
@@ -120,15 +110,7 @@ impl<'a> fmt::Display for ArgFmt<'a> {
         match &*arg {
             VarOrValue::Var(Var {
                 name, key: None, ..
-            }) => {
-                if let Some(rewrite) = self.witness_rewrites.get(name) {
-                    write!(f, "{rewrite}")
-                } else if let Some(ake) = self.obj_ake.get(name) {
-                    write!(f, "{}.{}", ake.side.arg_name(), ake.entry)
-                } else {
-                    write!(f, "{}", self.vars[name.as_str()])
-                }
-            }
+            }) => write!(f, "{}", self.vars[name.as_str()]),
             VarOrValue::Var(Var {
                 name,
                 key: Some(key),
@@ -139,24 +121,11 @@ impl<'a> fmt::Display for ArgFmt<'a> {
     }
 }
 
-/// Render an Object reference (the obj name, used for type guard +
-/// Tx event lines) honoring AKE rewrites.
-fn fmt_obj_ref(
-    obj: &str,
-    vars: &HashMap<&str, VarNameFmt>,
-    obj_ake: &HashMap<String, ObjAke>,
-) -> String {
-    if let Some(ake) = obj_ake.get(obj) {
-        format!("{}.{}", ake.side.arg_name(), ake.entry)
-    } else {
-        format!("{}", vars[obj])
-    }
-}
-
-/// IsX dispatch side for an Object inst. Per the plan: outputs and
-/// mutates dispatch on `out.X`; inputs dispatch on `in.X`. The input
-/// side of a mutate is intentionally excluded (decision #2).
-fn dispatch_side(io: &ObjectIO) -> Side {
+/// IsX dispatch side for an Object inst: inputs dispatch on `in.X`;
+/// outputs and mutates dispatch on `out.X`. The input side of a mutate
+/// is intentionally excluded; replay's mutate guard fires on the
+/// post-mutation form.
+pub(crate) fn dispatch_side(io: &ObjectIO) -> Side {
     match io {
         ObjectIO::Input => Side::In,
         ObjectIO::Output | ObjectIO::Mutate => Side::Out,
@@ -171,9 +140,8 @@ fn schema_name(action_name: &str, side: Side) -> String {
 /// Per-action info needed to emit the records-form predicate. Owned
 /// strings throughout to keep clear of `RefCell` borrow lifetimes.
 struct ActionInfo {
-    /// Object insts in declaration order, with each Object's: var name,
-    /// io, class, and bridged flag (true => keep flat SSA wildcards;
-    /// false => rewrite refs to `in.<entry>` / `out.<entry>` AKE).
+    /// Object insts in declaration order. Each Object becomes a flat SSA
+    /// wildcard plus a leading `ArrayContains` boundary clause.
     objects: Vec<ObjectInfo>,
     in_entries: Vec<String>,  // var names (script-side) on the in side
     out_entries: Vec<String>, // ditto, out side
@@ -307,122 +275,19 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
     calls
 }
 
-/// Compute the witness-absorption rewrite map for an action.
-///
-/// For each `Inst::Update { obj, key, value: Var{ name: V, key: None } }`
-/// where `V` is not an Object var and is bound by exactly one
-/// `Inst::Update`, the witness `V` semantically equals
-/// `<obj_post_update_ssa>.<key>` (DictUpdate's contract makes
-/// `new[key] == value`). Replacing every reference to `V` with that
-/// AK form eliminates `V` from the predicate's wildcard list.
-///
-/// At fmt time we just emit the AK string. Exec-time discharge needs
-/// matching AK-form Statements; the rewrite is performed by
-/// `rewrite_absorbed_witnesses` in `lib.rs` via
-/// `Operation::replace_value_with_entry`, using the post-update dict
-/// (extracted from the binding DictUpdate's Statement) as the
-/// Contains entry root.
-///
-/// **Intro restriction**: a witness used in any `Inst::Intro` arg
-/// position cannot be absorbed. Pod2's middleware-level
-/// `Statement::Intro` only accepts literal args (`statement.rs:487-495`),
-/// so we can't lift an Intro statement's literal arg to AK form via
-/// `ReplaceValueWithEntry`. Such witnesses stay as flat wildcards.
-///
-/// Returns `name → AK rewrite string` (e.g. `"key" → "wood.key"`).
-pub(crate) fn compute_witness_rewrites(action: &ActionContext) -> HashMap<String, String> {
-    let object_var_names: std::collections::HashSet<String> = action
-        .insts
-        .iter()
-        .filter_map(|inst| match inst {
-            Inst::Object { obj, .. } => Some(obj.borrow().var_name().to_string()),
-            _ => None,
-        })
-        .collect();
-
-    // Witnesses used in any Inst::Intro arg slot can't be absorbed
-    // because pod2 rejects AK args in `Statement::Intro` at runtime.
-    let mut intro_blocked: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    for inst in &action.insts {
-        if let Inst::Intro { args, .. } = inst {
-            for arg in args {
-                let v = arg.borrow();
-                if let VarOrValue::Var(Var {
-                    name, key: None, ..
-                }) = &*v
-                {
-                    intro_blocked.insert(name.clone());
-                }
-            }
-        }
-    }
-
-    let mut current_ts: HashMap<String, usize> = HashMap::new();
-    for var in &action.vars {
-        current_ts.insert(var.clone(), 0);
-    }
-
-    let mut bind_count: HashMap<String, usize> = HashMap::new();
-    let mut candidates: HashMap<String, String> = HashMap::new();
-
-    for inst in &action.insts {
-        if let Inst::Update { obj, key, value } = inst {
-            let obj_name = obj.as_str();
-            let pre_ts = *current_ts.get(obj_name).unwrap_or(&0);
-            let post_ts = pre_ts + 1;
-            let max_ts = action.var_state[obj_name].ts;
-            let post_ssa = fmt_var_at(obj_name, post_ts, max_ts);
-
-            let value_borrow = value.borrow();
-            if let VarOrValue::Var(Var {
-                name, key: None, ..
-            }) = &*value_borrow
-            {
-                if !object_var_names.contains(name)
-                    && name != "chain"
-                    && !intro_blocked.contains(name)
-                {
-                    let count = bind_count.entry(name.clone()).or_insert(0);
-                    *count += 1;
-                    if *count == 1 {
-                        candidates.insert(name.clone(), format!("{post_ssa}.{key}"));
-                    } else {
-                        candidates.remove(name);
-                    }
-                }
-            }
-
-            current_ts.insert(obj_name.to_string(), post_ts);
-        }
-    }
-    candidates
-}
-
-/// Emit one action predicate. Body uses `in.<entry>`/`out.<entry>` AKE
-/// for non-bridged Objects; bridged Objects get a leading `ArrayContains`
-/// clause and the body keeps using flat SSA wildcards. Witness vars
-/// bound by a single DictUpdate are absorbed via 1-level AK on the
-/// post-update SSA wildcard. Sub-action calls are emitted with
-/// synthesized typed-private wildcards `_<Sub>_in_<n>` / `_<Sub>_out_<n>`
-/// matching the sub's record schemas.
+/// Emit one action predicate. Each Object inst gets a leading
+/// `ArrayContains` boundary clause + a flat SSA wildcard; body refs
+/// resolve to the flat wildcard. Witness vars (e.g., values passed to
+/// `obj.update(k, v)`) appear as plain private wildcards. Sub-action
+/// calls are emitted with synthesized typed-private wildcards
+/// `_<Sub>_in_<n>` / `_<Sub>_out_<n>` matching the sub's record schemas.
 fn fmt_action(
     action: &ActionContext,
     loader: &Loader,
     w: &mut dyn fmt::Write,
 ) -> fmt::Result {
     let info = collect_action_info(action);
-    let witness_rewrites = compute_witness_rewrites(action);
     let sub_calls = collect_sub_action_calls(action, loader);
-
-    // All Objects are bridged: every Object inst gets a leading
-    // `ArrayContains` boundary clause + a flat SSA wildcard. Body refs
-    // resolve to the flat wildcard, never to integer-keyed AK on the
-    // record. This keeps exec-time discharge straightforward (no need
-    // for integer-keyed `replace_value_with_entry` rewrites in body
-    // clauses) at the cost of +1 wildcard per Object that lacked an
-    // SSA chain (e.g., a plain output with no `.update`).
-    let obj_ake: HashMap<String, ObjAke> = HashMap::new();
 
     // ---- Signature ----
     write!(w, "{}(", action.name)?;
@@ -446,27 +311,16 @@ fn fmt_action(
     // Sub-action aliases: parent vars that hold a sub's first producing
     // Object Ref. They're not real wildcards in the parent's predicate
     // (the binding is structural to the script, not the proof) so we
-    // skip them from the private list. Also block them from witness
-    // absorption (compute_witness_rewrites already does this via
-    // object_var_names, but aliases aren't Objects -- explicit skip here).
+    // skip them from the private list.
     let alias_names: std::collections::HashSet<String> = sub_calls
         .iter()
         .filter_map(|c| c.alias.clone())
         .collect();
 
-    // Private wildcards: every (var, ts) except those rewritten to AKE,
-    // those absorbed via witness rewrites, sub-action aliases, and
-    // except the chain's ts=0/max (which are public as chain0/chain).
+    // Private wildcards: every (var, ts) except sub-action aliases and
+    // the chain's ts=0/max (which are public as chain0/chain).
     let mut private_vars: Vec<String> = Vec::new();
     for var in &action.vars {
-        if obj_ake.contains_key(var.as_str()) {
-            // Non-bridged Object: never appears as a wildcard.
-            continue;
-        }
-        if witness_rewrites.contains_key(var.as_str()) {
-            // Absorbed witness: lives on as `<obj>.<key>` AK form.
-            continue;
-        }
         if alias_names.contains(var.as_str()) {
             // Sub-action alias: replaced by the synthesized sub_in/sub_out
             // wildcards added below.
@@ -509,8 +363,7 @@ fn fmt_action(
     }
     writeln!(w, ") = AND(")?;
 
-    // SSA tracker for body emission. Has an entry per var (including
-    // non-bridged Objects, which are just never read through this map).
+    // SSA tracker for body emission. One entry per var.
     let mut vars: HashMap<&str, VarNameFmt> = action
         .vars
         .iter()
@@ -583,12 +436,10 @@ fn fmt_action(
                 objs.push((io.clone(), varname, class.clone()));
             }
             Inst::Set { obj, kvs } => {
-                let obj_str = fmt_obj_ref(obj.as_str(), &vars, &obj_ake);
+                let obj_str = vars[obj.as_str()];
                 for (key, value) in kvs {
                     let value = ArgFmt {
                         vars: &vars,
-                        obj_ake: &obj_ake,
-                        witness_rewrites: &witness_rewrites,
                         arg: value,
                     };
                     writeln!(w, r#"  DictContains({obj_str}, "{key}", {value})"#,)?;
@@ -600,8 +451,6 @@ fn fmt_action(
                 let obj_next = obj_fmt.next();
                 let value = ArgFmt {
                     vars: &vars,
-                    obj_ake: &obj_ake,
-                    witness_rewrites: &witness_rewrites,
                     arg: value,
                 };
                 writeln!(
@@ -621,8 +470,6 @@ fn fmt_action(
                         "{}",
                         ArgFmt {
                             vars: &vars,
-                            obj_ake: &obj_ake,
-                            witness_rewrites: &witness_rewrites,
                             arg,
                         }
                     )?;
@@ -640,8 +487,6 @@ fn fmt_action(
                         "{}",
                         ArgFmt {
                             vars: &vars,
-                            obj_ake: &obj_ake,
-                            witness_rewrites: &witness_rewrites,
                             arg,
                         }
                     )?;
@@ -675,7 +520,7 @@ fn fmt_action(
         let max_ts = action.var_state[varname.as_str()].ts;
         let guard_obj = match io {
             ObjectIO::Mutate => fmt_var_at(varname, 0, max_ts),
-            _ => fmt_obj_ref(varname.as_str(), &vars, &obj_ake),
+            _ => format!("{}", vars[varname.as_str()]),
         };
         writeln!(
             w,
@@ -683,7 +528,7 @@ fn fmt_action(
         )?;
         let chain = vars["chain"];
         let chain_next = chain.next();
-        let obj_str = fmt_obj_ref(varname.as_str(), &vars, &obj_ake);
+        let obj_str = vars[varname.as_str()];
         match io {
             ObjectIO::Input => writeln!(w, "  tx::TxDelete({chain_next}, {chain}, {obj_str})")?,
             ObjectIO::Output => writeln!(w, "  tx::TxInsert({chain_next}, {chain}, {obj_str})")?,
@@ -698,7 +543,7 @@ fn fmt_action(
     Ok(())
 }
 
-fn bridge_predicate_name(class: &str, action: &str, entry: &str, multi: bool) -> String {
+pub(crate) fn bridge_predicate_name(class: &str, action: &str, entry: &str, multi: bool) -> String {
     if multi {
         format!("Is{class}From{action}_{entry}")
     } else {
@@ -711,19 +556,18 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     for action_handle in &loader.actions {
         let action = action_handle.0.borrow();
         let info = collect_action_info(&action);
-        // Multi-detection: count Object insts per (side, class).
-        let mut multi_keys: HashMap<(&'static str, String), usize> = HashMap::new();
+        // Multi-detection: count Object insts per class. The bridge
+        // OR enumerates one branch per (action, object-of-class), so
+        // any class appearing more than once in an action needs its
+        // bridges differentiated by varname suffix, regardless of
+        // whether the duplicates are on the same side.
+        let mut multi_keys: HashMap<String, usize> = HashMap::new();
         for o in &info.objects {
-            let side_key = dispatch_side(&o.io).arg_name();
-            *multi_keys.entry((side_key, o.class.clone())).or_insert(0) += 1;
+            *multi_keys.entry(o.class.clone()).or_insert(0) += 1;
         }
         for o in &info.objects {
             let side = dispatch_side(&o.io);
-            let multi = multi_keys
-                .get(&(side.arg_name(), o.class.clone()))
-                .copied()
-                .unwrap_or(0)
-                > 1;
+            let multi = multi_keys.get(&o.class).copied().unwrap_or(0) > 1;
             let bridge_name = bridge_predicate_name(&o.class, &action.name, &o.varname, multi);
 
             // Bridge predicate signature: state, chain0, chain (public);
@@ -783,18 +627,13 @@ fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt:
         let info = collect_action_info(&action);
         let o = &info.objects[*obj_index];
 
-        // Multi-detection per (side, class) within the action.
-        let mut multi_keys: HashMap<(&'static str, String), usize> = HashMap::new();
+        // Multi-detection: count Object insts per class. Same logic
+        // as `fmt_bridges` so the names match.
+        let mut multi_keys: HashMap<String, usize> = HashMap::new();
         for obj in &info.objects {
-            let side_key = dispatch_side(&obj.io).arg_name();
-            *multi_keys.entry((side_key, obj.class.clone())).or_insert(0) += 1;
+            *multi_keys.entry(obj.class.clone()).or_insert(0) += 1;
         }
-        let side = dispatch_side(&o.io);
-        let multi = multi_keys
-            .get(&(side.arg_name(), o.class.clone()))
-            .copied()
-            .unwrap_or(0)
-            > 1;
+        let multi = multi_keys.get(&o.class).copied().unwrap_or(0) > 1;
         let bridge_name = bridge_predicate_name(&o.class, action_name, &o.varname, multi);
         writeln!(w, "  {bridge_name}(state, chain0, chain)")?;
     }
