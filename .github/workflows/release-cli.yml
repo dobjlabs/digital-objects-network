@@ -70,6 +70,14 @@ jobs:
       - name: Build dobj
         run: cargo build --release --locked -p dobj --target ${{ matrix.target }}
 
+      - name: Build craft-mcp-proxy
+        # Stdio↔HTTP bridge that Claude Desktop launches as a child process
+        # to reach dobjd's MCP endpoint. Ships in the dobjd tarball because
+        # it's a companion to the MCP server inside dobjd — anyone running
+        # the daemon can wire it into Claude Desktop without also needing
+        # the dobj CLI.
+        run: cargo build --release --locked -p craft-mcp --bin craft-mcp-proxy --features proxy --target ${{ matrix.target }}
+
       - name: Stage tarball directories
         shell: bash
         run: |
@@ -82,8 +90,9 @@ jobs:
           DOBJ_STAGE="$GITHUB_WORKSPACE/staging/dobj"
           mkdir -p "$DOBJD_STAGE" "$DOBJ_STAGE"
 
-          cp "$OUT/dobjd" "$DOBJD_STAGE/"
-          cp "$OUT/dobj"  "$DOBJ_STAGE/"
+          cp "$OUT/dobjd"            "$DOBJD_STAGE/"
+          cp "$OUT/craft-mcp-proxy"  "$DOBJD_STAGE/"
+          cp "$OUT/dobj"             "$DOBJ_STAGE/"
 
           # ---- Diagnostics ---------------------------------------------------
           # If anything's off, the logs show the actual layout cargo produced.
@@ -299,12 +308,15 @@ jobs:
           codesign --force --sign "$IDENTITY" \
             --options runtime --timestamp "$DOBJD_STAGE/dobjd"
           codesign --force --sign "$IDENTITY" \
+            --options runtime --timestamp "$DOBJD_STAGE/craft-mcp-proxy"
+          codesign --force --sign "$IDENTITY" \
             --options runtime --timestamp "$DOBJ_STAGE/dobj"
 
           # Verify each one. `codesign --verify` exits non-zero if anything's
           # off — we want the workflow to fail loudly here rather than ship
           # broken signatures.
           codesign --verify --verbose=2 "$DOBJD_STAGE/dobjd"
+          codesign --verify --verbose=2 "$DOBJD_STAGE/craft-mcp-proxy"
           codesign --verify --verbose=2 "$DOBJ_STAGE/dobj"
           for f in "$DOBJD_STAGE"/*.dylib; do
             [ -L "$f" ] && continue
