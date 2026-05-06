@@ -269,7 +269,7 @@ jobs:
             BUNDLE_GCC=true
             echo "native build ($HOST_ARCH); will bundle GCC runtime libs"
           else
-            echo "cross-compile $HOST_ARCH→$TARGET_ARCH; skipping GCC runtime bundling"
+            echo "cross-compile $HOST_ARCH -> $TARGET_ARCH; skipping GCC runtime bundling"
           fi
 
           if [ "$BUNDLE_GCC" = true ]; then
