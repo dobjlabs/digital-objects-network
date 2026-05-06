@@ -248,24 +248,52 @@ jobs:
           # Logic mirrors app-gui/src-tauri/build.rs's copy_mac_gcc_runtime_libs
           # + rewrite_mac_dylib_ids.
 
-          GCC_RUNTIME_NAMES=(libgfortran.5.dylib libquadmath.0.dylib libgcc_s.1.1.dylib)
-          GCC_ROOTS=(/opt/homebrew/opt/gcc/lib/gcc/current /usr/local/opt/gcc/lib/gcc/current)
+          # Bundle GCC runtime libs only on **native** builds. Cross-compile
+          # (arm64 host → x86_64 target) can't pull x86_64 Homebrew libs from
+          # the arm64 runner, and copying arm64 libs into an x86_64 tarball
+          # ships a binary that fails to load. Strategy:
+          #
+          #   - native build:    bundle from /opt/homebrew or /usr/local
+          #   - cross-compile:   skip bundling; assert libscip doesn't need
+          #                      GCC runtime libs (cmake usually drops Fortran
+          #                      when no cross-compatible Fortran toolchain is
+          #                      available, in which case libscip is
+          #                      self-sufficient).
+          #
+          # If the assert fails on cross-compile, we'd need x86_64 Homebrew
+          # under Rosetta — left as a follow-up.
+          HOST_ARCH=$(uname -m)
+          TARGET_ARCH=$(echo "${{ matrix.target }}" | sed 's/-.*//; s/aarch64/arm64/')
+          BUNDLE_GCC=false
+          if [ "$HOST_ARCH" = "$TARGET_ARCH" ]; then
+            BUNDLE_GCC=true
+            echo "native build ($HOST_ARCH); will bundle GCC runtime libs"
+          else
+            echo "cross-compile $HOST_ARCH→$TARGET_ARCH; skipping GCC runtime bundling"
+          fi
 
-          for root in "${GCC_ROOTS[@]}"; do
-            [ -d "$root" ] || continue
-            for name in "${GCC_RUNTIME_NAMES[@]}"; do
-              src="$root/$name"
-              [ -e "$src" ] || continue
-              cp -P "$src" "$DOBJD_LIBS/$name"
-              chmod u+w "$DOBJD_LIBS/$name"
+          if [ "$BUNDLE_GCC" = true ]; then
+            GCC_RUNTIME_NAMES=(libgfortran.5.dylib libquadmath.0.dylib libgcc_s.1.1.dylib)
+            GCC_ROOTS=(/opt/homebrew/opt/gcc/lib/gcc/current /usr/local/opt/gcc/lib/gcc/current)
+            for root in "${GCC_ROOTS[@]}"; do
+              [ -d "$root" ] || continue
+              for name in "${GCC_RUNTIME_NAMES[@]}"; do
+                src="$root/$name"
+                [ -e "$src" ] || continue
+                cp -P "$src" "$DOBJD_LIBS/$name"
+                chmod u+w "$DOBJD_LIBS/$name"
+              done
             done
-          done
+          fi
 
           # Walk every dylib transitively, rewriting:
           #   - its own LC_ID_DYLIB to @rpath/<basename>
           #   - any dependency under /opt/homebrew or /usr/local to
           #     @rpath/<basename>, copying the dep into .libs/ if it isn't
-          #     already there
+          #     already there *and the source file actually exists* (some
+          #     Homebrew bottles bake stale absolute paths into install_names
+          #     that resolve nowhere — leave those references unchanged
+          #     rather than aborting the build).
           declare -A SEEN
           QUEUE=()
           for f in "$DOBJD_LIBS"/*.dylib; do
@@ -282,13 +310,16 @@ jobs:
             base=$(basename "$lib")
             install_name_tool -id "@rpath/$base" "$lib"
 
-            # Each `otool -L` line after the header is "    <path> (compat …)".
             while read -r dep; do
               case "$dep" in
                 /opt/homebrew/*|/usr/local/*)
                   dep_name=$(basename "$dep")
                   dep_dest="$DOBJD_LIBS/$dep_name"
                   if [ ! -e "$dep_dest" ]; then
+                    if [ ! -e "$dep" ]; then
+                      echo "::warning::skipping missing dep $dep (referenced by $base)"
+                      continue
+                    fi
                     cp -P "$dep" "$dep_dest"
                     chmod u+w "$dep_dest"
                     QUEUE+=("$dep_dest")
@@ -298,6 +329,24 @@ jobs:
               esac
             done < <(otool -L "$lib" | tail -n +2 | awk '{print $1}')
           done
+
+          # If we skipped GCC bundling because of cross-compile, assert that
+          # libscip doesn't actually need GCC runtime. If it does, we shipped
+          # a broken bundle — fail loudly.
+          if [ "$BUNDLE_GCC" = false ]; then
+            for lib in "$DOBJD_LIBS"/libscip*.dylib; do
+              [ -L "$lib" ] && continue
+              if otool -L "$lib" | grep -qE 'libgfortran|libgcc_s|libquadmath'; then
+                echo "::error::cross-compiled libscip transitively links GCC runtime,"
+                echo "::error::but no x86_64 GCC libs are available on this arm64 runner."
+                echo "::error::Fix options: install x86_64 Homebrew + GCC under Rosetta,"
+                echo "::error::or use a paid x86_64 runner (macos-13-large)."
+                otool -L "$lib"
+                exit 1
+              fi
+            done
+            echo "✓ libscip is self-sufficient (no GCC runtime deps); cross-compile bundle is sound"
+          fi
 
           echo "--- final bundle ---"
           ls -la "$DOBJD_STAGE" "$DOBJD_LIBS"
