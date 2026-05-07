@@ -62,8 +62,8 @@ curl -fsSL "$RELEASE/craft-basics.pexe" \
 ```bash
 cat > ~/.dobj/settings.json <<'EOF'
 {
-  "synchronizerApiUrl": "http://18.191.91.161:3000",
-  "relayerApiUrl": "http://18.191.91.161:3200"
+  "synchronizerApiUrl": "http://18.217.144.33:3000",
+  "relayerApiUrl": "http://18.217.144.33:3200"
 }
 EOF
 ```

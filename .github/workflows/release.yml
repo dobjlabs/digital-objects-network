@@ -490,8 +490,8 @@ jobs:
             ## Notes
 
             - macOS binaries are codesigned + notarized
-            - Defaults: synchronizer `http://18.191.91.161:3000`, relayer
-              `http://18.191.91.161:3200`. Change with
+            - Defaults: synchronizer `http://18.217.144.33:3000`, relayer
+              `http://18.217.144.33:3200`. Change with
               `dobj settings set --synchronizer ... --relayer ...`.
 
   plugin:
@@ -562,6 +562,6 @@ jobs:
             ## Notes
 
             - macOS binaries are codesigned + notarized
-            - Defaults: synchronizer `http://18.191.91.161:3000`, relayer
-              `http://18.191.91.161:3200`. Change with
+            - Defaults: synchronizer `http://18.217.144.33:3000`, relayer
+              `http://18.217.144.33:3200`. Change with
               `dobj settings set --synchronizer ... --relayer ...`.

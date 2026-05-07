@@ -61,7 +61,10 @@ install_packages() {
     ca-certificates \
     rsync \
     postgresql \
-    postgresql-contrib
+    postgresql-contrib \
+    libgfortran5 \
+    libquadmath0 \
+    libgomp1
 }
 
 ensure_user() {
