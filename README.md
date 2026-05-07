@@ -1,7 +1,7 @@
 # bitcraft
 
-A privacy-preserving crafting game where each item is a **digital object**
-backed by a zero-knowledge proof. Items are `.dobj` JSON files on disk;
+A crafting game where each item is a **digital object**
+backed by a recursive zero-knowledge proof. Items are `.dobj` JSON files on disk;
 their validity is anchored to Ethereum via EIP-4844 blobs. The chain
 sees only opaque commitments — an observer can't tell what an object is
 or who holds it.
