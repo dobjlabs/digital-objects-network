@@ -69,7 +69,12 @@ jobs:
           fi
           echo "tag ok: $RELEASE_TAG"
 
-  cli:
+  dobjd:
+    # Builds and signs every native binary that ships in the release: the
+    # daemon (`dobjd`) is the dominant artifact, with `dobj` (the CLI) and
+    # `bitcraft-mcp-proxy` riding alongside. Named after dobjd because the
+    # daemon is the load-bearing piece — the others are thin wrappers
+    # around its HTTP/MCP surfaces.
     needs: validate
     strategy:
       fail-fast: false
@@ -117,7 +122,7 @@ jobs:
           # toolchain version comes from rust-toolchain.toml — single source
           # for the workspace, the daily CI workflows, and this release.
           target: ${{ matrix.target }}
-          cache-shared-key: cli-${{ matrix.target }}
+          cache-shared-key: dobjd-${{ matrix.target }}
           cache-workspace-crates: true
 
       - name: Install x86_64 Homebrew + gcc@13 (cross-compile prerequisite)
@@ -459,7 +464,7 @@ jobs:
 
           # `xcrun notarytool` accepts a single .zip / .dmg / .pkg per
           # submission. Bundle dobjd + dobj together and submit once.
-          BUNDLE="$RUNNER_TEMP/cli-${{ matrix.target }}.zip"
+          BUNDLE="$RUNNER_TEMP/dobjd-${{ matrix.target }}.zip"
           (cd "$GITHUB_WORKSPACE/staging" && /usr/bin/zip -ry "$BUNDLE" .)
 
           xcrun notarytool submit "$BUNDLE" \
