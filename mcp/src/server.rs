@@ -303,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_router_lists_all_seven_tools() {
+    fn test_tool_router_lists_all_tools() {
         let service = make_service();
         let tools: Vec<String> = service
             .tool_router
@@ -320,7 +320,10 @@ mod tests {
         assert!(tools.contains(&"check_feasibility".to_string()));
         assert!(tools.contains(&"list_classes".to_string()));
         assert!(tools.contains(&"read_doc".to_string()));
-        assert_eq!(tools.len(), 9);
+        assert!(tools.contains(&"read_settings".to_string()));
+        assert!(tools.contains(&"write_settings".to_string()));
+        assert!(tools.contains(&"get_objects_dir".to_string()));
+        assert_eq!(tools.len(), 12);
     }
 
     #[test]
