@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use ::driver::QualifiedName;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +11,7 @@ use crate::progress::TauriProgressReporter;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunActionInput {
-    pub action_id: String,
+    pub action: QualifiedName,
     pub input_object_paths: Vec<String>,
 }
 
@@ -50,10 +51,10 @@ pub async fn run_action(
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let reporter = TauriProgressReporter::new(app, input.action_id.clone());
+        let reporter = TauriProgressReporter::new(app, input.action.id());
         let result = driver.execute_with_reporter(
             ::driver::ExecuteActionInput {
-                action_id: input.action_id,
+                action: input.action,
                 input_objects,
             },
             &reporter,

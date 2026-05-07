@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::object_record::ObjectStatus;
+use crate::qualified_name::QualifiedName;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverPaths {
@@ -28,8 +29,7 @@ pub enum ObjectSelector {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ObjectQuery {
-    /// Qualified class id (`<plugin>::<class>`).
-    pub class_id: Option<String>,
+    pub class: Option<QualifiedName>,
     pub status: Option<ObjectStatus>,
     pub id: Option<String>,
     pub file_name: Option<String>,
@@ -37,12 +37,9 @@ pub struct ObjectQuery {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActionQuery {
-    /// Qualified action id (`<plugin>::<action>`).
-    pub id: Option<String>,
-    /// Qualified class id (`<plugin>::<class>`).
-    pub input_class_id: Option<String>,
-    /// Qualified class id (`<plugin>::<class>`).
-    pub output_class_id: Option<String>,
+    pub action: Option<QualifiedName>,
+    pub input_class: Option<QualifiedName>,
+    pub output_class: Option<QualifiedName>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -50,11 +47,7 @@ pub struct ActionQuery {
 pub struct ObjectSummary {
     pub id: String,
     pub file_name: String,
-    /// Qualified class id (`<plugin>::<class>`).
-    pub class_id: String,
-    /// Bare class name from the producing plugin's manifest.
-    pub class_display_name: String,
-    pub plugin_name: String,
+    pub class: QualifiedName,
     pub class_hash: String,
     pub status: ObjectStatus,
     pub tx_hash: Option<String>,
@@ -63,16 +56,12 @@ pub struct ObjectSummary {
 }
 
 /// One entry in an action's input/output slot list, or a missing-slot entry
-/// in a feasibility report. Bundles the qualified id, the bare display name,
-/// and the on-chain `Is{class}` predicate hash so callers don't have to keep
-/// three parallel `Vec<String>`s in sync.
+/// in a feasibility report. Pairs the class identity with its on-chain
+/// `Is{class}` predicate hash.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassRef {
-    /// Qualified class id (`<plugin>::<class>`).
-    pub id: String,
-    /// Bare class name from the producing plugin's manifest.
-    pub display_name: String,
+    pub class: QualifiedName,
     /// Hex-encoded `Is{class}` predicate hash. Empty if the catalog could
     /// not derive it (shouldn't happen for compiled modules).
     pub hash: String,
@@ -81,10 +70,7 @@ pub struct ClassRef {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionSummary {
-    /// Qualified action id (`<plugin>::<action>`).
-    pub id: String,
-    pub display_name: String,
-    pub plugin_name: String,
+    pub action: QualifiedName,
     pub emoji: String,
     pub hash: String,
     pub description: String,
@@ -95,25 +81,20 @@ pub struct ActionSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassSummary {
-    /// Qualified class id (`<plugin>::<class>`).
-    pub id: String,
-    pub display_name: String,
-    pub plugin_name: String,
+    pub class: QualifiedName,
     pub emoji: String,
     pub hash: String,
     pub description: String,
     pub live_count: usize,
-    pub produced_by: Vec<String>,
-    pub consumed_by: Vec<String>,
+    pub produced_by: Vec<QualifiedName>,
+    pub consumed_by: Vec<QualifiedName>,
     pub predicate_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckActionCandidate {
-    pub class_id: String,
-    pub class_display_name: String,
-    pub plugin_name: String,
+    pub class: QualifiedName,
     pub object_id: String,
     pub file_name: String,
 }
@@ -122,8 +103,7 @@ pub struct CheckActionCandidate {
 #[serde(rename_all = "camelCase")]
 pub struct CheckActionReport {
     pub feasible: bool,
-    /// Qualified action id (`<plugin>::<action>`).
-    pub action_id: String,
+    pub action: QualifiedName,
     pub available_inputs: Vec<CheckActionCandidate>,
     /// Slots that had no eligible live object in inventory.
     pub missing_inputs: Vec<ClassRef>,
@@ -131,7 +111,7 @@ pub struct CheckActionReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecuteActionInput {
-    pub action_id: String,
+    pub action: QualifiedName,
     pub input_objects: Vec<ObjectSelector>,
 }
 

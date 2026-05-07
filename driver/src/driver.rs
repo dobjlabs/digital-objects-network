@@ -25,6 +25,7 @@ use crate::object_store::{
     write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
+use crate::qualified_name::QualifiedName;
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
     ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
@@ -204,13 +205,15 @@ impl Driver {
             .into_iter()
             .filter(|action| {
                 query.is_none_or(|query| {
-                    query.id.as_ref().is_none_or(|id| &action.id == id)
-                        && query.input_class_id.as_ref().is_none_or(|class_id| {
-                            action.total_inputs.iter().any(|r| &r.id == class_id)
-                        })
-                        && query.output_class_id.as_ref().is_none_or(|class_id| {
-                            action.total_outputs.iter().any(|r| &r.id == class_id)
-                        })
+                    query.action.as_ref().is_none_or(|q| &action.action == q)
+                        && query
+                            .input_class
+                            .as_ref()
+                            .is_none_or(|c| action.total_inputs.iter().any(|r| r.class == *c))
+                        && query
+                            .output_class
+                            .as_ref()
+                            .is_none_or(|c| action.total_outputs.iter().any(|r| r.class == *c))
                 })
             })
             .collect())
@@ -229,23 +232,23 @@ impl Driver {
             .map(|class_info| ClassSummary {
                 live_count: live_objects
                     .iter()
-                    .filter(|entry| entry.record.class_id == class_info.id)
+                    .filter(|entry| entry.record.class == class_info.class)
                     .count(),
                 ..self.class_summary(class_info)
             })
             .collect())
     }
 
-    pub fn get_class(&self, class_id: &str) -> Result<ClassSummary> {
+    pub fn get_class(&self, class: &QualifiedName) -> Result<ClassSummary> {
         let class_info = self
             .deps
             .catalog
-            .get_class(class_id)
-            .ok_or_else(|| anyhow!("unknown class: {class_id}"))?;
+            .get_class(class)
+            .ok_or_else(|| anyhow!("unknown class: {class}"))?;
         let live_count = load_object_files(&self.paths)?
             .into_iter()
             .filter(|entry| {
-                entry.record.status == ObjectStatus::Live && entry.record.class_id == class_id
+                entry.record.status == ObjectStatus::Live && entry.record.class == *class
             })
             .count();
         Ok(ClassSummary {
@@ -254,12 +257,12 @@ impl Driver {
         })
     }
 
-    pub fn check_action(&self, action_id: &str) -> Result<CheckActionReport> {
-        let action = self
+    pub fn check_action(&self, action: &QualifiedName) -> Result<CheckActionReport> {
+        let action_summary = self
             .deps
             .catalog
-            .get_action(action_id)
-            .ok_or_else(|| anyhow!("unknown action: {action_id}"))?;
+            .get_action(action)
+            .ok_or_else(|| anyhow!("unknown action: {action}"))?;
         let entries = load_object_files(&self.paths)?;
         let live_objects = entries
             .iter()
@@ -271,15 +274,15 @@ impl Driver {
         let mut used_ids = HashSet::new();
 
         // Apply the same cryptographic check that `resolve_inputs` runs at
-        // execute time: a candidate must match by qualified class id AND its
+        // execute time: a candidate must match by qualified class AND its
         // on-chain `obj["type"]` predicate hash must equal the action's
         // required class hash. Without the hash check, a tampered or
         // stale-migration .dobj would be reported as feasible here and then
         // rejected at execute, wasting proof-generation time.
-        for required in &action.total_inputs {
+        for required in &action_summary.total_inputs {
             let expected_hash = decode_hash_hex(required.hash.as_str()).ok();
             let candidate = live_objects.iter().find(|entry| {
-                entry.record.class_id == required.id
+                entry.record.class == required.class
                     && !used_ids.contains(&entry.record.id)
                     && matches!(
                         (expected_hash, obj_type_hash(&entry.record.obj)),
@@ -288,13 +291,8 @@ impl Driver {
             });
             if let Some(entry) = candidate {
                 used_ids.insert(entry.record.id.clone());
-                // Cross-plugin class refs are rejected at catalog load, so
-                // the action's plugin owns its input classes. No catalog
-                // round-trip needed.
                 available.push(CheckActionCandidate {
-                    class_id: required.id.clone(),
-                    class_display_name: required.display_name.clone(),
-                    plugin_name: action.plugin_name.clone(),
+                    class: required.class.clone(),
                     object_id: entry.record.id.clone(),
                     file_name: entry.file_name.clone(),
                 });
@@ -305,7 +303,7 @@ impl Driver {
 
         Ok(CheckActionReport {
             feasible: missing_inputs.is_empty(),
-            action_id: action_id.to_string(),
+            action: action.clone(),
             available_inputs: available,
             missing_inputs,
         })
@@ -333,8 +331,8 @@ impl Driver {
         let action = self
             .deps
             .catalog
-            .get_action(&input.action_id)
-            .ok_or_else(|| anyhow!("unknown action: {}", input.action_id))?;
+            .get_action(&input.action)
+            .ok_or_else(|| anyhow!("unknown action: {}", input.action))?;
 
         validate_execute_request(&input, &action)?;
 
@@ -359,7 +357,7 @@ impl Driver {
             .map(|input| input.record.spendable())
             .collect::<Vec<_>>();
         let spendable_outputs = self.deps.catalog.execute_action(
-            input.action_id.clone(),
+            input.action.clone(),
             grounding_witness,
             execution_inputs,
         )?;
@@ -376,13 +374,7 @@ impl Driver {
         let expected_tx_final = spendable_outputs.tx.dict().commitment();
 
         reporter.on_step(ExecutionPhase::Commit, "Creating files", &commit_ctx);
-        let saved = save_results(
-            &self.paths,
-            &action,
-            &input.action_id,
-            &resolved_inputs,
-            &spendable_outputs,
-        )?;
+        let saved = save_results(&self.paths, &action, &resolved_inputs, &spendable_outputs)?;
 
         // Submit to relayer. Output files are kept as Unknown on failure so
         // the user can retry submission later without regenerating proofs.
@@ -394,7 +386,7 @@ impl Driver {
         let submit_response = match self.deps.relayer.submit_proof(
             &settings.relayer_api_url,
             &payload_bytes,
-            Some(format!("driver:{}", input.action_id)),
+            Some(format!("driver:{}", input.action)),
         ) {
             Ok(resp) if resp.status == relayer::api_types::JobStatus::Failed => {
                 return Err(anyhow!("relayer rejected job {} immediately", resp.job_id));
@@ -500,17 +492,16 @@ impl Driver {
     }
 
     fn object_summary(&self, entry: &ObjectFileEntry, grounded: Option<bool>) -> ObjectSummary {
-        let class_info = self.deps.catalog.get_class(&entry.record.class_id);
-        let (class_hash, display_name, plugin_name) = match class_info {
-            Some(c) => (c.hash, c.display_name, c.plugin_name),
-            None => (String::new(), entry.record.class_id.clone(), String::new()),
-        };
+        let class_hash = self
+            .deps
+            .catalog
+            .get_class(&entry.record.class)
+            .map(|c| c.hash)
+            .unwrap_or_default();
         ObjectSummary {
             id: entry.record.id.clone(),
             file_name: entry.file_name.clone(),
-            class_id: entry.record.class_id.clone(),
-            class_display_name: display_name,
-            plugin_name,
+            class: entry.record.class.clone(),
             class_hash,
             status: entry.record.status,
             tx_hash: entry.record.tx_hash.clone(),
@@ -521,9 +512,7 @@ impl Driver {
 
     fn class_summary(&self, class_info: CatalogClass) -> ClassSummary {
         ClassSummary {
-            id: class_info.id,
-            display_name: class_info.display_name,
-            plugin_name: class_info.plugin_name,
+            class: class_info.class,
             emoji: class_info.emoji,
             hash: class_info.hash,
             description: class_info.description,

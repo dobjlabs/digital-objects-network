@@ -5,13 +5,13 @@
 //! `module_hash`). The compiled module is used to derive action/class hashes and
 //! the podlang source shown in the GUI.
 //!
-//! Classes and actions are keyed by qualified id `<plugin_name>::<name>`,
-//! using the same `::` separator podlang uses for namespaced predicates.
-//! Two plugins may declare a class or action with the same bare name; they
-//! are kept distinct by qualified id and by their on-chain `Is{class}`
-//! predicate hash (which differs between modules because each module has a
-//! unique `module_hash`). Cross-plugin class references are not supported:
-//! an action must reference classes declared in its own plugin.
+//! Classes and actions are keyed by [`QualifiedName`] (`<plugin>::<name>`
+//! when printed). Two plugins may declare a class or action with the same
+//! bare name; they stay distinct because every internal map keys on the full
+//! `QualifiedName` and because their on-chain `Is{class}` predicate hashes
+//! differ (each module has a unique `module_hash`). Cross-plugin class
+//! references are not supported: an action must reference classes declared
+//! in its own plugin.
 //!
 //! The compiled [`sdk::SdkModule`] is not kept — it holds a `Rc<Engine>` and is
 //! therefore `!Send`. `execute_action` re-loads the script from its stored bytes
@@ -28,6 +28,7 @@ use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
 use txlib::GroundingWitness;
 
 use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
+use crate::qualified_name::QualifiedName;
 use crate::types::{ActionSummary, ClassRef};
 
 struct Plugin {
@@ -35,28 +36,19 @@ struct Plugin {
     path: PathBuf,
     manifest: Manifest,
     script: String,
-    /// Qualified ids (`<plugin>::<action>`) provided by this plugin. Used
-    /// to route `execute_action` back to the originating script bytes.
-    action_ids: Vec<String>,
 }
 
 pub struct PexeCatalog {
     plugins: Vec<Plugin>,
     actions: Vec<ActionSummary>,
-    actions_by_id: HashMap<String, ActionSummary>,
-    /// Maps qualified action id -> plugin index in `plugins`.
-    action_plugin_idx: HashMap<String, usize>,
+    actions_by_name: HashMap<QualifiedName, ActionSummary>,
+    /// Maps qualified action -> plugin index in `plugins`.
+    action_plugin_idx: HashMap<QualifiedName, usize>,
     classes: Vec<CatalogClass>,
-    classes_by_id: HashMap<String, CatalogClass>,
-    classes_by_hash: HashMap<Hash, String>,
+    classes_by_name: HashMap<QualifiedName, CatalogClass>,
+    classes_by_hash: HashMap<Hash, QualifiedName>,
     combined_podlang_src: String,
     mock_proofs: bool,
-}
-
-/// Compose a qualified class or action id (`<plugin>::<name>`). The `::`
-/// separator matches podlang's convention for namespaced predicates.
-pub fn qualified_id(plugin_name: &str, name: &str) -> String {
-    format!("{plugin_name}::{name}")
 }
 
 impl PexeCatalog {
@@ -80,14 +72,13 @@ impl PexeCatalog {
     }
 
     fn from_plugins(plugins: Vec<Plugin>, mock_proofs: bool) -> Result<Self> {
-        // Validate plugin.name early: it ends up in qualified ids
-        // (`<plugin>::<name>`), in `.dobj` filename prefixes, and in GUI
-        // labels. The allowlist is filename-safe on every OS we target
-        // and rules out `:` (which would let a name straddle the `::`
-        // separator and break `bare_action_name`'s split) and any
-        // path-significant chars (`/`, `\`, `..`) that could otherwise
-        // let a malicious or misconfigured plugin escape the objects
-        // directory.
+        // Validate plugin.name early: it ends up as the `plugin_name`
+        // component of every `QualifiedName`, in `.dobj` filename prefixes,
+        // and in GUI labels. The allowlist is filename-safe on every OS we
+        // target and rules out `:` (which would let a name straddle the
+        // `::` separator when callers stringify), and any path-significant
+        // chars (`/`, `\`, `..`) that could otherwise let a malicious or
+        // misconfigured plugin escape the objects directory.
         let mut seen_plugin_names: HashMap<String, usize> = HashMap::new();
         for (idx, plugin) in plugins.iter().enumerate() {
             let name = &plugin.manifest.plugin.name;
@@ -111,9 +102,9 @@ impl PexeCatalog {
         let mut classes_in_order: Vec<CatalogClass> = Vec::new();
         let mut combined_podlang = String::new();
         let mut enriched_plugins: Vec<Plugin> = Vec::with_capacity(plugins.len());
-        let mut action_plugin_idx: HashMap<String, usize> = HashMap::new();
+        let mut action_plugin_idx: HashMap<QualifiedName, usize> = HashMap::new();
 
-        for mut plugin in plugins {
+        for plugin in plugins {
             let plugin_name = plugin.manifest.plugin.name.clone();
             let module = sdk
                 .load_module_from_src_manifest(&plugin.script, &plugin.manifest)
@@ -148,15 +139,13 @@ impl PexeCatalog {
 
             for class in module.classes() {
                 let bare = &class.name;
-                let qid = qualified_id(&plugin_name, bare);
+                let qname = QualifiedName::new(plugin_name.clone(), bare.clone());
                 let class_hash = class_hashes[bare];
                 let meta = class_meta_by_name.get(bare.as_str());
                 let predicate_source = extract_predicate(&podlang_src, &format!("Is{bare}"))
                     .unwrap_or_else(|| format!("Is{bare}(state) = OR(...)"));
                 classes_in_order.push(CatalogClass {
-                    id: qid,
-                    display_name: bare.clone(),
-                    plugin_name: plugin_name.clone(),
+                    class: qname,
                     emoji: meta.map_or("📦", |m| m.emoji.as_str()).to_string(),
                     hash: format!("{:#}", class_hash),
                     description: meta
@@ -171,7 +160,7 @@ impl PexeCatalog {
             // Build ActionSummary rows. Each input/output class is resolved
             // against this plugin's own class set; cross-plugin references
             // are rejected. Hidden actions are still recorded so their
-            // qualified id routes back to this plugin via execute_action.
+            // qualified name routes back to this plugin via execute_action.
             let action_meta_by_name: HashMap<&str, &sdk::manifest::Action> = plugin
                 .manifest
                 .actions
@@ -179,15 +168,13 @@ impl PexeCatalog {
                 .map(|a| (a.name.as_str(), a))
                 .collect();
             let plugin_idx = enriched_plugins.len();
-            let mut plugin_action_ids: Vec<String> = Vec::new();
 
             for action in module.actions() {
                 let bare = action.name.clone();
-                let qid = qualified_id(&plugin_name, &bare);
-                plugin_action_ids.push(qid.clone());
-                if let Some(prior) = action_plugin_idx.insert(qid.clone(), plugin_idx) {
+                let qname = QualifiedName::new(plugin_name.clone(), bare.clone());
+                if let Some(prior) = action_plugin_idx.insert(qname.clone(), plugin_idx) {
                     return Err(anyhow!(
-                        "internal: duplicate action qualified id {qid} (already mapped to plugin idx {prior})"
+                        "internal: duplicate action qualified name {qname} (already mapped to plugin idx {prior})"
                     ));
                 }
 
@@ -201,8 +188,7 @@ impl PexeCatalog {
                         )
                     })?;
                     Ok(ClassRef {
-                        id: qualified_id(&plugin_name, class_name),
-                        display_name: class_name.to_string(),
+                        class: QualifiedName::new(plugin_name.clone(), class_name.to_string()),
                         hash: format!("{:#}", hash),
                     })
                 };
@@ -225,9 +211,7 @@ impl PexeCatalog {
                     .map(|h| format!("{:#}", h))
                     .unwrap_or_default();
                 all_actions.push(ActionSummary {
-                    id: qid,
-                    display_name: bare.clone(),
-                    plugin_name: plugin_name.clone(),
+                    action: qname,
                     emoji: meta.map_or("⚙️", |m| m.emoji.as_str()).to_string(),
                     hash: action_hash,
                     description: meta
@@ -238,55 +222,55 @@ impl PexeCatalog {
                 });
             }
 
-            plugin.action_ids = plugin_action_ids;
             enriched_plugins.push(plugin);
         }
 
-        // Second pass: fill produced_by / consumed_by per class using qualified ids.
+        // Second pass: fill produced_by / consumed_by per class.
         for class in classes_in_order.iter_mut() {
             class.produced_by = all_actions
                 .iter()
-                .filter(|a| a.total_outputs.iter().any(|r| r.id == class.id))
-                .map(|a| a.id.clone())
+                .filter(|a| a.total_outputs.iter().any(|r| r.class == class.class))
+                .map(|a| a.action.clone())
                 .collect();
             class.consumed_by = all_actions
                 .iter()
-                .filter(|a| a.total_inputs.iter().any(|r| r.id == class.id))
-                .map(|a| a.id.clone())
+                .filter(|a| a.total_inputs.iter().any(|r| r.class == class.class))
+                .map(|a| a.action.clone())
                 .collect();
         }
 
         // Deterministic GUI order: sort by display name, then plugin.
         classes_in_order.sort_by(|a, b| {
-            a.display_name
-                .cmp(&b.display_name)
-                .then_with(|| a.plugin_name.cmp(&b.plugin_name))
+            a.class
+                .name
+                .cmp(&b.class.name)
+                .then_with(|| a.class.plugin_name.cmp(&b.class.plugin_name))
         });
 
-        let actions_by_id: HashMap<String, ActionSummary> = all_actions
+        let actions_by_name: HashMap<QualifiedName, ActionSummary> = all_actions
             .iter()
-            .map(|a| (a.id.clone(), a.clone()))
+            .map(|a| (a.action.clone(), a.clone()))
             .collect();
-        let classes_by_id: HashMap<String, CatalogClass> = classes_in_order
+        let classes_by_name: HashMap<QualifiedName, CatalogClass> = classes_in_order
             .iter()
-            .map(|c| (c.id.clone(), c.clone()))
+            .map(|c| (c.class.clone(), c.clone()))
             .collect();
-        let classes_by_hash: HashMap<Hash, String> = classes_in_order
+        let classes_by_hash: HashMap<Hash, QualifiedName> = classes_in_order
             .iter()
             .filter_map(|c| {
                 decode_hash_hex(&c.hash)
                     .ok()
-                    .map(|hash| (hash, c.id.clone()))
+                    .map(|hash| (hash, c.class.clone()))
             })
             .collect();
 
         Ok(Self {
             plugins: enriched_plugins,
             actions: all_actions,
-            actions_by_id,
+            actions_by_name,
             action_plugin_idx,
             classes: classes_in_order,
-            classes_by_id,
+            classes_by_name,
             classes_by_hash,
             combined_podlang_src: combined_podlang,
             mock_proofs,
@@ -303,36 +287,34 @@ impl ActionCatalog for PexeCatalog {
         self.actions.clone()
     }
 
-    fn get_action(&self, action_id: &str) -> Option<ActionSummary> {
-        self.actions_by_id.get(action_id).cloned()
+    fn get_action(&self, action: &QualifiedName) -> Option<ActionSummary> {
+        self.actions_by_name.get(action).cloned()
     }
 
     fn list_classes(&self) -> Vec<CatalogClass> {
         self.classes.clone()
     }
 
-    fn get_class(&self, class_id: &str) -> Option<CatalogClass> {
-        self.classes_by_id.get(class_id).cloned()
+    fn get_class(&self, class: &QualifiedName) -> Option<CatalogClass> {
+        self.classes_by_name.get(class).cloned()
     }
 
     fn get_class_by_hash(&self, class_hash: &Hash) -> Option<CatalogClass> {
-        let id = self.classes_by_hash.get(class_hash)?;
-        self.classes_by_id.get(id).cloned()
+        let qname = self.classes_by_hash.get(class_hash)?;
+        self.classes_by_name.get(qname).cloned()
     }
 
     fn execute_action(
         &self,
-        action_id: String,
+        action: QualifiedName,
         grounding_witness: GroundingWitness,
         inputs: Vec<SpendableObject>,
     ) -> Result<SpendableObjects> {
         let plugin_idx = *self
             .action_plugin_idx
-            .get(&action_id)
-            .ok_or_else(|| anyhow!("no plugin provides action {action_id}"))?;
+            .get(&action)
+            .ok_or_else(|| anyhow!("no plugin provides action {action}"))?;
         let plugin = &self.plugins[plugin_idx];
-        let bare_name = bare_action_name(&action_id, &plugin.manifest.plugin.name)
-            .ok_or_else(|| anyhow!("invalid qualified action id: {action_id}"))?;
         let sdk = Sdk::default();
         let module = sdk
             .load_module_from_src_manifest(&plugin.script, &plugin.manifest)
@@ -343,7 +325,7 @@ impl ActionCatalog for PexeCatalog {
                 )
             })?;
         let executor = module.executor(self.mock_proofs, Arc::new(grounding_witness));
-        Ok(executor.action(bare_name, inputs)?)
+        Ok(executor.action(&action.name, inputs)?)
     }
 
     fn generated_podlang(&self) -> Option<String> {
@@ -382,7 +364,6 @@ fn load_plugin_from_bytes(path: PathBuf, bytes: &[u8]) -> Result<Plugin> {
         path,
         manifest,
         script,
-        action_ids: Vec::new(),
     })
 }
 
@@ -407,13 +388,6 @@ fn validate_plugin_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn bare_action_name<'a>(qualified_id: &'a str, plugin_name: &str) -> Option<&'a str> {
-    qualified_id
-        .strip_prefix(plugin_name)
-        .and_then(|rest| rest.strip_prefix("::"))
-        .filter(|rest| !rest.is_empty())
-}
-
 #[cfg(test)]
 pub(crate) fn test_plugin_bytes() -> Vec<u8> {
     // Pack the live plugin sources in-memory so tests never touch ~/.dobj/actions.
@@ -426,6 +400,10 @@ pub(crate) fn test_plugin_bytes() -> Vec<u8> {
 mod tests {
     use super::*;
 
+    fn craft_basics(name: &str) -> QualifiedName {
+        QualifiedName::new("craft-basics", name)
+    }
+
     fn test_catalog() -> PexeCatalog {
         PexeCatalog::from_bytes(
             std::iter::once((PathBuf::from("craft-basics.pexe"), test_plugin_bytes())),
@@ -437,17 +415,25 @@ mod tests {
     #[test]
     fn test_pexe_catalog_hides_internal_actions() {
         let catalog = test_catalog();
-        let action_ids: Vec<_> = catalog.list_actions().into_iter().map(|a| a.id).collect();
-        assert!(action_ids.contains(&"craft-basics::CraftWood".to_string()));
-        assert!(!action_ids.contains(&"craft-basics::UseWoodPick".to_string()));
+        let names: Vec<_> = catalog
+            .list_actions()
+            .into_iter()
+            .map(|a| a.action)
+            .collect();
+        assert!(names.contains(&craft_basics("CraftWood")));
+        assert!(!names.contains(&craft_basics("UseWoodPick")));
     }
 
     #[test]
     fn test_pexe_catalog_lists_classes() {
         let catalog = test_catalog();
-        let class_ids: Vec<_> = catalog.list_classes().into_iter().map(|c| c.id).collect();
-        assert!(class_ids.contains(&"craft-basics::Log".to_string()));
-        assert!(class_ids.contains(&"craft-basics::WoodPick".to_string()));
+        let classes: Vec<_> = catalog
+            .list_classes()
+            .into_iter()
+            .map(|c| c.class)
+            .collect();
+        assert!(classes.contains(&craft_basics("Log")));
+        assert!(classes.contains(&craft_basics("WoodPick")));
     }
 
     #[test]
@@ -462,13 +448,13 @@ mod tests {
     fn test_get_class_by_hash_round_trip() {
         let catalog = test_catalog();
         let log = catalog
-            .get_class("craft-basics::Log")
+            .get_class(&craft_basics("Log"))
             .expect("Log class present");
         let by_hash = decode_hash_hex(&log.hash)
             .ok()
             .and_then(|h| catalog.get_class_by_hash(&h))
             .expect("class hash resolves back");
-        assert_eq!(by_hash.id, log.id);
+        assert_eq!(by_hash.class, log.class);
     }
 
     #[test]
@@ -503,36 +489,6 @@ mod tests {
     }
 
     #[test]
-    fn test_file_prefix_for_class_sanitizes_path_chars() {
-        use crate::execute::file_prefix_for_class;
-        // Real qualified ids use the `::` separator (each `:` is mapped to
-        // `_`, so the prefix gets a double underscore).
-        assert_eq!(
-            file_prefix_for_class("craft-basics::Wood"),
-            "craft-basics__wood"
-        );
-        // Plugin names are validated upstream, but class names come from
-        // arbitrary rhai literals — the sanitizer must still stay confined
-        // to a single filename component if a class name happens to
-        // contain path-significant characters.
-        assert_eq!(
-            file_prefix_for_class("plugin::weird/class"),
-            "plugin__weird_class"
-        );
-        // `::` (2) + `..` (2) + `\` (1) = 5 underscores between the plugin
-        // name and the class name.
-        assert_eq!(
-            file_prefix_for_class("plugin::..\\Stone"),
-            "plugin_____stone"
-        );
-        let prefix = file_prefix_for_class("p::c");
-        assert!(
-            !prefix.contains('/') && !prefix.contains('\\') && !prefix.contains(':'),
-            "prefix {prefix:?} must be path-safe"
-        );
-    }
-
-    #[test]
     fn test_duplicate_plugin_name_rejected() {
         let result = PexeCatalog::from_bytes(
             [
@@ -558,7 +514,7 @@ mod tests {
     // plugin a different `CustomPredicateBatch` id and therefore different
     // class/action predicate hashes. This is the exact shape the catalog
     // collision bug used to mishandle.
-
+    //
     // Each action introduces a private `key` wildcard so the compiled
     // podlang has a non-empty `private:` clause (an empty one is a syntax
     // error). The literal blueprint string ("FooA" vs "FooB", "BarA" vs
@@ -654,12 +610,14 @@ description = "consume a Foo to make a Bar"
     #[test]
     fn test_two_plugins_same_class_name_keeps_distinct_hashes() {
         let catalog = alpha_beta_catalog();
-        let foo_alpha = catalog.get_class("alpha::Foo").expect("alpha::Foo present");
-        let foo_beta = catalog.get_class("beta::Foo").expect("beta::Foo present");
-        assert_eq!(foo_alpha.display_name, "Foo");
-        assert_eq!(foo_beta.display_name, "Foo");
-        assert_eq!(foo_alpha.plugin_name, "alpha");
-        assert_eq!(foo_beta.plugin_name, "beta");
+        let alpha_foo = QualifiedName::new("alpha", "Foo");
+        let beta_foo = QualifiedName::new("beta", "Foo");
+        let foo_alpha = catalog.get_class(&alpha_foo).expect("alpha::Foo present");
+        let foo_beta = catalog.get_class(&beta_foo).expect("beta::Foo present");
+        assert_eq!(foo_alpha.class.name, "Foo");
+        assert_eq!(foo_beta.class.name, "Foo");
+        assert_eq!(foo_alpha.class.plugin_name, "alpha");
+        assert_eq!(foo_beta.class.plugin_name, "beta");
         assert_ne!(
             foo_alpha.hash, foo_beta.hash,
             "Foo from two different modules must have different IsFoo predicate hashes"
@@ -673,14 +631,18 @@ description = "consume a Foo to make a Bar"
         // Each plugin's MakeFoo produces an output whose obj["type"] is *that
         // plugin's* IsFoo predicate hash. If the catalog routed the wrong
         // script, the type field would be the other plugin's hash.
-        let alpha_foo = catalog.get_class("alpha::Foo").expect("alpha::Foo present");
-        let beta_foo = catalog.get_class("beta::Foo").expect("beta::Foo present");
+        let alpha_foo = catalog
+            .get_class(&QualifiedName::new("alpha", "Foo"))
+            .expect("alpha::Foo present");
+        let beta_foo = catalog
+            .get_class(&QualifiedName::new("beta", "Foo"))
+            .expect("beta::Foo present");
         let alpha_hash = decode_hash_hex(&alpha_foo.hash).expect("alpha::Foo hash parses");
         let beta_hash = decode_hash_hex(&beta_foo.hash).expect("beta::Foo hash parses");
 
         let alpha_out = catalog
             .execute_action(
-                "alpha::MakeFoo".to_string(),
+                QualifiedName::new("alpha", "MakeFoo"),
                 dummy_grounding_witness(),
                 vec![],
             )
@@ -694,7 +656,7 @@ description = "consume a Foo to make a Bar"
 
         let beta_out = catalog
             .execute_action(
-                "beta::MakeFoo".to_string(),
+                QualifiedName::new("beta", "MakeFoo"),
                 dummy_grounding_witness(),
                 vec![],
             )
@@ -709,21 +671,25 @@ description = "consume a Foo to make a Bar"
     #[test]
     fn test_action_input_class_hash_is_module_scoped() {
         let catalog = alpha_beta_catalog();
-        let alpha_foo = catalog.get_class("alpha::Foo").unwrap();
-        let beta_foo = catalog.get_class("beta::Foo").unwrap();
+        let alpha_foo = catalog
+            .get_class(&QualifiedName::new("alpha", "Foo"))
+            .unwrap();
+        let beta_foo = catalog
+            .get_class(&QualifiedName::new("beta", "Foo"))
+            .unwrap();
         assert_ne!(alpha_foo.hash, beta_foo.hash);
 
         let alpha_consume = catalog
-            .get_action("alpha::ConsumeFoo")
+            .get_action(&QualifiedName::new("alpha", "ConsumeFoo"))
             .expect("alpha::ConsumeFoo present");
         let beta_consume = catalog
-            .get_action("beta::ConsumeFoo")
+            .get_action(&QualifiedName::new("beta", "ConsumeFoo"))
             .expect("beta::ConsumeFoo present");
 
         let alpha_input = &alpha_consume.total_inputs[0];
         let beta_input = &beta_consume.total_inputs[0];
-        assert_eq!(alpha_input.id, "alpha::Foo");
-        assert_eq!(beta_input.id, "beta::Foo");
+        assert_eq!(alpha_input.class, QualifiedName::new("alpha", "Foo"));
+        assert_eq!(beta_input.class, QualifiedName::new("beta", "Foo"));
         assert_eq!(
             alpha_input.hash, alpha_foo.hash,
             "alpha::ConsumeFoo's required input hash must be alpha's IsFoo hash"
@@ -738,25 +704,33 @@ description = "consume a Foo to make a Bar"
     fn test_class_cross_references_are_per_plugin() {
         // Each class's `produced_by` / `consumed_by` must list only the
         // actions from its own plugin. If the catalog conflated entries by
-        // bare name, alpha:Foo's `produced_by` could end up containing
-        // `beta:MakeFoo` (and vice versa), which would mis-route GUI
+        // bare name, alpha::Foo's `produced_by` could end up containing
+        // beta::MakeFoo (and vice versa), which would mis-route GUI
         // suggestions and feasibility checks.
         let catalog = alpha_beta_catalog();
-        let alpha_foo = catalog.get_class("alpha::Foo").unwrap();
-        let beta_foo = catalog.get_class("beta::Foo").unwrap();
+        let alpha_foo = catalog
+            .get_class(&QualifiedName::new("alpha", "Foo"))
+            .unwrap();
+        let beta_foo = catalog
+            .get_class(&QualifiedName::new("beta", "Foo"))
+            .unwrap();
 
         assert_eq!(
             alpha_foo.produced_by,
-            vec!["alpha::MakeFoo".to_string()],
-            "alpha::Foo should only be produced by alpha:MakeFoo"
+            vec![QualifiedName::new("alpha", "MakeFoo")]
         );
         assert_eq!(
             alpha_foo.consumed_by,
-            vec!["alpha::ConsumeFoo".to_string()],
-            "alpha::Foo should only be consumed by alpha:ConsumeFoo"
+            vec![QualifiedName::new("alpha", "ConsumeFoo")]
         );
-        assert_eq!(beta_foo.produced_by, vec!["beta::MakeFoo".to_string()]);
-        assert_eq!(beta_foo.consumed_by, vec!["beta::ConsumeFoo".to_string()]);
+        assert_eq!(
+            beta_foo.produced_by,
+            vec![QualifiedName::new("beta", "MakeFoo")]
+        );
+        assert_eq!(
+            beta_foo.consumed_by,
+            vec![QualifiedName::new("beta", "ConsumeFoo")]
+        );
 
         // The predicate source string is also non-empty and looks like an
         // IsFoo predicate. (The IsFoo body itself is the same shape in both

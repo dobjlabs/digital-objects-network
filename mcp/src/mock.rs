@@ -8,8 +8,11 @@ use crate::types::*;
 
 const PLUGIN: &str = "craft-basics";
 
-fn qid(name: &str) -> String {
-    format!("{PLUGIN}::{name}")
+fn qname(name: &str) -> QualifiedName {
+    QualifiedName {
+        plugin_name: PLUGIN.to_string(),
+        name: name.to_string(),
+    }
 }
 
 /// Mock implementation of CraftOps for testing.
@@ -64,35 +67,33 @@ impl CraftOps for MockCraftOps {
         let mut classes: Vec<ClassSummary> = KNOWN_CLASSES
             .iter()
             .map(|&name| {
-                let class_id = qid(name);
+                let class = qname(name);
                 let live_count = self
                     .inventory
                     .iter()
-                    .filter(|o| o.class_id == class_id && o.status == "live")
+                    .filter(|o| o.class == class && o.status == "live")
                     .count();
                 let produced_by = self
                     .actions
                     .iter()
-                    .filter(|a| a.total_outputs.iter().any(|r| r.id == class_id))
-                    .map(|a| a.id.clone())
+                    .filter(|a| a.total_outputs.iter().any(|r| r.class == class))
+                    .map(|a| a.action.clone())
                     .collect();
                 let consumed_by = self
                     .actions
                     .iter()
-                    .filter(|a| a.total_inputs.iter().any(|r| r.id == class_id))
-                    .map(|a| a.id.clone())
+                    .filter(|a| a.total_inputs.iter().any(|r| r.class == class))
+                    .map(|a| a.action.clone())
                     .collect();
                 ClassSummary {
-                    id: class_id,
-                    display_name: name.to_string(),
-                    plugin_name: PLUGIN.to_string(),
+                    class,
                     live_count,
                     produced_by,
                     consumed_by,
                 }
             })
             .collect();
-        classes.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+        classes.sort_by(|a, b| a.class.name.cmp(&b.class.name));
         Ok(classes)
     }
 
@@ -109,41 +110,34 @@ impl CraftOps for MockCraftOps {
 
         Ok(ObjectDetail {
             id: obj.id.clone(),
-            class_id: obj.class_id.clone(),
-            class_display_name: obj.class_display_name.clone(),
-            plugin_name: obj.plugin_name.clone(),
+            class: obj.class.clone(),
             status: obj.status.clone(),
             tx_hash: obj.tx_hash.clone(),
             state: obj.fields.clone(),
-            predicate_source: predicate_source_for(&obj.class_display_name),
+            predicate_source: predicate_source_for(&obj.class.name),
         })
     }
 
-    fn inspect_class(&self, class_id: &str) -> anyhow::Result<ClassDetail> {
+    fn inspect_class(&self, class: &QualifiedName) -> anyhow::Result<ClassDetail> {
         let actions = &self.actions;
         let produced_by = actions
             .iter()
-            .filter(|a| a.total_outputs.iter().any(|r| r.id == class_id))
-            .map(|a| a.id.clone())
+            .filter(|a| a.total_outputs.iter().any(|r| r.class == *class))
+            .map(|a| a.action.clone())
             .collect();
         let consumed_by = actions
             .iter()
-            .filter(|a| a.total_inputs.iter().any(|r| r.id == class_id))
-            .map(|a| a.id.clone())
+            .filter(|a| a.total_inputs.iter().any(|r| r.class == *class))
+            .map(|a| a.action.clone())
             .collect();
 
-        let display_name = class_id
-            .strip_prefix(&format!("{PLUGIN}::"))
-            .unwrap_or(class_id);
-        if !is_known_class(display_name) {
-            bail!("unknown class: {class_id}");
+        if class.plugin_name != PLUGIN || !is_known_class(&class.name) {
+            bail!("unknown class: {}::{}", class.plugin_name, class.name);
         }
 
         Ok(ClassDetail {
-            class_id: class_id.to_string(),
-            class_display_name: display_name.to_string(),
-            plugin_name: PLUGIN.to_string(),
-            predicate_source: predicate_source_for(display_name),
+            class: class.clone(),
+            predicate_source: predicate_source_for(&class.name),
             produced_by,
             consumed_by,
         })
@@ -156,8 +150,8 @@ impl CraftOps for MockCraftOps {
         }
 
         // Validate the action exists
-        if !self.actions.iter().any(|a| a.id == input.action_id) {
-            bail!("unknown action: {}", input.action_id);
+        if !self.actions.iter().any(|a| a.action == input.action) {
+            bail!("unknown action: {}::{}", input.action.plugin_name, input.action.name);
         }
 
         *in_progress = true;
@@ -166,12 +160,13 @@ impl CraftOps for MockCraftOps {
 
         Ok(RunActionResult {
             success: true,
-            message: format!("Action {} completed successfully", input.action_id),
+            message: format!(
+                "Action {}::{} completed successfully",
+                input.action.plugin_name, input.action.name
+            ),
             outputs: vec![InventoryObject {
                 id: "0xnew1234567890abcdef".to_string(),
-                class_id: qid("Wood"),
-                class_display_name: "Wood".to_string(),
-                plugin_name: PLUGIN.to_string(),
+                class: qname("Wood"),
                 file_name: "craft-basics__wood_0xnew.dobj".to_string(),
                 status: "live".to_string(),
                 tx_hash: Some("0xmocktxnew12345678".to_string()),
@@ -190,26 +185,24 @@ impl CraftOps for MockCraftOps {
         })
     }
 
-    fn check_feasibility(&self, action_id: &str) -> anyhow::Result<FeasibilityReport> {
-        let action = self
+    fn check_feasibility(&self, action: &QualifiedName) -> anyhow::Result<FeasibilityReport> {
+        let action_summary = self
             .actions
             .iter()
-            .find(|a| a.id == action_id)
-            .ok_or_else(|| anyhow!("unknown action: {action_id}"))?;
+            .find(|a| a.action == *action)
+            .ok_or_else(|| anyhow!("unknown action: {}::{}", action.plugin_name, action.name))?;
 
         let mut available = Vec::new();
         let mut missing_inputs = Vec::new();
 
-        for required in &action.total_inputs {
+        for required in &action_summary.total_inputs {
             if let Some(obj) = self
                 .inventory
                 .iter()
-                .find(|o| o.class_id == required.id && o.status == "live")
+                .find(|o| o.class == required.class && o.status == "live")
             {
                 available.push(FeasibilityInput {
-                    class_id: obj.class_id.clone(),
-                    class_display_name: obj.class_display_name.clone(),
-                    plugin_name: obj.plugin_name.clone(),
+                    class: obj.class.clone(),
                     object_id: obj.id.clone(),
                     file_name: obj.file_name.clone(),
                 });
@@ -220,7 +213,7 @@ impl CraftOps for MockCraftOps {
 
         Ok(FeasibilityReport {
             feasible: missing_inputs.is_empty(),
-            action_id: action_id.to_string(),
+            action: action.clone(),
             available_inputs: available,
             missing_inputs,
         })
@@ -229,7 +222,7 @@ impl CraftOps for MockCraftOps {
 
 fn make_obj(
     id: &str,
-    class: &str,
+    class_name: &str,
     file_name: &str,
     tx_hash: &str,
     status: &str,
@@ -238,7 +231,7 @@ fn make_obj(
     let mut fields = HashMap::from([
         (
             "blueprint".to_string(),
-            serde_json::Value::String(class.to_string()),
+            serde_json::Value::String(class_name.to_string()),
         ),
         ("key".to_string(), serde_json::Value::String(id.to_string())),
     ]);
@@ -247,9 +240,7 @@ fn make_obj(
     }
     InventoryObject {
         id: id.to_string(),
-        class_id: qid(class),
-        class_display_name: class.to_string(),
-        plugin_name: PLUGIN.to_string(),
+        class: qname(class_name),
         file_name: file_name.to_string(),
         status: status.to_string(),
         tx_hash: Some(tx_hash.to_string()),
@@ -316,16 +307,13 @@ fn make_action(name: &str, description: &str, inputs: &[&str], outputs: &[&str])
         classes
             .iter()
             .map(|c| ClassRef {
-                id: qid(c),
-                display_name: c.to_string(),
+                class: qname(c),
                 hash: format!("0x{}", "0".repeat(64)),
             })
             .collect()
     };
     Action {
-        id: qid(name),
-        display_name: name.to_string(),
-        plugin_name: PLUGIN.to_string(),
+        action: qname(name),
         description: description.to_string(),
         total_inputs: to_refs(inputs),
         total_outputs: to_refs(outputs),
@@ -409,7 +397,7 @@ mod tests {
     fn test_default_inventory_has_all_classes() {
         let mock = MockCraftOps::new();
         let inv = mock.list_inventory().unwrap();
-        let names: Vec<&str> = inv.iter().map(|o| o.class_display_name.as_str()).collect();
+        let names: Vec<&str> = inv.iter().map(|o| o.class.name.as_str()).collect();
         assert!(names.contains(&"Log"));
         assert!(names.contains(&"Wood"));
         assert!(names.contains(&"Stick"));
@@ -421,7 +409,7 @@ mod tests {
     fn test_inspect_object_found() {
         let mock = MockCraftOps::new();
         let detail = mock.inspect_object("0xabc1111111111111").unwrap();
-        assert_eq!(detail.class_display_name, "Log");
+        assert_eq!(detail.class.name, "Log");
         assert_eq!(detail.status, "live");
         assert!(detail.predicate_source.contains("FindLog"));
     }
@@ -435,22 +423,22 @@ mod tests {
     #[test]
     fn test_inspect_class() {
         let mock = MockCraftOps::new();
-        let detail = mock.inspect_class("craft-basics::Wood").unwrap();
-        assert!(detail.produced_by.contains(&qid("CraftWood")));
-        assert!(detail.consumed_by.contains(&qid("CraftSticks")));
-        assert!(detail.consumed_by.contains(&qid("CraftWoodPick")));
+        let detail = mock.inspect_class(&qname("Wood")).unwrap();
+        assert!(detail.produced_by.contains(&qname("CraftWood")));
+        assert!(detail.consumed_by.contains(&qname("CraftSticks")));
+        assert!(detail.consumed_by.contains(&qname("CraftWoodPick")));
     }
 
     #[test]
     fn test_inspect_unknown_class() {
         let mock = MockCraftOps::new();
-        assert!(mock.inspect_class("craft-basics::Diamond").is_err());
+        assert!(mock.inspect_class(&qname("Diamond")).is_err());
     }
 
     #[test]
     fn test_check_feasibility_feasible() {
         let mock = MockCraftOps::new();
-        let report = mock.check_feasibility(&qid("CraftWoodPick")).unwrap();
+        let report = mock.check_feasibility(&qname("CraftWoodPick")).unwrap();
         assert!(report.feasible);
         assert!(report.missing_inputs.is_empty());
         assert_eq!(report.available_inputs.len(), 2);
@@ -459,7 +447,7 @@ mod tests {
     #[test]
     fn test_check_feasibility_missing() {
         let mock = MockCraftOps::new();
-        let report = mock.check_feasibility(&qid("CraftStonePick")).unwrap();
+        let report = mock.check_feasibility(&qname("CraftStonePick")).unwrap();
         // We have Stone and Stick, so this should be feasible
         assert!(report.feasible);
     }
@@ -467,7 +455,7 @@ mod tests {
     #[test]
     fn test_check_feasibility_unknown_action() {
         let mock = MockCraftOps::new();
-        assert!(mock.check_feasibility(&qid("CraftDiamond")).is_err());
+        assert!(mock.check_feasibility(&qname("CraftDiamond")).is_err());
     }
 
     #[test]
@@ -475,7 +463,7 @@ mod tests {
         let mock = MockCraftOps::new();
         let result = mock
             .run_action(RunActionInput {
-                action_id: qid("CraftWood"),
+                action: qname("CraftWood"),
                 input_object_paths: vec!["craft-basics__log_0xabc1.dobj".to_string()],
             })
             .unwrap();
@@ -486,7 +474,7 @@ mod tests {
     fn test_run_action_already_in_progress() {
         let mock = MockCraftOps::new().with_action_in_progress();
         let result = mock.run_action(RunActionInput {
-            action_id: qid("CraftWood"),
+            action: qname("CraftWood"),
             input_object_paths: vec!["craft-basics__log_0xabc1.dobj".to_string()],
         });
         assert!(result.is_err());
@@ -502,7 +490,7 @@ mod tests {
     fn test_run_action_unknown() {
         let mock = MockCraftOps::new();
         let result = mock.run_action(RunActionInput {
-            action_id: qid("CraftDiamond"),
+            action: qname("CraftDiamond"),
             input_object_paths: vec![],
         });
         assert!(result.is_err());

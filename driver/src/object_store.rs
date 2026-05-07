@@ -171,8 +171,8 @@ pub(crate) fn select_object<'a>(
 }
 
 pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> bool {
-    if let Some(class_id) = &query.class_id
-        && &entry.record.class_id != class_id
+    if let Some(class) = &query.class
+        && &entry.record.class != class
     {
         return false;
     }
@@ -241,7 +241,7 @@ mod tests {
         .unwrap();
         let outputs = catalog
             .execute_action(
-                "craft-basics::FindLog".to_string(),
+                crate::QualifiedName::new("craft-basics", "FindLog"),
                 dummy_grounding_witness(),
                 vec![],
             )
@@ -249,7 +249,7 @@ mod tests {
         let spendable = outputs.obj(0);
         ObjectRecord {
             id: format!("{:#}", spendable.obj.commitment()),
-            class_id: "craft-basics::Log".to_string(),
+            class: crate::QualifiedName::new("craft-basics", "Log"),
             status: ObjectStatus::Live,
             tx_hash: None,
             pod: spendable.pod,

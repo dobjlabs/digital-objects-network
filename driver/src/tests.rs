@@ -19,6 +19,7 @@ use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
 };
 use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
+use crate::qualified_name::QualifiedName;
 use crate::{ActionQuery, DriverPaths, ExecuteActionInput, ObjectSelector};
 
 fn temp_paths() -> DriverPaths {
@@ -77,21 +78,21 @@ fn state_root(state: &TestState) -> StateRoot {
     )
 }
 
+fn craft_basics(name: &str) -> QualifiedName {
+    QualifiedName::new("craft-basics", name)
+}
+
 fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
     ensure_extra_pod_deserializers_registered();
     let catalog = make_catalog();
     let outputs = catalog
-        .execute_action(
-            "craft-basics::FindLog".to_string(),
-            dummy_grounding_witness(),
-            vec![],
-        )
+        .execute_action(craft_basics("FindLog"), dummy_grounding_witness(), vec![])
         .unwrap();
     let spendable = outputs.obj(0);
     let id = format!("{:#}", spendable.obj.commitment());
     let record = ObjectRecord {
         id,
-        class_id: "craft-basics::Log".to_string(),
+        class: craft_basics("Log"),
         status: ObjectStatus::Live,
         tx_hash: None,
         pod: spendable.pod,
@@ -260,9 +261,10 @@ fn test_list_actions_filters_by_input_class() {
         payload_builder: Arc::new(MockPayloadBuilder),
     };
     let driver = Driver::open(paths, deps).unwrap();
+    let wood = craft_basics("Wood");
     let filtered = driver
         .list_actions(Some(&ActionQuery {
-            input_class_id: Some("craft-basics::Wood".to_string()),
+            input_class: Some(wood.clone()),
             ..ActionQuery::default()
         }))
         .unwrap();
@@ -270,12 +272,11 @@ fn test_list_actions_filters_by_input_class() {
         !filtered.is_empty(),
         "expected at least one Wood-consuming action"
     );
-    assert!(filtered.iter().all(|action| {
-        action
-            .total_inputs
+    assert!(
+        filtered
             .iter()
-            .any(|r| r.id == "craft-basics::Wood")
-    }));
+            .all(|action| action.total_inputs.iter().any(|r| r.class == wood))
+    );
 }
 
 #[test]
@@ -292,7 +293,7 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
 
     let err = driver
         .execute(ExecuteActionInput {
-            action_id: "craft-basics::CraftWood".to_string(),
+            action: craft_basics("CraftWood"),
             input_objects: vec![ObjectSelector::FileName("log_1.dobj".to_string())],
         })
         .unwrap_err();
@@ -314,7 +315,7 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
     assert_eq!(output.record.status, ObjectStatus::Unknown);
 }
 
-/// A `.dobj` whose `class_id` text matches what an action expects must STILL
+/// A `.dobj` whose `class` text matches what an action expects must STILL
 /// be rejected when its on-chain `obj["type"]` predicate hash disagrees. This
 /// is the regression test for the original collision bug: if two plugins
 /// declared a class `Wood`, the bare-name check used to let the wrong
@@ -323,10 +324,10 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
 #[test]
 fn test_execute_rejects_class_hash_mismatch_with_matching_class_id() {
     // A real Log object (obj["type"] = IsLog hash) written to disk with a
-    // forged class_id of "craft-basics::Wood". CraftSticks consumes a Wood,
-    // so the bare-id check passes; the cryptographic hash check then fires.
+    // forged class of "craft-basics::Wood". CraftSticks consumes a Wood, so
+    // the qualified-name check passes; the cryptographic hash check then fires.
     let (mut entry, deps) = make_input_record("forged_wood.dobj");
-    entry.record.class_id = "craft-basics::Wood".to_string();
+    entry.record.class = craft_basics("Wood");
     let paths = temp_paths();
     ensure_store_dirs(&paths).unwrap();
     write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
@@ -334,7 +335,7 @@ fn test_execute_rejects_class_hash_mismatch_with_matching_class_id() {
 
     let err = driver
         .execute(ExecuteActionInput {
-            action_id: "craft-basics::CraftSticks".to_string(),
+            action: craft_basics("CraftSticks"),
             input_objects: vec![ObjectSelector::FileName("forged_wood.dobj".to_string())],
         })
         .unwrap_err();
@@ -359,7 +360,7 @@ fn test_execute_keeps_files_after_relayer_accepts() {
 
     let err = driver
         .execute(ExecuteActionInput {
-            action_id: "craft-basics::CraftWood".to_string(),
+            action: craft_basics("CraftWood"),
             input_objects: vec![ObjectSelector::FileName("log_1.dobj".to_string())],
         })
         .unwrap_err();

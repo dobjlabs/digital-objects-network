@@ -112,7 +112,7 @@ pub(crate) fn validate_execute_request(
     if input.input_objects.len() != action.total_inputs.len() {
         return Err(anyhow!(
             "{} expects {} inputs, got {}",
-            input.action_id,
+            input.action,
             action.total_inputs.len(),
             input.input_objects.len()
         ));
@@ -157,16 +157,16 @@ pub(crate) fn resolve_inputs(
                 entry.record.id
             ));
         }
-        // Belt-and-suspenders: compare both the qualified class id stored on
+        // Belt-and-suspenders: compare both the qualified class stored on
         // disk AND the on-chain `obj["type"]` predicate hash. Mismatch on
-        // either is fatal — the second check catches files whose class_id
+        // either is fatal — the second check catches files whose class
         // text drifted from the actual pod-level identity.
-        if entry.record.class_id != required.id {
+        if entry.record.class != required.class {
             return Err(anyhow!(
                 "input class mismatch for {}: expected {}, got {}",
                 entry.record.id,
-                required.id,
-                entry.record.class_id
+                required.class,
+                entry.record.class
             ));
         }
         let actual_class_hash = obj_type_hash(&entry.record.obj).ok_or_else(|| {
@@ -196,27 +196,6 @@ pub(crate) fn obj_type_hash(obj: &pod2::middleware::containers::Dictionary) -> O
     Some(Hash(value.raw().0))
 }
 
-/// Build the lowercase filename prefix for a `.dobj` of the given qualified
-/// class id (`<plugin>::<class>`). Plugin names are already restricted to
-/// `[A-Za-z0-9_-]` at catalog load, but class names come from arbitrary
-/// rhai string literals (e.g. `action.output("…")`) so they could in
-/// principle contain path-significant characters. To keep written files
-/// inside `~/.dobj/objects/`, every char outside the allowlist
-/// `[a-z0-9_-]` (after lowercasing) is replaced with `_`.
-pub(crate) fn file_prefix_for_class(class_id: &str) -> String {
-    class_id
-        .chars()
-        .map(|c| {
-            let lower = c.to_ascii_lowercase();
-            if lower.is_ascii_alphanumeric() || lower == '-' || lower == '_' {
-                lower
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
 #[derive(Debug)]
 pub(crate) struct SavedFiles {
     pub(crate) output_files: Vec<String>,
@@ -226,7 +205,6 @@ pub(crate) struct SavedFiles {
 pub(crate) fn save_results(
     paths: &DriverPaths,
     action: &ActionSummary,
-    action_id: &str,
     resolved_inputs: &[ResolvedInput],
     spendable_outputs: &SpendableObjects,
 ) -> Result<SavedFiles> {
@@ -238,7 +216,7 @@ pub(crate) fn save_results(
     if spendable_outputs.objs.len() != action.total_outputs.len() {
         return Err(anyhow!(
             "action {} output mismatch: descriptor expects {}, engine returned {}",
-            action_id,
+            action.action,
             action.total_outputs.len(),
             spendable_outputs.objs.len()
         ));
@@ -246,19 +224,18 @@ pub(crate) fn save_results(
 
     let mut output_files = Vec::new();
     for (index, output) in action.total_outputs.iter().enumerate() {
-        let class_id = &output.id;
         let spendable = spendable_outputs.obj(index);
         let object_id = format!("{:#}", spendable.obj.commitment());
         let file_name = format!(
             "{}_{}.{DOBJ_EXTENSION}",
-            file_prefix_for_class(class_id),
+            output.class.file_prefix(),
             object_id.to_ascii_lowercase()
         );
         output_files.push(file_name.clone());
 
         let live_record = StoredObjectRecord {
             id: object_id,
-            class_id: class_id.clone(),
+            class: output.class.clone(),
             status: ObjectStatus::Unknown,
             tx_hash: None,
             pod: spendable.pod,

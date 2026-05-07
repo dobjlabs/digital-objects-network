@@ -7,6 +7,8 @@ use serde_json::Value;
 use std::{fs, path::Path};
 use txlib::Tx;
 
+use crate::qualified_name::QualifiedName;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ObjectStatus {
@@ -19,9 +21,9 @@ pub enum ObjectStatus {
 #[derive(Debug, Clone)]
 pub struct ObjectRecord {
     pub id: String,
-    /// Qualified class id (`<plugin>::<class>`). The bare display name and
-    /// human description are recovered from the catalog at read time.
-    pub class_id: String,
+    /// The class this object belongs to. Plugin-scoped so two plugins with
+    /// the same bare class name stay distinguishable.
+    pub class: QualifiedName,
     /// Lifecycle status of this object.
     pub status: ObjectStatus,
     /// Optional Ethereum transaction hash for the blob that anchored this object.
@@ -75,7 +77,11 @@ impl ObjectRecord {
     fn to_file_value(&self) -> Result<Value, String> {
         let mut fields = serde_json::Map::new();
         fields.insert("id".to_string(), Value::String(self.id.clone()));
-        fields.insert("classId".to_string(), Value::String(self.class_id.clone()));
+        fields.insert(
+            "class".to_string(),
+            serde_json::to_value(&self.class)
+                .map_err(|err| format!("failed to serialize class: {err}"))?,
+        );
         fields.insert(
             "status".to_string(),
             serde_json::to_value(self.status)
@@ -107,7 +113,7 @@ impl ObjectRecord {
             .as_object()
             .ok_or_else(|| "invalid object file: expected JSON object".to_string())?;
         let id = parse_required_field::<String>(fields, "id", "id")?;
-        let class_id = parse_required_field::<String>(fields, "classId", "classId")?;
+        let class = parse_required_field::<QualifiedName>(fields, "class", "class")?;
         let status = parse_required_field::<ObjectStatus>(fields, "status", "status")?;
         let tx_hash: Option<String> = match fields.get("txHash") {
             Some(Value::String(s)) => Some(s.clone()),
@@ -119,7 +125,7 @@ impl ObjectRecord {
 
         Ok(Self {
             id,
-            class_id,
+            class,
             status,
             tx_hash,
             pod,

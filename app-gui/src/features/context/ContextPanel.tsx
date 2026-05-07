@@ -4,6 +4,7 @@ import type {
   ActionPayload as Action,
   ClassRefPayload,
   InventoryObjectPayload as InventoryObject,
+  QualifiedNamePayload,
 } from "../../shared/api/wireTypes";
 import { pickDobjFilePath, readDobjFile } from "../../shared/api/tauriClient";
 import { truncateDisplayHash } from "../../shared/format";
@@ -12,6 +13,8 @@ import {
   isNullifiedObject,
   joinObjectsDirPath,
   pluginScopedLabel,
+  qualifiedEq,
+  qualifiedId,
 } from "../../shared/objectUtils";
 import { isRecord, normalizePod2Value } from "../../shared/pod2utils";
 import type { ContextSelection } from "../../shared/state/store";
@@ -23,7 +26,7 @@ interface ContextPanelProps {
   actions: Action[];
   onClearSelection: () => void;
   onRunProof: (input: {
-    actionId: string;
+    action: QualifiedNamePayload;
     inputBindings: Array<{
       objectPath: string;
       label: string;
@@ -56,7 +59,7 @@ export function ContextPanel({
     selection.kind === "object"
       ? `object:${selection.objectId}`
       : selection.kind === "action"
-        ? `action:${selection.actionId}`
+        ? `action:${qualifiedId(selection.action)}`
         : "none";
 
   useEffect(() => {
@@ -82,36 +85,24 @@ export function ContextPanel({
   ): {
     objectPath?: string;
     name?: string;
-    classId?: string;
-    classDisplayName?: string;
+    class?: QualifiedNamePayload;
   } => {
     try {
       return JSON.parse(raw) as {
         objectPath?: string;
         name?: string;
-        classId?: string;
-        classDisplayName?: string;
+        class?: QualifiedNamePayload;
       };
     } catch {
       return { name: raw };
     }
   };
 
-  /** Compatibility is by qualified class id; bare names alone are ambiguous
-   * across plugins. */
-  const isArgCompatible = (
-    expectedClassId: string,
-    droppedClassId?: string,
-  ) => {
-    if (!droppedClassId) return false;
-    return droppedClassId === expectedClassId;
-  };
-
   const handleDropArg = (
     event: DragEvent<HTMLDivElement>,
     methodId: string,
-    expectedClassId: string,
-    expectedClassDisplay: string,
+    expected: QualifiedNamePayload,
+    expectedLabel: string,
     index: number,
   ) => {
     if (proofRunning) return;
@@ -129,11 +120,13 @@ export function ContextPanel({
     const droppedName = parsed.name ?? raw;
     const droppedPath = parsed.objectPath?.trim() ?? "";
 
-    if (!isArgCompatible(expectedClassId, parsed.classId)) {
-      const got = parsed.classDisplayName ?? parsed.classId ?? droppedName;
+    if (!parsed.class || !qualifiedEq(parsed.class, expected)) {
+      const got = parsed.class
+        ? pluginScopedLabel(parsed.class)
+        : droppedName;
       setArgErrors((prev) => ({
         ...prev,
-        [key]: `Expected ${expectedClassDisplay} but got ${got}`,
+        [key]: `Expected ${expectedLabel} but got ${got}`,
       }));
       return;
     }
@@ -180,8 +173,8 @@ export function ContextPanel({
 
   const handleBrowseArgFile = async (
     methodId: string,
-    expectedClassId: string,
-    expectedClassDisplay: string,
+    expected: QualifiedNamePayload,
+    expectedLabel: string,
     index: number,
   ) => {
     const key = argKey(methodId, index);
@@ -216,7 +209,7 @@ export function ContextPanel({
     }
 
     let parsed: {
-      classId: string;
+      class: QualifiedNamePayload;
       status: string;
     };
     try {
@@ -229,11 +222,10 @@ export function ContextPanel({
       return;
     }
 
-    const classId = parsed.classId.trim();
     const objectIsLive = parsed.status === "live";
     const fileLabel = selectedName;
 
-    if (!classId) {
+    if (!parsed.class) {
       setArgErrors((prev) => ({
         ...prev,
         [key]: `Missing required fields in .dobj: ${selectedName}`,
@@ -241,10 +233,10 @@ export function ContextPanel({
       return;
     }
 
-    if (!isArgCompatible(expectedClassId, classId)) {
+    if (!qualifiedEq(parsed.class, expected)) {
       setArgErrors((prev) => ({
         ...prev,
-        [key]: `Expected ${expectedClassDisplay} but got ${classId}`,
+        [key]: `Expected ${expectedLabel} but got ${pluginScopedLabel(parsed.class)}`,
       }));
       return;
     }
@@ -291,7 +283,6 @@ export function ContextPanel({
   const renderMethodCard = (config: {
     methodId: string;
     methodName: string;
-    pluginName: string;
     totalInputs: ClassRefPayload[];
     onRun: (boundArgs: BoundArg[]) => void;
   }) =>
@@ -315,21 +306,16 @@ export function ContextPanel({
                 const bound = argBindings[key];
                 const isDropActive = hoverArgKey === key;
                 const err = argErrors[key];
-                const expectedClassId = required.id;
-                const classHash = required.hash;
-                const expectedClassLabel = pluginScopedLabel(
-                  required.displayName,
-                  config.pluginName,
-                );
+                const expectedClassLabel = pluginScopedLabel(required.class);
 
                 return (
                   <div
-                    key={`${expectedClassId}:${index}`}
+                    key={`${qualifiedId(required.class)}:${index}`}
                     className="method-arg"
                   >
                     <div className="method-arg-row">
                       <span className="method-arg-label">
-                        {renderClassChip(`# ${expectedClassLabel}`, classHash)}
+                        {renderClassChip(`# ${expectedClassLabel}`, required.hash)}
                       </span>
                       <div
                         className={`method-arg-drop ${bound ? "filled" : ""} ${isDropActive ? "drop-active" : ""} ${err ? "error" : ""}`}
@@ -352,7 +338,7 @@ export function ContextPanel({
                           handleDropArg(
                             event,
                             config.methodId,
-                            expectedClassId,
+                            required.class,
                             expectedClassLabel,
                             index,
                           )
@@ -379,7 +365,7 @@ export function ContextPanel({
                           }
                           void handleBrowseArgFile(
                             config.methodId,
-                            expectedClassId,
+                            required.class,
                             expectedClassLabel,
                             index,
                           );
@@ -518,7 +504,7 @@ export function ContextPanel({
     if (!object)
       return <section className="context-panel">Object not found.</section>;
 
-    const titleName = pluginScopedLabel(object.classDisplayName, object.pluginName);
+    const titleName = pluginScopedLabel(object.class);
     const liveValueRaw = object.status === "live" ? object.id : object.status;
     const liveValue = truncateDisplayHash(liveValueRaw);
 
@@ -568,14 +554,14 @@ export function ContextPanel({
     );
   }
 
-  const action = actions.find(
-    (candidate) => candidate.id === selection.actionId,
+  const action = actions.find((candidate) =>
+    qualifiedEq(candidate.action, selection.action),
   );
   if (!action)
     return <section className="context-panel">Action not found.</section>;
   const actionHashRaw = action.hash.trim();
   const actionHashDisplay = truncateDisplayHash(actionHashRaw);
-  const actionLabel = pluginScopedLabel(action.displayName, action.pluginName);
+  const actionLabel = pluginScopedLabel(action.action);
 
   return (
     <section className="context-panel">
@@ -605,13 +591,12 @@ export function ContextPanel({
       <div className="context-desc">{action.description}</div>
 
       {renderMethodCard({
-        methodId: action.id,
+        methodId: qualifiedId(action.action),
         methodName: actionLabel,
-        pluginName: action.pluginName,
         totalInputs: action.totalInputs,
         onRun: (boundArgs) =>
           onRunProof({
-            actionId: action.id,
+            action: action.action,
             inputBindings: boundArgs.map((arg) => ({
               objectPath: arg.objectPath,
               label: arg.label,

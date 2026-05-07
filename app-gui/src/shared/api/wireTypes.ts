@@ -3,17 +3,21 @@ export type ProofProgressStatus = "running" | "done";
 
 export type ObjectStatus = "unknown" | "pending" | "live" | "nullified";
 
-// Action IDs and class names are not enumerated at compile time — they come
+// Action and class names are not enumerated at compile time — they come
 // from whichever plugin archives the user has installed in ~/.dobj/actions/.
+
+/** A name scoped to a plugin. Both classes and actions are identified this
+ * way; the printable form `<pluginName>::<name>` matches podlang's
+ * namespaced-predicate syntax. */
+export interface QualifiedNamePayload {
+  pluginName: string;
+  name: string;
+}
 
 export interface InventoryObjectPayload {
   id: string;
   fileName: string;
-  /** Qualified class id (`<plugin>::<class>`). */
-  classId: string;
-  /** Bare class name from the plugin manifest. */
-  classDisplayName: string;
-  pluginName: string;
+  class: QualifiedNamePayload;
   classHash: string;
   emoji: string;
   status: ObjectStatus;
@@ -24,20 +28,13 @@ export interface InventoryObjectPayload {
 }
 
 export interface ClassRefPayload {
-  /** Qualified class id (`<plugin>::<class>`). */
-  id: string;
-  /** Bare class name from the producing plugin's manifest. */
-  displayName: string;
+  class: QualifiedNamePayload;
   /** Hex-encoded `Is{class}` predicate hash. */
   hash: string;
 }
 
 export interface ActionPayload {
-  /** Qualified action id (`<plugin>::<action>`). */
-  id: string;
-  /** Bare action name from the plugin manifest. */
-  displayName: string;
-  pluginName: string;
+  action: QualifiedNamePayload;
   emoji: string;
   hash: string;
   totalInputs: ClassRefPayload[];
@@ -50,7 +47,7 @@ export interface LoadGuiInventoryResult {
 }
 
 export interface RunActionInput {
-  actionId: string;
+  action: QualifiedNamePayload;
   inputObjectPaths: string[];
 }
 
@@ -64,8 +61,7 @@ export interface RunActionResult {
 
 export interface ObjectRecordPayload {
   id: string;
-  /** Qualified class id (`<plugin>::<class>`). */
-  classId: string;
+  class: QualifiedNamePayload;
   status: ObjectStatus;
   txHash: string | null;
   pod: unknown;

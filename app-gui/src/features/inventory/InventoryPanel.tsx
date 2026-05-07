@@ -42,13 +42,12 @@ export function InventoryPanel({
       return;
     }
     const objectPath = joinObjectsDirPath(objectsDirPath, object.fileName);
-    const displayLabel = pluginScopedLabel(object.classDisplayName, object.pluginName);
+    const displayLabel = pluginScopedLabel(object.class);
 
     const payload = JSON.stringify({
       objectPath,
       name: displayLabel,
-      classId: object.classId,
-      classDisplayName: object.classDisplayName,
+      class: object.class,
     });
     event.dataTransfer.setData("application/x-zkcraft-object", payload);
     event.dataTransfer.setData("text/plain", displayLabel);
@@ -70,7 +69,7 @@ export function InventoryPanel({
   const nullifiedObjects = inventory.filter((object) => isNullifiedObject(object));
 
   const renderInventoryObject = (object: InventoryObject) => {
-    const displayName = pluginScopedLabel(object.classDisplayName, object.pluginName);
+    const displayName = pluginScopedLabel(object.class);
     const hashLineRaw = object.status === "live"
       ? object.id
       : object.status;
