@@ -970,29 +970,17 @@ name = "app-gui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "common",
  "driver",
  "env_logger",
- "hex",
- "lt_eq_u256_pod",
- "notify",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=448b6608fc0e39e644ee36435ad977c2d4e122bb)",
- "pod2utils",
- "relayer",
- "reqwest 0.12.28",
  "rfd",
  "serde",
  "serde_json",
- "synchronizer",
  "sysinfo",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
  "thiserror 2.0.18",
- "tokio",
- "txlib",
- "vdfpod",
 ]
 
 [[package]]
@@ -2031,6 +2019,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]
@@ -2765,6 +2754,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tower-http",
+ "uuid",
 ]
 
 [[package]]

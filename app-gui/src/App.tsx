@@ -118,7 +118,7 @@ function App() {
     let unlisten: (() => void) | null = null;
     listenMcpActionStarted((event) => {
       if (!cancelled) {
-        initProofPanel({ actionId: event.actionId, args: ["(via MCP)"] });
+        initProofPanel({ runId: event.runId, args: [`(via MCP: ${event.actionId})`] });
       }
     })
       .then((dispose) => {

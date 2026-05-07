@@ -1,8 +1,8 @@
 use crate::types::*;
 
-/// The interface the MCP server needs from the host application.
-/// During testing, this is mocked. In production, implemented by
-/// the Tauri app (or a future headless binary).
+/// The interface the MCP server needs from the host process.
+/// In production it's implemented by `DobjdCraftOps` in the `dobjd` crate
+/// (one driver process serving HTTP + MCP). Tests use `MockCraftOps`.
 pub trait CraftOps: Send + Sync + 'static {
     fn list_inventory(&self) -> anyhow::Result<Vec<InventoryObject>>;
     fn list_actions(&self) -> anyhow::Result<Vec<Action>>;

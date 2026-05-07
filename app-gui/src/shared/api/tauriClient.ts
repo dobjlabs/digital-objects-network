@@ -218,9 +218,12 @@ export function listenObjectsChanged(handler: () => void): Promise<UnlistenFn> {
 }
 
 export function listenMcpActionStarted(
-  handler: (event: { actionId: string }) => void,
+  handler: (event: { actionId: string; runId: string }) => void,
 ): Promise<UnlistenFn> {
-  return subscribeHttp<{ actionId: string }>("mcp-action-started", handler);
+  return subscribeHttp<{ actionId: string; runId: string }>(
+    "mcp-action-started",
+    handler,
+  );
 }
 
 export function listenOpenSettings(handler: () => void): Promise<UnlistenFn> {

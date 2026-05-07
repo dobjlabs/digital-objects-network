@@ -3,8 +3,6 @@ name = "cli"
 version = "0.1.0"
 edition = "2024"
 
-# The crate is named `cli` (one of several thin clients of `dobjd`), but the
-# user-facing command stays `dobj` to match `~/.dobj/bin/dobj` in SKILL.md.
 [[bin]]
 name = "dobj"
 path = "src/main.rs"
@@ -22,3 +20,4 @@ futures-util = "0.3"
 libc = "0.2"
 dirs = "6"
 urlencoding = "2"
+uuid = { version = "1.18.1", features = ["v4"] }

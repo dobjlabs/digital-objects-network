@@ -58,11 +58,21 @@ async fn main() -> anyhow::Result<()> {
     let mut first = true;
     while let Some(line) = stdin_rx.recv().await {
         if first {
-            // The first request (typically `initialize`) must complete before
-            // concurrent requests can be dispatched, because we need the
-            // session ID from the response.
+            // The first request (typically `initialize`) must complete and
+            // populate `session_id` before any concurrent request can be
+            // dispatched. If it doesn't, every subsequent request would block
+            // forever on `session_ready` waiting for a notify that never
+            // comes (the server returned no session id, or the connection
+            // failed). Fail fast in that case so Claude Desktop restarts us
+            // — there's nothing useful this proxy can do without a session.
             first = false;
             handle_request(&client, &url, &line, &session_id, &stdout_tx).await;
+            if session_id.read().await.is_none() {
+                tracing::error!(
+                    "first request to {url} did not establish an MCP session; exiting so the parent can respawn"
+                );
+                std::process::exit(1);
+            }
             session_ready.notify_waiters();
         } else {
             let client = client.clone();

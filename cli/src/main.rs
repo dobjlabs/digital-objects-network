@@ -141,6 +141,6 @@ async fn main() -> Result<()> {
         Cmd::Start => daemon::start(&client).await,
         Cmd::Stop => daemon::stop().await,
         Cmd::Status => daemon::status(&client).await,
-        Cmd::Logs { follow, lines } => daemon::logs(follow, lines),
+        Cmd::Logs { follow, lines } => daemon::logs(follow, lines).await,
     }
 }

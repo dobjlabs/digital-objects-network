@@ -117,11 +117,16 @@ impl CraftOps for DobjdCraftOps {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
+        // Generate a per-call run id. action_id is shared across concurrent
+        // runs of the same action and isn't unique enough for SSE filtering.
+        let run_id = uuid::Uuid::new_v4().to_string();
+
         let _ = self.events.send(Event::McpActionStarted {
             action_id: input.action_id.clone(),
+            run_id: run_id.clone(),
         });
 
-        let reporter = SseProgressReporter::new(self.events.clone(), input.action_id.clone());
+        let reporter = SseProgressReporter::new(self.events.clone(), run_id.clone());
         let result = self.driver.execute_with_reporter(
             ::driver::ExecuteActionInput {
                 action_id: input.action_id.clone(),
@@ -154,6 +159,7 @@ impl CraftOps for DobjdCraftOps {
                 "Action {} completed. Old root: {}, New root: {}",
                 input.action_id, result.old_root, result.new_root
             ),
+            run_id,
             outputs,
             consumed: result.nullified_files,
         })

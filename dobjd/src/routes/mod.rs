@@ -1,5 +1,6 @@
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{get, post},
 };
 use tower_http::cors::CorsLayer;
@@ -10,6 +11,7 @@ use crate::state::AppState;
 mod actions;
 mod classes;
 mod events;
+mod health;
 mod inventory;
 mod objects;
 mod settings;
@@ -25,10 +27,19 @@ mod state;
 /// load-bearing — but the literals are listed first for readability.
 pub fn router(app_state: AppState) -> Router {
     Router::new()
+        .route("/healthz", get(health::healthz))
         .route("/inventory", get(inventory::load_inventory))
         .route("/state-root", get(state::get_state_root))
         .route("/objects/dir", get(objects::get_objects_dir))
-        .route("/objects/parse", post(objects::parse_object))
+        // `/objects/parse` accepts a `.dobj` upload — cap at the route
+        // level so a hostile / buggy client can't OOM the daemon by
+        // streaming an unbounded multipart body. axum's default limit is
+        // ~2 MiB but doesn't cover Multipart unless we attach this layer.
+        .route(
+            "/objects/parse",
+            post(objects::parse_object)
+                .layer(DefaultBodyLimit::max(objects::MAX_DOBJ_UPLOAD_BYTES)),
+        )
         .route("/objects/{id}", get(objects::inspect_object))
         .route("/classes", get(classes::list_classes))
         .route("/classes/{name}", get(classes::inspect_class))

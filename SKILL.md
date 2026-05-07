@@ -98,9 +98,8 @@ idempotent, safe to re-run:
 
 ```bash
 if command -v claude >/dev/null 2>&1; then
-  claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp \
-    || claude mcp remove bitcraft 2>/dev/null \
-    && claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp
+  claude mcp remove bitcraft 2>/dev/null || true
+  claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp
 fi
 ```
 

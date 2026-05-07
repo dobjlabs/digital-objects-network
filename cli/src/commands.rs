@@ -123,12 +123,19 @@ pub async fn run(
     input_paths: Vec<String>,
     quiet: bool,
 ) -> Result<()> {
+    // Mint a per-call run id up front so the SSE filter can match against
+    // it before the POST returns. We could let the daemon generate one and
+    // pick it up from the response, but that response only arrives after
+    // the action finishes — by then the progress events have already
+    // streamed past our filter. Client-side generation closes that window.
+    let run_id = uuid::Uuid::new_v4().to_string();
+
     // Subscribe to /events first so we don't miss progress messages emitted
     // before the SSE connection is established. We block on the first `Open`
     // event before posting the action so a fast `run_action` can't beat the
     // EventSource handshake.
     let events_url = format!("{}/events", client.base_url());
-    let progress_run_id = action_id.clone();
+    let progress_run_id = run_id.clone();
     let (open_tx, open_rx) = oneshot::channel::<()>();
     let progress_handle = tokio::spawn(async move {
         let mut es = EventSource::get(&events_url);
@@ -180,6 +187,7 @@ pub async fn run(
                 input: RunActionInput {
                     action_id: action_id.clone(),
                     input_object_paths: input_paths,
+                    run_id,
                 },
             },
         )
@@ -187,7 +195,8 @@ pub async fn run(
 
     progress_handle.abort();
 
-    println!("action: {action_id}");
+    println!("action:   {action_id}");
+    println!("run id:   {}", result.run_id);
     println!("old root: {}", result.old_root);
     println!("new root: {}", result.new_root);
     if !result.output_files.is_empty() {

@@ -36,9 +36,15 @@ export interface LoadGuiInventoryResult {
 export interface RunActionInput {
   actionId: string;
   inputObjectPaths: string[];
+  // Client-generated correlation id. The daemon echoes it back in
+  // run-action-progress events so we can filter to our own run when more
+  // than one is in flight (e.g. the user kicks off a craft while an MCP
+  // agent is mid-action in the background).
+  runId: string;
 }
 
 export interface RunActionResult {
+  runId: string;
   oldRoot: string;
   newRoot: string;
   outputFiles: string[];

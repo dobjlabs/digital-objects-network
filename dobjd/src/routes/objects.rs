@@ -8,6 +8,12 @@ use serde::Serialize;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
+/// Cap for `/objects/parse` multipart uploads. A `.dobj` file is small
+/// JSON wrapping a pod proof — a few hundred KiB at most. 16 MiB is two
+/// orders of magnitude over realistic input and protects the daemon from
+/// a hostile/buggy frontend uploading multi-GB blobs.
+pub const MAX_DOBJ_UPLOAD_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectsDirResponse {

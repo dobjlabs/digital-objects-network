@@ -63,7 +63,7 @@ export interface AppState {
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   setGlobalStateRoot: (hash: string | null) => void;
   applyRunActionProgress: (event: RunActionProgress) => void;
-  initProofPanel: (input: { actionId: string; args: string[] }) => void;
+  initProofPanel: (input: { runId: string; args: string[] }) => void;
   runProof: (input: {
     actionId: string;
     inputBindings: Array<{
@@ -242,7 +242,7 @@ export const useStore = create<AppState>((set, get) => ({
         },
       };
     }),
-  initProofPanel: ({ actionId, args }) =>
+  initProofPanel: ({ runId, args }) =>
     set((prev) => {
       if (
         prev.proof.status === "generating" ||
@@ -253,7 +253,7 @@ export const useStore = create<AppState>((set, get) => ({
       return {
         ...prev,
         proof: {
-          runActionId: actionId,
+          runActionId: runId,
           status: "generating",
           args,
           messages: ["Running action..."],
@@ -286,16 +286,21 @@ export const useStore = create<AppState>((set, get) => ({
         ? inputBindings.map((binding) => binding.label)
         : ["(no inputs)"];
 
-    get().initProofPanel({ actionId, args: verifyTargets });
+    // Mint a per-run id up front so progress events streaming back during
+    // the action can be matched against this run before runAction returns.
+    // Two concurrent runs of the same action would collide on actionId.
+    const runId = crypto.randomUUID();
+    get().initProofPanel({ runId, args: verifyTargets });
 
     try {
       const result = await runAction({
         actionId,
         inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
+        runId,
       });
 
       set((prev) => {
-        if (prev.proof.runActionId !== actionId) return prev;
+        if (prev.proof.runActionId !== runId) return prev;
         return {
           ...prev,
           proof: {

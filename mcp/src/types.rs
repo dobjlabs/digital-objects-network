@@ -128,6 +128,10 @@ pub struct RunActionResult {
     pub success: bool,
     /// Human-readable status message
     pub message: String,
+    /// Server-generated correlation id for the run. Maps progress events on
+    /// the daemon's broadcast hub (`run-action-progress`) to this call.
+    /// Useful when more than one action runs concurrently.
+    pub run_id: String,
     /// Objects produced by the action
     pub outputs: Vec<InventoryObject>,
     /// Objects consumed (nullified) by the action

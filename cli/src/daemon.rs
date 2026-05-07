@@ -111,15 +111,19 @@ fn signal(pid: i32, sig: libc::c_int) -> Result<()> {
 /// listener that ate the connection but never replied.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Probe whether dobjd's HTTP listener is up.
+/// Probe whether dobjd is operable.
 ///
-/// Uses `/objects/dir` because it's the cheapest local endpoint —
-/// `/inventory` and `/state-root` round-trip to the synchronizer and can
-/// hang for 30s when it's unreachable, which is useless for a liveness
-/// probe. We also wrap the request in a per-call timeout so a stuck server
-/// can't hang the loop forever.
+/// Hits `/healthz` rather than just any cheap endpoint: a daemon whose
+/// HTTP listener bound but whose plugin catalog failed to load is *not*
+/// ready to serve, and `dobj start`'s readiness gate should reflect that.
+/// `/healthz` returns 503 in those cases. Network-free on the server side
+/// (no synchronizer round-trip) so a slow synchronizer doesn't break the
+/// probe — that's a separate failure mode.
+///
+/// A per-call timeout caps each probe so a stuck server can't hang the
+/// polling loop forever.
 async fn http_alive(client: &DobjdClient) -> bool {
-    let url = format!("{}/objects/dir", client.base_url());
+    let url = format!("{}/healthz", client.base_url());
     reqwest::Client::new()
         .get(&url)
         .timeout(PROBE_TIMEOUT)
@@ -320,7 +324,7 @@ pub async fn status(client: &DobjdClient) -> Result<()> {
     Ok(())
 }
 
-pub fn logs(follow: bool, lines: usize) -> Result<()> {
+pub async fn logs(follow: bool, lines: usize) -> Result<()> {
     let paths = DaemonPaths::resolve()?;
     if !paths.log_file.exists() {
         eprintln!("no log file yet at {}", paths.log_file.display());
@@ -337,6 +341,10 @@ pub fn logs(follow: bool, lines: usize) -> Result<()> {
 
     // Follow new lines. We re-open and seek to the end to avoid re-printing
     // what we just emitted; further reads stream as the file grows.
+    //
+    // The loop is sync std I/O (a stat + a small read every 250ms is fine
+    // here) but the sleep yields back to the runtime so we don't hold a
+    // worker thread across the whole follow session.
     let mut file = File::open(&paths.log_file)?;
     let mut pos = file.metadata()?.len();
     file.seek(SeekFrom::Start(pos))?;
@@ -358,7 +366,7 @@ pub fn logs(follow: bool, lines: usize) -> Result<()> {
             }
             pos = new_len;
         }
-        std::thread::sleep(Duration::from_millis(250));
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 

@@ -133,6 +133,9 @@ impl CraftOps for MockCraftOps {
         Ok(RunActionResult {
             success: true,
             message: format!("Action {} completed successfully", input.action_id),
+            // Static fixture so tests can assert on it without depending on
+            // wall-clock or randomness. Real `DobjdCraftOps` mints a UUID v4.
+            run_id: "00000000-0000-4000-8000-000000000000".to_string(),
             outputs: vec![InventoryObject {
                 id: "0xnew1234567890abcdef".to_string(),
                 class_name: "Wood".to_string(),

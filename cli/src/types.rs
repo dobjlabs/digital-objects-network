@@ -39,6 +39,9 @@ pub struct LoadGuiInventoryResult {
 pub struct RunActionInput {
     pub action_id: String,
     pub input_object_paths: Vec<String>,
+    /// Client-generated correlation id; the daemon echoes it back in
+    /// `run-action-progress` events so we can filter to our own run.
+    pub run_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +52,7 @@ pub struct RunActionRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunActionResult {
+    pub run_id: String,
     pub old_root: String,
     pub new_root: String,
     pub output_files: Vec<String>,
