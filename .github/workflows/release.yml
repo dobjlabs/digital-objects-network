@@ -22,23 +22,61 @@ on:
         required: true
         type: string
 
+# Single sources of truth — every job and the release-notes template draws
+# from here so a value change is one edit.
+env:
+  # `inputs.tag_name` is required:true on workflow_dispatch and empty on
+  # push:tags, so the `||` falls through to the tag ref cleanly.
+  RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
+  # Hosted defaults baked into dobjd at compile time (see
+  # driver/src/settings.rs::default_settings) AND surfaced in the release
+  # notes via envsubst. Change here, both move together.
+  DEFAULT_SYNCHRONIZER_API_URL: http://18.217.144.33:3000
+  DEFAULT_RELAYER_API_URL: http://18.217.144.33:3200
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+# Two pushes to the same tag (or a push + a manual dispatch) racing on the
+# same draft release would clobber each other's uploads. Serialize per-tag.
+concurrency:
+  group: release-${{ github.ref_name || inputs.tag_name }}
+  cancel-in-progress: false
+
+# No CI gate (Clippy/Tests/Rustfmt). Those workflows run on `push: branches:
+# [main]` and on PRs, not on tag pushes — so requiring a green run for the
+# tagged SHA blocks every release. Reintroduce a gate before the first
+# stable release if needed (e.g. by extending the prerequisite workflows
+# to also fire on tag push, or by polling for completion).
+
 jobs:
-  # No CI gate (Clippy/Tests/Rustfmt). Those workflows run on `push: branches:
-  # [main]` and on PRs, not on tag pushes — so requiring a green run for the
-  # tagged SHA blocks every release. Reintroduce a gate before the first
-  # stable release if needed (e.g. by extending the prerequisite workflows
-  # to also fire on tag push, or by polling for completion).
+  validate:
+    # Tiny gate so a malformed dispatch tag fails in seconds instead of
+    # 30 minutes into a macOS notarization. push:tags filtering already
+    # rejects non-`v*` refs, but workflow_dispatch accepts any string.
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Validate tag shape
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(rc|alpha|beta)\.[0-9]+)?$ ]]; then
+            echo "::error::tag must be vMAJOR.MINOR.PATCH[-rc.N | -alpha.N | -beta.N], got '$RELEASE_TAG'"
+            exit 1
+          fi
+          echo "tag ok: $RELEASE_TAG"
 
   cli:
-    permissions:
-      contents: write
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
         include:
           # Both macOS targets run on `macos-latest` (Apple Silicon) — the
-          # arm64 build is native, x86_64 is cross-compiled. Mirrors the
-          # historical desktop release workflow which did the same. Free
+          # arm64 build is native, x86_64 is cross-compiled. Free
           # macos-13 (Intel) runners were deprecated end of 2025 and are
           # unavailable in the public queue, so cross-compile is the only
           # path to ship Intel binaries without paying for a runner.
@@ -48,11 +86,27 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             scip_glob: libscip*.dylib
+          # Pin Linux runner to 22.04 (not -latest / 24.04) intentionally.
+          # Linking against an older glibc widens the set of distros that
+          # can run our prebuilt binary; bumping the runner bumps the
+          # required minimum glibc on end-user machines.
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             scip_glob: "libscip.so*"
 
     runs-on: ${{ matrix.os }}
+
+    # Apple secrets used across signing/notarize steps. Job-level (not
+    # per-step) so they're declared once. Linux steps don't reference
+    # them; macOS-gated steps see them as needed.
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
 
     steps:
       - uses: actions/checkout@v4
@@ -60,7 +114,8 @@ jobs:
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: nightly-2026-01-25
+          # toolchain version comes from rust-toolchain.toml — single source
+          # for the workspace, the daily CI workflows, and this release.
           target: ${{ matrix.target }}
           cache-shared-key: cli-${{ matrix.target }}
           cache-workspace-crates: true
@@ -77,7 +132,6 @@ jobs:
         # cmake would write, so the build links cleanly and the bundle
         # has the right binaries.
         if: matrix.target == 'x86_64-apple-darwin'
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -100,15 +154,15 @@ jobs:
           arch -x86_64 /usr/local/bin/brew install gcc@13
 
           echo "--- /usr/local/opt/gcc@13/lib/gcc/13 ---"
+          # Pure diagnostic display — `ls -la` is intentional and not parsed.
+          # shellcheck disable=SC2012
           ls -la /usr/local/opt/gcc@13/lib/gcc/13 | head -30
 
       - name: Build dobjd
+        # DEFAULT_*_URL come from the workflow-level env block — driver/src/
+        # settings.rs reads them via option_env! at compile time and bakes
+        # them into the binary as the hosted defaults.
         run: cargo build --release --locked -p dobjd --target ${{ matrix.target }}
-        env:
-          # Bake hosted defaults into the binary so SKILL.md's settings.json
-          # write is belt-and-suspenders rather than load-bearing.
-          DEFAULT_SYNCHRONIZER_API_URL: http://18.217.144.33:3000
-          DEFAULT_RELAYER_API_URL: http://18.217.144.33:3200
 
       - name: Build dobj
         run: cargo build --release --locked -p cli --target ${{ matrix.target }}
@@ -122,7 +176,6 @@ jobs:
         run: cargo build --release --locked -p craft-mcp --bin bitcraft-mcp-proxy --features proxy --target ${{ matrix.target }}
 
       - name: Stage tarball directories
-        shell: bash
         run: |
           set -euo pipefail
           OUT="target/${{ matrix.target }}/release"
@@ -203,26 +256,16 @@ jobs:
 
           ls -la "$DOBJD_STAGE" "$DOBJD_LIBS" "$DOBJ_STAGE"
 
-          echo "DOBJD_STAGE=$DOBJD_STAGE" >> "$GITHUB_ENV"
-          echo "DOBJD_LIBS=$DOBJD_LIBS"   >> "$GITHUB_ENV"
-          echo "DOBJ_STAGE=$DOBJ_STAGE"   >> "$GITHUB_ENV"
+          {
+            echo "DOBJD_STAGE=$DOBJD_STAGE"
+            echo "DOBJD_LIBS=$DOBJD_LIBS"
+            echo "DOBJ_STAGE=$DOBJ_STAGE"
+          } >> "$GITHUB_ENV"
 
       # ---------- macOS codesign + notarize -----------------------------------
-      #
-      # Mirrors release.yml's signing flow. The inputs are the same secrets
-      # the desktop release uses, so adding new secrets isn't required.
 
       - name: Validate macOS signing secrets
         if: runner.os == 'macOS'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
         run: |
           missing=()
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY_SECRET KEYCHAIN_PASSWORD APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_CONTENT; do
@@ -237,38 +280,32 @@ jobs:
 
       - name: Prepare macOS signing assets
         if: runner.os == 'macOS'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
         run: |
           set -euo pipefail
           CERT_PATH="$RUNNER_TEMP/apple-certificate.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          # printf %s avoids the trailing newline `echo` would add — the
+          # base64 decoder tolerates it but the explicit form is clearer.
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security default-keychain -s "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -t 3600 -u "$KEYCHAIN_PATH"
           security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          echo "MACOS_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY_SECRET" >> "$GITHUB_ENV"
-
           # App Store Connect API key (used by xcrun notarytool).
           APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY.p8"
           printf '%s' "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY_PATH"
-          echo "APPLE_API_KEY_ID=$APPLE_API_KEY"     >> "$GITHUB_ENV"
-          echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"  >> "$GITHUB_ENV"
-          echo "APPLE_API_KEY_PATH=$APPLE_API_KEY_PATH" >> "$GITHUB_ENV"
+
+          {
+            echo "MACOS_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY_SECRET"
+            echo "APPLE_API_KEY_ID=$APPLE_API_KEY"
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
+            echo "APPLE_API_KEY_PATH=$APPLE_API_KEY_PATH"
+          } >> "$GITHUB_ENV"
 
       - name: Bundle macOS GCC runtime deps
         if: runner.os == 'macOS'
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -281,9 +318,6 @@ jobs:
           # 2. Rewrite their install_names to @rpath so they resolve via the
           #    same `@loader_path` that libscip uses
           # 3. Re-sign them with our team identity (later step)
-          #
-          # Logic mirrors app-gui/src-tauri/build.rs's copy_mac_gcc_runtime_libs
-          # + rewrite_mac_dylib_ids.
 
           # Bundle GCC runtime libs (libgfortran/libquadmath/libgcc_s, plus
           # whatever the install_name walk pulls in transitively, e.g.
@@ -387,7 +421,6 @@ jobs:
 
       - name: Codesign macOS binaries
         if: runner.os == 'macOS'
-        shell: bash
         run: |
           set -euo pipefail
           IDENTITY="${MACOS_SIGNING_IDENTITY}"
@@ -421,7 +454,6 @@ jobs:
 
       - name: Notarize macOS binaries
         if: runner.os == 'macOS'
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -445,11 +477,23 @@ jobs:
       # ---------- Tarball + upload --------------------------------------------
 
       - name: Stage tarballs
-        shell: bash
         run: |
           set -euo pipefail
           tar -czf "dobjd-${{ matrix.target }}.tar.gz" -C "$DOBJD_STAGE" .
           tar -czf "dobj-${{ matrix.target }}.tar.gz"  -C "$DOBJ_STAGE"  .
+
+      - name: Render release notes
+        # Substitute DEFAULT_*_URL into the template so the body shown on
+        # the GitHub release page matches the URLs baked into the binary.
+        # Whitelist the variables to avoid touching unrelated `$foo` text.
+        run: |
+          set -euo pipefail
+          # envsubst's first arg is a whitelist of `$VAR` names to substitute
+          # — single quotes are intentional (shellcheck SC2016 warns by
+          # default but it's wrong here, the names must NOT expand in shell).
+          # shellcheck disable=SC2016
+          envsubst '$DEFAULT_SYNCHRONIZER_API_URL $DEFAULT_RELAYER_API_URL' \
+            < .github/release-notes.md.tpl > release-notes.md
 
       - name: Upload to draft release
         uses: softprops/action-gh-release@v2
@@ -457,63 +501,30 @@ jobs:
           files: |
             dobjd-${{ matrix.target }}.tar.gz
             dobj-${{ matrix.target }}.tar.gz
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
           draft: true
           fail_on_unmatched_files: true
-          body: |
-            ## Install via agent prompt
-
-            Paste this to Claude Code, Cursor, or any MCP-aware agent:
-
-            > Read https://raw.githubusercontent.com/dobjlabs/zk-craft/main/SKILL.md and set up bitcraft.
-
-            The skill installs `dobjd`, `dobj`, `bitcraft-mcp-proxy`, and the
-            `craft-basics` plugin into `~/.dobj/` and registers MCP with the
-            agent so you can drive bitcraft directly.
-
-            ## Manual install
-
-            See [SKILL.md](https://github.com/dobjlabs/zk-craft/blob/main/SKILL.md) for the underlying steps.
-
-            ## What's in the release
-
-            - **`dobjd-{target}.tar.gz`** — the daemon (HTTP API on `:7717`,
-              MCP on `:7718`). Bundles `bitcraft-mcp-proxy` + `libscip` + GCC
-              runtime libs in `.libs/`.
-            - **`dobj-{target}.tar.gz`** — terminal CLI for the daemon.
-            - **`craft-basics.pexe`** — the bundled crafting plugin (Log,
-              Wood, Stone, sticks, picks…).
-
-            Targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
-            `x86_64-unknown-linux-gnu`.
-
-            ## Notes
-
-            - macOS binaries are codesigned + notarized
-            - Defaults: synchronizer `http://18.217.144.33:3000`, relayer
-              `http://18.217.144.33:3200`. Change with
-              `dobj settings set --synchronizer ... --relayer ...`.
+          body_path: release-notes.md
 
   plugin:
+    needs: validate
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: nightly-2026-01-25
-          cache-shared-key: cli-plugin
+          # toolchain version comes from rust-toolchain.toml.
+          cache-shared-key: plugin
 
       - name: Build craft-basics.pexe
         run: cargo run --release --locked -p pexe -- build plugins/craft-basics
 
       - name: Locate artifact
         id: find
-        shell: bash
         run: |
+          set -euo pipefail
           PEXE=$(find target -path '*pexe*' -name 'craft-basics*.pexe' | head -1)
           if [ -z "$PEXE" ]; then
             echo "::error::craft-basics.pexe not produced"
@@ -522,46 +533,21 @@ jobs:
           echo "pexe=$PEXE" >> "$GITHUB_OUTPUT"
           echo "found: $PEXE"
 
+      - name: Render release notes
+        run: |
+          set -euo pipefail
+          # envsubst's first arg is a whitelist of `$VAR` names to substitute
+          # — single quotes are intentional (shellcheck SC2016 warns by
+          # default but it's wrong here, the names must NOT expand in shell).
+          # shellcheck disable=SC2016
+          envsubst '$DEFAULT_SYNCHRONIZER_API_URL $DEFAULT_RELAYER_API_URL' \
+            < .github/release-notes.md.tpl > release-notes.md
+
       - name: Upload to draft release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.find.outputs.pexe }}
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
           draft: true
           fail_on_unmatched_files: true
-          # Same body as the cli job uploads — softprops merges to the same
-          # release, whichever job finishes first creates it. Setting the
-          # body identically across uploads is race-safe (idempotent).
-          body: |
-            ## Install via agent prompt
-
-            Paste this to Claude Code, Cursor, or any MCP-aware agent:
-
-            > Read https://raw.githubusercontent.com/dobjlabs/zk-craft/main/SKILL.md and set up bitcraft.
-
-            The skill installs `dobjd`, `dobj`, `bitcraft-mcp-proxy`, and the
-            `craft-basics` plugin into `~/.dobj/` and registers MCP with the
-            agent so you can drive bitcraft directly.
-
-            ## Manual install
-
-            See [SKILL.md](https://github.com/dobjlabs/zk-craft/blob/main/SKILL.md) for the underlying steps.
-
-            ## What's in the release
-
-            - **`dobjd-{target}.tar.gz`** — the daemon (HTTP API on `:7717`,
-              MCP on `:7718`). Bundles `bitcraft-mcp-proxy` + `libscip` + GCC
-              runtime libs in `.libs/`.
-            - **`dobj-{target}.tar.gz`** — terminal CLI for the daemon.
-            - **`craft-basics.pexe`** — the bundled crafting plugin (Log,
-              Wood, Stone, sticks, picks…).
-
-            Targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
-            `x86_64-unknown-linux-gnu`.
-
-            ## Notes
-
-            - macOS binaries are codesigned + notarized
-            - Defaults: synchronizer `http://18.217.144.33:3000`, relayer
-              `http://18.217.144.33:3200`. Change with
-              `dobj settings set --synchronizer ... --relayer ...`.
+          body_path: release-notes.md
