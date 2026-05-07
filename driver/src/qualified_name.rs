@@ -52,12 +52,15 @@ impl QualifiedName {
         })
     }
 
-    /// Lowercase, filename-safe prefix for `.dobj` files. Plugin names are
-    /// validated against `[A-Za-z0-9_-]` at catalog load, but class names
-    /// come from arbitrary rhai literals and could in principle contain
-    /// path-significant characters — anything outside `[a-z0-9_-]` is
-    /// replaced with `_` so the result stays inside a single filename
-    /// component (no path traversal, no separator escapes).
+    /// Lowercase, filename-safe prefix for `.dobj` files. Both plugin
+    /// names (validated at catalog load) and class names (validated by
+    /// the SDK at module compile time) are already restricted to
+    /// `[A-Za-z0-9_-]`, so the only normalization this needs to do is
+    /// lowercase. The fallback to `_` for any non-allowlisted byte stays
+    /// in place as a defense-in-depth measure: if a future SDK regression
+    /// or an entirely different catalog implementation ever feeds in a
+    /// stray path separator, written files will still be confined to a
+    /// single filename component.
     pub fn file_prefix(&self) -> String {
         let mut out = String::with_capacity(self.plugin_name.len() + 2 + self.name.len());
         push_safe_lower(&mut out, &self.plugin_name);
