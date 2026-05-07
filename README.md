@@ -26,7 +26,7 @@ A single **driver daemon** (`dobjd`) on the user's machine owns
   REST/SSE API on `:7717` and the MCP server on `:7718`. Owns the
   filesystem watcher, plugin loader, RocksDB, and the in-memory state
   every client shares.
-- **`dobj`** ([dobj/](dobj)) — terminal CLI. Subcommands for inventory,
+- **`dobj`** ([cli/](cli)) — terminal CLI. Subcommands for inventory,
   inspecting objects/classes, running actions, watching the event bus,
   and managing the daemon (`start`/`stop`/`status`/`logs`).
 - **Desktop / web** ([app-gui/](app-gui)) — React UI bundled either as a
@@ -105,7 +105,7 @@ Run individual pieces standalone with `just sync`, `just relayer`,
 |---|---|
 | [`driver/`](driver) | the canonical Rust library — opens `~/.dobj/`, runs actions, queries inventory. Single entry point for any in-process consumer |
 | [`dobjd/`](dobjd) | HTTP + MCP daemon wrapping the driver. Long-running, owns broadcast hub + file watcher |
-| [`dobj/`](dobj) | terminal CLI client for dobjd |
+| [`cli/`](cli) | terminal CLI client for dobjd (binary: `dobj`) |
 | [`mcp/`](mcp) | MCP server library + `bitcraft-mcp-proxy` stdio bridge |
 | [`app-gui/`](app-gui) | React frontend + thin Tauri shell. Fetches from dobjd over HTTP/SSE |
 | [`synchronizer/`](synchronizer), [`relayer/`](relayer) | chain-side services (Postgres-backed) |

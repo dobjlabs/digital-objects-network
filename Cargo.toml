@@ -13,7 +13,7 @@ members = [
     "intro_pods/lt_eq_u256_pod",
     "mcp",
     "dobjd",
-    "dobj",
+    "cli",
 ]
 resolver = "2"
 

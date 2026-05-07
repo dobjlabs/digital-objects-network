@@ -111,7 +111,7 @@ jobs:
           DEFAULT_RELAYER_API_URL: http://18.217.144.33:3200
 
       - name: Build dobj
-        run: cargo build --release --locked -p dobj --target ${{ matrix.target }}
+        run: cargo build --release --locked -p cli --target ${{ matrix.target }}
 
       - name: Build bitcraft-mcp-proxy
         # Stdio↔HTTP bridge that Claude Desktop launches as a child process
