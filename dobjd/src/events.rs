@@ -33,16 +33,6 @@ pub enum Event {
         #[serde(rename = "nullifiedFiles")]
         nullified_files: Option<Vec<String>>,
     },
-    /// Emitted when an MCP client kicks off an action so other clients
-    /// (the desktop GUI / website) can highlight it as in-flight. Carries
-    /// both the action_id (which class of work) and the run_id (the
-    /// server-generated correlation id, also used for `RunActionProgress`).
-    McpActionStarted {
-        #[serde(rename = "actionId")]
-        action_id: String,
-        #[serde(rename = "runId")]
-        run_id: String,
-    },
 }
 
 /// Channel capacity for the broadcast hub. Slow subscribers get lagged events

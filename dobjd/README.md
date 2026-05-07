@@ -57,7 +57,7 @@ All routes return JSON unless noted; errors come back as
 | `GET` | `/events` | broadcast hub stream (SSE) |
 
 The `/events` payload is a JSON object with a `type` discriminator.
-Variants: `objects-changed`, `run-action-progress`, `mcp-action-started`.
+Variants: `objects-changed`, `run-action-progress`.
 
 ## MCP integration
 

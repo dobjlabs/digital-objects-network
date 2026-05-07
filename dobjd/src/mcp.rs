@@ -2,8 +2,6 @@
 //! and broadcast hub used by the HTTP routes.
 //!
 //! Ported from `app-gui/src-tauri/src/mcp.rs` — the only differences are:
-//! - emits `mcp-action-started` over the SSE event hub instead of Tauri's
-//!   per-window event channel
 //! - uses [`SseProgressReporter`] instead of `TauriProgressReporter` for
 //!   action execution progress.
 
@@ -13,7 +11,7 @@ use std::sync::Arc;
 use craft_mcp::ops::CraftOps;
 use craft_mcp::types as mcp;
 
-use crate::events::{Event, EventTx};
+use crate::events::EventTx;
 use crate::progress::SseProgressReporter;
 
 pub struct DobjdCraftOps {
@@ -120,11 +118,6 @@ impl CraftOps for DobjdCraftOps {
         // Generate a per-call run id. action_id is shared across concurrent
         // runs of the same action and isn't unique enough for SSE filtering.
         let run_id = uuid::Uuid::new_v4().to_string();
-
-        let _ = self.events.send(Event::McpActionStarted {
-            action_id: input.action_id.clone(),
-            run_id: run_id.clone(),
-        });
 
         let reporter = SseProgressReporter::new(self.events.clone(), run_id.clone());
         let result = self.driver.execute_with_reporter(

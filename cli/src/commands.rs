@@ -215,7 +215,7 @@ pub async fn run(
 }
 
 /// Stream every event flowing through dobjd's broadcast hub as JSON
-/// lines: `objects-changed`, `run-action-progress`, `mcp-action-started`.
+/// lines: `objects-changed`, `run-action-progress`.
 /// Each event prints once across all connected clients, so this is the
 /// single place to see activity from the desktop, web UI, MCP, and
 /// other CLI invocations at the same time.
