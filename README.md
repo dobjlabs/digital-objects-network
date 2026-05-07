@@ -84,13 +84,13 @@ just dev
 
 `just dev` brings up five panes via mprocs:
 
-| Pane | Purpose |
-|---|---|
+| Pane           | Purpose                                                    |
+| -------------- | ---------------------------------------------------------- |
 | `synchronizer` | rebuilds canonical state from chain data (Postgres-backed) |
-| `relayer` | submits proof payloads as EIP-4844 blobs |
-| `dobjd` | the driver daemon — HTTP on `:7717`, MCP on `:7718` |
-| `web` | Vite on `:1420`, hot-reload for the React app |
-| `desktop` | Tauri shell pointing at the standalone Vite |
+| `relayer`      | submits proof payloads as EIP-4844 blobs                   |
+| `dobjd`        | the driver daemon — HTTP on `:7717`, MCP on `:7718`        |
+| `web`          | Vite on `:1420`, hot-reload for the React app              |
+| `desktop`      | Tauri shell pointing at the standalone Vite                |
 
 The desktop window opens automatically. Open `http://localhost:1420` in
 any browser to use the website client. MCP-aware agents can connect via
@@ -101,19 +101,19 @@ Run individual pieces standalone with `just sync`, `just relayer`,
 
 ## Workspace map
 
-| Crate | Role |
-|---|---|
-| [`driver/`](driver) | the canonical Rust library — opens `~/.dobj/`, runs actions, queries inventory. Single entry point for any in-process consumer |
-| [`dobjd/`](dobjd) | HTTP + MCP daemon wrapping the driver. Long-running, owns broadcast hub + file watcher |
-| [`cli/`](cli) | terminal CLI client for dobjd (binary: `dobj`) |
-| [`mcp/`](mcp) | MCP server library + `bitcraft-mcp-proxy` stdio bridge |
-| [`app-gui/`](app-gui) | React frontend + thin Tauri shell. Fetches from dobjd over HTTP/SSE |
-| [`synchronizer/`](synchronizer), [`relayer/`](relayer) | chain-side services (Postgres-backed) |
-| [`txlib/`](txlib) | transaction builder — event hash chain, `TxFinalized` predicate, nullifier derivation |
-| [`sdk/`](sdk) | higher-level helpers used inside plugin actions |
-| [`pexe/`](pexe) | plugin packager — bundles `manifest.toml` + `plugin.rhai` into `.pexe` archives |
-| [`plugins/craft-basics/`](plugins/craft-basics) | the bundled crafting plugin (Log, Wood, Stone, sticks, picks…) |
-| [`common/`](common), [`pod2utils/`](pod2utils), [`intro_pods/`](intro_pods), [`timelib/`](timelib) | shared utilities + intro proof-of-work / VDF pods |
+| Crate                                                                                              | Role                                                                                                                           |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| [`driver/`](driver)                                                                                | the canonical Rust library — opens `~/.dobj/`, runs actions, queries inventory. Single entry point for any in-process consumer |
+| [`dobjd/`](dobjd)                                                                                  | HTTP + MCP daemon wrapping the driver. Long-running, owns broadcast hub + file watcher                                         |
+| [`cli/`](cli)                                                                                      | terminal CLI client for dobjd (binary: `dobj`)                                                                                 |
+| [`mcp/`](mcp)                                                                                      | MCP server library + `bitcraft-mcp-proxy` stdio bridge                                                                         |
+| [`app-gui/`](app-gui)                                                                              | React frontend + thin Tauri shell. Fetches from dobjd over HTTP/SSE                                                            |
+| [`synchronizer/`](synchronizer), [`relayer/`](relayer)                                             | chain-side services (Postgres-backed)                                                                                          |
+| [`txlib/`](txlib)                                                                                  | transaction builder — event hash chain, `TxFinalized` predicate, nullifier derivation                                          |
+| [`sdk/`](sdk)                                                                                      | higher-level helpers used inside plugin actions                                                                                |
+| [`pexe/`](pexe)                                                                                    | plugin packager — bundles `manifest.toml` + `plugin.rhai` into `.pexe` archives                                                |
+| [`plugins/craft-basics/`](plugins/craft-basics)                                                    | the bundled crafting plugin (Log, Wood, Stone, sticks, picks…)                                                                 |
+| [`common/`](common), [`pod2utils/`](pod2utils), [`intro_pods/`](intro_pods), [`timelib/`](timelib) | shared utilities + intro proof-of-work / VDF pods                                                                              |
 
 Built on **pod2** (0xPARC's predicate-of-data system) using `plonky2` +
 Groth16 — proofs are constant-size regardless of input count.
@@ -157,18 +157,3 @@ plugins automatically.
 If you're not using the default local `postgres` role/admin database,
 either adjust the `just reset` command or drop the `synchronizer` and
 `relayer` databases manually.
-
-## Further reading
-
-- [SKILL.md](SKILL.md) — end-user install via agent prompt
-- [readmes/digital-objects.md](readmes/digital-objects.md) — full `.dobj`
-  file structure spec
-- [readmes/driver-design.md](readmes/driver-design.md) — driver API +
-  storage model
-- [readmes/synchronizer-design.md](readmes/synchronizer-design.md) — chain
-  indexing + Merkle trees
-- [readmes/network.md](readmes/network.md) — how transactions reach the
-  chain
-- [readmes/pexe-design.md](readmes/pexe-design.md) — plugin format
-- [deploy/ec2/README.md](deploy/ec2/README.md) — running the
-  synchronizer + relayer on an EC2 box
