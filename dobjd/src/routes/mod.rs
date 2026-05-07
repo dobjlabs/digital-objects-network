@@ -1,11 +1,8 @@
-use std::path::PathBuf;
-
 use axum::{
     Router,
     routing::{get, post},
 };
 use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 use crate::state::AppState;
@@ -20,16 +17,14 @@ mod state;
 
 /// Build the axum router.
 ///
-/// `static_dir`, when set, makes dobjd serve a static frontend bundle (the
-/// React build under `app-gui/dist`) at every path the API doesn't claim.
-/// Without it, dobjd is API-only and a separate dev server (Vite) hosts the
-/// UI.
+/// dobjd is API-only — the UI is served separately (Vite on `:1420` in dev,
+/// Tauri's webview for the desktop app).
 ///
 /// Note: axum routes literal paths (e.g. `/objects/dir`, `/objects/parse`)
 /// before parameterized ones (`/objects/{id}`), so the relative order isn't
 /// load-bearing — but the literals are listed first for readability.
-pub fn router(app_state: AppState, static_dir: Option<PathBuf>) -> Router {
-    let api = Router::new()
+pub fn router(app_state: AppState) -> Router {
+    Router::new()
         .route("/inventory", get(inventory::load_inventory))
         .route("/state-root", get(state::get_state_root))
         .route("/objects/dir", get(objects::get_objects_dir))
@@ -44,13 +39,7 @@ pub fn router(app_state: AppState, static_dir: Option<PathBuf>) -> Router {
         .route("/actions/run", post(actions::run_action))
         .route("/actions/{id}/feasibility", get(actions::check_feasibility))
         .route("/events", get(events::stream))
-        .with_state(app_state);
-
-    let api = match static_dir {
-        Some(dir) => api.fallback_service(ServeDir::new(dir)),
-        None => api,
-    };
-
-    api.layer(CorsLayer::permissive())
+        .with_state(app_state)
+        .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }

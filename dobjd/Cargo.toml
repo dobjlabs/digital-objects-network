@@ -22,6 +22,6 @@ env_logger = { workspace = true }
 axum = { version = "0.8.8", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 futures-util = "0.3"
 notify = "6"

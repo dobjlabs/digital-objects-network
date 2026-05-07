@@ -27,11 +27,6 @@ async fn main() -> Result<()> {
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(DEFAULT_PORT);
 
-    let static_dir = std::env::var("DOBJD_STATIC_DIR")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(std::path::PathBuf::from);
-
     let driver = Arc::new(Driver::open_default()?);
     let (event_tx, _initial_rx) = events::channel();
 
@@ -42,10 +37,7 @@ async fn main() -> Result<()> {
     }
 
     let state = AppState::new(driver.clone(), event_tx.clone());
-    if let Some(ref dir) = static_dir {
-        eprintln!("dobjd: serving static frontend from {}", dir.display());
-    }
-    let app = routes::router(state, static_dir);
+    let app = routes::router(state);
 
     // Bind both listeners up-front so we fail fast and synchronously if
     // either port is taken. Without this, an MCP bind failure would surface

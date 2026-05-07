@@ -32,11 +32,6 @@ web:
 dobjd:
     RUST_LOG=info cargo run -p dobjd --release
 
-# Run dobjd with the React app served from app-gui/dist as a single binary.
-# Requires `pnpm --dir app-gui build` to have produced the bundle.
-dobjd-web:
-    DOBJD_STATIC_DIR={{justfile_directory()}}/app-gui/dist RUST_LOG=info cargo run -p dobjd --release
-
 # Bring up everything: synchronizer, relayer, dobjd, Vite, and the Tauri
 # shell — all backed by one dobjd process. Open http://localhost:1420 in a
 # browser to use the website client; the desktop window opens automatically.
