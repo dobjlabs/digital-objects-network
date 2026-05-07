@@ -49,7 +49,6 @@ pub struct RunActionRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunActionResult {
-    pub ok: bool,
     pub old_root: String,
     pub new_root: String,
     pub output_files: Vec<String>,

@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde_json::Value;
@@ -186,10 +186,6 @@ pub async fn run(
         .await?;
 
     progress_handle.abort();
-
-    if !result.ok {
-        return Err(anyhow!("run_action returned ok=false"));
-    }
 
     println!("action: {action_id}");
     println!("old root: {}", result.old_root);

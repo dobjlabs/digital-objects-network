@@ -39,7 +39,6 @@ export interface RunActionInput {
 }
 
 export interface RunActionResult {
-  ok: boolean;
   oldRoot: string;
   newRoot: string;
   outputFiles: string[];

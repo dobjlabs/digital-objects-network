@@ -1,8 +1,9 @@
-/// Stdio-to-HTTP proxy for the ZK-Craft MCP server.
+/// Stdio-to-HTTP proxy for the bitcraft MCP server.
 ///
-/// Claude Desktop launches this as a child process. It reads JSON-RPC from
-/// stdin, forwards to the Tauri app's streamable HTTP MCP endpoint, and
-/// writes responses to stdout.
+/// Claude Desktop only speaks stdio MCP. This binary reads JSON-RPC from
+/// stdin, forwards it to dobjd's streamable HTTP MCP endpoint
+/// (`http://127.0.0.1:7718/mcp` by default), and writes the response back
+/// to stdout.
 ///
 /// Requests are dispatched concurrently so that long-running tool calls
 /// (e.g. proof generation) do not block other requests.
@@ -117,7 +118,7 @@ async fn handle_request(
         Ok(r) => r,
         Err(e) => {
             tracing::error!(
-                "Failed to connect to MCP server at {url}: {e}. Is the Tauri app running?"
+                "Failed to connect to MCP server at {url}: {e}. Is dobjd running? Try `dobj status`."
             );
             return;
         }
@@ -156,25 +157,34 @@ async fn handle_request(
     }
 }
 
+/// Parse `--url <url>` or `--port <num>` from argv. The two are mutually
+/// exclusive; `--url` wins if both are provided. Missing values exit non-zero
+/// rather than silently falling back, so a typo can't quietly point the
+/// proxy at the wrong endpoint.
 fn parse_url_from_args() -> String {
-    let args: Vec<String> = std::env::args().collect();
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--port" => {
-                if let Some(port) = args.get(i + 1) {
-                    return format!("http://127.0.0.1:{port}/mcp");
-                }
-                i += 2;
-            }
+    let mut args = std::env::args().skip(1);
+    let mut url: Option<String> = None;
+    let mut port: Option<String> = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
             "--url" => {
-                if let Some(url) = args.get(i + 1) {
-                    return url.clone();
-                }
-                i += 2;
+                url = Some(args.next().unwrap_or_else(|| die("--url requires a value")));
             }
-            _ => i += 1,
+            "--port" => {
+                port = Some(args.next().unwrap_or_else(|| die("--port requires a value")));
+            }
+            other => die(&format!("unknown argument: {other}")),
         }
     }
-    format!("http://127.0.0.1:{}/mcp", craft_mcp::DEFAULT_PORT)
+    if let Some(url) = url {
+        return url;
+    }
+    let port = port.unwrap_or_else(|| craft_mcp::DEFAULT_PORT.to_string());
+    format!("http://127.0.0.1:{port}/mcp")
+}
+
+fn die(msg: &str) -> ! {
+    eprintln!("bitcraft-mcp-proxy: {msg}");
+    eprintln!("usage: bitcraft-mcp-proxy [--url <url> | --port <num>]");
+    std::process::exit(2);
 }

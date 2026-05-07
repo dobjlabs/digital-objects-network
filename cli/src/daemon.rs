@@ -239,8 +239,10 @@ pub async fn start(client: &DobjdClient) -> Result<()> {
     fs::write(&paths.pid_file, pid.to_string())
         .with_context(|| format!("failed to write {}", paths.pid_file.display()))?;
 
-    // Don't reap the child — we want it to keep running after we exit.
-    std::mem::forget(child);
+    // Drop the Child without reaping. Rust's Child only kills on an explicit
+    // `.kill()` (not on drop), so the spawned process keeps running after we
+    // exit. The pidfile is what later `dobj stop` / `status` use to reach it.
+    drop(child);
 
     println!(
         "starting dobjd (pid {pid}, log {})…",
@@ -371,9 +373,8 @@ fn read_tail(path: &Path, n: usize) -> Result<String> {
         lines.drain(0..lines.len() - n);
     }
     let mut out = lines.join("\n");
-    if !contents.is_empty() && !contents.ends_with('\n') {
-        // Preserve original trailing-newline state.
-    } else if !out.is_empty() {
+    // Preserve the original file's trailing-newline state.
+    if !out.is_empty() && contents.ends_with('\n') {
         out.push('\n');
     }
     Ok(out)

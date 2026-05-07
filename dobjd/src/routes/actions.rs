@@ -22,7 +22,6 @@ pub struct RunActionInput {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunActionResult {
-    pub ok: bool,
     pub old_root: String,
     pub new_root: String,
     pub output_files: Vec<String>,
@@ -72,7 +71,6 @@ pub async fn run_action(
         )?;
 
         Ok(RunActionResult {
-            ok: true,
             old_root: result.old_root,
             new_root: result.new_root,
             output_files: result.output_files,
