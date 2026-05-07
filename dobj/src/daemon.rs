@@ -173,16 +173,29 @@ async fn wait_until_ready(client: &DobjdClient, pid: i32, timeout: Duration) -> 
 pub async fn start(client: &DobjdClient) -> Result<()> {
     let paths = DaemonPaths::resolve()?;
 
-    // Already running? Idempotent: succeed without spawning a duplicate.
-    if let Some(pid) = read_pidfile(&paths.pid_file) {
-        if process_alive(pid) {
-            // Confirm via HTTP — pidfile could be stale from a different binary.
-            if http_alive(client).await {
+    // Already running? Probe HTTP first — some other process may own :7717
+    // (a `cargo run -p dobjd`, a previous `dobj start` whose pidfile was
+    // wiped, etc.) and if we don't catch that here, we'd spawn a duplicate
+    // that immediately dies on EADDRINUSE while wait_until_ready happily
+    // sees the *original* dobjd answering and reports success — leaving a
+    // pidfile pointing at a corpse.
+    if http_alive(client).await {
+        match read_pidfile(&paths.pid_file) {
+            Some(pid) if process_alive(pid) => {
                 println!("dobjd already running (pid {pid})");
-                return Ok(());
+            }
+            _ => {
+                println!(
+                    "dobjd already running on {} (not under our pidfile)",
+                    client.base_url()
+                );
             }
         }
-        // Stale pidfile (process gone or unreachable). Wipe it and start fresh.
+        return Ok(());
+    }
+
+    // Nothing answering on :7717. If a pidfile exists, it's stale.
+    if paths.pid_file.exists() {
         let _ = fs::remove_file(&paths.pid_file);
     }
 

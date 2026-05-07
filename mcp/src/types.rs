@@ -164,9 +164,9 @@ pub struct FeasibilityInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DriverSettings {
-    /// Synchronizer base URL (e.g. `http://18.119.100.201:3000`).
+    /// Synchronizer base URL
     pub synchronizer_api_url: String,
-    /// Relayer base URL (e.g. `http://18.119.100.201:3200`).
+    /// Relayer base URL
     pub relayer_api_url: String,
 }
 

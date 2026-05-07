@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde_json::Value;
+use tokio::sync::oneshot;
 
 use crate::client::DobjdClient;
 use crate::types::{
@@ -123,14 +124,22 @@ pub async fn run(
     quiet: bool,
 ) -> Result<()> {
     // Subscribe to /events first so we don't miss progress messages emitted
-    // before the SSE connection is established.
+    // before the SSE connection is established. We block on the first `Open`
+    // event before posting the action so a fast `run_action` can't beat the
+    // EventSource handshake.
     let events_url = format!("{}/events", client.base_url());
     let progress_run_id = action_id.clone();
+    let (open_tx, open_rx) = oneshot::channel::<()>();
     let progress_handle = tokio::spawn(async move {
         let mut es = EventSource::get(&events_url);
+        let mut open_tx = Some(open_tx);
         while let Some(event) = es.next().await {
             match event {
-                Ok(SseEvent::Open) => {}
+                Ok(SseEvent::Open) => {
+                    if let Some(tx) = open_tx.take() {
+                        let _ = tx.send(());
+                    }
+                }
                 Ok(SseEvent::Message(msg)) => {
                     let Ok(value) = serde_json::from_str::<Value>(&msg.data) else {
                         continue;
@@ -156,6 +165,12 @@ pub async fn run(
             }
         }
     });
+
+    // Wait for the SSE connection to actually open before kicking off the
+    // action. If the EventSource task dies before opening (e.g. dobjd
+    // unreachable), the oneshot is dropped — fall through and let the POST
+    // surface the real error.
+    let _ = open_rx.await;
 
     // Kick off the action.
     let result: RunActionResult = client

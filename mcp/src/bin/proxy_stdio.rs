@@ -71,8 +71,14 @@ async fn main() -> anyhow::Result<()> {
             let stdout_tx = stdout_tx.clone();
             tokio::spawn(async move {
                 // Wait until the session has been established.
+                //
+                // Register the Notified future *before* checking session_id,
+                // so we can't miss a notify_waiters() that races between the
+                // check and the await. Tokio's Notify only wakes waiters that
+                // were already registered when notify_waiters() fires.
+                let waiter = session_ready.notified();
                 if session_id.read().await.is_none() {
-                    session_ready.notified().await;
+                    waiter.await;
                 }
                 handle_request(&client, &url, &line, &session_id, &stdout_tx).await;
             });
