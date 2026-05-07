@@ -151,7 +151,11 @@ impl CraftOps for MockCraftOps {
 
         // Validate the action exists
         if !self.actions.iter().any(|a| a.action == input.action) {
-            bail!("unknown action: {}::{}", input.action.plugin_name, input.action.name);
+            bail!(
+                "unknown action: {}::{}",
+                input.action.plugin_name,
+                input.action.name
+            );
         }
 
         *in_progress = true;

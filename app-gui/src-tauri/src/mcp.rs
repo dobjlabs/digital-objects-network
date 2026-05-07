@@ -40,8 +40,16 @@ impl CraftOps for AppCraftOps {
             .map(|action| mcp::Action {
                 action: to_mcp_qname(action.action),
                 description: action.description,
-                total_inputs: action.total_inputs.into_iter().map(to_mcp_class_ref).collect(),
-                total_outputs: action.total_outputs.into_iter().map(to_mcp_class_ref).collect(),
+                total_inputs: action
+                    .total_inputs
+                    .into_iter()
+                    .map(to_mcp_class_ref)
+                    .collect(),
+                total_outputs: action
+                    .total_outputs
+                    .into_iter()
+                    .map(to_mcp_class_ref)
+                    .collect(),
             })
             .collect())
     }
@@ -54,8 +62,16 @@ impl CraftOps for AppCraftOps {
             .map(|class_info| mcp::ClassSummary {
                 class: to_mcp_qname(class_info.class),
                 live_count: class_info.live_count,
-                produced_by: class_info.produced_by.into_iter().map(to_mcp_qname).collect(),
-                consumed_by: class_info.consumed_by.into_iter().map(to_mcp_qname).collect(),
+                produced_by: class_info
+                    .produced_by
+                    .into_iter()
+                    .map(to_mcp_qname)
+                    .collect(),
+                consumed_by: class_info
+                    .consumed_by
+                    .into_iter()
+                    .map(to_mcp_qname)
+                    .collect(),
             })
             .collect())
     }
@@ -88,8 +104,16 @@ impl CraftOps for AppCraftOps {
         Ok(mcp::ClassDetail {
             class: to_mcp_qname(class_info.class),
             predicate_source: class_info.predicate_source,
-            produced_by: class_info.produced_by.into_iter().map(to_mcp_qname).collect(),
-            consumed_by: class_info.consumed_by.into_iter().map(to_mcp_qname).collect(),
+            produced_by: class_info
+                .produced_by
+                .into_iter()
+                .map(to_mcp_qname)
+                .collect(),
+            consumed_by: class_info
+                .consumed_by
+                .into_iter()
+                .map(to_mcp_qname)
+                .collect(),
         })
     }
 

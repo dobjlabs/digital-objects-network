@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ::driver::{ClassRef, ObjectStatus, QualifiedName};
 use crate::error::CommandError;
+use ::driver::{ClassRef, ObjectStatus, QualifiedName};
 use serde::Serialize;
 
 #[derive(Debug, Serialize, Clone)]
