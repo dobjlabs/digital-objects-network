@@ -171,7 +171,10 @@ fn parse_url_from_args() -> String {
                 url = Some(args.next().unwrap_or_else(|| die("--url requires a value")));
             }
             "--port" => {
-                port = Some(args.next().unwrap_or_else(|| die("--port requires a value")));
+                port = Some(
+                    args.next()
+                        .unwrap_or_else(|| die("--port requires a value")),
+                );
             }
             other => die(&format!("unknown argument: {other}")),
         }
