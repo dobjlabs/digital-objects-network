@@ -31,6 +31,7 @@ interface ProofSummary {
 
 interface ProofState {
   runActionId: string | null;
+  actionId: string | null;
   status: ProofStatus;
   args: string[];
   messages: string[];
@@ -63,7 +64,12 @@ export interface AppState {
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   setGlobalStateRoot: (hash: string | null) => void;
   applyRunActionProgress: (event: RunActionProgress) => void;
-  initProofPanel: (input: { runId: string; args: string[] }) => void;
+  initProofPanel: (input: {
+    runId: string;
+    actionId: string;
+    args: string[];
+  }) => void;
+  resetProofPanel: (runId?: string) => void;
   runProof: (input: {
     actionId: string;
     inputBindings: Array<{
@@ -89,6 +95,7 @@ export const useStore = create<AppState>((set, get) => ({
   actions: [],
   proof: {
     runActionId: null,
+    actionId: null,
     status: "idle",
     args: [],
     messages: [],
@@ -212,6 +219,7 @@ export const useStore = create<AppState>((set, get) => ({
       let nextStatus = prev.proof.status;
       let nextOldRoot = prev.proof.oldRoot;
       let nextNewRoot = prev.proof.newRoot;
+      let nextSummary = prev.proof.summary;
 
       if (event.phase === "generateProof") {
         nextStatus = "generating";
@@ -220,13 +228,19 @@ export const useStore = create<AppState>((set, get) => ({
           detail: event.message,
         });
       } else if (event.phase === "commit") {
-        nextStatus = "committing";
+        nextStatus = event.status === "done" ? "summary" : "committing";
         nextOldRoot = event.oldRoot ?? nextOldRoot;
         nextNewRoot = event.newRoot ?? nextNewRoot;
         updateStep("commit", {
           status: event.status,
           detail: event.message,
         });
+        if (event.status === "done") {
+          nextSummary = {
+            nullified: event.nullifiedFiles ?? [],
+            live: event.outputFiles ?? [],
+          };
+        }
       }
 
       return {
@@ -238,11 +252,12 @@ export const useStore = create<AppState>((set, get) => ({
           steps: nextSteps,
           oldRoot: nextOldRoot,
           newRoot: nextNewRoot,
+          summary: nextSummary,
           stats: prev.proof.stats,
         },
       };
     }),
-  initProofPanel: ({ runId, args }) =>
+  initProofPanel: ({ runId, actionId, args }) =>
     set((prev) => {
       if (
         prev.proof.status === "generating" ||
@@ -254,6 +269,7 @@ export const useStore = create<AppState>((set, get) => ({
         ...prev,
         proof: {
           runActionId: runId,
+          actionId,
           status: "generating",
           args,
           messages: ["Running action..."],
@@ -279,6 +295,26 @@ export const useStore = create<AppState>((set, get) => ({
         },
       };
     }),
+  resetProofPanel: (runId) =>
+    set((prev) => {
+      if (runId && prev.proof.runActionId !== runId) return prev;
+      return {
+        ...prev,
+        proof: {
+          ...prev.proof,
+          runActionId: null,
+          actionId: null,
+          status: "idle",
+          args: [],
+          messages: [],
+          steps: [],
+          oldRoot: null,
+          newRoot: null,
+          summary: null,
+          error: null,
+        },
+      };
+    }),
   runProof: async ({ actionId, inputBindings }) => {
     const postDoneHoldMs = 2800;
     const verifyTargets =
@@ -290,7 +326,7 @@ export const useStore = create<AppState>((set, get) => ({
     // the action can be matched against this run before runAction returns.
     // Two concurrent runs of the same action would collide on actionId.
     const runId = crypto.randomUUID();
-    get().initProofPanel({ runId, args: verifyTargets });
+    get().initProofPanel({ runId, actionId, args: verifyTargets });
 
     try {
       const result = await runAction({
@@ -320,21 +356,7 @@ export const useStore = create<AppState>((set, get) => ({
       await hydrateData();
 
       await new Promise((resolve) => setTimeout(resolve, postDoneHoldMs));
-      set((prev) => ({
-        ...prev,
-        proof: {
-          ...prev.proof,
-          runActionId: null,
-          status: "idle",
-          args: [],
-          messages: [],
-          steps: [],
-          oldRoot: null,
-          newRoot: null,
-          summary: null,
-          error: null,
-        },
-      }));
+      get().resetProofPanel(runId);
     } catch (error) {
       const errorMessage = normalizeErrorMessage(error, "Failed to run action");
       console.error("Failed to run SDK action:", error);
@@ -342,6 +364,7 @@ export const useStore = create<AppState>((set, get) => ({
         ...prev,
         proof: {
           runActionId: null,
+          actionId: null,
           status: "error",
           args: verifyTargets,
           messages: [],

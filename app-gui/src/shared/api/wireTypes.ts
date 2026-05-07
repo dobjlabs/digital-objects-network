@@ -69,6 +69,7 @@ export interface RunActionProgress {
   oldRoot: string | null;
   newRoot: string | null;
   outputFiles: string[] | null;
+  nullifiedFiles: string[] | null;
 }
 
 export interface CpuSample {

@@ -30,6 +30,8 @@ pub enum Event {
         new_root: Option<String>,
         #[serde(rename = "outputFiles")]
         output_files: Option<Vec<String>>,
+        #[serde(rename = "nullifiedFiles")]
+        nullified_files: Option<Vec<String>>,
     },
     /// Emitted when an MCP client kicks off an action so other clients
     /// (the desktop GUI / website) can highlight it as in-flight. Carries

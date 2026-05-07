@@ -5,8 +5,9 @@ pub mod resources;
 pub mod server;
 pub mod types;
 
-/// Default port for the MCP server. Adjacent to dobjd's HTTP API on 7717
-/// so the two ports read as a pair in `lsof -i` / `ss` output.
+/// Default port for the MCP server. Adjacent to dobjd's default HTTP API
+/// port on 7717 so the two ports read as a pair in `lsof -i` / `ss`
+/// output. dobjd derives custom MCP ports as `DOBJD_PORT + 1`.
 pub const DEFAULT_PORT: u16 = 7718;
 
 use std::sync::Arc;

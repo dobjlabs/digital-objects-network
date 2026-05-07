@@ -111,6 +111,18 @@ fn signal(pid: i32, sig: libc::c_int) -> Result<()> {
 /// listener that ate the connection but never replied.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
+fn dobjd_port_from_url(url: &str) -> Result<u16> {
+    let parsed = reqwest::Url::parse(url).with_context(|| format!("invalid dobjd URL: {url}"))?;
+    parsed
+        .port_or_known_default()
+        .ok_or_else(|| anyhow!("dobjd URL must include a port: {url}"))
+}
+
+fn mcp_port_for_http_port(port: u16) -> Result<u16> {
+    port.checked_add(1)
+        .ok_or_else(|| anyhow!("DOBJD_PORT={port} cannot derive an adjacent MCP port"))
+}
+
 /// Probe whether dobjd is operable.
 ///
 /// Hits `/healthz` rather than just any cheap endpoint: a daemon whose
@@ -176,8 +188,10 @@ async fn wait_until_ready(client: &DobjdClient, pid: i32, timeout: Duration) -> 
 
 pub async fn start(client: &DobjdClient) -> Result<()> {
     let paths = DaemonPaths::resolve()?;
+    let dobjd_port = dobjd_port_from_url(client.base_url())?;
+    let mcp_port = mcp_port_for_http_port(dobjd_port)?;
 
-    // Already running? Probe HTTP first — some other process may own :7717
+    // Already running? Probe HTTP first — some other process may own the port
     // (a `cargo run -p dobjd`, a previous `dobj start` whose pidfile was
     // wiped, etc.) and if we don't catch that here, we'd spawn a duplicate
     // that immediately dies on EADDRINUSE while wait_until_ready happily
@@ -198,7 +212,7 @@ pub async fn start(client: &DobjdClient) -> Result<()> {
         return Ok(());
     }
 
-    // Nothing answering on :7717. If a pidfile exists, it's stale.
+    // Nothing answering on the requested port. If a pidfile exists, it's stale.
     if paths.pid_file.exists() {
         let _ = fs::remove_file(&paths.pid_file);
     }
@@ -213,6 +227,7 @@ pub async fn start(client: &DobjdClient) -> Result<()> {
 
     let bin = find_dobjd_binary(&paths);
     let mut cmd = Command::new(&bin);
+    cmd.env("DOBJD_PORT", dobjd_port.to_string());
     cmd.stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_clone));
@@ -249,8 +264,9 @@ pub async fn start(client: &DobjdClient) -> Result<()> {
     drop(child);
 
     println!(
-        "starting dobjd (pid {pid}, log {})…",
-        paths.log_file.display()
+        "starting dobjd (pid {pid}, http {}, mcp http://127.0.0.1:{mcp_port}/mcp, log {})…",
+        client.base_url(),
+        paths.log_file.display(),
     );
     wait_until_ready(client, pid, READY_TIMEOUT).await?;
     println!("dobjd is up");
@@ -386,4 +402,25 @@ fn read_tail(path: &Path, n: usize) -> Result<String> {
         out.push('\n');
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_dobjd_port_from_url() {
+        let port = dobjd_port_from_url("http://127.0.0.1:7727").unwrap();
+        assert_eq!(port, 7727);
+    }
+
+    #[test]
+    fn derives_mcp_port_from_http_port() {
+        assert_eq!(mcp_port_for_http_port(7727).unwrap(), 7728);
+    }
+
+    #[test]
+    fn rejects_mcp_port_overflow() {
+        assert!(mcp_port_for_http_port(u16::MAX).is_err());
+    }
 }

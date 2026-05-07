@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
 use driver::Driver;
 
 mod error;
@@ -13,7 +13,7 @@ mod watcher;
 
 use state::AppState;
 
-const DEFAULT_PORT: u16 = 7717;
+const DEFAULT_HTTP_PORT: u16 = 7717;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,10 +22,8 @@ async fn main() -> Result<()> {
     }
     let _ = env_logger::builder().try_init();
 
-    let port = std::env::var("DOBJD_PORT")
-        .ok()
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(DEFAULT_PORT);
+    let port = http_port_from_env()?;
+    let mcp_port = mcp_port_for_http_port(port)?;
 
     let driver = Arc::new(Driver::open_default()?);
     let (event_tx, _initial_rx) = events::channel();
@@ -43,11 +41,11 @@ async fn main() -> Result<()> {
     // either port is taken. Without this, an MCP bind failure would surface
     // asynchronously (or get lost in a spawned task) while the HTTP side
     // looks healthy — and a half-running dobjd is worse than no dobjd,
-    // because every other client assumes MCP is reachable on :7718.
+    // because every other client expects MCP on the adjacent port.
     let addr = format!("127.0.0.1:{port}");
     let http_listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    let mcp_addr = format!("127.0.0.1:{}", craft_mcp::DEFAULT_PORT);
+    let mcp_addr = format!("127.0.0.1:{mcp_port}");
     let mcp_listener = tokio::net::TcpListener::bind(&mcp_addr).await?;
 
     // Both ports are ours. Spawn the MCP server; share `Arc<Driver>` and the
@@ -65,6 +63,21 @@ async fn main() -> Result<()> {
     eprintln!("dobjd: listening on http://{addr}");
     axum::serve(http_listener, app).await?;
     Ok(())
+}
+
+fn http_port_from_env() -> Result<u16> {
+    match std::env::var("DOBJD_PORT") {
+        Ok(value) => value
+            .parse::<u16>()
+            .with_context(|| format!("invalid DOBJD_PORT={value:?}")),
+        Err(std::env::VarError::NotPresent) => Ok(DEFAULT_HTTP_PORT),
+        Err(err) => Err(anyhow!("invalid DOBJD_PORT env: {err}")),
+    }
+}
+
+fn mcp_port_for_http_port(port: u16) -> Result<u16> {
+    port.checked_add(1)
+        .ok_or_else(|| anyhow!("DOBJD_PORT={port} cannot derive an adjacent MCP port"))
 }
 
 async fn start_mcp_server(

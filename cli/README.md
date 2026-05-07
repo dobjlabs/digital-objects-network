@@ -53,7 +53,7 @@ MCP agent) just assume `dobjd` is running and connect to it.
 
 | Flag | Env var | Default | Notes |
 |---|---|---|---|
-| `--url <URL>` | `DOBJD_URL` | `http://127.0.0.1:7717` | dobjd's HTTP base URL. Useful for hitting a remote dobjd or running on a non-default port. |
+| `--url <URL>` | `DOBJD_URL` | `http://127.0.0.1:7717` | dobjd's HTTP base URL. `start` parses this URL's port and launches the local daemon with `DOBJD_PORT=<port>`; dobjd then hosts MCP on `<port + 1>`. |
 | `--json` | — | off | Machine-readable output where applicable. |
 
 The daemon-lifecycle commands also resolve the `dobjd` binary in this

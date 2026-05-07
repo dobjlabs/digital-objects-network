@@ -46,6 +46,7 @@ function App() {
     (state) => state.applyRunActionProgress,
   );
   const initProofPanel = useStore((state) => state.initProofPanel);
+  const resetProofPanel = useStore((state) => state.resetProofPanel);
   const runProof = useStore((state) => state.runProof);
   const proofStatus = useStore((state) => state.proof.status);
   const proofRunning = useStore(
@@ -90,9 +91,22 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
+    const resetTimers = new Set<number>();
     listenRunActionProgress((event) => {
       if (!cancelled) {
         applyRunActionProgress(event);
+        if (event.phase === "commit" && event.status === "done") {
+          void hydrateData().catch((error) => {
+            if (!cancelled) {
+              console.error("Failed to refresh GUI after action commit:", error);
+            }
+          });
+          const timer = window.setTimeout(() => {
+            resetTimers.delete(timer);
+            if (!cancelled) resetProofPanel(event.runId);
+          }, 2800);
+          resetTimers.add(timer);
+        }
       }
     })
       .then((dispose) => {
@@ -108,9 +122,10 @@ function App() {
 
     return () => {
       cancelled = true;
+      for (const timer of resetTimers) window.clearTimeout(timer);
       if (unlisten) unlisten();
     };
-  }, [applyRunActionProgress]);
+  }, [applyRunActionProgress, hydrateData, resetProofPanel]);
 
   // Listen for MCP-initiated actions so the proof panel shows progress
   useEffect(() => {
@@ -118,7 +133,11 @@ function App() {
     let unlisten: (() => void) | null = null;
     listenMcpActionStarted((event) => {
       if (!cancelled) {
-        initProofPanel({ runId: event.runId, args: [`(via MCP: ${event.actionId})`] });
+        initProofPanel({
+          runId: event.runId,
+          actionId: event.actionId,
+          args: [`(via MCP: ${event.actionId})`],
+        });
       }
     })
       .then((dispose) => {

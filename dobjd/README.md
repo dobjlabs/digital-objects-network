@@ -23,7 +23,7 @@ Two concurrent listeners:
 - **REST/SSE on `127.0.0.1:7717`** (configurable via `DOBJD_PORT`) —
   routes mirror driver capabilities and there's a single SSE event
   stream every client subscribes to.
-- **MCP on `127.0.0.1:7718`** — streamable-HTTP MCP server (from the
+- **MCP on `127.0.0.1:7718`** (`DOBJD_PORT + 1`) — streamable-HTTP MCP server (from the
   [`craft-mcp`](../mcp) crate) sharing the same `Arc<Driver>` as the
   HTTP routes, so an MCP-driven action shows up in real time on every
   other connected client.
@@ -77,7 +77,7 @@ cargo run --release -p dobjd
 # or via the just recipe (matches what `just dev` uses)
 just dobjd
 
-# different port (MCP port is hard-coded to dobjd_port + 1):
+# different HTTP port; MCP binds to the adjacent port, 127.0.0.1:7728:
 DOBJD_PORT=7727 cargo run --release -p dobjd
 ```
 

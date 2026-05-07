@@ -46,6 +46,7 @@ impl ExecutionReporter for SseProgressReporter {
                 old_root: None,
                 new_root: None,
                 output_files: None,
+                nullified_files: None,
             },
             ExecutionPhase::Commit => Event::RunActionProgress {
                 run_id: self.run_id.clone(),
@@ -55,6 +56,7 @@ impl ExecutionReporter for SseProgressReporter {
                 old_root: ctx.old_root.clone(),
                 new_root: None,
                 output_files: None,
+                nullified_files: None,
             },
         };
         self.send(event);
@@ -70,6 +72,7 @@ impl ExecutionReporter for SseProgressReporter {
                 old_root: None,
                 new_root: None,
                 output_files: None,
+                nullified_files: None,
             },
             ExecutionPhase::Commit => match result {
                 Some(result) => Event::RunActionProgress {
@@ -80,6 +83,7 @@ impl ExecutionReporter for SseProgressReporter {
                     old_root: Some(result.old_root.clone()),
                     new_root: Some(result.new_root.clone()),
                     output_files: Some(result.output_files.clone()),
+                    nullified_files: Some(result.nullified_files.clone()),
                 },
                 None => return,
             },

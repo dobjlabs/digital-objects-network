@@ -49,18 +49,18 @@ export function ProofRunnerPanel() {
   };
 
   const canReturnToAction =
-    !!proof.runActionId &&
+    !!proof.actionId &&
     (proof.status === "generating" ||
       proof.status === "committing" ||
       proof.status === "summary");
   const alreadyViewingRunningAction =
-    proof.runActionId !== null &&
+    proof.actionId !== null &&
     contextSelection.kind === "action" &&
-    contextSelection.actionId === proof.runActionId;
+    contextSelection.actionId === proof.actionId;
 
   const returnToRunningAction = () => {
-    if (!proof.runActionId) return;
-    selectAction(proof.runActionId);
+    if (!proof.actionId) return;
+    selectAction(proof.actionId);
   };
 
   const toggleProofPanelView = () => {

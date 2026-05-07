@@ -13,7 +13,7 @@ pub struct DobjdClient {
 impl DobjdClient {
     pub fn new(base: String) -> Self {
         Self {
-            base,
+            base: base.trim_end_matches('/').to_string(),
             http: Client::new(),
         }
     }
