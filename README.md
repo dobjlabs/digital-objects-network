@@ -24,7 +24,7 @@ A single **driver daemon** (`dobjd`) on the user's machine owns
 
 - **`dobjd`** ([dobjd/](dobjd)) — long-running driver process. Serves the
   REST/SSE API on `:7717` and the MCP server on `:7718`. Owns the
-  filesystem watcher, plugin loader, RocksDB, and the in-memory state
+  plugin loader, RocksDB, and the in-memory state
   every client shares.
 - **`dobj`** ([cli/](cli)) — terminal CLI. Subcommands for inventory,
   inspecting objects/classes, running actions, watching the event bus,
@@ -104,7 +104,7 @@ Run individual pieces standalone with `just sync`, `just relayer`,
 | Crate                                                                                              | Role                                                                                                                           |
 | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | [`driver/`](driver)                                                                                | the canonical Rust library — opens `~/.dobj/`, runs actions, queries inventory. Single entry point for any in-process consumer |
-| [`dobjd/`](dobjd)                                                                                  | HTTP + MCP daemon wrapping the driver. Long-running, owns broadcast hub + file watcher                                         |
+| [`dobjd/`](dobjd)                                                                                  | HTTP + MCP daemon wrapping the driver. Long-running, owns the broadcast hub                                                    |
 | [`cli/`](cli)                                                                                      | terminal CLI client for dobjd (binary: `dobj`)                                                                                 |
 | [`mcp/`](mcp)                                                                                      | MCP server library + `bitcraft-mcp-proxy` stdio bridge                                                                         |
 | [`app-gui/`](app-gui)                                                                              | React frontend + thin Tauri shell. Fetches from dobjd over HTTP/SSE                                                            |

@@ -5,7 +5,7 @@ API and an MCP server so that every client (terminal CLI, desktop app,
 website, MCP-aware agents) talks to a single driver process per machine.
 
 `dobjd` owns `~/.dobj/` exclusively — the RocksDB lock, the in-memory
-catalog, the file watcher, the broadcast event hub. The companion CLI
+catalog, and the broadcast event hub. The companion CLI
 (`dobj`, in the [`cli/`](../cli) crate) and the React frontend in
 [`app-gui/`](../app-gui) are thin clients over the API surface here.
 
@@ -31,11 +31,6 @@ Two concurrent listeners:
 dobjd is API-only — the UI is served separately (Vite on `:1420` in
 dev, Tauri's webview for the desktop app).
 
-A background thread runs a [`notify`](https://docs.rs/notify) filesystem
-watcher on `~/.dobj/objects/` and broadcasts an `objects-changed` event
-whenever anything in there mutates. Clients use this to invalidate their
-inventory caches without polling.
-
 ## HTTP API
 
 All routes return JSON unless noted; errors come back as
@@ -57,7 +52,7 @@ All routes return JSON unless noted; errors come back as
 | `GET` | `/events` | broadcast hub stream (SSE) |
 
 The `/events` payload is a JSON object with a `type` discriminator.
-Variants: `objects-changed`, `run-action-progress`.
+Variants: `run-action-progress`.
 
 ## MCP integration
 

@@ -107,7 +107,6 @@ dobj run FindLog
 
 # tail the event hub while you do other things
 dobj events
-# {"type":"objects-changed"}
 # {"type":"run-action-progress","runId":"CraftWood",...}
 ```
 

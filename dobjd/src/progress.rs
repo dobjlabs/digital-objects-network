@@ -46,6 +46,7 @@ impl ExecutionReporter for SseProgressReporter {
                 old_root: None,
                 new_root: None,
                 output_files: None,
+                output_status: None,
                 nullified_files: None,
             },
             ExecutionPhase::Commit => Event::RunActionProgress {
@@ -55,7 +56,8 @@ impl ExecutionReporter for SseProgressReporter {
                 message: message.to_string(),
                 old_root: ctx.old_root.clone(),
                 new_root: None,
-                output_files: None,
+                output_files: (!ctx.output_files.is_empty()).then(|| ctx.output_files.clone()),
+                output_status: ctx.output_status,
                 nullified_files: None,
             },
         };
@@ -72,6 +74,7 @@ impl ExecutionReporter for SseProgressReporter {
                 old_root: None,
                 new_root: None,
                 output_files: None,
+                output_status: None,
                 nullified_files: None,
             },
             ExecutionPhase::Commit => match result {
@@ -83,6 +86,7 @@ impl ExecutionReporter for SseProgressReporter {
                     old_root: Some(result.old_root.clone()),
                     new_root: Some(result.new_root.clone()),
                     output_files: Some(result.output_files.clone()),
+                    output_status: Some(driver::ObjectStatus::Live),
                     nullified_files: Some(result.nullified_files.clone()),
                 },
                 None => return,

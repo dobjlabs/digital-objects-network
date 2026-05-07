@@ -158,9 +158,9 @@ export function sampleAppCpu(): Promise<CpuSample> {
 
 // === Event subscriptions ====================================================
 //
-// Driver events (`objects-changed`, `run-action-progress`) always come from
-// dobjd over a single SSE connection. The `open-settings` event comes from
-// the Tauri native menu and is desktop-only.
+// Driver events (`run-action-progress`) always come from dobjd over a single
+// SSE connection. The `open-settings` event comes from the Tauri native menu
+// and is desktop-only.
 
 type Handler<T> = (payload: T) => void;
 
@@ -211,10 +211,6 @@ export function listenRunActionProgress(
   handler: (event: RunActionProgress) => void,
 ): Promise<UnlistenFn> {
   return subscribeHttp<RunActionProgress>("run-action-progress", handler);
-}
-
-export function listenObjectsChanged(handler: () => void): Promise<UnlistenFn> {
-  return subscribeHttp<unknown>("objects-changed", () => handler());
 }
 
 export function listenOpenSettings(handler: () => void): Promise<UnlistenFn> {

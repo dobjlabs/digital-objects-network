@@ -41,7 +41,6 @@ From `src-tauri/src/lib.rs` invoke handler:
 Events:
 
 - `run-action-progress`
-- `objects-changed`
 - `open-settings`
 
 ## Runtime flow

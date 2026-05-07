@@ -12,7 +12,7 @@
 //! - native menu (incl. `Cmd+,` settings shortcut)
 //!
 //! Every call that touches `~/.dobj/` state — inventory, run_action, settings,
-//! state-root, the objects watcher, MCP — lives in [`dobjd`]. The user must
+//! state-root, MCP — lives in [`dobjd`]. The user must
 //! start `dobjd` separately for the desktop app's webview to function.
 
 mod cpu;

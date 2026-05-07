@@ -14,8 +14,6 @@ use crate::progress::{ProofPhase, ProofProgressStatus};
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Event {
-    /// The objects directory changed on disk (file added / removed / modified).
-    ObjectsChanged,
     /// Progress update for an in-flight `run_action` invocation.
     /// Field shape mirrors `RunActionProgress` from the legacy Tauri client.
     RunActionProgress {
@@ -30,6 +28,8 @@ pub enum Event {
         new_root: Option<String>,
         #[serde(rename = "outputFiles")]
         output_files: Option<Vec<String>>,
+        #[serde(rename = "outputStatus")]
+        output_status: Option<driver::ObjectStatus>,
         #[serde(rename = "nullifiedFiles")]
         nullified_files: Option<Vec<String>>,
     },

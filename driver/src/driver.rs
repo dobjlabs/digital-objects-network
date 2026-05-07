@@ -349,6 +349,7 @@ impl Driver {
 
         let commit_ctx = ExecutionStepContext {
             old_root: Some(old_root.clone()),
+            ..ExecutionStepContext::default()
         };
         reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &commit_ctx);
         let payload_bytes = self
@@ -365,6 +366,11 @@ impl Driver {
             &resolved_inputs,
             &spendable_outputs,
         )?;
+        reporter.on_step(
+            ExecutionPhase::Commit,
+            "Output object files created with status unknown",
+            &file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Unknown),
+        );
 
         // Submit to relayer. Output files are kept as Unknown on failure so
         // the user can retry submission later without regenerating proofs.
@@ -407,6 +413,11 @@ impl Driver {
             ObjectStatus::Pending,
             Some(&eth_tx_hash),
         )?;
+        reporter.on_step(
+            ExecutionPhase::Commit,
+            "Got transaction hash; output object files updated to pending while waiting for submission confirmation",
+            &file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Pending),
+        );
 
         let confirmation = self.deps.relayer.wait_for_confirmation(
             &settings.relayer_api_url,
@@ -428,6 +439,11 @@ impl Driver {
                 ObjectStatus::Pending,
                 Some(final_tx_hash),
             )?;
+            reporter.on_step(
+                ExecutionPhase::Commit,
+                "Got replacement transaction hash; output object files updated to pending",
+                &file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Pending),
+            );
         }
 
         reporter.on_step(
@@ -452,6 +468,11 @@ impl Driver {
                     ObjectStatus::Unknown,
                     Some(final_tx_hash),
                 )?;
+                reporter.on_step(
+                    ExecutionPhase::Commit,
+                    "Synchronizer did not observe commit; output object files reverted to unknown",
+                    &file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Unknown),
+                );
                 return Err(err);
             }
         };
@@ -463,6 +484,11 @@ impl Driver {
             ObjectStatus::Live,
             Some(final_tx_hash),
         )?;
+        reporter.on_step(
+            ExecutionPhase::Commit,
+            "Commit observed; output object files updated to live",
+            &file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Live),
+        );
 
         let result = ExecuteActionResult {
             old_root,
@@ -511,5 +537,17 @@ impl Driver {
             consumed_by: class_info.consumed_by,
             predicate_source: class_info.predicate_source,
         }
+    }
+}
+
+fn file_write_ctx(
+    old_root: &str,
+    output_files: &[String],
+    output_status: ObjectStatus,
+) -> ExecutionStepContext {
+    ExecutionStepContext {
+        old_root: Some(old_root.to_string()),
+        output_files: output_files.to_vec(),
+        output_status: Some(output_status),
     }
 }

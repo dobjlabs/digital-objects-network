@@ -8,7 +8,6 @@ import {
   getGlobalStateRoot,
   getObjectsDir,
   listenOpenSettings,
-  listenObjectsChanged,
   listenRunActionProgress,
   openObjectsDir,
   sampleAppCpu,
@@ -90,15 +89,33 @@ function App() {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
     const resetTimers = new Set<number>();
+    let refreshTimer: number | null = null;
+    const scheduleRefresh = () => {
+      if (cancelled) return;
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        if (cancelled) return;
+        hydrateData().catch((error) => {
+          if (!cancelled) {
+            console.error("Failed to refresh GUI after action progress:", error);
+          }
+        });
+      }, 120);
+    };
+
     listenRunActionProgress((event) => {
       if (!cancelled) {
         applyRunActionProgress(event);
+        if (
+          (event.outputFiles?.length ?? 0) > 0 ||
+          (event.phase === "commit" && event.status === "done")
+        ) {
+          scheduleRefresh();
+        }
         if (event.phase === "commit" && event.status === "done") {
-          void hydrateData().catch((error) => {
-            if (!cancelled) {
-              console.error("Failed to refresh GUI after action commit:", error);
-            }
-          });
           const timer = window.setTimeout(() => {
             resetTimers.delete(timer);
             if (!cancelled) resetProofPanel(event.runId);
@@ -120,54 +137,11 @@ function App() {
 
     return () => {
       cancelled = true;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
       for (const timer of resetTimers) window.clearTimeout(timer);
       if (unlisten) unlisten();
     };
   }, [applyRunActionProgress, hydrateData, resetProofPanel]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    let refreshTimer: number | null = null;
-
-    const scheduleRefresh = () => {
-      if (cancelled) return;
-      if (refreshTimer !== null) {
-        window.clearTimeout(refreshTimer);
-      }
-      refreshTimer = window.setTimeout(() => {
-        refreshTimer = null;
-        if (cancelled) return;
-        hydrateData().catch((error) => {
-          if (!cancelled) {
-            console.error("Failed to refresh GUI after objects change:", error);
-          }
-        });
-      }, 120);
-    };
-
-    listenObjectsChanged(() => {
-      scheduleRefresh();
-    })
-      .then((dispose) => {
-        if (cancelled) {
-          dispose();
-          return;
-        }
-        unlisten = dispose;
-      })
-      .catch((error) => {
-        console.error("Failed to subscribe to objects-changed:", error);
-      });
-
-    return () => {
-      cancelled = true;
-      if (refreshTimer !== null) {
-        window.clearTimeout(refreshTimer);
-      }
-      if (unlisten) unlisten();
-    };
-  }, [hydrateData]);
 
   useEffect(() => {
     let cancelled = false;

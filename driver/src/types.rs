@@ -125,6 +125,11 @@ pub enum ExecutionPhase {
 pub struct ExecutionStepContext {
     /// The state root hash before this execution (available during Commit phase).
     pub old_root: Option<String>,
+    /// Output files touched by this step, when the step corresponds to a
+    /// filesystem write.
+    pub output_files: Vec<String>,
+    /// Shared status written to all `output_files` for this step.
+    pub output_status: Option<ObjectStatus>,
 }
 
 pub trait ExecutionReporter {

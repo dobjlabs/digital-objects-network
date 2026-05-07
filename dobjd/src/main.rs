@@ -9,7 +9,6 @@ mod mcp;
 mod progress;
 mod routes;
 mod state;
-mod watcher;
 
 use state::AppState;
 
@@ -27,12 +26,6 @@ async fn main() -> Result<()> {
 
     let driver = Arc::new(Driver::open_default()?);
     let (event_tx, _initial_rx) = events::channel();
-
-    if let Err(err) =
-        watcher::start_objects_watcher(event_tx.clone(), driver.paths().objects_dir.clone())
-    {
-        eprintln!("dobjd: objects watcher disabled: {err}");
-    }
 
     let state = AppState::new(driver.clone(), event_tx.clone());
     let app = routes::router(state);

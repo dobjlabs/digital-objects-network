@@ -69,6 +69,7 @@ export interface RunActionProgress {
   oldRoot: string | null;
   newRoot: string | null;
   outputFiles: string[] | null;
+  outputStatus: ObjectStatus | null;
   nullifiedFiles: string[] | null;
 }
 
