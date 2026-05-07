@@ -7,6 +7,8 @@ use serde::Serialize;
 use crate::error::ApiResult;
 use crate::state::AppState;
 
+/// Inventory object with class metadata folded in (emoji, description) so
+/// GUI clients can render rows without a second `/classes` round-trip.
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryObject {
@@ -22,36 +24,21 @@ pub struct InventoryObject {
     pub obj: serde_json::Value,
 }
 
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Action {
-    pub id: String,
-    pub emoji: String,
-    pub hash: String,
-    pub total_input_class_hashes: Vec<String>,
-    pub description: String,
-    pub total_input_classes: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoadGuiInventoryResult {
-    pub inventory: Vec<InventoryObject>,
-    pub actions: Vec<Action>,
-}
-
+/// `GET /inventory` — local objects synced against the chain. The action
+/// catalog comes from `GET /actions` separately, so clients can fetch the
+/// two in parallel.
 pub async fn load_inventory(
     State(state): State<AppState>,
-) -> ApiResult<Json<LoadGuiInventoryResult>> {
+) -> ApiResult<Json<Vec<InventoryObject>>> {
     let driver = state.driver.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<LoadGuiInventoryResult> {
+    let inventory = tokio::task::spawn_blocking(move || -> Result<Vec<InventoryObject>> {
         let classes = driver
             .list_classes()?
             .into_iter()
             .map(|class_info| (class_info.name.clone(), class_info))
             .collect::<HashMap<_, _>>();
 
-        let inventory = driver
+        Ok(driver
             .sync_inventory(None)
             .unwrap_or_else(|err| {
                 eprintln!("dobjd: failed to sync inventory, falling back to local: {err}");
@@ -75,25 +62,10 @@ pub async fn load_inventory(
                     obj: serde_json::Value::Object(object.fields.into_iter().collect()),
                 }
             })
-            .collect();
-
-        let actions = driver
-            .list_actions(None)?
-            .into_iter()
-            .map(|action| Action {
-                id: action.id,
-                emoji: action.emoji,
-                hash: action.hash,
-                total_input_class_hashes: action.total_input_class_hashes,
-                description: action.description,
-                total_input_classes: action.total_input_classes,
-            })
-            .collect();
-
-        Ok(LoadGuiInventoryResult { inventory, actions })
+            .collect())
     })
     .await
     .map_err(|err| anyhow::anyhow!("inventory task panicked: {err}"))??;
 
-    Ok(Json(result))
+    Ok(Json(inventory))
 }

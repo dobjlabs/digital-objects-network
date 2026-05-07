@@ -106,7 +106,11 @@ impl CraftOps for DobjdCraftOps {
                     Path::new(path)
                         .file_name()
                         .and_then(|name| name.to_str())
-                        .ok_or_else(|| anyhow::anyhow!("invalid input path: {path}"))?
+                        .ok_or_else(|| {
+                            ::driver::DriverError::InvalidInput(format!(
+                                "invalid input path: {path}"
+                            ))
+                        })?
                         .to_string()
                 } else {
                     path.to_string()
@@ -120,13 +124,19 @@ impl CraftOps for DobjdCraftOps {
         let run_id = uuid::Uuid::new_v4().to_string();
 
         let reporter = SseProgressReporter::new(self.events.clone(), run_id.clone());
-        let result = self.driver.execute_with_reporter(
+        let result = match self.driver.execute_with_reporter(
             ::driver::ExecuteActionInput {
                 action_id: input.action_id.clone(),
                 input_objects,
             },
             &reporter,
-        )?;
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                reporter.commit_failed(err.to_string());
+                return Err(err);
+            }
+        };
 
         let outputs = result
             .output_files

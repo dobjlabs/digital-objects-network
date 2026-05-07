@@ -146,9 +146,17 @@ pub fn parse_object_record_file(path: &Path) -> anyhow::Result<ObjectRecord> {
 
 /// Parse a `.dobj` from in-memory bytes. Used by the HTTP server when the
 /// frontend uploads a dropped file for inspection without a disk write.
+///
+/// Errors are tagged with `DriverError::InvalidInput` so HTTP callers can
+/// surface a 400 instead of a 500 — the bytes came from the client, so a
+/// parse failure is a client problem.
 pub fn parse_object_record_bytes(bytes: &[u8]) -> anyhow::Result<ObjectRecord> {
-    serde_json::from_slice::<ObjectRecord>(bytes)
-        .map_err(|err| anyhow::anyhow!("failed to parse object bytes as object file: {err}"))
+    serde_json::from_slice::<ObjectRecord>(bytes).map_err(|err| {
+        crate::error::DriverError::InvalidInput(format!(
+            "failed to parse uploaded bytes as object file: {err}"
+        ))
+        .into()
+    })
 }
 
 #[cfg(test)]

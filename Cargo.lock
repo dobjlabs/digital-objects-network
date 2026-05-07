@@ -2816,6 +2816,7 @@ dependencies = [
  "serde_json",
  "synchronizer",
  "tempfile",
+ "thiserror 2.0.18",
  "txlib",
  "vdfpod",
 ]

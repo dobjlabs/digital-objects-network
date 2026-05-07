@@ -47,6 +47,7 @@ pub fn router(app_state: AppState) -> Router {
             "/settings",
             get(settings::get_settings).put(settings::put_settings),
         )
+        .route("/actions", get(actions::list_actions))
         .route("/actions/run", post(actions::run_action))
         .route("/actions/{id}/feasibility", get(actions::check_feasibility))
         .route("/events", get(events::stream))

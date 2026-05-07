@@ -19,9 +19,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  ActionPayload,
   AppSettingsPayload,
   CpuSample,
-  LoadGuiInventoryResult,
+  InventoryObjectPayload,
   ObjectRecordPayload,
   RunActionInput,
   RunActionProgress,
@@ -33,7 +34,6 @@ export type {
   AppSettingsPayload,
   CpuSample,
   InventoryObjectPayload,
-  LoadGuiInventoryResult,
   ObjectRecordPayload,
   RunActionInput,
   RunActionProgress,
@@ -69,8 +69,16 @@ async function httpJson<T>(res: Response): Promise<T> {
 
 // === Driver-backed operations: always HTTP ==================================
 
-export function loadGuiInventory(): Promise<LoadGuiInventoryResult> {
-  return fetch(`${HTTP_BASE}/inventory`).then(httpJson<LoadGuiInventoryResult>);
+// Inventory and the action catalog are independent reads; callers run them
+// in parallel via Promise.all rather than letting one block the other.
+export function loadInventory(): Promise<InventoryObjectPayload[]> {
+  return fetch(`${HTTP_BASE}/inventory`).then(
+    httpJson<InventoryObjectPayload[]>,
+  );
+}
+
+export function loadActions(): Promise<ActionPayload[]> {
+  return fetch(`${HTTP_BASE}/actions`).then(httpJson<ActionPayload[]>);
 }
 
 export function getGlobalStateRoot(): Promise<string> {

@@ -27,13 +27,6 @@ pub struct ActionSummary {
     pub total_input_classes: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoadGuiInventoryResult {
-    pub inventory: Vec<InventoryObject>,
-    pub actions: Vec<ActionSummary>,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunActionInput {

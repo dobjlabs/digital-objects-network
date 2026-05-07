@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use std::{collections::HashMap, fs, path::Path};
 
+use crate::error::DriverError;
 use crate::object_record::ObjectRecord;
 use crate::types::{DriverPaths, ObjectQuery, ObjectSelector};
 
@@ -162,11 +163,11 @@ pub(crate) fn select_object<'a>(
         ObjectSelector::FileName(file_name) => entries
             .iter()
             .find(|entry| entry.file_name == *file_name)
-            .ok_or_else(|| anyhow!("object file not found: {file_name}")),
+            .ok_or_else(|| DriverError::ObjectFileNotFound(file_name.clone()).into()),
         ObjectSelector::ObjectId(object_id) => entries
             .iter()
             .find(|entry| entry.record.id == *object_id)
-            .ok_or_else(|| anyhow!("object not found: {object_id}")),
+            .ok_or_else(|| DriverError::ObjectNotFound(object_id.clone()).into()),
     }
 }
 

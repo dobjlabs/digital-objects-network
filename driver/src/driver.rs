@@ -14,6 +14,7 @@ use crate::clients::{
     RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS,
     SynchronizerClient,
 };
+use crate::error::DriverError;
 use crate::execute::{
     build_relayer_payload, reconcile_objects, resolve_inputs, save_results, update_output_files,
     validate_execute_request,
@@ -136,7 +137,9 @@ impl Driver {
         let file_name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| anyhow!("invalid input path (missing file name): {}", path.display()))?
+            .ok_or_else(|| {
+                DriverError::InvalidInput(format!("missing file name in path: {}", path.display()))
+            })?
             .to_string();
         let record = parse_object_record_file(path)?;
         Ok(self.object_summary(&ObjectFileEntry { file_name, record }, None))
@@ -241,7 +244,7 @@ impl Driver {
             .deps
             .catalog
             .get_class(class_name)
-            .ok_or_else(|| anyhow!("unknown class: {class_name}"))?;
+            .ok_or_else(|| DriverError::UnknownClass(class_name.to_string()))?;
         let live_count = load_object_files(&self.paths)?
             .into_iter()
             .filter(|entry| {
@@ -259,7 +262,7 @@ impl Driver {
             .deps
             .catalog
             .get_action(action_id)
-            .ok_or_else(|| anyhow!("unknown action: {action_id}"))?;
+            .ok_or_else(|| DriverError::UnknownAction(action_id.to_string()))?;
         let entries = load_object_files(&self.paths)?;
         let live_objects = entries
             .iter()
@@ -316,7 +319,7 @@ impl Driver {
             .deps
             .catalog
             .get_action(&input.action_id)
-            .ok_or_else(|| anyhow!("unknown action: {}", input.action_id))?;
+            .ok_or_else(|| DriverError::UnknownAction(input.action_id.clone()))?;
 
         validate_execute_request(&input, &action)?;
 

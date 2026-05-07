@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import {
-  loadGuiInventory,
+  loadActions,
+  loadInventory,
   runAction,
   type ActionPayload as Action,
   type InventoryObjectPayload as InventoryObject,
@@ -111,12 +112,14 @@ export const useStore = create<AppState>((set, get) => ({
     },
   },
   hydrateData: async () => {
-    const data = await loadGuiInventory();
-    set((prev) => ({
-      ...prev,
-      inventory: data.inventory,
-      actions: data.actions,
-    }));
+    // Inventory hits the synchronizer (network-bound); the action catalog
+    // is purely local. Fire them in parallel so the catalog isn't gated
+    // on the slower call.
+    const [inventory, actions] = await Promise.all([
+      loadInventory(),
+      loadActions(),
+    ]);
+    set((prev) => ({ ...prev, inventory, actions }));
   },
   selectObject: (objectId) =>
     set((prev) => {

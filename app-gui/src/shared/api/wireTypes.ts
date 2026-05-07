@@ -28,11 +28,6 @@ export interface ActionPayload {
   totalInputClasses: string[];
 }
 
-export interface LoadGuiInventoryResult {
-  inventory: InventoryObjectPayload[];
-  actions: ActionPayload[];
-}
-
 export interface RunActionInput {
   actionId: string;
   inputObjectPaths: string[];

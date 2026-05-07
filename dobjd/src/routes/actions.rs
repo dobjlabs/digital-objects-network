@@ -5,7 +5,7 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use driver::CheckActionReport;
+use driver::{ActionSummary, CheckActionReport, DriverError};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ApiResult;
@@ -72,7 +72,9 @@ pub async fn run_action(
                         FsPath::new(path)
                             .file_name()
                             .and_then(|name| name.to_str())
-                            .ok_or_else(|| anyhow!("invalid input path: {path}"))?
+                            .ok_or_else(|| {
+                                DriverError::InvalidInput(format!("invalid input path: {path}"))
+                            })?
                             .to_string()
                     } else {
                         path.to_string()
@@ -81,14 +83,24 @@ pub async fn run_action(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
+            // Reporter is created here (after input parsing) so a malformed
+            // request returns 400 without ever opening a progress window.
+            // Once it exists, every error path must call `commit_failed`
+            // before returning, so SSE subscribers see a terminal event.
             let reporter = SseProgressReporter::new(events, run_id.clone());
-            let result = driver.execute_with_reporter(
+            let result = match driver.execute_with_reporter(
                 driver::ExecuteActionInput {
                     action_id: input.action_id,
                     input_objects,
                 },
                 &reporter,
-            )?;
+            ) {
+                Ok(result) => result,
+                Err(err) => {
+                    reporter.commit_failed(err.to_string());
+                    return Err(err);
+                }
+            };
 
             Ok(RunActionResult {
                 run_id,
@@ -103,6 +115,17 @@ pub async fn run_action(
     .map_err(|err| anyhow!("run_action task panicked: {err}"))??;
 
     Ok(Json(result))
+}
+
+/// `GET /actions` — full catalog of every action the loaded plugins
+/// declare. Pure local state; no synchronizer round-trip. Use this
+/// instead of `/inventory` when you only need the action list.
+pub async fn list_actions(State(state): State<AppState>) -> ApiResult<Json<Vec<ActionSummary>>> {
+    let driver = state.driver.clone();
+    let actions = tokio::task::spawn_blocking(move || driver.list_actions(None))
+        .await
+        .map_err(|err| anyhow!("list_actions task panicked: {err}"))??;
+    Ok(Json(actions))
 }
 
 /// `GET /actions/{id}/feasibility` — does the local inventory have what

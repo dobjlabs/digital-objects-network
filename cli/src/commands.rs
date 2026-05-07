@@ -6,32 +6,35 @@ use tokio::sync::oneshot;
 
 use crate::client::DobjdClient;
 use crate::types::{
-    AppSettings, CheckActionReport, ClassSummary, LoadGuiInventoryResult, ObjectSummary,
+    ActionSummary, AppSettings, CheckActionReport, ClassSummary, InventoryObject, ObjectSummary,
     ObjectsDir, RunActionInput, RunActionRequest, RunActionResult,
 };
 
 const TARGET_RUN_ACTION_PROGRESS: &str = "run-action-progress";
 
 pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
-    let result: LoadGuiInventoryResult = client.get_json("/inventory").await?;
+    let inventory: Vec<InventoryObject> = client.get_json("/inventory").await?;
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "inventory": result.inventory.iter().map(|o| serde_json::json!({
-                    "id": o.id, "fileName": o.file_name, "className": o.class_name,
-                    "status": o.status, "txHash": o.tx_hash, "grounded": o.grounded,
-                })).collect::<Vec<_>>(),
-            }))?
+            serde_json::to_string_pretty(
+                &inventory
+                    .iter()
+                    .map(|o| serde_json::json!({
+                        "id": o.id, "fileName": o.file_name, "className": o.class_name,
+                        "status": o.status, "txHash": o.tx_hash, "grounded": o.grounded,
+                    }))
+                    .collect::<Vec<_>>()
+            )?
         );
         return Ok(());
     }
 
-    if result.inventory.is_empty() {
+    if inventory.is_empty() {
         println!("(no objects in inventory)");
         return Ok(());
     }
-    for obj in &result.inventory {
+    for obj in &inventory {
         let grounded = if obj.grounded { "✓" } else { " " };
         println!(
             "[{:<10}] {} {} {:<14} id={}",
@@ -46,13 +49,14 @@ pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
 }
 
 pub async fn actions(client: &DobjdClient, json: bool) -> Result<()> {
-    let result: LoadGuiInventoryResult = client.get_json("/inventory").await?;
+    // `/actions` is a pure-local read of the plugin catalog — no
+    // synchronizer round-trip, unlike `/inventory`.
+    let actions: Vec<ActionSummary> = client.get_json("/actions").await?;
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(
-                &result
-                    .actions
+                &actions
                     .iter()
                     .map(|a| serde_json::json!({
                         "id": a.id, "description": a.description, "inputs": a.total_input_classes,
@@ -62,7 +66,7 @@ pub async fn actions(client: &DobjdClient, json: bool) -> Result<()> {
         );
         return Ok(());
     }
-    for action in &result.actions {
+    for action in &actions {
         let inputs = if action.total_input_classes.is_empty() {
             "(no inputs)".to_string()
         } else {

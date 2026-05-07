@@ -16,6 +16,7 @@ pub enum ProofPhase {
 pub enum ProofProgressStatus {
     Running,
     Done,
+    Failed,
 }
 
 /// `ExecutionReporter` impl that broadcasts every step over the SSE event
@@ -32,6 +33,27 @@ impl SseProgressReporter {
 
     fn send(&self, event: Event) {
         let _ = self.events.send(event);
+    }
+
+    /// Terminal failure event. The `ExecutionReporter` trait only fires
+    /// `on_step` / `on_done` and never sees errors — `Driver::
+    /// execute_with_reporter` just returns `Err`. Without this, SSE
+    /// subscribers stay stuck in the last in-flight step and never receive
+    /// a terminal `Done`/`Failed` to clear their progress UI. Callers
+    /// invoke this from the same scope that owns the reporter, after
+    /// `execute_with_reporter` errors.
+    pub fn commit_failed(&self, message: impl Into<String>) {
+        self.send(Event::RunActionProgress {
+            run_id: self.run_id.clone(),
+            phase: ProofPhase::Commit,
+            status: ProofProgressStatus::Failed,
+            message: message.into(),
+            old_root: None,
+            new_root: None,
+            output_files: None,
+            output_status: None,
+            nullified_files: None,
+        });
     }
 }
 
