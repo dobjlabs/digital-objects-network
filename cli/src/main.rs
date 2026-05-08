@@ -83,10 +83,7 @@ enum Cmd {
         #[arg(long)]
         quiet: bool,
     },
-    /// Stream every dobjd event (object changes, action progress, MCP
-    /// activity) as JSON lines until interrupted. This is the broadcast
-    /// hub every client shares — useful for seeing what the desktop, web,
-    /// or MCP are doing in real time.
+    /// Stream every dobjd event as JSON lines until interrupted.
     Events,
     /// Start dobjd in the background. Idempotent — safe to run when
     /// dobjd is already up.
