@@ -50,6 +50,7 @@ ensure-plugins:
 
 # Wipe local state (RocksDB + local Postgres DBs + objects)
 reset:
+    @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
