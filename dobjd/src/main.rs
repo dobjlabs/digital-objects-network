@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use driver::Driver;
+use tracing_subscriber::{EnvFilter, prelude::*};
 
 mod error;
 mod events;
@@ -16,10 +17,10 @@ const DEFAULT_HTTP_PORT: u16 = 7717;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing();
     if let Err(err) = common::load_dotenv() {
-        eprintln!("dobjd: failed to load env: {err}");
+        tracing::warn!("failed to load env: {err}");
     }
-    let _ = env_logger::builder().try_init();
 
     let port = http_port_from_env()?;
     let mcp_port = mcp_port_for_http_port(port)?;
@@ -47,13 +48,13 @@ async fn main() -> Result<()> {
     let mcp_driver = driver.clone();
     tokio::spawn(async move {
         if let Err(err) = start_mcp_server(mcp_driver, mcp_event_tx, mcp_listener).await {
-            eprintln!("dobjd: MCP server crashed after startup: {err}");
+            tracing::error!("MCP server crashed after startup: {err:#}");
             std::process::exit(1);
         }
     });
-    eprintln!("dobjd: MCP server listening on http://{mcp_addr}/mcp");
+    tracing::info!("MCP server listening on http://{mcp_addr}/mcp");
 
-    eprintln!("dobjd: listening on http://{addr}");
+    tracing::info!("listening on http://{addr}");
     axum::serve(http_listener, app).await?;
     Ok(())
 }
@@ -83,4 +84,22 @@ async fn start_mcp_server(
     let server = craft_mcp::McpServer::new(ops, config);
     server.serve(listener).await?;
     Ok(())
+}
+
+/// Initialize the global tracing subscriber.
+///
+/// - `RUST_LOG` controls per-target levels (default `info`).
+/// - The fmt layer prints span context inline so every log line from
+///   inside a request handler is annotated with the method + URI from
+///   tower-http's `TraceLayer` span.
+/// - `tracing_log::LogTracer` bridges `log::*!` macros from crates that
+///   don't speak tracing (notably `driver`) into the same subscriber.
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let fmt_layer = tracing_subscriber::fmt::layer().with_target(false);
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt_layer)
+        .try_init();
+    let _ = tracing_log::LogTracer::init();
 }

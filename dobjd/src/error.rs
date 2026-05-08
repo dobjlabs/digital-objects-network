@@ -44,6 +44,15 @@ impl From<anyhow::Error> for ApiError {
             .downcast_ref::<DriverError>()
             .map(status_for_driver_error)
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        // Log the full anyhow chain (`{:#}` joins causes with " : ").
+        // tower-http's request span carries `method` + `uri`, so the
+        // tracing fmt layer annotates every line with the failing route.
+        // 5xx → ERROR (something is broken); 4xx → WARN (caller's fault).
+        if status.is_server_error() {
+            tracing::error!(status = %status, "{:#}", err);
+        } else {
+            tracing::warn!(status = %status, "{:#}", err);
+        }
         ApiError::new(status, err.to_string())
     }
 }

@@ -40,7 +40,7 @@ pub async fn load_inventory(
         Ok(driver
             .sync_inventory(None)
             .unwrap_or_else(|err| {
-                eprintln!("dobjd: failed to sync inventory, falling back to local: {err}");
+                tracing::warn!("sync_inventory failed, falling back to local: {err:#}");
                 driver.list_objects(None).unwrap_or_default()
             })
             .into_iter()

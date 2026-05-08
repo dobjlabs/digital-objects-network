@@ -3,7 +3,8 @@ use axum::{
     routing::{get, post},
 };
 use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tracing::Level;
 
 use crate::state::AppState;
 
@@ -43,5 +44,9 @@ pub fn router(app_state: AppState) -> Router {
         .route("/events", get(events::stream))
         .with_state(app_state)
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_failure(()),
+        )
 }
