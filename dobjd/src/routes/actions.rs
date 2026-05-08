@@ -1,11 +1,9 @@
-use std::path::Path as FsPath;
-
 use anyhow::{Result, anyhow};
 use axum::{
     Json,
     extract::{Path, State},
 };
-use driver::{ActionSummary, CheckActionReport, DriverError};
+use driver::{ActionSummary, CheckActionReport};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ApiResult;
@@ -63,25 +61,14 @@ pub async fn run_action(
     let result = tokio::task::spawn_blocking({
         let run_id = run_id.clone();
         move || -> Result<RunActionResult> {
-            let input_objects = input
+            // Pass strings through verbatim — the driver extracts basenames
+            // via `Path::file_name`, so an absolute path or a bare basename
+            // resolve to the same managed file.
+            let input_objects: Vec<String> = input
                 .input_object_paths
                 .iter()
-                .map(|path| {
-                    let path = path.trim();
-                    let file_name = if FsPath::new(path).is_absolute() {
-                        FsPath::new(path)
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .ok_or_else(|| {
-                                DriverError::InvalidInput(format!("invalid input path: {path}"))
-                            })?
-                            .to_string()
-                    } else {
-                        path.to_string()
-                    };
-                    Ok(driver::ObjectSelector::FileName(file_name))
-                })
-                .collect::<Result<Vec<_>>>()?;
+                .map(|path| path.trim().to_string())
+                .collect();
 
             // Reporter is created here (after input parsing) so a malformed
             // request returns 400 without ever opening a progress window.

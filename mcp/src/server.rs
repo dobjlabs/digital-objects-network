@@ -35,8 +35,10 @@ impl<T: CraftOps> CraftMcpService<T> {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct InspectObjectParams {
-    /// The object ID (hex hash) to inspect
-    pub object_id: String,
+    /// The `.dobj` file name (e.g. `wood_0xabc….dobj`) to inspect. Must
+    /// be a basename in `~/.dobj/objects/` — use `list_inventory` to
+    /// see what's available.
+    pub file_name: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -100,14 +102,14 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Inspect an object by ID: full detail including fields, class, liveness, and predicate source"
+        description = "Inspect an object by file name: full detail including fields, class, liveness, and predicate source. The file_name is a `.dobj` basename from list_inventory (e.g. `wood_0xabc….dobj`)."
     )]
     fn inspect_object(
         &self,
         Parameters(params): Parameters<InspectObjectParams>,
     ) -> Result<Json<ObjectDetail>, String> {
         self.ops
-            .inspect_object(&params.object_id)
+            .inspect_object(&params.file_name)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -363,7 +365,7 @@ mod tests {
         let service = make_service();
         let Json(detail) = service
             .inspect_object(Parameters(InspectObjectParams {
-                object_id: "0xabc4444444444444".to_string(),
+                file_name: "WoodPick.dobj".to_string(),
             }))
             .unwrap();
         assert_eq!(detail.class_name, "WoodPick");
@@ -374,7 +376,7 @@ mod tests {
     fn test_inspect_object_not_found_returns_error() {
         let service = make_service();
         let result = service.inspect_object(Parameters(InspectObjectParams {
-            object_id: "0xnonexistent".to_string(),
+            file_name: "nonexistent.dobj".to_string(),
         }));
         let err = result.err().expect("should be an error");
         assert!(err.contains("not found"));

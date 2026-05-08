@@ -244,10 +244,10 @@ pub async fn events(client: &DobjdClient) -> Result<()> {
     Ok(())
 }
 
-pub async fn inspect_object(client: &DobjdClient, id: String, json: bool) -> Result<()> {
-    // Object IDs are URL-safe (hex), but be defensive in case someone pastes
-    // a raw filename that contains underscores etc.
-    let path = format!("/objects/{}", urlencoding::encode(&id));
+pub async fn inspect_object(client: &DobjdClient, file_name: String, json: bool) -> Result<()> {
+    // `.dobj` file names contain underscores and dots — both URL-safe — but
+    // a paranoid encode keeps us correct if the naming scheme ever changes.
+    let path = format!("/objects/{}", urlencoding::encode(&file_name));
     let obj: ObjectSummary = client.get_json(&path).await?;
     if json {
         println!(

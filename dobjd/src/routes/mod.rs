@@ -23,8 +23,8 @@ mod state;
 /// Tauri's webview for the desktop app).
 ///
 /// Note: axum routes literal paths (e.g. `/objects/dir`, `/objects/parse`)
-/// before parameterized ones (`/objects/{id}`), so the relative order isn't
-/// load-bearing — but the literals are listed first for readability.
+/// before parameterized ones (`/objects/{file_name}`), so the relative order
+/// isn't load-bearing — but the literals are listed first for readability.
 pub fn router(app_state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(health::healthz))
@@ -40,7 +40,7 @@ pub fn router(app_state: AppState) -> Router {
             post(objects::parse_object)
                 .layer(DefaultBodyLimit::max(objects::MAX_DOBJ_UPLOAD_BYTES)),
         )
-        .route("/objects/{id}", get(objects::inspect_object))
+        .route("/objects/{file_name}", get(objects::inspect_object))
         .route("/classes", get(classes::list_classes))
         .route("/classes/{name}", get(classes::inspect_class))
         .route(

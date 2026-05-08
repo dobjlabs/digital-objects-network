@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
@@ -22,15 +22,14 @@ use crate::execute::{
 use crate::object_record::ObjectStatus;
 use crate::object_record::parse_object_record_file;
 use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, select_object,
-    write_object_file,
+    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
     ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
     DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
-    ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSelector, ObjectSummary,
+    ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSummary,
 };
 
 pub trait PayloadBuilder: Send + Sync {
@@ -127,22 +126,38 @@ impl Driver {
             .collect())
     }
 
-    pub fn read_object(&self, selector: &ObjectSelector) -> Result<ObjectSummary> {
-        let entries = load_object_files(&self.paths)?;
-        let entry = select_object(&entries, selector)?;
-        Ok(self.object_summary(entry, None))
+    /// Read a single `.dobj` file and return its summary.
+    ///
+    /// `path` may be a bare basename (`Wood.dobj`) or any longer path —
+    /// only the file name is used. The driver always resolves inside its
+    /// managed dirs (`~/.dobj/objects/`, falling back to `.nullified/` so
+    /// callers can inspect already-spent objects). This means absolute or
+    /// pasted paths work the same as basenames, and `..` segments can't
+    /// escape the inventory.
+    ///
+    /// Missing files produce [`DriverError::ObjectFileNotFound`] (HTTP
+    /// 404), not a generic 500.
+    pub fn read_object(&self, path: &Path) -> Result<ObjectSummary> {
+        let file_name = extract_basename(path)?;
+        let resolved = self.resolve_managed_path(&file_name);
+        if !resolved.exists() {
+            return Err(DriverError::ObjectFileNotFound(file_name).into());
+        }
+        let record = parse_object_record_file(&resolved)?;
+        Ok(self.object_summary(&ObjectFileEntry { file_name, record }, None))
     }
 
-    pub fn read_object_file(&self, path: &Path) -> Result<ObjectSummary> {
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| {
-                DriverError::InvalidInput(format!("missing file name in path: {}", path.display()))
-            })?
-            .to_string();
-        let record = parse_object_record_file(path)?;
-        Ok(self.object_summary(&ObjectFileEntry { file_name, record }, None))
+    /// Look up a basename in the live dir, falling back to the nullified
+    /// dir. Either path is returned even if the file doesn't exist on
+    /// disk — the caller is expected to follow up with an existence check
+    /// or a parse attempt.
+    fn resolve_managed_path(&self, file_name: &str) -> PathBuf {
+        let live = self.paths.objects_dir.join(file_name);
+        if live.exists() {
+            live
+        } else {
+            self.paths.nullified_objects_dir.join(file_name)
+        }
     }
 
     pub fn sync_inventory(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
@@ -553,4 +568,19 @@ fn file_write_ctx(
         output_files: output_files.to_vec(),
         output_status: Some(output_status),
     }
+}
+
+/// Extract the file name from a caller-supplied path. Used by every
+/// driver entry point that takes a "name an object in your inventory"
+/// argument so callers can pass either `Wood.dobj` or
+/// `/some/full/path/Wood.dobj` — only the basename is honored, which
+/// also blocks `..` traversal (returns `None`).
+pub(crate) fn extract_basename(path: &Path) -> Result<String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            DriverError::InvalidInput(format!("missing file name in path: {}", path.display()))
+                .into()
+        })
 }

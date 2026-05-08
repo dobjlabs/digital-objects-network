@@ -19,7 +19,7 @@ use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
 };
 use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
-use crate::{ActionQuery, DriverPaths, ExecuteActionInput, ObjectSelector};
+use crate::{ActionQuery, DriverPaths, ExecuteActionInput};
 
 fn temp_paths() -> DriverPaths {
     let dir = tempdir().unwrap();
@@ -274,7 +274,7 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
     let err = driver
         .execute(ExecuteActionInput {
             action_id: "CraftWood".to_string(),
-            input_objects: vec![ObjectSelector::FileName("log_1.dobj".to_string())],
+            input_objects: vec!["log_1.dobj".to_string()],
         })
         .unwrap_err();
     assert!(err.to_string().contains("relayer submit failed"));
@@ -310,7 +310,7 @@ fn test_execute_keeps_files_after_relayer_accepts() {
     let err = driver
         .execute(ExecuteActionInput {
             action_id: "CraftWood".to_string(),
-            input_objects: vec![ObjectSelector::FileName("log_1.dobj".to_string())],
+            input_objects: vec!["log_1.dobj".to_string()],
         })
         .unwrap_err();
     assert!(err.to_string().contains("relayer timeout"));

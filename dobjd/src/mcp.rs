@@ -5,7 +5,7 @@
 //! - uses [`SseProgressReporter`] instead of `TauriProgressReporter` for
 //!   action execution progress.
 
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use craft_mcp::ops::CraftOps;
@@ -67,10 +67,8 @@ impl CraftOps for DobjdCraftOps {
         self.driver.get_state_root()
     }
 
-    fn inspect_object(&self, object_id: &str) -> anyhow::Result<mcp::ObjectDetail> {
-        let object = self
-            .driver
-            .read_object(&::driver::ObjectSelector::ObjectId(object_id.to_string()))?;
+    fn inspect_object(&self, file_name: &str) -> anyhow::Result<mcp::ObjectDetail> {
+        let object = self.driver.read_object(&PathBuf::from(file_name))?;
         let predicate_source = self
             .driver
             .get_class(&object.class_name)
@@ -97,27 +95,14 @@ impl CraftOps for DobjdCraftOps {
     }
 
     fn run_action(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::RunActionResult> {
-        let input_objects = input
+        // Pass strings through verbatim — the driver extracts basenames
+        // via `Path::file_name`, so an absolute path or a bare basename
+        // resolve to the same managed file.
+        let input_objects: Vec<String> = input
             .input_object_paths
             .iter()
-            .map(|path| {
-                let path = path.trim();
-                let selector = if Path::new(path).is_absolute() {
-                    Path::new(path)
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .ok_or_else(|| {
-                            ::driver::DriverError::InvalidInput(format!(
-                                "invalid input path: {path}"
-                            ))
-                        })?
-                        .to_string()
-                } else {
-                    path.to_string()
-                };
-                Ok(::driver::ObjectSelector::FileName(selector))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            .map(|path| path.trim().to_string())
+            .collect();
 
         // Generate a per-call run id. action_id is shared across concurrent
         // runs of the same action and isn't unique enough for SSE filtering.
@@ -142,9 +127,7 @@ impl CraftOps for DobjdCraftOps {
             .output_files
             .iter()
             .map(|file_name| {
-                let detail = self
-                    .driver
-                    .read_object(&::driver::ObjectSelector::FileName(file_name.clone()))?;
+                let detail = self.driver.read_object(&PathBuf::from(file_name))?;
                 Ok(mcp::InventoryObject {
                     id: detail.id,
                     class_name: detail.class_name,

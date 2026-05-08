@@ -26,5 +26,5 @@ pub use crate::pexe_catalog::PexeCatalog;
 pub use crate::types::{
     ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
     DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
-    ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSelector, ObjectSummary,
+    ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSummary,
 };

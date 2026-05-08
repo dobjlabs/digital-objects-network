@@ -44,10 +44,11 @@ enum Cmd {
     Actions,
     /// Show every class the action catalog defines.
     Classes,
-    /// Inspect a single object by its content-addressed id.
+    /// Inspect a single object by its `.dobj` file name.
     InspectObject {
-        /// Hex-encoded object id (e.g. `0xabc…`).
-        id: String,
+        /// The `.dobj` basename in `~/.dobj/objects/` (e.g.
+        /// `wood_0xabc….dobj`). See `dobj inventory`.
+        file_name: String,
     },
     /// Inspect a single class by name (with predicate source).
     InspectClass {
@@ -122,7 +123,9 @@ async fn main() -> Result<()> {
         Cmd::Inventory => commands::inventory(&client, cli.json).await,
         Cmd::Actions => commands::actions(&client, cli.json).await,
         Cmd::Classes => commands::classes(&client, cli.json).await,
-        Cmd::InspectObject { id } => commands::inspect_object(&client, id, cli.json).await,
+        Cmd::InspectObject { file_name } => {
+            commands::inspect_object(&client, file_name, cli.json).await
+        }
         Cmd::InspectClass { name } => commands::inspect_class(&client, name, cli.json).await,
         Cmd::Feasibility { action_id } => commands::feasibility(&client, action_id, cli.json).await,
         Cmd::StateRoot => commands::state_root(&client).await,

@@ -82,12 +82,12 @@ impl CraftOps for MockCraftOps {
         Ok(self.state_root.clone())
     }
 
-    fn inspect_object(&self, object_id: &str) -> anyhow::Result<ObjectDetail> {
+    fn inspect_object(&self, file_name: &str) -> anyhow::Result<ObjectDetail> {
         let obj = self
             .inventory
             .iter()
-            .find(|o| o.id == object_id)
-            .ok_or_else(|| anyhow!("object not found: {object_id}"))?;
+            .find(|o| o.file_name == file_name)
+            .ok_or_else(|| anyhow!("object file not found: {file_name}"))?;
 
         Ok(ObjectDetail {
             id: obj.id.clone(),
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn test_inspect_object_found() {
         let mock = MockCraftOps::new();
-        let detail = mock.inspect_object("0xabc1111111111111").unwrap();
+        let detail = mock.inspect_object("Log.dobj").unwrap();
         assert_eq!(detail.class_name, "Log");
         assert_eq!(detail.status, "live");
         assert!(detail.predicate_source.contains("FindLog"));
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn test_inspect_object_not_found() {
         let mock = MockCraftOps::new();
-        assert!(mock.inspect_object("0xnonexistent").is_err());
+        assert!(mock.inspect_object("nonexistent.dobj").is_err());
     }
 
     #[test]

@@ -1,9 +1,8 @@
 use anyhow::{Result, anyhow};
 use std::{collections::HashMap, fs, path::Path};
 
-use crate::error::DriverError;
 use crate::object_record::ObjectRecord;
-use crate::types::{DriverPaths, ObjectQuery, ObjectSelector};
+use crate::types::{DriverPaths, ObjectQuery};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ObjectFileEntry {
@@ -155,22 +154,6 @@ pub(crate) fn load_object_files(paths: &DriverPaths) -> Result<Vec<ObjectFileEnt
     Ok(objects)
 }
 
-pub(crate) fn select_object<'a>(
-    entries: &'a [ObjectFileEntry],
-    selector: &ObjectSelector,
-) -> Result<&'a ObjectFileEntry> {
-    match selector {
-        ObjectSelector::FileName(file_name) => entries
-            .iter()
-            .find(|entry| entry.file_name == *file_name)
-            .ok_or_else(|| DriverError::ObjectFileNotFound(file_name.clone()).into()),
-        ObjectSelector::ObjectId(object_id) => entries
-            .iter()
-            .find(|entry| entry.record.id == *object_id)
-            .ok_or_else(|| DriverError::ObjectNotFound(object_id.clone()).into()),
-    }
-}
-
 pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> bool {
     if let Some(class_name) = &query.class_name
         && &entry.record.class_name != class_name
@@ -179,16 +162,6 @@ pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> boo
     }
     if let Some(status) = query.status
         && status != entry.record.status
-    {
-        return false;
-    }
-    if let Some(id) = &query.id
-        && &entry.record.id != id
-    {
-        return false;
-    }
-    if let Some(file_name) = &query.file_name
-        && &entry.file_name != file_name
     {
         return false;
     }

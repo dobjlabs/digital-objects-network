@@ -20,18 +20,10 @@ pub struct DriverSettings {
     pub relayer_api_url: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ObjectSelector {
-    FileName(String),
-    ObjectId(String),
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ObjectQuery {
     pub class_name: Option<String>,
     pub status: Option<ObjectStatus>,
-    pub id: Option<String>,
-    pub file_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -99,7 +91,11 @@ pub struct CheckActionReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecuteActionInput {
     pub action_id: String,
-    pub input_objects: Vec<ObjectSelector>,
+    /// `.dobj` files this action should consume, ordered to match the
+    /// action's input class slots. Each entry can be a bare basename
+    /// (`Wood.dobj`) or a longer path — only the file name is used, and
+    /// it must resolve to a live object inside `~/.dobj/objects/`.
+    pub input_objects: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

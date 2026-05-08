@@ -43,7 +43,7 @@ All routes return JSON unless noted; errors come back as
 | `GET` | `/state-root` | `get_state_root` |
 | `GET` | `/objects/dir` | `paths().objects_dir` |
 | `POST` | `/objects/parse` | `parse_object_record_bytes` (multipart `file` upload, no disk write) |
-| `GET` | `/objects/{id}` | `read_object(ObjectSelector::ObjectId)` |
+| `GET` | `/objects/{file_name}` | `read_object(&Path)` (basename in `~/.dobj/objects/`) |
 | `GET` | `/classes` | `list_classes` |
 | `GET` | `/classes/{name}` | `get_class` |
 | `GET` | `/settings` | `load_settings` |

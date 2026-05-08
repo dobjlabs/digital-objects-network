@@ -1,8 +1,10 @@
+use std::path::PathBuf;
+
 use axum::{
     Json,
     extract::{Multipart, Path, State},
 };
-use driver::{ObjectRecord, ObjectSelector, ObjectSummary, parse_object_record_bytes};
+use driver::{ObjectRecord, ObjectSummary, parse_object_record_bytes};
 use serde::Serialize;
 
 use crate::error::{ApiError, ApiResult};
@@ -27,15 +29,18 @@ pub async fn get_objects_dir(State(state): State<AppState>) -> ApiResult<Json<Ob
     }))
 }
 
-/// `GET /objects/{id}` — read a single object by its content-addressed id.
-/// Routes a hex commitment (e.g. `0xabc...`) into `Driver::read_object`.
+/// `GET /objects/{file_name}` — read a single object's summary. The path
+/// segment is treated as a basename within `~/.dobj/objects/` (or
+/// `.nullified/` for spent objects). The driver normalizes the input
+/// via `Path::file_name`, so traversal attempts (`..`) resolve to no
+/// match and surface as 404, never as an arbitrary read.
 pub async fn inspect_object(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(file_name): Path<String>,
 ) -> ApiResult<Json<ObjectSummary>> {
     let driver = state.driver.clone();
     let summary =
-        tokio::task::spawn_blocking(move || driver.read_object(&ObjectSelector::ObjectId(id)))
+        tokio::task::spawn_blocking(move || driver.read_object(&PathBuf::from(&file_name)))
             .await
             .map_err(|err| anyhow::anyhow!("inspect_object task panicked: {err}"))??;
     Ok(Json(summary))
@@ -47,8 +52,8 @@ pub async fn inspect_object(
 /// filesystem, so the frontend reads bytes from a drop and POSTs them here.
 ///
 /// No disk write happens on the server. To actually use a file as action
-/// input, it must live in `~/.dobj/objects/` (the existing constraint from
-/// `ObjectSelector::FileName`).
+/// input, it must live in `~/.dobj/objects/` (the constraint
+/// `ExecuteActionInput.input_objects` enforces — basenames only).
 pub async fn parse_object(mut multipart: Multipart) -> ApiResult<Json<ObjectRecord>> {
     while let Some(field) = multipart
         .next_field()

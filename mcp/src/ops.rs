@@ -8,7 +8,7 @@ pub trait CraftOps: Send + Sync + 'static {
     fn list_actions(&self) -> anyhow::Result<Vec<Action>>;
     fn list_classes(&self) -> anyhow::Result<Vec<ClassSummary>>;
     fn get_state_root(&self) -> anyhow::Result<String>;
-    fn inspect_object(&self, object_id: &str) -> anyhow::Result<ObjectDetail>;
+    fn inspect_object(&self, file_name: &str) -> anyhow::Result<ObjectDetail>;
     fn inspect_class(&self, class_name: &str) -> anyhow::Result<ClassDetail>;
     fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunActionResult>;
     fn check_feasibility(&self, action_id: &str) -> anyhow::Result<FeasibilityReport>;
