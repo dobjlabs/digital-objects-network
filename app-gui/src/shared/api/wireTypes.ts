@@ -14,7 +14,6 @@ export interface InventoryObjectPayload {
   emoji: string;
   status: ObjectStatus;
   txHash: string | null;
-  grounded: boolean;
   description?: string;
   obj: unknown;
 }

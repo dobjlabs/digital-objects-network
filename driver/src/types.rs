@@ -40,9 +40,11 @@ pub struct ObjectSummary {
     pub file_name: String,
     pub class_name: String,
     pub class_hash: String,
+    /// Lifecycle. `Live` and `Nullified` both mean the source tx is
+    /// canonical on-chain; `Pending` means relayer-accepted but not yet
+    /// observed by the synchronizer; `Unknown` means neither.
     pub status: ObjectStatus,
     pub tx_hash: Option<String>,
-    pub grounded: Option<bool>,
     pub fields: HashMap<String, serde_json::Value>,
 }
 

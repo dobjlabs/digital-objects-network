@@ -14,7 +14,6 @@ pub struct InventoryObject {
     pub class_name: String,
     pub status: String,
     pub tx_hash: Option<String>,
-    pub grounded: bool,
     pub emoji: String,
 }
 
@@ -73,7 +72,6 @@ pub struct ObjectSummary {
     pub class_name: String,
     pub status: String,
     pub tx_hash: Option<String>,
-    pub grounded: Option<bool>,
     pub fields: serde_json::Value,
 }
 

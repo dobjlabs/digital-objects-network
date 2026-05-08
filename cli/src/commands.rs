@@ -22,7 +22,7 @@ pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
                     .iter()
                     .map(|o| serde_json::json!({
                         "id": o.id, "fileName": o.file_name, "className": o.class_name,
-                        "status": o.status, "txHash": o.tx_hash, "grounded": o.grounded,
+                        "status": o.status, "txHash": o.tx_hash,
                     }))
                     .collect::<Vec<_>>()
             )?
@@ -35,11 +35,9 @@ pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
         return Ok(());
     }
     for obj in &inventory {
-        let grounded = if obj.grounded { "✓" } else { " " };
         println!(
-            "[{:<10}] {} {} {:<14} id={}",
+            "[{:<10}] {} {:<14} id={}",
             obj.status,
-            grounded,
             obj.emoji,
             obj.class_name,
             short_hex(&obj.id),
@@ -254,7 +252,7 @@ pub async fn inspect_object(client: &DobjdClient, file_name: String, json: bool)
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "id": obj.id, "fileName": obj.file_name, "className": obj.class_name,
-                "status": obj.status, "txHash": obj.tx_hash, "grounded": obj.grounded,
+                "status": obj.status, "txHash": obj.tx_hash,
                 "fields": obj.fields,
             }))?
         );
@@ -266,9 +264,6 @@ pub async fn inspect_object(client: &DobjdClient, file_name: String, json: bool)
     println!("file:      {}", obj.file_name);
     if let Some(tx) = obj.tx_hash {
         println!("tx hash:   {tx}");
-    }
-    if let Some(grounded) = obj.grounded {
-        println!("grounded:  {grounded}");
     }
     println!("fields:");
     println!("{}", serde_json::to_string_pretty(&obj.fields)?);

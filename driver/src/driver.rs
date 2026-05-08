@@ -122,7 +122,7 @@ impl Driver {
         Ok(entries
             .iter()
             .filter(|entry| query.is_none_or(|query| matches_query(entry, query)))
-            .map(|entry| self.object_summary(entry, None))
+            .map(|entry| self.object_summary(entry))
             .collect())
     }
 
@@ -144,7 +144,7 @@ impl Driver {
             return Err(DriverError::ObjectFileNotFound(file_name).into());
         }
         let record = parse_object_record_file(&resolved)?;
-        Ok(self.object_summary(&ObjectFileEntry { file_name, record }, None))
+        Ok(self.object_summary(&ObjectFileEntry { file_name, record }))
     }
 
     /// Look up a basename in the live dir, falling back to the nullified
@@ -207,12 +207,7 @@ impl Driver {
         Ok(entries
             .iter()
             .filter(|entry| query.is_none_or(|query| matches_query(entry, query)))
-            .map(|entry| {
-                let source_tx_hash = entry.record.spendable().tx.dict().commitment();
-                let grounded = entry.record.is_nullified()
-                    || membership.grounded_txs.contains(&source_tx_hash);
-                self.object_summary(entry, Some(grounded))
-            })
+            .map(|entry| self.object_summary(entry))
             .collect())
     }
 
@@ -525,7 +520,7 @@ impl Driver {
         self.deps.catalog.generated_podlang()
     }
 
-    fn object_summary(&self, entry: &ObjectFileEntry, grounded: Option<bool>) -> ObjectSummary {
+    fn object_summary(&self, entry: &ObjectFileEntry) -> ObjectSummary {
         let class_hash = self
             .deps
             .catalog
@@ -539,7 +534,6 @@ impl Driver {
             class_hash,
             status: entry.record.status,
             tx_hash: entry.record.tx_hash.clone(),
-            grounded,
             fields: entry.record.fields_map(),
         }
     }
