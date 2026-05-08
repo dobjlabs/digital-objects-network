@@ -6,7 +6,7 @@ use crate::ops::CraftOps;
 use crate::types::*;
 
 /// Mock implementation of CraftOps for testing.
-/// Returns realistic fixtures matching the zk-craft game.
+/// Returns realistic fixtures matching the bitcraft game.
 /// Multiple actions can run concurrently
 pub struct MockCraftOps {
     inventory: Vec<InventoryObject>,

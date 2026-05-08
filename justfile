@@ -1,4 +1,4 @@
-# zk-craft justfile
+# bitcraft justfile
 # Install just: https://github.com/casey/just
 
 # Run the synchronizer (loads env from synchronizer/.env if present)

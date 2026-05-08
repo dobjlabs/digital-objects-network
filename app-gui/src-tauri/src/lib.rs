@@ -27,7 +27,7 @@ use settings::{build_app_menu, handle_settings_menu_event};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if let Err(err) = common::load_dotenv() {
-        eprintln!("zk-craft: failed to load app-gui env: {err}");
+        eprintln!("bitcraft: failed to load app-gui env: {err}");
     }
     let _ = env_logger::builder().try_init();
 

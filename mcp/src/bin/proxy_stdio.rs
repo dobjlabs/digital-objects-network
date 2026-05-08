@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     craft_mcp::logging::init_stderr();
 
     let url = parse_url_from_args();
-    tracing::info!("ZK-Craft MCP proxy connecting to {url}");
+    tracing::info!("bitcraft MCP proxy connecting to {url}");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))

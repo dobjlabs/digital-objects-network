@@ -66,7 +66,7 @@ pub(crate) fn write_object_file(
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => {
                 eprintln!(
-                    "zk-craft: failed to remove stale object file {}: {err}",
+                    "bitcraft: failed to remove stale object file {}: {err}",
                     stale_path.display()
                 );
             }
@@ -102,7 +102,7 @@ fn load_object_files_from_dir(
         let contents = match fs::read_to_string(&path) {
             Ok(contents) => contents,
             Err(err) => {
-                eprintln!("zk-craft: failed to read {file_name}, skipping: {err}");
+                eprintln!("bitcraft: failed to read {file_name}, skipping: {err}");
                 continue;
             }
         };
@@ -133,7 +133,7 @@ fn load_object_files_from_dir(
 
                 objects.insert(file_name.to_string(), record);
             }
-            Err(err) => eprintln!("zk-craft: failed to parse {file_name}, skipping: {err}"),
+            Err(err) => eprintln!("bitcraft: failed to parse {file_name}, skipping: {err}"),
         }
     }
 

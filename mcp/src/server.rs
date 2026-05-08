@@ -15,7 +15,7 @@ use serde::Deserialize;
 use crate::ops::CraftOps;
 use crate::types::*;
 
-/// MCP server service that exposes zk-craft operations as tools.
+/// MCP server service that exposes bitcraft operations as tools.
 #[derive(Clone)]
 pub struct CraftMcpService<T: CraftOps> {
     ops: Arc<T>,
@@ -214,10 +214,10 @@ impl<T: CraftOps> CraftMcpService<T> {
             }
             _ => {
                 let uri = match params.name.as_str() {
-                    "podlang-reference" => "zk-craft://docs/podlang-reference",
-                    "object-lifecycle" => "zk-craft://docs/object-lifecycle",
-                    "txlib.podlang" => "zk-craft://source/txlib.podlang",
-                    "time.podlang" => "zk-craft://source/time.podlang",
+                    "podlang-reference" => "bitcraft://docs/podlang-reference",
+                    "object-lifecycle" => "bitcraft://docs/object-lifecycle",
+                    "txlib.podlang" => "bitcraft://source/txlib.podlang",
+                    "time.podlang" => "bitcraft://source/time.podlang",
                     "generated.podlang" => {
                         return self
                             .ops
@@ -334,7 +334,7 @@ mod tests {
         let info = service.get_info();
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
-        assert!(info.instructions.unwrap().contains("ZK-Craft MCP Server"));
+        assert!(info.instructions.unwrap().contains("bitcraft MCP Server"));
     }
 
     #[test]
