@@ -128,33 +128,16 @@ export function saveAppSettings(
   }).then(httpJson<AppSettingsPayload>);
 }
 
-/// Parse a dropped `.dobj` File by uploading its bytes to dobjd. Works in
-/// both desktop and browser modes — desktop-only file pickers are still
-/// available below for users who prefer that flow.
-export function parseDobjBytes(file: File): Promise<ObjectRecordPayload> {
-  const fd = new FormData();
-  fd.append("file", file);
-  return fetch(`${HTTP_BASE}/objects/parse`, { method: "POST", body: fd }).then(
-    httpJson<ObjectRecordPayload>,
-  );
-}
-
 // === Desktop-only conveniences (not driver-backed): Tauri IPC, no fallback ==
 
 export function pickDobjFilePath(): Promise<string> {
   if (isTauri) return invoke<string>("pick_dobj_file_path");
-  return Promise.reject(
-    new Error("File picker unavailable in browser mode; use drag-and-drop"),
-  );
+  return Promise.reject(new Error("File picker unavailable in browser mode"));
 }
 
 export function readDobjFile(path: string): Promise<ObjectRecordPayload> {
   if (isTauri) return invoke<ObjectRecordPayload>("read_dobj_file", { path });
-  return Promise.reject(
-    new Error(
-      "readDobjFile by path is desktop-only; use parseDobjBytes (drag-and-drop)",
-    ),
-  );
+  return Promise.reject(new Error("readDobjFile by path is desktop-only"));
 }
 
 export function sampleAppCpu(): Promise<CpuSample> {

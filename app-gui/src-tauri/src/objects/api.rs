@@ -6,8 +6,7 @@ use rfd::FileDialog;
 use tauri_plugin_opener::OpenerExt;
 
 /// Native file picker for `.dobj` files. Returns the absolute path of the
-/// chosen file. Desktop-only convenience — the website uses drag-and-drop
-/// against `dobjd`'s `POST /objects/parse` endpoint instead.
+/// chosen file. Desktop-only convenience.
 #[tauri::command]
 pub fn pick_dobj_file_path() -> Result<String, CommandError> {
     let Some(path) = FileDialog::new()

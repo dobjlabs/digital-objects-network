@@ -19,7 +19,7 @@ thiserror = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 
-axum = { version = "0.8.8", features = ["multipart"] }
+axum = "0.8.8"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
