@@ -58,6 +58,7 @@ pub struct ActionSummary {
     pub description: String,
     pub total_input_classes: Vec<String>,
     pub total_output_classes: Vec<String>,
+    pub predicate_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

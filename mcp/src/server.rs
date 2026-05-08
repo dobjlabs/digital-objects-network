@@ -48,6 +48,12 @@ pub struct InspectClassParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct InspectActionParams {
+    /// The action ID to inspect, e.g. "CraftWoodPick"
+    pub action_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct CheckFeasibilityParams {
     /// The action ID to check, e.g. "CraftWoodPick"
     pub action_id: String,
@@ -123,6 +129,19 @@ impl<T: CraftOps> CraftMcpService<T> {
     ) -> Result<Json<ClassDetail>, String> {
         self.ops
             .inspect_class(&params.class_name)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Inspect an action by id: predicate definition, description, and input/output class requirements"
+    )]
+    fn inspect_action(
+        &self,
+        Parameters(params): Parameters<InspectActionParams>,
+    ) -> Result<Json<ActionDetail>, String> {
+        self.ops
+            .inspect_action(&params.action_id)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -318,6 +337,7 @@ mod tests {
         assert!(tools.contains(&"get_state_root".to_string()));
         assert!(tools.contains(&"inspect_object".to_string()));
         assert!(tools.contains(&"inspect_class".to_string()));
+        assert!(tools.contains(&"inspect_action".to_string()));
         assert!(tools.contains(&"run_action".to_string()));
         assert!(tools.contains(&"check_feasibility".to_string()));
         assert!(tools.contains(&"list_classes".to_string()));
@@ -325,7 +345,7 @@ mod tests {
         assert!(tools.contains(&"read_settings".to_string()));
         assert!(tools.contains(&"write_settings".to_string()));
         assert!(tools.contains(&"get_objects_dir".to_string()));
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 13);
     }
 
     #[test]
@@ -392,6 +412,29 @@ mod tests {
             .unwrap();
         assert_eq!(detail.class_name, "Stick");
         assert!(detail.produced_by.contains(&"CraftSticks".to_string()));
+    }
+
+    #[test]
+    fn test_inspect_action_via_handler() {
+        let service = make_service();
+        let Json(detail) = service
+            .inspect_action(Parameters(InspectActionParams {
+                action_id: "CraftWoodPick".to_string(),
+            }))
+            .unwrap();
+        assert_eq!(detail.id, "CraftWoodPick");
+        assert!(detail.total_input_classes.contains(&"Wood".to_string()));
+        assert!(detail.total_input_classes.contains(&"Stick".to_string()));
+        assert!(detail.predicate_source.contains("CraftWoodPick"));
+    }
+
+    #[test]
+    fn test_inspect_action_unknown_returns_error() {
+        let service = make_service();
+        let result = service.inspect_action(Parameters(InspectActionParams {
+            action_id: "CraftDiamond".to_string(),
+        }));
+        assert!(result.is_err());
     }
 
     #[tokio::test]

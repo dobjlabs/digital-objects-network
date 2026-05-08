@@ -335,6 +335,45 @@ pub async fn inspect_class(client: &DobjdClient, name: String, json: bool) -> Re
     Ok(())
 }
 
+pub async fn inspect_action(client: &DobjdClient, id: String, json: bool) -> Result<()> {
+    let path = format!("/actions/{}", urlencoding::encode(&id));
+    let action: ActionSummary = client.get_json(&path).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": action.id, "hash": action.hash, "description": action.description,
+                "totalInputClasses": action.total_input_classes,
+                "totalOutputClasses": action.total_output_classes,
+                "predicateSource": action.predicate_source,
+            }))?
+        );
+        return Ok(());
+    }
+    println!("action:       {} {}", action.emoji, action.id);
+    println!("hash:         {}", action.hash);
+    println!("description:  {}", action.description);
+    let inputs = if action.total_input_classes.is_empty() {
+        "(none)".to_string()
+    } else {
+        action.total_input_classes.join(", ")
+    };
+    println!("inputs:       {inputs}");
+    let outputs = if action.total_output_classes.is_empty() {
+        "(none)".to_string()
+    } else {
+        action.total_output_classes.join(", ")
+    };
+    println!("outputs:      {outputs}");
+    if !action.predicate_source.is_empty() {
+        println!("predicate source:");
+        for line in action.predicate_source.lines() {
+            println!("  {line}");
+        }
+    }
+    Ok(())
+}
+
 pub async fn feasibility(client: &DobjdClient, action_id: String, json: bool) -> Result<()> {
     let path = format!("/actions/{}/feasibility", urlencoding::encode(&action_id));
     let report: CheckActionReport = client.get_json(&path).await?;

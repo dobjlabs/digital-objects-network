@@ -115,6 +115,18 @@ pub async fn list_actions(State(state): State<AppState>) -> ApiResult<Json<Vec<A
     Ok(Json(actions))
 }
 
+/// `GET /actions/{id}` — one action detail with predicate source.
+pub async fn inspect_action(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ActionSummary>> {
+    let driver = state.driver.clone();
+    let action = tokio::task::spawn_blocking(move || driver.get_action(&id))
+        .await
+        .map_err(|err| anyhow!("get_action task panicked: {err}"))??;
+    Ok(Json(action))
+}
+
 /// `GET /actions/{id}/feasibility` — does the local inventory have what
 /// this action needs? Returns the report shape `Driver::check_action`
 /// produces: `feasible` flag, the candidate objects we'd use, and any

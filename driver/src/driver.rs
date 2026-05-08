@@ -267,6 +267,13 @@ impl Driver {
         })
     }
 
+    pub fn get_action(&self, action_id: &str) -> Result<ActionSummary> {
+        self.deps
+            .catalog
+            .get_action(action_id)
+            .ok_or_else(|| DriverError::UnknownAction(action_id.to_string()).into())
+    }
+
     pub fn check_action(&self, action_id: &str) -> Result<CheckActionReport> {
         let action = self
             .deps

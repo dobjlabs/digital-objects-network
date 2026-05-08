@@ -40,6 +40,7 @@ pub fn router(app_state: AppState) -> Router {
         )
         .route("/actions", get(actions::list_actions))
         .route("/actions/run", post(actions::run_action))
+        .route("/actions/{id}", get(actions::inspect_action))
         .route("/actions/{id}/feasibility", get(actions::check_feasibility))
         .route("/events", get(events::stream))
         .with_state(app_state)

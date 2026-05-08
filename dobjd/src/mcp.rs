@@ -94,6 +94,17 @@ impl CraftOps for DobjdCraftOps {
         })
     }
 
+    fn inspect_action(&self, action_id: &str) -> anyhow::Result<mcp::ActionDetail> {
+        let action = self.driver.get_action(action_id)?;
+        Ok(mcp::ActionDetail {
+            id: action.id,
+            description: action.description,
+            total_input_classes: action.total_input_classes,
+            total_output_classes: action.total_output_classes,
+            predicate_source: action.predicate_source,
+        })
+    }
+
     fn run_action(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::RunActionResult> {
         // Pass strings through verbatim — the driver extracts basenames
         // via `Path::file_name`, so an absolute path or a bare basename

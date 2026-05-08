@@ -22,8 +22,11 @@ pub struct InventoryObject {
 pub struct ActionSummary {
     pub id: String,
     pub emoji: String,
+    pub hash: String,
     pub description: String,
     pub total_input_classes: Vec<String>,
+    pub total_output_classes: Vec<String>,
+    pub predicate_source: String,
 }
 
 #[derive(Debug, Serialize)]

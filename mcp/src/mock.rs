@@ -124,6 +124,22 @@ impl CraftOps for MockCraftOps {
         })
     }
 
+    fn inspect_action(&self, action_id: &str) -> anyhow::Result<ActionDetail> {
+        let action = self
+            .actions
+            .iter()
+            .find(|a| a.id == action_id)
+            .ok_or_else(|| anyhow!("unknown action: {action_id}"))?;
+
+        Ok(ActionDetail {
+            id: action.id.clone(),
+            description: action.description.clone(),
+            total_input_classes: action.total_input_classes.clone(),
+            total_output_classes: action.total_output_classes.clone(),
+            predicate_source: action_predicate_source_for(&action.id),
+        })
+    }
+
     fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunActionResult> {
         // Validate the action exists
         if !self.actions.iter().any(|a| a.id == input.action_id) {
@@ -367,6 +383,40 @@ fn is_known_class(name: &str) -> bool {
     KNOWN_CLASSES.contains(&name)
 }
 
+fn action_predicate_source_for(action_id: &str) -> String {
+    match action_id {
+        "FindLog" => {
+            "FindLog(log, chain0, chain, private: log0, work) = AND(\n  DictContains(log0, \"blueprint\", \"Log\")\n  Vdf(3, log0, work)\n  DictUpdate(log, log0, \"work\", work)\n  DictContains(log, \"type\", @self_predicate(IsLog))\n  tx::TxInsert(chain, chain0, log)\n)"
+                .to_string()
+        }
+        "CraftWood" => {
+            "CraftWood(log, wood, chain0, chain, private: chain1, wood0, key) = AND(\n  DictContains(wood0, \"blueprint\", \"Wood\")\n  DictUpdate(wood, wood0, \"key\", key)\n  LtEqU256(wood, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))\n  DictContains(log, \"type\", @self_predicate(IsLog))\n  tx::TxDelete(chain1, chain0, log)\n  DictContains(wood, \"type\", @self_predicate(IsWood))\n  tx::TxInsert(chain, chain1, wood)\n)"
+                .to_string()
+        }
+        "CraftSticks" => {
+            "CraftSticks(wood, stick_a, stick_b, chain0, chain, private: chain1, chain2) = AND(\n  DictContains(stick_a, \"blueprint\", \"Stick\")\n  DictContains(stick_b, \"blueprint\", \"Stick\")\n  DictContains(wood, \"type\", @self_predicate(IsWood))\n  tx::TxDelete(chain1, chain0, wood)\n  DictContains(stick_a, \"type\", @self_predicate(IsStick))\n  tx::TxInsert(chain2, chain1, stick_a)\n  DictContains(stick_b, \"type\", @self_predicate(IsStick))\n  tx::TxInsert(chain, chain2, stick_b)\n)"
+                .to_string()
+        }
+        "CraftWoodPick" => {
+            "CraftWoodPick(wood, stick, pick, chain0, chain, private: chain1, chain2) = AND(\n  DictContains(pick, \"blueprint\", \"WoodPick\")\n  DictContains(pick, \"durability\", 100)\n  DictContains(wood, \"type\", @self_predicate(IsWood))\n  tx::TxDelete(chain1, chain0, wood)\n  DictContains(stick, \"type\", @self_predicate(IsStick))\n  tx::TxDelete(chain2, chain1, stick)\n  DictContains(pick, \"type\", @self_predicate(IsWoodPick))\n  tx::TxInsert(chain, chain2, pick)\n)"
+                .to_string()
+        }
+        "CraftStonePick" => {
+            "CraftStonePick(stone, stick, pick, chain0, chain, private: chain1, chain2) = AND(\n  DictContains(pick, \"blueprint\", \"StonePick\")\n  DictContains(pick, \"durability\", 200)\n  DictContains(stone, \"type\", @self_predicate(IsStone))\n  tx::TxDelete(chain1, chain0, stone)\n  DictContains(stick, \"type\", @self_predicate(IsStick))\n  tx::TxDelete(chain2, chain1, stick)\n  DictContains(pick, \"type\", @self_predicate(IsStonePick))\n  tx::TxInsert(chain, chain2, pick)\n)"
+                .to_string()
+        }
+        "MineStoneWithWoodPick" => {
+            "MineStoneWithWoodPick(stone, chain0, chain, private: chain1, pick) = AND(\n  UseWoodPick(pick, chain0, chain1)\n  DictContains(stone, \"blueprint\", \"Stone\")\n  DictContains(stone, \"type\", @self_predicate(IsStone))\n  tx::TxInsert(chain, chain1, stone)\n)"
+                .to_string()
+        }
+        "MineStoneWithStonePick" => {
+            "MineStoneWithStonePick(stone, chain0, chain, private: chain1, pick) = AND(\n  UseStonePick(pick, chain0, chain1)\n  DictContains(stone, \"blueprint\", \"Stone\")\n  DictContains(stone, \"type\", @self_predicate(IsStone))\n  tx::TxInsert(chain, chain1, stone)\n)"
+                .to_string()
+        }
+        _ => format!("{action_id}(state) = AND(...)"),
+    }
+}
+
 fn predicate_source_for(class_name: &str) -> String {
     match class_name {
         "Log" => "IsLog(state) = AND(\n  FindLog(state)\n)".to_string(),
@@ -432,6 +482,27 @@ mod tests {
     fn test_inspect_unknown_class() {
         let mock = MockCraftOps::new();
         assert!(mock.inspect_class("Diamond").is_err());
+    }
+
+    #[test]
+    fn test_inspect_action() {
+        let mock = MockCraftOps::new();
+        let detail = mock.inspect_action("CraftWoodPick").unwrap();
+        assert_eq!(detail.id, "CraftWoodPick");
+        assert!(detail.total_input_classes.contains(&"Wood".to_string()));
+        assert!(detail.total_input_classes.contains(&"Stick".to_string()));
+        assert!(
+            detail
+                .total_output_classes
+                .contains(&"WoodPick".to_string())
+        );
+        assert!(detail.predicate_source.contains("CraftWoodPick"));
+    }
+
+    #[test]
+    fn test_inspect_unknown_action() {
+        let mock = MockCraftOps::new();
+        assert!(mock.inspect_action("CraftDiamond").is_err());
     }
 
     #[test]

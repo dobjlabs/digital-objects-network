@@ -142,6 +142,7 @@ impl PexeCatalog {
                         .to_string(),
                     total_input_classes,
                     total_output_classes,
+                    predicate_source: String::new(), // filled in a second pass
                 });
             }
 
@@ -160,13 +161,16 @@ impl PexeCatalog {
             enriched_plugins.push(plugin);
         }
 
-        // Second pass: fill in input_class_hashes now that every class hash is known.
+        // Second pass: fill in input_class_hashes now that every class hash is known,
+        // and the per-action predicate source now that combined_podlang is complete.
         for action in &mut all_actions {
             action.total_input_class_hashes = action
                 .total_input_classes
                 .iter()
                 .map(|c| class_hashes.get(c).cloned().unwrap_or_default())
                 .collect();
+            action.predicate_source = extract_predicate(&combined_podlang, &action.id)
+                .unwrap_or_else(|| format!("{}(state) = AND(...)", action.id));
         }
 
         // Ensure manifest-declared classes that weren't seen via the compiled

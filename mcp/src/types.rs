@@ -110,6 +110,21 @@ pub struct ClassDetail {
     pub consumed_by: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionDetail {
+    /// Action identifier, e.g. "CraftWoodPick"
+    pub id: String,
+    /// Human-readable description
+    pub description: String,
+    /// Class names required as inputs
+    pub total_input_classes: Vec<String>,
+    /// Class names produced as outputs
+    pub total_output_classes: Vec<String>,
+    /// Predicate definition in podlang source
+    pub predicate_source: String,
+}
+
 // -- Actions --
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

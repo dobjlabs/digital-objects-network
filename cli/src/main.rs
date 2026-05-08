@@ -55,6 +55,11 @@ enum Cmd {
         /// Class name (e.g. `Wood`, `WoodPick`). See `dobj classes`.
         name: String,
     },
+    /// Inspect a single action by id (with predicate source).
+    InspectAction {
+        /// Action id (e.g. `CraftWood`, `CraftWoodPick`). See `dobj actions`.
+        id: String,
+    },
     /// Check whether an action can run with the current inventory.
     Feasibility {
         /// Action id to check (e.g. `CraftWood`). See `dobj actions`.
@@ -127,6 +132,7 @@ async fn main() -> Result<()> {
             commands::inspect_object(&client, file_name, cli.json).await
         }
         Cmd::InspectClass { name } => commands::inspect_class(&client, name, cli.json).await,
+        Cmd::InspectAction { id } => commands::inspect_action(&client, id, cli.json).await,
         Cmd::Feasibility { action_id } => commands::feasibility(&client, action_id, cli.json).await,
         Cmd::StateRoot => commands::state_root(&client).await,
         Cmd::ObjectsDir => commands::objects_dir(&client).await,

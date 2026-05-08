@@ -48,6 +48,7 @@ All routes return JSON unless noted; errors come back as
 | `GET` | `/settings` | `load_settings` |
 | `PUT` | `/settings` | `save_settings` |
 | `POST` | `/actions/run` | `execute_with_reporter` |
+| `GET` | `/actions/{id}` | `get_action` |
 | `GET` | `/actions/{id}/feasibility` | `check_action` |
 | `GET` | `/events` | broadcast hub stream (SSE) |
 

@@ -10,6 +10,7 @@ pub trait CraftOps: Send + Sync + 'static {
     fn get_state_root(&self) -> anyhow::Result<String>;
     fn inspect_object(&self, file_name: &str) -> anyhow::Result<ObjectDetail>;
     fn inspect_class(&self, class_name: &str) -> anyhow::Result<ClassDetail>;
+    fn inspect_action(&self, action_id: &str) -> anyhow::Result<ActionDetail>;
     fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunActionResult>;
     fn check_feasibility(&self, action_id: &str) -> anyhow::Result<FeasibilityReport>;
 
