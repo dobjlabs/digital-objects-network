@@ -1,6 +1,6 @@
 ---
 name: bitcraft-obtain-log
-description: Bitcraft command — obtain a new Log object by running FindLog. Use when the user types "obtain-log", "find a log", "get a log", or asks bitcraft to produce a Log.
+description: Obtain a new Log object.
 ---
 
 # obtain-log

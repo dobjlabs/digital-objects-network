@@ -1,6 +1,6 @@
 ---
 name: bitcraft-craft-wood
-description: Bitcraft command — refine one Log into a Wood object via CraftWood. Use when the user types "craft-wood", "craft wood", "make wood", or asks bitcraft to refine a Log.
+description: Refine one Log into a Wood object.
 ---
 
 # craft-wood

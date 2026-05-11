@@ -1,6 +1,6 @@
 ---
 name: bitcraft-craft-stone-pick
-description: Bitcraft command — combine one Stone and one Stick into a StonePick via CraftStonePick. Use when the user types "craft-stone-pick", "craft stone pick", "make a stone pick", or asks bitcraft to craft a StonePick.
+description: Combine one Stone and one Stick into a StonePick.
 ---
 
 # craft-stone-pick
