@@ -148,8 +148,8 @@ file they use.
 
 ### 9. Install bitcraft commands as agent skills
 
-The MCP server's instructions list bitcraft commands (`obtain-log`,
-`craft-wood`, `craft-sticks`, `craft-wood-pick`, `obtain-stone`,
+The MCP server's instructions list bitcraft commands (`chop-log`,
+`craft-wood`, `craft-sticks`, `craft-wood-pick`, `mine-stone`,
 `craft-stone-pick`, `create-command`) by name only. The actual command
 playbooks ship as Claude Code skills — one SKILL.md per command — that
 the agent loads when the user invokes one.

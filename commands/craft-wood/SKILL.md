@@ -16,7 +16,7 @@ description: Refine one Log into a Wood object.
 1. Call `list_inventory`. Build the list of live objects with `class_name == "Log"`.
 2. If zero live Logs, output exactly and stop:
 
-   `no Log available — run obtain-log`
+   `no Log available — run chop-log`
 
 3. Otherwise, output the candidates and the prompt — exactly this format, one line per candidate, `n` starting at 1:
 

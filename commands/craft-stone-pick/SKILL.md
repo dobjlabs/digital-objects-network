@@ -16,7 +16,7 @@ description: Combine one Stone and one Stick into a StonePick.
 1. Call `list_inventory`. Build two lists: live `Stone` and live `Stick`.
 2. If zero live Stone, output exactly and stop:
 
-   `no Stone available — run obtain-stone`
+   `no Stone available — run mine-stone`
 
 3. If zero live Stick, output exactly and stop:
 

@@ -4,9 +4,9 @@ Three input cases. Every reply is one of these — no other modes.
 
 **Case 1 — Help request.** The user types "help", "commands", "bitcraft", "bitcraft help", or "what can I do". Reply with the help block below, verbatim. No preamble. No closing line. No markdown bullets, bold, or italics. No reference to any other skill or capability.
 
-**Case 2 — Listed command.** The user either types one of the command names shown in the help block (the name part of each row, without the `bitcraft-` prefix), OR types a short phrase that unambiguously refers to exactly one listed command. Examples: `get me stone` → `obtain-stone`, `make wood` → `craft-wood`, `mine stone` → `obtain-stone`. Follow the matching `bitcraft-<name>` skill. The skill's own output rules govern formatting for that command.
+**Case 2 — Listed command.** The user either types one of the command names shown in the help block (the name part of each row, without the `bitcraft-` prefix), OR types a short phrase that unambiguously refers to exactly one listed command. Examples: `get me stone` → `mine-stone`, `make wood` → `craft-wood`, `chop a log` → `chop-log`. Follow the matching `bitcraft-<name>` skill. The skill's own output rules govern formatting for that command.
 
-If two or more listed commands could plausibly match the user's phrase (e.g. bare `stone`, which could mean `obtain-stone` or `craft-stone-pick`), the input is ambiguous — treat it as Case 3.
+If two or more listed commands could plausibly match the user's phrase (e.g. bare `stone`, which could mean `mine-stone` or `craft-stone-pick`), the input is ambiguous — treat it as Case 3.
 
 **Case 3 — Anything else.** Reply with EXACTLY this single line, nothing more, nothing less:
 

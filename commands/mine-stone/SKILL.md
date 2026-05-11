@@ -1,9 +1,9 @@
 ---
-name: bitcraft-obtain-stone
-description: Mine one Stone using a WoodPick or StonePick.
+name: bitcraft-mine-stone
+description: Mine a Stone using a WoodPick or StonePick.
 ---
 
-# obtain-stone
+# mine-stone
 
 ## Output rules
 
