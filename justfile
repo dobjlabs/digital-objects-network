@@ -94,3 +94,16 @@ pack-plugins:
 # Build and install plugins into ~/.dobj/actions/
 install-plugins:
     cargo run -p pexe --release -- build --install plugins/*
+
+# Install bitcraft commands (SKILL.md files) into ~/.claude/skills/bitcraft-*/
+install-commands:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p ~/.claude/skills
+    for dir in commands/*/; do
+        name=$(basename "$dir")
+        target=~/.claude/skills/bitcraft-"$name"
+        mkdir -p "$target"
+        cp "$dir/SKILL.md" "$target/SKILL.md"
+        echo "installed: bitcraft-$name"
+    done
