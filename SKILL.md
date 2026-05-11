@@ -169,6 +169,43 @@ those, the command names show up in the MCP instructions but the agent
 has to follow the commands' bodies on its own — open the SKILL.md files
 in `~/.claude/skills/bitcraft-*/` for the playbooks.
 
+## Final output
+
+Steps 1–9 complete the install. After step 9 succeeds, output the success
+block below VERBATIM and stop. Do not run the sections that follow (those
+are user reference, not install steps). No preamble. No closing line. No
+commentary. No suggestions beyond what is in the block.
+
+If any step 1–9 fails, output the failure block VERBATIM with the step
+number and verbatim error message substituted, then stop.
+
+### Success block
+
+```
+bitcraft is ready.
+
+installed:
+  ~/.dobj/bin/dobjd                     — driver daemon (HTTP :7717, MCP :7718)
+  ~/.dobj/bin/dobj                      — terminal CLI
+  ~/.dobj/actions/craft-basics.pexe     — bundled crafting plugin
+  ~/.dobj/settings.json                 — points at hosted synchronizer + relayer
+  ~/.claude/skills/bitcraft-*/SKILL.md  — 7 commands
+
+restart Claude Code, then type `bitcraft help` to get started.
+```
+
+### Failure block
+
+Substitute `<n>` with the failing step number and `<error>` with the verbatim error message from the failed command (single line — strip newlines).
+
+```
+bitcraft install failed at step <n>: <error>
+
+retry later, or ask in the bitcraft Discord: <discord-invite-url>
+```
+
+Replace `<discord-invite-url>` with the project's Discord invite when one is published; for now leave the literal placeholder so the user knows where to look.
+
 ## Optional: add `dobj` to your PATH
 
 ```bash
