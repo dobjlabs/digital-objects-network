@@ -5,33 +5,37 @@ description: Bitcraft command — mine one Stone using a WoodPick or StonePick. 
 
 # obtain-stone
 
-Mine one `Stone` using a pick. The user picks which pick. The chosen pick loses durability.
+## Output rules
 
-Two actions back this command:
-- `MineStoneWithWoodPick` — consumes a `WoodPick`.
-- `MineStoneWithStonePick` — consumes a `StonePick`.
+- Plain text only. No markdown bold, italics, bullets, code fences, or headers in user-facing output.
+- No preamble. No closing summary. No suggestions. No commentary.
+- Do not mention any other command, skill, or capability.
 
 ## Steps
 
-1. Call `list_inventory`. Filter live objects for class `WoodPick` and class `StonePick`.
-2. If both lists are empty: print `no pick available — run craft-wood-pick` and stop.
-3. Print live picks together, labeled by class:
-   ```
-   W<n>) <wood pick file_name>
-   S<n>) <stone pick file_name>
-   ```
-   Ask the user for one (`W<n>` or `S<n>`). One line.
-4. If the chosen pick is a `WoodPick`: `action_id="MineStoneWithWoodPick"`. If `StonePick`: `action_id="MineStoneWithStonePick"`.
-5. Call `run_action` with that `action_id` and `input_object_paths=[<chosen pick path>]`.
-6. Report exactly one line:
+1. Call `list_inventory`. Build a single list of live objects whose `class_name` is `WoodPick` or `StonePick`, preserving inventory order.
+2. If the list is empty, output exactly and stop:
+
+   `no pick available — run craft-wood-pick`
+
+3. Output candidates and prompt — exactly this format, `n` starting at 1, one line per pick:
 
    ```
-   Stone → <output_path>
+   1) <class_name> <file_name>
+   2) <class_name> <file_name>
+   ...
+   pick:
    ```
 
-No commentary. Errors print verbatim and stop.
+   End the turn. Wait for the user's reply.
 
-## Related
+4. Parse the user's reply as an integer. If invalid, output `invalid choice` and stop.
+5. Determine `action_id`:
+   - If the chosen pick's `class_name == "WoodPick"`: `action_id="MineStoneWithWoodPick"`
+   - If `class_name == "StonePick"`: `action_id="MineStoneWithStonePick"`
+6. Call `run_action` with that `action_id` and `input_object_paths=[<chosen pick path>]`.
+7. On success, output exactly one line and stop:
 
-- `craft-wood-pick`, `craft-stone-pick` — produce the pick.
-- `craft-stone-pick` — combine the new Stone + a Stick into a StonePick.
+   `Stone → <output_path>`
+
+8. On tool error, output the tool's error message verbatim, on one line. Stop.

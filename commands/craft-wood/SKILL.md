@@ -5,24 +5,37 @@ description: Bitcraft command — refine one Log into a Wood object via CraftWoo
 
 # craft-wood
 
-Refine one `Log` into one `Wood`. The user picks the Log.
+## Output rules
+
+- Plain text only. No markdown bold, italics, bullets, code fences, or headers in user-facing output.
+- No preamble. No closing summary. No suggestions. No commentary.
+- Do not mention any other command, skill, or capability.
 
 ## Steps
 
-1. Call `list_inventory`. Filter for live `Log` objects.
-2. If zero live Logs: print `no Log available — run obtain-log` and stop.
-3. Print each live Log as `<n>) <file_name>` and ask the user which `<n>` to use. One line only.
-4. Call `run_action` with `action_id="CraftWood"` and `input_object_paths=[<chosen path>]`.
-5. Report exactly one line:
+1. Call `list_inventory`. Build the list of live objects with `class_name == "Log"`.
+2. If zero live Logs, output exactly and stop:
+
+   `no Log available — run obtain-log`
+
+3. Otherwise, output the candidates and the prompt — exactly this format, one line per candidate, `n` starting at 1:
 
    ```
-   Wood → <output_path>
+   1) <file_name of first live Log>
+   2) <file_name of second live Log>
+   ...
+   pick Log:
    ```
 
-No commentary. Errors print verbatim and stop.
+   Then end the turn and wait for the user's reply.
 
-## Related
+4. When the user replies, parse a single integer. If it does not match a listed index, output exactly and stop:
 
-- `obtain-log` — produce a Log first.
-- `craft-sticks` — turn this Wood into Sticks.
-- `craft-wood-pick` — combine Wood + Stick into a WoodPick.
+   `invalid choice`
+
+5. Call `run_action` with `action_id="CraftWood"` and `input_object_paths=[<file_path of the chosen Log>]`.
+6. On success, output exactly one line and stop:
+
+   `Wood → <output_path>`
+
+7. On tool error, output the tool's error message verbatim, on one line. Stop.
