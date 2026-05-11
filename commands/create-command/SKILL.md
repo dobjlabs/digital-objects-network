@@ -5,47 +5,61 @@ description: Bitcraft meta-command — help the user define a new bitcraft comma
 
 # create-command
 
-Guide the user through writing a new bitcraft command and installing it.
+## Output rules
 
-A bitcraft command is a SKILL.md file with frontmatter (`name`, `description`) plus a body that tells the agent what to do. The body can include:
-- prompt text
-- MCP tool calls (any bitcraft MCP tool — `run_action`, `list_inventory`, `inspect_*`, etc.)
-- references to other bitcraft commands (just name them; the agent will trigger them)
-- regular code blocks the agent runs (Bash, etc.)
+- Plain text only. No markdown bold, italics, bullets, or headers in user-facing output. The SKILL.md draft you show the user in step 5 may be inside a single fenced block — that is the only allowed exception.
+- No preamble. No closing summary. No commentary outside the four prompts and the final result line.
+- Do not mention any other command or skill.
 
 ## Steps
 
-Ask the user these four questions, one at a time, one line each. Wait for each answer before asking the next:
+Ask four questions, one at a time. Output each prompt on a single line, end the turn, and wait for the user's reply before asking the next.
 
-1. `name?` — kebab-case identifier, e.g. `mine-stone-x10`. Will be installed as `bitcraft-<name>`.
-2. `description?` — one sentence. Used by the agent to decide when to trigger this command.
-3. `what should it do?` — short body describing the steps. Plain prose is fine; the user can name MCP tools, other commands, or paste code.
-4. `confirm?` — show the user the assembled SKILL.md (frontmatter + body) and ask `y/n`.
+1. Output exactly:
 
-If the user answers `n`, return to step 3.
+   `name?`
 
-If the user answers `y`:
+   Wait for reply. The reply is the kebab-case identifier (e.g. `mine-stone-x10`). Save it as `<name>`.
 
-1. Write the file to `~/.claude/skills/bitcraft-<name>/SKILL.md` using the Write tool. Create the directory first.
-2. Report exactly one line:
+2. Output exactly:
+
+   `description?`
+
+   Wait for reply. Save as `<description>`.
+
+3. Output exactly:
+
+   `what should it do?`
+
+   Wait for reply. Save as `<body>`.
+
+4. Assemble the SKILL.md draft using exactly this template:
 
    ```
-   command → ~/.claude/skills/bitcraft-<name>/SKILL.md (reload the agent to register)
+   ---
+   name: bitcraft-<name>
+   description: <description>
+   ---
+
+   # <name>
+
+   <body>
    ```
 
-## SKILL.md template
+   Output the draft inside a single fenced code block. Then on the line immediately after the closing fence, output exactly:
 
-Use this exact frontmatter shape — the agent skill loader requires it:
+   `confirm? (y/n)`
 
-```
----
-name: bitcraft-<name>
-description: <user's answer to question 2>
----
+   End the turn. Wait for reply.
 
-# <name>
+5. If the user replies `n`, return to step 3.
+   If the user replies anything other than `y` or `n`, output `invalid choice` and stop.
+   If the user replies `y`, continue.
 
-<user's answer to question 3>
-```
+6. Create the directory `~/.claude/skills/bitcraft-<name>/` if it does not exist. Write the assembled SKILL.md text from step 4 to `~/.claude/skills/bitcraft-<name>/SKILL.md`.
 
-No commentary. Errors print verbatim and stop.
+7. Output exactly one line and stop:
+
+   `command → ~/.claude/skills/bitcraft-<name>/SKILL.md (reload the agent to register)`
+
+8. On any tool error during steps 6, output the error message verbatim and stop.
