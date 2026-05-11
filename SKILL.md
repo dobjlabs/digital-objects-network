@@ -8,6 +8,7 @@ Install the **bitcraft driver** on this machine. After this skill runs you'll ha
 - `~/.dobj/bin/dobj` — terminal CLI that talks to dobjd
 - `~/.dobj/actions/craft-basics.pexe` — the bundled crafting plugin
 - `~/.dobj/settings.json` — pointing at the hosted synchronizer + relayer
+- `~/.claude/skills/bitcraft-*/SKILL.md` — bitcraft commands (one per crafting class plus `create-command`)
 
 bitcraft is a privacy-preserving crafting game where each item is a digital
 object backed by a ZK proof. The driver runs locally, talks to a hosted
@@ -144,6 +145,29 @@ Then quit Claude Desktop fully (Cmd+Q) and reopen.
 For **other agents** (Cursor, Aider, Continue, etc.), point their MCP
 configuration at `http://127.0.0.1:7718/mcp` via whatever UI / config
 file they use.
+
+### 9. Install bitcraft commands as agent skills
+
+The MCP server's instructions list bitcraft commands (`obtain-log`,
+`craft-wood`, `craft-sticks`, `craft-wood-pick`, `obtain-stone`,
+`craft-stone-pick`, `create-command`) by name only. The actual command
+playbooks ship as Claude Code skills — one SKILL.md per command — that
+the agent loads when the user invokes one.
+
+```bash
+SKILLS_DIR="$HOME/.claude/skills"
+mkdir -p "$SKILLS_DIR"
+curl -fsSL "$RELEASE/bitcraft-commands.tar.gz" | tar -xz -C "$SKILLS_DIR"
+```
+
+The tarball unpacks into `~/.claude/skills/bitcraft-<name>/SKILL.md`.
+After it lands, fully restart Claude Code (close and reopen the chat)
+so the new skills register.
+
+**Claude Desktop and other agents** don't load `~/.claude/skills/`. For
+those, the command names show up in the MCP instructions but the agent
+has to follow the commands' bodies on its own — open the SKILL.md files
+in `~/.claude/skills/bitcraft-*/` for the playbooks.
 
 ## Optional: add `dobj` to your PATH
 

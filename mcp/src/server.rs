@@ -368,7 +368,10 @@ mod tests {
         let info = service.get_info();
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
-        assert!(info.instructions.unwrap().contains("bitcraft MCP Server"));
+        let instructions = info.instructions.unwrap();
+        assert!(instructions.contains("> bitcraft"));
+        assert!(instructions.contains("obtain-log"));
+        assert!(instructions.contains("create-command"));
     }
 
     #[test]

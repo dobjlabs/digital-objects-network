@@ -99,3 +99,16 @@ install-plugins:
 #   just pexe inspect plan --action CraftWood plugins/craft-basics
 pexe *ARGS:
     cargo run -p pexe --release -- {{ARGS}}
+
+# Install bitcraft commands (SKILL.md files) into ~/.claude/skills/bitcraft-*/
+install-commands:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p ~/.claude/skills
+    for dir in commands/*/; do
+        name=$(basename "$dir")
+        target=~/.claude/skills/bitcraft-"$name"
+        mkdir -p "$target"
+        cp "$dir/SKILL.md" "$target/SKILL.md"
+        echo "installed: bitcraft-$name"
+    done
