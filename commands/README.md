@@ -16,10 +16,10 @@ Source-of-truth SKILL.md files for bitcraft commands. `just install-commands` co
                                    │
        ┌─ Commands (this directory) ─┐
        │  built-in:                  │
-       │  obtain-log, craft-wood,    │      ┌─ Custom commands ─┐
+       │  chop-log, craft-wood,      │      ┌─ Custom commands ─┐
        │  craft-sticks,              │ ◄──► │  user-authored    │
        │  craft-wood-pick,           │      │  via create-command│
-       │  obtain-stone,              │      │  written to       │
+       │  mine-stone,                │      │  written to       │
        │  craft-stone-pick,          │      │  ~/.claude/skills/│
        │  create-command (meta)      │      │    bitcraft-*/    │
        └─────────────────────────────┘      └───────────────────┘
@@ -76,7 +76,7 @@ Each built-in has an `## Output rules` section near the top:
 
 - plain text only, no markdown
 - exact result lines (e.g. `Log → <path>`)
-- exact error lines (e.g. `no Log available — run obtain-log`)
+- exact error lines (e.g. `no Log available — run chop-log`)
 
 This keeps the MUD feel consistent across the built-in set. Custom commands are not required to follow this — `create-command` says so explicitly.
 
