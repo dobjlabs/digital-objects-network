@@ -1,6 +1,6 @@
 ---
 name: bitcraft-obtain-stone
-description: Bitcraft command — mine one Stone using a WoodPick or StonePick. Use when the user types "obtain-stone", "mine stone", "get stone", or asks bitcraft to produce a Stone.
+description: Mine one Stone using a WoodPick or StonePick.
 ---
 
 # obtain-stone
