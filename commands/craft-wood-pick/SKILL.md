@@ -1,6 +1,6 @@
 ---
 name: bitcraft-craft-wood-pick
-description: Bitcraft command — combine one Wood and one Stick into a WoodPick via CraftWoodPick. Use when the user types "craft-wood-pick", "craft wood pick", "make a wood pick", or asks bitcraft to craft a WoodPick.
+description: Combine one Wood and one Stick into a WoodPick.
 ---
 
 # craft-wood-pick

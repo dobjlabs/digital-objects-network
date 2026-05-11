@@ -36,7 +36,7 @@ dobjd:
 # shell — all backed by one dobjd process. Open http://localhost:1420 in a
 # browser to use the website client; the desktop window opens automatically.
 # https://github.com/pvolok/mprocs
-dev: ensure-plugins
+dev: ensure-plugins ensure-commands
     mprocs --config mprocs.yaml
 
 # Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
@@ -48,10 +48,21 @@ ensure-plugins:
         just install-plugins; \
     fi
 
-# Wipe local state (RocksDB + local Postgres DBs + objects)
+# Install bitcraft commands into ~/.claude/skills/ if the built-ins are missing.
+# Runs as part of `just dev`. Re-run `just install-commands` manually after
+# editing a command source file in commands/.
+ensure-commands:
+    @mkdir -p ~/.claude/skills
+    @if [ ! -d ~/.claude/skills/bitcraft-obtain-log ]; then \
+        echo "No bitcraft commands installed — installing from commands/..."; \
+        just install-commands; \
+    fi
+
+# Wipe local state (RocksDB + local Postgres DBs + objects + installed bitcraft commands)
 reset:
     @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
+    rm -rf ~/.claude/skills/bitcraft-*
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
 
