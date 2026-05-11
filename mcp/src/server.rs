@@ -216,6 +216,19 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
+        description = "List all installed bitcraft commands (skills in `~/.claude/skills/bitcraft-*`) with their descriptions. The list is computed fresh on every call, so newly-created commands appear without restarting the agent. Used to render `bitcraft help` and to validate command names the user types."
+    )]
+    fn list_commands(&self) -> Json<CommandList> {
+        let commands = default_skills_dir()
+            .map(|d| enumerate_commands_in(&d))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, description)| Command { name, description })
+            .collect();
+        Json(CommandList { commands })
+    }
+
+    #[tool(
         description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes in this game). Pass \"list\" to see all available documents."
     )]
     fn read_doc(&self, Parameters(params): Parameters<ReadDocParams>) -> String {
@@ -280,10 +293,9 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 }
 
-// -- Instructions --
+// -- Instructions + command enumeration --
 
-const INSTRUCTIONS_TEMPLATE: &str = include_str!("../docs/instructions.md");
-const COMMANDS_PLACEHOLDER: &str = "{{COMMANDS}}";
+const INSTRUCTIONS: &str = include_str!("../docs/instructions.md");
 const SKILL_PREFIX: &str = "bitcraft-";
 
 /// Default location to scan for installed bitcraft commands.
@@ -338,33 +350,6 @@ fn parse_skill_meta(skill_md: &Path) -> Option<(String, String)> {
     Some((display, description?))
 }
 
-/// Render a column-aligned help block from the command list.
-fn render_help_block(commands: &[(String, String)]) -> String {
-    if commands.is_empty() {
-        return "Commands:\n  (no bitcraft commands installed — see ~/.claude/skills/)".to_string();
-    }
-    let width = commands.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
-    let mut out = String::from("Commands:\n");
-    for (name, desc) in commands {
-        out.push_str(&format!("  {:<width$}  {}\n", name, desc, width = width));
-    }
-    out.trim_end().to_string()
-}
-
-/// Build the instructions string with the `{{COMMANDS}}` placeholder
-/// replaced by a help block enumerated from `skills_dir`. If
-/// `skills_dir` is None, no commands are enumerated.
-fn build_instructions_with(skills_dir: Option<&Path>) -> String {
-    let commands = skills_dir.map(enumerate_commands_in).unwrap_or_default();
-    let help = render_help_block(&commands);
-    INSTRUCTIONS_TEMPLATE.replace(COMMANDS_PLACEHOLDER, &help)
-}
-
-/// Production builder: scans `~/.claude/skills/`.
-fn build_instructions() -> String {
-    build_instructions_with(default_skills_dir().as_deref())
-}
-
 // -- ServerHandler --
 
 #[tool_handler]
@@ -376,7 +361,7 @@ impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
                 .enable_resources()
                 .build(),
         )
-        .with_instructions(build_instructions())
+        .with_instructions(INSTRUCTIONS.to_string())
     }
 
     fn list_resources(
@@ -441,7 +426,8 @@ mod tests {
         assert!(tools.contains(&"read_settings".to_string()));
         assert!(tools.contains(&"write_settings".to_string()));
         assert!(tools.contains(&"get_objects_dir".to_string()));
-        assert_eq!(tools.len(), 13);
+        assert!(tools.contains(&"list_commands".to_string()));
+        assert_eq!(tools.len(), 14);
     }
 
     #[test]
@@ -454,34 +440,31 @@ mod tests {
         assert!(instructions.contains("> bitcraft"));
         assert!(instructions.contains("Three input cases"));
         assert!(instructions.contains("no such bitcraft command"));
-        assert!(!instructions.contains(COMMANDS_PLACEHOLDER));
+        assert!(instructions.contains("list_commands"));
     }
 
     #[test]
-    fn test_dynamic_help_renders_installed_commands() {
+    fn test_enumerate_commands_filters_and_sorts() {
         let tmp = tempfile::tempdir().unwrap();
         let skills = tmp.path();
         write_skill(skills, "bitcraft-foo", "Bitcraft foo command.");
         write_skill(skills, "bitcraft-bar", "Bitcraft bar command.");
         write_skill(skills, "other-thing", "Not a bitcraft skill.");
 
-        let instructions = build_instructions_with(Some(skills));
+        let commands = enumerate_commands_in(skills);
 
-        assert!(instructions.contains("foo  Bitcraft foo command."));
-        assert!(instructions.contains("bar  Bitcraft bar command."));
-        assert!(!instructions.contains("other-thing"));
-        // alphabetical
-        let foo_pos = instructions.find("foo").unwrap();
-        let bar_pos = instructions.find("bar").unwrap();
-        assert!(bar_pos < foo_pos);
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0].0, "bar");
+        assert_eq!(commands[0].1, "Bitcraft bar command.");
+        assert_eq!(commands[1].0, "foo");
+        assert_eq!(commands[1].1, "Bitcraft foo command.");
     }
 
     #[test]
-    fn test_empty_skills_dir_renders_empty_state() {
+    fn test_enumerate_commands_missing_dir_returns_empty() {
         let tmp = tempfile::tempdir().unwrap();
-        let empty = tmp.path().join("does-not-exist");
-        let instructions = build_instructions_with(Some(&empty));
-        assert!(instructions.contains("no bitcraft commands installed"));
+        let missing = tmp.path().join("does-not-exist");
+        assert!(enumerate_commands_in(&missing).is_empty());
     }
 
     #[test]
