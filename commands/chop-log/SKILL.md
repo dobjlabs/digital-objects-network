@@ -1,9 +1,9 @@
 ---
-name: bitcraft-obtain-log
-description: Obtain a new Log object.
+name: bitcraft-chop-log
+description: Chop a new Log.
 ---
 
-# obtain-log
+# chop-log
 
 ## Output rules
 
