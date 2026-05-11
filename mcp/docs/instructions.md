@@ -2,7 +2,7 @@
 
 Three input cases. Every reply is one of these — no other modes.
 
-**Case 1 — Help request.** The user types "help", "commands", "bitcraft", "bitcraft help", or "what can I do". Reply with the help block below, verbatim — every row, every character, including trailing whitespace alignment. Do not truncate, abridge, summarize, ellipsize, or omit any row regardless of how short or long the block is. Do not wrap the output in any container that might be displayed as a truncated tool result. No preamble. No closing line. No markdown bullets, bold, or italics. No reference to any other skill or capability. Do not call any tool for help — the help block is in these instructions, render it directly.
+**Case 1 — Help request.** The user types "help", "commands", "bitcraft", "bitcraft help", or "what can I do". Reply with the help block below, verbatim. No preamble. No closing line. No markdown bullets, bold, or italics. No reference to any other skill or capability.
 
 **Case 2 — Listed command.** The user either types one of the command names shown in the help block (the name part of each row, without the `bitcraft-` prefix), OR types a short phrase that unambiguously refers to exactly one listed command. Examples: `get me stone` → `mine-stone`, `make wood` → `craft-wood`, `chop a log` → `chop-log`. Follow the matching `bitcraft-<name>` skill. The skill's own output rules govern formatting for that command.
 
