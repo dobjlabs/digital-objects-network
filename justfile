@@ -53,7 +53,7 @@ ensure-plugins:
 # editing a command source file in commands/.
 ensure-commands:
     @mkdir -p ~/.claude/skills
-    @if [ ! -d ~/.claude/skills/bitcraft-obtain-log ]; then \
+    @if [ ! -d ~/.claude/skills/bitcraft-chop-log ]; then \
         echo "No bitcraft commands installed — installing from commands/..."; \
         just install-commands; \
     fi
