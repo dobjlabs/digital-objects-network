@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rmcp::ErrorData as McpError;
@@ -281,7 +282,88 @@ impl<T: CraftOps> CraftMcpService<T> {
 
 // -- Instructions --
 
-const INSTRUCTIONS: &str = include_str!("../docs/instructions.md");
+const INSTRUCTIONS_TEMPLATE: &str = include_str!("../docs/instructions.md");
+const COMMANDS_PLACEHOLDER: &str = "{{COMMANDS}}";
+const SKILL_PREFIX: &str = "bitcraft-";
+
+/// Default location to scan for installed bitcraft commands.
+fn default_skills_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".claude").join("skills"))
+}
+
+/// Scan a skills directory for `bitcraft-*` SKILL.md files and parse
+/// `(display_name, description)` pairs from each frontmatter. The
+/// `bitcraft-` prefix is stripped from the display name. Sorted
+/// alphabetically. Returns an empty Vec if the directory is missing.
+fn enumerate_commands_in(skills_dir: &Path) -> Vec<(String, String)> {
+    let Ok(entries) = std::fs::read_dir(skills_dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(SKILL_PREFIX)
+        })
+        .filter_map(|e| parse_skill_meta(&e.path().join("SKILL.md")))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Parse `name` and `description` from a SKILL.md frontmatter. The
+/// frontmatter is a YAML block delimited by `---` lines at the top of
+/// the file. Returns None if missing/malformed. Strips the `bitcraft-`
+/// prefix from `name` to produce the display name.
+fn parse_skill_meta(skill_md: &Path) -> Option<(String, String)> {
+    let contents = std::fs::read_to_string(skill_md).ok()?;
+    let mut lines = contents.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    let mut name: Option<String> = None;
+    let mut description: Option<String> = None;
+    for line in lines {
+        if line.trim() == "---" {
+            break;
+        }
+        if let Some(rest) = line.strip_prefix("name:") {
+            name = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("description:") {
+            description = Some(rest.trim().to_string());
+        }
+    }
+    let display = name?.strip_prefix(SKILL_PREFIX)?.to_string();
+    Some((display, description?))
+}
+
+/// Render a column-aligned help block from the command list.
+fn render_help_block(commands: &[(String, String)]) -> String {
+    if commands.is_empty() {
+        return "Commands:\n  (no bitcraft commands installed — see ~/.claude/skills/)".to_string();
+    }
+    let width = commands.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+    let mut out = String::from("Commands:\n");
+    for (name, desc) in commands {
+        out.push_str(&format!("  {:<width$}  {}\n", name, desc, width = width));
+    }
+    out.trim_end().to_string()
+}
+
+/// Build the instructions string with the `{{COMMANDS}}` placeholder
+/// replaced by a help block enumerated from `skills_dir`. If
+/// `skills_dir` is None, no commands are enumerated.
+fn build_instructions_with(skills_dir: Option<&Path>) -> String {
+    let commands = skills_dir.map(enumerate_commands_in).unwrap_or_default();
+    let help = render_help_block(&commands);
+    INSTRUCTIONS_TEMPLATE.replace(COMMANDS_PLACEHOLDER, &help)
+}
+
+/// Production builder: scans `~/.claude/skills/`.
+fn build_instructions() -> String {
+    build_instructions_with(default_skills_dir().as_deref())
+}
 
 // -- ServerHandler --
 
@@ -294,7 +376,7 @@ impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
                 .enable_resources()
                 .build(),
         )
-        .with_instructions(INSTRUCTIONS)
+        .with_instructions(build_instructions())
     }
 
     fn list_resources(
@@ -370,8 +452,71 @@ mod tests {
         assert!(info.instructions.is_some());
         let instructions = info.instructions.unwrap();
         assert!(instructions.contains("> bitcraft"));
-        assert!(instructions.contains("obtain-log"));
-        assert!(instructions.contains("create-command"));
+        assert!(instructions.contains("Three input cases"));
+        assert!(instructions.contains("no such bitcraft command"));
+        assert!(!instructions.contains(COMMANDS_PLACEHOLDER));
+    }
+
+    #[test]
+    fn test_dynamic_help_renders_installed_commands() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills = tmp.path();
+        write_skill(skills, "bitcraft-foo", "Bitcraft foo command.");
+        write_skill(skills, "bitcraft-bar", "Bitcraft bar command.");
+        write_skill(skills, "other-thing", "Not a bitcraft skill.");
+
+        let instructions = build_instructions_with(Some(skills));
+
+        assert!(instructions.contains("foo  Bitcraft foo command."));
+        assert!(instructions.contains("bar  Bitcraft bar command."));
+        assert!(!instructions.contains("other-thing"));
+        // alphabetical
+        let foo_pos = instructions.find("foo").unwrap();
+        let bar_pos = instructions.find("bar").unwrap();
+        assert!(bar_pos < foo_pos);
+    }
+
+    #[test]
+    fn test_empty_skills_dir_renders_empty_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let empty = tmp.path().join("does-not-exist");
+        let instructions = build_instructions_with(Some(&empty));
+        assert!(instructions.contains("no bitcraft commands installed"));
+    }
+
+    #[test]
+    fn test_parse_skill_meta_extracts_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("bitcraft-test");
+        std::fs::create_dir(&dir).unwrap();
+        let skill_md = dir.join("SKILL.md");
+        std::fs::write(
+            &skill_md,
+            "---\nname: bitcraft-test\ndescription: A test command.\n---\n\n# test\n\nbody\n",
+        )
+        .unwrap();
+
+        let (display, desc) = parse_skill_meta(&skill_md).unwrap();
+        assert_eq!(display, "test");
+        assert_eq!(desc, "A test command.");
+    }
+
+    #[test]
+    fn test_parse_skill_meta_rejects_missing_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_md = tmp.path().join("SKILL.md");
+        std::fs::write(&skill_md, "no frontmatter here\n").unwrap();
+        assert!(parse_skill_meta(&skill_md).is_none());
+    }
+
+    fn write_skill(skills_dir: &Path, name: &str, description: &str) {
+        let dir = skills_dir.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n"),
+        )
+        .unwrap();
     }
 
     #[test]

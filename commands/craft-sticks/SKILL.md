@@ -1,6 +1,6 @@
 ---
 name: bitcraft-craft-sticks
-description: Bitcraft command — split one Wood into two Sticks via CraftSticks. Use when the user types "craft-sticks", "craft sticks", "make sticks", or asks bitcraft to produce Sticks.
+description: Split one Wood into two Stick objects.
 ---
 
 # craft-sticks

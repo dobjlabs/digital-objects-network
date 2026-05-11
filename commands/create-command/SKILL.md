@@ -1,6 +1,6 @@
 ---
 name: bitcraft-create-command
-description: Bitcraft meta-command — help the user define a new bitcraft command (a SKILL.md file installed alongside the built-in commands). Use when the user types "create-command", "new command", "add a command", "make a bitcraft command", or asks to extend the bitcraft command set.
+description: Define a new bitcraft command.
 ---
 
 # create-command
