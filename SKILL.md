@@ -189,9 +189,9 @@ installed:
   ~/.dobj/bin/dobj                      — terminal CLI
   ~/.dobj/actions/craft-basics.pexe     — bundled crafting plugin
   ~/.dobj/settings.json                 — points at hosted synchronizer + relayer
-  ~/.claude/skills/bitcraft-*/SKILL.md  — 7 commands
+  ~/.claude/skills/bitcraft-*/SKILL.md  — bitcraft commands
 
-restart Claude Code, then type `bitcraft help` to get started.
+restart Claude Code, then type `bitcraft start` to begin a session.
 ```
 
 ### Failure block
