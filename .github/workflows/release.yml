@@ -556,3 +556,72 @@ jobs:
           draft: true
           fail_on_unmatched_files: true
           body_path: release-notes.md
+
+  commands:
+    # Packages every `commands/<name>/` subdirectory as `bitcraft-<name>/`
+    # inside `bitcraft-commands.tar.gz`. The install SKILL.md fetches this
+    # tarball and extracts into `~/.claude/skills/`, so the agent skills (one
+    # SKILL.md per command, plus any sibling files like preview/index.html
+    # or start/ensure_hook.py) ship alongside the daemon + plugin.
+    #
+    # No Rust needed — pure file packaging.
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage bitcraft-commands.tar.gz
+        run: |
+          set -euo pipefail
+          PACK="$RUNNER_TEMP/commands"
+          mkdir -p "$PACK"
+
+          # Mirror the on-disk layout `~/.claude/skills/` expects: each
+          # `commands/<name>/` becomes `bitcraft-<name>/` in the tarball.
+          # Copies SKILL.md plus every sibling file (e.g. preview/index.html,
+          # help/format_help.py, start/ensure_hook.py, create-command/references/*).
+          if [ ! -d commands ]; then
+            echo "::error::commands/ directory not found at repo root"
+            exit 1
+          fi
+          for dir in commands/*/; do
+            name=$(basename "$dir")
+            target="$PACK/bitcraft-$name"
+            mkdir -p "$target"
+            cp -R "$dir". "$target/"
+          done
+
+          # Sanity check: every command has a SKILL.md.
+          for d in "$PACK"/bitcraft-*/; do
+            if [ ! -f "$d/SKILL.md" ]; then
+              echo "::error::missing SKILL.md in $d"
+              exit 1
+            fi
+          done
+
+          echo "--- staged commands ---"
+          ls -la "$PACK"
+          for d in "$PACK"/bitcraft-*/; do
+            echo "--- $d ---"
+            ls -la "$d"
+          done
+
+          tar -czf "bitcraft-commands.tar.gz" -C "$PACK" .
+          echo "--- tarball contents ---"
+          tar -tzf bitcraft-commands.tar.gz | head -40
+
+      - name: Render release notes
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016
+          envsubst '$DEFAULT_SYNCHRONIZER_API_URL $DEFAULT_RELAYER_API_URL' \
+            < .github/release-notes.md.tpl > release-notes.md
+
+      - name: Upload to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bitcraft-commands.tar.gz
+          tag_name: ${{ env.RELEASE_TAG }}
+          draft: true
+          fail_on_unmatched_files: true
+          body_path: release-notes.md
