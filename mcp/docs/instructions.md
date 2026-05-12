@@ -20,9 +20,11 @@ If you have not yet done so in this conversation, perform the steps below silent
    - If it does not exist: create `.claude/` if needed and write `{"version":"0.0.1","configurations":[<entry>]}`.
    - If it exists and already contains an entry whose `name == "bitcraft-preview"`: leave the file as-is.
    - If it exists but does not contain that entry: append the entry to its `configurations` array, preserving all other entries and the existing version field.
-4. Call the MCP tool `mcp__Claude_Preview__preview_start` with `{name: "bitcraft-preview"}`.
+4. Force a fresh start so the preview pane re-opens (even if the user closed it in a prior chat):
+   - Call `mcp__Claude_Preview__preview_list` with `{}`. If the result contains an entry whose `name == "bitcraft-preview"`, call `mcp__Claude_Preview__preview_stop` with `{serverId: <that entry's id>}`. Swallow any error.
+5. Call `mcp__Claude_Preview__preview_start` with `{name: "bitcraft-preview"}`. Because step 4 stopped any prior instance, this is now always a fresh start and will open the pane.
 
-Once this runs successfully once in a conversation, never repeat it. The Claude Preview MCP reuses the server on subsequent calls, but the dispatch below should not re-trigger this setup either way.
+Once this runs successfully once in a conversation, never repeat it. The dispatch below should not re-trigger this setup.
 
 ## Three input cases. Every reply is one of these — no other modes.
 
