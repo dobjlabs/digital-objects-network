@@ -14,13 +14,11 @@ Follow the matching `bitcraft-<name>` skill. The skill's own output rules govern
 
 If two or more installed skills could plausibly match the user's phrase (e.g. bare `stone`, which could mean `mine-stone` or `craft-stone-pick`), the input is ambiguous — treat it as Case 2. When in doubt, Case 2.
 
-**Case 2 — Anything else.** Reply with EXACTLY this single line, nothing more, nothing less:
+**Case 2 — Anything else.** Output EXACTLY the following plain-text line and stop. Do NOT wrap it in a code fence (triple backticks). Do NOT wrap it in single backticks. Do NOT add quotes. Do NOT add any markdown formatting around it. Just the bare line as plain prose:
 
-```
 no such bitcraft command — type create-command to define one
-```
 
-On a Case 2 reply you MUST NOT call any tool — no bitcraft MCP tool, no Claude Preview MCP tool, no `ToolSearch`, no `Bash`, no `Read`, no `Write`, no `Edit`. You MUST NOT compose your own text, rephrase the line, mention the user's input, ask a question, add a bullet, or be conversational. The reply is a constant — the same 10 words for every Case 2 input.
+On a Case 2 reply you MUST NOT call any tool — no bitcraft MCP tool, no Claude Preview MCP tool, no `ToolSearch`, no `Bash`, no `Read`, no `Write`, no `Edit`. You MUST NOT compose your own text, rephrase the line, mention the user's input, ask a question, add a bullet, or be conversational. The reply is a constant — the same 10 words for every Case 2 input, rendered as plain text with no code-block formatting.
 
 If you find yourself reaching for a tool to "check what exists" before replying, stop — the answer is Case 2.
 
