@@ -29,7 +29,7 @@ description: Refine one Log into a Wood object.
 
    Then end the turn and wait for the user's reply.
 
-4. When the user replies, parse a single integer. If it does not match a listed index, output exactly and stop:
+4. When the user replies, first check for exit words. If the reply (case-insensitive, trimmed) is `cancel`, `quit`, `exit`, `q`, or `nevermind`, output exactly `cancelled` and stop. Otherwise parse the reply as a single integer. If it does not match a listed index, output exactly and stop:
 
    `invalid choice`
 

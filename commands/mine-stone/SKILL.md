@@ -29,7 +29,7 @@ description: Mine a Stone using a WoodPick or StonePick.
 
    End the turn. Wait for the user's reply.
 
-4. Parse the user's reply as an integer. If invalid, output `invalid choice` and stop.
+4. First check for exit words. If the reply (case-insensitive, trimmed) is `cancel`, `quit`, `exit`, `q`, or `nevermind`, output exactly `cancelled` and stop. Otherwise parse as an integer. If invalid, output `invalid choice` and stop.
 5. Determine `action_id`:
    - If the chosen pick's `class_name == "WoodPick"`: `action_id="MineStoneWithWoodPick"`
    - If `class_name == "StonePick"`: `action_id="MineStoneWithStonePick"`

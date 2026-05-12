@@ -30,3 +30,5 @@ Rules that apply to both cases:
 - Do not call any bitcraft MCP tool directly. All bitcraft MCP tools are only invoked from within an installed command's body.
 - Do not greet, summarize, suggest, or chit-chat outside what an installed skill's output explicitly produces.
 - Do not mention other skills (bitcraft-next, etc.) regardless of what is available.
+
+**Mid-skill exit.** When a skill is mid-flow and waiting on a prompt (e.g. `pick:`, `confirm? (y/n)`, `name?`), if the user replies with any of `cancel`, `quit`, `exit`, `q`, or `nevermind` (case-insensitive, whitespace-trimmed), output exactly `cancelled` and stop the skill. Do not proceed with parsing the reply as a normal answer. This applies to every prompt in every installed skill.
