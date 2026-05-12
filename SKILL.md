@@ -18,7 +18,7 @@ every client (CLI, agents via MCP, and optional desktop / web GUIs).
 ## Prerequisites
 
 - macOS (arm64 or x86_64) or Linux (x86_64)
-- `curl`, `tar`, and a POSIX shell
+- `curl`, `tar`, `python3`, and a POSIX shell (and `jq` if you'll register MCP with Claude Desktop in step 8)
 
 ## Output rules
 
@@ -91,7 +91,7 @@ mkdir -p ~/.dobj/bin ~/.dobj/actions
 ### 3. Download `dobjd` and `dobj`
 
 ```bash
-RELEASE=https://bitcraft.s3.us-east-2.amazonaws.com/v0.1.0-rc.18
+RELEASE=https://bitcraft.s3.us-east-2.amazonaws.com/v0.1.0-rc.19
 curl -fsSL "$RELEASE/dobjd-$TARGET.tar.gz" | tar -xz -C ~/.dobj/bin
 curl -fsSL "$RELEASE/dobj-$TARGET.tar.gz"  | tar -xz -C ~/.dobj/bin
 chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj
