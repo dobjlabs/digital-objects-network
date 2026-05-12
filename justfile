@@ -90,7 +90,8 @@ pack-plugins:
 install-plugins:
     cargo run -p pexe --release -- build --install plugins/*
 
-# Install bitcraft commands (SKILL.md files) into ~/.claude/skills/bitcraft-*/
+# Install bitcraft commands into ~/.claude/skills/bitcraft-*/. Copies SKILL.md
+# plus any sibling files (e.g. preview.html, sibling scripts).
 install-commands:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -99,6 +100,6 @@ install-commands:
         name=$(basename "$dir")
         target=~/.claude/skills/bitcraft-"$name"
         mkdir -p "$target"
-        cp "$dir/SKILL.md" "$target/SKILL.md"
+        cp -R "$dir"* "$target/"
         echo "installed: bitcraft-$name"
     done
