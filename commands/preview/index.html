@@ -59,15 +59,18 @@
   .dot.bad { background: #ef4444; }
   table { width: 100%; border-collapse: collapse; }
   td { padding: 2px 8px 2px 0; vertical-align: top; }
-  td.label { color: #666; width: 160px; }
-  td.value { color: #d4d4d4; font-variant-numeric: tabular-nums; word-break: break-all; }
+  table { table-layout: fixed; }
+  td.label { color: #666; width: 130px; min-width: 0; }
+  td.value { color: #d4d4d4; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; min-width: 0; }
   .row {
     padding: 3px 0;
     border-bottom: 1px solid #1c1c1c;
     display: flex;
-    gap: 10px;
+    gap: 8px;
     align-items: baseline;
+    min-width: 0;
   }
+  .row > * { min-width: 0; overflow-wrap: anywhere; }
   .row:last-child { border-bottom: 0; }
   .status-live  { color: #4ade80; }
   .status-dead  { color: #666; text-decoration: line-through; }
@@ -78,6 +81,7 @@
   .muted { color: #555; }
   .empty { color: #555; font-style: italic; padding: 4px 0; }
   .flex1 { flex: 1; }
+  .id { font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -116,6 +120,16 @@ let syncUrl = null;
 function shortHash(h, head = 8, tail = 6) {
   if (!h) return "—";
   return h.length > head + tail + 1 ? h.slice(0, head) + "…" + h.slice(-tail) : h;
+}
+function shortFile(name) {
+  if (!name) return "—";
+  // <class>_0x<hash>.dobj  →  <head6>…<tail4>
+  const m = name.match(/_0x([a-f0-9]+)\.dobj$/i);
+  if (m) {
+    const h = m[1];
+    return h.length > 12 ? h.slice(0, 6) + "…" + h.slice(-4) : h;
+  }
+  return name.length > 24 ? name.slice(0, 14) + "…" + name.slice(-6) : name;
 }
 function fmtNum(n) {
   if (n === undefined || n === null) return "—";
@@ -180,10 +194,10 @@ async function pollInventory() {
       return;
     }
     list.innerHTML = objects.map(o => `
-      <div class="row">
-        <span class="status-${o.status || "live"}">${(o.emoji || "")} ${o.fileName}</span>
-        <span class="muted flex1">· ${o.className || "?"}</span>
-        <span class="muted">${shortHash(o.classHash, 4, 4)}</span>
+      <div class="row" title="${o.fileName || ""}">
+        <span>${(o.emoji || "")}</span>
+        <span class="flex1">${o.className || "?"}</span>
+        <span class="status-${o.status || "live"} id">${shortFile(o.fileName)}</span>
       </div>
     `).join("");
   } catch (e) {
