@@ -216,7 +216,7 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "List all installed bitcraft commands (skills in `~/.claude/skills/bitcraft-*`) with their descriptions. The list is computed fresh on every call, so newly-created commands appear without restarting the agent. Used to render `bitcraft help` and to validate command names the user types."
+        description = "List all installed bitcraft commands (skills in `~/.claude/skills/bitcraft-*`) with their descriptions. The list is computed fresh on every call, so newly-created commands appear without restarting the agent. Used to validate command names the user types. For rendering `bitcraft help`, call `get_help_block` instead — it returns the exact pre-formatted text to echo."
     )]
     fn list_commands(&self) -> Json<CommandList> {
         let commands = default_skills_dir()
@@ -226,6 +226,24 @@ impl<T: CraftOps> CraftMcpService<T> {
             .map(|(name, description)| Command { name, description })
             .collect();
         Json(CommandList { commands })
+    }
+
+    #[tool(
+        description = "Return the pre-rendered help block as a single plain-text string. This is the ENTIRE output the agent should print on a `bitcraft help` request — echo the returned string verbatim, with NO additional formatting, NO markdown, NO table, NO prefix or suffix lines. The string is computed fresh on every call from the installed commands in `~/.claude/skills/bitcraft-*`."
+    )]
+    fn get_help_block(&self) -> String {
+        let commands = default_skills_dir()
+            .map(|d| enumerate_commands_in(&d))
+            .unwrap_or_default();
+        if commands.is_empty() {
+            return "Commands:\n  (no bitcraft commands installed — type create-command to define one)".to_string();
+        }
+        let width = commands.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+        let mut out = String::from("Commands:\n");
+        for (name, desc) in &commands {
+            out.push_str(&format!("  {:<width$}  {}\n", name, desc, width = width));
+        }
+        out.trim_end().to_string()
     }
 
     #[tool(
@@ -427,7 +445,8 @@ mod tests {
         assert!(tools.contains(&"write_settings".to_string()));
         assert!(tools.contains(&"get_objects_dir".to_string()));
         assert!(tools.contains(&"list_commands".to_string()));
-        assert_eq!(tools.len(), 14);
+        assert!(tools.contains(&"get_help_block".to_string()));
+        assert_eq!(tools.len(), 15);
     }
 
     #[test]
