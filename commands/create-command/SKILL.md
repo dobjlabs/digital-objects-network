@@ -47,7 +47,7 @@ Every SKILL.md begins with a YAML block between `---` markers. All fields are op
 
 | Field | Type | Purpose |
 |---|---|---|
-| `name` | string | Skill name. Must be `bitcraft-<kebab-case>` (lowercase letters/numbers/hyphens, max 64 chars). The `bitcraft-` prefix is what our help script keys off. |
+| `name` | string | Skill name. Must be `bitcraft-<identifier>` where identifier is lowercase letters, numbers, and optional hyphens (max 64 chars). A single word like `ideas` is valid; hyphens are not required. The `bitcraft-` prefix is what our help script keys off. |
 | `description` | string | One short sentence shown in `help`. Drives Claude's automatic skill triggering. Keep it concrete (combined with `when_to_use`, capped at 1,536 chars). |
 | `when_to_use` | string | Additional trigger phrases / example requests. Appended to `description` in the skill listing. Useful when the description is short but you want to widen the matcher. |
 | `argument-hint` | string | Autocomplete hint shown in the `/` menu. Examples: `[file_name]`, `[class_name] [count]`, `[issue-number]`. Square brackets are convention for placeholders. |
@@ -90,7 +90,7 @@ Ask the user four questions, ONE AT A TIME. Output each prompt on a single line,
 
 **Exit handling for every prompt below (steps 1, 2, 3, and the confirm in 4).** Before parsing any user reply, check whether the reply (case-insensitive, trimmed) is `cancel`, `quit`, `exit`, `q`, or `nevermind`. If yes, output exactly `cancelled` and stop the entire create-command flow — do not proceed to the next step, do not write any file.
 
-1. Output exactly `name?` and wait. The reply is the kebab-case identifier. Save as `<name>`. Validate: lowercase letters / numbers / hyphens only, ≤ 64 chars. If invalid, output `invalid name (lowercase letters, numbers, hyphens; max 64)` and stop.
+1. Output exactly `name?` and wait. Save as `<name>`. Validate: the reply must match the regex `^[a-z0-9]([a-z0-9-]{0,63})$` — lowercase letters and digits, optionally with hyphens, up to 64 chars total. Single-word names like `ideas` or `notes` are VALID. Hyphens are NOT required. Examples of valid names: `ideas`, `chop-log`, `mine-stone-x10`, `notes2`. Examples of invalid names: `Ideas` (uppercase), `chop_log` (underscore), `-foo` (leading hyphen), empty string. If invalid, output `invalid name (lowercase letters, digits, optional hyphens; max 64 chars; no leading hyphen)` and stop.
 
 2. Output exactly `description?` and wait. Save as `<description>` (one short sentence — this is what shows in `help`).
 
