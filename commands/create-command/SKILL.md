@@ -7,71 +7,238 @@ description: Define a new bitcraft command.
 
 ## Output rules
 
-- Plain text only. No markdown bold, italics, bullets, or headers in user-facing output. The SKILL.md draft you show the user in step 4 may be inside a single fenced block — that is the only allowed exception.
-- No preamble. No closing summary. No commentary outside the four prompts and the final result line.
-- Do not mention any other command or skill.
+- Plain text. The SKILL.md draft in step 4 is the ONE allowed fenced code block. Everything else is bare lines.
+- No preamble. No commentary outside the four prompts and the final result line.
+- Do not mention any other command or skill outside the draft body.
 
-## What a command can contain
+## Available primitives — REFERENCE FOR DRAFTING
 
-The `<body>` in step 4's template may include any combination of:
+When you draft a new command in step 4, build the body from these primitives. Reference them by name. Do NOT just paraphrase the user's intent — translate it into concrete tool calls, paths, or scripts.
 
-- Prose instructions for Claude.
-- MCP tool calls (any bitcraft MCP tool — `run_action`, `list_inventory`, etc.).
-- References to other bitcraft commands by name (Claude will trigger them).
-- Inline scripts in any language inside fenced code blocks — `bash`, `python`, `node`, `ruby`, etc. When the command runs, Claude executes them via the Bash tool (e.g. `python -c '...'` for inline Python, or `node -e '...'` for inline Node).
-- Sibling files: longer scripts the user wants saved alongside SKILL.md (e.g. `fetch_trades.py`). If the user's reply in step 3 describes a sibling file with its contents, save it as `(filename, contents)` in a list `<extra_files>` and write it in step 6. The body should reference such files by absolute path: `~/.claude/skills/bitcraft-<name>/<filename>`.
-- Rich markdown intended for the user to read. The strict no-markdown output rule applies only to built-in commands; user-authored commands may format freely.
+### bitcraft MCP tools (invoked by the future agent running the new skill)
+
+| Tool | Signature | Returns |
+|---|---|---|
+| `list_inventory` | `()` | array of `{id, className, fileName, status, txHash, fields, ...}` |
+| `list_actions` | `()` | array of `{id, description, totalInputClasses, totalOutputClasses}` |
+| `list_classes` | `()` | array of `{name, liveCount, producedBy, consumedBy}` |
+| `inspect_object` | `(file_name)` | `{id, className, status, txHash, state, predicateSource}` |
+| `inspect_class` | `(class_name)` | `{className, predicateSource, producedBy, consumedBy}` |
+| `inspect_action` | `(action_id)` | `{id, description, totalInputClasses, totalOutputClasses, predicateSource}` |
+| `run_action` | `(action_id, input_object_paths)` | `{success, message, runId, outputs, consumed}` — blocks for proof gen |
+| `check_feasibility` | `(action_id)` | `{feasible, actionId, availableInputs, missingInputs}` |
+| `get_state_root` | `()` | `{stateRoot}` |
+| `read_settings` | `()` | `{synchronizerApiUrl, relayerApiUrl}` |
+| `get_objects_dir` | `()` | `{path}` |
+| `read_doc` | `(name)` | reference documentation |
+
+### Filesystem paths
+
+- `~/.dobj/objects/*.dobj` — JSON, one file per object. Contains class, state, predicate, and a `proof` field (large opaque hex — usually not for display).
+- `~/.dobj/objects/nullified/` — consumed (dead) objects, moved here after a successful action.
+- `~/.dobj/actions/*.pexe` — installed plugin archives (zk-craft action modules).
+- `~/.dobj/settings.json` — `{ synchronizerApiUrl, relayerApiUrl }`.
+- `~/.dobj/dobjd.log` — driver daemon logs.
+- `~/.claude/skills/bitcraft-*/` — every installed bitcraft skill.
+
+### Skill frontmatter fields
+
+Every SKILL.md begins with a YAML block between `---` markers. All fields are optional except where noted. Use only the fields the command actually needs — don't add ones you won't use.
+
+| Field | Type | Purpose |
+|---|---|---|
+| `name` | string | Skill name. Must be `bitcraft-<kebab-case>` (lowercase letters/numbers/hyphens, max 64 chars). The `bitcraft-` prefix is what our help script keys off. |
+| `description` | string | One short sentence shown in `help`. Drives Claude's automatic skill triggering. Keep it concrete (combined with `when_to_use`, capped at 1,536 chars). |
+| `when_to_use` | string | Additional trigger phrases / example requests. Appended to `description` in the skill listing. Useful when the description is short but you want to widen the matcher. |
+| `argument-hint` | string | Autocomplete hint shown in the `/` menu. Examples: `[file_name]`, `[class_name] [count]`, `[issue-number]`. Square brackets are convention for placeholders. |
+| `arguments` | string OR list | Named positional arguments for `$name` substitution. Space-separated string or YAML list, e.g. `arguments: file_name` or `arguments: [class, count]`. Names map to positions in order. |
+| `disable-model-invocation` | bool | Set `true` to require explicit user invocation (Claude won't trigger automatically). Good for destructive or side-effectful commands. |
+| `user-invocable` | bool | Set `false` to hide from the `/` menu while still letting Claude trigger it. |
+| `hidden` | bool | **Our custom field.** Set `true` to hide from the `bitcraft help` block. The skill still works and Claude can still trigger it. Used for utility commands (like `start`) that show up via natural-language match but shouldn't clutter the help table. |
+| `allowed-tools` | string OR list | Tools the skill can use without per-use permission prompts (e.g. `Bash(git *)`, `Read`, `Write`). |
+| `model` | string | Model override for the skill's lifetime. |
+| `effort` | string | Effort override (`low`/`medium`/`high`/`xhigh`/`max`). |
+| `context` | string | Set to `fork` to run the skill in an isolated subagent context. |
+| `agent` | string | When `context: fork`, which subagent type (`Explore`, `Plan`, `general-purpose`, etc.). |
+| `paths` | string OR list | Glob patterns that limit when the skill is auto-activated. |
+
+### String substitutions inside the skill body
+
+| Variable | Meaning |
+|---|---|
+| `$ARGUMENTS` | All arguments passed when the skill was invoked, as a single string. |
+| `$ARGUMENTS[N]` or `$N` | The Nth positional argument (0-based). `$0` is the first. |
+| `$<name>` | Named argument from the `arguments` frontmatter list. With `arguments: [class, count]`, `$class` is the first arg and `$count` is the second. |
+| `${CLAUDE_SKILL_DIR}` | Absolute path to the skill's directory. Use this in Bash commands to invoke sibling scripts portably: `python3 ${CLAUDE_SKILL_DIR}/script.py`. |
+| `${CLAUDE_SESSION_ID}` | Current session ID. Useful for logging. |
+
+Indexed arguments use shell-style quoting: `/skill "hello world" foo` makes `$0 = "hello world"`, `$1 = "foo"`.
+
+### Scripting in the skill body
+
+- **Inline scripts** in fenced code blocks: ` ```bash `, ` ```python `, ` ```node `, etc. The agent runs them via Bash (e.g. `python3 -c '...'`).
+- **Dynamic context injection** with the `` !`<command>` `` syntax: when the skill loads, the placeholder is replaced with the command's stdout before the agent sees it. Use this for cheap up-front data fetches (e.g. `` !`git diff HEAD` ``).
+- **Sibling files** for longer scripts: save as `${CLAUDE_SKILL_DIR}/<filename>` and reference by that absolute path from the SKILL.md body. Step 6 will write any sibling files you declare.
+
+### Chaining other bitcraft commands
+
+Reference another command by name in prose (e.g. "if no Wood, first invoke `craft-wood`"). The agent triggers it.
 
 ## Steps
 
-Ask four questions, one at a time. Output each prompt on a single line, end the turn, and wait for the user's reply before asking the next.
+Ask the user four questions, ONE AT A TIME. Output each prompt on a single line, end the turn, wait for the reply before asking the next.
 
-1. Output exactly:
+1. Output exactly `name?` and wait. The reply is the kebab-case identifier. Save as `<name>`. Validate: lowercase letters / numbers / hyphens only, ≤ 64 chars. If invalid, output `invalid name (lowercase letters, numbers, hyphens; max 64)` and stop.
 
-   `name?`
+2. Output exactly `description?` and wait. Save as `<description>` (one short sentence — this is what shows in `help`).
 
-   Wait for reply. The reply is the kebab-case identifier (e.g. `mine-stone-x10`). Save it as `<name>`.
+3. Output exactly `what should it do?` and wait. Save as `<intent>`. The user's reply is INTENT, not the body. You will not paste it into the body verbatim.
 
-2. Output exactly:
+4. **Design the skill body.** Translate `<intent>` into concrete, executable steps using the primitives above. Before writing, decide:
 
-   `description?`
+   - **Which MCP tool(s)** does this need? With what arguments? (Look at the Available primitives table.)
+   - **Arguments vs. interactive prompting**: does this command take command-line arguments (e.g. `/inspect-object foo.dobj`) or prompt the user mid-flow? Argument-style is direct and scriptable; interactive is more discoverable. If you choose arguments, set `argument-hint` and (optionally) `arguments` in the frontmatter, and reference `$0`, `$1`, or `$name` in the body. If you choose interactive, the body asks the user and parses their reply.
+   - **Output format**: specify the exact lines. Plain text MUD-style is the default for new commands. If the intent calls for richer output, allow markdown.
+   - **Errors**: what does the command output on tool failure / empty inventory / invalid choice?
+   - **Prerequisites**: should the command reference other bitcraft commands (e.g. "if no Log, invoke `chop-log`")?
+   - **Hidden?**: if this is a utility command users shouldn't see in `help`, set `hidden: true`.
+   - **Side effects?**: if this is destructive or you want explicit-only invocation, set `disable-model-invocation: true`.
+   - **Scripts vs. tool calls**: simple transformations of MCP data fit inline. Anything > 20 lines or with libraries → sibling Python script. Reference it with `${CLAUDE_SKILL_DIR}/<file>`.
 
-   Wait for reply. Save as `<description>`.
-
-3. Output exactly:
-
-   `what should it do?`
-
-   Wait for reply. Save the entire reply as `<body>`. If the reply describes sibling files with their contents (e.g. "save this as run.py" followed by code), extract each `(filename, contents)` pair into the list `<extra_files>`. Otherwise `<extra_files>` is empty.
-
-4. Assemble the SKILL.md draft using exactly this template:
+   Then assemble the SKILL.md draft using this shape (filled in, not template-y — include ONLY the frontmatter fields the command actually needs):
 
    ```
    ---
    name: bitcraft-<name>
    description: <description>
+   argument-hint: <[arg-placeholders]>      # if it takes arguments
+   arguments: <name1 name2>                  # if you want $name substitutions
+   hidden: true                              # if utility (not in help)
+   disable-model-invocation: true            # if explicit-invocation only
+   allowed-tools: <space-separated list>     # if it needs tool permissions
    ---
 
    # <name>
 
-   <body>
+   ## Output rules
+   - <plain text / markdown choice, format-specific rules>
+
+   ## Steps
+   1. <concrete step using a named MCP tool, path, or script>
+   2. <…>
+   N. On error, output the error message verbatim. Stop.
    ```
 
-   Output the draft inside a single fenced code block. Immediately below the closing fence, output two lines:
+   If the user described one or more sibling files (e.g. "save this as `parse.py` with these contents"), extract them into `<extra_files>` as `(filename, contents)` pairs. Otherwise `<extra_files>` is empty.
 
-   `extra files: <comma-separated list of filenames in <extra_files>, or "(none)">`
-   `confirm? (y/n)`
+   Output the assembled draft inside a single fenced code block. Immediately below the closing fence, output two lines:
 
-   End the turn. Wait for reply.
+   ```
+   extra files: <comma-separated filenames in <extra_files>, or "(none)">
+   confirm? (y/n)
+   ```
 
-5. If the user replies `n`, return to step 3.
-   If the user replies anything other than `y` or `n`, output `invalid choice` and stop.
-   If the user replies `y`, continue.
+   End the turn. Wait for the reply.
 
-6. Create the directory `~/.claude/skills/bitcraft-<name>/` if it does not exist. Write the assembled SKILL.md text from step 4 to `~/.claude/skills/bitcraft-<name>/SKILL.md`. For each `(filename, contents)` in `<extra_files>`, write to `~/.claude/skills/bitcraft-<name>/<filename>`.
+5. If `n`, ask `what to change?`, take the reply, revise the draft, and re-output (return to the draft + `confirm? (y/n)`). If anything other than `y` or `n`, output `invalid choice` and stop. If `y`, continue.
+
+6. Create the directory `~/.claude/skills/bitcraft-<name>/`. Write the assembled SKILL.md to `~/.claude/skills/bitcraft-<name>/SKILL.md`. For each `(filename, contents)` in `<extra_files>`, write to `~/.claude/skills/bitcraft-<name>/<filename>`.
 
 7. Output exactly one line and stop:
 
    `command → ~/.claude/skills/bitcraft-<name>/ (reload the agent to register)`
 
 8. On any tool error during step 6, output the error message verbatim and stop.
+
+## Worked example — interactive picker pattern
+
+**User intent:** "print the information contained in an object's file in a user-readable way, not including the proof"
+
+This is a good fit for the **interactive picker** pattern: no arguments, the command lists inventory and asks the user to pick one.
+
+```
+---
+name: bitcraft-inspect-object
+description: Show one Digital Object's contents, omitting the ZK proof.
+---
+
+# inspect-object
+
+## Output rules
+
+- Plain text. One field per line as `<key>: <value>`.
+- No markdown bullets, bold, or tables.
+- Truncate hex values longer than 40 chars to `<first 8>…<last 6>`.
+- Skip any field whose name contains "proof" or whose value is longer than 200 chars.
+
+## Steps
+
+1. Call `list_inventory`. If the array is empty, output exactly `no objects in inventory` and stop.
+
+2. Print each object on its own line as `<n>) <file_name>` (n starting at 1), then `pick:` on a new line. End the turn and wait.
+
+3. Parse the user's reply as an integer. If it doesn't match a listed n, output `invalid choice` and stop.
+
+4. Call `inspect_object` with `file_name = <chosen object's file_name>`. The response is JSON.
+
+5. Output these fields, each on its own line, in this order (omit any field that is missing):
+   - `id: <id>`  (truncate hex)
+   - `class: <className>`
+   - `status: <status>`
+   - `txHash: <txHash>`  (truncate hex)
+   - one line per entry in `state`: `state.<key>: <value>`  (truncate hex; skip if value > 200 chars)
+   - `predicate:` followed by `predicateSource` indented 2 spaces on subsequent lines
+
+6. On tool error, output the error message verbatim, on one line. Stop.
+```
+
+## Worked example — argument-based pattern
+
+Same intent, but **invoked with the file_name as an argument**: e.g. `/bitcraft-inspect-object log_0xd4…819f.dobj`. Useful when the user already knows which object they want or is scripting.
+
+```
+---
+name: bitcraft-inspect-object
+description: Show one Digital Object's contents, omitting the ZK proof.
+argument-hint: [file_name]
+arguments: file_name
+---
+
+# inspect-object
+
+## Output rules
+
+- Plain text. One field per line as `<key>: <value>`.
+- No markdown bullets, bold, or tables.
+- Truncate hex values longer than 40 chars to `<first 8>…<last 6>`.
+- Skip any field whose name contains "proof" or whose value is longer than 200 chars.
+
+## Steps
+
+1. If `$file_name` is empty, output `usage: inspect-object [file_name]` and stop.
+
+2. Call `inspect_object` with `file_name = $file_name`. The response is JSON. On tool error (file not found, etc.), output the error message verbatim and stop.
+
+3. Output these fields, each on its own line, in this order (omit any field that is missing):
+   - `id: <id>`  (truncate hex)
+   - `class: <className>`
+   - `status: <status>`
+   - `txHash: <txHash>`  (truncate hex)
+   - one line per entry in `state`: `state.<key>: <value>`  (truncate hex; skip if value > 200 chars)
+   - `predicate:` followed by `predicateSource` indented 2 spaces on subsequent lines
+```
+
+## Anti-example — don't do this
+
+```
+---
+name: bitcraft-inspect-object
+description: prints the information contained in an object's file in a user-readable way, besides the proof
+---
+
+# inspect-object
+
+print the information contained in an object's file in a user-readable way, not including the proof
+```
+
+The body has no concrete steps; no MCP tool is named; no output format; no error handling; the description duplicates the body verbatim. Always produce a draft with named tools, specified output, and explicit error cases — pick the picker pattern OR the argument pattern, but never echo the user's prose into the body.
