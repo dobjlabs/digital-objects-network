@@ -20,6 +20,52 @@ every client (CLI, agents via MCP, and optional desktop / web GUIs).
 - macOS (arm64 or x86_64) or Linux (x86_64)
 - `curl`, `tar`, and a POSIX shell
 
+## Output rules
+
+Your user-facing output is deterministic. Emit EXACTLY:
+
+1. One line per step (steps 1–9) as each step's commands complete successfully — see the per-step label list below.
+2. The final success or failure block from "## Final output".
+3. Verbatim tool error messages, only when a command fails.
+
+Do NOT emit anything else. No preamble, no greeting, no narration ("I'll start by..."), no commentary after a step completes ("that worked", "now I'll..."), no closing summary, no markdown bullets or headers around the per-step lines, no reflection.
+
+Per-step line format (one line, plain text, output after the step succeeds):
+
+```
+[<n>/9] <label>
+```
+
+where `<label>` is exactly:
+
+- 1: `detect platform`
+- 2: `create dobj home`
+- 3: `download dobjd + dobj`
+- 4: `download craft-basics.pexe`
+- 5: `write settings.json`
+- 6: `start dobjd`
+- 7: `verify`
+- 8: `register MCP with Claude Code`
+- 9: `install bitcraft commands`
+
+So a successful run prints exactly:
+
+```
+[1/9] detect platform
+[2/9] create dobj home
+[3/9] download dobjd + dobj
+[4/9] download craft-basics.pexe
+[5/9] write settings.json
+[6/9] start dobjd
+[7/9] verify
+[8/9] register MCP with Claude Code
+[9/9] install bitcraft commands
+
+<success block from "## Final output">
+```
+
+On step failure: skip remaining steps, print the failure block (with the failing step number and the verbatim error message), and stop.
+
 ## Steps
 
 Run these in order. Each is idempotent — safe to re-run.
@@ -100,7 +146,7 @@ idempotent, safe to re-run:
 ```bash
 if command -v claude >/dev/null 2>&1; then
   claude mcp remove bitcraft 2>/dev/null || true
-  claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp
+  claude mcp add -s user --transport http bitcraft http://127.0.0.1:7718/mcp
 fi
 ```
 
