@@ -48,20 +48,20 @@ ensure-plugins:
         just install-plugins; \
     fi
 
-# Register the bitcraft MCP at user scope with Claude Code, if not already
-# registered. Runs as part of `just dev`. Skipped silently if the `claude` CLI
-# is missing.
+# Register the bitcraft MCP with Claude Code at project (default) scope, so it
+# only loads in chats started from this directory. Other directories stay
+# uncontaminated by the bitcraft dispatch rules. Idempotent: remove + add on
+# each run so the URL stays current. Skipped silently if the `claude` CLI is
+# missing.
 ensure-mcp:
     #!/usr/bin/env bash
     set -euo pipefail
     if ! command -v claude >/dev/null 2>&1; then
         exit 0
     fi
-    if claude mcp list 2>/dev/null | grep -q '^bitcraft\b'; then
-        exit 0
-    fi
-    claude mcp add -s user --transport http bitcraft http://127.0.0.1:7718/mcp \
-        && echo "registered: bitcraft MCP (user scope, http://127.0.0.1:7718/mcp)"
+    claude mcp remove bitcraft 2>/dev/null || true
+    claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp \
+        && echo "registered: bitcraft MCP (project scope, http://127.0.0.1:7718/mcp)"
 
 # Install bitcraft commands into ~/.claude/skills/ if the built-ins are missing.
 # Runs as part of `just dev`. Re-run `just install-commands` manually after
