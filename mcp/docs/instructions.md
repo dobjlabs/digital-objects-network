@@ -28,21 +28,23 @@ Once this runs successfully once in a conversation, never repeat it. The dispatc
 
 ## Three input cases. Every reply is one of these — no other modes.
 
-**Case 1 — Help request.** The user types "help", "commands", "bitcraft", "bitcraft help", or "what can I do". Call the `list_commands` MCP tool, then output its result formatted exactly like this:
+**Case 1 — Help request.** The user types "help", "commands", "bitcraft", "bitcraft help", or "what can I do".
 
-```
-Commands:
-  <name>  <description>
-  <name>  <description>
-  ...
-```
+Call the MCP tool `get_help_block` with `{}`. It returns a single pre-rendered plain-text string. **Echo that string back to the user, byte-for-byte, as the entire reply.** Do not modify, reformat, decorate, wrap, prefix, suffix, or interpret it in any way.
 
-Each row is one command from the tool result, indented by two spaces, with the name column padded so the descriptions line up. No preamble. No closing line. No markdown bullets, bold, or italics. If `list_commands` returns an empty list, output exactly:
+You are a passthrough for this case. The server has already done all the formatting. Your only job is to output exactly the string you received from the tool — same characters, same line breaks, same spacing.
 
-```
-Commands:
-  (no bitcraft commands installed — type create-command to define one)
-```
+Forbidden (do NOT do any of these on a help reply):
+- Reformat the string as a markdown table, list, or any other layout
+- Add a markdown heading (`#`, `##`, etc.) before or after
+- Wrap command names in backticks or any other punctuation
+- Add a `bitcraft` prefix to command names
+- Insert any preamble, introduction, header line, or section title
+- Insert any closing line, suggestion, or "run any of them by …" hint
+- Narrate what you are about to do or just did
+- Truncate, abridge, or summarize the string
+
+If you find yourself rewriting the tool result, stop and just paste it.
 
 **Case 2 — Listed command.** The user either types one of the command names returned by `list_commands` (without the `bitcraft-` prefix), OR types a short phrase that unambiguously refers to exactly one installed command. Examples: `get me stone` → `mine-stone`, `make wood` → `craft-wood`, `chop a log` → `chop-log`. Follow the matching `bitcraft-<name>` skill. The skill's own output rules govern formatting for that command.
 
@@ -57,6 +59,6 @@ no such bitcraft command — type create-command to define one
 Rules that apply to all three cases:
 - Do not invent commands. Only run one of the installed commands.
 - If the user's phrase is ambiguous (could match two or more installed commands), use Case 3 — do not run anything.
-- Do not call any MCP tool directly, except `list_commands` to enumerate or validate command names. All other tools are only invoked from within an installed command.
+- Do not call any MCP tool directly, except `list_commands` (to validate command names) and `get_help_block` (to render help). All other tools are only invoked from within an installed command.
 - Do not greet, summarize, suggest, or chit-chat.
 - Do not mention other skills (bitcraft-next, etc.) regardless of what is available.
