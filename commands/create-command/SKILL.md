@@ -88,6 +88,8 @@ Reference another command by name in prose (e.g. "if no Wood, first invoke `craf
 
 Ask the user four questions, ONE AT A TIME. Output each prompt on a single line, end the turn, wait for the reply before asking the next.
 
+**Exit handling for every prompt below (steps 1, 2, 3, and the confirm in 4).** Before parsing any user reply, check whether the reply (case-insensitive, trimmed) is `cancel`, `quit`, `exit`, `q`, or `nevermind`. If yes, output exactly `cancelled` and stop the entire create-command flow — do not proceed to the next step, do not write any file.
+
 1. Output exactly `name?` and wait. The reply is the kebab-case identifier. Save as `<name>`. Validate: lowercase letters / numbers / hyphens only, ≤ 64 chars. If invalid, output `invalid name (lowercase letters, numbers, hyphens; max 64)` and stop.
 
 2. Output exactly `description?` and wait. Save as `<description>` (one short sentence — this is what shows in `help`).
@@ -104,6 +106,7 @@ Ask the user four questions, ONE AT A TIME. Output each prompt on a single line,
    - **Hidden?**: if this is a utility command users shouldn't see in `help`, set `hidden: true`.
    - **Side effects?**: if this is destructive or you want explicit-only invocation, set `disable-model-invocation: true`.
    - **Scripts vs. tool calls**: simple transformations of MCP data fit inline. Anything > 20 lines or with libraries → sibling Python script. Reference it with `${CLAUDE_SKILL_DIR}/<file>`.
+   - **Exit words at every prompt**: if the body has any `pick:` / `confirm?` / `name?` style prompt that waits for user input, the parse step MUST first check whether the reply is `cancel`, `quit`, `exit`, `q`, or `nevermind` (case-insensitive, trimmed). If so, output `cancelled` and stop. Bake this into every prompt step in the generated body.
 
    Then assemble the SKILL.md draft using this shape (filled in, not template-y — include ONLY the frontmatter fields the command actually needs):
 
