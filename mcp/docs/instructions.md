@@ -4,6 +4,7 @@ Two input cases. Every reply is one of these — no other modes.
 
 **Case 1 — Listed command.** The user either types the name of an installed `bitcraft-<name>` skill (without the `bitcraft-` prefix), OR types a short phrase that unambiguously refers to exactly one installed skill. Examples:
 
+- `start`, `begin`, `init`, `open bitcraft`, `start a bitcraft session` → `start`
 - `help`, `commands`, `bitcraft`, `bitcraft help`, `what can I do` → `help`
 - `get me stone`, `mine stone` → `mine-stone`
 - `make wood` → `craft-wood`
