@@ -22,27 +22,13 @@ hidden: true
 
 ### 1. Ensure `.claude/launch.json` has the bitcraft-preview server entry
 
-Resolve `$HOME` (do not leave it literal in the JSON). Compute the absolute path: `<HOME>/.claude/skills/bitcraft-preview`.
+Run the `bitcraft-start` skill's sibling helper to idempotently merge the entry into the project-local `.claude/launch.json` (CWD):
 
-The server entry must match this shape exactly:
-
-```json
-{
-  "name": "bitcraft-preview",
-  "runtimeExecutable": "python3",
-  "runtimeArgs": ["-m", "http.server", "7719", "--directory", "<HOME>/.claude/skills/bitcraft-preview"],
-  "port": 7719
-}
+```bash
+python3 "$HOME/.claude/skills/bitcraft-start/ensure_launch.py"
 ```
 
-- If `.claude/launch.json` exists: parse it, locate any existing entry whose `name == "bitcraft-preview"`, and replace it with the shape above. Preserve all other entries and the surrounding object structure.
-- If `.claude/launch.json` does not exist: create `.claude/` if needed, then write:
-  ```json
-  {
-    "version": "0.0.1",
-    "configurations": [<entry>]
-  }
-  ```
+Swallow any error silently.
 
 ### 2. Start the preview server and open the pane
 

@@ -36,7 +36,7 @@ dobjd:
 # shell — all backed by one dobjd process. Open http://localhost:1420 in a
 # browser to use the website client; the desktop window opens automatically.
 # https://github.com/pvolok/mprocs
-dev: ensure-plugins ensure-commands
+dev: ensure-plugins ensure-commands ensure-mcp
     mprocs --config mprocs.yaml
 
 # Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
@@ -48,6 +48,21 @@ ensure-plugins:
         just install-plugins; \
     fi
 
+# Register the bitcraft MCP at user scope with Claude Code, if not already
+# registered. Runs as part of `just dev`. Skipped silently if the `claude` CLI
+# is missing.
+ensure-mcp:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v claude >/dev/null 2>&1; then
+        exit 0
+    fi
+    if claude mcp list 2>/dev/null | grep -q '^bitcraft\b'; then
+        exit 0
+    fi
+    claude mcp add -s user --transport http bitcraft http://127.0.0.1:7718/mcp \
+        && echo "registered: bitcraft MCP (user scope, http://127.0.0.1:7718/mcp)"
+
 # Install bitcraft commands into ~/.claude/skills/ if the built-ins are missing.
 # Runs as part of `just dev`. Re-run `just install-commands` manually after
 # editing a command source file in commands/.
@@ -58,11 +73,16 @@ ensure-commands:
         just install-commands; \
     fi
 
-# Wipe local state (RocksDB + local Postgres DBs + objects + installed bitcraft commands)
+# Wipe local state: RocksDB, local Postgres DBs, objects, installed bitcraft
+# commands, and the bitcraft-preview entry in ~/.claude/launch.json. The
+# SessionStart compact hook in ~/.claude/settings.json is NOT removed
+# (idempotent re-registration is cheap on next install).
 reset:
     @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
     rm -rf ~/.claude/skills/bitcraft-*
+    @python3 commands/start/ensure_launch.py --remove && echo "removed: bitcraft-preview from ~/.claude/launch.json"
+    @command -v claude >/dev/null 2>&1 && claude mcp remove bitcraft 2>/dev/null && echo "removed: bitcraft MCP registration" || true
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
 
@@ -96,6 +116,132 @@ pexe *ARGS:
     cargo run -p pexe --release -- {{ARGS}}
 
 # Install bitcraft commands (SKILL.md files) into ~/.claude/skills/bitcraft-*/
+# Stage a local "release" of the install bundle (binaries, plugin, commands
+# tarball) and serve it on http://localhost:8080 so SKILL.md onboarding can be
+# tested without S3. Also writes target/dev-release/SKILL.md with URLs
+# rewritten to localhost. Use `just dev-unstage` to stop the server.
+dev-stage port='8080':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    STAGE=target/dev-release
+    PORT={{port}}
+
+    # Kill any prior server BEFORE wiping the stage dir, so we don't orphan it.
+    # Two layers: (1) pid file from a previous dev-stage, (2) anything currently
+    # bound to the port (catches the case where the pid file was lost).
+    if [ -f "$STAGE/.server.pid" ]; then
+        prev=$(cat "$STAGE/.server.pid")
+        if kill -0 "$prev" 2>/dev/null; then
+            kill "$prev" 2>/dev/null || true
+            echo "→ killed prior server from pid file (pid $prev)"
+        fi
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        port_pids=$(lsof -ti "tcp:$PORT" 2>/dev/null || true)
+        for pid in $port_pids; do
+            kill "$pid" 2>/dev/null || true
+            echo "→ killed orphan on :$PORT (pid $pid)"
+        done
+    fi
+    # brief settle so the kernel actually releases the port
+    sleep 0.3
+
+    rm -rf "$STAGE"
+    mkdir -p "$STAGE"
+
+    case "$(uname -s)-$(uname -m)" in
+        Darwin-arm64)   TARGET=aarch64-apple-darwin ;;
+        Darwin-x86_64)  TARGET=x86_64-apple-darwin ;;
+        Linux-x86_64)   TARGET=x86_64-unknown-linux-gnu ;;
+        *) echo "unsupported platform: $(uname -sm)"; exit 1 ;;
+    esac
+    echo "→ host target: $TARGET"
+
+    echo "→ building dobjd + dobj (release)..."
+    cargo build --release -p dobjd -p cli
+
+    echo "→ packaging dobj-$TARGET.tar.gz..."
+    tar -czf "$STAGE/dobj-$TARGET.tar.gz" -C target/release dobj
+
+    echo "→ packaging dobjd-$TARGET.tar.gz (with bundled libscip + deps)..."
+    if [ ! -d target/Frameworks ]; then
+        echo "✗ target/Frameworks not found — dobjd will be missing libscip at runtime."
+        echo "  (Usually populated by the scip-sys build script; try a clean rebuild.)"
+        exit 1
+    fi
+    DOBJD_PACK="$STAGE/.dobjd-pack"
+    mkdir -p "$DOBJD_PACK/.libs"
+    cp target/release/dobjd "$DOBJD_PACK/"
+    # Copy libs and preserve symlinks (libscip.dylib → libscip.9.2.dylib → libscip.9.2.4.0.dylib)
+    cp -R target/Frameworks/. "$DOBJD_PACK/.libs/"
+    tar -czf "$STAGE/dobjd-$TARGET.tar.gz" -C "$DOBJD_PACK" .
+    rm -rf "$DOBJD_PACK"
+
+    echo "→ building craft-basics.pexe..."
+    cargo run -p pexe --release -- build plugins/craft-basics >/dev/null
+    cp target/pexe/craft-basics.pexe "$STAGE/craft-basics.pexe"
+
+    echo "→ packaging bitcraft-commands.tar.gz..."
+    PACK="$STAGE/.pack"
+    mkdir -p "$PACK"
+    for dir in commands/*/; do
+        name=$(basename "$dir")
+        mkdir -p "$PACK/bitcraft-$name"
+        cp -R "$dir"* "$PACK/bitcraft-$name/"
+    done
+    tar -czf "$STAGE/bitcraft-commands.tar.gz" -C "$PACK" .
+    rm -rf "$PACK"
+
+    echo "→ rewriting SKILL.md → $STAGE/SKILL.md (URLs point at localhost:{{port}})..."
+    sed "s|https://bitcraft.s3.us-east-2.amazonaws.com/v0.1.0-rc.17|http://localhost:{{port}}|g" SKILL.md > "$STAGE/SKILL.md"
+
+    echo "→ starting http.server on :{{port}}..."
+    cd "$STAGE"
+    python3 -m http.server {{port}} > .server.log 2>&1 &
+    echo $! > .server.pid
+    cd - > /dev/null
+    sleep 0.3
+    if ! kill -0 "$(cat $STAGE/.server.pid)" 2>/dev/null; then
+        echo "✗ http.server failed to start — see $STAGE/.server.log"
+        exit 1
+    fi
+
+    echo ""
+    echo "✓ staged. server pid $(cat $STAGE/.server.pid) on http://localhost:{{port}}"
+    echo ""
+    echo "now paste this into a fresh Claude Code chat (any directory):"
+    echo "  Read $(pwd)/$STAGE/SKILL.md and run the install steps."
+    echo ""
+    echo "iterate: edit SKILL.md → re-run \`just dev-stage\` → re-paste into fresh chat."
+    echo "stop the server when done: \`just dev-unstage\`."
+
+# Stop the http.server started by `just dev-stage`. Kills the pid recorded by
+# dev-stage AND anything currently bound to the port (in case the pid file was
+# lost or a previous dev-stage orphaned a process).
+dev-unstage port='8080':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    killed_any=false
+    if [ -f target/dev-release/.server.pid ]; then
+        pid=$(cat target/dev-release/.server.pid)
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            echo "stopped http.server from pid file (pid $pid)"
+            killed_any=true
+        fi
+        rm -f target/dev-release/.server.pid
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        for pid in $(lsof -ti "tcp:{{port}}" 2>/dev/null || true); do
+            kill "$pid" 2>/dev/null || true
+            echo "stopped orphan on :{{port}} (pid $pid)"
+            killed_any=true
+        done
+    fi
+    if [ "$killed_any" = false ]; then
+        echo "no http.server running on :{{port}}"
+    fi
+
 # Install bitcraft commands into ~/.claude/skills/bitcraft-*/. Copies SKILL.md
 # plus any sibling files (e.g. index.html, sibling scripts). Wipes the target
 # directory first so renamed/deleted source files don't linger. Also registers
