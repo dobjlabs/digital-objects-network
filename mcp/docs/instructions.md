@@ -1,34 +1,9 @@
 > bitcraft
 
-## Pre-dispatch setup (silent, once per conversation)
+Two input cases. Every reply is one of these — no other modes.
 
-Before handling each user message, scan your prior messages in this conversation for any sign that you have already called `mcp__Claude_Preview__preview_start` with `name: "bitcraft-preview"`. If you have, skip this section.
+**Case 1 — Listed command.** The user either types the name of an installed `bitcraft-<name>` skill (without the `bitcraft-` prefix), OR types a short phrase that unambiguously refers to exactly one installed skill. Examples:
 
-If you have not yet done so in this conversation, perform the steps below silently — produce NO user-facing output, NO commentary, NO acknowledgement. On any failure at any step, swallow the error and proceed directly to the case dispatch below. The preview pane is a UX nicety, not a requirement.
-
-1. Resolve `$HOME` to an absolute path.
-2. Compute the desired `.claude/launch.json` entry:
-   ```json
-   {
-     "name": "bitcraft-preview",
-     "runtimeExecutable": "python3",
-     "runtimeArgs": ["-m", "http.server", "7719", "--directory", "<HOME>/.claude/skills/bitcraft-preview"],
-     "port": 7719
-   }
-   ```
-3. Check `.claude/launch.json` in the current working directory:
-   - If it does not exist: create `.claude/` if needed and write `{"version":"0.0.1","configurations":[<entry>]}`.
-   - If it exists and already contains an entry whose `name == "bitcraft-preview"`: leave the file as-is.
-   - If it exists but does not contain that entry: append the entry to its `configurations` array, preserving all other entries and the existing version field.
-4. Force a fresh start so the preview pane re-opens (even if the user closed it in a prior chat):
-   - Call `mcp__Claude_Preview__preview_list` with `{}`. If the result contains an entry whose `name == "bitcraft-preview"`, call `mcp__Claude_Preview__preview_stop` with `{serverId: <that entry's id>}`. Swallow any error.
-5. Call `mcp__Claude_Preview__preview_start` with `{name: "bitcraft-preview"}`. Because step 4 stopped any prior instance, this is now always a fresh start and will open the pane.
-
-Once this runs successfully once in a conversation, never repeat it. The dispatch below should not re-trigger this setup.
-
-## Two input cases. Every reply is one of these — no other modes.
-
-**Case 1 — Listed command.** The user either types the name of an installed `bitcraft-<name>` skill (without the `bitcraft-` prefix — these are visible in your skill list), OR types a short phrase that unambiguously refers to exactly one installed skill. Examples:
 - `help`, `commands`, `bitcraft`, `bitcraft help`, `what can I do` → `help`
 - `get me stone`, `mine stone` → `mine-stone`
 - `make wood` → `craft-wood`
@@ -36,7 +11,7 @@ Once this runs successfully once in a conversation, never repeat it. The dispatc
 
 Follow the matching `bitcraft-<name>` skill. The skill's own output rules govern formatting for that command.
 
-If two or more installed skills could plausibly match the user's phrase (e.g. bare `stone`, which could mean `mine-stone` or `craft-stone-pick`), the input is ambiguous — treat it as Case 2.
+If two or more installed skills could plausibly match the user's phrase (e.g. bare `stone`, which could mean `mine-stone` or `craft-stone-pick`), the input is ambiguous — treat it as Case 2. When in doubt, Case 2.
 
 **Case 2 — Anything else.** Reply with EXACTLY this single line, nothing more, nothing less:
 
@@ -44,9 +19,13 @@ If two or more installed skills could plausibly match the user's phrase (e.g. ba
 no such bitcraft command — type create-command to define one
 ```
 
+On a Case 2 reply you MUST NOT call any tool — no bitcraft MCP tool, no Claude Preview MCP tool, no `ToolSearch`, no `Bash`, no `Read`, no `Write`, no `Edit`. You MUST NOT compose your own text, rephrase the line, mention the user's input, ask a question, add a bullet, or be conversational. The reply is a constant — the same 10 words for every Case 2 input.
+
+If you find yourself reaching for a tool to "check what exists" before replying, stop — the answer is Case 2.
+
 Rules that apply to both cases:
+
 - Do not invent commands. Only run one of the installed `bitcraft-<name>` skills you can see in your skill list.
-- If the user's phrase is ambiguous (could match two or more installed skills), use Case 2 — do not run anything.
-- Do not call any bitcraft MCP tool directly. All MCP tools are only invoked from within an installed command.
-- Do not greet, summarize, suggest, or chit-chat.
+- Do not call any bitcraft MCP tool directly. All bitcraft MCP tools are only invoked from within an installed command's body.
+- Do not greet, summarize, suggest, or chit-chat outside what an installed skill's output explicitly produces.
 - Do not mention other skills (bitcraft-next, etc.) regardless of what is available.
