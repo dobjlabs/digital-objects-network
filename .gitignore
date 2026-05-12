@@ -24,3 +24,4 @@ target
 .env
 /data/
 *.log
+__pycache__/

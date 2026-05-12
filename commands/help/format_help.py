@@ -19,7 +19,9 @@ def parse_frontmatter(skill_md: Path) -> dict | None:
     """Read a SKILL.md and return the YAML-frontmatter fields as a dict.
 
     Returns None if the file is missing or has no `---`-delimited
-    frontmatter block at the top.
+    frontmatter block at the top. The closing `---` must be on its own
+    line — a body containing `---` mid-line (markdown horizontal rules,
+    YAML-in-prose) is not mistaken for the terminator.
     """
     try:
         text = skill_md.read_text(encoding="utf-8")
@@ -27,11 +29,13 @@ def parse_frontmatter(skill_md: Path) -> dict | None:
         return None
     if not text.startswith("---\n"):
         return None
-    end = text.find("\n---", 4)
-    if end == -1:
+    lines = text.splitlines()
+    end = next((i for i, line in enumerate(lines[1:], start=1)
+                if line.rstrip() == "---"), None)
+    if end is None:
         return None
     fields: dict[str, str] = {}
-    for line in text[4:end].splitlines():
+    for line in lines[1:end]:
         if ":" in line:
             k, _, v = line.partition(":")
             fields[k.strip()] = v.strip()
