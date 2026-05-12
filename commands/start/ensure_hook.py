@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Idempotently ensure ~/.claude/settings.json has the bitcraft compact-re-injection SessionStart hook.
+"""Idempotently manage the bitcraft compact-re-injection SessionStart hook in ~/.claude/settings.json.
 
 When Claude Code auto-compacts a conversation, regular agent messages (including
 the help block printout) are summarized away. The MCP instructions and recently-
 invoked skill bodies are preserved, but the *live* command list and a dispatch
 reminder are not — they need to be re-injected.
 
-This script registers a SessionStart hook (matcher="compact") whose command
+Default mode registers a SessionStart hook (matcher="compact") whose command
 re-emits the dispatch rules + the help block via format_help.py. Anything that
 hook prints to stdout becomes fresh context for Claude after compaction.
+`--remove` mode drops the entry (run from `just reset`).
 
 The merge is non-destructive: other top-level settings, other hook events, and
 unrelated SessionStart entries are preserved. If a previous bitcraft entry
@@ -16,6 +17,7 @@ already exists (identified by the MARKER substring), it is updated in place so
 re-running this script picks up any tweaks to the command string.
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -59,7 +61,7 @@ def is_bitcraft_compact_hook(entry: dict) -> bool:
     return False
 
 
-def main() -> int:
+def add() -> int:
     settings = load_settings()
 
     hooks = settings.setdefault("hooks", {})
@@ -84,6 +86,33 @@ def main() -> int:
     SETTINGS.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
     return 0
+
+
+def remove() -> int:
+    if not SETTINGS.exists():
+        return 0
+    settings = load_settings()
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return 0
+    sessions = hooks.get("SessionStart")
+    if not isinstance(sessions, list):
+        return 0
+    hooks["SessionStart"] = [e for e in sessions if not is_bitcraft_compact_hook(e)]
+    if not hooks["SessionStart"]:
+        hooks.pop("SessionStart")
+    if not hooks:
+        settings.pop("hooks")
+    SETTINGS.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--remove", action="store_true",
+                        help="Remove the entry instead of adding it.")
+    args = parser.parse_args()
+    return remove() if args.remove else add()
 
 
 if __name__ == "__main__":

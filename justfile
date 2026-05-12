@@ -74,14 +74,14 @@ ensure-commands:
     fi
 
 # Wipe local state: RocksDB, local Postgres DBs, objects, installed bitcraft
-# commands, and the bitcraft-preview entry in ~/.claude/launch.json. The
-# SessionStart compact hook in ~/.claude/settings.json is NOT removed
-# (idempotent re-registration is cheap on next install).
+# commands, the bitcraft-preview entry in ~/.claude/launch.json, and the
+# SessionStart compact hook in ~/.claude/settings.json.
 reset:
     @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
     rm -rf ~/.claude/skills/bitcraft-*
     @python3 commands/start/ensure_launch.py --remove && echo "removed: bitcraft-preview from ~/.claude/launch.json"
+    @python3 commands/start/ensure_hook.py --remove && echo "removed: bitcraft compact hook from ~/.claude/settings.json"
     @command -v claude >/dev/null 2>&1 && claude mcp remove bitcraft 2>/dev/null && echo "removed: bitcraft MCP registration" || true
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
