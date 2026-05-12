@@ -83,6 +83,7 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
     let outputs = catalog
         .execute_action("FindLog".to_string(), dummy_grounding_witness(), vec![])
         .unwrap();
+    let source_tx = outputs.tx.clone();
     let spendable = outputs.obj(0);
     let id = format!("{:#}", spendable.obj.commitment());
     let record = ObjectRecord {
@@ -90,12 +91,11 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
         class_name: "Log".to_string(),
         status: ObjectStatus::Live,
         tx_hash: None,
-        pod: spendable.pod,
         obj: spendable.obj,
-        tx: spendable.tx,
+        evidence: spendable.evidence,
     };
     let mut state = TestState::default();
-    apply_tx(&mut state, &record.tx);
+    apply_tx(&mut state, &source_tx);
     (
         ObjectFileEntry {
             file_name: file_name.to_string(),

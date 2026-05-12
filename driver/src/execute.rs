@@ -78,7 +78,7 @@ pub(crate) fn reconcile_objects(
         if entry.record.is_nullified() || entry.record.status == ObjectStatus::Live {
             continue;
         }
-        let source_tx_hash = entry.record.tx.dict().commitment();
+        let source_tx_hash = entry.record.evidence.tx_final;
         if !grounded_txs.contains(&source_tx_hash) {
             continue;
         }
@@ -214,9 +214,8 @@ pub(crate) fn save_results(
             class_name: class_name.clone(),
             status: ObjectStatus::Unknown,
             tx_hash: None,
-            pod: spendable.pod,
             obj: spendable.obj,
-            tx: spendable.tx,
+            evidence: spendable.evidence,
         };
         write_object_file(paths, &live_record, &file_name)?;
     }

@@ -179,55 +179,63 @@ fn test_sdk_1() {
 
     println!("exe FindLog");
     let executor = module.executor(true, grounding_witness(&state, &[]));
-    let [log_a] = executor.action("FindLog", vec![]).unwrap().objs();
-    apply_tx(&mut state, &log_a.tx);
+    let res = executor.action("FindLog", vec![]).unwrap();
+    let log_a_tx = res.tx.clone();
+    let [log_a] = res.objs();
+    apply_tx(&mut state, &log_a_tx);
 
     println!("exe CraftWood");
-    let executor = module.executor(true, grounding_witness(&state, &[log_a.tx.clone()]));
-    let [wood_a] = executor.action("CraftWood", vec![log_a]).unwrap().objs();
-    apply_tx(&mut state, &wood_a.tx);
+    let executor = module.executor(true, grounding_witness(&state, &[log_a_tx]));
+    let res = executor.action("CraftWood", vec![log_a]).unwrap();
+    let wood_a_tx = res.tx.clone();
+    let [wood_a] = res.objs();
+    apply_tx(&mut state, &wood_a_tx);
 
     println!("exe CraftSticks");
-    let executor = module.executor(true, grounding_witness(&state, &[wood_a.tx.clone()]));
-    let [stick_a, _stick_b] = executor.action("CraftSticks", vec![wood_a]).unwrap().objs();
-    apply_tx(&mut state, &stick_a.tx);
+    let executor = module.executor(true, grounding_witness(&state, &[wood_a_tx]));
+    let res = executor.action("CraftSticks", vec![wood_a]).unwrap();
+    let sticks_tx = res.tx.clone();
+    let [stick_a, _stick_b] = res.objs();
+    apply_tx(&mut state, &sticks_tx);
 
     println!("exe FindLog");
     let executor = module.executor(true, grounding_witness(&state, &[]));
-    let [log_b] = executor.action("FindLog", vec![]).unwrap().objs();
-    apply_tx(&mut state, &log_b.tx);
+    let res = executor.action("FindLog", vec![]).unwrap();
+    let log_b_tx = res.tx.clone();
+    let [log_b] = res.objs();
+    apply_tx(&mut state, &log_b_tx);
 
     println!("exe CraftWood");
-    let executor = module.executor(true, grounding_witness(&state, &[log_b.tx.clone()]));
-    let [wood_b] = executor.action("CraftWood", vec![log_b]).unwrap().objs();
-    apply_tx(&mut state, &wood_b.tx);
+    let executor = module.executor(true, grounding_witness(&state, &[log_b_tx]));
+    let res = executor.action("CraftWood", vec![log_b]).unwrap();
+    let wood_b_tx = res.tx.clone();
+    let [wood_b] = res.objs();
+    apply_tx(&mut state, &wood_b_tx);
 
     println!("exe CraftWoodPick");
-    let executor = module.executor(
-        true,
-        grounding_witness(&state, &[wood_b.tx.clone(), stick_a.tx.clone()]),
-    );
-    let [wood_pick] = executor
+    let executor = module.executor(true, grounding_witness(&state, &[wood_b_tx, sticks_tx]));
+    let res = executor
         .action("CraftWoodPick", vec![wood_b, stick_a])
-        .unwrap()
-        .objs();
-    apply_tx(&mut state, &wood_pick.tx);
+        .unwrap();
+    let wood_pick_tx = res.tx.clone();
+    let [wood_pick] = res.objs();
+    apply_tx(&mut state, &wood_pick_tx);
 
     println!("exe UseWoodPick");
-    let executor = module.executor(true, grounding_witness(&state, &[wood_pick.tx.clone()]));
-    let [wood_pick] = executor
-        .action("UseWoodPick", vec![wood_pick])
-        .unwrap()
-        .objs();
-    apply_tx(&mut state, &wood_pick.tx);
+    let executor = module.executor(true, grounding_witness(&state, &[wood_pick_tx]));
+    let res = executor.action("UseWoodPick", vec![wood_pick]).unwrap();
+    let wood_pick_tx = res.tx.clone();
+    let [wood_pick] = res.objs();
+    apply_tx(&mut state, &wood_pick_tx);
 
     println!("exe MineStoneWithWoodPick");
-    let executor = module.executor(true, grounding_witness(&state, &[wood_pick.tx.clone()]));
-    let [stone] = executor
+    let executor = module.executor(true, grounding_witness(&state, &[wood_pick_tx]));
+    let res = executor
         .action("MineStoneWithWoodPick", vec![wood_pick])
-        .unwrap()
-        .objs();
-    apply_tx(&mut state, &stone.tx);
+        .unwrap();
+    let stone_tx = res.tx.clone();
+    let [_stone] = res.objs();
+    apply_tx(&mut state, &stone_tx);
 }
 
 #[allow(clippy::cloned_ref_to_slice_refs)]
