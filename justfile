@@ -97,7 +97,8 @@ pexe *ARGS:
 
 # Install bitcraft commands (SKILL.md files) into ~/.claude/skills/bitcraft-*/
 # Install bitcraft commands into ~/.claude/skills/bitcraft-*/. Copies SKILL.md
-# plus any sibling files (e.g. preview.html, sibling scripts).
+# plus any sibling files (e.g. index.html, sibling scripts). Wipes the target
+# directory first so renamed/deleted source files don't linger.
 install-commands:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -105,6 +106,7 @@ install-commands:
     for dir in commands/*/; do
         name=$(basename "$dir")
         target=~/.claude/skills/bitcraft-"$name"
+        rm -rf "$target"
         mkdir -p "$target"
         cp -R "$dir"* "$target/"
         echo "installed: bitcraft-$name"
