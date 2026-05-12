@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>bitcraft preview</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: #0a0a0a;
+    color: #d4d4d4;
+    margin: 0;
+    padding: 20px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  header h1 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: 0.3px;
+  }
+  header .subtle {
+    color: #555;
+    font-size: 12px;
+  }
+  section {
+    background: #141414;
+    border: 1px solid #222;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+  }
+  h2 {
+    font-size: 13px;
+    margin: 0 0 10px;
+    color: #888;
+    font-weight: 500;
+    text-transform: lowercase;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #555;
+    flex-shrink: 0;
+  }
+  .dot.ok  { background: #4ade80; }
+  .dot.bad { background: #ef4444; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 2px 8px 2px 0; vertical-align: top; }
+  td.label { color: #666; width: 160px; }
+  td.value { color: #d4d4d4; font-variant-numeric: tabular-nums; word-break: break-all; }
+  .row {
+    padding: 3px 0;
+    border-bottom: 1px solid #1c1c1c;
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+  }
+  .row:last-child { border-bottom: 0; }
+  .status-live  { color: #4ade80; }
+  .status-dead  { color: #666; text-decoration: line-through; }
+  .phase-running { color: #fbbf24; }
+  .phase-done    { color: #4ade80; }
+  .phase-failed  { color: #ef4444; }
+  .events { max-height: 360px; overflow-y: auto; }
+  .muted { color: #555; }
+  .empty { color: #555; font-style: italic; padding: 4px 0; }
+  .flex1 { flex: 1; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>bitcraft preview</h1>
+    <span class="subtle" id="last-refresh">—</span>
+  </header>
+
+  <section>
+    <h2><span class="dot" id="sync-dot"></span>universe — synchronizer</h2>
+    <table>
+      <tr><td class="label">current GSR</td>          <td class="value" id="u-gsr">…</td></tr>
+      <tr><td class="label">current block</td>        <td class="value" id="u-block">…</td></tr>
+      <tr><td class="label">tx count</td>             <td class="value" id="u-tx">…</td></tr>
+      <tr><td class="label">nullifier count</td>      <td class="value" id="u-null">…</td></tr>
+      <tr><td class="label">gsr count</td>            <td class="value" id="u-gsrcount">…</td></tr>
+      <tr><td class="label">last processed slot</td>  <td class="value" id="u-slot">…</td></tr>
+      <tr><td class="label">synchronizer URL</td>     <td class="value muted" id="u-url">…</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2><span class="dot" id="inv-dot"></span>inventory — ~/.dobj/objects/</h2>
+    <div id="inv-list"><div class="empty">loading…</div></div>
+  </section>
+
+  <section>
+    <h2><span class="dot" id="ev-dot"></span>action log — events stream</h2>
+    <div id="ev-list" class="events"><div class="empty">waiting for events…</div></div>
+  </section>
+
+<script>
+const DOBJD = "http://127.0.0.1:7717";
+let syncUrl = null;
+
+function shortHash(h, head = 8, tail = 6) {
+  if (!h) return "—";
+  return h.length > head + tail + 1 ? h.slice(0, head) + "…" + h.slice(-tail) : h;
+}
+function fmtNum(n) {
+  if (n === undefined || n === null) return "—";
+  return Number(n).toLocaleString();
+}
+function setDot(id, ok) {
+  document.getElementById(id).className = "dot " + (ok ? "ok" : "bad");
+}
+function refreshTs() {
+  document.getElementById("last-refresh").textContent = new Date().toLocaleTimeString();
+}
+
+async function getSettings() {
+  try {
+    const r = await fetch(DOBJD + "/settings");
+    if (!r.ok) throw new Error("status " + r.status);
+    const s = await r.json();
+    syncUrl = s.synchronizerApiUrl;
+    document.getElementById("u-url").textContent = syncUrl || "(unset)";
+  } catch (e) {
+    syncUrl = null;
+    document.getElementById("u-url").textContent = "(dobjd /settings unreachable)";
+  }
+}
+
+async function pollUniverse() {
+  if (!syncUrl) await getSettings();
+  if (!syncUrl) {
+    setDot("sync-dot", false);
+    document.getElementById("u-gsr").textContent = "(no synchronizer URL configured)";
+    return;
+  }
+  try {
+    const r = await fetch(syncUrl + "/v1/state/head");
+    if (!r.ok) throw new Error("status " + r.status);
+    const j = await r.json();
+    // synchronizer uses snake_case; dobjd uses camelCase. Accept either.
+    const pick = (...keys) => keys.map(k => j[k]).find(v => v !== undefined);
+    document.getElementById("u-gsr").textContent      = pick("current_gsr", "currentGsr") ?? "—";
+    document.getElementById("u-block").textContent    = fmtNum(pick("current_block_number", "currentBlockNumber"));
+    document.getElementById("u-tx").textContent       = fmtNum(pick("tx_count", "txCount"));
+    document.getElementById("u-null").textContent     = fmtNum(pick("nullifier_count", "nullifierCount"));
+    document.getElementById("u-gsrcount").textContent = fmtNum(pick("gsr_count", "gsrCount"));
+    document.getElementById("u-slot").textContent     = fmtNum(pick("last_processed_slot", "lastProcessedSlot"));
+    setDot("sync-dot", true);
+    refreshTs();
+  } catch (e) {
+    setDot("sync-dot", false);
+    document.getElementById("u-gsr").textContent = "(unreachable: " + e.message + ")";
+  }
+}
+
+async function pollInventory() {
+  const list = document.getElementById("inv-list");
+  try {
+    const r = await fetch(DOBJD + "/inventory");
+    if (!r.ok) throw new Error("status " + r.status);
+    const objects = await r.json();
+    setDot("inv-dot", true);
+    if (!objects.length) {
+      list.innerHTML = '<div class="empty">no objects yet</div>';
+      return;
+    }
+    list.innerHTML = objects.map(o => `
+      <div class="row">
+        <span class="status-${o.status || "live"}">${(o.emoji || "")} ${o.fileName}</span>
+        <span class="muted flex1">· ${o.className || "?"}</span>
+        <span class="muted">${shortHash(o.classHash, 4, 4)}</span>
+      </div>
+    `).join("");
+  } catch (e) {
+    setDot("inv-dot", false);
+    list.innerHTML = '<div class="empty">unreachable: ' + e.message + '</div>';
+  }
+}
+
+function startEvents() {
+  const list = document.getElementById("ev-list");
+  let first = true;
+
+  function connect() {
+    const es = new EventSource(DOBJD + "/events");
+    es.onopen = () => setDot("ev-dot", true);
+    es.onerror = () => {
+      setDot("ev-dot", false);
+      es.close();
+      setTimeout(connect, 2000);
+    };
+    es.onmessage = (e) => {
+      if (first) { list.innerHTML = ""; first = false; }
+      let d;
+      try { d = JSON.parse(e.data); } catch { d = { raw: e.data }; }
+      const ts = new Date().toLocaleTimeString();
+      const runId = d.runId ? shortHash(d.runId, 6, 4) : "—";
+      const phase = d.phase ?? "—";
+      const status = d.status ?? "—";
+      const msg = d.message ?? "";
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML =
+        `<span class="muted">${ts}</span>` +
+        `<span class="muted">${runId}</span>` +
+        `<span>${phase}</span>` +
+        `<span class="phase-${status}">${status}</span>` +
+        `<span class="muted flex1">${msg}</span>`;
+      list.prepend(row);
+      while (list.children.length > 60) list.removeChild(list.lastChild);
+    };
+  }
+  connect();
+}
+
+pollUniverse();
+pollInventory();
+startEvents();
+setInterval(pollUniverse, 5000);
+setInterval(pollInventory, 2000);
+</script>
+</body>
+</html>
