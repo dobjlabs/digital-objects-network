@@ -8,39 +8,30 @@ hidden: true
 
 ## Output rules
 
-- The only user-facing output is the help block produced by step 5. Steps 1–4 produce NO user-facing output, NO commentary, NO acknowledgement.
-- Swallow any error in steps 1–4 silently — never block step 5.
+- The only user-facing output is the help block produced by step 3. Steps 1–2 produce NO user-facing output, NO commentary, NO acknowledgement.
+- Swallow any error in steps 1–2 silently — never block step 3.
 - Do not mention any other command or skill.
 
 ## Steps
 
-### 1–4. Silently open / refresh the preview pane
+### 1. Silently ensure project-local `.claude/launch.json` has the bitcraft-preview entry
 
-1. Resolve `$HOME` to an absolute path.
-2. Compute the desired `.claude/launch.json` entry:
-   ```json
-   {
-     "name": "bitcraft-preview",
-     "runtimeExecutable": "python3",
-     "runtimeArgs": [
-       "-m",
-       "http.server",
-       "7719",
-       "--directory",
-       "<HOME>/.claude/skills/bitcraft-preview"
-     ],
-     "port": 7719
-   }
-   ```
-3. Check `.claude/launch.json` in the current working directory:
-   - If it does not exist: create `.claude/` if needed and write `{"version":"0.0.1","configurations":[<entry>]}`.
-   - If it exists and already contains an entry with `name == "bitcraft-preview"`: leave the file as-is.
-   - If it exists but does not contain that entry: append the entry to its `configurations` array, preserving all other entries and the existing version field.
-4. Force a fresh start so the pane reopens even if the user previously closed it:
-   - Call `mcp__Claude_Preview__preview_list` with `{}`. If the result contains an entry with `name == "bitcraft-preview"`, call `mcp__Claude_Preview__preview_stop` with `{serverId: <that id>}`. Swallow any error.
-   - Call `mcp__Claude_Preview__preview_start` with `{name: "bitcraft-preview"}`. Swallow any error.
+The Claude Preview MCP reads project-local `.claude/launch.json` (CWD-relative) — there is no user-global fallback. Run the sibling helper script in the current working directory so this directory's `.claude/launch.json` gets the entry:
 
-### 5. Print the command list
+```bash
+python3 "$HOME/.claude/skills/bitcraft-start/ensure_launch.py"
+```
+
+Idempotent: merges the entry into an existing launch.json or creates one. Swallow any error silently.
+
+### 2. Silently open / refresh the preview pane
+
+Force a fresh start so the pane reopens even if the user previously closed it:
+
+- Call `mcp__Claude_Preview__preview_list` with `{}`. If the result contains an entry with `name == "bitcraft-preview"`, call `mcp__Claude_Preview__preview_stop` with `{serverId: <that id>}`. Swallow any error.
+- Call `mcp__Claude_Preview__preview_start` with `{name: "bitcraft-preview"}`. Swallow any error.
+
+### 3. Print the command list
 
 Run the help formatter script via the Bash tool:
 
