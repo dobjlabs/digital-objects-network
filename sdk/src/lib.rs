@@ -20,7 +20,7 @@ use pod2::{
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
-use txlib::{EventHandle, GroundingWitness, Tx, TxBuilder};
+use txlib::{EventHandle, GroundingEvidence, GroundingWitness, Tx, TxBuilder};
 use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 
 mod error;
@@ -648,7 +648,6 @@ impl ActionHandle {
             obj_dict: Dictionary,
         }
         let mut events: Vec<EventData> = Vec::new();
-        let mut direct_outputs: Vec<usize> = Vec::new();
         let mut event_sts: Vec<Statement> = Vec::new();
         let mut obj_refs_index: usize = 0;
         {
@@ -748,16 +747,7 @@ impl ActionHandle {
                         st_tx_literal
                     };
                     if io.produces() {
-                        direct_outputs.push(exe_ctx.outputs.len());
-                        exe_ctx.outputs.push(PerOutput {
-                            class: class.clone(),
-                            obj: obj_dict.clone(),
-                            action_name: action.clone(),
-                            object_refs_index: obj_refs_index,
-                            action_st: Statement::None,
-                            out_array: out_array.clone(),
-                            out_entry_idx: out_entry_idx[&varname],
-                        });
+                        exe_ctx.outputs.push(obj_dict.clone());
                     }
                     events.push(EventData {
                         handle,
@@ -873,14 +863,10 @@ impl ActionHandle {
                 .unwrap()
         };
 
-        // ---- Backfill action_st on direct outputs + attach IsX
-        // guard to each event via the bridge predicate.
+        // ---- Attach IsX guard to each event via the bridge predicate.
         {
             let mut exe_ctx = exe_rc.borrow_mut();
             let exe_ctx = &mut *exe_ctx;
-            for idx in &direct_outputs {
-                exe_ctx.outputs[*idx].action_st = st_action.clone();
-            }
             let module = exe_ctx.module.clone();
             for EventData {
                 handle,
@@ -1784,31 +1770,32 @@ impl SdkModule {
 
 #[derive(Debug, Clone)]
 pub struct SpendableObject {
-    pub pod: MainPod,
     pub obj: Dictionary,
-    pub tx: Tx,
+    pub evidence: GroundingEvidence,
 }
 
 impl SpendableObject {
-    pub fn tx_input(&self) -> (Dictionary, Tx) {
-        (self.obj.clone(), self.tx.clone())
+    pub fn tx_input(&self) -> (Dictionary, GroundingEvidence) {
+        (self.obj.clone(), self.evidence.clone())
     }
 }
 
 pub struct SpendableObjects {
+    /// Single tx-level pod that proves `TxFinalized` and is published
+    /// via the relayer.
     pub tx_pod: MainPod,
-    pub obj_pods: Vec<MainPod>,
-    pub objs: Vec<Dictionary>,
+    /// Each produced output object with its own per-object grounding
+    /// evidence (no per-object pod).
+    pub objs: Vec<SpendableObject>,
+    /// In-flight `Tx` value held by the producer; carries the literal
+    /// live/nullifiers/ctx for the SDK's own bookkeeping. Not part of
+    /// the per-output wire format.
     pub tx: Tx,
 }
 
 impl SpendableObjects {
     pub fn obj(&self, index: usize) -> SpendableObject {
-        SpendableObject {
-            pod: self.obj_pods[index].clone(),
-            obj: self.objs[index].clone(),
-            tx: self.tx.clone(),
-        }
+        self.objs[index].clone()
     }
     pub fn objs<const N: usize>(&self) -> [SpendableObject; N] {
         let objs: Vec<_> = (0..N).map(|i| self.obj(i)).collect();
@@ -1843,11 +1830,10 @@ struct ExeContext {
     // re-enter a sub-action's rhai body inline, and `new_obj` reads
     // cached class hashes off it.
     module: Rc<SdkModule>,
-    // Accumulated produced (Output/Mutate) objects across the whole
-    // action call tree. Each entry becomes one obj_pod in the returned
-    // `SpendableObjects`. Sub-actions append into this same vec so the
-    // top-level call sees them in declaration order.
-    outputs: Vec<PerOutput>,
+    // Produced (Output/Mutate) object dicts across the whole action
+    // call tree, in declaration order. Sub-actions append into this
+    // same vec so the top-level call sees them in order.
+    outputs: Vec<Dictionary>,
 }
 
 impl ExeContext {
@@ -1897,33 +1883,12 @@ impl Executor {
     fn new_builder(&self) -> MultiPodBuilder {
         MultiPodBuilder::new(&self.params, &self.vd_set)
     }
-    fn new_tx_builder(&self, ctx: &mut BuildContext, inputs: &[(Dictionary, Tx)]) -> TxBuilder {
+    fn new_tx_builder(
+        &self,
+        ctx: &mut BuildContext,
+        inputs: &[(Dictionary, GroundingEvidence)],
+    ) -> TxBuilder {
         TxBuilder::new(ctx, inputs, self.grounding_witness.clone())
-    }
-    /// Prove a pod that reveals a single `Is{class}` statement for one
-    /// produced output, referencing `source` (the internal pod that
-    /// exposes the originating action statement).
-    fn prove_is_x_pod(&self, source: &MainPod, out: &PerOutput) -> MainPod {
-        let builder = self.new_builder();
-        let mut bld = BuildContext {
-            builder,
-            modules: self.pod_modules.clone(),
-        };
-        bld.builder.add_pod(source.clone()).unwrap();
-        let st_class = self.module.build_is_x(
-            &mut bld,
-            &out.action_name,
-            &out.class,
-            out.object_refs_index,
-            out.action_st.clone(),
-            &out.out_array,
-            out.out_entry_idx,
-            &out.obj,
-        );
-        bld.builder.reveal(&st_class).unwrap();
-        let pod = prove(bld.builder, &*self.prover);
-        pod.pod.verify().unwrap();
-        pod
     }
     /// Execute an action that consumes some input objects and produces some output objects
     pub fn action(
@@ -1940,14 +1905,12 @@ impl Executor {
 
         let total = &self.module.action_by_name(action).total_inputs;
 
-        let mut tx_inputs = Vec::new();
+        let mut tx_inputs = Vec::with_capacity(inputs.len());
         let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
         for (input, _ref) in zip_eq(inputs, total.iter()) {
-            tx_inputs.push(input.tx_input());
-            bld.builder
-                .add_pod(input.pod)
-                .expect("MultiPodBuilder is unlimited");
-            rhai_input_objs.push(input.obj);
+            let SpendableObject { obj, evidence } = input;
+            tx_inputs.push((obj.clone(), evidence));
+            rhai_input_objs.push(obj);
         }
         // Reverse so rhai pops in declaration order (last-declared on top).
         rhai_input_objs.reverse();
@@ -1984,25 +1947,19 @@ impl Executor {
         let (st_tx_finalize, tx, _stats) = tx_builder.finalize(&mut bld);
         bld.builder.reveal(&st_tx_finalize).unwrap();
 
-        // Internal pod carries both statements so obj_pods can
-        // reference st_action. It's not exposed to callers.
         let internal_pod = prove(bld.builder, &*self.prover);
         internal_pod.pod.verify().unwrap();
 
-        // User-facing tx_pod: thin wrapper that exposes only the
-        // TxFinalized statement. The relayer / synchronizer's
-        // `ProofParser` verifies a single-statement hash, so tx_pod
-        // must contain exactly one public statement.
-        // `Operation::copy` re-materializes the statement from
-        // `internal_pod` into this builder so it can be revealed as
-        // our own public output.
+        // tx_pod is the single-statement wrapper that the relayer /
+        // synchronizer's `ProofParser` consumes. `Operation::copy`
+        // re-materializes `st_tx_finalize` into this builder.
         let tx_pod = {
             let builder = self.new_builder();
             let mut bld = BuildContext {
                 builder,
                 modules: self.pod_modules.clone(),
             };
-            bld.builder.add_pod(internal_pod.clone()).unwrap();
+            bld.builder.add_pod(internal_pod).unwrap();
             bld.builder
                 .pub_op(Operation::copy(st_tx_finalize.clone()))
                 .unwrap();
@@ -2011,36 +1968,35 @@ impl Executor {
             pod
         };
 
-        let obj_pods: Vec<MainPod> = outputs
-            .iter()
-            .map(|out| self.prove_is_x_pod(&internal_pod, out))
+        // tx_final, live_root, and the "live" Merkle path are invariant
+        // across outputs; compute once and share.
+        let tx_final = tx.ctx.commitment();
+        let live_root = tx.live.commitment();
+        let (_, live_in_tx_proof) = tx
+            .ctx
+            .prove(&StrKey::from("live"))
+            .expect("finalized tx has a live key");
+        let objs: Vec<SpendableObject> = outputs
+            .into_iter()
+            .map(|obj| {
+                let obj_in_live_proof = tx
+                    .live
+                    .prove(&Value::from(obj.clone()))
+                    .expect("output is live in finalized tx");
+                SpendableObject {
+                    obj,
+                    evidence: GroundingEvidence {
+                        tx_final,
+                        live_root,
+                        live_in_tx_proof: live_in_tx_proof.clone(),
+                        obj_in_live_proof,
+                    },
+                }
+            })
             .collect();
 
-        let objs = outputs.into_iter().map(|out| out.obj).collect();
-        Ok(SpendableObjects {
-            tx_pod,
-            obj_pods,
-            objs,
-            tx,
-        })
+        Ok(SpendableObjects { tx_pod, objs, tx })
     }
-}
-
-/// One produced (Output/Mutate) object from a top-level
-/// `Executor::action` call. Each becomes one `SpendableObject` in the
-/// returned `objs`, with an accompanying `Is{class}` pod built from
-/// the originating action's OR branch.
-struct PerOutput {
-    class: String,
-    obj: Dictionary,
-    action_name: String,
-    object_refs_index: usize,
-    action_st: Statement,
-    /// The action's `out` record array. Shared (cloned) across all
-    /// PerOutputs from the same action.
-    out_array: Array,
-    /// Index of `obj`'s entry in `out_array`.
-    out_entry_idx: usize,
 }
 
 /// The Sdk is the main entrypoint of this crate.  It's used to load modules from manifests and

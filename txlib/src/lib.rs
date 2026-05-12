@@ -31,7 +31,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
-    frontend::Operation,
+    frontend::{Operation, OperationArg},
     middleware::{
         EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
         containers::{Dictionary, Set},
@@ -169,6 +169,48 @@ impl<'de> Deserialize<'de> for Tx {
             nullifiers: payload.nullifiers,
             ctx: payload.ctx,
             state_root: Arc::new(payload.state_root),
+        })
+    }
+}
+
+/// Per-object membership evidence: the source transaction's commitment,
+/// the live-set commitment, and Merkle proofs that anchor the object
+/// inside that source transaction's live set. Produced at mint time by
+/// the source transaction's prover and packaged alongside each output
+/// object; consumed at proof time by [`TxBuilder`] when the object is
+/// spent.
+///
+/// State-root anchoring (proving the source tx is in `transactions_root`)
+/// is supplied separately at consume time by the synchronizer via
+/// [`GroundingWitness`]; it cannot be pre-computed at mint time because
+/// the source tx is not yet anchored.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingEvidence {
+    /// Source transaction commitment (== `source_tx.ctx.commitment()`).
+    pub tx_final: Hash,
+    /// Commitment of the source transaction's live set.
+    pub live_root: Hash,
+    /// Merkle proof for `DictContains(source_tx_ctx, "live", live_root)`.
+    pub live_in_tx_proof: MerkleProof,
+    /// Merkle proof for `SetContains(live, obj)`.
+    pub obj_in_live_proof: MerkleProof,
+}
+
+impl GroundingEvidence {
+    /// Construct from the source transaction's `ctx` dict and `live` set
+    /// (both available to the prover at finalize time) plus the produced
+    /// object whose membership we attest.
+    pub fn new(ctx: &Dictionary, live: &Set, obj: &Dictionary) -> anyhow::Result<Self> {
+        let tx_final = ctx.commitment();
+        let live_root = live.commitment();
+        let (_, live_in_tx_proof) = ctx.prove(&StrKey::from("live"))?;
+        let obj_in_live_proof = live.prove(&Value::from(obj.clone()))?;
+        Ok(Self {
+            tx_final,
+            live_root,
+            live_in_tx_proof,
+            obj_in_live_proof,
         })
     }
 }
@@ -434,7 +476,7 @@ impl TxBuilder {
     /// Seeds `chain_start = H(inputs, 0)`.
     pub fn new(
         ctx: &mut BuildContext,
-        inputs: &[(Dictionary, Tx)],
+        inputs: &[(Dictionary, GroundingEvidence)],
         grounding: Arc<GroundingWitness>,
     ) -> Self {
         let (st_inputs_grounded, inputs_set, stats) =
@@ -802,7 +844,7 @@ impl TxBuilder {
 
     fn build_inputs_grounded(
         ctx: &mut BuildContext,
-        inputs: &[(Dictionary, Tx)],
+        inputs: &[(Dictionary, GroundingEvidence)],
         grounding: &GroundingWitness,
     ) -> (Statement, Set, TxStats) {
         let mut stats = TxStats::new();
@@ -851,12 +893,11 @@ impl TxBuilder {
 
         if inputs.len() == 1 {
             // Single-input fast path: InputsGroundedSingle avoids recursion.
-            let (obj, prior_tx) = &inputs[0];
-            let source_tx = prior_tx.ctx.clone();
+            let (obj, evidence) = &inputs[0];
             let mut inputs_set = set!();
             inputs_set.insert(&Value::from(obj.clone())).unwrap();
             let st_tx_membership =
-                prove_source_tx_membership(ctx, grounding, transactions_root, &source_tx);
+                prove_source_tx_membership(ctx, grounding, transactions_root, evidence.tx_final);
             let st_tx_in_sr = st_custom!(
                 ctx,
                 TxInStateRoot() = (
@@ -868,11 +909,12 @@ impl TxBuilder {
             )
             .unwrap();
             record(&mut stats, "TxInStateRoot");
+            let st_set_contains_live = prove_obj_in_source_tx_live(ctx, evidence, obj);
             let st_single = st_custom!(
                 ctx,
                 InputsGroundedSingle() = (
                     st_tx_in_sr,
-                    SetContains((&source_tx, "live"), obj),
+                    st_set_contains_live,
                     SetInsert(inputs_set, set!(), obj)
                 )
             )
@@ -896,12 +938,11 @@ impl TxBuilder {
         .unwrap();
         record(&mut stats, "InputsGrounded");
         let mut prev_set = set!();
-        for (obj, prior_tx) in inputs {
-            let source_tx = prior_tx.ctx.clone();
+        for (obj, evidence) in inputs {
             let mut next_set = prev_set.clone();
             next_set.insert(&Value::from(obj.clone())).unwrap();
             let st_tx_membership =
-                prove_source_tx_membership(ctx, grounding, transactions_root, &source_tx);
+                prove_source_tx_membership(ctx, grounding, transactions_root, evidence.tx_final);
             let st_tx_in_sr = st_custom!(
                 ctx,
                 TxInStateRoot() = (
@@ -913,11 +954,12 @@ impl TxBuilder {
             )
             .unwrap();
             record(&mut stats, "TxInStateRoot");
+            let st_set_contains_live = prove_obj_in_source_tx_live(ctx, evidence, obj);
             let st_rec = st_custom!(
                 ctx,
                 InputsGroundedRecursive() = (
                     st_tx_in_sr,
-                    SetContains((&source_tx, "live"), obj),
+                    st_set_contains_live,
                     SetInsert(next_set, prev_set, obj),
                     st
                 )
@@ -936,24 +978,64 @@ impl TxBuilder {
     }
 }
 
-/// Prove `SetContains(transactions_root, source_tx)` using a Merkle proof
-/// supplied by the grounding witness.
+/// Prove `SetContains(transactions_root, tx_final)` using a Merkle proof
+/// supplied by the grounding witness. The source tx is identified by its
+/// commitment alone (the literal `ctx` dict is not required).
 fn prove_source_tx_membership(
     ctx: &mut BuildContext,
     grounding: &GroundingWitness,
     transactions_root: Hash,
-    source_tx: &Dictionary,
+    tx_final: Hash,
 ) -> Statement {
     let proof = grounding
         .source_tx_proofs
-        .get(&source_tx.commitment())
+        .get(&tx_final)
         .cloned()
         .expect("missing source tx proof in grounding witness");
     ctx.builder
         .priv_op(Operation(
             OperationType::Native(NativeOperation::SetContainsFromEntries),
-            vec![transactions_root.into(), source_tx.clone().into()],
+            vec![transactions_root.into(), Value::from(tx_final).into()],
             OperationAux::MerkleProof(proof),
+        ))
+        .unwrap()
+}
+
+/// Build `SetContains(source_tx.live, obj)` from a [`GroundingEvidence`].
+///
+/// Discharges two Merkle proofs:
+///   * `DictContains(source_tx_ctx, "live", live_root)` via `live_in_tx_proof`.
+///   * `SetContains(live_root, obj)` via `obj_in_live_proof`.
+///
+/// The DictContains statement is fed as the first arg of the SetContains
+/// op as `OperationArg::Statement(...)`. Pod2 then promotes that arg to
+/// `ValueRef::Key(AnchoredKey(tx_final, "live"))`, which is the form the
+/// `source_tx.live` template arg requires.
+fn prove_obj_in_source_tx_live(
+    ctx: &mut BuildContext,
+    evidence: &GroundingEvidence,
+    obj: &Dictionary,
+) -> Statement {
+    let st_dict_contains = ctx
+        .builder
+        .priv_op(Operation(
+            OperationType::Native(NativeOperation::DictContainsFromEntries),
+            vec![
+                Value::from(evidence.tx_final).into(),
+                Value::from("live").into(),
+                Value::from(evidence.live_root).into(),
+            ],
+            OperationAux::MerkleProof(evidence.live_in_tx_proof.clone()),
+        ))
+        .unwrap();
+    ctx.builder
+        .priv_op(Operation(
+            OperationType::Native(NativeOperation::SetContainsFromEntries),
+            vec![
+                OperationArg::Statement(st_dict_contains),
+                Value::from(obj.clone()).into(),
+            ],
+            OperationAux::MerkleProof(evidence.obj_in_live_proof.clone()),
         ))
         .unwrap()
 }
@@ -1215,7 +1297,8 @@ mod tests {
         let stone = make_object(is_stone.clone(), &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx0));
-        let inputs = vec![(pick.clone(), tx0)];
+        let evidence = GroundingEvidence::new(&tx0.ctx, &tx0.live, &pick).unwrap();
+        let inputs = vec![(pick.clone(), evidence)];
         let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
 
         let scope_outer = tx2.begin_action();
@@ -1359,7 +1442,8 @@ mod tests {
         let wood = make_object(is_wood.clone(), &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx1_out));
-        let inputs = vec![(log.clone(), tx1_out)];
+        let evidence = GroundingEvidence::new(&tx1_out.ctx, &tx1_out.live, &log).unwrap();
+        let inputs = vec![(log.clone(), evidence)];
         let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
 
         let scope_outer = tx2.begin_action();
@@ -1420,7 +1504,8 @@ mod tests {
         let stick_b = make_object(is_stick, &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx2_out));
-        let inputs = vec![(wood.clone(), tx2_out)];
+        let evidence = GroundingEvidence::new(&tx2_out.ctx, &tx2_out.live, &wood).unwrap();
+        let inputs = vec![(wood.clone(), evidence)];
         let mut tx3 = TxBuilder::new(&mut ctx, &inputs, witness);
 
         let scope_outer = tx3.begin_action();
