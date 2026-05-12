@@ -2,128 +2,340 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>bitcraft preview</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bitcraft</title>
 <style>
-  :root { color-scheme: dark; }
-  body {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    background: #0a0a0a;
-    color: #d4d4d4;
+  :root {
+    --bg:        #fafafa;
+    --panel:     #ffffff;
+    --border:    #e5e5e5;
+    --border-2:  #f0f0f0;
+    --text:      #171717;
+    --text-2:    #525252;
+    --text-3:    #a3a3a3;
+    --ok:        #16a34a;
+    --bad:       #dc2626;
+    --warn:      #d97706;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:        #0a0a0a;
+      --panel:     #111111;
+      --border:    #1f1f1f;
+      --border-2:  #161616;
+      --text:      #f5f5f5;
+      --text-2:    #a3a3a3;
+      --text-3:    #525252;
+      --ok:        #4ade80;
+      --bad:       #f87171;
+      --warn:      #fbbf24;
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
     margin: 0;
-    padding: 20px;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
     font-size: 13px;
     line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
+
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 16px;
+  }
+
+  /* Header */
+
   header {
     display: flex;
-    align-items: baseline;
     justify-content: space-between;
+    align-items: baseline;
+    padding-bottom: 12px;
     margin-bottom: 16px;
+    border-bottom: 1px solid var(--border);
   }
   header h1 {
-    font-size: 14px;
-    font-weight: 600;
     margin: 0;
-    letter-spacing: 0.3px;
-  }
-  header .subtle {
-    color: #555;
-    font-size: 12px;
-  }
-  section {
-    background: #141414;
-    border: 1px solid #222;
-    border-radius: 6px;
-    padding: 14px 16px;
-    margin-bottom: 12px;
-  }
-  h2 {
     font-size: 13px;
-    margin: 0 0 10px;
-    color: #888;
-    font-weight: 500;
-    text-transform: lowercase;
-    letter-spacing: 0.5px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  header .ts {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Section */
+
+  section {
+    margin-bottom: 20px;
+  }
+  .section-head {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .section-head h2 {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-2);
+  }
+  .section-head .meta {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
   }
   .dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
-    background: #555;
+    background: var(--text-3);
     flex-shrink: 0;
   }
-  .dot.ok  { background: #4ade80; }
-  .dot.bad { background: #ef4444; }
-  table { width: 100%; border-collapse: collapse; }
-  td { padding: 2px 8px 2px 0; vertical-align: top; }
-  table { table-layout: fixed; }
-  td.label { color: #666; width: 130px; min-width: 0; }
-  td.value { color: #d4d4d4; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; min-width: 0; }
-  .row {
-    padding: 3px 0;
-    border-bottom: 1px solid #1c1c1c;
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
+  .dot.ok  { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+
+  /* Card */
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  /* Key-value rows (universe) */
+
+  .kv {
+    display: grid;
+    grid-template-columns: minmax(110px, 36%) 1fr;
+  }
+  .kv > * {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-2);
     min-width: 0;
   }
-  .row > * { min-width: 0; overflow-wrap: anywhere; }
-  .row:last-child { border-bottom: 0; }
-  .status-live  { color: #4ade80; }
-  .status-dead  { color: #666; text-decoration: line-through; }
-  .phase-running { color: #fbbf24; }
-  .phase-done    { color: #4ade80; }
-  .phase-failed  { color: #ef4444; }
-  .events { max-height: 360px; overflow-y: auto; }
-  .muted { color: #555; }
-  .empty { color: #555; font-style: italic; padding: 4px 0; }
-  .flex1 { flex: 1; }
-  .id { font-variant-numeric: tabular-nums; }
+  .kv > *:nth-last-child(-n+2) { border-bottom: 0; }
+  .kv dt {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 12px;
+  }
+  .kv dd {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+  }
+  .kv dd.sans { font-family: var(--sans); word-break: normal; }
+  .kv dd.err  { color: var(--bad); font-style: italic; font-family: var(--sans); }
+
+  /* List rows (inventory + events) */
+
+  .list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .list li {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-2);
+    min-width: 0;
+  }
+  .list li:last-child { border-bottom: 0; }
+
+  /* Inventory row */
+
+  .inv-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    gap: 2px 8px;
+    align-items: baseline;
+  }
+  .inv-row .name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .inv-row .id {
+    grid-column: 1 / -1;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-3);
+    overflow-wrap: anywhere;
+    word-break: break-all;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid currentColor;
+    line-height: 1.3;
+    text-transform: lowercase;
+    background: transparent;
+    flex-shrink: 0;
+  }
+  .badge.live      { color: var(--ok); }
+  .badge.pending   { color: var(--warn); }
+  .badge.dead,
+  .badge.nullified { color: var(--text-3); }
+
+  /* Event row */
+
+  .ev-list {
+    max-height: 360px;
+    overflow-y: auto;
+  }
+  .ev-row {
+    display: grid;
+    grid-template-columns: 70px 1fr auto;
+    gap: 4px 10px;
+    align-items: baseline;
+  }
+  .ev-row .ts {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .ev-row .phase {
+    font-size: 13px;
+    color: var(--text);
+  }
+  .ev-row .phase .run-id {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-3);
+    margin-left: 6px;
+  }
+  .ev-row .badge.running { color: var(--warn); }
+  .ev-row .badge.done    { color: var(--ok); }
+  .ev-row .badge.failed  { color: var(--bad); }
+  .ev-row .msg {
+    grid-column: 2 / -1;
+    color: var(--text-2);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  /* Empty / error states */
+
+  .empty {
+    padding: 12px;
+    color: var(--text-3);
+    font-size: 12px;
+  }
+  .empty.err { color: var(--bad); }
+
+  /* Scrollbar (subtle) */
+
+  .ev-list::-webkit-scrollbar { width: 6px; }
+  .ev-list::-webkit-scrollbar-track { background: transparent; }
+  .ev-list::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+  }
+
+  /* Narrow pane */
+
+  @media (max-width: 420px) {
+    main { padding: 12px; }
+    .kv { grid-template-columns: 1fr; }
+    .kv > * { border-bottom: 0; padding: 4px 12px; }
+    .kv dt { padding-top: 8px; color: var(--text-3); font-size: 11px; }
+    .kv dd { padding-bottom: 8px; border-bottom: 1px solid var(--border-2); }
+    .kv dd:last-child { border-bottom: 0; }
+    .ev-row { grid-template-columns: 1fr; gap: 2px; }
+    .ev-row .msg { grid-column: 1; }
+  }
 </style>
 </head>
 <body>
+<main>
+
   <header>
-    <h1>bitcraft preview</h1>
-    <span class="subtle" id="last-refresh">—</span>
+    <h1>bitcraft</h1>
+    <span class="ts" id="header-time">—</span>
   </header>
 
   <section>
-    <h2><span class="dot" id="sync-dot"></span>universe — synchronizer</h2>
-    <table>
-      <tr><td class="label">current GSR</td>          <td class="value" id="u-gsr">…</td></tr>
-      <tr><td class="label">current block</td>        <td class="value" id="u-block">…</td></tr>
-      <tr><td class="label">tx count</td>             <td class="value" id="u-tx">…</td></tr>
-      <tr><td class="label">nullifier count</td>      <td class="value" id="u-null">…</td></tr>
-      <tr><td class="label">gsr count</td>            <td class="value" id="u-gsrcount">…</td></tr>
-      <tr><td class="label">last processed slot</td>  <td class="value" id="u-slot">…</td></tr>
-      <tr><td class="label">synchronizer URL</td>     <td class="value muted" id="u-url">…</td></tr>
-    </table>
+    <div class="section-head">
+      <span class="dot" id="sync-dot"></span>
+      <h2>universe</h2>
+      <span class="meta" id="sync-meta">synchronizer</span>
+    </div>
+    <div class="card">
+      <dl class="kv">
+        <dt>state root</dt>   <dd id="u-gsr">—</dd>
+        <dt>block</dt>        <dd id="u-block" class="sans">—</dd>
+        <dt>txs</dt>          <dd id="u-tx" class="sans">—</dd>
+        <dt>nullifiers</dt>   <dd id="u-null" class="sans">—</dd>
+        <dt>roots</dt>        <dd id="u-gsrcount" class="sans">—</dd>
+        <dt>last slot</dt>    <dd id="u-slot" class="sans">—</dd>
+        <dt>endpoint</dt>     <dd id="u-url">—</dd>
+      </dl>
+    </div>
   </section>
 
   <section>
-    <h2><span class="dot" id="inv-dot"></span>inventory — ~/.dobj/objects/</h2>
-    <div id="inv-list"><div class="empty">loading…</div></div>
+    <div class="section-head">
+      <span class="dot" id="inv-dot"></span>
+      <h2>inventory</h2>
+      <span class="meta" id="inv-meta">—</span>
+    </div>
+    <div class="card" id="inv-card">
+      <div class="empty">loading…</div>
+    </div>
   </section>
 
   <section>
-    <h2><span class="dot" id="ev-dot"></span>action log — events stream</h2>
-    <div id="ev-list" class="events"><div class="empty">waiting for events…</div></div>
+    <div class="section-head">
+      <span class="dot" id="ev-dot"></span>
+      <h2>action log</h2>
+      <span class="meta" id="ev-meta">stream</span>
+    </div>
+    <div class="card" id="ev-card">
+      <div class="empty">no events yet</div>
+    </div>
   </section>
+
+</main>
 
 <script>
 const DOBJD = "http://127.0.0.1:7717";
 let syncUrl = null;
 
-function shortHash(h, head = 8, tail = 6) {
+function shortHash(h, head = 6, tail = 4) {
   if (!h) return "—";
   return h.length > head + tail + 1 ? h.slice(0, head) + "…" + h.slice(-tail) : h;
 }
 function shortFile(name) {
   if (!name) return "—";
-  // <class>_0x<hash>.dobj  →  <head6>…<tail4>
   const m = name.match(/_0x([a-f0-9]+)\.dobj$/i);
   if (m) {
     const h = m[1];
@@ -135,11 +347,27 @@ function fmtNum(n) {
   if (n === undefined || n === null) return "—";
   return Number(n).toLocaleString();
 }
-function setDot(id, ok) {
-  document.getElementById(id).className = "dot " + (ok ? "ok" : "bad");
+function fmtTime(d = new Date()) {
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 }
-function refreshTs() {
-  document.getElementById("last-refresh").textContent = new Date().toLocaleTimeString();
+function setDot(id, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove("ok", "bad");
+  if (state) el.classList.add(state);
+}
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+function tickClock() {
+  setText("header-time", fmtTime());
 }
 
 async function getSettings() {
@@ -148,103 +376,134 @@ async function getSettings() {
     if (!r.ok) throw new Error("status " + r.status);
     const s = await r.json();
     syncUrl = s.synchronizerApiUrl;
-    document.getElementById("u-url").textContent = syncUrl || "(unset)";
+    setText("u-url", syncUrl || "(unset)");
   } catch (e) {
     syncUrl = null;
-    document.getElementById("u-url").textContent = "(dobjd /settings unreachable)";
+    setText("u-url", "(dobjd /settings unreachable)");
   }
 }
 
 async function pollUniverse() {
   if (!syncUrl) await getSettings();
+  const gsrEl = document.getElementById("u-gsr");
   if (!syncUrl) {
-    setDot("sync-dot", false);
-    document.getElementById("u-gsr").textContent = "(no synchronizer URL configured)";
+    setDot("sync-dot", "bad");
+    setText("sync-meta", "no endpoint");
+    gsrEl.className = "err";
+    gsrEl.textContent = "no synchronizer URL";
     return;
   }
   try {
     const r = await fetch(syncUrl + "/v1/state/head");
     if (!r.ok) throw new Error("status " + r.status);
     const j = await r.json();
-    // synchronizer uses snake_case; dobjd uses camelCase. Accept either.
     const pick = (...keys) => keys.map(k => j[k]).find(v => v !== undefined);
-    document.getElementById("u-gsr").textContent      = pick("current_gsr", "currentGsr") ?? "—";
-    document.getElementById("u-block").textContent    = fmtNum(pick("current_block_number", "currentBlockNumber"));
-    document.getElementById("u-tx").textContent       = fmtNum(pick("tx_count", "txCount"));
-    document.getElementById("u-null").textContent     = fmtNum(pick("nullifier_count", "nullifierCount"));
-    document.getElementById("u-gsrcount").textContent = fmtNum(pick("gsr_count", "gsrCount"));
-    document.getElementById("u-slot").textContent     = fmtNum(pick("last_processed_slot", "lastProcessedSlot"));
-    setDot("sync-dot", true);
-    refreshTs();
+    gsrEl.className = "";
+    gsrEl.textContent = pick("current_gsr", "currentGsr") ?? "—";
+    setText("u-block",    fmtNum(pick("current_block_number", "currentBlockNumber")));
+    setText("u-tx",       fmtNum(pick("tx_count", "txCount")));
+    setText("u-null",     fmtNum(pick("nullifier_count", "nullifierCount")));
+    setText("u-gsrcount", fmtNum(pick("gsr_count", "gsrCount")));
+    setText("u-slot",     fmtNum(pick("last_processed_slot", "lastProcessedSlot")));
+    setDot("sync-dot", "ok");
+    setText("sync-meta", "synchronizer");
   } catch (e) {
-    setDot("sync-dot", false);
-    document.getElementById("u-gsr").textContent = "(unreachable: " + e.message + ")";
+    setDot("sync-dot", "bad");
+    setText("sync-meta", "unreachable");
+    gsrEl.className = "err";
+    gsrEl.textContent = e.message || "unreachable";
   }
 }
 
 async function pollInventory() {
-  const list = document.getElementById("inv-list");
+  const card = document.getElementById("inv-card");
   try {
     const r = await fetch(DOBJD + "/inventory");
     if (!r.ok) throw new Error("status " + r.status);
     const objects = await r.json();
-    setDot("inv-dot", true);
+    setDot("inv-dot", "ok");
+    setText("inv-meta", `${objects.length} object${objects.length === 1 ? "" : "s"}`);
     if (!objects.length) {
-      list.innerHTML = '<div class="empty">no objects yet</div>';
+      card.innerHTML = '<div class="empty">no objects yet</div>';
       return;
     }
-    list.innerHTML = objects.map(o => `
-      <div class="row" title="${o.fileName || ""}">
-        <span>${(o.emoji || "")}</span>
-        <span class="flex1">${o.className || "?"}</span>
-        <span class="status-${o.status || "live"} id">${shortFile(o.fileName)}</span>
-      </div>
-    `).join("");
+    const rows = objects.map(o => {
+      const status = (o.status || "live").toLowerCase();
+      const name = escapeHtml((o.emoji ? o.emoji + " " : "") + (o.className || "?"));
+      const id = escapeHtml(shortFile(o.fileName));
+      const title = escapeHtml(o.fileName || "");
+      return (
+        `<li title="${title}">` +
+          `<div class="inv-row">` +
+            `<span class="name">${name}</span>` +
+            `<span class="badge ${status}">${escapeHtml(status)}</span>` +
+            `<span class="id">${id}</span>` +
+          `</div>` +
+        `</li>`
+      );
+    }).join("");
+    card.innerHTML = `<ul class="list">${rows}</ul>`;
   } catch (e) {
-    setDot("inv-dot", false);
-    list.innerHTML = '<div class="empty">unreachable: ' + e.message + '</div>';
+    setDot("inv-dot", "bad");
+    setText("inv-meta", "unreachable");
+    card.innerHTML = `<div class="empty err">${escapeHtml(e.message || "unreachable")}</div>`;
   }
 }
 
 function startEvents() {
-  const list = document.getElementById("ev-list");
-  let first = true;
+  const card = document.getElementById("ev-card");
+  let listEl = null;
+
+  function ensureList() {
+    if (!listEl) {
+      card.innerHTML = '<ul class="list ev-list" id="ev-ul"></ul>';
+      listEl = document.getElementById("ev-ul");
+    }
+    return listEl;
+  }
 
   function connect() {
     const es = new EventSource(DOBJD + "/events");
-    es.onopen = () => setDot("ev-dot", true);
+    es.onopen = () => {
+      setDot("ev-dot", "ok");
+      setText("ev-meta", "connected");
+    };
     es.onerror = () => {
-      setDot("ev-dot", false);
+      setDot("ev-dot", "bad");
+      setText("ev-meta", "reconnecting");
       es.close();
       setTimeout(connect, 2000);
     };
     es.onmessage = (e) => {
-      if (first) { list.innerHTML = ""; first = false; }
       let d;
       try { d = JSON.parse(e.data); } catch { d = { raw: e.data }; }
-      const ts = new Date().toLocaleTimeString();
-      const runId = d.runId ? shortHash(d.runId, 6, 4) : "—";
+      const list = ensureList();
+      const ts = fmtTime();
+      const runId = d.runId ? shortHash(d.runId, 5, 4) : "—";
       const phase = d.phase ?? "—";
-      const status = d.status ?? "—";
+      const status = (d.status ?? "—").toLowerCase();
       const msg = d.message ?? "";
-      const row = document.createElement("div");
-      row.className = "row";
-      row.innerHTML =
-        `<span class="muted">${ts}</span>` +
-        `<span class="muted">${runId}</span>` +
-        `<span>${phase}</span>` +
-        `<span class="phase-${status}">${status}</span>` +
-        `<span class="muted flex1">${msg}</span>`;
-      list.prepend(row);
+
+      const li = document.createElement("li");
+      li.innerHTML =
+        `<div class="ev-row">` +
+          `<span class="ts">${escapeHtml(ts)}</span>` +
+          `<span class="phase">${escapeHtml(phase)}<span class="run-id">${escapeHtml(runId)}</span></span>` +
+          `<span class="badge ${status}">${escapeHtml(status)}</span>` +
+          (msg ? `<span class="msg">${escapeHtml(msg)}</span>` : "") +
+        `</div>`;
+      list.prepend(li);
       while (list.children.length > 60) list.removeChild(list.lastChild);
     };
   }
   connect();
 }
 
+tickClock();
 pollUniverse();
 pollInventory();
 startEvents();
+setInterval(tickClock, 1000);
 setInterval(pollUniverse, 5000);
 setInterval(pollInventory, 2000);
 </script>
