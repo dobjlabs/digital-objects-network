@@ -77,7 +77,7 @@ Indexed arguments use shell-style quoting: `/skill "hello world" foo` makes `$0 
 ### Scripting in the skill body
 
 - **Inline scripts** in fenced code blocks: ` ```bash `, ` ```python `, ` ```node `, etc. The agent runs them via Bash (e.g. `python3 -c '...'`).
-- **Dynamic context injection** with the `` !`<command>` `` syntax: when the skill loads, the placeholder is replaced with the command's stdout before the agent sees it. Use this for cheap up-front data fetches (e.g. `` !`git diff HEAD` ``).
+- **Dynamic context injection** — Claude Code supports a special inline syntax where a bang followed by a backticked shell command (the exclamation-mark-then-backtick form) gets replaced with the command's stdout before the agent sees the skill. Useful for cheap up-front data fetches like a `git diff HEAD` inlined into the prompt. See the Claude Code skills docs for the exact syntax — do NOT paste literal examples of this form into a SKILL.md body unless you intend the command to run.
 - **Sibling files** for longer scripts: save as `${CLAUDE_SKILL_DIR}/<filename>` and reference by that absolute path from the SKILL.md body. Step 6 will write any sibling files you declare.
 
 ### Chaining other bitcraft commands
