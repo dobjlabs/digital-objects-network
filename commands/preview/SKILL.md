@@ -1,6 +1,6 @@
 ---
 name: bitcraft-preview
-description: Open the live bitcraft dashboard in your browser.
+description: Open the live bitcraft dashboard in the Claude Code preview pane (falls back to the browser).
 ---
 
 # preview
@@ -11,35 +11,60 @@ description: Open the live bitcraft dashboard in your browser.
 - No preamble. No closing summary. No suggestions. No commentary.
 - Do not mention any other command, skill, or capability.
 
+## Constants
+
+- Server name: `bitcraft-preview`
+- Port: `7719`
+- Skill directory: `$HOME/.claude/skills/bitcraft-preview` (contains `index.html`)
+
 ## Steps
 
-1. Determine the platform-appropriate opener via `uname -s`:
-   - `Darwin` → `open`
-   - `Linux` → `xdg-open`
-   - anything else (Windows under WSL, MSYS, etc.) → `start` (run through `cmd.exe /c` if needed)
+### 1. Ensure `.claude/launch.json` has the bitcraft-preview server entry
 
-2. Run the opener with the absolute path to the dashboard HTML:
+Resolve `$HOME` (do not leave it literal in the JSON). Compute the absolute path: `<HOME>/.claude/skills/bitcraft-preview`.
 
-   ```bash
-   <opener> "$HOME/.claude/skills/bitcraft-preview/preview.html"
-   ```
+The server entry must match this shape exactly:
 
-3. On success (exit code 0), output exactly one line and stop:
+```json
+{
+  "name": "bitcraft-preview",
+  "runtimeExecutable": "python3",
+  "runtimeArgs": ["-m", "http.server", "7719", "--directory", "<HOME>/.claude/skills/bitcraft-preview"],
+  "port": 7719
+}
+```
 
-   `preview → ~/.claude/skills/bitcraft-preview/preview.html`
+- If `.claude/launch.json` exists: parse it, locate any existing entry whose `name == "bitcraft-preview"`, and replace it with the shape above. Preserve all other entries and the surrounding object structure.
+- If `.claude/launch.json` does not exist: create `.claude/` if needed, then write:
+  ```json
+  {
+    "version": "0.0.1",
+    "configurations": [<entry>]
+  }
+  ```
 
-4. If the opener fails (no display server, headless system, exit code non-zero), output exactly one line and stop:
+### 2. Start the preview server and open the pane
 
-   `preview at ~/.claude/skills/bitcraft-preview/preview.html (open this file manually)`
+Call the MCP tool `mcp__Claude_Preview__preview_start` with `name: "bitcraft-preview"`. The preview pane opens automatically at `http://localhost:7719/` which serves `index.html`.
 
-5. On any other tool error, output the error message verbatim, on one line. Stop.
+On success, output exactly one line and stop:
 
-## What the dashboard shows
+`preview pane → http://localhost:7719/`
 
-(For your context — do not narrate this to the user.) The HTML is self-contained and polls live data from the running daemon and synchronizer:
+### 3. Fallback if step 2 fails
 
-- **universe** — current GSR, current block, tx count, nullifier count, GSR count, last processed slot. Source: synchronizer's `/v1/state/head`. Refreshes every 5s.
-- **inventory** — every `.dobj` file in `~/.dobj/objects/` with class + status. Source: dobjd's `/inventory`. Refreshes every 2s.
-- **action log** — live event stream from dobjd's `/events` SSE. Auto-reconnects on disconnect. Shows runId, phase (generateProof / commit), status (running / done / failed), and message.
+If `mcp__Claude_Preview__preview_start` returns an error (Claude Preview MCP not installed, `python3` missing, port already bound by something else, etc.), fall back to the browser path. Do not retry the pane.
 
-If dobjd is stopped, the inventory and action log panels show as disconnected. If the synchronizer URL is unreachable, the universe panel shows as disconnected. The dashboard does not need to be restarted in any of these cases — it recovers automatically when the services come back.
+1. Detect platform via `uname -s`. Pick `open` (Darwin), `xdg-open` (Linux), or `start` (Windows/MSYS).
+2. Run `<opener> "$HOME/.claude/skills/bitcraft-preview/index.html"`.
+3. On success, output exactly one line and stop:
+
+   `preview → ~/.claude/skills/bitcraft-preview/index.html (browser; pane unavailable)`
+
+4. If the opener also fails, output exactly:
+
+   `preview at ~/.claude/skills/bitcraft-preview/index.html (open this file manually)`
+
+### 4. Other errors
+
+On any tool error not handled above, output the error message verbatim, on one line. Stop.
