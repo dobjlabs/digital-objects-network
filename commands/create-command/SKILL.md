@@ -150,95 +150,36 @@ Ask the user four questions, ONE AT A TIME. Output each prompt on a single line,
 
 8. On any tool error during step 6, output the error message verbatim and stop.
 
-## Worked example — interactive picker pattern
+## Reference docs (read on demand during step 4)
 
-**User intent:** "print the information contained in an object's file in a user-readable way, not including the proof"
+| Doc | When to read |
+|-----|-------------|
+| `references/worked-examples.md` | When you need a template for the SKILL.md draft. Shows the interactive-picker pattern, the argument-based pattern, and an anti-example. Read this if you're unsure how to structure the body. |
 
-This is a good fit for the **interactive picker** pattern: no arguments, the command lists inventory and asks the user to pick one.
+These are sibling files in this skill's directory. Read with the `Read` tool when needed. They are NOT auto-loaded; only this `SKILL.md` is in context.
 
-```
----
-name: bitcraft-inspect-object
-description: Show one Digital Object's contents, omitting the ZK proof.
----
+## Out of scope — pexe authoring is not supported
 
-# inspect-object
+create-command produces **skills** (SKILL.md files that wrap existing actions and MCP tools). It does NOT produce **pexes** (the `.pexe` plugin archives that define the underlying classes and actions). Pexe authoring has no public tooling yet.
 
-## Output rules
-
-- Plain text. One field per line as `<key>: <value>`.
-- No markdown bullets, bold, or tables.
-- Truncate hex values longer than 40 chars to `<first 8>…<last 6>`.
-- Skip any field whose name contains "proof" or whose value is longer than 200 chars.
-
-## Steps
-
-1. Call `list_inventory`. If the array is empty, output exactly `no objects in inventory` and stop.
-
-2. Print each object on its own line as `<n>) <file_name>` (n starting at 1), then `pick:` on a new line. End the turn and wait.
-
-3. Parse the user's reply as an integer. If it doesn't match a listed n, output `invalid choice` and stop.
-
-4. Call `inspect_object` with `file_name = <chosen object's file_name>`. The response is JSON.
-
-5. Output these fields, each on its own line, in this order (omit any field that is missing):
-   - `id: <id>`  (truncate hex)
-   - `class: <className>`
-   - `status: <status>`
-   - `txHash: <txHash>`  (truncate hex)
-   - one line per entry in `state`: `state.<key>: <value>`  (truncate hex; skip if value > 200 chars)
-   - `predicate:` followed by `predicateSource` indented 2 spaces on subsequent lines
-
-6. On tool error, output the error message verbatim, on one line. Stop.
-```
-
-## Worked example — argument-based pattern
-
-Same intent, but **invoked with the file_name as an argument**: e.g. `/bitcraft-inspect-object log_0xd4…819f.dobj`. Useful when the user already knows which object they want or is scripting.
+If between steps 3 and 4 you realize the user's intent requires introducing a new class of object, a new craftable recipe, or any state transition that doesn't map to an action already in the catalog, do NOT proceed to draft a skill. Output exactly the following three lines and stop:
 
 ```
----
-name: bitcraft-inspect-object
-description: Show one Digital Object's contents, omitting the ZK proof.
-argument-hint: [file_name]
-arguments: file_name
----
-
-# inspect-object
-
-## Output rules
-
-- Plain text. One field per line as `<key>: <value>`.
-- No markdown bullets, bold, or tables.
-- Truncate hex values longer than 40 chars to `<first 8>…<last 6>`.
-- Skip any field whose name contains "proof" or whose value is longer than 200 chars.
-
-## Steps
-
-1. If `$file_name` is empty, output `usage: inspect-object [file_name]` and stop.
-
-2. Call `inspect_object` with `file_name = $file_name`. The response is JSON. On tool error (file not found, etc.), output the error message verbatim and stop.
-
-3. Output these fields, each on its own line, in this order (omit any field that is missing):
-   - `id: <id>`  (truncate hex)
-   - `class: <className>`
-   - `status: <status>`
-   - `txHash: <txHash>`  (truncate hex)
-   - one line per entry in `state`: `state.<key>: <value>`  (truncate hex; skip if value > 200 chars)
-   - `predicate:` followed by `predicateSource` indented 2 spaces on subsequent lines
+creating new classes or recipes is not yet supported (requires pexe authoring, which has no public tooling).
+create-command can only wrap existing actions.
+try a different intent, or run `help` to see what's available.
 ```
 
-## Anti-example — don't do this
+Signals the intent needs a pexe (any of these → reject as above):
 
-```
----
-name: bitcraft-inspect-object
-description: prints the information contained in an object's file in a user-readable way, besides the proof
----
+- The user names a **new type of object** that isn't in the help list or in `list_classes` output (e.g. "rocket", "garden", "weapon", "sword", etc. when none of those are existing classes).
+- The user describes a **new recipe**: "combine A + B → new C", where C is not an existing class.
+- The user explicitly asks to "add a class", "make a new item type", "create a new recipe", "extend the crafting tree".
 
-# inspect-object
+By contrast, these intents ARE in scope (proceed with normal draft flow):
 
-print the information contained in an object's file in a user-readable way, not including the proof
-```
-
-The body has no concrete steps; no MCP tool is named; no output format; no error handling; the description duplicates the body verbatim. Always produce a draft with named tools, specified output, and explicit error cases — pick the picker pattern OR the argument pattern, but never echo the user's prose into the body.
+- Inspecting, listing, filtering, or formatting existing objects / actions / classes.
+- Wrapping an existing action with custom input-picking or output-rendering logic.
+- Chaining multiple existing commands (e.g. "obtain a log then craft wood").
+- Reporting on chain state (state root, transactions, nullifiers, etc.).
+- Anything that calls existing MCP tools and produces text output.
