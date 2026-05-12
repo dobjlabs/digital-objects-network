@@ -26,39 +26,27 @@ If you have not yet done so in this conversation, perform the steps below silent
 
 Once this runs successfully once in a conversation, never repeat it. The dispatch below should not re-trigger this setup.
 
-## Three input cases. Every reply is one of these — no other modes.
+## Two input cases. Every reply is one of these — no other modes.
 
-**Case 1 — Help request.** The user types "help", "commands", "bitcraft", "bitcraft help", or "what can I do".
+**Case 1 — Listed command.** The user either types the name of an installed `bitcraft-<name>` skill (without the `bitcraft-` prefix — these are visible in your skill list), OR types a short phrase that unambiguously refers to exactly one installed skill. Examples:
+- `help`, `commands`, `bitcraft`, `bitcraft help`, `what can I do` → `help`
+- `get me stone`, `mine stone` → `mine-stone`
+- `make wood` → `craft-wood`
+- `chop a log` → `chop-log`
 
-Call the MCP tool `get_help_block` with `{}`. It returns a single pre-rendered plain-text string. **Echo that string back to the user, byte-for-byte, as the entire reply.** Do not modify, reformat, decorate, wrap, prefix, suffix, or interpret it in any way.
+Follow the matching `bitcraft-<name>` skill. The skill's own output rules govern formatting for that command.
 
-You are a passthrough for this case. The server has already done all the formatting. Your only job is to output exactly the string you received from the tool — same characters, same line breaks, same spacing.
+If two or more installed skills could plausibly match the user's phrase (e.g. bare `stone`, which could mean `mine-stone` or `craft-stone-pick`), the input is ambiguous — treat it as Case 2.
 
-Forbidden (do NOT do any of these on a help reply):
-- Reformat the string as a markdown table, list, or any other layout
-- Add a markdown heading (`#`, `##`, etc.) before or after
-- Wrap command names in backticks or any other punctuation
-- Add a `bitcraft` prefix to command names
-- Insert any preamble, introduction, header line, or section title
-- Insert any closing line, suggestion, or "run any of them by …" hint
-- Narrate what you are about to do or just did
-- Truncate, abridge, or summarize the string
-
-If you find yourself rewriting the tool result, stop and just paste it.
-
-**Case 2 — Listed command.** The user either types one of the command names returned by `list_commands` (without the `bitcraft-` prefix), OR types a short phrase that unambiguously refers to exactly one installed command. Examples: `get me stone` → `mine-stone`, `make wood` → `craft-wood`, `chop a log` → `chop-log`. Follow the matching `bitcraft-<name>` skill. The skill's own output rules govern formatting for that command.
-
-If you are unsure whether a name is installed, or whether a phrase matches exactly one command, call `list_commands` first to check. If two or more installed commands could plausibly match the user's phrase (e.g. bare `stone`, which could mean `mine-stone` or `craft-stone-pick`), the input is ambiguous — treat it as Case 3.
-
-**Case 3 — Anything else.** Reply with EXACTLY this single line, nothing more, nothing less:
+**Case 2 — Anything else.** Reply with EXACTLY this single line, nothing more, nothing less:
 
 ```
 no such bitcraft command — type create-command to define one
 ```
 
-Rules that apply to all three cases:
-- Do not invent commands. Only run one of the installed commands.
-- If the user's phrase is ambiguous (could match two or more installed commands), use Case 3 — do not run anything.
-- Do not call any MCP tool directly, except `list_commands` (to validate command names) and `get_help_block` (to render help). All other tools are only invoked from within an installed command.
+Rules that apply to both cases:
+- Do not invent commands. Only run one of the installed `bitcraft-<name>` skills you can see in your skill list.
+- If the user's phrase is ambiguous (could match two or more installed skills), use Case 2 — do not run anything.
+- Do not call any bitcraft MCP tool directly. All MCP tools are only invoked from within an installed command.
 - Do not greet, summarize, suggest, or chit-chat.
 - Do not mention other skills (bitcraft-next, etc.) regardless of what is available.
