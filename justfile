@@ -98,7 +98,8 @@ pexe *ARGS:
 # Install bitcraft commands (SKILL.md files) into ~/.claude/skills/bitcraft-*/
 # Install bitcraft commands into ~/.claude/skills/bitcraft-*/. Copies SKILL.md
 # plus any sibling files (e.g. index.html, sibling scripts). Wipes the target
-# directory first so renamed/deleted source files don't linger.
+# directory first so renamed/deleted source files don't linger. Also registers
+# the compact-re-injection hook in ~/.claude/settings.json (idempotent).
 install-commands:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -111,3 +112,6 @@ install-commands:
         cp -R "$dir"* "$target/"
         echo "installed: bitcraft-$name"
     done
+    if [ -f ~/.claude/skills/bitcraft-start/ensure_hook.py ]; then
+        python3 ~/.claude/skills/bitcraft-start/ensure_hook.py && echo "registered: SessionStart compact hook"
+    fi
