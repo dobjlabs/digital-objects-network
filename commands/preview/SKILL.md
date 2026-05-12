@@ -1,6 +1,7 @@
 ---
 name: bitcraft-preview
 description: Open the live bitcraft dashboard in the Claude Code preview pane (falls back to the browser).
+hidden: true
 ---
 
 # preview

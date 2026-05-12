@@ -68,21 +68,3 @@ pub struct RunActionResult {
     /// navigate to `result.outputFiles` etc.
     pub result: RunActionInner,
 }
-
-// -- Commands --
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CommandList {
-    /// All installed bitcraft commands, sorted alphabetically by name.
-    pub commands: Vec<Command>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Command {
-    /// Command name without the `bitcraft-` prefix, e.g. "chop-log".
-    pub name: String,
-    /// Human-readable description from the SKILL.md frontmatter.
-    pub description: String,
-}

@@ -1,4 +1,3 @@
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rmcp::ErrorData as McpError;
@@ -216,37 +215,6 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "List all installed bitcraft commands (skills in `~/.claude/skills/bitcraft-*`) with their descriptions. The list is computed fresh on every call, so newly-created commands appear without restarting the agent. Used to validate command names the user types. For rendering `bitcraft help`, call `get_help_block` instead — it returns the exact pre-formatted text to echo."
-    )]
-    fn list_commands(&self) -> Json<CommandList> {
-        let commands = default_skills_dir()
-            .map(|d| enumerate_commands_in(&d))
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(name, description)| Command { name, description })
-            .collect();
-        Json(CommandList { commands })
-    }
-
-    #[tool(
-        description = "Return the pre-rendered help block as a single plain-text string. This is the ENTIRE output the agent should print on a `bitcraft help` request — echo the returned string verbatim, with NO additional formatting, NO markdown, NO table, NO prefix or suffix lines. The string is computed fresh on every call from the installed commands in `~/.claude/skills/bitcraft-*`."
-    )]
-    fn get_help_block(&self) -> String {
-        let commands = default_skills_dir()
-            .map(|d| enumerate_commands_in(&d))
-            .unwrap_or_default();
-        if commands.is_empty() {
-            return "Commands:\n  (no bitcraft commands installed — type create-command to define one)".to_string();
-        }
-        let width = commands.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
-        let mut out = String::from("Commands:\n");
-        for (name, desc) in &commands {
-            out.push_str(&format!("  {:<width$}  {}\n", name, desc, width = width));
-        }
-        out.trim_end().to_string()
-    }
-
-    #[tool(
         description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes in this game). Pass \"list\" to see all available documents."
     )]
     fn read_doc(&self, Parameters(params): Parameters<ReadDocParams>) -> String {
@@ -311,62 +279,9 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 }
 
-// -- Instructions + command enumeration --
+// -- Instructions --
 
 const INSTRUCTIONS: &str = include_str!("../docs/instructions.md");
-const SKILL_PREFIX: &str = "bitcraft-";
-
-/// Default location to scan for installed bitcraft commands.
-fn default_skills_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude").join("skills"))
-}
-
-/// Scan a skills directory for `bitcraft-*` SKILL.md files and parse
-/// `(display_name, description)` pairs from each frontmatter. The
-/// `bitcraft-` prefix is stripped from the display name. Sorted
-/// alphabetically. Returns an empty Vec if the directory is missing.
-fn enumerate_commands_in(skills_dir: &Path) -> Vec<(String, String)> {
-    let Ok(entries) = std::fs::read_dir(skills_dir) else {
-        return Vec::new();
-    };
-    let mut out: Vec<(String, String)> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with(SKILL_PREFIX)
-        })
-        .filter_map(|e| parse_skill_meta(&e.path().join("SKILL.md")))
-        .collect();
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
-}
-
-/// Parse `name` and `description` from a SKILL.md frontmatter. The
-/// frontmatter is a YAML block delimited by `---` lines at the top of
-/// the file. Returns None if missing/malformed. Strips the `bitcraft-`
-/// prefix from `name` to produce the display name.
-fn parse_skill_meta(skill_md: &Path) -> Option<(String, String)> {
-    let contents = std::fs::read_to_string(skill_md).ok()?;
-    let mut lines = contents.lines();
-    if lines.next()?.trim() != "---" {
-        return None;
-    }
-    let mut name: Option<String> = None;
-    let mut description: Option<String> = None;
-    for line in lines {
-        if line.trim() == "---" {
-            break;
-        }
-        if let Some(rest) = line.strip_prefix("name:") {
-            name = Some(rest.trim().to_string());
-        } else if let Some(rest) = line.strip_prefix("description:") {
-            description = Some(rest.trim().to_string());
-        }
-    }
-    let display = name?.strip_prefix(SKILL_PREFIX)?.to_string();
-    Some((display, description?))
-}
 
 // -- ServerHandler --
 
@@ -444,9 +359,7 @@ mod tests {
         assert!(tools.contains(&"read_settings".to_string()));
         assert!(tools.contains(&"write_settings".to_string()));
         assert!(tools.contains(&"get_objects_dir".to_string()));
-        assert!(tools.contains(&"list_commands".to_string()));
-        assert!(tools.contains(&"get_help_block".to_string()));
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools.len(), 13);
     }
 
     #[test]
@@ -457,68 +370,8 @@ mod tests {
         assert!(info.instructions.is_some());
         let instructions = info.instructions.unwrap();
         assert!(instructions.contains("> bitcraft"));
-        assert!(instructions.contains("Three input cases"));
+        assert!(instructions.contains("Two input cases"));
         assert!(instructions.contains("no such bitcraft command"));
-        assert!(instructions.contains("list_commands"));
-    }
-
-    #[test]
-    fn test_enumerate_commands_filters_and_sorts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let skills = tmp.path();
-        write_skill(skills, "bitcraft-foo", "Bitcraft foo command.");
-        write_skill(skills, "bitcraft-bar", "Bitcraft bar command.");
-        write_skill(skills, "other-thing", "Not a bitcraft skill.");
-
-        let commands = enumerate_commands_in(skills);
-
-        assert_eq!(commands.len(), 2);
-        assert_eq!(commands[0].0, "bar");
-        assert_eq!(commands[0].1, "Bitcraft bar command.");
-        assert_eq!(commands[1].0, "foo");
-        assert_eq!(commands[1].1, "Bitcraft foo command.");
-    }
-
-    #[test]
-    fn test_enumerate_commands_missing_dir_returns_empty() {
-        let tmp = tempfile::tempdir().unwrap();
-        let missing = tmp.path().join("does-not-exist");
-        assert!(enumerate_commands_in(&missing).is_empty());
-    }
-
-    #[test]
-    fn test_parse_skill_meta_extracts_fields() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("bitcraft-test");
-        std::fs::create_dir(&dir).unwrap();
-        let skill_md = dir.join("SKILL.md");
-        std::fs::write(
-            &skill_md,
-            "---\nname: bitcraft-test\ndescription: A test command.\n---\n\n# test\n\nbody\n",
-        )
-        .unwrap();
-
-        let (display, desc) = parse_skill_meta(&skill_md).unwrap();
-        assert_eq!(display, "test");
-        assert_eq!(desc, "A test command.");
-    }
-
-    #[test]
-    fn test_parse_skill_meta_rejects_missing_frontmatter() {
-        let tmp = tempfile::tempdir().unwrap();
-        let skill_md = tmp.path().join("SKILL.md");
-        std::fs::write(&skill_md, "no frontmatter here\n").unwrap();
-        assert!(parse_skill_meta(&skill_md).is_none());
-    }
-
-    fn write_skill(skills_dir: &Path, name: &str, description: &str) {
-        let dir = skills_dir.join(name);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: {description}\n---\n"),
-        )
-        .unwrap();
     }
 
     #[test]
