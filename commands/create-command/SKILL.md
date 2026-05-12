@@ -147,9 +147,12 @@ Ask the user four questions, ONE AT A TIME. Output each prompt on a single line,
 
 6. Create the directory `~/.claude/skills/bitcraft-<name>/`. Write the assembled SKILL.md to `~/.claude/skills/bitcraft-<name>/SKILL.md`. For each `(filename, contents)` in `<extra_files>`, write to `~/.claude/skills/bitcraft-<name>/<filename>`.
 
-7. Output exactly one line and stop:
+7. Output exactly two lines and stop:
 
-   `command → ~/.claude/skills/bitcraft-<name>/ (reload the agent to register)`
+   ```
+   command → ~/.claude/skills/bitcraft-<name>/
+   type `help` then restart the agent to start using it.
+   ```
 
 8. On any tool error during step 6, output the error message verbatim and stop.
 
