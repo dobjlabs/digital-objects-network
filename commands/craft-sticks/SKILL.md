@@ -29,7 +29,7 @@ description: Split one Wood into two Stick objects.
 
    End the turn and wait for the user's reply.
 
-4. When the user replies, parse a single integer. If invalid, output exactly and stop:
+4. When the user replies, first check for exit words. If the reply (case-insensitive, trimmed) is `cancel`, `quit`, `exit`, `q`, or `nevermind`, output exactly `cancelled` and stop. Otherwise parse the reply as a single integer. If invalid, output exactly and stop:
 
    `invalid choice`
 
