@@ -33,7 +33,7 @@ description: Combine one Stone and one Stick into a StonePick.
 
    End the turn. Wait for reply.
 
-5. Parse the user's reply as an integer. If invalid, output `invalid choice` and stop.
+5. First check for exit words. If the reply (case-insensitive, trimmed) is `cancel`, `quit`, `exit`, `q`, or `nevermind`, output exactly `cancelled` and stop. Otherwise parse as an integer. If invalid, output `invalid choice` and stop.
 6. Output Stick candidates and prompt — exactly:
 
    ```
@@ -45,7 +45,7 @@ description: Combine one Stone and one Stick into a StonePick.
 
    End the turn. Wait for reply.
 
-7. Parse the user's reply as an integer. If invalid, output `invalid choice` and stop.
+7. First check for exit words. If the reply (case-insensitive, trimmed) is `cancel`, `quit`, `exit`, `q`, or `nevermind`, output exactly `cancelled` and stop. Otherwise parse as an integer. If invalid, output `invalid choice` and stop.
 8. Call `run_action` with `action_id="CraftStonePick"` and `input_object_paths=[<chosen Stone path>, <chosen Stick path>]`.
 9. On success, output exactly one line and stop:
 
