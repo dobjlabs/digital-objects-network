@@ -355,7 +355,7 @@ impl Driver {
         validate_execute_request(&input, &action)?;
 
         let no_ctx = ExecutionStepContext::default();
-        reporter.on_step(ExecutionPhase::GenerateProof, "Verifying Inputs", &no_ctx);
+        reporter.on_step(ExecutionPhase::GenerateProof, "Verifying inputs", &no_ctx);
         let entries = load_object_files(&self.paths)?;
         let resolved_inputs = resolve_inputs(&entries, &input, &action)?;
         let source_tx_hashes = resolved_inputs
