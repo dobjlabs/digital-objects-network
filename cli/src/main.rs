@@ -50,20 +50,26 @@ enum Cmd {
         /// `wood_0xabc….dobj`). See `dobj inventory`.
         file_name: String,
     },
-    /// Inspect a single class by name (with predicate source).
+    /// Inspect a single class (with predicate source).
     InspectClass {
-        /// Class name (e.g. `Wood`, `WoodPick`). See `dobj classes`.
-        name: String,
+        /// Class to inspect, e.g. `craft-basics::Wood`. Run `dobj classes`
+        /// for the available list.
+        #[arg(value_name = "PLUGIN::CLASS")]
+        qualified_id: String,
     },
-    /// Inspect a single action by id (with predicate source).
+    /// Inspect a single action (with predicate source).
     InspectAction {
-        /// Action id (e.g. `CraftWood`, `CraftWoodPick`). See `dobj actions`.
-        id: String,
+        /// Action to inspect, e.g. `craft-basics::CraftWoodPick`. Run
+        /// `dobj actions` for the available list.
+        #[arg(value_name = "PLUGIN::ACTION")]
+        qualified_id: String,
     },
     /// Check whether an action can run with the current inventory.
     Feasibility {
-        /// Action id to check (e.g. `CraftWood`). See `dobj actions`.
-        action_id: String,
+        /// Action to check, e.g. `craft-basics::CraftWoodPick`. Run
+        /// `dobj actions` for the available list.
+        #[arg(value_name = "PLUGIN::ACTION")]
+        qualified_id: String,
     },
     /// Print the current global state root.
     StateRoot,
@@ -74,8 +80,10 @@ enum Cmd {
     Settings(SettingsCmd),
     /// Execute an action. Streams progress to stderr; result on stdout.
     Run {
-        /// Action id (e.g. `FindLog`, `CraftWoodPick`). See `dobj actions`.
-        action_id: String,
+        /// Action to execute, e.g. `craft-basics::CraftWoodPick`. Run
+        /// `dobj actions` for the available list.
+        #[arg(value_name = "PLUGIN::ACTION")]
+        qualified_id: String,
         /// Input object filenames or paths. Filenames must exist in
         /// `~/.dobj/objects/` (the driver looks them up by basename).
         inputs: Vec<String>,
@@ -128,9 +136,15 @@ async fn main() -> Result<()> {
         Cmd::InspectObject { file_name } => {
             commands::inspect_object(&client, file_name, cli.json).await
         }
-        Cmd::InspectClass { name } => commands::inspect_class(&client, name, cli.json).await,
-        Cmd::InspectAction { id } => commands::inspect_action(&client, id, cli.json).await,
-        Cmd::Feasibility { action_id } => commands::feasibility(&client, action_id, cli.json).await,
+        Cmd::InspectClass { qualified_id } => {
+            commands::inspect_class(&client, qualified_id, cli.json).await
+        }
+        Cmd::InspectAction { qualified_id } => {
+            commands::inspect_action(&client, qualified_id, cli.json).await
+        }
+        Cmd::Feasibility { qualified_id } => {
+            commands::feasibility(&client, qualified_id, cli.json).await
+        }
         Cmd::StateRoot => commands::state_root(&client).await,
         Cmd::ObjectsDir => commands::objects_dir(&client).await,
         Cmd::Settings(SettingsCmd::Get) => commands::settings_get(&client, cli.json).await,
@@ -139,10 +153,10 @@ async fn main() -> Result<()> {
             relayer,
         }) => commands::settings_set(&client, synchronizer, relayer).await,
         Cmd::Run {
-            action_id,
+            qualified_id,
             inputs,
             quiet,
-        } => commands::run(&client, action_id, inputs, quiet).await,
+        } => commands::run(&client, qualified_id, inputs, quiet).await,
         Cmd::Events => commands::events(&client).await,
         Cmd::Start => daemon::start(&client).await,
         Cmd::Stop => daemon::stop().await,
