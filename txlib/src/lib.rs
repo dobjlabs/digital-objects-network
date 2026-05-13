@@ -1161,7 +1161,7 @@ mod tests {
             .into_iter()
             .collect::<HashSet<_>>();
         let nullifiers = [test_hash(3)].into_iter().collect::<HashSet<_>>();
-        let prior_gsrs = vec![test_hash(4), test_hash(5)];
+        let prior_gsrs = [test_hash(4), test_hash(5)];
 
         let txs = Set::new(txns.iter().map(|hash| Value::from(*hash)).collect());
         let nulls = Set::new(nullifiers.iter().map(|hash| Value::from(*hash)).collect());
