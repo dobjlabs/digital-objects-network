@@ -1,5 +1,5 @@
 use axum::{Json, extract::State};
-use driver::DriverSettings;
+use wire_types::DriverSettings;
 
 use crate::error::ApiResult;
 use crate::state::AppState;

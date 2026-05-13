@@ -5,9 +5,10 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 
 use crate::client::DobjdClient;
-use crate::types::{
-    ActionSummary, AppSettings, CheckActionReport, ClassSummary, InventoryObject, ObjectSummary,
-    ObjectsDir, QualifiedName, RunActionInput, RunActionRequest, RunActionResult,
+use wire_types::{
+    ActionSummary, CheckActionReport, ClassRef, ClassSummary, DriverSettings, InventoryObject,
+    ObjectSummary, ObjectsDirInfo, QualifiedName, RunActionInput, RunActionRequest,
+    RunActionResult,
 };
 
 const TARGET_RUN_ACTION_PROGRESS: &str = "run-action-progress";
@@ -16,7 +17,7 @@ fn parse_qualified(id: &str) -> Result<QualifiedName> {
     QualifiedName::parse(id).map_err(|err| anyhow!("{err}"))
 }
 
-fn render_inputs(refs: &[crate::types::ClassRef]) -> String {
+fn render_inputs(refs: &[ClassRef]) -> String {
     if refs.is_empty() {
         return "(no inputs)".to_string();
     }
@@ -26,7 +27,7 @@ fn render_inputs(refs: &[crate::types::ClassRef]) -> String {
         .join(", ")
 }
 
-fn render_outputs(refs: &[crate::types::ClassRef]) -> String {
+fn render_outputs(refs: &[ClassRef]) -> String {
     if refs.is_empty() {
         return "(no outputs)".to_string();
     }
@@ -109,13 +110,13 @@ pub async fn state_root(client: &DobjdClient) -> Result<()> {
 }
 
 pub async fn objects_dir(client: &DobjdClient) -> Result<()> {
-    let dir: ObjectsDir = client.get_json("/objects/dir").await?;
+    let dir: ObjectsDirInfo = client.get_json("/objects/dir").await?;
     println!("{}", dir.path);
     Ok(())
 }
 
 pub async fn settings_get(client: &DobjdClient, json: bool) -> Result<()> {
-    let settings: AppSettings = client.get_json("/settings").await?;
+    let settings: DriverSettings = client.get_json("/settings").await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&settings)?);
     } else {
@@ -130,14 +131,14 @@ pub async fn settings_set(
     synchronizer: Option<String>,
     relayer: Option<String>,
 ) -> Result<()> {
-    let mut current: AppSettings = client.get_json("/settings").await?;
+    let mut current: DriverSettings = client.get_json("/settings").await?;
     if let Some(s) = synchronizer {
         current.synchronizer_api_url = s;
     }
     if let Some(r) = relayer {
         current.relayer_api_url = r;
     }
-    let saved: AppSettings = client.put_json("/settings", &current).await?;
+    let saved: DriverSettings = client.put_json("/settings", &current).await?;
     println!("synchronizer = {}", saved.synchronizer_api_url);
     println!("relayer      = {}", saved.relayer_api_url);
     Ok(())
@@ -215,7 +216,7 @@ pub async fn run(
                 input: RunActionInput {
                     action: action.clone(),
                     input_object_paths: input_paths,
-                    run_id,
+                    run_id: Some(run_id),
                 },
             },
         )

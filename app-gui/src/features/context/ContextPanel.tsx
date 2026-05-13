@@ -456,7 +456,7 @@ export function ContextPanel({
   };
 
   const renderObjectData = (object: InventoryObject) => {
-    const normalizedObject = normalizePod2Value(object.obj);
+    const normalizedObject = normalizePod2Value(object.fields);
     const entries = isRecord(normalizedObject)
       ? Object.entries(normalizedObject).sort(([left], [right]) =>
           left.localeCompare(right),

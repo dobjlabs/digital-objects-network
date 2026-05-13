@@ -3,45 +3,13 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use driver::{ActionSummary, CheckActionReport};
-use serde::{Deserialize, Serialize};
-use wire_types::QualifiedName;
+use wire_types::{
+    ActionSummary, CheckActionReport, QualifiedName, RunActionRequest, RunActionResult,
+};
 
 use crate::error::ApiResult;
 use crate::progress::SseProgressReporter;
 use crate::state::AppState;
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunActionInput {
-    pub action: QualifiedName,
-    pub input_object_paths: Vec<String>,
-    /// Optional client-generated correlation id for filtering progress
-    /// events. If omitted, dobjd generates a UUID v4 and returns it on
-    /// the response — clients that don't care about correlation can ignore
-    /// it; clients that subscribe to `/events` use it to scope progress
-    /// events to their own run when multiple runs are in flight.
-    pub run_id: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunActionResult {
-    /// The correlation id used for `run-action-progress` events scoped to
-    /// this call. Echoed from the request when the client supplied one,
-    /// otherwise a freshly-minted UUID v4.
-    pub run_id: String,
-    pub old_root: String,
-    pub new_root: String,
-    pub output_files: Vec<String>,
-    pub nullified_files: Vec<String>,
-}
-
-/// Wire shape mirrors the Tauri command: `{ "input": { ... } }`.
-#[derive(Debug, Deserialize)]
-pub struct RunActionRequest {
-    pub input: RunActionInput,
-}
 
 pub async fn run_action(
     State(state): State<AppState>,

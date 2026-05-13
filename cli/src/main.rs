@@ -10,7 +10,6 @@ use clap::{Parser, Subcommand};
 mod client;
 mod commands;
 mod daemon;
-mod types;
 
 use client::DobjdClient;
 

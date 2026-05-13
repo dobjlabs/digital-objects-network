@@ -23,7 +23,8 @@ export interface InventoryObjectPayload {
   status: ObjectStatus;
   txHash: string | null;
   description?: string;
-  obj: unknown;
+  /** Application-layer fields (e.g. `blueprint`, `durability`, `key`). */
+  fields: Record<string, unknown>;
 }
 
 export interface ClassRefPayload {

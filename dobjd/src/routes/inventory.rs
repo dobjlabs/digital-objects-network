@@ -2,27 +2,10 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use axum::{Json, extract::State};
-use serde::Serialize;
-use wire_types::QualifiedName;
+use wire_types::InventoryObject;
 
 use crate::error::ApiResult;
 use crate::state::AppState;
-
-/// Inventory object with class metadata folded in (emoji, description) so
-/// GUI clients can render rows without a second `/classes` round-trip.
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct InventoryObject {
-    pub id: String,
-    pub file_name: String,
-    pub class: QualifiedName,
-    pub class_hash: String,
-    pub emoji: String,
-    pub status: driver::ObjectStatus,
-    pub tx_hash: Option<String>,
-    pub description: Option<String>,
-    pub obj: serde_json::Value,
-}
 
 /// `GET /inventory` — local objects synced against the chain. The action
 /// catalog comes from `GET /actions` separately, so clients can fetch the
@@ -58,7 +41,7 @@ pub async fn load_inventory(
                     status: object.status,
                     tx_hash: object.tx_hash,
                     description: class_info.map(|class_info| class_info.description.clone()),
-                    obj: serde_json::Value::Object(object.fields.into_iter().collect()),
+                    fields: object.fields,
                 }
             })
             .collect())

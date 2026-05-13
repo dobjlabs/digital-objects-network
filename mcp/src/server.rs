@@ -407,7 +407,6 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(detail.class.name, "WoodPick");
-        assert!(detail.predicate_source.contains("CraftWoodPick"));
     }
 
     #[test]
@@ -440,9 +439,9 @@ mod tests {
                 action: craft_basics("CraftWoodPick"),
             }))
             .unwrap();
-        assert_eq!(detail.id, "CraftWoodPick");
-        assert!(detail.total_input_classes.contains(&"Wood".to_string()));
-        assert!(detail.total_input_classes.contains(&"Stick".to_string()));
+        assert_eq!(detail.action.name, "CraftWoodPick");
+        assert!(detail.total_inputs.iter().any(|r| r.class.name == "Wood"));
+        assert!(detail.total_inputs.iter().any(|r| r.class.name == "Stick"));
         assert!(detail.predicate_source.contains("CraftWoodPick"));
     }
 
@@ -462,6 +461,7 @@ mod tests {
             .run_action(Parameters(RunActionInput {
                 action: craft_basics("FindLog"),
                 input_object_paths: vec![],
+                run_id: None,
             }))
             .await
             .unwrap();
@@ -478,6 +478,7 @@ mod tests {
                 svc.run_action(Parameters(RunActionInput {
                     action: craft_basics("FindLog"),
                     input_object_paths: vec![],
+                    run_id: None,
                 }))
                 .await
             }));

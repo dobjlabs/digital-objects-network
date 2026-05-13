@@ -1,23 +1,7 @@
-use serde::Serialize;
-
-use driver::{ExecuteActionResult, ExecutionPhase, ExecutionReporter, ExecutionStepContext};
+use driver::{ExecuteActionResult, ExecutionReporter, ExecutionStepContext};
+use wire_types::{ExecutionPhase, ObjectStatus, ProofProgressStatus, RunActionProgress};
 
 use crate::events::{Event, EventTx};
-
-#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum ProofPhase {
-    GenerateProof,
-    Commit,
-}
-
-#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum ProofProgressStatus {
-    Running,
-    Done,
-    Failed,
-}
 
 /// `ExecutionReporter` impl that broadcasts every step over the SSE event
 /// hub.
@@ -31,8 +15,8 @@ impl SseProgressReporter {
         Self { events, run_id }
     }
 
-    fn send(&self, event: Event) {
-        let _ = self.events.send(event);
+    fn send(&self, progress: RunActionProgress) {
+        let _ = self.events.send(Event::RunActionProgress(progress));
     }
 
     /// Terminal failure event. The `ExecutionReporter` trait only fires
@@ -43,9 +27,9 @@ impl SseProgressReporter {
     /// invoke this from the same scope that owns the reporter, after
     /// `execute_with_reporter` errors.
     pub fn commit_failed(&self, message: impl Into<String>) {
-        self.send(Event::RunActionProgress {
+        self.send(RunActionProgress {
             run_id: self.run_id.clone(),
-            phase: ProofPhase::Commit,
+            phase: ExecutionPhase::Commit,
             status: ProofProgressStatus::Failed,
             message: message.into(),
             old_root: None,
@@ -59,10 +43,10 @@ impl SseProgressReporter {
 
 impl ExecutionReporter for SseProgressReporter {
     fn on_step(&self, phase: ExecutionPhase, message: &str, ctx: &ExecutionStepContext) {
-        let event = match phase {
-            ExecutionPhase::GenerateProof => Event::RunActionProgress {
+        let progress = match phase {
+            ExecutionPhase::GenerateProof => RunActionProgress {
                 run_id: self.run_id.clone(),
-                phase: ProofPhase::GenerateProof,
+                phase: ExecutionPhase::GenerateProof,
                 status: ProofProgressStatus::Running,
                 message: message.to_string(),
                 old_root: None,
@@ -71,9 +55,9 @@ impl ExecutionReporter for SseProgressReporter {
                 output_status: None,
                 nullified_files: None,
             },
-            ExecutionPhase::Commit => Event::RunActionProgress {
+            ExecutionPhase::Commit => RunActionProgress {
                 run_id: self.run_id.clone(),
-                phase: ProofPhase::Commit,
+                phase: ExecutionPhase::Commit,
                 status: ProofProgressStatus::Running,
                 message: message.to_string(),
                 old_root: ctx.old_root.clone(),
@@ -83,14 +67,14 @@ impl ExecutionReporter for SseProgressReporter {
                 nullified_files: None,
             },
         };
-        self.send(event);
+        self.send(progress);
     }
 
     fn on_done(&self, phase: ExecutionPhase, result: Option<&ExecuteActionResult>) {
-        let event = match phase {
-            ExecutionPhase::GenerateProof => Event::RunActionProgress {
+        let progress = match phase {
+            ExecutionPhase::GenerateProof => RunActionProgress {
                 run_id: self.run_id.clone(),
-                phase: ProofPhase::GenerateProof,
+                phase: ExecutionPhase::GenerateProof,
                 status: ProofProgressStatus::Done,
                 message: "Proof generation complete".to_string(),
                 old_root: None,
@@ -100,20 +84,20 @@ impl ExecutionReporter for SseProgressReporter {
                 nullified_files: None,
             },
             ExecutionPhase::Commit => match result {
-                Some(result) => Event::RunActionProgress {
+                Some(result) => RunActionProgress {
                     run_id: self.run_id.clone(),
-                    phase: ProofPhase::Commit,
+                    phase: ExecutionPhase::Commit,
                     status: ProofProgressStatus::Done,
                     message: "Commit complete".to_string(),
                     old_root: Some(result.old_root.clone()),
                     new_root: Some(result.new_root.clone()),
                     output_files: Some(result.output_files.clone()),
-                    output_status: Some(driver::ObjectStatus::Live),
+                    output_status: Some(ObjectStatus::Live),
                     nullified_files: Some(result.nullified_files.clone()),
                 },
                 None => return,
             },
         };
-        self.send(event);
+        self.send(progress);
     }
 }

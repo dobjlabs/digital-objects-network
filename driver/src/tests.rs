@@ -14,13 +14,13 @@ use crate::clients::{
     SynchronizerMembership,
 };
 use crate::driver::{Driver, DriverDeps, PayloadBuilder};
-use crate::object_record::{ObjectRecord, ObjectStatus, ensure_extra_pod_deserializers_registered};
+use crate::object_record::{ObjectRecord, ensure_extra_pod_deserializers_registered};
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
 };
 use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
 use crate::{ActionQuery, DriverPaths, ExecuteActionInput};
-use wire_types::QualifiedName;
+use wire_types::{ObjectStatus, QualifiedName};
 
 fn temp_paths() -> DriverPaths {
     let dir = tempdir().unwrap();

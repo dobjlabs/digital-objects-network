@@ -19,7 +19,6 @@ use crate::execute::{
     build_relayer_payload, obj_type_hash, reconcile_objects, resolve_inputs, save_results,
     update_output_files, validate_execute_request,
 };
-use crate::object_record::ObjectStatus;
 use crate::object_record::parse_object_record_file;
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, write_object_file,
@@ -27,11 +26,13 @@ use crate::object_store::{
 use crate::pexe_catalog::PexeCatalog;
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
-    ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
-    DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
-    ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSummary,
+    ActionQuery, DriverPaths, ExecuteActionInput, ExecuteActionResult, ExecutionReporter,
+    ExecutionStepContext, NoopExecutionReporter, ObjectQuery,
 };
-use wire_types::QualifiedName;
+use wire_types::{
+    ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverSettings,
+    ExecutionPhase, ObjectStatus, ObjectSummary, QualifiedName,
+};
 
 pub trait PayloadBuilder: Send + Sync {
     fn build_payload(

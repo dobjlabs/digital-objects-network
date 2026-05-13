@@ -4,21 +4,14 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use driver::ObjectSummary;
-use serde::Serialize;
+use wire_types::{ObjectSummary, ObjectsDirInfo};
 
 use crate::error::ApiResult;
 use crate::state::AppState;
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ObjectsDirResponse {
-    pub path: String,
-}
-
-pub async fn get_objects_dir(State(state): State<AppState>) -> ApiResult<Json<ObjectsDirResponse>> {
+pub async fn get_objects_dir(State(state): State<AppState>) -> ApiResult<Json<ObjectsDirInfo>> {
     let path = state.driver.paths().objects_dir.clone();
-    Ok(Json(ObjectsDirResponse {
+    Ok(Json(ObjectsDirInfo {
         path: path.to_string_lossy().to_string(),
     }))
 }

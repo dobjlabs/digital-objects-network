@@ -14,10 +14,11 @@ use std::path::Path;
 
 use crate::driver::extract_basename;
 use crate::error::DriverError;
-use crate::object_record::{ObjectRecord as StoredObjectRecord, ObjectStatus};
+use crate::object_record::ObjectRecord as StoredObjectRecord;
 use crate::object_store::{ObjectFileEntry, write_object_file};
 use crate::paths::DOBJ_EXTENSION;
-use crate::types::{ActionSummary, DriverPaths, ExecuteActionInput};
+use crate::types::{DriverPaths, ExecuteActionInput};
+use wire_types::{ActionSummary, ObjectStatus};
 
 pub(crate) fn reconcile_objects(
     paths: &DriverPaths,

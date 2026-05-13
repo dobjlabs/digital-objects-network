@@ -179,11 +179,11 @@ mod tests {
     use crate::paths::default_paths;
     use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
     use crate::types::DriverPaths;
+    use wire_types::ObjectStatus;
 
     use super::{load_object_files, write_object_file};
     use crate::object_record::{
-        ObjectRecord, ObjectStatus, ensure_extra_pod_deserializers_registered,
-        parse_object_record_file,
+        ObjectRecord, ensure_extra_pod_deserializers_registered, parse_object_record_file,
     };
 
     fn temp_paths() -> DriverPaths {
