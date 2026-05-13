@@ -16,7 +16,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "49af256a9609762019d071f5bf6007c04173890c", default-features = false, features = [
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "6129bd04ae14ee0f2baf6f71f77ba92a93cb523e", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
@@ -56,3 +56,6 @@ tracing-log = "0.1.1"
 time = { version = "0.3.44", features = ["formatting", "local-offset"] }
 rand = { version = "0.9.2", features = ["std_rng"] }
 thiserror = "2.0.18"
+
+[patch."https://github.com/0xPARC/pod2"]
+pod2 = { path = "../pod2" }

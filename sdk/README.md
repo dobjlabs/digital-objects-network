@@ -163,16 +163,16 @@ use module 0x3f981843afd48984c701f396fc890db3c6a6d8753f1c7390b925de22194a1406 as
 use intro Vdf(count, input, output) from 0xb77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06
 use intro LtEqU256(lhs, rhs) from 0x2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529
 
-record FindLogOut = (log)
-record CraftWoodIn = (log)
-record CraftWoodOut = (wood)
-record CraftSticksIn = (wood)
-record CraftSticksOut = (stick_a, stick_b)
-record CraftWoodPickIn = (wood, stick)
-record CraftWoodPickOut = (pick)
-record UseWoodPickIn = (wood_pick)
-record UseWoodPickOut = (wood_pick)
-record MineStoneWithWoodPickOut = (stone)
+record FindLogOut = (_pad, log)
+record CraftWoodIn = (_pad, log)
+record CraftWoodOut = (_pad, wood)
+record CraftSticksIn = (_pad, wood)
+record CraftSticksOut = (_pad, stick_a, stick_b)
+record CraftWoodPickIn = (_pad, wood, stick)
+record CraftWoodPickOut = (_pad, pick)
+record UseWoodPickIn = (_pad, wood_pick)
+record UseWoodPickOut = (_pad, wood_pick)
+record MineStoneWithWoodPickOut = (_pad, stone)
 
 // Actions
 
