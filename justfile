@@ -36,7 +36,7 @@ dobjd:
 # shell — all backed by one dobjd process. Open http://localhost:1420 in a
 # browser to use the website client; the desktop window opens automatically.
 # https://github.com/pvolok/mprocs
-dev: ensure-plugins
+dev: ensure-plugins ensure-mcp
     mprocs --config mprocs.yaml
 
 # Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
@@ -48,10 +48,26 @@ ensure-plugins:
         just install-plugins; \
     fi
 
+# Register the bitcraft MCP with Claude Code at project (default) scope, so it
+# only loads in chats started from this directory. Other directories stay
+# uncontaminated by the bitcraft dispatch rules. Idempotent: remove + add on
+# each run so the URL stays current. Skipped silently if the `claude` CLI is
+# missing.
+ensure-mcp:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v claude >/dev/null 2>&1; then
+        exit 0
+    fi
+    claude mcp remove bitcraft 2>/dev/null || true
+    claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp \
+        && echo "registered: bitcraft MCP (project scope, http://127.0.0.1:7718/mcp)"
+
 # Wipe local state (RocksDB + local Postgres DBs + objects)
 reset:
     @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
+    @command -v claude >/dev/null 2>&1 && claude mcp remove bitcraft 2>/dev/null && echo "removed: bitcraft MCP registration" || true
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
 
