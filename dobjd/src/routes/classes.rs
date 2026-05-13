@@ -12,7 +12,8 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use driver::{ClassSummary, QualifiedName};
+use driver::ClassSummary;
+use wire_types::QualifiedName;
 
 use crate::error::ApiResult;
 use crate::state::AppState;

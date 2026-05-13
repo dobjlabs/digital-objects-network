@@ -2,20 +2,7 @@ use std::collections::HashMap;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-/// A name scoped to a plugin. Both classes and actions are identified by a
-/// `(plugin_name, name)` pair; the printable form `<plugin>::<name>` matches
-/// podlang's namespaced-predicate syntax. The MCP crate carries its own
-/// mirror of `driver::QualifiedName` so the MCP boundary doesn't pull in
-/// the rest of the driver crate.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct QualifiedName {
-    /// Originating plugin, e.g. "craft-basics".
-    pub plugin_name: String,
-    /// Bare class or action name, e.g. "WoodPick".
-    pub name: String,
-}
+pub use wire_types::{ClassRef, QualifiedName};
 
 // -- List response wrappers (MCP outputSchema requires root type "object") --
 
@@ -70,15 +57,6 @@ pub struct InventoryObject {
     pub tx_hash: Option<String>,
     /// Application-layer fields as key-value pairs
     pub fields: HashMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ClassRef {
-    /// Plugin-scoped class identity.
-    pub class: QualifiedName,
-    /// Hex-encoded `Is{class}` predicate hash
-    pub hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

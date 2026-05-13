@@ -3,8 +3,9 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use driver::{ActionSummary, CheckActionReport, QualifiedName};
+use driver::{ActionSummary, CheckActionReport};
 use serde::{Deserialize, Serialize};
+use wire_types::QualifiedName;
 
 use crate::error::ApiResult;
 use crate::progress::SseProgressReporter;

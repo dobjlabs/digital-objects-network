@@ -5,33 +5,7 @@
 //! fields. Anything beyond that comes through as `serde_json::Value`.
 
 use serde::{Deserialize, Serialize};
-
-/// Plugin-scoped name. Mirrors `driver::QualifiedName` over the wire —
-/// the canonical printable form is `<pluginName>::<name>`.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
-pub struct QualifiedName {
-    pub plugin_name: String,
-    pub name: String,
-}
-
-impl std::fmt::Display for QualifiedName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}::{}", self.plugin_name, self.name)
-    }
-}
-
-/// One entry in an action's input/output slot list. Pairs the class
-/// identity with its on-chain `Is{class}` predicate hash.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClassRef {
-    pub class: QualifiedName,
-    /// Read off the wire but not displayed by the CLI today; kept here
-    /// for shape parity with `driver::ClassRef`.
-    #[allow(dead_code)]
-    pub hash: String,
-}
+pub use wire_types::{ClassRef, QualifiedName};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

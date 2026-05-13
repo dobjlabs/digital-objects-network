@@ -1,19 +1,26 @@
-//! `QualifiedName` is the canonical handle for both classes and actions
-//! across the driver. It carries the originating plugin and the bare name as
-//! two separate fields so callers can reason about them directly without
-//! having to remember to keep `(plugin_name, name, id)` triples in sync. The
-//! string presentation `<plugin>::<name>` matches podlang's namespaced
-//! predicates and is produced by [`QualifiedName::id`] when the GUI or a
-//! human reader needs a single string.
+//! Pure-data wire types shared across the driver, dobjd, MCP, and CLI.
+//!
+//! Anything that travels over a process boundary (HTTP body, MCP tool
+//! parameter, SSE event, CLI arg) belongs here — but only if it has no
+//! logic that depends on ZK proofs or chain state. Keeping this crate
+//! dependency-light is the entire point: `cli` and `mcp` should be able
+//! to use it without compiling pod2/plonky2/rocksdb.
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// A name scoped to a plugin. Used for both classes and actions — both have
-/// the same shape — so `QualifiedName` shows up as the field type in
-/// summaries (`ObjectSummary::class`, `ActionSummary::action`, …).
+#[cfg(feature = "schemars")]
+use schemars::JsonSchema;
+
+/// `QualifiedName` is the canonical handle for both classes and actions.
+/// It carries the originating plugin and the bare name as two separate
+/// fields so callers can reason about them directly without juggling
+/// `(plugin_name, name, id)` triples. The string presentation
+/// `<plugin>::<name>` matches podlang's namespaced predicates and is
+/// produced by [`QualifiedName::id`] when a single string is needed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct QualifiedName {
     pub plugin_name: String,
@@ -85,6 +92,19 @@ fn push_safe_lower(out: &mut String, s: &str) {
             out.push('_');
         }
     }
+}
+
+/// One entry in an action's input/output slot list, or a missing-slot
+/// entry in a feasibility report. Pairs the class identity with its
+/// on-chain `Is{class}` predicate hash.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ClassRef {
+    pub class: QualifiedName,
+    /// Hex-encoded `Is{class}` predicate hash. Empty if the catalog
+    /// could not derive it (shouldn't happen for compiled modules).
+    pub hash: String,
 }
 
 #[cfg(test)]

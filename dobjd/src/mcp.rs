@@ -7,9 +7,10 @@
 
 use std::sync::Arc;
 
-use ::driver::{ClassRef, ExecuteActionInput, ObjectStatus, ObjectSummary, QualifiedName};
+use ::driver::{ExecuteActionInput, ObjectStatus, ObjectSummary};
 use craft_mcp::ops::CraftOps;
 use craft_mcp::types as mcp;
+use wire_types::{ClassRef, QualifiedName};
 
 use crate::events::EventTx;
 use crate::progress::SseProgressReporter;

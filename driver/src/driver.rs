@@ -25,13 +25,13 @@ use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
-use crate::qualified_name::QualifiedName;
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
     ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
     DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
     ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSummary,
 };
+use wire_types::QualifiedName;
 
 pub trait PayloadBuilder: Send + Sync {
     fn build_payload(

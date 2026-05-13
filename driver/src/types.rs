@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use wire_types::ClassRef;
 
 use crate::object_record::ObjectStatus;
-use crate::qualified_name::QualifiedName;
+use wire_types::QualifiedName;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverPaths {
@@ -47,18 +48,6 @@ pub struct ObjectSummary {
     pub status: ObjectStatus,
     pub tx_hash: Option<String>,
     pub fields: HashMap<String, serde_json::Value>,
-}
-
-/// One entry in an action's input/output slot list, or a missing-slot entry
-/// in a feasibility report. Pairs the class identity with its on-chain
-/// `Is{class}` predicate hash.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ClassRef {
-    pub class: QualifiedName,
-    /// Hex-encoded `Is{class}` predicate hash. Empty if the catalog could
-    /// not derive it (shouldn't happen for compiled modules).
-    pub hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

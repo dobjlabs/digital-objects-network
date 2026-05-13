@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::{fs, path::Path};
 use txlib::Tx;
 
-use crate::qualified_name::QualifiedName;
+use wire_types::QualifiedName;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

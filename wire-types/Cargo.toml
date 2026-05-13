@@ -1,0 +1,20 @@
+[package]
+name = "wire-types"
+version = "0.1.0"
+edition = "2024"
+
+# Pure-data types that cross process boundaries (HTTP body, MCP tool
+# param, SSE event, CLI arg). No logic that needs ZK / chain access —
+# keep this dependency-light so `cli` and `mcp` can use it without
+# pulling in the driver's heavy deps (pod2, plonky2, rocksdb).
+
+[dependencies]
+serde = { workspace = true }
+schemars = { version = "1", optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[features]
+default = []
+schemars = ["dep:schemars"]

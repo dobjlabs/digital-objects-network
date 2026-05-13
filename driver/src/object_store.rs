@@ -215,7 +215,7 @@ mod tests {
         .unwrap();
         let outputs = catalog
             .execute_action(
-                crate::QualifiedName::new("craft-basics", "FindLog"),
+                wire_types::QualifiedName::new("craft-basics", "FindLog"),
                 dummy_grounding_witness(),
                 vec![],
             )
@@ -223,7 +223,7 @@ mod tests {
         let spendable = outputs.obj(0);
         ObjectRecord {
             id: format!("{:#}", spendable.obj.commitment()),
-            class: crate::QualifiedName::new("craft-basics", "Log"),
+            class: wire_types::QualifiedName::new("craft-basics", "Log"),
             status: ObjectStatus::Live,
             tx_hash: None,
             pod: spendable.pod,

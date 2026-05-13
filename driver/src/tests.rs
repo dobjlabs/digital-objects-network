@@ -19,8 +19,8 @@ use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
 };
 use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
-use crate::qualified_name::QualifiedName;
 use crate::{ActionQuery, DriverPaths, ExecuteActionInput};
+use wire_types::QualifiedName;
 
 fn temp_paths() -> DriverPaths {
     let dir = tempdir().unwrap();

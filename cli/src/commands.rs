@@ -13,16 +13,7 @@ use crate::types::{
 const TARGET_RUN_ACTION_PROGRESS: &str = "run-action-progress";
 
 fn parse_qualified(id: &str) -> Result<QualifiedName> {
-    let (plugin, name) = id
-        .split_once("::")
-        .ok_or_else(|| anyhow!("expected '<plugin>::<name>', got {id:?}"))?;
-    if plugin.is_empty() || name.is_empty() {
-        return Err(anyhow!("empty plugin or name in {id:?}"));
-    }
-    Ok(QualifiedName {
-        plugin_name: plugin.to_string(),
-        name: name.to_string(),
-    })
+    QualifiedName::parse(id).map_err(|err| anyhow!("{err}"))
 }
 
 fn render_inputs(refs: &[crate::types::ClassRef]) -> String {

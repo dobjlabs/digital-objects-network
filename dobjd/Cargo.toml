@@ -11,6 +11,7 @@ path = "src/main.rs"
 driver = { path = "../driver" }
 common = { path = "../common" }
 craft-mcp = { path = "../mcp" }
+wire-types = { workspace = true }
 
 anyhow = { workspace = true }
 serde = { workspace = true }

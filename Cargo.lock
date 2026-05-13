@@ -2022,6 +2022,7 @@ dependencies = [
  "tokio",
  "urlencoding",
  "uuid",
+ "wire-types",
 ]
 
 [[package]]
@@ -2247,6 +2248,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "wire-types",
 ]
 
 [[package]]
@@ -2705,6 +2707,7 @@ dependencies = [
  "tracing-log 0.1.4",
  "tracing-subscriber",
  "uuid",
+ "wire-types",
 ]
 
 [[package]]
@@ -2771,6 +2774,7 @@ dependencies = [
  "toml 1.1.2+spec-1.1.0",
  "txlib",
  "vdfpod",
+ "wire-types",
 ]
 
 [[package]]
@@ -10207,6 +10211,15 @@ checksum = "cb5a765337c50e9ec252c2069be9bf91c7df47afb103b642ba3a53bf8101be97"
 dependencies = [
  "cfg-if",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "wire-types"
+version = "0.1.0"
+dependencies = [
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,9 +1,8 @@
 //! Tauri shell for the desktop app.
 //!
-//! After the move to a single `dobjd` driver process, this shell holds **no**
-//! driver state of its own. The webview talks to dobjd over HTTP just like a
-//! browser would. The remaining Tauri commands are desktop-only conveniences
-//! that don't need a `Driver` instance:
+//! This shell holds **no** driver state of its own. The webview talks to dobjd over
+//! HTTP just like a browser would. The remaining Tauri commands are desktop-only
+//! conveniences that don't need a `Driver` instance:
 //!
 //! - native file picker for `.dobj` files
 //! - in-memory parse of a picked file (for inspection before passing the

@@ -28,8 +28,9 @@ use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
 use txlib::GroundingWitness;
 
 use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
-use crate::qualified_name::QualifiedName;
-use crate::types::{ActionSummary, ClassRef};
+use wire_types::{ClassRef, QualifiedName};
+
+use crate::types::ActionSummary;
 
 struct Plugin {
     #[allow(dead_code)]

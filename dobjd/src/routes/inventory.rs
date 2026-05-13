@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use axum::{Json, extract::State};
-use driver::QualifiedName;
 use serde::Serialize;
+use wire_types::QualifiedName;
 
 use crate::error::ApiResult;
 use crate::state::AppState;

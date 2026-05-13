@@ -21,3 +21,4 @@ libc = "0.2"
 dirs = "6"
 urlencoding = "2"
 uuid = { version = "1.18.1", features = ["v4"] }
+wire-types = { workspace = true }
