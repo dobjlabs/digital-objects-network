@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::object_record::ObjectStatus;
+use crate::qualified_name::QualifiedName;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverPaths {
@@ -28,7 +29,7 @@ pub enum ObjectSelector {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ObjectQuery {
-    pub class_name: Option<String>,
+    pub class: Option<QualifiedName>,
     pub status: Option<ObjectStatus>,
     pub id: Option<String>,
     pub file_name: Option<String>,
@@ -36,9 +37,9 @@ pub struct ObjectQuery {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActionQuery {
-    pub name: Option<String>,
-    pub input_class: Option<String>,
-    pub output_class: Option<String>,
+    pub action: Option<QualifiedName>,
+    pub input_class: Option<QualifiedName>,
+    pub output_class: Option<QualifiedName>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,7 +47,7 @@ pub struct ActionQuery {
 pub struct ObjectSummary {
     pub id: String,
     pub file_name: String,
-    pub class_name: String,
+    pub class: QualifiedName,
     pub class_hash: String,
     pub status: ObjectStatus,
     pub tx_hash: Option<String>,
@@ -54,35 +55,46 @@ pub struct ObjectSummary {
     pub fields: HashMap<String, serde_json::Value>,
 }
 
+/// One entry in an action's input/output slot list, or a missing-slot entry
+/// in a feasibility report. Pairs the class identity with its on-chain
+/// `Is{class}` predicate hash.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassRef {
+    pub class: QualifiedName,
+    /// Hex-encoded `Is{class}` predicate hash. Empty if the catalog could
+    /// not derive it (shouldn't happen for compiled modules).
+    pub hash: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionSummary {
-    pub id: String,
+    pub action: QualifiedName,
     pub emoji: String,
     pub hash: String,
-    pub total_input_class_hashes: Vec<String>,
     pub description: String,
-    pub total_input_classes: Vec<String>,
-    pub total_output_classes: Vec<String>,
+    pub total_inputs: Vec<ClassRef>,
+    pub total_outputs: Vec<ClassRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassSummary {
-    pub name: String,
+    pub class: QualifiedName,
     pub emoji: String,
     pub hash: String,
     pub description: String,
     pub live_count: usize,
-    pub produced_by: Vec<String>,
-    pub consumed_by: Vec<String>,
+    pub produced_by: Vec<QualifiedName>,
+    pub consumed_by: Vec<QualifiedName>,
     pub predicate_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckActionCandidate {
-    pub class_name: String,
+    pub class: QualifiedName,
     pub object_id: String,
     pub file_name: String,
 }
@@ -91,14 +103,15 @@ pub struct CheckActionCandidate {
 #[serde(rename_all = "camelCase")]
 pub struct CheckActionReport {
     pub feasible: bool,
-    pub action_id: String,
+    pub action: QualifiedName,
     pub available_inputs: Vec<CheckActionCandidate>,
-    pub missing_inputs: Vec<String>,
+    /// Slots that had no eligible live object in inventory.
+    pub missing_inputs: Vec<ClassRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecuteActionInput {
-    pub action_id: String,
+    pub action: QualifiedName,
     pub input_objects: Vec<ObjectSelector>,
 }
 

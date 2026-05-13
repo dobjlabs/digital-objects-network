@@ -9,9 +9,9 @@ pub trait CraftOps: Send + Sync + 'static {
     fn list_classes(&self) -> anyhow::Result<Vec<ClassSummary>>;
     fn get_state_root(&self) -> anyhow::Result<String>;
     fn inspect_object(&self, object_id: &str) -> anyhow::Result<ObjectDetail>;
-    fn inspect_class(&self, class_name: &str) -> anyhow::Result<ClassDetail>;
+    fn inspect_class(&self, class: &QualifiedName) -> anyhow::Result<ClassDetail>;
     fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunActionResult>;
-    fn check_feasibility(&self, action_id: &str) -> anyhow::Result<FeasibilityReport>;
+    fn check_feasibility(&self, action: &QualifiedName) -> anyhow::Result<FeasibilityReport>;
 
     /// Returns the generated podlang source for all actions and classes,
     /// or None if not available (e.g. in mock mode).

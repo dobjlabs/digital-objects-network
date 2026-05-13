@@ -3,13 +3,21 @@ export type ProofProgressStatus = "running" | "done";
 
 export type ObjectStatus = "unknown" | "pending" | "live" | "nullified";
 
-// Action IDs and class names are not enumerated at compile time — they come
+// Action and class names are not enumerated at compile time — they come
 // from whichever plugin archives the user has installed in ~/.dobj/actions/.
+
+/** A name scoped to a plugin. Both classes and actions are identified this
+ * way; the printable form `<pluginName>::<name>` matches podlang's
+ * namespaced-predicate syntax. */
+export interface QualifiedNamePayload {
+  pluginName: string;
+  name: string;
+}
 
 export interface InventoryObjectPayload {
   id: string;
   fileName: string;
-  className: string;
+  class: QualifiedNamePayload;
   classHash: string;
   emoji: string;
   status: ObjectStatus;
@@ -19,13 +27,18 @@ export interface InventoryObjectPayload {
   obj: unknown;
 }
 
+export interface ClassRefPayload {
+  class: QualifiedNamePayload;
+  /** Hex-encoded `Is{class}` predicate hash. */
+  hash: string;
+}
+
 export interface ActionPayload {
-  id: string;
+  action: QualifiedNamePayload;
   emoji: string;
   hash: string;
-  totalInputClassHashes: string[];
+  totalInputs: ClassRefPayload[];
   description: string;
-  totalInputClasses: string[];
 }
 
 export interface LoadGuiInventoryResult {
@@ -34,7 +47,7 @@ export interface LoadGuiInventoryResult {
 }
 
 export interface RunActionInput {
-  actionId: string;
+  action: QualifiedNamePayload;
   inputObjectPaths: string[];
 }
 
@@ -48,7 +61,7 @@ export interface RunActionResult {
 
 export interface ObjectRecordPayload {
   id: string;
-  className: string;
+  class: QualifiedNamePayload;
   status: ObjectStatus;
   txHash: string | null;
   pod: unknown;

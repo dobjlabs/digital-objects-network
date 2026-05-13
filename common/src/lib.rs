@@ -32,7 +32,7 @@ pub mod groth {
 use std::io;
 
 use anyhow::{Result, anyhow};
-use hex::ToHex;
+use hex::{FromHex, ToHex};
 use pod2::middleware::Hash;
 use tracing_subscriber::{EnvFilter, fmt::time::OffsetTime, prelude::*};
 
@@ -83,6 +83,11 @@ impl ProofType {
 
 pub fn encode_hash_hex(hash: &Hash) -> String {
     format!("0x{}", hash.encode_hex::<String>())
+}
+
+pub fn decode_hash_hex(s: &str) -> Result<Hash> {
+    let trimmed = s.strip_prefix("0x").unwrap_or(s);
+    Hash::from_hex(trimmed).map_err(|err| anyhow!("invalid hash hex {s:?}: {err}"))
 }
 
 pub fn log_init() {

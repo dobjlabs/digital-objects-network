@@ -4,7 +4,6 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use hex::FromHex;
 use pod2::middleware::Hash;
 use serde::de::DeserializeOwned;
 use synchronizer::api_types::{
@@ -13,7 +12,7 @@ use synchronizer::api_types::{
 };
 use txlib::{GroundingWitness, StateRoot};
 
-use common::encode_hash_hex;
+use common::{decode_hash_hex, encode_hash_hex};
 
 pub const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
 pub const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
@@ -183,8 +182,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
 }
 
 fn parse_hash_hex(value: &str) -> Result<Hash> {
-    let trimmed = value.trim().strip_prefix("0x").unwrap_or(value.trim());
-    Hash::from_hex(trimmed).map_err(|err| anyhow!("invalid hash {value}: {err}"))
+    decode_hash_hex(value.trim())
 }
 
 fn send_json_request<T: DeserializeOwned>(
@@ -300,7 +298,7 @@ mod tests {
     use super::*;
 
     fn test_hash(byte: u8) -> Hash {
-        Hash::from_hex(hex::encode([byte; 32])).expect("valid test hash")
+        decode_hash_hex(&hex::encode([byte; 32])).expect("valid test hash")
     }
 
     #[test]

@@ -4,10 +4,10 @@ import type { InventoryObjectPayload as InventoryObject } from "../../shared/api
 import { truncateDisplayHash } from "../../shared/format";
 import {
   displayPathInObjectsDir,
-  displayObjectFileName,
   isLiveObject,
   isNullifiedObject,
   joinObjectsDirPath,
+  pluginScopedLabel,
 } from "../../shared/objectUtils";
 
 interface InventoryPanelProps {
@@ -42,16 +42,16 @@ export function InventoryPanel({
       return;
     }
     const objectPath = joinObjectsDirPath(objectsDirPath, object.fileName);
-    const displayName = displayObjectFileName(object.className);
+    const displayLabel = pluginScopedLabel(object.class);
 
     const payload = JSON.stringify({
       objectPath,
-      name: displayName,
-      className: object.className,
+      name: displayLabel,
+      class: object.class,
     });
     event.dataTransfer.setData("application/x-zkcraft-object", payload);
-    event.dataTransfer.setData("text/plain", displayName);
-    event.dataTransfer.setData("text", displayName);
+    event.dataTransfer.setData("text/plain", displayLabel);
+    event.dataTransfer.setData("text", displayLabel);
     event.dataTransfer.effectAllowed = "copy";
     isDraggingRef.current = true;
   };
@@ -69,7 +69,7 @@ export function InventoryPanel({
   const nullifiedObjects = inventory.filter((object) => isNullifiedObject(object));
 
   const renderInventoryObject = (object: InventoryObject) => {
-    const displayName = displayObjectFileName(object.className);
+    const displayName = pluginScopedLabel(object.class);
     const hashLineRaw = object.status === "live"
       ? object.id
       : object.status;

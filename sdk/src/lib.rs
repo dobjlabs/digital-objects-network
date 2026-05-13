@@ -79,6 +79,31 @@ fn class_predicate_name(class: &str) -> String {
     format!("Is{class}")
 }
 
+/// Allowlist for class names declared via `action.output("…")` /
+/// `action.input("…")` / `action.mutate("…")` in plugin scripts. Must be
+/// non-empty and contain only ASCII alphanumerics, `-`, or `_`.
+///
+/// Class names appear inside qualified ids (`<plugin>::<name>`) and inside
+/// `.dobj` filename prefixes, so they need to be filename-safe and never
+/// straddle the `::` separator. Validating here — at the earliest entry
+/// point — means a malformed class name fails to compile rather than only
+/// being caught downstream by catalog/filename sanitization.
+fn validate_class_name(class: &str) -> Result<(), String> {
+    if class.is_empty() {
+        return Err("class name must be non-empty".to_string());
+    }
+    if let Some(bad) = class
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || *c == '-' || *c == '_'))
+    {
+        return Err(format!(
+            "class name {class:?} may only contain ASCII letters, digits, '-', and '_'; \
+             rejected character {bad:?}"
+        ));
+    }
+    Ok(())
+}
+
 /// An instruction records the structural shape of one rhai-level
 /// operation. Pure Load-time data, enough to render podlang and to
 /// derive metadata. Statement-producing operations push their
@@ -410,6 +435,9 @@ impl ActionHandle {
         })
     }
     fn obj_io(self, io: ObjectIO, class: String) -> RuntimeResult<ArgHandle> {
+        if let Err(msg) = validate_class_name(&class) {
+            return Err(msg.into());
+        }
         let arg = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
         let mut ctx = self.0.borrow_mut();
         let mut original: Option<Dictionary> = None;

@@ -5,6 +5,7 @@ import type {
   CpuSample,
   LoadGuiInventoryResult,
   ObjectRecordPayload,
+  QualifiedNamePayload,
   RunActionInput,
   RunActionProgress,
   RunActionResult,
@@ -17,6 +18,7 @@ export type {
   InventoryObjectPayload,
   LoadGuiInventoryResult,
   ObjectRecordPayload,
+  QualifiedNamePayload,
   RunActionInput,
   RunActionProgress,
   RunActionResult,
@@ -75,11 +77,14 @@ export function getGlobalStateRoot(): Promise<string> {
 }
 
 export function listenMcpActionStarted(
-  handler: (event: { actionId: string }) => void,
+  handler: (event: { action: QualifiedNamePayload }) => void,
 ): Promise<UnlistenFn> {
-  return listen<{ actionId: string }>("mcp-action-started", (event) => {
-    handler(event.payload);
-  });
+  return listen<{ action: QualifiedNamePayload }>(
+    "mcp-action-started",
+    (event) => {
+      handler(event.payload);
+    },
+  );
 }
 
 export function getAppSettings(): Promise<AppSettingsPayload> {

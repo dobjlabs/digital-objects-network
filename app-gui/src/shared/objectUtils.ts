@@ -1,3 +1,5 @@
+import type { QualifiedNamePayload } from "./api/wireTypes";
+
 interface ObjectLike {
   status: string;
 }
@@ -10,8 +12,35 @@ export function isNullifiedObject(object: ObjectLike): boolean {
   return object.status === "nullified";
 }
 
-export function displayObjectFileName(className: string): string {
-  return `${className}.dobj`;
+/**
+ * Canonical printable form `<plugin>::<name>` matching podlang's
+ * namespaced-predicate syntax. Use this for tooltips, drag payloads, or
+ * anywhere a single-string identifier is needed.
+ */
+export function qualifiedId(q: QualifiedNamePayload): string {
+  return `${q.pluginName}::${q.name}`;
+}
+
+/**
+ * `true` when two qualified names refer to the same plugin-scoped class or
+ * action. The wire type is structural, so equality is field-by-field.
+ */
+export function qualifiedEq(
+  a: QualifiedNamePayload,
+  b: QualifiedNamePayload,
+): boolean {
+  return a.pluginName === b.pluginName && a.name === b.name;
+}
+
+/**
+ * Label that always includes the originating plugin name so two plugins
+ * that expose the same bare name (e.g. `Wood` or `MakeFoo`) stay visually
+ * distinguishable in lists, headers, and slot chips. Returns just the bare
+ * name when the qualified name has no plugin (shouldn't happen in normal
+ * data flows but falls back gracefully).
+ */
+export function pluginScopedLabel(q: QualifiedNamePayload): string {
+  return q.pluginName ? `${q.name} (${q.pluginName})` : q.name;
 }
 
 function normalizeObjectsDir(objectsDirPath: string): string {
