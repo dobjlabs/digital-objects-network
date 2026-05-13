@@ -485,9 +485,17 @@ impl ActionHandle {
         // ---- Build in/out record arrays from the action's direct
         // Object insts. Each Object contributes one entry to its
         // dispatch side's array (Mutate contributes to both).
+        //
+        // Index 0 is a placeholder slot, matching the `_pad` entry that
+        // `fmt_record_decls` prepends to every schema. This dodges
+        // pod2 issue #513: an `ArrayContains(arr, 0, value)` anchored
+        // key has a `StatementArg::Key(root, IndexKey(0))` encoding
+        // that collides with `StatementArg::Literal(v)` when v==root,
+        // and the circuit can't disambiguate. Real entries start at
+        // index 1; remove this padding once #513 is fixed in pod2.
         let exe_rc = self.0.borrow().exe_ctx.clone().expect("exe phase");
-        let mut in_dicts: Vec<Value> = Vec::new();
-        let mut out_dicts: Vec<Value> = Vec::new();
+        let mut in_dicts: Vec<Value> = vec![Value::from(0_i64)];
+        let mut out_dicts: Vec<Value> = vec![Value::from(0_i64)];
         let mut in_entry_idx: HashMap<String, usize> = HashMap::new();
         let mut out_entry_idx: HashMap<String, usize> = HashMap::new();
         {
@@ -937,13 +945,6 @@ impl ActionHandle {
         let (arg, st_sub) = if let Some(exe_rc) = exe_rc_opt {
             let sub_handle = ActionHandle::new(action.clone(), Some(exe_rc.clone()));
             let st_sub = sub_handle.exe_action()?;
-
-            {
-                let mut exe_ctx = exe_rc.borrow_mut();
-                // Reveal so per-output IsX pods can reference the
-                // sub-action's Action statement via the internal pod.
-                exe_ctx.bld.builder.reveal(&st_sub).unwrap();
-            }
 
             // Alias the parent's binding to the sub-action's first
             // producing object Ref, or a fresh placeholder if the sub
@@ -1854,7 +1855,7 @@ impl ExeContext {
 
 fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
     let solution = builder.solve().unwrap();
-    log::info!("solution needs {} pods", solution.solution().pod_count);
+    log::info!("multi-pod solve:\n{}", solution.solution_breakdown());
     solution.prove(prover).unwrap().pods.pop().unwrap()
 }
 
@@ -1927,7 +1928,7 @@ impl Executor {
             outputs: Vec::new(),
         }));
         let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
-        let st_action = action_handle.exe_action()?;
+        action_handle.exe_action()?;
 
         // Release the handle's Rc clone so `exe_rc` has a unique
         // owner for the `try_unwrap` below.
@@ -1942,31 +1943,18 @@ impl Executor {
             .expect("unique ExeContext reference after rhai")
             .into_inner();
 
-        bld.builder.reveal(&st_action).unwrap();
-
         let (st_tx_finalize, tx, _stats) = tx_builder.finalize(&mut bld);
         bld.builder.reveal(&st_tx_finalize).unwrap();
 
-        let internal_pod = prove(bld.builder, &*self.prover);
-        internal_pod.pod.verify().unwrap();
-
-        // tx_pod is the single-statement wrapper that the relayer /
-        // synchronizer's `ProofParser` consumes. `Operation::copy`
-        // re-materializes `st_tx_finalize` into this builder.
-        let tx_pod = {
-            let builder = self.new_builder();
-            let mut bld = BuildContext {
-                builder,
-                modules: self.pod_modules.clone(),
-            };
-            bld.builder.add_pod(internal_pod).unwrap();
-            bld.builder
-                .pub_op(Operation::copy(st_tx_finalize.clone()))
-                .unwrap();
-            let pod = prove(bld.builder, &*self.prover);
-            pod.pod.verify().unwrap();
-            pod
-        };
+        // The action body's `st_action` and any sub-action `st_sub`
+        // statements are not revealed: they would force a wrapping pod
+        // to mask them from the relayer / synchronizer's `ProofParser`,
+        // which expects a single public statement. Per-output IsX pods
+        // (which used to consume `st_action` via `prove_is_x_pod`) were
+        // removed when outputs switched to `GroundingEvidence`.
+        log::info!("proving tx_pod for action {}", action);
+        let tx_pod = prove(bld.builder, &*self.prover);
+        tx_pod.pod.verify().unwrap();
 
         // tx_final, live_root, and the "live" Merkle path are invariant
         // across outputs; compute once and share.

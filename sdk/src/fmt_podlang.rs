@@ -213,8 +213,16 @@ fn collect_action_info(action: &ActionContext) -> ActionInfo {
 }
 
 /// Emit `record <Action><Side> = (<entries>)` lines for any non-empty
-/// in/out schema across all actions.
+/// in/out schema across all actions. Each schema is prepended with a
+/// `_pad` entry so real entries start at index 1; see the comment in
+/// `ActionHandle::exe_action` (around the `in_dicts` init) for why.
 fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
+    let render = |entries: &[String]| {
+        std::iter::once("_pad".to_string())
+            .chain(entries.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     for action_handle in &loader.actions {
         let action = action_handle.0.borrow();
         let info = collect_action_info(&action);
@@ -223,7 +231,7 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
                 w,
                 "record {} = ({})",
                 schema_name(&action.name, Side::In),
-                info.in_entries.join(", ")
+                render(&info.in_entries),
             )?;
         }
         if !info.out_entries.is_empty() {
@@ -231,7 +239,7 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
                 w,
                 "record {} = ({})",
                 schema_name(&action.name, Side::Out),
-                info.out_entries.join(", ")
+                render(&info.out_entries),
             )?;
         }
     }

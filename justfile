@@ -11,7 +11,7 @@ relayer:
 
 # Run the gui
 gui:
-    cd app-gui && RUST_LOG=info pnpm tauri dev --release
+    cd app-gui && RUST_BACKTRACE=1 RUST_LOG=info pnpm tauri dev --release
 
 # Run relayer + synchronizer + gui together via mprocs
 # https://github.com/pvolok/mprocs
@@ -40,10 +40,6 @@ test:
 # Run all ignored test
 test-ignored:
     cargo test --workspace --release -- --ignored --nocapture
-
-# Run the slow end-to-end proof test
-test-e2e:
-    cargo test -p synchronizer test_e2e_real_proof --release -- --ignored --nocapture
 
 # Build all workspace crates
 build:

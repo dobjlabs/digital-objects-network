@@ -37,6 +37,7 @@ fn grounding_witness(state: &TestState, inputs: &[Tx]) -> Arc<GroundingWitness> 
 #[allow(clippy::cloned_ref_to_slice_refs)]
 #[test]
 fn test_sdk_1() {
+    let _ = env_logger::builder().is_test(true).try_init();
     let craft_src = r#"
         fn FindLog(action) {
             var log = action.output("Log");
@@ -245,7 +246,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "ec4e61f32c3e1aec21a1b7392f7f4a2137acfdcd6738f477d87fa441df2ab54f"
+        module_hash = "91a689e2858c0745c5188533862f75b0310791abc4e426aae0a8d06b86dd6988"
 
         [[classes]]
         name = "Log"
@@ -311,7 +312,7 @@ fn test_records_form_just_output() {
         .load_module_from_src_actions(craft_src, &["JustOutput"])
         .unwrap();
 
-    let expected = r#"record JustOutputOut = (x)
+    let expected = r#"record JustOutputOut = (_pad, x)
 
 // Actions
 
@@ -362,8 +363,8 @@ fn test_records_form_input_output_update() {
         .load_module_from_src_actions(craft_src, &["LogToWood"])
         .unwrap();
 
-    let expected = r#"record LogToWoodIn = (log)
-record LogToWoodOut = (wood)
+    let expected = r#"record LogToWoodIn = (_pad, log)
+record LogToWoodOut = (_pad, wood)
 
 // Actions
 
@@ -488,8 +489,8 @@ fn test_records_form_mutate() {
         .load_module_from_src_actions(craft_src, &["UseFoo"])
         .unwrap();
 
-    let expected = r#"record UseFooIn = (foo)
-record UseFooOut = (foo)
+    let expected = r#"record UseFooIn = (_pad, foo)
+record UseFooOut = (_pad, foo)
 
 // Actions
 
