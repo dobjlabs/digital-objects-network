@@ -3,7 +3,7 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use driver::{ActionSummary, CheckActionReport};
+use driver::{ActionSummary, CheckActionReport, QualifiedName};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ApiResult;
@@ -13,7 +13,7 @@ use crate::state::AppState;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunActionInput {
-    pub action_id: String,
+    pub action: QualifiedName,
     pub input_object_paths: Vec<String>,
     /// Optional client-generated correlation id for filtering progress
     /// events. If omitted, dobjd generates a UUID v4 and returns it on
@@ -77,7 +77,7 @@ pub async fn run_action(
             let reporter = SseProgressReporter::new(events, run_id.clone());
             let result = match driver.execute_with_reporter(
                 driver::ExecuteActionInput {
-                    action_id: input.action_id,
+                    action: input.action,
                     input_objects,
                 },
                 &reporter,
@@ -116,12 +116,14 @@ pub async fn list_actions(State(state): State<AppState>) -> ApiResult<Json<Vec<A
 }
 
 /// `GET /actions/{id}` — one action detail with predicate source.
+/// `id` is the canonical `plugin::name` form.
 pub async fn inspect_action(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<ActionSummary>> {
     let driver = state.driver.clone();
-    let action = tokio::task::spawn_blocking(move || driver.get_action(&id))
+    let qname = QualifiedName::parse(&id).map_err(|err| anyhow!("{err}"))?;
+    let action = tokio::task::spawn_blocking(move || driver.get_action(&qname))
         .await
         .map_err(|err| anyhow!("get_action task panicked: {err}"))??;
     Ok(Json(action))
@@ -130,13 +132,14 @@ pub async fn inspect_action(
 /// `GET /actions/{id}/feasibility` — does the local inventory have what
 /// this action needs? Returns the report shape `Driver::check_action`
 /// produces: `feasible` flag, the candidate objects we'd use, and any
-/// missing input class names.
+/// missing input class names. `id` is the canonical `plugin::name` form.
 pub async fn check_feasibility(
     State(state): State<AppState>,
     Path(action_id): Path<String>,
 ) -> ApiResult<Json<CheckActionReport>> {
     let driver = state.driver.clone();
-    let report = tokio::task::spawn_blocking(move || driver.check_action(&action_id))
+    let qname = QualifiedName::parse(&action_id).map_err(|err| anyhow!("{err}"))?;
+    let report = tokio::task::spawn_blocking(move || driver.check_action(&qname))
         .await
         .map_err(|err| anyhow!("check_feasibility task panicked: {err}"))??;
     Ok(Json(report))

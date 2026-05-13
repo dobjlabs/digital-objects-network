@@ -1,14 +1,16 @@
 use std::collections::HashSet;
-use std::path::Path;
 
 use anyhow::{Result, anyhow};
 use common::{
+    decode_hash_hex,
     payload::{Payload, PayloadProof},
     shrink::{ShrunkMainPodSetup, shrink_compress_pod},
 };
-use pod2::middleware::{Hash, Params};
+use pod2::middleware::{Hash, Key, Params};
 use sdk::SpendableObjects;
 use txlib::object_nullifier_hash;
+
+use std::path::Path;
 
 use crate::driver::extract_basename;
 use crate::error::DriverError;
@@ -111,11 +113,11 @@ pub(crate) fn validate_execute_request(
     input: &ExecuteActionInput,
     action: &ActionSummary,
 ) -> Result<()> {
-    if input.input_objects.len() != action.total_input_classes.len() {
+    if input.input_objects.len() != action.total_inputs.len() {
         return Err(anyhow!(
             "{} expects {} inputs, got {}",
-            input.action_id,
-            action.total_input_classes.len(),
+            input.action,
+            action.total_inputs.len(),
             input.input_objects.len()
         ));
     }
@@ -147,9 +149,10 @@ pub(crate) fn resolve_inputs(
     action: &ActionSummary,
 ) -> Result<Vec<ResolvedInput>> {
     let mut resolved_inputs = Vec::new();
-    for (slot, raw) in input.input_objects.iter().enumerate() {
+    for (raw, required) in input.input_objects.iter().zip(action.total_inputs.iter()) {
+        let expected_class_hash = decode_hash_hex(required.hash.as_str())?;
+
         let file_name = extract_basename(Path::new(raw))?;
-        let expected_class = action.total_input_classes[slot].as_str();
         let entry = entries
             .iter()
             .find(|entry| entry.file_name == file_name)
@@ -161,12 +164,30 @@ pub(crate) fn resolve_inputs(
                 entry.record.id
             ));
         }
-        if entry.record.class_name != expected_class {
+        // Belt-and-suspenders: compare both the qualified class stored on
+        // disk AND the on-chain `obj["type"]` predicate hash. Mismatch on
+        // either is fatal — the second check catches files whose class
+        // text drifted from the actual pod-level identity.
+        if entry.record.class != required.class {
             return Err(anyhow!(
                 "input class mismatch for {}: expected {}, got {}",
                 entry.record.id,
-                expected_class,
-                entry.record.class_name
+                required.class,
+                entry.record.class
+            ));
+        }
+        let actual_class_hash = obj_type_hash(&entry.record.obj).ok_or_else(|| {
+            anyhow!(
+                "input object {} has no readable 'type' field",
+                entry.record.id
+            )
+        })?;
+        if actual_class_hash != expected_class_hash {
+            return Err(anyhow!(
+                "input class hash mismatch for {}: pod 'type' = {:#}, action expects {}",
+                entry.record.id,
+                actual_class_hash,
+                required.hash,
             ));
         }
         resolved_inputs.push(ResolvedInput {
@@ -175,6 +196,11 @@ pub(crate) fn resolve_inputs(
         });
     }
     Ok(resolved_inputs)
+}
+
+pub(crate) fn obj_type_hash(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {
+    let value = obj.get(&Key::from("type")).ok()??;
+    Some(Hash(value.raw().0))
 }
 
 #[derive(Debug)]
@@ -186,7 +212,6 @@ pub(crate) struct SavedFiles {
 pub(crate) fn save_results(
     paths: &DriverPaths,
     action: &ActionSummary,
-    action_id: &str,
     resolved_inputs: &[ResolvedInput],
     spendable_outputs: &SpendableObjects,
 ) -> Result<SavedFiles> {
@@ -195,29 +220,29 @@ pub(crate) fn save_results(
         .map(|input| input.file_name.clone())
         .collect();
 
-    if spendable_outputs.objs.len() != action.total_output_classes.len() {
+    if spendable_outputs.objs.len() != action.total_outputs.len() {
         return Err(anyhow!(
             "action {} output mismatch: descriptor expects {}, engine returned {}",
-            action_id,
-            action.total_output_classes.len(),
+            action.action,
+            action.total_outputs.len(),
             spendable_outputs.objs.len()
         ));
     }
 
     let mut output_files = Vec::new();
-    for (index, class_name) in action.total_output_classes.iter().enumerate() {
+    for (index, output) in action.total_outputs.iter().enumerate() {
         let spendable = spendable_outputs.obj(index);
         let object_id = format!("{:#}", spendable.obj.commitment());
         let file_name = format!(
             "{}_{}.{DOBJ_EXTENSION}",
-            class_name.to_ascii_lowercase(),
+            output.class.file_prefix(),
             object_id.to_ascii_lowercase()
         );
         output_files.push(file_name.clone());
 
         let live_record = StoredObjectRecord {
             id: object_id,
-            class_name: class_name.clone(),
+            class: output.class.clone(),
             status: ObjectStatus::Unknown,
             tx_hash: None,
             pod: spendable.pod,

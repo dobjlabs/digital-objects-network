@@ -35,6 +35,7 @@ export type {
   CpuSample,
   InventoryObjectPayload,
   ObjectRecordPayload,
+  QualifiedNamePayload,
   RunActionInput,
   RunActionProgress,
   RunActionResult,

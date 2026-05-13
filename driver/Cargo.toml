@@ -30,3 +30,4 @@ dirs = "6.0.0"
 [dev-dependencies]
 common = { path = "../common", features = ["test-utils"] }
 tempfile = "3"
+toml = { workspace = true }

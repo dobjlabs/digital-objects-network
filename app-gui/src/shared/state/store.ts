@@ -5,9 +5,11 @@ import {
   runAction,
   type ActionPayload as Action,
   type InventoryObjectPayload as InventoryObject,
+  type QualifiedNamePayload,
   type RunActionProgress,
 } from "../api/tauriClient";
 import { normalizeErrorMessage } from "../error";
+import { qualifiedEq } from "../objectUtils";
 
 type ProofStatus = "idle" | "generating" | "committing" | "summary" | "error";
 type StepStatus = "pending" | "running" | "done";
@@ -31,8 +33,12 @@ interface ProofSummary {
 }
 
 interface ProofState {
+  /** Server-minted run id; matched against incoming SSE progress events.
+   * Distinct from `action` because two concurrent runs of the same action
+   * would otherwise collide. */
   runActionId: string | null;
-  actionId: string | null;
+  /** Identity (qualified) of the action currently being proved, when one is. */
+  action: QualifiedNamePayload | null;
   status: ProofStatus;
   args: string[];
   messages: string[];
@@ -47,19 +53,19 @@ interface ProofState {
 export type ContextSelection =
   | { kind: "none" }
   | { kind: "object"; objectId: string }
-  | { kind: "action"; actionId: string };
+  | { kind: "action"; action: QualifiedNamePayload };
 
 export interface AppState {
   contextSelection: ContextSelection;
   activeObjectId: string | null;
-  activeActionId: string | null;
+  activeAction: QualifiedNamePayload | null;
   showNullifiedItems: boolean;
   inventory: InventoryObject[];
   actions: Action[];
   proof: ProofState;
   hydrateData: () => Promise<void>;
   selectObject: (objectId: string) => void;
-  selectAction: (actionId: string) => void;
+  selectAction: (action: QualifiedNamePayload) => void;
   clearSelection: () => void;
   toggleNullified: () => void;
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
@@ -67,12 +73,12 @@ export interface AppState {
   applyRunActionProgress: (event: RunActionProgress) => void;
   initProofPanel: (input: {
     runId: string;
-    actionId: string;
+    action: QualifiedNamePayload;
     args: string[];
   }) => void;
   resetProofPanel: (runId?: string) => void;
   runProof: (input: {
-    actionId: string;
+    action: QualifiedNamePayload;
     inputBindings: Array<{
       objectPath: string;
       label: string;
@@ -82,11 +88,11 @@ export interface AppState {
 
 const initialAppState: Pick<
   AppState,
-  "contextSelection" | "activeObjectId" | "activeActionId" | "showNullifiedItems"
+  "contextSelection" | "activeObjectId" | "activeAction" | "showNullifiedItems"
 > = {
   contextSelection: { kind: "none" },
   activeObjectId: null,
-  activeActionId: null,
+  activeAction: null,
   showNullifiedItems: false,
 };
 
@@ -96,7 +102,7 @@ export const useStore = create<AppState>((set, get) => ({
   actions: [],
   proof: {
     runActionId: null,
-    actionId: null,
+    action: null,
     status: "idle",
     args: [],
     messages: [],
@@ -125,7 +131,7 @@ export const useStore = create<AppState>((set, get) => ({
     set((prev) => {
       if (
         prev.activeObjectId === objectId &&
-        prev.activeActionId === null &&
+        prev.activeAction === null &&
         prev.contextSelection.kind === "object" &&
         prev.contextSelection.objectId === objectId
       ) {
@@ -138,36 +144,37 @@ export const useStore = create<AppState>((set, get) => ({
       return {
         ...prev,
         activeObjectId: objectId,
-        activeActionId: null,
+        activeAction: null,
         contextSelection: { kind: "object", objectId },
       };
     }),
-  selectAction: (actionId) =>
+  selectAction: (action) =>
     set((prev) => {
       if (
-        prev.activeActionId === actionId &&
+        prev.activeAction !== null &&
+        qualifiedEq(prev.activeAction, action) &&
         prev.activeObjectId === null &&
         prev.contextSelection.kind === "action" &&
-        prev.contextSelection.actionId === actionId
+        qualifiedEq(prev.contextSelection.action, action)
       ) {
         return {
           ...prev,
-          activeActionId: null,
+          activeAction: null,
           contextSelection: { kind: "none" },
         };
       }
       return {
         ...prev,
         activeObjectId: null,
-        activeActionId: actionId,
-        contextSelection: { kind: "action", actionId },
+        activeAction: action,
+        contextSelection: { kind: "action", action },
       };
     }),
   clearSelection: () =>
     set((prev) => ({
       ...prev,
       activeObjectId: null,
-      activeActionId: null,
+      activeAction: null,
       contextSelection: { kind: "none" },
     })),
   toggleNullified: () =>
@@ -260,7 +267,7 @@ export const useStore = create<AppState>((set, get) => ({
         },
       };
     }),
-  initProofPanel: ({ runId, actionId, args }) =>
+  initProofPanel: ({ runId, action, args }) =>
     set((prev) => {
       if (
         prev.proof.status === "generating" ||
@@ -272,7 +279,7 @@ export const useStore = create<AppState>((set, get) => ({
         ...prev,
         proof: {
           runActionId: runId,
-          actionId,
+          action,
           status: "generating",
           args,
           messages: ["Running action..."],
@@ -306,7 +313,7 @@ export const useStore = create<AppState>((set, get) => ({
         proof: {
           ...prev.proof,
           runActionId: null,
-          actionId: null,
+          action: null,
           status: "idle",
           args: [],
           messages: [],
@@ -318,7 +325,7 @@ export const useStore = create<AppState>((set, get) => ({
         },
       };
     }),
-  runProof: async ({ actionId, inputBindings }) => {
+  runProof: async ({ action, inputBindings }) => {
     const postDoneHoldMs = 2800;
     const verifyTargets =
       inputBindings.length > 0
@@ -327,13 +334,13 @@ export const useStore = create<AppState>((set, get) => ({
 
     // Mint a per-run id up front so progress events streaming back during
     // the action can be matched against this run before runAction returns.
-    // Two concurrent runs of the same action would collide on actionId.
+    // Two concurrent runs of the same action would collide on action alone.
     const runId = crypto.randomUUID();
-    get().initProofPanel({ runId, actionId, args: verifyTargets });
+    get().initProofPanel({ runId, action, args: verifyTargets });
 
     try {
       const result = await runAction({
-        actionId,
+        action,
         inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
         runId,
       });
@@ -367,7 +374,7 @@ export const useStore = create<AppState>((set, get) => ({
         ...prev,
         proof: {
           runActionId: null,
-          actionId: null,
+          action: null,
           status: "error",
           args: verifyTargets,
           messages: [],

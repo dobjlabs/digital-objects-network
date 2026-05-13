@@ -7,11 +7,12 @@
 //! for the CLI, the website, and any other client that wants the full
 //! catalog.
 
+use anyhow::anyhow;
 use axum::{
     Json,
     extract::{Path, State},
 };
-use driver::ClassSummary;
+use driver::{ClassSummary, QualifiedName};
 
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -25,14 +26,16 @@ pub async fn list_classes(State(state): State<AppState>) -> ApiResult<Json<Vec<C
     Ok(Json(classes))
 }
 
-/// `GET /classes/{name}` — one class detail with predicate source.
+/// `GET /classes/{id}` — one class detail with predicate source.
+/// `id` is the canonical `plugin::name` form.
 pub async fn inspect_class(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<ClassSummary>> {
     let driver = state.driver.clone();
-    let class = tokio::task::spawn_blocking(move || driver.get_class(&name))
+    let qname = QualifiedName::parse(&name).map_err(|err| anyhow!("{err}"))?;
+    let class = tokio::task::spawn_blocking(move || driver.get_class(&qname))
         .await
-        .map_err(|err| anyhow::anyhow!("get_class task panicked: {err}"))??;
+        .map_err(|err| anyhow!("get_class task panicked: {err}"))??;
     Ok(Json(class))
 }

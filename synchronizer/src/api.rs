@@ -7,7 +7,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use hex::FromHex;
 use pod2::{backends::plonky2::primitives::merkletree::MerkleProof, middleware::Hash};
 use synchronizer::api_types::{
     GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, MembershipRequest,
@@ -23,7 +22,7 @@ use crate::{
     head::CanonicalRoots,
     sync_db::{CurrentSnapshot, SyncDb},
 };
-use common::encode_hash_hex;
+use common::{decode_hash_hex, encode_hash_hex};
 
 const MAX_HASH_QUERY_ITEMS: usize = 256;
 
@@ -419,13 +418,7 @@ fn nullifier_contains_entries(
 }
 
 fn parse_hash_hex(value: &str) -> Result<Hash, (StatusCode, String)> {
-    let trimmed = value.trim().strip_prefix("0x").unwrap_or(value.trim());
-    Hash::from_hex(trimmed).map_err(|err| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("invalid hash `{value}`: {err}"),
-        )
-    })
+    decode_hash_hex(value.trim()).map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))
 }
 
 fn internal_error(err: anyhow::Error) -> (StatusCode, String) {

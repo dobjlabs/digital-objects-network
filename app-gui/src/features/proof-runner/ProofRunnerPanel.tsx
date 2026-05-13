@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { truncateDisplayHash } from "../../shared/format";
+import { qualifiedEq } from "../../shared/objectUtils";
 import { useStore } from "../../shared/state/store";
 
 export function ProofRunnerPanel() {
@@ -31,7 +32,7 @@ export function ProofRunnerPanel() {
     if (!runActive) {
       setShowCpuDuringRun(false);
     }
-  }, [runActive, proof.runActionId]);
+  }, [runActive, proof.action]);
 
   const globalRootRaw = proof.stats.globalStateRoot?.trim() ?? "";
   const globalRootDisplay = globalRootRaw
@@ -49,18 +50,18 @@ export function ProofRunnerPanel() {
   };
 
   const canReturnToAction =
-    !!proof.actionId &&
+    proof.action !== null &&
     (proof.status === "generating" ||
       proof.status === "committing" ||
       proof.status === "summary");
   const alreadyViewingRunningAction =
-    proof.actionId !== null &&
+    proof.action !== null &&
     contextSelection.kind === "action" &&
-    contextSelection.actionId === proof.actionId;
+    qualifiedEq(contextSelection.action, proof.action);
 
   const returnToRunningAction = () => {
-    if (!proof.actionId) return;
-    selectAction(proof.actionId);
+    if (!proof.action) return;
+    selectAction(proof.action);
   };
 
   const toggleProofPanelView = () => {

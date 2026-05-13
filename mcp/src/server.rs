@@ -19,6 +19,10 @@ use crate::types::*;
 #[derive(Clone)]
 pub struct CraftMcpService<T: CraftOps> {
     ops: Arc<T>,
+    /// Used by the `#[tool_handler]` macro at request-dispatch time and by
+    /// the test below. Plain dead-code analysis can't see the macro
+    /// expansion, so silence the warning.
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
 
@@ -35,28 +39,31 @@ impl<T: CraftOps> CraftMcpService<T> {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct InspectObjectParams {
-    /// The `.dobj` file name (e.g. `wood_0xabc….dobj`) to inspect. Must
-    /// be a basename in `~/.dobj/objects/` — use `list_inventory` to
-    /// see what's available.
+    /// The `.dobj` file name (e.g. `craft-basics__wood_0xabc….dobj`) to
+    /// inspect. Must be a basename in `~/.dobj/objects/` — use
+    /// `list_inventory` to see what's available.
     pub file_name: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct InspectClassParams {
-    /// The class name to inspect, e.g. "WoodPick"
-    pub class_name: String,
+    /// The plugin-scoped class to inspect, e.g.
+    /// `{ "pluginName": "craft-basics", "name": "WoodPick" }`.
+    pub class: QualifiedName,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct InspectActionParams {
-    /// The action ID to inspect, e.g. "CraftWoodPick"
-    pub action_id: String,
+    /// The plugin-scoped action to inspect, e.g.
+    /// `{ "pluginName": "craft-basics", "name": "CraftWoodPick" }`.
+    pub action: QualifiedName,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CheckFeasibilityParams {
-    /// The action ID to check, e.g. "CraftWoodPick"
-    pub action_id: String,
+    /// The plugin-scoped action to check, e.g.
+    /// `{ "pluginName": "craft-basics", "name": "CraftWoodPick" }`.
+    pub action: QualifiedName,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -108,7 +115,7 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Inspect an object by file name: full detail including fields, class, liveness, and predicate source. The file_name is a `.dobj` basename from list_inventory (e.g. `wood_0xabc….dobj`)."
+        description = "Inspect an object by file name: full detail including fields, class, liveness, and predicate source. The file_name is a `.dobj` basename from list_inventory (e.g. `craft-basics__wood_0xabc….dobj`)."
     )]
     fn inspect_object(
         &self,
@@ -121,27 +128,27 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Inspect a class by name: predicate definition, and which actions produce/consume it"
+        description = "Inspect a class by plugin-scoped name: predicate definition, and which actions produce/consume it"
     )]
     fn inspect_class(
         &self,
         Parameters(params): Parameters<InspectClassParams>,
     ) -> Result<Json<ClassDetail>, String> {
         self.ops
-            .inspect_class(&params.class_name)
+            .inspect_class(&params.class)
             .map(Json)
             .map_err(|e| e.to_string())
     }
 
     #[tool(
-        description = "Inspect an action by id: predicate definition, description, and input/output class requirements"
+        description = "Inspect an action by plugin-scoped name: predicate definition, description, and input/output class requirements"
     )]
     fn inspect_action(
         &self,
         Parameters(params): Parameters<InspectActionParams>,
     ) -> Result<Json<ActionDetail>, String> {
         self.ops
-            .inspect_action(&params.action_id)
+            .inspect_action(&params.action)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -171,7 +178,7 @@ impl<T: CraftOps> CraftMcpService<T> {
         Parameters(params): Parameters<CheckFeasibilityParams>,
     ) -> Result<Json<FeasibilityReport>, String> {
         self.ops
-            .check_feasibility(&params.action_id)
+            .check_feasibility(&params.action)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -323,6 +330,13 @@ mod tests {
         CraftMcpService::new(Arc::new(MockCraftOps::new()))
     }
 
+    fn craft_basics(name: &str) -> QualifiedName {
+        QualifiedName {
+            plugin_name: "craft-basics".to_string(),
+            name: name.to_string(),
+        }
+    }
+
     #[test]
     fn test_tool_router_lists_all_tools() {
         let service = make_service();
@@ -362,7 +376,7 @@ mod tests {
         let service = make_service();
         let Json(list) = service.list_inventory().unwrap();
         assert!(!list.objects.is_empty());
-        assert!(list.objects.iter().any(|o| o.class_name == "Log"));
+        assert!(list.objects.iter().any(|o| o.class.name == "Log"));
     }
 
     #[test]
@@ -370,7 +384,11 @@ mod tests {
         let service = make_service();
         let Json(list) = service.list_actions().unwrap();
         assert!(!list.actions.is_empty());
-        assert!(list.actions.iter().any(|a| a.id == "CraftWoodPick"));
+        assert!(
+            list.actions
+                .iter()
+                .any(|a| a.action == craft_basics("CraftWoodPick"))
+        );
     }
 
     #[test]
@@ -385,10 +403,10 @@ mod tests {
         let service = make_service();
         let Json(detail) = service
             .inspect_object(Parameters(InspectObjectParams {
-                file_name: "WoodPick.dobj".to_string(),
+                file_name: "craft-basics__woodpick_0xabc4.dobj".to_string(),
             }))
             .unwrap();
-        assert_eq!(detail.class_name, "WoodPick");
+        assert_eq!(detail.class.name, "WoodPick");
         assert!(detail.predicate_source.contains("CraftWoodPick"));
     }
 
@@ -407,11 +425,11 @@ mod tests {
         let service = make_service();
         let Json(detail) = service
             .inspect_class(Parameters(InspectClassParams {
-                class_name: "Stick".to_string(),
+                class: craft_basics("Stick"),
             }))
             .unwrap();
-        assert_eq!(detail.class_name, "Stick");
-        assert!(detail.produced_by.contains(&"CraftSticks".to_string()));
+        assert_eq!(detail.class.name, "Stick");
+        assert!(detail.produced_by.contains(&craft_basics("CraftSticks")));
     }
 
     #[test]
@@ -419,7 +437,7 @@ mod tests {
         let service = make_service();
         let Json(detail) = service
             .inspect_action(Parameters(InspectActionParams {
-                action_id: "CraftWoodPick".to_string(),
+                action: craft_basics("CraftWoodPick"),
             }))
             .unwrap();
         assert_eq!(detail.id, "CraftWoodPick");
@@ -432,7 +450,7 @@ mod tests {
     fn test_inspect_action_unknown_returns_error() {
         let service = make_service();
         let result = service.inspect_action(Parameters(InspectActionParams {
-            action_id: "CraftDiamond".to_string(),
+            action: craft_basics("CraftDiamond"),
         }));
         assert!(result.is_err());
     }
@@ -442,7 +460,7 @@ mod tests {
         let service = make_service();
         let Json(result) = service
             .run_action(Parameters(RunActionInput {
-                action_id: "FindLog".to_string(),
+                action: craft_basics("FindLog"),
                 input_object_paths: vec![],
             }))
             .await
@@ -458,7 +476,7 @@ mod tests {
             let svc = service.clone();
             handles.push(tokio::spawn(async move {
                 svc.run_action(Parameters(RunActionInput {
-                    action_id: "FindLog".to_string(),
+                    action: craft_basics("FindLog"),
                     input_object_paths: vec![],
                 }))
                 .await
@@ -476,7 +494,7 @@ mod tests {
         let service = make_service();
         let Json(report) = service
             .check_feasibility(Parameters(CheckFeasibilityParams {
-                action_id: "CraftWoodPick".to_string(),
+                action: craft_basics("CraftWoodPick"),
             }))
             .unwrap();
         assert!(report.feasible);
@@ -489,7 +507,7 @@ mod tests {
         let service = CraftMcpService::new(Arc::new(mock));
         let Json(report) = service
             .check_feasibility(Parameters(CheckFeasibilityParams {
-                action_id: "CraftWoodPick".to_string(),
+                action: craft_basics("CraftWoodPick"),
             }))
             .unwrap();
         assert!(!report.feasible);

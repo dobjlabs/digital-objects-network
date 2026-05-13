@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use axum::{Json, extract::State};
+use driver::QualifiedName;
 use serde::Serialize;
 
 use crate::error::ApiResult;
@@ -14,7 +15,7 @@ use crate::state::AppState;
 pub struct InventoryObject {
     pub id: String,
     pub file_name: String,
-    pub class_name: String,
+    pub class: QualifiedName,
     pub class_hash: String,
     pub emoji: String,
     pub status: driver::ObjectStatus,
@@ -34,7 +35,7 @@ pub async fn load_inventory(
         let classes = driver
             .list_classes()?
             .into_iter()
-            .map(|class_info| (class_info.name.clone(), class_info))
+            .map(|class_info| (class_info.class.clone(), class_info))
             .collect::<HashMap<_, _>>();
 
         Ok(driver
@@ -45,11 +46,11 @@ pub async fn load_inventory(
             })
             .into_iter()
             .map(|object| {
-                let class_info = classes.get(&object.class_name);
+                let class_info = classes.get(&object.class);
                 InventoryObject {
                     id: object.id,
                     file_name: object.file_name,
-                    class_name: object.class_name.clone(),
+                    class: object.class.clone(),
                     class_hash: object.class_hash,
                     emoji: class_info
                         .map(|class_info| class_info.emoji.clone())

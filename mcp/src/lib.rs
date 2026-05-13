@@ -58,10 +58,7 @@ impl<T: CraftOps> McpServer<T> {
         let service = StreamableHttpService::new(
             move || Ok(CraftMcpService::new(ops.clone())),
             LocalSessionManager::default().into(),
-            StreamableHttpServerConfig {
-                cancellation_token: ct.child_token(),
-                ..Default::default()
-            },
+            StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
         );
 
         axum::Router::new().nest_service("/mcp", service)

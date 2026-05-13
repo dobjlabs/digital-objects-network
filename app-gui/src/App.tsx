@@ -30,7 +30,7 @@ function App() {
   const inventory = useStore((state) => state.inventory);
   const actions = useStore((state) => state.actions);
   const activeObjectId = useStore((state) => state.activeObjectId);
-  const activeActionId = useStore((state) => state.activeActionId);
+  const activeAction = useStore((state) => state.activeAction);
   const contextSelection = useStore((state) => state.contextSelection);
   const showNullifiedItems = useStore((state) => state.showNullifiedItems);
   const hydrateData = useStore((state) => state.hydrateData);
@@ -271,7 +271,7 @@ function App() {
           <div className="right-column">
             <ActionGrid
               actions={actions}
-              activeActionId={activeActionId}
+              activeAction={activeAction}
               selectedObject={selectedObject}
               onSelectAction={selectAction}
               onClearSelection={clearSelection}

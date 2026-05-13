@@ -1,9 +1,9 @@
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use common::encode_hash_hex;
+use common::{decode_hash_hex, encode_hash_hex};
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
 use txlib::object_nullifier_hash;
@@ -16,8 +16,8 @@ use crate::clients::{
 };
 use crate::error::DriverError;
 use crate::execute::{
-    build_relayer_payload, reconcile_objects, resolve_inputs, save_results, update_output_files,
-    validate_execute_request,
+    build_relayer_payload, obj_type_hash, reconcile_objects, resolve_inputs, save_results,
+    update_output_files, validate_execute_request,
 };
 use crate::object_record::ObjectStatus;
 use crate::object_record::parse_object_record_file;
@@ -25,6 +25,7 @@ use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
+use crate::qualified_name::QualifiedName;
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
     ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
@@ -126,13 +127,9 @@ impl Driver {
             .collect())
     }
 
-    /// Read a single `.dobj` file and return its summary.
-    ///
-    /// `path` may be a bare basename (`Wood.dobj`) or any longer path —
-    /// only the file name is used. The driver always resolves inside its
-    /// managed dirs (`~/.dobj/objects/`, falling back to `.nullified/` so
-    /// callers can inspect already-spent objects). This means absolute or
-    /// pasted paths work the same as basenames, and `..` segments can't
+    /// Resolve an object by either a bare basename (`Wood.dobj`) or an
+    /// absolute path. Only the file name is consulted, so user-pasted
+    /// paths work the same as basenames, and `..` segments can't
     /// escape the inventory.
     ///
     /// Missing files produce [`DriverError::ObjectFileNotFound`] (HTTP
@@ -151,7 +148,7 @@ impl Driver {
     /// dir. Either path is returned even if the file doesn't exist on
     /// disk — the caller is expected to follow up with an existence check
     /// or a parse attempt.
-    fn resolve_managed_path(&self, file_name: &str) -> PathBuf {
+    fn resolve_managed_path(&self, file_name: &str) -> std::path::PathBuf {
         let live = self.paths.objects_dir.join(file_name);
         if live.exists() {
             live
@@ -217,16 +214,27 @@ impl Driver {
             .into_iter()
             .filter(|action| {
                 query.is_none_or(|query| {
-                    query.name.as_ref().is_none_or(|name| &action.id == name)
-                        && query.input_class.as_ref().is_none_or(|class_name| {
-                            action.total_input_classes.contains(class_name)
-                        })
-                        && query.output_class.as_ref().is_none_or(|class_name| {
-                            action.total_output_classes.contains(class_name)
-                        })
+                    query.action.as_ref().is_none_or(|q| &action.action == q)
+                        && query
+                            .input_class
+                            .as_ref()
+                            .is_none_or(|c| action.total_inputs.iter().any(|r| r.class == *c))
+                        && query
+                            .output_class
+                            .as_ref()
+                            .is_none_or(|c| action.total_outputs.iter().any(|r| r.class == *c))
                 })
             })
             .collect())
+    }
+
+    /// Look up a single action by its qualified name. Errors if no plugin
+    /// provides the action.
+    pub fn get_action(&self, action: &QualifiedName) -> Result<ActionSummary> {
+        self.deps
+            .catalog
+            .get_action(action)
+            .ok_or_else(|| anyhow!("unknown action: {action}"))
     }
 
     pub fn list_classes(&self) -> Result<Vec<ClassSummary>> {
@@ -242,23 +250,23 @@ impl Driver {
             .map(|class_info| ClassSummary {
                 live_count: live_objects
                     .iter()
-                    .filter(|entry| entry.record.class_name == class_info.name)
+                    .filter(|entry| entry.record.class == class_info.class)
                     .count(),
                 ..self.class_summary(class_info)
             })
             .collect())
     }
 
-    pub fn get_class(&self, class_name: &str) -> Result<ClassSummary> {
+    pub fn get_class(&self, class: &QualifiedName) -> Result<ClassSummary> {
         let class_info = self
             .deps
             .catalog
-            .get_class(class_name)
-            .ok_or_else(|| DriverError::UnknownClass(class_name.to_string()))?;
+            .get_class(class)
+            .ok_or_else(|| anyhow!("unknown class: {class}"))?;
         let live_count = load_object_files(&self.paths)?
             .into_iter()
             .filter(|entry| {
-                entry.record.status == ObjectStatus::Live && entry.record.class_name == class_name
+                entry.record.status == ObjectStatus::Live && entry.record.class == *class
             })
             .count();
         Ok(ClassSummary {
@@ -267,19 +275,12 @@ impl Driver {
         })
     }
 
-    pub fn get_action(&self, action_id: &str) -> Result<ActionSummary> {
-        self.deps
-            .catalog
-            .get_action(action_id)
-            .ok_or_else(|| DriverError::UnknownAction(action_id.to_string()).into())
-    }
-
-    pub fn check_action(&self, action_id: &str) -> Result<CheckActionReport> {
-        let action = self
+    pub fn check_action(&self, action: &QualifiedName) -> Result<CheckActionReport> {
+        let action_summary = self
             .deps
             .catalog
-            .get_action(action_id)
-            .ok_or_else(|| DriverError::UnknownAction(action_id.to_string()))?;
+            .get_action(action)
+            .ok_or_else(|| anyhow!("unknown action: {action}"))?;
         let entries = load_object_files(&self.paths)?;
         let live_objects = entries
             .iter()
@@ -287,29 +288,42 @@ impl Driver {
             .collect::<Vec<_>>();
 
         let mut available = Vec::new();
-        let mut missing = Vec::new();
+        let mut missing_inputs = Vec::new();
         let mut used_ids = HashSet::new();
 
-        for required_class in &action.total_input_classes {
-            if let Some(entry) = live_objects.iter().find(|entry| {
-                &entry.record.class_name == required_class && !used_ids.contains(&entry.record.id)
-            }) {
+        // Apply the same cryptographic check that `resolve_inputs` runs at
+        // execute time: a candidate must match by qualified class AND its
+        // on-chain `obj["type"]` predicate hash must equal the action's
+        // required class hash. Without the hash check, a tampered or
+        // stale-migration .dobj would be reported as feasible here and then
+        // rejected at execute, wasting proof-generation time.
+        for required in &action_summary.total_inputs {
+            let expected_hash = decode_hash_hex(required.hash.as_str()).ok();
+            let candidate = live_objects.iter().find(|entry| {
+                entry.record.class == required.class
+                    && !used_ids.contains(&entry.record.id)
+                    && matches!(
+                        (expected_hash, obj_type_hash(&entry.record.obj)),
+                        (Some(expected), Some(actual)) if expected == actual
+                    )
+            });
+            if let Some(entry) = candidate {
                 used_ids.insert(entry.record.id.clone());
                 available.push(CheckActionCandidate {
-                    class_name: entry.record.class_name.clone(),
+                    class: required.class.clone(),
                     object_id: entry.record.id.clone(),
                     file_name: entry.file_name.clone(),
                 });
             } else {
-                missing.push(required_class.clone());
+                missing_inputs.push(required.clone());
             }
         }
 
         Ok(CheckActionReport {
-            feasible: missing.is_empty(),
-            action_id: action_id.to_string(),
+            feasible: missing_inputs.is_empty(),
+            action: action.clone(),
             available_inputs: available,
-            missing_inputs: missing,
+            missing_inputs,
         })
     }
 
@@ -335,8 +349,8 @@ impl Driver {
         let action = self
             .deps
             .catalog
-            .get_action(&input.action_id)
-            .ok_or_else(|| DriverError::UnknownAction(input.action_id.clone()))?;
+            .get_action(&input.action)
+            .ok_or_else(|| anyhow!("unknown action: {}", input.action))?;
 
         validate_execute_request(&input, &action)?;
 
@@ -361,15 +375,16 @@ impl Driver {
             .map(|input| input.record.spendable())
             .collect::<Vec<_>>();
         let spendable_outputs = self.deps.catalog.execute_action(
-            input.action_id.clone(),
+            input.action.clone(),
             grounding_witness,
             execution_inputs,
         )?;
         reporter.on_done(ExecutionPhase::GenerateProof, None);
 
-        let commit_ctx = ExecutionStepContext {
+        let mut commit_ctx = ExecutionStepContext {
             old_root: Some(old_root.clone()),
-            ..ExecutionStepContext::default()
+            output_files: Vec::new(),
+            output_status: None,
         };
         reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &commit_ctx);
         let payload_bytes = self
@@ -379,17 +394,12 @@ impl Driver {
         let expected_tx_final = spendable_outputs.tx.dict().commitment();
 
         reporter.on_step(ExecutionPhase::Commit, "Creating files", &commit_ctx);
-        let saved = save_results(
-            &self.paths,
-            &action,
-            &input.action_id,
-            &resolved_inputs,
-            &spendable_outputs,
-        )?;
+        let saved = save_results(&self.paths, &action, &resolved_inputs, &spendable_outputs)?;
+        commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Unknown);
         reporter.on_step(
             ExecutionPhase::Commit,
             "Output object files created with status unknown",
-            &file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Unknown),
+            &commit_ctx,
         );
 
         // Submit to relayer. Output files are kept as Unknown on failure so
@@ -402,7 +412,7 @@ impl Driver {
         let submit_response = match self.deps.relayer.submit_proof(
             &settings.relayer_api_url,
             &payload_bytes,
-            Some(format!("driver:{}", input.action_id)),
+            Some(format!("driver:{}", input.action)),
         ) {
             Ok(resp) if resp.status == relayer::api_types::JobStatus::Failed => {
                 return Err(anyhow!("relayer rejected job {} immediately", resp.job_id));
@@ -433,10 +443,11 @@ impl Driver {
             ObjectStatus::Pending,
             Some(&eth_tx_hash),
         )?;
+        commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Pending);
         reporter.on_step(
             ExecutionPhase::Commit,
             "Got transaction hash; output object files updated to pending while waiting for submission confirmation",
-            &file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Pending),
+            &commit_ctx,
         );
 
         let confirmation = self.deps.relayer.wait_for_confirmation(
@@ -462,7 +473,7 @@ impl Driver {
             reporter.on_step(
                 ExecutionPhase::Commit,
                 "Got replacement transaction hash; output object files updated to pending",
-                &file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Pending),
+                &commit_ctx,
             );
         }
 
@@ -488,10 +499,11 @@ impl Driver {
                     ObjectStatus::Unknown,
                     Some(final_tx_hash),
                 )?;
+                commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Unknown);
                 reporter.on_step(
                     ExecutionPhase::Commit,
                     "Synchronizer did not observe commit; output object files reverted to unknown",
-                    &file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Unknown),
+                    &commit_ctx,
                 );
                 return Err(err);
             }
@@ -504,10 +516,11 @@ impl Driver {
             ObjectStatus::Live,
             Some(final_tx_hash),
         )?;
+        commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Live);
         reporter.on_step(
             ExecutionPhase::Commit,
             "Commit observed; output object files updated to live",
-            &file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Live),
+            &commit_ctx,
         );
 
         let result = ExecuteActionResult {
@@ -531,13 +544,13 @@ impl Driver {
         let class_hash = self
             .deps
             .catalog
-            .get_class(&entry.record.class_name)
-            .map(|class_info| class_info.hash)
+            .get_class(&entry.record.class)
+            .map(|c| c.hash)
             .unwrap_or_default();
         ObjectSummary {
             id: entry.record.id.clone(),
             file_name: entry.file_name.clone(),
-            class_name: entry.record.class_name.clone(),
+            class: entry.record.class.clone(),
             class_hash,
             status: entry.record.status,
             tx_hash: entry.record.tx_hash.clone(),
@@ -547,7 +560,7 @@ impl Driver {
 
     fn class_summary(&self, class_info: CatalogClass) -> ClassSummary {
         ClassSummary {
-            name: class_info.name,
+            class: class_info.class,
             emoji: class_info.emoji,
             hash: class_info.hash,
             description: class_info.description,
@@ -571,11 +584,9 @@ fn file_write_ctx(
     }
 }
 
-/// Extract the file name from a caller-supplied path. Used by every
-/// driver entry point that takes a "name an object in your inventory"
-/// argument so callers can pass either `Wood.dobj` or
-/// `/some/full/path/Wood.dobj` — only the basename is honored, which
-/// also blocks `..` traversal (returns `None`).
+/// Normalize an input path (absolute or basename) to its file name. Used
+/// by `read_object` and by action execution to turn user-supplied paths
+/// into managed-store basenames before lookup.
 pub(crate) fn extract_basename(path: &Path) -> Result<String> {
     path.file_name()
         .and_then(|name| name.to_str())
