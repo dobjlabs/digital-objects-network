@@ -4,7 +4,9 @@ use rmcp::ErrorData as McpError;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{
-    ListResourcesResult, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
+    GetPromptRequestParams, GetPromptResult, ListPromptsResult, ListResourcesResult,
+    PaginatedRequestParams, Prompt, PromptArgument, PromptMessage, PromptMessageContent,
+    PromptMessageRole, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
     ServerInfo,
 };
 use rmcp::service::{RequestContext, RoleServer};
@@ -283,6 +285,70 @@ impl<T: CraftOps> CraftMcpService<T> {
 
 const INSTRUCTIONS: &str = include_str!("../docs/instructions.md");
 
+// -- Sample prompts --
+//
+// Demonstrates the MCP `prompts` primitive. Clients (Claude Code, Cursor, …)
+// surface these as slash commands, e.g. `/bitcraft:welcome`. `get_prompt`
+// returns the message(s) that get injected into the chat when the user picks
+// one — argument values are substituted server-side.
+
+fn sample_prompts() -> Vec<Prompt> {
+    vec![
+        Prompt::new(
+            "welcome",
+            Some("Onboard a new bitcraft player — survey inventory and suggest a next move."),
+            None,
+        ),
+        Prompt::new(
+            "craft-plan",
+            Some("Plan a sequence of bitcraft commands to obtain a target item."),
+            Some(vec![
+                PromptArgument::new("target")
+                    .with_description("Class name to craft, e.g. WoodPick, StonePick, Wood")
+                    .with_required(true),
+            ]),
+        ),
+    ]
+}
+
+fn render_prompt(request: &GetPromptRequestParams) -> Result<GetPromptResult, McpError> {
+    let arg = |name: &str| -> Option<String> {
+        request
+            .arguments
+            .as_ref()
+            .and_then(|args| args.get(name))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+
+    match request.name.as_str() {
+        "welcome" => Ok(GetPromptResult::new(vec![PromptMessage::new(
+            PromptMessageRole::User,
+            PromptMessageContent::text(
+                "I'm starting a new bitcraft session. Call `list_inventory` and `list_actions`, \
+                 then suggest one concrete next step in a single line.",
+            ),
+        )])),
+        "craft-plan" => {
+            let target = arg("target").ok_or_else(|| {
+                McpError::invalid_params("missing required argument: target", None)
+            })?;
+            Ok(GetPromptResult::new(vec![PromptMessage::new(
+                PromptMessageRole::User,
+                PromptMessageContent::text(format!(
+                    "Plan how to obtain a {target}. List the ordered bitcraft commands to invoke \
+                     (chop-log, craft-wood, craft-sticks, craft-wood-pick, mine-stone, \
+                     craft-stone-pick). Output one command per line, nothing else."
+                )),
+            )]))
+        }
+        other => Err(McpError::invalid_params(
+            format!("unknown prompt: {other}"),
+            None,
+        )),
+    }
+}
+
 // -- ServerHandler --
 
 #[tool_handler]
@@ -292,6 +358,7 @@ impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
+                .enable_prompts()
                 .build(),
         )
         .with_instructions(INSTRUCTIONS.to_string())
@@ -299,7 +366,7 @@ impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
 
     fn list_resources(
         &self,
-        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
         std::future::ready(Ok(ListResourcesResult {
@@ -317,6 +384,26 @@ impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
         std::future::ready(crate::resources::read(&request.uri).ok_or_else(|| {
             McpError::resource_not_found(format!("unknown resource: {}", request.uri), None)
         }))
+    }
+
+    fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
+        std::future::ready(Ok(ListPromptsResult {
+            meta: None,
+            prompts: sample_prompts(),
+            next_cursor: None,
+        }))
+    }
+
+    fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+        std::future::ready(render_prompt(&request))
     }
 }
 
@@ -367,11 +454,50 @@ mod tests {
         let service = make_service();
         let info = service.get_info();
         assert!(info.capabilities.tools.is_some());
+        assert!(info.capabilities.prompts.is_some());
         assert!(info.instructions.is_some());
         let instructions = info.instructions.unwrap();
         assert!(instructions.contains("> bitcraft"));
         assert!(instructions.contains("Two input cases"));
         assert!(instructions.contains("no such bitcraft command"));
+    }
+
+    #[test]
+    fn test_sample_prompts_listed() {
+        let prompts = sample_prompts();
+        let names: Vec<&str> = prompts.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"welcome"));
+        assert!(names.contains(&"craft-plan"));
+        let craft = prompts.iter().find(|p| p.name == "craft-plan").unwrap();
+        let args = craft.arguments.as_ref().expect("craft-plan has arguments");
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0].name, "target");
+        assert_eq!(args[0].required, Some(true));
+    }
+
+    #[test]
+    fn test_render_prompt_craft_plan_substitutes_target() {
+        let mut args = serde_json::Map::new();
+        args.insert("target".to_string(), serde_json::json!("StonePick"));
+        let req = GetPromptRequestParams::new("craft-plan").with_arguments(args);
+        let result = render_prompt(&req).unwrap();
+        assert_eq!(result.messages.len(), 1);
+        let PromptMessageContent::Text { text } = &result.messages[0].content else {
+            panic!("expected text content");
+        };
+        assert!(text.contains("StonePick"));
+    }
+
+    #[test]
+    fn test_render_prompt_craft_plan_missing_arg_errors() {
+        let req = GetPromptRequestParams::new("craft-plan");
+        assert!(render_prompt(&req).is_err());
+    }
+
+    #[test]
+    fn test_render_prompt_unknown_errors() {
+        let req = GetPromptRequestParams::new("no-such-prompt");
+        assert!(render_prompt(&req).is_err());
     }
 
     #[test]
