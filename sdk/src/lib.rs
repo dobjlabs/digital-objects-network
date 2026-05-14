@@ -14,7 +14,7 @@ use pod2::{
     lang::{Module, load_module},
     middleware::{
         EMPTY_VALUE, F, Hash, MainPodProver, NativePredicate, OperationAux, OperationType, Params,
-        Pod, Predicate, RawValue, Statement, StrKey, VDSet, Value,
+        Pod, Predicate, RawValue, Statement, StatementArg, StrKey, VDSet, Value,
         containers::{Array, Dictionary, Set},
     },
 };
@@ -648,21 +648,82 @@ impl ActionHandle {
         // ---- Per-Object type guard + Tx event. Same order as
         // `fmt_action`'s second loop. Tx events come from `tx_builder`
         // with literal dict args; we lift them to anchored form via
-        // `ReplaceValueWithEntry` when their side is collapsed.
+        // `ReplaceValueWithEntry` when their side is collapsed, and (if
+        // this action packs its chain into a `<Action>Chain` record)
+        // when their chain slot is at an intermediate ts.
         struct EventData {
             handle: EventHandle,
             class: String,
             object_refs_index: usize,
             obj_dict: Dictionary,
         }
-        let mut events: Vec<EventData> = Vec::new();
-        let mut event_sts: Vec<Statement> = Vec::new();
+        struct PendingObjectEvent {
+            st_literal: Statement,
+            event: EventData,
+            io: ObjectIO,
+            varname: String,
+            post_ts: usize,
+        }
+        // Assign a parent_ts to each Object/SubAction inst (each one
+        // advances the parent chain by exactly 1, in inst-iteration
+        // order). Drives chain anchoring and the chain_steps record.
+        let chain_max_ts = self
+            .0
+            .borrow()
+            .var_state
+            .get("chain")
+            .map(|s| s.ts)
+            .unwrap_or(0);
+        let action_chain_packed = chain_max_ts >= fmt_podlang::CHAIN_PACK_MIN_TS;
+        let inst_chain_ts: Vec<Option<usize>> = {
+            let ctx = self.0.borrow();
+            let mut chain_ts: usize = 0;
+            ctx.insts
+                .iter()
+                .map(|inst| match inst {
+                    Inst::Object { .. } | Inst::SubAction { .. } => {
+                        chain_ts += 1;
+                        Some(chain_ts)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // Capture per-ts intermediate chain values. Index 0 is the
+        // `_pad` placeholder; indices 1..chain_max_ts hold the chain
+        // hash at that ts. (The final chain at ts=chain_max_ts is the
+        // public `chain` wildcard and not stored here.)
+        let mut chain_step_values: Vec<Value> = vec![Value::from(0_i64); chain_max_ts.max(1)];
+        // Sub-action chain values are already baked into the cached
+        // `st_sub` statements; extract them so chain_steps is fully
+        // populated by the time we wrap event statements.
+        if action_chain_packed {
+            let ctx = self.0.borrow();
+            for (i, inst) in ctx.insts.iter().enumerate() {
+                if let Inst::SubAction { st_sub, .. } = inst {
+                    let st = st_sub
+                        .as_ref()
+                        .expect("SubAction statement captured at Rhai");
+                    let args = st.args();
+                    let post_chain = match args.last() {
+                        Some(StatementArg::Literal(v)) => v.clone(),
+                        _ => panic!("sub-action chain arg must be a literal value"),
+                    };
+                    let post_ts = inst_chain_ts[i].expect("SubAction has parent_ts");
+                    if post_ts < chain_max_ts {
+                        chain_step_values[post_ts] = post_chain;
+                    }
+                }
+            }
+        }
+
+        let mut pending_object_events: Vec<PendingObjectEvent> = Vec::new();
         let mut obj_refs_index: usize = 0;
         {
             let mut exe_ctx = exe_rc.borrow_mut();
             let exe_ctx = &mut *exe_ctx;
             let ctx = self.0.borrow();
-            for inst in &ctx.insts {
+            for (i, inst) in ctx.insts.iter().enumerate() {
                 if let Inst::Object {
                     io,
                     obj,
@@ -682,61 +743,111 @@ impl ActionHandle {
                             exe_ctx.tx_builder.mutate(&mut exe_ctx.bld, &obj_dict, obj0)
                         }
                     };
-                    // Lift tx event args to anchored form when their
-                    // side is collapsed. Arg layout (per txlib):
-                    //   TxInsert(chain, prev_chain, new, type)
-                    //   TxDelete(chain, prev_chain, old, type)
-                    //   TxMutate(chain, prev_chain, new, old, type)
-                    // `type` is always literal (the @self_predicate ref).
-                    let new_anchor = || -> Option<OperationArg> {
-                        if matches!(io, ObjectIO::Output | ObjectIO::Mutate)
-                            && !needs_out_wildcard.contains(&varname)
-                        {
-                            Some((&out_array, out_entry_idx[&varname] as i64).into())
-                        } else {
-                            None
-                        }
-                    };
-                    let old_anchor = || -> Option<OperationArg> {
-                        if matches!(io, ObjectIO::Input | ObjectIO::Mutate)
-                            && !needs_in_wildcard.contains(&varname)
-                        {
-                            Some((&in_array, in_entry_idx[&varname] as i64).into())
-                        } else {
-                            None
-                        }
-                    };
-                    let replacements: Vec<Option<OperationArg>> = match io {
-                        ObjectIO::Output => vec![None, None, new_anchor(), None],
-                        ObjectIO::Input => vec![None, None, old_anchor(), None],
-                        ObjectIO::Mutate => {
-                            vec![None, None, new_anchor(), old_anchor(), None]
-                        }
-                    };
-                    let st_tx = if replacements.iter().any(|r| r.is_some()) {
-                        exe_ctx
-                            .bld
-                            .builder
-                            .priv_op(Operation::replace_value_with_entry(
-                                replacements,
-                                st_tx_literal,
-                            ))
-                            .unwrap()
-                    } else {
-                        st_tx_literal
-                    };
+                    let post_ts = inst_chain_ts[i].expect("Object inst has parent_ts");
+                    if action_chain_packed && post_ts < chain_max_ts {
+                        chain_step_values[post_ts] = Value::from(exe_ctx.tx_builder.chain);
+                    }
                     if io.produces() {
                         exe_ctx.outputs.push(obj_dict.clone());
                     }
-                    events.push(EventData {
-                        handle,
-                        class: class.clone(),
-                        object_refs_index: obj_refs_index,
-                        obj_dict,
+                    pending_object_events.push(PendingObjectEvent {
+                        st_literal: st_tx_literal,
+                        event: EventData {
+                            handle,
+                            class: class.clone(),
+                            object_refs_index: obj_refs_index,
+                            obj_dict,
+                        },
+                        io: *io,
+                        varname,
+                        post_ts,
                     });
                     obj_refs_index += 1;
-                    event_sts.push(st_tx);
                 }
+            }
+        }
+
+        // Build the chain_steps record once all intermediate values
+        // are known (from sub-actions and from Object events).
+        let chain_steps_array: Option<Array> = if action_chain_packed {
+            Some(Array::new(chain_step_values))
+        } else {
+            None
+        };
+
+        // Wrap each pending Tx event with its anchors. Arg layout
+        // (per txlib):
+        //   TxInsert(chain, prev_chain, new, type)
+        //   TxDelete(chain, prev_chain, old, type)
+        //   TxMutate(chain, prev_chain, new, old, type)
+        // `type` is always literal (the @self_predicate ref).
+        let mut events: Vec<EventData> = Vec::new();
+        let mut event_sts: Vec<Statement> = Vec::new();
+        {
+            let mut exe_ctx = exe_rc.borrow_mut();
+            let exe_ctx = &mut *exe_ctx;
+            for pending in pending_object_events {
+                let varname = &pending.varname;
+                let io = pending.io;
+                let new_anchor: Option<OperationArg> =
+                    if matches!(io, ObjectIO::Output | ObjectIO::Mutate)
+                        && !needs_out_wildcard.contains(varname)
+                    {
+                        Some((&out_array, out_entry_idx[varname] as i64).into())
+                    } else {
+                        None
+                    };
+                let old_anchor: Option<OperationArg> =
+                    if matches!(io, ObjectIO::Input | ObjectIO::Mutate)
+                        && !needs_in_wildcard.contains(varname)
+                    {
+                        Some((&in_array, in_entry_idx[varname] as i64).into())
+                    } else {
+                        None
+                    };
+                let pre_ts = pending.post_ts - 1;
+                let post_ts = pending.post_ts;
+                let chain_anchor: Option<OperationArg> = match (action_chain_packed, post_ts) {
+                    (true, t) if t > 0 && t < chain_max_ts => {
+                        Some((chain_steps_array.as_ref().unwrap(), t as i64).into())
+                    }
+                    _ => None,
+                };
+                let prev_chain_anchor: Option<OperationArg> = match (action_chain_packed, pre_ts) {
+                    (true, t) if t > 0 && t < chain_max_ts => {
+                        Some((chain_steps_array.as_ref().unwrap(), t as i64).into())
+                    }
+                    _ => None,
+                };
+                let replacements: Vec<Option<OperationArg>> = match io {
+                    ObjectIO::Output => {
+                        vec![chain_anchor, prev_chain_anchor, new_anchor, None]
+                    }
+                    ObjectIO::Input => {
+                        vec![chain_anchor, prev_chain_anchor, old_anchor, None]
+                    }
+                    ObjectIO::Mutate => vec![
+                        chain_anchor,
+                        prev_chain_anchor,
+                        new_anchor,
+                        old_anchor,
+                        None,
+                    ],
+                };
+                let st_tx = if replacements.iter().any(|r| r.is_some()) {
+                    exe_ctx
+                        .bld
+                        .builder
+                        .priv_op(Operation::replace_value_with_entry(
+                            replacements,
+                            pending.st_literal,
+                        ))
+                        .unwrap()
+                } else {
+                    pending.st_literal
+                };
+                events.push(pending.event);
+                event_sts.push(st_tx);
             }
         }
 
@@ -750,7 +861,7 @@ impl ActionHandle {
             let mut exe_ctx = exe_rc.borrow_mut();
             let exe_ctx = &mut *exe_ctx;
             let ctx = self.0.borrow();
-            for inst in &ctx.insts {
+            for (i, inst) in ctx.insts.iter().enumerate() {
                 match inst {
                     Inst::Object { .. } => {}
                     Inst::Statement { pred, args } => {
@@ -773,11 +884,50 @@ impl ActionHandle {
                         body_sts.push(statement.clone().expect("Intro statement captured at Rhai"));
                     }
                     Inst::SubAction { st_sub, .. } => {
-                        body_sts.push(
-                            st_sub
-                                .clone()
-                                .expect("SubAction statement captured at Rhai"),
-                        );
+                        let st_literal = st_sub
+                            .clone()
+                            .expect("SubAction statement captured at Rhai");
+                        let st = if action_chain_packed {
+                            // Sub-action signature ends with `..., chain0, chain`
+                            // (parent pre/post ts); the in/out record args (if
+                            // any) precede them. Anchor those two slots to
+                            // chain_steps entries when intermediate.
+                            let arg_count = st_literal.args().len();
+                            let post_ts = inst_chain_ts[i].expect("SubAction has parent_ts");
+                            let pre_ts = post_ts - 1;
+                            let chain_arr = chain_steps_array.as_ref().unwrap();
+                            let prev_chain_anchor: Option<OperationArg> =
+                                if pre_ts > 0 && pre_ts < chain_max_ts {
+                                    Some((chain_arr, pre_ts as i64).into())
+                                } else {
+                                    None
+                                };
+                            let chain_anchor: Option<OperationArg> =
+                                if post_ts > 0 && post_ts < chain_max_ts {
+                                    Some((chain_arr, post_ts as i64).into())
+                                } else {
+                                    None
+                                };
+                            if prev_chain_anchor.is_some() || chain_anchor.is_some() {
+                                let mut replacements: Vec<Option<OperationArg>> =
+                                    vec![None; arg_count];
+                                replacements[arg_count - 2] = prev_chain_anchor;
+                                replacements[arg_count - 1] = chain_anchor;
+                                exe_ctx
+                                    .bld
+                                    .builder
+                                    .priv_op(Operation::replace_value_with_entry(
+                                        replacements,
+                                        st_literal,
+                                    ))
+                                    .unwrap()
+                            } else {
+                                st_literal
+                            }
+                        } else {
+                            st_literal
+                        };
+                        body_sts.push(st);
                     }
                     Inst::Set {
                         obj,

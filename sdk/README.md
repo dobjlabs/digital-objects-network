@@ -168,8 +168,10 @@ record CraftWoodIn = (_pad, log)
 record CraftWoodOut = (_pad, wood)
 record CraftSticksIn = (_pad, wood)
 record CraftSticksOut = (_pad, stick_a, stick_b)
+record CraftSticksChain = (_pad, step_0, step_1)
 record CraftWoodPickIn = (_pad, wood, stick)
 record CraftWoodPickOut = (_pad, pick)
+record CraftWoodPickChain = (_pad, step_0, step_1)
 record UseWoodPickIn = (_pad, wood_pick)
 record UseWoodPickOut = (_pad, wood_pick)
 record MineStoneWithWoodPickOut = (_pad, stone)
@@ -190,17 +192,17 @@ CraftWood(in CraftWoodIn, out CraftWoodOut, chain0, chain, private: chain1, wood
   tx::TxInsert(chain, chain1, wood, @self_predicate(IsWood))
 )
 
-CraftSticks(in CraftSticksIn, out CraftSticksOut, chain0, chain, private: chain1, chain2) = AND(
-  tx::TxDelete(chain1, chain0, in.wood, @self_predicate(IsWood))
-  tx::TxInsert(chain2, chain1, out.stick_a, @self_predicate(IsStick))
-  tx::TxInsert(chain, chain2, out.stick_b, @self_predicate(IsStick))
+CraftSticks(in CraftSticksIn, out CraftSticksOut, chain0, chain, private: chain_steps CraftSticksChain) = AND(
+  tx::TxDelete(chain_steps.step_0, chain0, in.wood, @self_predicate(IsWood))
+  tx::TxInsert(chain_steps.step_1, chain_steps.step_0, out.stick_a, @self_predicate(IsStick))
+  tx::TxInsert(chain, chain_steps.step_1, out.stick_b, @self_predicate(IsStick))
 )
 
-CraftWoodPick(in CraftWoodPickIn, out CraftWoodPickOut, chain0, chain, private: chain1, chain2) = AND(
+CraftWoodPick(in CraftWoodPickIn, out CraftWoodPickOut, chain0, chain, private: chain_steps CraftWoodPickChain) = AND(
   DictContains(out.pick, "durability", 100)
-  tx::TxDelete(chain1, chain0, in.wood, @self_predicate(IsWood))
-  tx::TxDelete(chain2, chain1, in.stick, @self_predicate(IsStick))
-  tx::TxInsert(chain, chain2, out.pick, @self_predicate(IsWoodPick))
+  tx::TxDelete(chain_steps.step_0, chain0, in.wood, @self_predicate(IsWood))
+  tx::TxDelete(chain_steps.step_1, chain_steps.step_0, in.stick, @self_predicate(IsStick))
+  tx::TxInsert(chain, chain_steps.step_1, out.pick, @self_predicate(IsWoodPick))
 )
 
 UseWoodPick(in UseWoodPickIn, out UseWoodPickOut, chain0, chain, private: wood_pick0, wood_pick1, wood_pick2, durability, key, work) = AND(

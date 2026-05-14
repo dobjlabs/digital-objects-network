@@ -45,6 +45,27 @@ fn fmt_var_at(name: &str, ts: usize, max_ts: usize) -> String {
     }
 }
 
+/// An action's chain max_ts must be at least this for the SDK to pack
+/// intermediate chain states into a `<Action>Chain` record. Below the
+/// threshold, the per-step scalar wildcards (`chain1`, `chain2`, ...)
+/// fit in fewer slots than the record-typed wildcard would cost.
+pub(crate) const CHAIN_PACK_MIN_TS: usize = 3;
+
+/// Schema name for an action's chain record (e.g. `LogToWoodChain`).
+pub(crate) fn chain_schema_name(action_name: &str) -> String {
+    format!("{action_name}Chain")
+}
+
+/// True if this action's chain has enough intermediate states to be
+/// worth packing into a record.
+pub(crate) fn chain_packed(action: &ActionContext) -> bool {
+    action
+        .var_state
+        .get("chain")
+        .map(|s| s.ts >= CHAIN_PACK_MIN_TS)
+        .unwrap_or(false)
+}
+
 #[derive(Clone, Copy)]
 struct VarNameFmt<'a> {
     name: &'a str,
@@ -58,6 +79,9 @@ struct VarNameFmt<'a> {
     /// Whether the Object's `out` entry needs a wildcard. Meaningless
     /// for non-Object vars.
     needs_out_wildcard: bool,
+    /// Whether this action packs its intermediate chain states into a
+    /// `<Action>Chain` record. Only meaningful when `name == "chain"`.
+    chain_packed: bool,
 }
 
 impl<'a> VarNameFmt<'a> {
@@ -101,6 +125,12 @@ impl<'a> fmt::Display for VarNameFmt<'a> {
         }
         if self.at_collapsed_out() {
             return write!(f, "out.{}", self.name);
+        }
+        // Chain intermediates render as `chain_steps.step_<ts-1>` when
+        // packed; endpoints (ts=0=chain0, ts=max_ts=chain) still use
+        // the scalar names from `fmt_var_at`.
+        if self.name == "chain" && self.chain_packed && self.ts > 0 && self.ts < self.max_ts {
+            return write!(f, "chain_steps.step_{}", self.ts - 1);
         }
         write!(f, "{}", fmt_var_at(self.name, self.ts, self.max_ts))
     }
@@ -213,9 +243,11 @@ fn collect_action_info(action: &ActionContext) -> ActionInfo {
 }
 
 /// Emit `record <Action><Side> = (<entries>)` lines for any non-empty
-/// in/out schema across all actions. Each schema is prepended with a
-/// `_pad` entry so real entries start at index 1; see the comment in
-/// `ActionHandle::exe_action` (around the `in_dicts` init) for why.
+/// in/out schema across all actions, plus `<Action>Chain` records for
+/// actions whose chain has 2+ intermediate states. Each schema is
+/// prepended with a `_pad` entry so real entries start at index 1; see
+/// the comment in `ActionHandle::exe_action` (around the `in_dicts`
+/// init) for why.
 fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     let render = |entries: &[String]| {
         std::iter::once("_pad".to_string())
@@ -240,6 +272,17 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
                 "record {} = ({})",
                 schema_name(&action.name, Side::Out),
                 render(&info.out_entries),
+            )?;
+        }
+        if chain_packed(&action) {
+            let chain_max_ts = action.var_state["chain"].ts;
+            // Intermediates: ts=1..=chain_max_ts-1 → step_0..step_(K-2).
+            let steps: Vec<String> = (0..chain_max_ts - 1).map(|i| format!("step_{i}")).collect();
+            writeln!(
+                w,
+                "record {} = ({})",
+                chain_schema_name(&action.name),
+                render(&steps),
             )?;
         }
     }
@@ -368,7 +411,10 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
 
     // Private wildcards: every (var, ts) except sub-action aliases,
     // the chain's ts=0/max (public as chain0/chain), and Object pre/
-    // post-form ts on collapsed sides.
+    // post-form ts on collapsed sides. When the chain is packed into a
+    // `<Action>Chain` record, intermediate chain ts are also dropped
+    // (they render as `chain_steps.step_N` anchored refs in the body).
+    let action_chain_packed = chain_packed(action);
     let mut private_vars: Vec<String> = Vec::new();
     for var in &action.vars {
         if alias_names.contains(var.as_str()) {
@@ -378,6 +424,9 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         let obj = object_io.get(var.as_str()).copied();
         for i in 0..=max_ts {
             if var == "chain" && (i == 0 || i == max_ts) {
+                continue;
+            }
+            if var == "chain" && action_chain_packed {
                 continue;
             }
             if let Some(io) = obj {
@@ -401,6 +450,10 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         if let Some(name) = &c.sub_out_var {
             private_vars.push(format!("{name} {}", schema_name(&c.sub_name, Side::Out)));
         }
+    }
+    // Append the chain record typed private (if this action packs chain).
+    if action_chain_packed {
+        private_vars.push(format!("chain_steps {}", chain_schema_name(&action.name)));
     }
     if !private_vars.is_empty() {
         write!(w, ", private: ")?;
@@ -430,6 +483,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                     obj_io,
                     needs_in_wildcard: needs_in(v),
                     needs_out_wildcard: needs_out(v),
+                    chain_packed: action_chain_packed,
                 },
             )
         })
