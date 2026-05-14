@@ -12,18 +12,21 @@
 use pod2::{
     frontend::Operation,
     middleware::{
-        Hash, Statement, StrKey, Value,
+        Hash, Statement, Value,
         containers::{Dictionary, Set},
-        hash_values,
     },
 };
-use pod2utils::{macros::BuildContext, map, op, st_custom};
+use pod2utils::{dict, macros::BuildContext, map, op, st_custom};
 
-use crate::{ChainEvent, OBJECT_NULLIFIER_VERSION, TxStats, build_tx, record, tx_with};
+use crate::{
+    ChainEvent, OBJECT_NULLIFIER_VERSION, TxStats, build_tx, object_key_hash,
+    object_nullifier_from_key_hash, record, tx_with,
+};
 
 /// Walk the top-level event list and build a `ReplayActions` statement.
 /// Every top-level event must be `ChainEvent::Action` -- the prover
 /// API enforces this by construction, and we panic here if not.
+/// `events` is guaranteed non-empty (TxBuilder::finalize asserts).
 /// Callers: `TxBuilder::finalize`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_replay_actions(
@@ -36,23 +39,10 @@ pub(crate) fn build_replay_actions(
     chain_start: Hash,
     chain_end: Hash,
 ) -> (Statement, Hash, Set, Set) {
-    if events.is_empty() {
-        // Done: reuse ReplayContentsDone.
-        let d = build_tx(live, nullifiers, chain_start, chain_end);
-        let st_done = st_custom!(
-            ctx,
-            ReplayContentsDone() = (Equal(d, d), Equal(chain, chain))
-        )
-        .unwrap();
-        record(stats, "ReplayContentsDone");
-        let st = st_custom!(
-            ctx,
-            ReplayActions() = (st_done, Statement::None, Statement::None)
-        )
-        .unwrap();
-        record(stats, "ReplayActions");
-        return (st, chain, live.clone(), nullifiers.clone());
-    }
+    assert!(
+        !events.is_empty(),
+        "build_replay_actions: empty event list (empty Tx is forbidden)"
+    );
 
     if events.len() == 1 {
         // Single action: no step wrapping.
@@ -66,11 +56,7 @@ pub(crate) fn build_replay_actions(
             chain_start,
             chain_end,
         );
-        let st = st_custom!(
-            ctx,
-            ReplayActions() = (Statement::None, st_action, Statement::None)
-        )
-        .unwrap();
+        let st = st_custom!(ctx, ReplayActions() = (st_action, Statement::None)).unwrap();
         record(stats, "ReplayActions");
         return (st, c, l, n);
     }
@@ -91,11 +77,7 @@ pub(crate) fn build_replay_actions(
         build_replay_actions(ctx, stats, rest, c, &l, &n, chain_start, chain_end);
     let st_step = st_custom!(ctx, ReplayActionsStep() = (st_action, st_rest)).unwrap();
     record(stats, "ReplayActionsStep");
-    let st = st_custom!(
-        ctx,
-        ReplayActions() = (Statement::None, Statement::None, st_step)
-    )
-    .unwrap();
+    let st = st_custom!(ctx, ReplayActions() = (Statement::None, st_step)).unwrap();
     record(stats, "ReplayActions");
     (st, c2, l2, n2)
 }
@@ -139,7 +121,10 @@ fn build_top_level_action(
     }
 }
 
-/// Recursively build `ReplayContents` for a list of events.
+/// Recursively build `ReplayContents` for a list of events. `events`
+/// is guaranteed non-empty (TxBuilder asserts on `end_action`). The
+/// K=1 case lands on `ReplayElement`; K>=2 dispatches to the
+/// type-specialized `ReplayContentsStep<X>` for the head.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_replay_contents(
     ctx: &mut BuildContext,
@@ -151,26 +136,12 @@ pub(crate) fn build_replay_contents(
     chain_start: Hash,
     chain_end: Hash,
 ) -> (Statement, Hash, Set, Set) {
-    if events.is_empty() {
-        // Done: before_tx = after_tx AND before_chain = after_chain
-        let d = build_tx(live, nullifiers, chain_start, chain_end);
-        let st_done = st_custom!(
-            ctx,
-            ReplayContentsDone() = (Equal(d, d), Equal(chain, chain))
-        )
-        .unwrap();
-        record(stats, "ReplayContentsDone");
-        let st = st_custom!(
-            ctx,
-            ReplayContents() = (st_done, Statement::None, Statement::None, Statement::None)
-        )
-        .unwrap();
-        record(stats, "ReplayContents");
-        return (st, chain, live.clone(), nullifiers.clone());
-    }
+    assert!(
+        !events.is_empty(),
+        "build_replay_contents: empty event list (empty action scope is forbidden)"
+    );
 
     if events.len() == 1 {
-        // Single branch: exactly one element, skip Step + Done overhead
         let (st_elem, c, l, n) = build_replay_element(
             ctx,
             stats,
@@ -183,66 +154,246 @@ pub(crate) fn build_replay_contents(
         );
         let st = st_custom!(
             ctx,
-            ReplayContents() = (Statement::None, st_elem, Statement::None, Statement::None)
+            ReplayContents() = (
+                st_elem,
+                Statement::None,
+                Statement::None,
+                Statement::None,
+                Statement::None
+            )
         )
         .unwrap();
         record(stats, "ReplayContents");
         return (st, c, l, n);
     }
 
-    if events.len() == 2 {
-        // Pair branch: exactly two elements, skip Step + recursive Contents
-        let (st_elem1, c1, l1, n1) = build_replay_element(
-            ctx,
-            stats,
-            &events[0],
-            chain,
-            live,
-            nullifiers,
-            chain_start,
-            chain_end,
-        );
-        let (st_elem2, c2, l2, n2) =
-            build_replay_element(ctx, stats, &events[1], c1, &l1, &n1, chain_start, chain_end);
-        let st_pair = st_custom!(ctx, ReplayContentsPair() = (st_elem1, st_elem2)).unwrap();
-        record(stats, "ReplayContentsPair");
-        let st = st_custom!(
-            ctx,
-            ReplayContents() = (Statement::None, Statement::None, st_pair, Statement::None)
-        )
-        .unwrap();
-        record(stats, "ReplayContents");
-        return (st, c2, l2, n2);
-    }
-
-    // Step branch: 3+ elements, peel off first and recurse
+    // K>=2 step: peel off head, dispatch on its type, recurse on tail.
+    // For Insert and Mutate the Replay<X> body is inlined into the
+    // ReplayContentsStep<X> predicate, with `new`/`new_live` (Insert)
+    // or `old`/`new` (Mutate) packed into a small private dict so the
+    // wildcard count stays at the pod2 limit. Delete keeps its
+    // ReplayDelete wrapping (already at the 5-sub-stmt limit), and
+    // Action is opaque to this dispatch.
     let (first, rest) = events.split_first().unwrap();
-    let (st_elem, c, l, n) = build_replay_element(
-        ctx,
-        stats,
-        first,
-        chain,
-        live,
-        nullifiers,
-        chain_start,
-        chain_end,
-    );
-    let (st_rest, c2, l2, n2) =
-        build_replay_contents(ctx, stats, rest, c, &l, &n, chain_start, chain_end);
+    let (st_step, tag, c2, l2, n2) = match first {
+        ChainEvent::Insert {
+            new,
+            chain_after,
+            tx_stmt,
+            guard_evidence,
+            ..
+        } => {
+            let evidence = guard_evidence
+                .clone()
+                .expect("missing guard evidence for insert");
+            let mut nl = live.clone();
+            nl.insert(&Value::from(new.clone())).unwrap();
+            let (st_rest, c2, l2, n2) = build_replay_contents(
+                ctx,
+                stats,
+                rest,
+                *chain_after,
+                &nl,
+                nullifiers,
+                chain_start,
+                chain_end,
+            );
+            let st = build_replay_step_insert(
+                ctx,
+                stats,
+                new,
+                live,
+                &nl,
+                nullifiers,
+                chain_start,
+                chain_end,
+                tx_stmt.clone(),
+                evidence,
+                st_rest,
+            );
+            (st, EventTag::Insert, c2, l2, n2)
+        }
+        ChainEvent::Mutate {
+            new,
+            old,
+            chain_after,
+            tx_stmt,
+            guard_evidence,
+            ..
+        } => {
+            let evidence = guard_evidence
+                .clone()
+                .expect("missing guard evidence for mutate");
+            let mut lm = live.clone();
+            lm.delete(&Value::from(old.commitment())).unwrap();
+            let mut nl = lm.clone();
+            nl.insert(&Value::from(new.clone())).unwrap();
+            let nul = object_nullifier_from_key_hash(object_key_hash(old).unwrap());
+            let mut nn = nullifiers.clone();
+            nn.insert(&Value::from(nul)).unwrap();
+            let (st_rest, c2, l2, n2) = build_replay_contents(
+                ctx,
+                stats,
+                rest,
+                *chain_after,
+                &nl,
+                &nn,
+                chain_start,
+                chain_end,
+            );
+            let st = build_replay_step_mutate(
+                ctx,
+                stats,
+                new,
+                old,
+                live,
+                &lm,
+                &nl,
+                nullifiers,
+                &nn,
+                chain_start,
+                chain_end,
+                tx_stmt.clone(),
+                evidence,
+                st_rest,
+            );
+            (st, EventTag::Mutate, c2, l2, n2)
+        }
+        ChainEvent::Delete {
+            old,
+            chain_after,
+            tx_stmt,
+            guard_evidence,
+            ..
+        } => {
+            let evidence = guard_evidence
+                .clone()
+                .expect("missing guard evidence for delete");
+            let (st_head, l, n) = build_replay_delete(
+                ctx,
+                stats,
+                old,
+                live,
+                nullifiers,
+                chain_start,
+                chain_end,
+                tx_stmt.clone(),
+                evidence,
+            );
+            let (st_rest, c2, l2, n2) = build_replay_contents(
+                ctx,
+                stats,
+                rest,
+                *chain_after,
+                &l,
+                &n,
+                chain_start,
+                chain_end,
+            );
+            let st = ctx
+                .apply_custom_pred_simple(false, "ReplayContentsStepDelete", vec![st_head, st_rest])
+                .unwrap();
+            record(stats, "ReplayContentsStepDelete");
+            (st, EventTag::Delete, c2, l2, n2)
+        }
+        ChainEvent::Action {
+            chain_after,
+            contents,
+            ..
+        } => {
+            let (st_head, l, n) = build_replay_action(
+                ctx,
+                stats,
+                contents,
+                chain,
+                live,
+                nullifiers,
+                chain_start,
+                chain_end,
+                *chain_after,
+            );
+            let (st_rest, c2, l2, n2) = build_replay_contents(
+                ctx,
+                stats,
+                rest,
+                *chain_after,
+                &l,
+                &n,
+                chain_start,
+                chain_end,
+            );
+            let st = ctx
+                .apply_custom_pred_simple(false, "ReplayContentsStepAction", vec![st_head, st_rest])
+                .unwrap();
+            record(stats, "ReplayContentsStepAction");
+            (st, EventTag::Action, c2, l2, n2)
+        }
+    };
 
-    let st_step = st_custom!(ctx, ReplayContentsStep() = (st_elem, st_rest)).unwrap();
-    record(stats, "ReplayContentsStep");
-    let st = st_custom!(
-        ctx,
-        ReplayContents() = (Statement::None, Statement::None, Statement::None, st_step)
-    )
+    let st = match tag {
+        EventTag::Insert => st_custom!(
+            ctx,
+            ReplayContents() = (
+                Statement::None,
+                st_step,
+                Statement::None,
+                Statement::None,
+                Statement::None
+            )
+        ),
+        EventTag::Mutate => st_custom!(
+            ctx,
+            ReplayContents() = (
+                Statement::None,
+                Statement::None,
+                st_step,
+                Statement::None,
+                Statement::None
+            )
+        ),
+        EventTag::Delete => st_custom!(
+            ctx,
+            ReplayContents() = (
+                Statement::None,
+                Statement::None,
+                Statement::None,
+                st_step,
+                Statement::None
+            )
+        ),
+        EventTag::Action => st_custom!(
+            ctx,
+            ReplayContents() = (
+                Statement::None,
+                Statement::None,
+                Statement::None,
+                Statement::None,
+                st_step
+            )
+        ),
+    }
     .unwrap();
     record(stats, "ReplayContents");
     (st, c2, l2, n2)
 }
 
+/// Tag for the four event variants, used to pick the right
+/// `ReplayContentsStep<X>` or `ReplayElement` slot.
+#[derive(Clone, Copy, Debug)]
+enum EventTag {
+    Insert,
+    Mutate,
+    Delete,
+    Action,
+}
+
+/// Build the inner `Replay<X>` statement for one event, returning the
+/// statement plus a tag identifying which event variant produced it.
+/// Shared between `build_replay_element` (which wraps the result in
+/// `ReplayElement`) and the K>=2 step branch of `build_replay_contents`
+/// (which wraps in `ReplayContentsStep<X>`).
 #[allow(clippy::too_many_arguments)]
-fn build_replay_element(
+fn build_replay_event(
     ctx: &mut BuildContext,
     stats: &mut TxStats,
     event: &ChainEvent,
@@ -251,7 +402,7 @@ fn build_replay_element(
     nullifiers: &Set,
     chain_start: Hash,
     chain_end: Hash,
-) -> (Statement, Hash, Set, Set) {
+) -> (Statement, EventTag, Hash, Set, Set) {
     match event {
         ChainEvent::Insert {
             new,
@@ -274,13 +425,13 @@ fn build_replay_element(
                 tx_stmt.clone(),
                 evidence,
             );
-            let st = st_custom!(
-                ctx,
-                ReplayElement() = (st, Statement::None, Statement::None, Statement::None)
+            (
+                st,
+                EventTag::Insert,
+                *chain_after,
+                new_live,
+                nullifiers.clone(),
             )
-            .unwrap();
-            record(stats, "ReplayElement");
-            (st, *chain_after, new_live, nullifiers.clone())
         }
         ChainEvent::Mutate {
             new,
@@ -305,13 +456,7 @@ fn build_replay_element(
                 tx_stmt.clone(),
                 evidence,
             );
-            let st = st_custom!(
-                ctx,
-                ReplayElement() = (Statement::None, st, Statement::None, Statement::None)
-            )
-            .unwrap();
-            record(stats, "ReplayElement");
-            (st, *chain_after, new_live, new_null)
+            (st, EventTag::Mutate, *chain_after, new_live, new_null)
         }
         ChainEvent::Delete {
             old,
@@ -334,13 +479,7 @@ fn build_replay_element(
                 tx_stmt.clone(),
                 evidence,
             );
-            let st = st_custom!(
-                ctx,
-                ReplayElement() = (Statement::None, Statement::None, st, Statement::None)
-            )
-            .unwrap();
-            record(stats, "ReplayElement");
-            (st, *chain_after, new_live, new_null)
+            (st, EventTag::Delete, *chain_after, new_live, new_null)
         }
         ChainEvent::Action {
             chain_after,
@@ -358,15 +497,53 @@ fn build_replay_element(
                 chain_end,
                 *chain_after,
             );
-            let st = st_custom!(
-                ctx,
-                ReplayElement() = (Statement::None, Statement::None, Statement::None, st)
-            )
-            .unwrap();
-            record(stats, "ReplayElement");
-            (st, *chain_after, new_live, new_null)
+            (st, EventTag::Action, *chain_after, new_live, new_null)
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_replay_element(
+    ctx: &mut BuildContext,
+    stats: &mut TxStats,
+    event: &ChainEvent,
+    chain: Hash,
+    live: &Set,
+    nullifiers: &Set,
+    chain_start: Hash,
+    chain_end: Hash,
+) -> (Statement, Hash, Set, Set) {
+    let (st_inner, tag, c, l, n) = build_replay_event(
+        ctx,
+        stats,
+        event,
+        chain,
+        live,
+        nullifiers,
+        chain_start,
+        chain_end,
+    );
+    let st = match tag {
+        EventTag::Insert => st_custom!(
+            ctx,
+            ReplayElement() = (st_inner, Statement::None, Statement::None, Statement::None)
+        ),
+        EventTag::Mutate => st_custom!(
+            ctx,
+            ReplayElement() = (Statement::None, st_inner, Statement::None, Statement::None)
+        ),
+        EventTag::Delete => st_custom!(
+            ctx,
+            ReplayElement() = (Statement::None, Statement::None, st_inner, Statement::None)
+        ),
+        EventTag::Action => st_custom!(
+            ctx,
+            ReplayElement() = (Statement::None, Statement::None, Statement::None, st_inner)
+        ),
+    }
+    .unwrap();
+    record(stats, "ReplayElement");
+    (st, c, l, n)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -386,8 +563,6 @@ fn build_replay_insert(
     nl.insert(&Value::from(new.clone())).unwrap();
     let atx = tx_with(&btx, "live", Value::from(nl.clone()));
 
-    // ReplayInsert: TxInsert (from record time) + state update + guard.
-    // The type-pin is inside TxInsert now, so no separate DictContains here.
     let op_si = ctx
         .builder
         .priv_op(op!(SetInsert(nl, (&btx, "live"), new)))
@@ -414,6 +589,79 @@ fn build_replay_insert(
     (st, nl)
 }
 
+/// Build a `ReplayContentsStepInsert` statement: the inlined body of
+/// `ReplayInsert` plus the recursive `ReplayContents` tail. The `new`
+/// object and the resulting `new_live` set are packed into a tiny
+/// `ins` dict so they share a single wildcard slot (keeps the
+/// predicate at 8 wildcards). Body sub-statements anchor to
+/// `ins.new` / `ins.new_live` instead of using bare wildcards.
+/// `nl` is `live + {new}`, supplied by the caller (which already
+/// needs it for the recursive tail).
+#[allow(clippy::too_many_arguments)]
+fn build_replay_step_insert(
+    ctx: &mut BuildContext,
+    stats: &mut TxStats,
+    new: &Dictionary,
+    live: &Set,
+    nl: &Set,
+    nullifiers: &Set,
+    chain_start: Hash,
+    chain_end: Hash,
+    tx_stmt: Statement,
+    guard_evidence: Statement,
+    st_rest: Statement,
+) -> Statement {
+    let btx = build_tx(live, nullifiers, chain_start, chain_end);
+    let atx = tx_with(&btx, "live", Value::from(nl.clone()));
+    let ins = dict!({
+        "new" => new.clone(),
+        "new_live" => nl.clone()
+    });
+
+    // Re-anchor TxInsert's `new` slot (slot 2) from literal to ins.new.
+    let tx_stmt_wrapped = ctx
+        .builder
+        .priv_op(Operation::replace_value_with_entry(
+            vec![None, None, Some((&ins, "new")), None],
+            tx_stmt,
+        ))
+        .unwrap();
+    let op_si = ctx
+        .builder
+        .priv_op(op!(SetInsert(
+            (&ins, "new_live"),
+            (&btx, "live"),
+            (&ins, "new")
+        )))
+        .unwrap();
+    let op_du = ctx
+        .builder
+        .priv_op(op!(DictUpdate(atx, btx, "live", (&ins, "new_live"))))
+        .unwrap();
+    // Re-anchor guard call's slot 0 (new) to ins.new, plus the existing
+    // chain_start/chain_end anchors to btx.
+    let rebound_evidence = ctx
+        .builder
+        .priv_op(Operation::replace_value_with_entry(
+            vec![
+                Some((&ins, "new")),
+                Some((&btx, "chain_start")),
+                Some((&btx, "chain_end")),
+            ],
+            guard_evidence,
+        ))
+        .unwrap();
+    let st = ctx
+        .apply_custom_pred_simple(
+            false,
+            "ReplayContentsStepInsert",
+            vec![tx_stmt_wrapped, op_si, op_du, rebound_evidence, st_rest],
+        )
+        .unwrap();
+    record(stats, "ReplayContentsStepInsert");
+    st
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_replay_mutate(
     ctx: &mut BuildContext,
@@ -433,14 +681,48 @@ fn build_replay_mutate(
     lm.delete(&Value::from(old.commitment())).unwrap();
     let mut nl = lm.clone();
     nl.insert(&Value::from(new.clone())).unwrap();
-    let okh = hash_values(&[
-        Value::from(old.commitment()),
-        old.get(&StrKey::from("key")).unwrap().unwrap(),
-    ]);
-    let nul = hash_values(&[Value::from(okh), Value::from(OBJECT_NULLIFIER_VERSION)]);
+    let nul = object_nullifier_from_key_hash(object_key_hash(old).unwrap());
     let mut nn = nullifiers.clone();
     nn.insert(&Value::from(nul)).unwrap();
-    let m1 = tx_with(&btx, "live", Value::from(nl.clone()));
+
+    let st_event = build_replay_mutate_event(ctx, stats, new, old, &btx, &lm, &nl, &nn);
+
+    let rebound_evidence = ctx
+        .builder
+        .priv_op(Operation::replace_value_with_entry(
+            vec![None, Some((&btx, "chain_start")), Some((&btx, "chain_end"))],
+            guard_evidence,
+        ))
+        .unwrap();
+    let st = ctx
+        .apply_custom_pred_simple(
+            false,
+            "ReplayMutate",
+            vec![tx_stmt, st_event, rebound_evidence],
+        )
+        .unwrap();
+    record(stats, "ReplayMutate");
+    (st, nl, nn)
+}
+
+/// Build `ReplayMutateEvent` (and its inner `ReplayNullify`). Shared
+/// between `build_replay_mutate` and `build_replay_step_mutate` (these
+/// inner predicates don't reference `new`/`old` via anchored keys —
+/// they take the dicts directly as wildcards).
+#[allow(clippy::too_many_arguments)]
+fn build_replay_mutate_event(
+    ctx: &mut BuildContext,
+    stats: &mut TxStats,
+    new: &Dictionary,
+    old: &Dictionary,
+    btx: &Dictionary,
+    lm: &Set,
+    nl: &Set,
+    nn: &Set,
+) -> Statement {
+    let okh = object_key_hash(old).unwrap();
+    let nul = object_nullifier_from_key_hash(okh);
+    let m1 = tx_with(btx, "live", Value::from(nl.clone()));
     let atx = tx_with(&m1, "nullifiers", Value::from(nn.clone()));
 
     // ReplayNullify (called inside ReplayMutateEvent)
@@ -469,11 +751,11 @@ fn build_replay_mutate(
         .unwrap();
     record(stats, "ReplayNullify");
 
-    // ReplayMutateEvent (live swap + nullify; chain/event-hash work is
-    // delegated to the TxMutate statement referenced by ReplayMutate).
+    // Live swap + nullify; chain/event-hash work is delegated to the
+    // parent's TxMutate statement.
     let op_sd = ctx
         .builder
-        .priv_op(op!(SetDelete(lm, (&btx, "live"), old)))
+        .priv_op(op!(SetDelete(lm, (btx, "live"), old)))
         .unwrap();
     let op_si = ctx.builder.priv_op(op!(SetInsert(nl, lm, new))).unwrap();
     let op_du_live = ctx
@@ -488,25 +770,70 @@ fn build_replay_mutate(
         )
         .unwrap();
     record(stats, "ReplayMutateEvent");
+    st_event
+}
 
-    // ReplayMutate (TxMutate ref + event + guard). Type-preservation
-    // and type-pin are both inside TxMutate via its shared `type` arg.
+/// Build a `ReplayContentsStepMutate` statement: the inlined body of
+/// `ReplayMutate` plus the recursive `ReplayContents` tail. `old` and
+/// `new` are packed into a `pair` dict so they share a single
+/// wildcard slot (keeps the predicate at 8 wildcards). The TxMutate
+/// and guard sub-statements are re-anchored to `pair.old` / `pair.new`.
+/// `lm`/`nl`/`nn` are supplied by the caller (which already needs them
+/// for the recursive tail).
+#[allow(clippy::too_many_arguments)]
+fn build_replay_step_mutate(
+    ctx: &mut BuildContext,
+    stats: &mut TxStats,
+    new: &Dictionary,
+    old: &Dictionary,
+    live: &Set,
+    lm: &Set,
+    nl: &Set,
+    nullifiers: &Set,
+    nn: &Set,
+    chain_start: Hash,
+    chain_end: Hash,
+    tx_stmt: Statement,
+    guard_evidence: Statement,
+    st_rest: Statement,
+) -> Statement {
+    let btx = build_tx(live, nullifiers, chain_start, chain_end);
+    let pair = dict!({
+        "old" => old.clone(),
+        "new" => new.clone()
+    });
+
+    let st_event = build_replay_mutate_event(ctx, stats, new, old, &btx, lm, nl, nn);
+
+    // Re-anchor TxMutate's `new` (slot 2) and `old` (slot 3) to pair.
+    let tx_stmt_wrapped = ctx
+        .builder
+        .priv_op(Operation::replace_value_with_entry(
+            vec![None, None, Some((&pair, "new")), Some((&pair, "old")), None],
+            tx_stmt,
+        ))
+        .unwrap();
+    // Re-anchor guard call's slot 0 (new) to pair.new.
     let rebound_evidence = ctx
         .builder
         .priv_op(Operation::replace_value_with_entry(
-            vec![None, Some((&btx, "chain_start")), Some((&btx, "chain_end"))],
+            vec![
+                Some((&pair, "new")),
+                Some((&btx, "chain_start")),
+                Some((&btx, "chain_end")),
+            ],
             guard_evidence,
         ))
         .unwrap();
     let st = ctx
         .apply_custom_pred_simple(
             false,
-            "ReplayMutate",
-            vec![tx_stmt, st_event, rebound_evidence],
+            "ReplayContentsStepMutate",
+            vec![tx_stmt_wrapped, st_event, rebound_evidence, st_rest],
         )
         .unwrap();
-    record(stats, "ReplayMutate");
-    (st, nl, nn)
+    record(stats, "ReplayContentsStepMutate");
+    st
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -525,18 +852,13 @@ fn build_replay_delete(
 
     let mut nl = live.clone();
     nl.delete(&Value::from(old.commitment())).unwrap();
-    let okh = hash_values(&[
-        Value::from(old.commitment()),
-        old.get(&StrKey::from("key")).unwrap().unwrap(),
-    ]);
-    let nul = hash_values(&[Value::from(okh), Value::from(OBJECT_NULLIFIER_VERSION)]);
+    let okh = object_key_hash(old).unwrap();
+    let nul = object_nullifier_from_key_hash(okh);
     let mut nn = nullifiers.clone();
     nn.insert(&Value::from(nul)).unwrap();
     let m1 = tx_with(&btx, "live", Value::from(nl.clone()));
     let atx = tx_with(&m1, "nullifiers", Value::from(nn.clone()));
 
-    // ReplayNullify (called directly from ReplayDelete now that
-    // ReplayDeleteEvent has been inlined).
     let op_h1 = ctx
         .builder
         .priv_op(op!(HashOf(okh, old, (old, "key"))))
@@ -562,8 +884,6 @@ fn build_replay_delete(
         .unwrap();
     record(stats, "ReplayNullify");
 
-    // ReplayDelete (TxDelete ref + live removal + nullify + guard).
-    // ReplayDeleteEvent was inlined; type-pin is inside TxDelete now.
     let op_sd = ctx
         .builder
         .priv_op(op!(SetDelete(nl, (&btx, "live"), old)))

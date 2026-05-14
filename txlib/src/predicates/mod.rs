@@ -63,8 +63,18 @@ mod tests {
         module.predicate_ref_by_name("ReplayActions").unwrap();
         module.predicate_ref_by_name("ReplayActionsStep").unwrap();
         module.predicate_ref_by_name("ReplayContents").unwrap();
-        module.predicate_ref_by_name("ReplayContentsDone").unwrap();
-        module.predicate_ref_by_name("ReplayContentsPair").unwrap();
+        module
+            .predicate_ref_by_name("ReplayContentsStepInsert")
+            .unwrap();
+        module
+            .predicate_ref_by_name("ReplayContentsStepMutate")
+            .unwrap();
+        module
+            .predicate_ref_by_name("ReplayContentsStepDelete")
+            .unwrap();
+        module
+            .predicate_ref_by_name("ReplayContentsStepAction")
+            .unwrap();
         module.predicate_ref_by_name("ReplayElement").unwrap();
         module.predicate_ref_by_name("ReplayAction").unwrap();
         module.predicate_ref_by_name("ReplayInsert").unwrap();

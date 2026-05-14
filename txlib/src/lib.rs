@@ -224,6 +224,14 @@ pub fn object_key_hash(obj: &Dictionary) -> anyhow::Result<Hash> {
     Ok(hash_values(&[Value::from(obj.commitment()), key]))
 }
 
+/// Extract the `type` field from an object dict. The type is a
+/// predicate hash that identifies the object's `IsX` rule.
+pub fn object_type(obj: &Dictionary) -> Value {
+    obj.get(&StrKey::from("type"))
+        .expect("object dict lookup")
+        .expect("object missing required type field")
+}
+
 pub fn object_nullifier_from_key_hash(obj_key_hash: Hash) -> Hash {
     hash_values(&[
         Value::from(obj_key_hash),
@@ -522,8 +530,9 @@ impl TxBuilder {
 
     /// Close the action scope identified by `scope_id`. Verifies that
     /// every direct event in the scope has guard evidence attached
-    /// (panics on the first missing one) and that the supplied id
-    /// matches the top-of-stack scope.
+    /// (panics on the first missing one), that the supplied id matches
+    /// the top-of-stack scope, and that the scope is non-empty (the
+    /// replay predicates only cover K>=1 bodies).
     pub fn end_action(&mut self, scope_id: u64) {
         self.verify_scope_guards(scope_id);
         let scope = self.action_stack.pop().expect("no action scope to close");
@@ -531,6 +540,10 @@ impl TxBuilder {
             scope.scope_id, scope_id,
             "end_action scope id mismatch (expected {scope_id}, got {})",
             scope.scope_id
+        );
+        assert!(
+            !scope.events.is_empty(),
+            "end_action: action scope must contain at least one event"
         );
         self.push_event(ChainEvent::Action {
             chain_after: self.chain,
@@ -608,7 +621,7 @@ impl TxBuilder {
         self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
         self.live.insert(&Value::from(new.clone())).unwrap();
 
-        let new_type = new.get(&StrKey::from("type")).unwrap().unwrap();
+        let new_type = object_type(new);
         let st_dc = ctx
             .builder
             .priv_op(op!(DictContains(new, "type", new_type.clone())))
@@ -663,8 +676,8 @@ impl TxBuilder {
             .insert(&Value::from(compute_nullifier(old)))
             .unwrap();
 
-        let new_type = new.get(&StrKey::from("type")).unwrap().unwrap();
-        let old_type = old.get(&StrKey::from("type")).unwrap().unwrap();
+        let new_type = object_type(new);
+        let old_type = object_type(old);
         assert_eq!(new_type, old_type, "mutate must preserve object type");
         let st_dc_new = ctx
             .builder
@@ -719,7 +732,7 @@ impl TxBuilder {
             .insert(&Value::from(compute_nullifier(old)))
             .unwrap();
 
-        let old_type = old.get(&StrKey::from("type")).unwrap().unwrap();
+        let old_type = object_type(old);
         let st_dc = ctx
             .builder
             .priv_op(op!(DictContains(old, "type", old_type.clone())))
@@ -755,6 +768,10 @@ impl TxBuilder {
     /// Build the replay chain and emit TxFinalized.
     pub fn finalize(self, ctx: &mut BuildContext) -> (Statement, Tx, TxStats) {
         assert!(self.action_stack.is_empty(), "unclosed action scopes");
+        assert!(
+            !self.events.is_empty(),
+            "finalize: Tx must contain at least one top-level action"
+        );
 
         let mut stats = self.stats;
         let zero: Hash = EMPTY_VALUE.into();
@@ -1221,25 +1238,6 @@ mod tests {
 
         let decoded: StateRoot = serde_json::from_value(encoded).unwrap();
         assert_eq!(decoded, original);
-    }
-
-    #[test]
-    fn test_tx_builder_empty() {
-        let modules = vec![Arc::new(crate::predicates::module())];
-        let state = TestState::empty(0);
-        let params = Params::default();
-        let vd_set = VDSet::new(&[]);
-        let builder = MultiPodBuilder::new(&params, &vd_set);
-        let mut ctx = BuildContext { builder, modules };
-
-        let tx = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
-        let (st, tx, stats) = tx.finalize(&mut ctx);
-        print_stats(&stats);
-        ctx.builder.reveal(&st).unwrap();
-
-        solve_and_verify(ctx.builder);
-        assert!(tx.live.iter().next().is_none());
-        assert!(tx.nullifiers.iter().next().is_none());
     }
 
     /// Tx 1: Spawn a WoodPick (insert, no inputs).

@@ -91,37 +91,61 @@ Nullify(nullifier, obj, private: obj_key_hash) = AND(
 // ========================================================
 //
 // Replay walks the recorded event chain, element by element.
-// ReplayContents encodes a variable-length list as a recursive OR.
-// The four branches handle different list lengths:
-//   Done    -- 0 elements (before == after)
-//   Element -- exactly 1 element
-//   Pair    -- exactly 2 elements (avoids one recursion level)
-//   Step    -- 1 element + recursive tail (3+ elements)
+// ReplayContents encodes a variable-length list (K >= 1) as a
+// recursive OR. Empty bodies are forbidden by TxBuilder, so the
+// branches only cover the K=1 leaf and the four type-specialized
+// K>=2 step variants:
+//   Element     -- exactly 1 element
+//   StepInsert  -- head=Insert, tail=ReplayContents (K-1 elements)
+//   StepMutate  -- head=Mutate, tail=ReplayContents (K-1 elements)
+//   StepDelete  -- head=Delete, tail=ReplayContents (K-1 elements)
+//   StepAction  -- head=Action, tail=ReplayContents (K-1 elements)
+// Specializing the step on the head's type folds out the
+// ReplayElement OR-dispatch that the head would otherwise need.
 
 ReplayContents(before_tx, after_tx, before_chain, after_chain) = OR(
-  ReplayContentsDone(before_tx, after_tx, before_chain, after_chain)
   ReplayElement(before_tx, after_tx, before_chain, after_chain)
-  ReplayContentsPair(before_tx, after_tx, before_chain, after_chain)
-  ReplayContentsStep(before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepInsert(before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepMutate(before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepDelete(before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepAction(before_tx, after_tx, before_chain, after_chain)
 )
 
-// Empty list: nothing to replay, state passes through unchanged.
-ReplayContentsDone(before_tx, after_tx, before_chain, after_chain) = AND(
-  Equal(before_tx, after_tx)
-  Equal(before_chain, after_chain)
+// Head + recursive tail, specialized per head event type. Skips the
+// ReplayElement layer the head would otherwise need. For Insert and
+// Mutate the body of `ReplayInsert`/`ReplayMutate` is inlined here
+// (those predicates have room to fit alongside the recursive tail in
+// 5 sub-statements). To keep the wildcard count within the pod2 limit
+// of 8, head-event objects are packed into a small private dict and
+// accessed via anchored keys: `ins.new`/`ins.new_live` for Insert,
+// `pair.old`/`pair.new` for Mutate. ReplayDelete is too large to
+// inline so its Step variant just references the wrapping predicate.
+ReplayContentsStepInsert(before_tx, after_tx, before_chain, after_chain,
+    private: mid_tx, mid_chain, ins, guard) = AND(
+  TxInsert(mid_chain, before_chain, ins.new, guard)
+  SetInsert(ins.new_live, before_tx.live, ins.new)
+  DictUpdate(mid_tx, before_tx, "live", ins.new_live)
+  guard(ins.new, before_tx.chain_start, before_tx.chain_end)
+  ReplayContents(mid_tx, after_tx, mid_chain, after_chain)
 )
 
-// Exactly two elements, threaded through a midpoint.
-ReplayContentsPair(before_tx, after_tx, before_chain, after_chain,
+ReplayContentsStepMutate(before_tx, after_tx, before_chain, after_chain,
+    private: mid_tx, mid_chain, pair, guard) = AND(
+  TxMutate(mid_chain, before_chain, pair.new, pair.old, guard)
+  ReplayMutateEvent(before_tx, mid_tx, pair.old, pair.new)
+  guard(pair.new, before_tx.chain_start, before_tx.chain_end)
+  ReplayContents(mid_tx, after_tx, mid_chain, after_chain)
+)
+
+ReplayContentsStepDelete(before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain) = AND(
-  ReplayElement(before_tx, mid_tx, before_chain, mid_chain)
-  ReplayElement(mid_tx, after_tx, mid_chain, after_chain)
+  ReplayDelete(before_tx, mid_tx, before_chain, mid_chain)
+  ReplayContents(mid_tx, after_tx, mid_chain, after_chain)
 )
 
-// Head + recursive tail (for 3+ elements).
-ReplayContentsStep(before_tx, after_tx, before_chain, after_chain,
+ReplayContentsStepAction(before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain) = AND(
-  ReplayElement(before_tx, mid_tx, before_chain, mid_chain)
+  ReplayAction(before_tx, mid_tx, before_chain, mid_chain)
   ReplayContents(mid_tx, after_tx, mid_chain, after_chain)
 )
 
@@ -167,9 +191,9 @@ ReplayAction(before_tx, after_tx, before_chain, after_chain,
 // to ReplayAction here skips the ReplayElement layer that would
 // otherwise be needed to discriminate between event variants.
 // ReplayContents is still used *within* an action, where inserts,
-// mutates, deletes, and sub-actions can all appear.
+// mutates, deletes, and sub-actions can all appear. Empty top-level
+// transactions are forbidden by TxBuilder, so there is no Done leaf.
 ReplayActions(before_tx, after_tx, before_chain, after_chain) = OR(
-  ReplayContentsDone(before_tx, after_tx, before_chain, after_chain)
   ReplayAction(before_tx, after_tx, before_chain, after_chain)
   ReplayActionsStep(before_tx, after_tx, before_chain, after_chain)
 )
@@ -190,8 +214,6 @@ ReplayActionsStep(before_tx, after_tx, before_chain, after_chain,
 // guard dispatch. Referencing TxInsert instead of re-proving the
 // HashOf equations lets the prover reuse the record-time statement
 // that it already built for the application's action predicate.
-// TxInsert pins `new.type == guard`, so no separate DictContains
-// is needed here.
 ReplayInsert(before_tx, after_tx, before_chain, after_chain,
     private: new, new_live, guard) = AND(
   TxInsert(after_chain, before_chain, new, guard)
@@ -226,9 +248,8 @@ ReplayMutateEvent(before_tx, after_tx, old, new,
 )
 
 // Full mutate replay: chain step (via TxMutate) + state update +
-// guard dispatch. TxMutate pins both old.type and new.type to
-// `guard` via its shared type arg, so the explicit type-preservation
-// check is implicit and the guard dispatches on `new` alone.
+// guard dispatch. The guard dispatches on `new` alone because
+// TxMutate's shared `type` arg already pins old.type == new.type.
 ReplayMutate(before_tx, after_tx, before_chain, after_chain,
     private: old, new, guard) = AND(
   TxMutate(after_chain, before_chain, new, old, guard)
@@ -241,8 +262,7 @@ ReplayMutate(before_tx, after_tx, before_chain, after_chain,
 // ========================================================
 
 // Full delete replay: chain step (via TxDelete) + live-set removal
-// + nullifier accumulation + guard dispatch. TxDelete pins
-// `old.type == guard`, so no separate DictContains is needed.
+// + nullifier accumulation + guard dispatch.
 ReplayDelete(before_tx, after_tx, before_chain, after_chain,
     private: old, guard, new_live, mid_tx) = AND(
   TxDelete(after_chain, before_chain, old, guard)

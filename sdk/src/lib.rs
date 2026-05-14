@@ -775,6 +775,17 @@ impl ActionHandle {
             None
         };
 
+        // Anchor an intermediate chain-step ts (1..chain_max_ts) to the
+        // packed `chain_steps` record. Endpoint ts (0 = chain0, max =
+        // chain) stay as scalar wildcards. Returns None when packing is
+        // off or `ts` is an endpoint.
+        let chain_step_anchor = |ts: usize| -> Option<OperationArg> {
+            if !action_chain_packed || ts == 0 || ts >= chain_max_ts {
+                return None;
+            }
+            Some((chain_steps_array.as_ref().unwrap(), ts as i64).into())
+        };
+
         // Wrap each pending Tx event with its anchors. Arg layout
         // (per txlib):
         //   TxInsert(chain, prev_chain, new, type)
@@ -807,18 +818,8 @@ impl ActionHandle {
                     };
                 let pre_ts = pending.post_ts - 1;
                 let post_ts = pending.post_ts;
-                let chain_anchor: Option<OperationArg> = match (action_chain_packed, post_ts) {
-                    (true, t) if t > 0 && t < chain_max_ts => {
-                        Some((chain_steps_array.as_ref().unwrap(), t as i64).into())
-                    }
-                    _ => None,
-                };
-                let prev_chain_anchor: Option<OperationArg> = match (action_chain_packed, pre_ts) {
-                    (true, t) if t > 0 && t < chain_max_ts => {
-                        Some((chain_steps_array.as_ref().unwrap(), t as i64).into())
-                    }
-                    _ => None,
-                };
+                let chain_anchor = chain_step_anchor(post_ts);
+                let prev_chain_anchor = chain_step_anchor(pre_ts);
                 let replacements: Vec<Option<OperationArg>> = match io {
                     ObjectIO::Output => {
                         vec![chain_anchor, prev_chain_anchor, new_anchor, None]
@@ -890,24 +891,12 @@ impl ActionHandle {
                         let st = if action_chain_packed {
                             // Sub-action signature ends with `..., chain0, chain`
                             // (parent pre/post ts); the in/out record args (if
-                            // any) precede them. Anchor those two slots to
-                            // chain_steps entries when intermediate.
+                            // any) precede them.
                             let arg_count = st_literal.args().len();
                             let post_ts = inst_chain_ts[i].expect("SubAction has parent_ts");
                             let pre_ts = post_ts - 1;
-                            let chain_arr = chain_steps_array.as_ref().unwrap();
-                            let prev_chain_anchor: Option<OperationArg> =
-                                if pre_ts > 0 && pre_ts < chain_max_ts {
-                                    Some((chain_arr, pre_ts as i64).into())
-                                } else {
-                                    None
-                                };
-                            let chain_anchor: Option<OperationArg> =
-                                if post_ts > 0 && post_ts < chain_max_ts {
-                                    Some((chain_arr, post_ts as i64).into())
-                                } else {
-                                    None
-                                };
+                            let prev_chain_anchor = chain_step_anchor(pre_ts);
+                            let chain_anchor = chain_step_anchor(post_ts);
                             if prev_chain_anchor.is_some() || chain_anchor.is_some() {
                                 let mut replacements: Vec<Option<OperationArg>> =
                                     vec![None; arg_count];
