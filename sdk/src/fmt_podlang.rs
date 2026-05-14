@@ -542,29 +542,31 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         }
     }
 
-    // ---- Per-Object type guard + Tx event lines ----
+    // ---- Per-Object Tx event lines ----
+    // The Tx primitive checks `DictContains(<obj>, "type", <guard>)`
+    // internally, so the guard predicate ref is passed as the last
+    // arg to TxInsert / TxDelete / TxMutate (and pins both sides for
+    // mutate, making the type-preservation check implicit).
     for (io, varname, class) in &objs {
-        // Mutate guards the pre-form (ts=0); Input/Output guard the
-        // post-form (the current ts). VarNameFmt picks the bare or
-        // anchored rendering per the side's `needs_*_wildcard`.
-        let mut guard_fmt = vars[varname.as_str()];
-        if matches!(io, ObjectIO::Mutate) {
-            guard_fmt.ts = 0;
-        }
-        writeln!(
-            w,
-            r#"  DictContains({guard_fmt}, "type", @self_predicate(Is{class}))"#
-        )?;
         let chain = vars["chain"];
         let chain_next = chain.next();
         let obj_str = vars[varname.as_str()];
         match io {
-            ObjectIO::Input => writeln!(w, "  tx::TxDelete({chain_next}, {chain}, {obj_str})")?,
-            ObjectIO::Output => writeln!(w, "  tx::TxInsert({chain_next}, {chain}, {obj_str})")?,
+            ObjectIO::Input => writeln!(
+                w,
+                "  tx::TxDelete({chain_next}, {chain}, {obj_str}, @self_predicate(Is{class}))"
+            )?,
+            ObjectIO::Output => writeln!(
+                w,
+                "  tx::TxInsert({chain_next}, {chain}, {obj_str}, @self_predicate(Is{class}))"
+            )?,
             ObjectIO::Mutate => {
                 let mut pre = vars[varname.as_str()];
                 pre.ts = 0;
-                writeln!(w, "  tx::TxMutate({chain_next}, {chain}, {obj_str}, {pre})")?;
+                writeln!(
+                    w,
+                    "  tx::TxMutate({chain_next}, {chain}, {obj_str}, {pre}, @self_predicate(Is{class}))"
+                )?;
             }
         }
         vars.get_mut("chain").expect("chain exists").inc();

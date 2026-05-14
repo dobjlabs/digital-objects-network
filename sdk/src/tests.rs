@@ -246,7 +246,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "91a689e2858c0745c5188533862f75b0310791abc4e426aae0a8d06b86dd6988"
+        module_hash = "57d594952b75ec3ae1fbef4f40022da85c6197bb0de54b5d5b9b24fd177a145f"
 
         [[classes]]
         name = "Log"
@@ -317,8 +317,7 @@ fn test_records_form_just_output() {
 // Actions
 
 JustOutput(out JustOutputOut, chain0, chain) = AND(
-  DictContains(out.x, "type", @self_predicate(IsFoo))
-  tx::TxInsert(chain, chain0, out.x)
+  tx::TxInsert(chain, chain0, out.x, @self_predicate(IsFoo))
 )
 
 // Bridges
@@ -370,10 +369,8 @@ record LogToWoodOut = (_pad, wood)
 
 LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, wood0, key) = AND(
   DictUpdate(out.wood, wood0, "key", key)
-  DictContains(in.log, "type", @self_predicate(IsLog))
-  tx::TxDelete(chain1, chain0, in.log)
-  DictContains(out.wood, "type", @self_predicate(IsWood))
-  tx::TxInsert(chain, chain1, out.wood)
+  tx::TxDelete(chain1, chain0, in.log, @self_predicate(IsLog))
+  tx::TxInsert(chain, chain1, out.wood, @self_predicate(IsWood))
 )
 
 // Bridges
@@ -438,8 +435,7 @@ fn test_records_form_subaction() {
     // wildcard is dropped and body refs render as `out.bar`.
     let expected_parent = r#"MineBar(out MineBarOut, chain0, chain, private: chain1, _UseFoo_in_0 UseFooIn, _UseFoo_out_0 UseFooOut) = AND(
   UseFoo(_UseFoo_in_0, _UseFoo_out_0, chain0, chain1)
-  DictContains(out.bar, "type", @self_predicate(IsBar))
-  tx::TxInsert(chain, chain1, out.bar)
+  tx::TxInsert(chain, chain1, out.bar, @self_predicate(IsBar))
 )
 "#;
     assert!(
@@ -499,8 +495,7 @@ UseFoo(in UseFooIn, out UseFooOut, chain0, chain, private: foo0, dur) = AND(
   Gt(foo0.durability, 0)
   SumOf(foo0.durability, dur, 1)
   DictUpdate(out.foo, foo0, "durability", dur)
-  DictContains(foo0, "type", @self_predicate(IsFoo))
-  tx::TxMutate(chain, chain0, out.foo, foo0)
+  tx::TxMutate(chain, chain0, out.foo, foo0, @self_predicate(IsFoo))
 )
 
 // Bridges

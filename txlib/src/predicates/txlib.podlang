@@ -47,21 +47,29 @@
 // the hash relationship but do not update live/nullifier sets --
 // that happens during replay.
 
-// Insert: chain = H(prev, H(0, new))
-TxInsert(chain, prev_chain, new, private: event_hash) = AND(
+// Insert: chain = H(prev, H(0, new)). The `type` arg pins the
+// inserted object's type field so ReplayInsert can dispatch the
+// guard without re-extracting it.
+TxInsert(chain, prev_chain, new, type, private: event_hash) = AND(
+  DictContains(new, "type", type)
   HashOf(event_hash, 0, new)
   HashOf(chain, prev_chain, event_hash)
 )
 
-// Mutate: chain = H(prev, H(old, new)). The type-preservation check
-// is enforced by ReplayMutate, not here.
-TxMutate(chain, prev_chain, new, old, private: event_hash) = AND(
+// Mutate: chain = H(prev, H(old, new)). The shared `type` arg pins
+// both old and new to the same type, enforcing type preservation
+// implicitly (no separate Equal needed).
+TxMutate(chain, prev_chain, new, old, type, private: event_hash) = AND(
+  DictContains(new, "type", type)
+  DictContains(old, "type", type)
   HashOf(event_hash, old, new)
   HashOf(chain, prev_chain, event_hash)
 )
 
-// Delete: chain = H(prev, H(old, 0))
-TxDelete(chain, prev_chain, old, private: event_hash) = AND(
+// Delete: chain = H(prev, H(old, 0)). The `type` arg pins the
+// deleted object's type field for guard dispatch.
+TxDelete(chain, prev_chain, old, type, private: event_hash) = AND(
+  DictContains(old, "type", type)
   HashOf(event_hash, old, 0)
   HashOf(chain, prev_chain, event_hash)
 )
@@ -182,12 +190,13 @@ ReplayActionsStep(before_tx, after_tx, before_chain, after_chain,
 // guard dispatch. Referencing TxInsert instead of re-proving the
 // HashOf equations lets the prover reuse the record-time statement
 // that it already built for the application's action predicate.
+// TxInsert pins `new.type == guard`, so no separate DictContains
+// is needed here.
 ReplayInsert(before_tx, after_tx, before_chain, after_chain,
     private: new, new_live, guard) = AND(
-  TxInsert(after_chain, before_chain, new)
+  TxInsert(after_chain, before_chain, new, guard)
   SetInsert(new_live, before_tx.live, new)
   DictUpdate(after_tx, before_tx, "live", new_live)
-  DictContains(new, "type", guard)
   guard(new, before_tx.chain_start, before_tx.chain_end)
 )
 
@@ -216,17 +225,14 @@ ReplayMutateEvent(before_tx, after_tx, old, new,
   ReplayNullify(mid_tx, after_tx, old)
 )
 
-// Full mutate replay: type-preserve check + chain step (via TxMutate)
-// + state update + guard dispatch. The explicit old.type == new.type
-// check lets the guard dispatch on *new* alone (the authorizing action
-// predicate can reference either old or new, since their types are
-// equal here).
+// Full mutate replay: chain step (via TxMutate) + state update +
+// guard dispatch. TxMutate pins both old.type and new.type to
+// `guard` via its shared type arg, so the explicit type-preservation
+// check is implicit and the guard dispatches on `new` alone.
 ReplayMutate(before_tx, after_tx, before_chain, after_chain,
     private: old, new, guard) = AND(
-  Equal(old.type, new.type)
-  TxMutate(after_chain, before_chain, new, old)
+  TxMutate(after_chain, before_chain, new, old, guard)
   ReplayMutateEvent(before_tx, after_tx, old, new)
-  DictContains(new, "type", guard)
   guard(new, before_tx.chain_start, before_tx.chain_end)
 )
 
@@ -234,22 +240,15 @@ ReplayMutate(before_tx, after_tx, before_chain, after_chain,
 // Replay: Delete
 // ========================================================
 
-// Live-set removal + nullifier accumulation. Chain/event-hash work is
-// delegated to TxDelete in the ReplayDelete parent.
-ReplayDeleteEvent(before_tx, after_tx, old,
-    private: new_live, mid_tx) = AND(
+// Full delete replay: chain step (via TxDelete) + live-set removal
+// + nullifier accumulation + guard dispatch. TxDelete pins
+// `old.type == guard`, so no separate DictContains is needed.
+ReplayDelete(before_tx, after_tx, before_chain, after_chain,
+    private: old, guard, new_live, mid_tx) = AND(
+  TxDelete(after_chain, before_chain, old, guard)
   SetDelete(new_live, before_tx.live, old)
   DictUpdate(mid_tx, before_tx, "live", new_live)
   ReplayNullify(mid_tx, after_tx, old)
-)
-
-// Full delete replay: chain step (via TxDelete) + state update +
-// guard dispatch.
-ReplayDelete(before_tx, after_tx, before_chain, after_chain,
-    private: old, guard) = AND(
-  TxDelete(after_chain, before_chain, old)
-  ReplayDeleteEvent(before_tx, after_tx, old)
-  DictContains(old, "type", guard)
   guard(old, before_tx.chain_start, before_tx.chain_end)
 )
 

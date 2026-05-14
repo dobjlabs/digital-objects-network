@@ -159,7 +159,7 @@ The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
 The example in the test `test_sdk_1` produces the following podlang code:
 
 ```
-use module 0x3f981843afd48984c701f396fc890db3c6a6d8753f1c7390b925de22194a1406 as tx
+use module 0xc0fec0f1de0c8f66b9c2171c4f10557c9e575cca59751e4ff37471728a18c385 as tx
 use intro Vdf(count, input, output) from 0xb77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06
 use intro LtEqU256(lhs, rhs) from 0x2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529
 
@@ -179,37 +179,28 @@ record MineStoneWithWoodPickOut = (_pad, stone)
 FindLog(out FindLogOut, chain0, chain, private: log0, work) = AND(
   Vdf(3, log0, work)
   DictUpdate(out.log, log0, "work", work)
-  DictContains(out.log, "type", @self_predicate(IsLog))
-  tx::TxInsert(chain, chain0, out.log)
+  tx::TxInsert(chain, chain0, out.log, @self_predicate(IsLog))
 )
 
 CraftWood(in CraftWoodIn, out CraftWoodOut, chain0, chain, private: chain1, wood0, wood, key) = AND(
   ArrayContains(out, CraftWoodOut::wood, wood)
   DictUpdate(wood, wood0, "key", key)
   LtEqU256(wood, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))
-  DictContains(in.log, "type", @self_predicate(IsLog))
-  tx::TxDelete(chain1, chain0, in.log)
-  DictContains(wood, "type", @self_predicate(IsWood))
-  tx::TxInsert(chain, chain1, wood)
+  tx::TxDelete(chain1, chain0, in.log, @self_predicate(IsLog))
+  tx::TxInsert(chain, chain1, wood, @self_predicate(IsWood))
 )
 
 CraftSticks(in CraftSticksIn, out CraftSticksOut, chain0, chain, private: chain1, chain2) = AND(
-  DictContains(in.wood, "type", @self_predicate(IsWood))
-  tx::TxDelete(chain1, chain0, in.wood)
-  DictContains(out.stick_a, "type", @self_predicate(IsStick))
-  tx::TxInsert(chain2, chain1, out.stick_a)
-  DictContains(out.stick_b, "type", @self_predicate(IsStick))
-  tx::TxInsert(chain, chain2, out.stick_b)
+  tx::TxDelete(chain1, chain0, in.wood, @self_predicate(IsWood))
+  tx::TxInsert(chain2, chain1, out.stick_a, @self_predicate(IsStick))
+  tx::TxInsert(chain, chain2, out.stick_b, @self_predicate(IsStick))
 )
 
 CraftWoodPick(in CraftWoodPickIn, out CraftWoodPickOut, chain0, chain, private: chain1, chain2) = AND(
   DictContains(out.pick, "durability", 100)
-  DictContains(in.wood, "type", @self_predicate(IsWood))
-  tx::TxDelete(chain1, chain0, in.wood)
-  DictContains(in.stick, "type", @self_predicate(IsStick))
-  tx::TxDelete(chain2, chain1, in.stick)
-  DictContains(out.pick, "type", @self_predicate(IsWoodPick))
-  tx::TxInsert(chain, chain2, out.pick)
+  tx::TxDelete(chain1, chain0, in.wood, @self_predicate(IsWood))
+  tx::TxDelete(chain2, chain1, in.stick, @self_predicate(IsStick))
+  tx::TxInsert(chain, chain2, out.pick, @self_predicate(IsWoodPick))
 )
 
 UseWoodPick(in UseWoodPickIn, out UseWoodPickOut, chain0, chain, private: wood_pick0, wood_pick1, wood_pick2, durability, key, work) = AND(
@@ -220,14 +211,12 @@ UseWoodPick(in UseWoodPickIn, out UseWoodPickOut, chain0, chain, private: wood_p
   DictUpdate(wood_pick2, wood_pick1, "key", key)
   Vdf(10, wood_pick2, work)
   DictUpdate(out.wood_pick, wood_pick2, "work", work)
-  DictContains(wood_pick0, "type", @self_predicate(IsWoodPick))
-  tx::TxMutate(chain, chain0, out.wood_pick, wood_pick0)
+  tx::TxMutate(chain, chain0, out.wood_pick, wood_pick0, @self_predicate(IsWoodPick))
 )
 
 MineStoneWithWoodPick(out MineStoneWithWoodPickOut, chain0, chain, private: chain1, _UseWoodPick_in_0 UseWoodPickIn, _UseWoodPick_out_0 UseWoodPickOut) = AND(
   UseWoodPick(_UseWoodPick_in_0, _UseWoodPick_out_0, chain0, chain1)
-  DictContains(out.stone, "type", @self_predicate(IsStone))
-  tx::TxInsert(chain, chain1, out.stone)
+  tx::TxInsert(chain, chain1, out.stone, @self_predicate(IsStone))
 )
 
 // Bridges

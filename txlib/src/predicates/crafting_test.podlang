@@ -11,18 +11,15 @@ use module 0xTXLIB_MODULE_HASH as tx
 // ========================================================
 
 DeleteLog(log, chain_start, chain_end) = AND(
-  DictContains(log, "type", @self_predicate(IsLog))
-  tx::TxDelete(chain_end, chain_start, log)
+  tx::TxDelete(chain_end, chain_start, log, @self_predicate(IsLog))
 )
 
 DeleteWood(wood, chain_start, chain_end) = AND(
-  DictContains(wood, "type", @self_predicate(IsWood))
-  tx::TxDelete(chain_end, chain_start, wood)
+  tx::TxDelete(chain_end, chain_start, wood, @self_predicate(IsWood))
 )
 
 DeleteStick(stick, chain_start, chain_end) = AND(
-  DictContains(stick, "type", @self_predicate(IsStick))
-  tx::TxDelete(chain_end, chain_start, stick)
+  tx::TxDelete(chain_end, chain_start, stick, @self_predicate(IsStick))
 )
 
 // ========================================================
@@ -31,26 +28,22 @@ DeleteStick(stick, chain_start, chain_end) = AND(
 
 // FindLog: creates a log from nothing (simplified: no VDF).
 FindLog(log, chain_start, chain_end) = AND(
-  DictContains(log, "type", @self_predicate(IsLog))
-  tx::TxInsert(chain_end, chain_start, log)
+  tx::TxInsert(chain_end, chain_start, log, @self_predicate(IsLog))
 )
 
 // CraftWood: consumes a log, produces wood (simplified: no LtEqU256).
 CraftWood(wood, chain_start, chain_end,
     private: h0, log) = AND(
   DeleteLog(log, chain_start, h0)
-  DictContains(wood, "type", @self_predicate(IsWood))
-  tx::TxInsert(chain_end, h0, wood)
+  tx::TxInsert(chain_end, h0, wood, @self_predicate(IsWood))
 )
 
 // CraftSticks: consumes wood, produces two sticks.
 CraftSticks(stick_a, stick_b, chain_start, chain_end,
     private: h0, h1, wood) = AND(
   DeleteWood(wood, chain_start, h0)
-  DictContains(stick_a, "type", @self_predicate(IsStick))
-  tx::TxInsert(h1, h0, stick_a)
-  DictContains(stick_b, "type", @self_predicate(IsStick))
-  tx::TxInsert(chain_end, h1, stick_b)
+  tx::TxInsert(h1, h0, stick_a, @self_predicate(IsStick))
+  tx::TxInsert(chain_end, h1, stick_b, @self_predicate(IsStick))
 )
 
 // CraftWoodPick: consumes wood + stick, produces wood pick.
@@ -58,35 +51,31 @@ CraftWoodPick(wood_pick, chain_start, chain_end,
     private: h0, h1, wood, stick) = AND(
   DeleteWood(wood, chain_start, h0)
   DeleteStick(stick, h0, h1)
-  DictContains(wood_pick, "type", @self_predicate(IsWoodPick))
   DictContains(wood_pick, "durability", 100)
-  tx::TxInsert(chain_end, h1, wood_pick)
+  tx::TxInsert(chain_end, h1, wood_pick, @self_predicate(IsWoodPick))
 )
 
 // UseWoodPick: mutates a wood pick, decrementing durability.
 // Simplified: no VDF, no key rotation.
 UseWoodPick(wood_pick, chain_start, chain_end,
     private: wood_pick0, durability) = AND(
-  DictContains(wood_pick0, "type", @self_predicate(IsWoodPick))
   Gt(wood_pick0.durability, 0)
   SumOf(wood_pick0.durability, durability, 1)
   DictUpdate(wood_pick, wood_pick0, "durability", durability)
-  tx::TxMutate(chain_end, chain_start, wood_pick, wood_pick0)
+  tx::TxMutate(chain_end, chain_start, wood_pick, wood_pick0, @self_predicate(IsWoodPick))
 )
 
 // MineStone: uses a wood pick to mine stone.
 MineStone(stone, chain_start, chain_end,
     private: h0, pick) = AND(
   UseWoodPick(pick, chain_start, h0)
-  DictContains(stone, "type", @self_predicate(IsStone))
-  tx::TxInsert(chain_end, h0, stone)
+  tx::TxInsert(chain_end, h0, stone, @self_predicate(IsStone))
 )
 
 // SpawnWoodPick: test-only action that creates a wood pick from nothing.
 SpawnWoodPick(wood_pick, chain_start, chain_end) = AND(
-  DictContains(wood_pick, "type", @self_predicate(IsWoodPick))
   DictContains(wood_pick, "durability", 100)
-  tx::TxInsert(chain_end, chain_start, wood_pick)
+  tx::TxInsert(chain_end, chain_start, wood_pick, @self_predicate(IsWoodPick))
 )
 
 // ========================================================

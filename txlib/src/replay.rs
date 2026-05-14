@@ -387,6 +387,7 @@ fn build_replay_insert(
     let atx = tx_with(&btx, "live", Value::from(nl.clone()));
 
     // ReplayInsert: TxInsert (from record time) + state update + guard.
+    // The type-pin is inside TxInsert now, so no separate DictContains here.
     let op_si = ctx
         .builder
         .priv_op(op!(SetInsert(nl, (&btx, "live"), new)))
@@ -394,14 +395,6 @@ fn build_replay_insert(
     let op_du = ctx
         .builder
         .priv_op(op!(DictUpdate(atx, btx, "live", nl)))
-        .unwrap();
-    let guard = new
-        .get(&StrKey::from("type"))
-        .unwrap()
-        .expect("object missing 'type' field");
-    let op_dc = ctx
-        .builder
-        .priv_op(op!(DictContains(new, "type", guard.clone())))
         .unwrap();
     let rebound_evidence = ctx
         .builder
@@ -414,7 +407,7 @@ fn build_replay_insert(
         .apply_custom_pred_simple(
             false,
             "ReplayInsert",
-            vec![tx_stmt, op_si, op_du, op_dc, rebound_evidence],
+            vec![tx_stmt, op_si, op_du, rebound_evidence],
         )
         .unwrap();
     record(stats, "ReplayInsert");
@@ -496,19 +489,8 @@ fn build_replay_mutate(
         .unwrap();
     record(stats, "ReplayMutateEvent");
 
-    // ReplayMutate (type-preserve + TxMutate ref + event + guard).
-    let op_eq = ctx
-        .builder
-        .priv_op(op!(Equal((old, "type"), (new, "type"))))
-        .unwrap();
-    let guard = new
-        .get(&StrKey::from("type"))
-        .unwrap()
-        .expect("object missing 'type' field");
-    let op_dc = ctx
-        .builder
-        .priv_op(op!(DictContains(new, "type", guard.clone())))
-        .unwrap();
+    // ReplayMutate (TxMutate ref + event + guard). Type-preservation
+    // and type-pin are both inside TxMutate via its shared `type` arg.
     let rebound_evidence = ctx
         .builder
         .priv_op(Operation::replace_value_with_entry(
@@ -520,7 +502,7 @@ fn build_replay_mutate(
         .apply_custom_pred_simple(
             false,
             "ReplayMutate",
-            vec![op_eq, tx_stmt, st_event, op_dc, rebound_evidence],
+            vec![tx_stmt, st_event, rebound_evidence],
         )
         .unwrap();
     record(stats, "ReplayMutate");
@@ -553,7 +535,8 @@ fn build_replay_delete(
     let m1 = tx_with(&btx, "live", Value::from(nl.clone()));
     let atx = tx_with(&m1, "nullifiers", Value::from(nn.clone()));
 
-    // ReplayNullify (called inside ReplayDeleteEvent)
+    // ReplayNullify (called directly from ReplayDelete now that
+    // ReplayDeleteEvent has been inlined).
     let op_h1 = ctx
         .builder
         .priv_op(op!(HashOf(okh, old, (old, "key"))))
@@ -579,8 +562,8 @@ fn build_replay_delete(
         .unwrap();
     record(stats, "ReplayNullify");
 
-    // ReplayDeleteEvent (live removal + nullify; chain/event-hash work is
-    // delegated to the TxDelete statement referenced by ReplayDelete).
+    // ReplayDelete (TxDelete ref + live removal + nullify + guard).
+    // ReplayDeleteEvent was inlined; type-pin is inside TxDelete now.
     let op_sd = ctx
         .builder
         .priv_op(op!(SetDelete(nl, (&btx, "live"), old)))
@@ -588,24 +571,6 @@ fn build_replay_delete(
     let op_du_live = ctx
         .builder
         .priv_op(op!(DictUpdate(m1, btx, "live", nl)))
-        .unwrap();
-    let st_event = ctx
-        .apply_custom_pred_simple(
-            false,
-            "ReplayDeleteEvent",
-            vec![op_sd, op_du_live, st_nullify],
-        )
-        .unwrap();
-    record(stats, "ReplayDeleteEvent");
-
-    // ReplayDelete (TxDelete ref + event + guard inline).
-    let guard = old
-        .get(&StrKey::from("type"))
-        .unwrap()
-        .expect("object missing 'type' field");
-    let op_dc = ctx
-        .builder
-        .priv_op(op!(DictContains(old, "type", guard.clone())))
         .unwrap();
     let rebound_evidence = ctx
         .builder
@@ -618,7 +583,7 @@ fn build_replay_delete(
         .apply_custom_pred_simple(
             false,
             "ReplayDelete",
-            vec![tx_stmt, st_event, op_dc, rebound_evidence],
+            vec![tx_stmt, op_sd, op_du_live, st_nullify, rebound_evidence],
         )
         .unwrap();
     record(stats, "ReplayDelete");

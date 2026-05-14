@@ -672,36 +672,6 @@ impl ActionHandle {
                 {
                     let varname = obj.borrow().var_name().to_string();
                     let obj_dict = obj.borrow().to_dict();
-                    // Type guard: Mutate guards the pre-mutation dict
-                    // (ts=0); Input/Output guard the post (final) form.
-                    let (guard_dict, guard_ts) = match io {
-                        ObjectIO::Mutate => {
-                            let d = original
-                                .as_ref()
-                                .expect("Mutate records a pre-mutation dict")
-                                .clone();
-                            (d, 0usize)
-                        }
-                        ObjectIO::Input => (obj_dict.clone(), 0usize),
-                        ObjectIO::Output => (obj_dict.clone(), *max_ts.get(&varname).unwrap_or(&0)),
-                    };
-                    let class_hash = exe_ctx
-                        .module
-                        .class_hashes
-                        .get(class.as_str())
-                        .copied()
-                        .unwrap_or_else(|| panic!("no Is{class} predicate hash registered"));
-                    let guard_arg = anchor_or_literal(&varname, &guard_dict, guard_ts);
-                    let st_type = exe_ctx
-                        .bld
-                        .builder
-                        .priv_op(Operation::dict_contains(
-                            guard_arg,
-                            "type",
-                            Value::from(class_hash),
-                        ))
-                        .unwrap();
-                    event_sts.push(st_type);
                     let (st_tx_literal, handle) = match io {
                         ObjectIO::Output => exe_ctx.tx_builder.insert(&mut exe_ctx.bld, &obj_dict),
                         ObjectIO::Input => exe_ctx.tx_builder.delete(&mut exe_ctx.bld, &obj_dict),
@@ -714,9 +684,10 @@ impl ActionHandle {
                     };
                     // Lift tx event args to anchored form when their
                     // side is collapsed. Arg layout (per txlib):
-                    //   TxInsert(chain, prev_chain, new)
-                    //   TxDelete(chain, prev_chain, old)
-                    //   TxMutate(chain, prev_chain, new, old)
+                    //   TxInsert(chain, prev_chain, new, type)
+                    //   TxDelete(chain, prev_chain, old, type)
+                    //   TxMutate(chain, prev_chain, new, old, type)
+                    // `type` is always literal (the @self_predicate ref).
                     let new_anchor = || -> Option<OperationArg> {
                         if matches!(io, ObjectIO::Output | ObjectIO::Mutate)
                             && !needs_out_wildcard.contains(&varname)
@@ -736,10 +707,10 @@ impl ActionHandle {
                         }
                     };
                     let replacements: Vec<Option<OperationArg>> = match io {
-                        ObjectIO::Output => vec![None, None, new_anchor()],
-                        ObjectIO::Input => vec![None, None, old_anchor()],
+                        ObjectIO::Output => vec![None, None, new_anchor(), None],
+                        ObjectIO::Input => vec![None, None, old_anchor(), None],
                         ObjectIO::Mutate => {
-                            vec![None, None, new_anchor(), old_anchor()]
+                            vec![None, None, new_anchor(), old_anchor(), None]
                         }
                     };
                     let st_tx = if replacements.iter().any(|r| r.is_some()) {

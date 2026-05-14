@@ -608,6 +608,11 @@ impl TxBuilder {
         self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
         self.live.insert(&Value::from(new.clone())).unwrap();
 
+        let new_type = new.get(&StrKey::from("type")).unwrap().unwrap();
+        let st_dc = ctx
+            .builder
+            .priv_op(op!(DictContains(new, "type", new_type.clone())))
+            .unwrap();
         let st_h1 = ctx
             .builder
             .priv_op(op!(HashOf(event_hash, EMPTY_VALUE, new)))
@@ -620,8 +625,8 @@ impl TxBuilder {
             .apply_custom_pred(
                 false,
                 "TxInsert",
-                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone()}),
-                vec![st_h1, st_h2],
+                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "type" => new_type}),
+                vec![st_dc, st_h1, st_h2],
             )
             .unwrap();
         record(&mut self.stats, "TxInsert");
@@ -658,6 +663,17 @@ impl TxBuilder {
             .insert(&Value::from(compute_nullifier(old)))
             .unwrap();
 
+        let new_type = new.get(&StrKey::from("type")).unwrap().unwrap();
+        let old_type = old.get(&StrKey::from("type")).unwrap().unwrap();
+        assert_eq!(new_type, old_type, "mutate must preserve object type");
+        let st_dc_new = ctx
+            .builder
+            .priv_op(op!(DictContains(new, "type", new_type.clone())))
+            .unwrap();
+        let st_dc_old = ctx
+            .builder
+            .priv_op(op!(DictContains(old, "type", new_type.clone())))
+            .unwrap();
         let st_h1 = ctx
             .builder
             .priv_op(op!(HashOf(event_hash, old, new)))
@@ -670,8 +686,8 @@ impl TxBuilder {
             .apply_custom_pred(
                 false,
                 "TxMutate",
-                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "old" => old.clone()}),
-                vec![st_h1, st_h2],
+                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "old" => old.clone(), "type" => new_type}),
+                vec![st_dc_new, st_dc_old, st_h1, st_h2],
             )
             .unwrap();
         record(&mut self.stats, "TxMutate");
@@ -703,6 +719,11 @@ impl TxBuilder {
             .insert(&Value::from(compute_nullifier(old)))
             .unwrap();
 
+        let old_type = old.get(&StrKey::from("type")).unwrap().unwrap();
+        let st_dc = ctx
+            .builder
+            .priv_op(op!(DictContains(old, "type", old_type.clone())))
+            .unwrap();
         let st_h1 = ctx
             .builder
             .priv_op(op!(HashOf(event_hash, old, EMPTY_VALUE)))
@@ -715,8 +736,8 @@ impl TxBuilder {
             .apply_custom_pred(
                 false,
                 "TxDelete",
-                map!({"chain" => self.chain, "prev_chain" => prev, "old" => old.clone()}),
-                vec![st_h1, st_h2],
+                map!({"chain" => self.chain, "prev_chain" => prev, "old" => old.clone(), "type" => old_type}),
+                vec![st_dc, st_h1, st_h2],
             )
             .unwrap();
         record(&mut self.stats, "TxDelete");
@@ -1256,16 +1277,12 @@ mod tests {
 
         let scope = tx1.begin_action();
         let (st_insert, h) = tx1.insert(&mut ctx, &pick);
-        let op_type = ctx
-            .builder
-            .priv_op(op!(DictContains(pick, "type", is_wood_pick.clone())))
-            .unwrap();
         let op_dur = ctx
             .builder
             .priv_op(op!(DictContains(pick, "durability", 100_i64)))
             .unwrap();
         let st_spawn = ctx
-            .apply_custom_pred_simple(false, "SpawnWoodPick", vec![op_type, op_dur, st_insert])
+            .apply_custom_pred_simple(false, "SpawnWoodPick", vec![op_dur, st_insert])
             .unwrap();
         let st_guard = ctx
             .apply_custom_pred_simple(
@@ -1307,11 +1324,6 @@ mod tests {
         let st_use_wp = {
             let scope_sub = tx2.begin_action();
             let (st_mutate, h_sub) = tx2.mutate(&mut ctx, &pick_new, &pick);
-            let pick_type = pick.get(&StrKey::from("type")).unwrap().unwrap();
-            let op_type = ctx
-                .builder
-                .priv_op(op!(DictContains(pick, "type", pick_type)))
-                .unwrap();
             let op_gt = ctx
                 .builder
                 .priv_op(op!(Gt((&pick, "durability"), 0_i64)))
@@ -1328,7 +1340,7 @@ mod tests {
                 .apply_custom_pred_simple(
                     false,
                     "UseWoodPick",
-                    vec![op_type, op_gt, op_sum, op_du, st_mutate],
+                    vec![op_gt, op_sum, op_du, st_mutate],
                 )
                 .unwrap();
             let st_guard = ctx
@@ -1345,16 +1357,8 @@ mod tests {
 
         // Direct: insert stone
         let (st_stone_insert, h) = tx2.insert(&mut ctx, &stone);
-        let op_type = ctx
-            .builder
-            .priv_op(op!(DictContains(stone, "type", is_stone.clone())))
-            .unwrap();
         let st_mine = ctx
-            .apply_custom_pred_simple(
-                false,
-                "MineStone",
-                vec![st_use_wp, op_type, st_stone_insert],
-            )
+            .apply_custom_pred_simple(false, "MineStone", vec![st_use_wp, st_stone_insert])
             .unwrap();
         let st_guard = ctx
             .apply_custom_pred_simple(false, "IsStone", vec![st_mine.clone()])
@@ -1410,12 +1414,8 @@ mod tests {
 
         let scope = tx1.begin_action();
         let (st_insert, h) = tx1.insert(&mut ctx, &log);
-        let op_type = ctx
-            .builder
-            .priv_op(op!(DictContains(log, "type", is_log.clone())))
-            .unwrap();
         let st_find = ctx
-            .apply_custom_pred_simple(false, "FindLog", vec![op_type, st_insert])
+            .apply_custom_pred_simple(false, "FindLog", vec![st_insert])
             .unwrap();
         let st_guard = ctx
             .apply_custom_pred_simple(false, "IsLog", vec![st_find.clone(), Statement::None])
@@ -1452,13 +1452,8 @@ mod tests {
         let st_del_log = {
             let scope_sub = tx2.begin_action();
             let (st_del, h_sub) = tx2.delete(&mut ctx, &log);
-            let log_type = log.get(&StrKey::from("type")).unwrap().unwrap();
-            let op_type = ctx
-                .builder
-                .priv_op(op!(DictContains(log, "type", log_type)))
-                .unwrap();
             let st_action = ctx
-                .apply_custom_pred_simple(false, "DeleteLog", vec![op_type, st_del])
+                .apply_custom_pred_simple(false, "DeleteLog", vec![st_del])
                 .unwrap();
             let st_guard = ctx
                 .apply_custom_pred_simple(false, "IsLog", vec![Statement::None, st_action.clone()])
@@ -1470,12 +1465,8 @@ mod tests {
 
         // Direct: insert wood
         let (st_ins, h) = tx2.insert(&mut ctx, &wood);
-        let op_type = ctx
-            .builder
-            .priv_op(op!(DictContains(wood, "type", is_wood.clone())))
-            .unwrap();
         let st_craft_wood = ctx
-            .apply_custom_pred_simple(false, "CraftWood", vec![st_del_log, op_type, st_ins])
+            .apply_custom_pred_simple(false, "CraftWood", vec![st_del_log, st_ins])
             .unwrap();
         let st_guard = ctx
             .apply_custom_pred_simple(
@@ -1514,13 +1505,8 @@ mod tests {
         let st_del_wood = {
             let scope_sub = tx3.begin_action();
             let (st_del, h_sub) = tx3.delete(&mut ctx, &wood);
-            let wood_type = wood.get(&StrKey::from("type")).unwrap().unwrap();
-            let op_type = ctx
-                .builder
-                .priv_op(op!(DictContains(wood, "type", wood_type)))
-                .unwrap();
             let st_action = ctx
-                .apply_custom_pred_simple(false, "DeleteWood", vec![op_type, st_del])
+                .apply_custom_pred_simple(false, "DeleteWood", vec![st_del])
                 .unwrap();
             let st_guard = ctx
                 .apply_custom_pred_simple(false, "IsWood", vec![Statement::None, st_action.clone()])
@@ -1532,25 +1518,12 @@ mod tests {
 
         // Direct: insert stick_a
         let (st_ins_a, h_a) = tx3.insert(&mut ctx, &stick_a);
-        let stick_type = stick_a.get(&StrKey::from("type")).unwrap().unwrap();
-        let op_type_a = ctx
-            .builder
-            .priv_op(op!(DictContains(stick_a, "type", stick_type.clone())))
-            .unwrap();
 
         // Direct: insert stick_b
         let (st_ins_b, h_b) = tx3.insert(&mut ctx, &stick_b);
-        let op_type_b = ctx
-            .builder
-            .priv_op(op!(DictContains(stick_b, "type", stick_type)))
-            .unwrap();
 
         let st_craft_sticks = ctx
-            .apply_custom_pred_simple(
-                false,
-                "CraftSticks",
-                vec![st_del_wood, op_type_a, st_ins_a, op_type_b, st_ins_b],
-            )
+            .apply_custom_pred_simple(false, "CraftSticks", vec![st_del_wood, st_ins_a, st_ins_b])
             .unwrap();
 
         // stick_a: IsStick branch 2 = CraftSticks(obj, other, chain_start, chain_end)
