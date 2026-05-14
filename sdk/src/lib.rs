@@ -675,47 +675,45 @@ impl ActionHandle {
             .map(|s| s.ts)
             .unwrap_or(0);
         let action_chain_packed = chain_max_ts >= fmt_podlang::CHAIN_PACK_MIN_TS;
+        // Single pass over insts: assign a parent_ts to each
+        // Object/SubAction inst (each advances the parent chain by 1)
+        // and, for SubAction insts, extract the post-chain value from
+        // the cached `st_sub` (already baked in at Rhai time). Object
+        // chain values are filled later in the event_sts loop after
+        // `tx_builder.insert/mutate/delete` advances the chain.
+        // chain_step_values index 0 is the `_pad` placeholder;
+        // indices 1..chain_max_ts hold the chain hash at that ts.
+        // (The final chain at ts=chain_max_ts is the public `chain`
+        // wildcard and not stored here.)
+        let mut chain_step_values: Vec<Value> = vec![Value::from(0_i64); chain_max_ts.max(1)];
         let inst_chain_ts: Vec<Option<usize>> = {
             let ctx = self.0.borrow();
             let mut chain_ts: usize = 0;
             ctx.insts
                 .iter()
                 .map(|inst| match inst {
-                    Inst::Object { .. } | Inst::SubAction { .. } => {
+                    Inst::Object { .. } => {
                         chain_ts += 1;
+                        Some(chain_ts)
+                    }
+                    Inst::SubAction { st_sub, .. } => {
+                        chain_ts += 1;
+                        if action_chain_packed && chain_ts < chain_max_ts {
+                            let st = st_sub
+                                .as_ref()
+                                .expect("SubAction statement captured at Rhai");
+                            let post_chain = match st.args().last() {
+                                Some(StatementArg::Literal(v)) => v.clone(),
+                                _ => panic!("sub-action chain arg must be a literal value"),
+                            };
+                            chain_step_values[chain_ts] = post_chain;
+                        }
                         Some(chain_ts)
                     }
                     _ => None,
                 })
                 .collect()
         };
-        // Capture per-ts intermediate chain values. Index 0 is the
-        // `_pad` placeholder; indices 1..chain_max_ts hold the chain
-        // hash at that ts. (The final chain at ts=chain_max_ts is the
-        // public `chain` wildcard and not stored here.)
-        let mut chain_step_values: Vec<Value> = vec![Value::from(0_i64); chain_max_ts.max(1)];
-        // Sub-action chain values are already baked into the cached
-        // `st_sub` statements; extract them so chain_steps is fully
-        // populated by the time we wrap event statements.
-        if action_chain_packed {
-            let ctx = self.0.borrow();
-            for (i, inst) in ctx.insts.iter().enumerate() {
-                if let Inst::SubAction { st_sub, .. } = inst {
-                    let st = st_sub
-                        .as_ref()
-                        .expect("SubAction statement captured at Rhai");
-                    let args = st.args();
-                    let post_chain = match args.last() {
-                        Some(StatementArg::Literal(v)) => v.clone(),
-                        _ => panic!("sub-action chain arg must be a literal value"),
-                    };
-                    let post_ts = inst_chain_ts[i].expect("SubAction has parent_ts");
-                    if post_ts < chain_max_ts {
-                        chain_step_values[post_ts] = post_chain;
-                    }
-                }
-            }
-        }
 
         let mut pending_object_events: Vec<PendingObjectEvent> = Vec::new();
         let mut obj_refs_index: usize = 0;

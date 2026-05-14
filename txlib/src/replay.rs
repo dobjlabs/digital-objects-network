@@ -705,6 +705,48 @@ fn build_replay_mutate(
     (st, nl, nn)
 }
 
+/// Build a `ReplayNullify` statement: derives the object key hash and
+/// nullifier from `old`, then accumulates the nullifier into the tx's
+/// nullifiers set. `mid_tx` is the tx state with the new live set
+/// already in place; `after_tx` is `mid_tx` with `nullifiers` updated
+/// to `nn`. Used by both mutate and delete replay.
+fn build_replay_nullify(
+    ctx: &mut BuildContext,
+    stats: &mut TxStats,
+    old: &Dictionary,
+    mid_tx: &Dictionary,
+    after_tx: &Dictionary,
+    nn: &Set,
+) -> Statement {
+    let okh = object_key_hash(old).unwrap();
+    let nul = object_nullifier_from_key_hash(okh);
+    let op_h1 = ctx
+        .builder
+        .priv_op(op!(HashOf(okh, old, (old, "key"))))
+        .unwrap();
+    let op_h2 = ctx
+        .builder
+        .priv_op(op!(HashOf(nul, okh, OBJECT_NULLIFIER_VERSION)))
+        .unwrap();
+    let op_si = ctx
+        .builder
+        .priv_op(op!(SetInsert(nn, (mid_tx, "nullifiers"), nul)))
+        .unwrap();
+    let op_du_null = ctx
+        .builder
+        .priv_op(op!(DictUpdate(after_tx, mid_tx, "nullifiers", nn)))
+        .unwrap();
+    let st = ctx
+        .apply_custom_pred_simple(
+            false,
+            "ReplayNullify",
+            vec![op_h1, op_h2, op_si, op_du_null],
+        )
+        .unwrap();
+    record(stats, "ReplayNullify");
+    st
+}
+
 /// Build `ReplayMutateEvent` (and its inner `ReplayNullify`). Shared
 /// between `build_replay_mutate` and `build_replay_step_mutate` (these
 /// inner predicates don't reference `new`/`old` via anchored keys —
@@ -720,36 +762,9 @@ fn build_replay_mutate_event(
     nl: &Set,
     nn: &Set,
 ) -> Statement {
-    let okh = object_key_hash(old).unwrap();
-    let nul = object_nullifier_from_key_hash(okh);
     let m1 = tx_with(btx, "live", Value::from(nl.clone()));
     let atx = tx_with(&m1, "nullifiers", Value::from(nn.clone()));
-
-    // ReplayNullify (called inside ReplayMutateEvent)
-    let op_h1 = ctx
-        .builder
-        .priv_op(op!(HashOf(okh, old, (old, "key"))))
-        .unwrap();
-    let op_h2 = ctx
-        .builder
-        .priv_op(op!(HashOf(nul, okh, OBJECT_NULLIFIER_VERSION)))
-        .unwrap();
-    let op_si = ctx
-        .builder
-        .priv_op(op!(SetInsert(nn, (&m1, "nullifiers"), nul)))
-        .unwrap();
-    let op_du_null = ctx
-        .builder
-        .priv_op(op!(DictUpdate(atx, m1, "nullifiers", nn)))
-        .unwrap();
-    let st_nullify = ctx
-        .apply_custom_pred_simple(
-            false,
-            "ReplayNullify",
-            vec![op_h1, op_h2, op_si, op_du_null],
-        )
-        .unwrap();
-    record(stats, "ReplayNullify");
+    let st_nullify = build_replay_nullify(ctx, stats, old, &m1, &atx, nn);
 
     // Live swap + nullify; chain/event-hash work is delegated to the
     // parent's TxMutate statement.
@@ -852,37 +867,13 @@ fn build_replay_delete(
 
     let mut nl = live.clone();
     nl.delete(&Value::from(old.commitment())).unwrap();
-    let okh = object_key_hash(old).unwrap();
-    let nul = object_nullifier_from_key_hash(okh);
+    let nul = object_nullifier_from_key_hash(object_key_hash(old).unwrap());
     let mut nn = nullifiers.clone();
     nn.insert(&Value::from(nul)).unwrap();
     let m1 = tx_with(&btx, "live", Value::from(nl.clone()));
     let atx = tx_with(&m1, "nullifiers", Value::from(nn.clone()));
 
-    let op_h1 = ctx
-        .builder
-        .priv_op(op!(HashOf(okh, old, (old, "key"))))
-        .unwrap();
-    let op_h2 = ctx
-        .builder
-        .priv_op(op!(HashOf(nul, okh, OBJECT_NULLIFIER_VERSION)))
-        .unwrap();
-    let op_si = ctx
-        .builder
-        .priv_op(op!(SetInsert(nn, (&m1, "nullifiers"), nul)))
-        .unwrap();
-    let op_du_null = ctx
-        .builder
-        .priv_op(op!(DictUpdate(atx, m1, "nullifiers", nn)))
-        .unwrap();
-    let st_nullify = ctx
-        .apply_custom_pred_simple(
-            false,
-            "ReplayNullify",
-            vec![op_h1, op_h2, op_si, op_du_null],
-        )
-        .unwrap();
-    record(stats, "ReplayNullify");
+    let st_nullify = build_replay_nullify(ctx, stats, old, &m1, &atx, &nn);
 
     let op_sd = ctx
         .builder
