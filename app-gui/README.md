@@ -43,29 +43,29 @@ State: Zustand store at `src/shared/state/store.ts` (`useStore`).
 Everything that touches `~/.dobj/` lives in `dobjd`. The Tauri shell only
 provides things the browser fundamentally can't do.
 
-**dobjd HTTP / SSE** (always — from desktop *and* browser):
+**dobjd HTTP / SSE** (always — from desktop _and_ browser):
 
-| Surface | Route |
-|---|---|
-| `loadInventory` | `GET /inventory` |
-| `loadActions` | `GET /actions` |
-| `getGlobalStateRoot` | `GET /state-root` |
-| `getObjectsDir` | `GET /objects/dir` |
-| `getAppSettings` / `saveAppSettings` | `GET` / `PUT /settings` |
-| `runAction` | `POST /actions/run` |
-| `listenRunActionProgress` | `GET /events` (SSE, `run-action-progress`) |
+| Surface                              | Route                                      |
+| ------------------------------------ | ------------------------------------------ |
+| `loadInventory`                      | `GET /inventory`                           |
+| `loadActions`                        | `GET /actions`                             |
+| `getGlobalStateRoot`                 | `GET /state-root`                          |
+| `getObjectsDir`                      | `GET /objects/dir`                         |
+| `getAppSettings` / `saveAppSettings` | `GET` / `PUT /settings`                    |
+| `runAction`                          | `POST /actions/run`                        |
+| `listenRunActionProgress`            | `GET /events` (SSE, `run-action-progress`) |
 
 `hydrateData` calls `loadInventory` + `loadActions` in parallel via
 `Promise.all`.
 
 **Tauri commands** (desktop-only, declared in `src-tauri/src/lib.rs`):
 
-| Command | Purpose |
-|---|---|
-| `sample_app_cpu` | usage % for the status bar widget |
-| `pick_dobj_file_path` | native file picker |
-| `read_dobj_file` | parse a picked `.dobj` (returns `ObjectRecord`) |
-| `open_objects_dir` | reveal `~/.dobj/objects/` in Finder/Explorer |
+| Command               | Purpose                                         |
+| --------------------- | ----------------------------------------------- |
+| `sample_app_cpu`      | usage % for the status bar widget               |
+| `pick_dobj_file_path` | native file picker                              |
+| `read_dobj_file`      | parse a picked `.dobj` (returns `ObjectRecord`) |
+| `open_objects_dir`    | reveal `~/.dobj/objects/` in Finder/Explorer    |
 
 In browser mode these reject; the relevant UI either falls back (e.g.
 `openObjectsDir` returns the path as text) or the feature is unavailable
@@ -73,10 +73,10 @@ In browser mode these reject; the relevant UI either falls back (e.g.
 
 ## Events
 
-| Channel | Source | Payload |
-|---|---|---|
+| Channel               | Source                | Payload                                |
+| --------------------- | --------------------- | -------------------------------------- |
 | `run-action-progress` | dobjd SSE (`/events`) | `{ runId, phase, status, message, … }` |
-| `open-settings` | Tauri menu (`Cmd+,`) | empty — opens the Settings modal |
+| `open-settings`       | Tauri menu (`Cmd+,`)  | empty — opens the Settings modal       |
 
 The SSE stream is shared across every connected client (desktop, browser,
 CLI, MCP), so an action triggered by an MCP agent still updates the
@@ -119,7 +119,7 @@ file.
 
 Compile-time defaults are baked into `dobjd` via the
 `DEFAULT_SYNCHRONIZER_API_URL` / `DEFAULT_RELAYER_API_URL` env vars at
-*driver* build time (see `driver/src/settings.rs`). They only apply when
+_driver_ build time (see `driver/src/settings.rs`). They only apply when
 no `settings.json` exists yet.
 
 To point the frontend at a non-default `dobjd` instance, set

@@ -36,21 +36,21 @@ dev, Tauri's webview for the desktop app).
 All routes return JSON unless noted; errors come back as
 `{"error": "..."}` with an appropriate status code.
 
-| Method | Path | Driver call |
-|---|---|---|
-| `GET` | `/inventory` | `sync_inventory` (with fallback to `list_objects`) |
-| `GET` | `/actions` | `list_actions` |
-| `GET` | `/state-root` | `get_state_root` |
-| `GET` | `/objects/dir` | `paths().objects_dir` |
-| `GET` | `/objects/{file_name}` | `read_object(&Path)` (basename in `~/.dobj/objects/`) |
-| `GET` | `/classes` | `list_classes` |
-| `GET` | `/classes/{name}` | `get_class` |
-| `GET` | `/settings` | `load_settings` |
-| `PUT` | `/settings` | `save_settings` |
-| `POST` | `/actions/run` | `execute_with_reporter` |
-| `GET` | `/actions/{id}` | `get_action` |
-| `GET` | `/actions/{id}/feasibility` | `check_action` |
-| `GET` | `/events` | broadcast hub stream (SSE) |
+| Method | Path                        | Driver call                                           |
+| ------ | --------------------------- | ----------------------------------------------------- |
+| `GET`  | `/inventory`                | `sync_inventory` (with fallback to `list_objects`)    |
+| `GET`  | `/actions`                  | `list_actions`                                        |
+| `GET`  | `/state-root`               | `get_state_root`                                      |
+| `GET`  | `/objects/dir`              | `paths().objects_dir`                                 |
+| `GET`  | `/objects/{file_name}`      | `read_object(&Path)` (basename in `~/.dobj/objects/`) |
+| `GET`  | `/classes`                  | `list_classes`                                        |
+| `GET`  | `/classes/{name}`           | `get_class`                                           |
+| `GET`  | `/settings`                 | `load_settings`                                       |
+| `PUT`  | `/settings`                 | `save_settings`                                       |
+| `POST` | `/actions/run`              | `execute_with_reporter`                               |
+| `GET`  | `/actions/{id}`             | `get_action`                                          |
+| `GET`  | `/actions/{id}/feasibility` | `check_action`                                        |
+| `GET`  | `/events`                   | broadcast hub stream (SSE)                            |
 
 The `/events` payload is a JSON object with a `type` discriminator.
 Variants: `run-action-progress`.

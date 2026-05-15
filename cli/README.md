@@ -18,33 +18,33 @@ Two flavors of commands.
 
 ### API wrappers — every driver capability through one HTTP/SSE endpoint
 
-| Command | Hits |
-|---|---|
-| `inventory` | `GET /inventory` |
-| `actions` | `GET /actions` |
-| `classes` | `GET /classes` |
-| `inspect-object <file_name>` | `GET /objects/{file_name}` |
-| `inspect-class <plugin::class>` | `GET /classes/{name}` |
-| `inspect-action <plugin::action>` | `GET /actions/{id}` |
-| `feasibility <plugin::action>` | `GET /actions/{id}/feasibility` |
-| `state-root` | `GET /state-root` |
-| `objects-dir` | `GET /objects/dir` |
-| `settings get` | `GET /settings` |
-| `settings set --synchronizer URL --relayer URL` | `PUT /settings` (omitted flags left unchanged) |
-| `run <action> [paths...]` | `POST /actions/run` + filters `/events` for matching `run-action-progress` |
-| `events` | `GET /events` SSE — prints every event as JSON lines |
+| Command                                         | Hits                                                                       |
+| ----------------------------------------------- | -------------------------------------------------------------------------- |
+| `inventory`                                     | `GET /inventory`                                                           |
+| `actions`                                       | `GET /actions`                                                             |
+| `classes`                                       | `GET /classes`                                                             |
+| `inspect-object <file_name>`                    | `GET /objects/{file_name}`                                                 |
+| `inspect-class <plugin::class>`                 | `GET /classes/{name}`                                                      |
+| `inspect-action <plugin::action>`               | `GET /actions/{id}`                                                        |
+| `feasibility <plugin::action>`                  | `GET /actions/{id}/feasibility`                                            |
+| `state-root`                                    | `GET /state-root`                                                          |
+| `objects-dir`                                   | `GET /objects/dir`                                                         |
+| `settings get`                                  | `GET /settings`                                                            |
+| `settings set --synchronizer URL --relayer URL` | `PUT /settings` (omitted flags left unchanged)                             |
+| `run <action> [paths...]`                       | `POST /actions/run` + filters `/events` for matching `run-action-progress` |
+| `events`                                        | `GET /events` SSE — prints every event as JSON lines                       |
 
 Each command renders human-friendly output by default. Pass `--json`
 for the raw payload (suitable for `jq`).
 
 ### Daemon lifecycle — operates on local files, not HTTP
 
-| Command | What it does |
-|---|---|
-| `start` | spawns dobjd as a detached child (`setsid` on Unix), writes `~/.dobj/dobjd.pid`, polls until ready |
-| `stop` | reads the pidfile, sends `SIGTERM`, waits up to 10s, escalates to `SIGKILL` if needed |
-| `status` | prints whether the pid is alive and HTTP responds; surfaces stale pidfiles |
-| `logs [-f] [-n N]` | shows the last `N` lines (default 100) of `~/.dobj/dobjd.log`, optionally following |
+| Command            | What it does                                                                                       |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| `start`            | spawns dobjd as a detached child (`setsid` on Unix), writes `~/.dobj/dobjd.pid`, polls until ready |
+| `stop`             | reads the pidfile, sends `SIGTERM`, waits up to 10s, escalates to `SIGKILL` if needed              |
+| `status`           | prints whether the pid is alive and HTTP responds; surfaces stale pidfiles                         |
+| `logs [-f] [-n N]` | shows the last `N` lines (default 100) of `~/.dobj/dobjd.log`, optionally following                |
 
 Lifecycle commands are intentionally CLI-only — daemon supervision is
 a CLI-shaped concern by definition. Other clients (the desktop app, an
@@ -52,10 +52,10 @@ MCP agent) just assume `dobjd` is running and connect to it.
 
 ## Configuration
 
-| Flag | Env var | Default | Notes |
-|---|---|---|---|
+| Flag          | Env var     | Default                 | Notes                                                                                                                                               |
+| ------------- | ----------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--url <URL>` | `DOBJD_URL` | `http://127.0.0.1:7717` | dobjd's HTTP base URL. `start` parses this URL's port and launches the local daemon with `DOBJD_PORT=<port>`; dobjd then hosts MCP on `<port + 1>`. |
-| `--json` | — | off | Machine-readable output where applicable. |
+| `--json`      | —           | off                     | Machine-readable output where applicable.                                                                                                           |
 
 The daemon-lifecycle commands also resolve the `dobjd` binary in this
 order:
@@ -114,12 +114,12 @@ dobj events
 
 ## Relationship to other crates
 
-| Crate | Role |
-|---|---|
-| [`dobjd`](../dobjd) | the daemon this CLI talks to |
-| [`driver`](../driver) | the underlying Rust library `dobjd` wraps |
-| [`mcp`](../mcp) | MCP server (also in `dobjd`); the CLI doesn't speak MCP itself |
-| [`app-gui`](../app-gui) | React frontend that hits the same dobjd HTTP API |
+| Crate                   | Role                                                           |
+| ----------------------- | -------------------------------------------------------------- |
+| [`dobjd`](../dobjd)     | the daemon this CLI talks to                                   |
+| [`driver`](../driver)   | the underlying Rust library `dobjd` wraps                      |
+| [`mcp`](../mcp)         | MCP server (also in `dobjd`); the CLI doesn't speak MCP itself |
+| [`app-gui`](../app-gui) | React frontend that hits the same dobjd HTTP API               |
 
 Adding a new dobjd HTTP route generally means adding a corresponding
 CLI subcommand here and the matching MCP tool in [`mcp/`](../mcp). The
