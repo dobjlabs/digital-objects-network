@@ -16,7 +16,10 @@ CONCIERGE_URL = os.environ.get('CONCIERGE_URL', 'http://127.0.0.1:9996')
 
 
 async def main() -> None:
-    async with httpx.AsyncClient(timeout=600.0) as httpx_client:
+    # 30 min — first-run circuit cache building on each of the 4 isolated
+    # dobjds can take 2-3 minutes per action. After warm-up this is way more
+    # than needed.
+    async with httpx.AsyncClient(timeout=1800.0) as httpx_client:
         resolver = A2ACardResolver(httpx_client=httpx_client, base_url=CONCIERGE_URL)
         card = await resolver.get_agent_card()
         print('Concierge agent card:')

@@ -31,7 +31,11 @@ import httpx
 class DobjdClient:
     """Async client bound to a single dobjd instance."""
 
-    def __init__(self, base_url: str | None = None, timeout: float = 60.0) -> None:
+    def __init__(self, base_url: str | None = None, timeout: float = 1800.0) -> None:
+        # 30 minutes by default — first-run circuit cache building inside
+        # dobjd can take 2-3 minutes per action (we have four isolated dobjds
+        # each building separately), plus proof-of-work grinding can be slow.
+        # After warm-up, real actions take seconds.
         self.base_url = (base_url or os.environ.get('DOBJD_URL', 'http://127.0.0.1:7717')).rstrip('/')
         self._client = httpx.AsyncClient(timeout=timeout)
         self._objects_dir: str | None = None

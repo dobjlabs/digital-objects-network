@@ -29,7 +29,9 @@ async def send_and_stream(
     The peer's final artifact(s) arrive in the last chunks. Caller is
     responsible for picking out file artifacts from the stream.
     """
-    async with httpx.AsyncClient(timeout=600.0) as httpx_client:
+    # 30 minutes — long enough to outlast all four dobjds' first-run circuit
+    # cache builds.  After warm-up, every action takes seconds.
+    async with httpx.AsyncClient(timeout=1800.0) as httpx_client:
         resolver = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
         card = await resolver.get_agent_card()
 
