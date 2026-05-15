@@ -44,27 +44,40 @@ ZK-anchored StonePick.
 | -------------- | ---- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | **Concierge**  | 9996 | parse user request, fan out to specialists, verify everything locally, ship the final StonePick | runs `list_inventory` to verify each received `.dobj`      |
 | **Lumberjack** | 9997 | supply one Stick from scratch                                                                   | `FindLog` → `CraftWood` → `CraftSticks`                    |
-| **Stonemason** | 9998 | supply one Stone                                                                                | bootstraps a `WoodPick` if needed, then `MineStone`        |
+| **Stonemason** | 9998 | supply one Stone                                                                                | bootstraps a `WoodPick` if needed, then `MineStoneWithWoodPick` |
 | **Craftsmith** | 9999 | turn Stick + Stone into a StonePick                                                             | ingests received `.dobj`s, verifies, runs `CraftStonePick` |
 
 Each agent streams `Working`-state updates back through the A2A
-`message/stream` channel, so the user sees real-time progress like:
+`message/stream` channel, **including every step from dobjd's own
+`/events` SSE pipeline**, so the user sees real-time progress like:
 
 ```
-[concierge] reaching out in parallel: http://…:9997 + http://…:9998
+reaching out in parallel: http://…:9997 + http://…:9998
 [lumberjack] chopping a log…
+[lumberjack] FindLog: Verifying inputs (generateProof/running)
+[lumberjack] FindLog: Generating proof (generateProof/running)
+[lumberjack] FindLog: Proof generation complete (generateProof/done)
+[lumberjack] FindLog: Shrinking proof (commit/running)
+[lumberjack] FindLog: Submitting proof to relayer (commit/running)
+[lumberjack] FindLog: Waiting for synchronizer to observe commit (commit/running)
+[lumberjack] FindLog: Commit complete (commit/done)
+[lumberjack] refining craft-basics__log_….dobj into wood…
+[lumberjack] CraftWood: …                                       ← same sub-steps
 [stonemason] no WoodPick on hand — bootstrapping…
-[lumberjack] refining ….dobj into wood…
-[stonemason] assembling WoodPick…
-[lumberjack] splitting ….dobj into sticks…
+[stonemason] FindLog: …
 …
-[concierge] verifying Stick locally…
-[concierge] forwarding inputs to craftsmith…
-[craftsmith] ingesting inputs into local dobjd…
-[craftsmith] running CraftStonePick…
-[concierge] verifying StonePick locally…
-[concierge] StonePick delivered.
+[stonemason] mining stone with craft-basics__woodpick_….dobj…
+[stonemason] MineStoneWithWoodPick: …
+verifying Stick locally…
+forwarding inputs to craftsmith…
+[craftsmith] CraftStonePick: …
+verifying StonePick locally…
+StonePick delivered.
 ```
+
+The proof-step lines come from each peer's dobjd `/events` stream,
+forwarded by the executor via `make_progress_forwarder(...)` and
+re-broadcast by the concierge with a `[peer]` prefix.
 
 ## How object transfer works (MVP)
 
@@ -90,28 +103,32 @@ itself before either uses it. Adding a real `Transfer` action to
 ## Layout
 
 ```
-a2a-agent/
-  shared/                 cross-agent helpers
-    dobjd_client.py       async wrapper around dobjd REST + objects-dir
-    dobj_verify.py        ingest-and-verify: class + status=live
-    a2a_helpers.py        emit working/completed, FilePart helpers
-    registry.py           env-driven peer URL map
-  concierge/              the orchestrator
-    __main__.py           AgentCard, port 9996
-    agent_executor.py     fan out, verify, forward, verify, deliver
-    peer_client.py        streaming send_message wrapper
-  lumberjack/             supplies Sticks
-    __main__.py           port 9997
-    agent_executor.py     FindLog → CraftWood → CraftSticks
-  stonemason/             supplies Stones
-    __main__.py           port 9998
-    agent_executor.py     bootstrap WoodPick → MineStone
-  craftsmith/             assembles StonePicks
-    __main__.py           port 9999
-    agent_executor.py     verify inputs → CraftStonePick → ship
+agents/
+  shared/                       cross-agent helpers
+    dobjd_client.py             async wrapper around dobjd REST + objects-dir
+                                (+ run_action_with_progress: streams /events SSE)
+    dobj_verify.py              ingest-and-verify: class + status=live
+    a2a_helpers.py              emit working/completed, file-part helpers,
+                                make_progress_forwarder
+    registry.py                 env-driven peer URL map
+  concierge/                    the orchestrator
+    __main__.py                 AgentCard, port 9996
+    agent_executor.py           fan out, verify, forward, verify, deliver
+    peer_client.py              streaming send_message wrapper
+  lumberjack/                   supplies Sticks
+    __main__.py                 port 9997
+    agent_executor.py           FindLog → CraftWood → CraftSticks
+  stonemason/                   supplies Stones
+    __main__.py                 port 9998
+    agent_executor.py           bootstrap WoodPick → MineStoneWithWoodPick
+  craftsmith/                   assembles StonePicks
+    __main__.py                 port 9999
+    agent_executor.py           verify inputs → CraftStonePick → ship
   scripts/
-    run_all.sh            spin up all four (matches default env)
-    test_client.py        send "I want a stone pick" to the concierge
+    bootstrap_dobjds.sh         spin up four isolated dobjds (HOME-overridden)
+    run_all.sh                  spin up the four A2A agents
+    ping_dobjds.sh              health summary: status, inventory, state-root
+    test_client.py              send "I want a stone pick" to the concierge
 ```
 
 Per-folder layout follows the
@@ -160,6 +177,17 @@ bash scripts/bootstrap_dobjds.sh          # default: hosted sync+relayer
 ```
 
 Logs at `agents/.runtime/<name>/dobjd.log`. Ctrl-C stops all four.
+
+To verify they're up + talking to the synchronizer:
+
+```bash
+bash scripts/ping_dobjds.sh
+# agent       http  health  inv  actions  state-root
+# lumberjack  7717  ok      0    7        0x570762999dd9769d…
+# stonemason  7727  ok      0    7        0x570762999dd9769d…
+# craftsmith  7737  ok      0    7        0x570762999dd9769d…
+# concierge   7747  ok      0    7        0x570762999dd9769d…
+```
 
 ### 3. Four A2A agents
 
