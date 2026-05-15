@@ -54,6 +54,37 @@ const HTTP_BASE =
   (import.meta.env.VITE_DOBJD_URL as string | undefined) ??
   "http://127.0.0.1:7717";
 
+const DEFAULT_TIMEOUT_MS = 10_000;
+
+// fetch wrapper that bounds wall time and turns the two common dobjd-down
+// failure modes into actionable messages: a killed daemon (fetch rejects
+// with TypeError) and a hung daemon (fetch never resolves, surfaced via
+// AbortSignal.timeout). Pass `timeoutMs: null` for endpoints that
+// legitimately block — notably `/actions/run`, which doesn't return
+// until proof generation + commit finish.
+async function dobjdFetch(
+  path: string,
+  init: RequestInit & { timeoutMs?: number | null } = {},
+): Promise<Response> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchInit } = init;
+  const signal = timeoutMs != null ? AbortSignal.timeout(timeoutMs) : undefined;
+  try {
+    return await fetch(`${HTTP_BASE}${path}`, { ...fetchInit, signal });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      throw new Error(
+        `dobjd ${path} timed out after ${timeoutMs}ms — is the daemon responsive?`,
+      );
+    }
+    if (err instanceof TypeError) {
+      throw new Error(
+        `dobjd unreachable at ${HTTP_BASE} — is the daemon running?`,
+      );
+    }
+    throw err;
+  }
+}
+
 async function httpJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
@@ -73,37 +104,30 @@ async function httpJson<T>(res: Response): Promise<T> {
 // Inventory and the action catalog are independent reads; callers run them
 // in parallel via Promise.all rather than letting one block the other.
 export function loadInventory(): Promise<InventoryObjectPayload[]> {
-  return fetch(`${HTTP_BASE}/inventory`).then(
-    httpJson<InventoryObjectPayload[]>,
-  );
+  return dobjdFetch("/inventory").then(httpJson<InventoryObjectPayload[]>);
 }
 
 export function loadActions(): Promise<ActionPayload[]> {
-  return fetch(`${HTTP_BASE}/actions`).then(httpJson<ActionPayload[]>);
+  return dobjdFetch("/actions").then(httpJson<ActionPayload[]>);
 }
 
 export function getGlobalStateRoot(): Promise<string> {
-  return fetch(`${HTTP_BASE}/state-root`).then(async (res) => {
-    if (!res.ok) {
-      throw new Error(
-        ((await res.json()) as { error?: string }).error ??
-          `HTTP ${res.status}`,
-      );
-    }
-    return res.text();
-  });
+  return dobjdFetch("/state-root").then(httpJson<string>);
 }
 
 export function runAction(input: RunActionInput): Promise<RunActionResult> {
-  return fetch(`${HTTP_BASE}/actions/run`, {
+  return dobjdFetch("/actions/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input }),
+    // Proof generation + commit can take much longer than the default
+    // read timeout. SSE progress events are how we detect hangs here.
+    timeoutMs: null,
   }).then(httpJson<RunActionResult>);
 }
 
 export function getObjectsDir(): Promise<string> {
-  return fetch(`${HTTP_BASE}/objects/dir`)
+  return dobjdFetch("/objects/dir")
     .then(httpJson<{ path: string }>)
     .then((r) => r.path);
 }
@@ -116,13 +140,13 @@ export function openObjectsDir(): Promise<string> {
 }
 
 export function getAppSettings(): Promise<AppSettingsPayload> {
-  return fetch(`${HTTP_BASE}/settings`).then(httpJson<AppSettingsPayload>);
+  return dobjdFetch("/settings").then(httpJson<AppSettingsPayload>);
 }
 
 export function saveAppSettings(
   input: AppSettingsPayload,
 ): Promise<AppSettingsPayload> {
-  return fetch(`${HTTP_BASE}/settings`, {
+  return dobjdFetch("/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
