@@ -35,6 +35,7 @@ from shared.a2a_helpers import (  # noqa: E402
     emit_working,
     ensure_task,
     extract_file_parts,
+    make_progress_forwarder,
 )
 from shared.dobj_verify import DobjVerificationError, ingest_and_verify  # noqa: E402
 from shared.dobjd_client import DobjdClient  # noqa: E402
@@ -107,10 +108,12 @@ class CraftsmithAgentExecutor(AgentExecutor):
             )
 
             await emit_working(context, event_queue, 'running CraftStonePick…')
-            result = await self.dobjd.run_action(
+            result = await self.dobjd.run_action_with_progress(
                 PLUGIN,
                 'CraftStonePick',
                 [stick['fileName'], stone['fileName']],
+                on_progress=make_progress_forwarder(
+                    context, event_queue, action_label='CraftStonePick'),
             )
             pick_file = result['outputFiles'][0]
 

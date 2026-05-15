@@ -27,6 +27,7 @@ from shared.a2a_helpers import (  # noqa: E402
     emit_text_artifact,
     emit_working,
     ensure_task,
+    make_progress_forwarder,
 )
 from shared.dobjd_client import DobjdClient  # noqa: E402
 
@@ -40,6 +41,19 @@ class StonemasonAgentExecutor(AgentExecutor):
     def __init__(self) -> None:
         self.dobjd = DobjdClient()
 
+    async def _run(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+        action: str,
+        inputs: list[str],
+    ) -> dict:
+        return await self.dobjd.run_action_with_progress(
+            PLUGIN, action, inputs,
+            on_progress=make_progress_forwarder(
+                context, event_queue, action_label=action),
+        )
+
     async def _ensure_woodpick(
         self, context: RequestContext, event_queue: EventQueue
     ) -> str:
@@ -50,22 +64,22 @@ class StonemasonAgentExecutor(AgentExecutor):
         await emit_working(context, event_queue, 'no WoodPick on hand — bootstrapping…')
 
         # First Log → Wood → Sticks (yields 2 Sticks)
-        log1 = await self.dobjd.run_action(PLUGIN, 'FindLog', [])
+        log1 = await self._run(context, event_queue, 'FindLog', [])
         log1_file = log1['outputFiles'][0]
-        wood1 = await self.dobjd.run_action(PLUGIN, 'CraftWood', [log1_file])
+        wood1 = await self._run(context, event_queue, 'CraftWood', [log1_file])
         wood1_file = wood1['outputFiles'][0]
-        sticks = await self.dobjd.run_action(PLUGIN, 'CraftSticks', [wood1_file])
+        sticks = await self._run(context, event_queue, 'CraftSticks', [wood1_file])
         stick_file = sticks['outputFiles'][0]
 
         # Second Log → Wood (for the pick head)
-        log2 = await self.dobjd.run_action(PLUGIN, 'FindLog', [])
+        log2 = await self._run(context, event_queue, 'FindLog', [])
         log2_file = log2['outputFiles'][0]
-        wood2 = await self.dobjd.run_action(PLUGIN, 'CraftWood', [log2_file])
+        wood2 = await self._run(context, event_queue, 'CraftWood', [log2_file])
         wood2_file = wood2['outputFiles'][0]
 
         await emit_working(context, event_queue, 'assembling WoodPick…')
-        pick = await self.dobjd.run_action(
-            PLUGIN, 'CraftWoodPick', [wood2_file, stick_file]
+        pick = await self._run(
+            context, event_queue, 'CraftWoodPick', [wood2_file, stick_file]
         )
         return pick['outputFiles'][0]
 
@@ -80,8 +94,8 @@ class StonemasonAgentExecutor(AgentExecutor):
             woodpick_file = await self._ensure_woodpick(context, event_queue)
 
             await emit_working(context, event_queue, f'mining stone with {woodpick_file}…')
-            mine_result = await self.dobjd.run_action(
-                PLUGIN, 'MineStone', [woodpick_file]
+            mine_result = await self._run(
+                context, event_queue, 'MineStone', [woodpick_file]
             )
             # MineStone outputs Stone (and a damaged-but-not-nullified WoodPick
             # if the action chooses that shape). Identify the Stone by class.

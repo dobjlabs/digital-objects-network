@@ -21,11 +21,16 @@ Sender/receiver semantics:
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 import httpx
+from httpx_sse import aconnect_sse
 
 
 class DobjdClient:
@@ -73,6 +78,71 @@ class DobjdClient:
         r = await self._client.post(f'{self.base_url}/actions/run', json=body)
         r.raise_for_status()
         return r.json()
+
+    async def run_action_with_progress(
+        self,
+        plugin_name: str,
+        action_name: str,
+        input_files: list[str] | None = None,
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> dict[str, Any]:
+        """Same as `run_action`, but subscribes to `/events` and forwards every
+        `RunActionProgress` event for this run via `on_progress` before
+        returning the final `RunActionResult`.
+
+        Each progress event is a dict like:
+          {"runId": "...", "phase": "generateProof"|"commit",
+           "status": "running"|"done"|"failed",
+           "message": "Adding 3446 blinding terms…",
+           "oldRoot": ..., "newRoot": ..., "outputFiles": ..., ...}
+        """
+        run_id = uuid.uuid4().hex
+        body = {
+            'input': {
+                'action': {'pluginName': plugin_name, 'name': action_name},
+                'inputObjectPaths': input_files or [],
+                'runId': run_id,
+            }
+        }
+
+        # Open SSE FIRST so we don't race the action's first event.
+        async with aconnect_sse(
+            self._client, 'GET', f'{self.base_url}/events'
+        ) as event_source:
+            post_task = asyncio.create_task(
+                self._client.post(f'{self.base_url}/actions/run', json=body)
+            )
+            try:
+                async for sse in event_source.aiter_sse():
+                    if not sse.data:
+                        continue
+                    try:
+                        event = json.loads(sse.data)
+                    except json.JSONDecodeError:
+                        continue
+                    # Wire shape — serde(tag = "type", rename_all = "kebab-case"):
+                    # {"type": "run-action-progress", "runId": ..., "phase": ...,
+                    #  "status": ..., "message": ...}.
+                    if event.get('type') != 'run-action-progress':
+                        continue
+                    if event.get('runId') != run_id:
+                        continue
+                    if on_progress is not None:
+                        await on_progress(event)
+                    # Terminal events end with phase=commit, status=done|failed.
+                    if (
+                        event.get('phase') == 'commit'
+                        and event.get('status') in ('done', 'failed')
+                    ):
+                        break
+            except BaseException:
+                post_task.cancel()
+                raise
+
+        # Outside the SSE context: collect the POST response.
+        response = await post_task
+        response.raise_for_status()
+        return response.json()
 
     # ---- Filesystem (same host as dobjd) --------------------------------
 

@@ -31,6 +31,7 @@ from shared.a2a_helpers import (  # noqa: E402
     emit_text_artifact,
     emit_working,
     ensure_task,
+    make_progress_forwarder,
 )
 from shared.dobjd_client import DobjdClient  # noqa: E402
 
@@ -53,15 +54,27 @@ class LumberjackAgentExecutor(AgentExecutor):
 
         try:
             await emit_working(context, event_queue, 'chopping a log…')
-            log_result = await self.dobjd.run_action(PLUGIN, 'FindLog', [])
+            log_result = await self.dobjd.run_action_with_progress(
+                PLUGIN, 'FindLog', [],
+                on_progress=make_progress_forwarder(
+                    context, event_queue, action_label='FindLog'),
+            )
             log_file = log_result['outputFiles'][0]
 
             await emit_working(context, event_queue, f'refining {log_file} into wood…')
-            wood_result = await self.dobjd.run_action(PLUGIN, 'CraftWood', [log_file])
+            wood_result = await self.dobjd.run_action_with_progress(
+                PLUGIN, 'CraftWood', [log_file],
+                on_progress=make_progress_forwarder(
+                    context, event_queue, action_label='CraftWood'),
+            )
             wood_file = wood_result['outputFiles'][0]
 
             await emit_working(context, event_queue, f'splitting {wood_file} into sticks…')
-            sticks_result = await self.dobjd.run_action(PLUGIN, 'CraftSticks', [wood_file])
+            sticks_result = await self.dobjd.run_action_with_progress(
+                PLUGIN, 'CraftSticks', [wood_file],
+                on_progress=make_progress_forwarder(
+                    context, event_queue, action_label='CraftSticks'),
+            )
             # CraftSticks produces two Sticks; ship one, keep the other.
             stick_file = sticks_result['outputFiles'][0]
 

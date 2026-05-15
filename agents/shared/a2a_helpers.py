@@ -75,6 +75,28 @@ async def emit_failed(
     )
 
 
+def make_progress_forwarder(
+    context: RequestContext,
+    event_queue: EventQueue,
+    action_label: str = '',
+):
+    """Build an async callback that turns a dobjd RunActionProgress dict into
+    an A2A `Working`-state update. Useful with
+    `DobjdClient.run_action_with_progress(..., on_progress=forwarder)`.
+    """
+    async def forward(progress: dict) -> None:
+        msg = (progress.get('message') or '').strip()
+        if not msg:
+            return
+        phase = progress.get('phase') or ''
+        status = progress.get('status') or ''
+        suffix = f' ({phase}/{status})' if phase and status else ''
+        prefix = f'{action_label}: ' if action_label else ''
+        await emit_working(context, event_queue, f'{prefix}{msg}{suffix}')
+
+    return forward
+
+
 # ---------------------------------------------------------------------------
 # Artifact emitters
 # ---------------------------------------------------------------------------
