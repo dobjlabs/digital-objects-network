@@ -21,11 +21,12 @@ Two flavors of commands.
 | Command | Hits |
 |---|---|
 | `inventory` | `GET /inventory` |
-| `actions` | `GET /inventory` (filters to actions only) |
+| `actions` | `GET /actions` |
 | `classes` | `GET /classes` |
-| `inspect-object <id>` | `GET /objects/{id}` |
-| `inspect-class <name>` | `GET /classes/{name}` |
-| `feasibility <action>` | `GET /actions/{id}/feasibility` |
+| `inspect-object <file_name>` | `GET /objects/{file_name}` |
+| `inspect-class <plugin::class>` | `GET /classes/{name}` |
+| `inspect-action <plugin::action>` | `GET /actions/{id}` |
+| `feasibility <plugin::action>` | `GET /actions/{id}/feasibility` |
 | `state-root` | `GET /state-root` |
 | `objects-dir` | `GET /objects/dir` |
 | `settings get` | `GET /settings` |
@@ -94,12 +95,13 @@ dobj actions
 dobj inventory
 
 # run an action and see its progress streamed
-dobj run FindLog
+dobj run craft-basics::FindLog
 # [generateProof/running] Verifying Inputs
 # [generateProof/done]   Proof generation complete
 # [commit/running]       Awaiting blob landing
 # [commit/done]          Commit complete
-# action: FindLog
+# action:   craft-basics::FindLog
+# run id:   3f8c…
 # old root: 0xabcd...
 # new root: 0xefgh...
 # outputs:
