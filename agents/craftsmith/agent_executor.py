@@ -108,10 +108,12 @@ class CraftsmithAgentExecutor(AgentExecutor):
             )
 
             await emit_working(context, event_queue, 'running CraftStonePick…')
+            # CraftStonePick expects inputs in order [Stone, Stick] (positional
+            # — first action.input() call is Stone, second is Stick).
             result = await self.dobjd.run_action_with_progress(
                 PLUGIN,
                 'CraftStonePick',
-                [stick['fileName'], stone['fileName']],
+                [stone['fileName'], stick['fileName']],
                 on_progress=make_progress_forwarder(
                     context, event_queue, action_label='CraftStonePick'),
             )
