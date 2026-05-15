@@ -37,20 +37,6 @@ impl DobjdClient {
         decode_json(res).await
     }
 
-    pub async fn get_text(&self, path: &str) -> Result<String> {
-        let url = self.url(path);
-        let res = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .with_context(|| format!("GET {url}"))?;
-        if !res.status().is_success() {
-            return Err(decode_error(res).await);
-        }
-        Ok(res.text().await?)
-    }
-
     pub async fn post_json<B: Serialize, T: DeserializeOwned>(
         &self,
         path: &str,

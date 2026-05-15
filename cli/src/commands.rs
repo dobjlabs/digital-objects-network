@@ -104,8 +104,8 @@ pub async fn actions(client: &DobjdClient, json: bool) -> Result<()> {
 }
 
 pub async fn state_root(client: &DobjdClient) -> Result<()> {
-    let root = client.get_text("/state-root").await?;
-    println!("{}", root.trim_matches('"'));
+    let root: String = client.get_json("/state-root").await?;
+    println!("{root}");
     Ok(())
 }
 
