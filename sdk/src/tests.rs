@@ -517,3 +517,42 @@ IsFoo(state, chain0, chain) = OR(
         module.podlang_src
     );
 }
+
+/// Class names go straight into qualified ids (`<plugin>::<class>`) and
+/// `.dobj` filename prefixes. The SDK refuses to compile a script that
+/// declares a class name outside the `[A-Za-z0-9_-]` allowlist so a
+/// malformed name can never reach the catalog or the filesystem in the
+/// first place.
+#[test]
+fn test_class_name_rejects_invalid_chars() {
+    let cases = [
+        // (script body, what makes it invalid)
+        (r#"action.output("Foo/bar");"#, "'/' in class name"),
+        (r#"action.output("Foo\\bar");"#, "'\\' in class name"),
+        (r#"action.output("..");"#, "'..' as class name"),
+        (r#"action.output("weird:class");"#, "':' in class name"),
+        (r#"action.input("with space");"#, "whitespace in class name"),
+        (r#"action.mutate("");"#, "empty class name"),
+    ];
+    let sdk = Sdk::default();
+    for (body, label) in cases {
+        let craft_src = format!(
+            r#"
+fn Bad(action) {{
+    {body}
+}}
+"#
+        );
+        let result = sdk.load_module_from_src_actions(&craft_src, &["Bad"]);
+        match result {
+            Ok(_) => panic!("expected SDK to reject {label}, but the script compiled"),
+            Err(err) => {
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("class name"),
+                    "unexpected error for {label}: {msg}"
+                );
+            }
+        }
+    }
+}

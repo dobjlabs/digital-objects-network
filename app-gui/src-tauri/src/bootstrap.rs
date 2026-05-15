@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::CommandError;
+use ::driver::{ClassRef, ObjectStatus, QualifiedName};
 use serde::Serialize;
 
 #[derive(Debug, Serialize, Clone)]
@@ -9,10 +10,10 @@ use serde::Serialize;
 pub struct InventoryObject {
     pub id: String,
     pub file_name: String,
-    pub class_name: String,
+    pub class: QualifiedName,
     pub class_hash: String,
     pub emoji: String,
-    pub status: driver::ObjectStatus,
+    pub status: ObjectStatus,
     pub tx_hash: Option<String>,
     pub grounded: bool,
     pub description: Option<String>,
@@ -22,12 +23,11 @@ pub struct InventoryObject {
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Action {
-    pub id: String,
+    pub action: QualifiedName,
     pub emoji: String,
     pub hash: String,
-    pub total_input_class_hashes: Vec<String>,
+    pub total_inputs: Vec<ClassRef>,
     pub description: String,
-    pub total_input_classes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -46,7 +46,7 @@ pub async fn load_gui_inventory(
         let classes = driver
             .list_classes()?
             .into_iter()
-            .map(|class_info| (class_info.name.clone(), class_info))
+            .map(|class_info| (class_info.class.clone(), class_info))
             .collect::<HashMap<_, _>>();
         let inventory = driver
             .sync_inventory(None)
@@ -56,11 +56,11 @@ pub async fn load_gui_inventory(
             })
             .into_iter()
             .map(|object| {
-                let class_info = classes.get(&object.class_name);
+                let class_info = classes.get(&object.class);
                 InventoryObject {
                     id: object.id,
                     file_name: object.file_name,
-                    class_name: object.class_name.clone(),
+                    class: object.class,
                     class_hash: object.class_hash,
                     emoji: class_info
                         .map(|class_info| class_info.emoji.clone())
@@ -78,12 +78,11 @@ pub async fn load_gui_inventory(
             .list_actions(None)?
             .into_iter()
             .map(|action| Action {
-                id: action.id,
+                action: action.action,
                 emoji: action.emoji,
                 hash: action.hash,
-                total_input_class_hashes: action.total_input_class_hashes,
+                total_inputs: action.total_inputs,
                 description: action.description,
-                total_input_classes: action.total_input_classes,
             })
             .collect();
 

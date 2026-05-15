@@ -4,9 +4,11 @@ import {
   runAction,
   type ActionPayload as Action,
   type InventoryObjectPayload as InventoryObject,
+  type QualifiedNamePayload,
   type RunActionProgress,
 } from "../api/tauriClient";
 import { normalizeErrorMessage } from "../error";
+import { qualifiedEq, qualifiedId } from "../objectUtils";
 
 type ProofStatus = "idle" | "generating" | "committing" | "summary" | "error";
 type StepStatus = "pending" | "running" | "done";
@@ -30,7 +32,8 @@ interface ProofSummary {
 }
 
 interface ProofState {
-  runActionId: string | null;
+  /** Identity (qualified) of the action currently being proved, when one is. */
+  runAction: QualifiedNamePayload | null;
   status: ProofStatus;
   args: string[];
   messages: string[];
@@ -45,27 +48,30 @@ interface ProofState {
 export type ContextSelection =
   | { kind: "none" }
   | { kind: "object"; objectId: string }
-  | { kind: "action"; actionId: string };
+  | { kind: "action"; action: QualifiedNamePayload };
 
 export interface AppState {
   contextSelection: ContextSelection;
   activeObjectId: string | null;
-  activeActionId: string | null;
+  activeAction: QualifiedNamePayload | null;
   showNullifiedItems: boolean;
   inventory: InventoryObject[];
   actions: Action[];
   proof: ProofState;
   hydrateData: () => Promise<void>;
   selectObject: (objectId: string) => void;
-  selectAction: (actionId: string) => void;
+  selectAction: (action: QualifiedNamePayload) => void;
   clearSelection: () => void;
   toggleNullified: () => void;
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   setGlobalStateRoot: (hash: string | null) => void;
   applyRunActionProgress: (event: RunActionProgress) => void;
-  initProofPanel: (input: { actionId: string; args: string[] }) => void;
+  initProofPanel: (input: {
+    action: QualifiedNamePayload;
+    args: string[];
+  }) => void;
   runProof: (input: {
-    actionId: string;
+    action: QualifiedNamePayload;
     inputBindings: Array<{
       objectPath: string;
       label: string;
@@ -75,11 +81,11 @@ export interface AppState {
 
 const initialAppState: Pick<
   AppState,
-  "contextSelection" | "activeObjectId" | "activeActionId" | "showNullifiedItems"
+  "contextSelection" | "activeObjectId" | "activeAction" | "showNullifiedItems"
 > = {
   contextSelection: { kind: "none" },
   activeObjectId: null,
-  activeActionId: null,
+  activeAction: null,
   showNullifiedItems: false,
 };
 
@@ -88,7 +94,7 @@ export const useStore = create<AppState>((set, get) => ({
   inventory: [],
   actions: [],
   proof: {
-    runActionId: null,
+    runAction: null,
     status: "idle",
     args: [],
     messages: [],
@@ -115,7 +121,7 @@ export const useStore = create<AppState>((set, get) => ({
     set((prev) => {
       if (
         prev.activeObjectId === objectId &&
-        prev.activeActionId === null &&
+        prev.activeAction === null &&
         prev.contextSelection.kind === "object" &&
         prev.contextSelection.objectId === objectId
       ) {
@@ -128,36 +134,37 @@ export const useStore = create<AppState>((set, get) => ({
       return {
         ...prev,
         activeObjectId: objectId,
-        activeActionId: null,
+        activeAction: null,
         contextSelection: { kind: "object", objectId },
       };
     }),
-  selectAction: (actionId) =>
+  selectAction: (action) =>
     set((prev) => {
       if (
-        prev.activeActionId === actionId &&
+        prev.activeAction !== null &&
+        qualifiedEq(prev.activeAction, action) &&
         prev.activeObjectId === null &&
         prev.contextSelection.kind === "action" &&
-        prev.contextSelection.actionId === actionId
+        qualifiedEq(prev.contextSelection.action, action)
       ) {
         return {
           ...prev,
-          activeActionId: null,
+          activeAction: null,
           contextSelection: { kind: "none" },
         };
       }
       return {
         ...prev,
         activeObjectId: null,
-        activeActionId: actionId,
-        contextSelection: { kind: "action", actionId },
+        activeAction: action,
+        contextSelection: { kind: "action", action },
       };
     }),
   clearSelection: () =>
     set((prev) => ({
       ...prev,
       activeObjectId: null,
-      activeActionId: null,
+      activeAction: null,
       contextSelection: { kind: "none" },
     })),
   toggleNullified: () =>
@@ -200,7 +207,10 @@ export const useStore = create<AppState>((set, get) => ({
     }),
   applyRunActionProgress: (event) =>
     set((prev) => {
-      if (prev.proof.runActionId !== event.runId) return prev;
+      const runAction = prev.proof.runAction;
+      if (runAction === null || qualifiedId(runAction) !== event.runId) {
+        return prev;
+      }
 
       const nextSteps = prev.proof.steps.map((step) => ({ ...step }));
       const updateStep = (stepId: string, patch: Partial<ProofStep>) => {
@@ -242,7 +252,7 @@ export const useStore = create<AppState>((set, get) => ({
         },
       };
     }),
-  initProofPanel: ({ actionId, args }) =>
+  initProofPanel: ({ action, args }) =>
     set((prev) => {
       if (
         prev.proof.status === "generating" ||
@@ -253,7 +263,7 @@ export const useStore = create<AppState>((set, get) => ({
       return {
         ...prev,
         proof: {
-          runActionId: actionId,
+          runAction: action,
           status: "generating",
           args,
           messages: ["Running action..."],
@@ -279,23 +289,28 @@ export const useStore = create<AppState>((set, get) => ({
         },
       };
     }),
-  runProof: async ({ actionId, inputBindings }) => {
+  runProof: async ({ action, inputBindings }) => {
     const postDoneHoldMs = 2800;
     const verifyTargets =
       inputBindings.length > 0
         ? inputBindings.map((binding) => binding.label)
         : ["(no inputs)"];
 
-    get().initProofPanel({ actionId, args: verifyTargets });
+    get().initProofPanel({ action, args: verifyTargets });
 
     try {
       const result = await runAction({
-        actionId,
+        action,
         inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
       });
 
       set((prev) => {
-        if (prev.proof.runActionId !== actionId) return prev;
+        if (
+          prev.proof.runAction === null ||
+          !qualifiedEq(prev.proof.runAction, action)
+        ) {
+          return prev;
+        }
         return {
           ...prev,
           proof: {
@@ -319,7 +334,7 @@ export const useStore = create<AppState>((set, get) => ({
         ...prev,
         proof: {
           ...prev.proof,
-          runActionId: null,
+          runAction: null,
           status: "idle",
           args: [],
           messages: [],
@@ -336,7 +351,7 @@ export const useStore = create<AppState>((set, get) => ({
       set((prev) => ({
         ...prev,
         proof: {
-          runActionId: null,
+          runAction: null,
           status: "error",
           args: verifyTargets,
           messages: [],

@@ -41,14 +41,16 @@ pub struct InspectObjectParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct InspectClassParams {
-    /// The class name to inspect, e.g. "WoodPick"
-    pub class_name: String,
+    /// The plugin-scoped class to inspect, e.g.
+    /// `{ "pluginName": "craft-basics", "name": "WoodPick" }`.
+    pub class: QualifiedName,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CheckFeasibilityParams {
-    /// The action ID to check, e.g. "CraftWoodPick"
-    pub action_id: String,
+    /// The plugin-scoped action to check, e.g.
+    /// `{ "pluginName": "craft-basics", "name": "CraftWoodPick" }`.
+    pub action: QualifiedName,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -120,7 +122,7 @@ impl<T: CraftOps> CraftMcpService<T> {
         Parameters(params): Parameters<InspectClassParams>,
     ) -> Result<Json<ClassDetail>, String> {
         self.ops
-            .inspect_class(&params.class_name)
+            .inspect_class(&params.class)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -150,7 +152,7 @@ impl<T: CraftOps> CraftMcpService<T> {
         Parameters(params): Parameters<CheckFeasibilityParams>,
     ) -> Result<Json<FeasibilityReport>, String> {
         self.ops
-            .check_feasibility(&params.action_id)
+            .check_feasibility(&params.action)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -301,12 +303,19 @@ mod tests {
         assert!(info.instructions.unwrap().contains("ZK-Craft MCP Server"));
     }
 
+    fn craft_basics(name: &str) -> QualifiedName {
+        QualifiedName {
+            plugin_name: "craft-basics".to_string(),
+            name: name.to_string(),
+        }
+    }
+
     #[test]
     fn test_list_inventory_returns_structured() {
         let service = make_service();
         let Json(list) = service.list_inventory().unwrap();
         assert!(!list.objects.is_empty());
-        assert!(list.objects.iter().any(|o| o.class_name == "Log"));
+        assert!(list.objects.iter().any(|o| o.class.name == "Log"));
     }
 
     #[test]
@@ -314,7 +323,11 @@ mod tests {
         let service = make_service();
         let Json(list) = service.list_actions().unwrap();
         assert!(!list.actions.is_empty());
-        assert!(list.actions.iter().any(|a| a.id == "CraftWoodPick"));
+        assert!(
+            list.actions
+                .iter()
+                .any(|a| a.action == craft_basics("CraftWoodPick"))
+        );
     }
 
     #[test]
@@ -332,7 +345,7 @@ mod tests {
                 object_id: "0xabc4444444444444".to_string(),
             }))
             .unwrap();
-        assert_eq!(detail.class_name, "WoodPick");
+        assert_eq!(detail.class.name, "WoodPick");
         assert!(detail.predicate_source.contains("CraftWoodPick"));
     }
 
@@ -351,11 +364,11 @@ mod tests {
         let service = make_service();
         let Json(detail) = service
             .inspect_class(Parameters(InspectClassParams {
-                class_name: "Stick".to_string(),
+                class: craft_basics("Stick"),
             }))
             .unwrap();
-        assert_eq!(detail.class_name, "Stick");
-        assert!(detail.produced_by.contains(&"CraftSticks".to_string()));
+        assert_eq!(detail.class.name, "Stick");
+        assert!(detail.produced_by.contains(&craft_basics("CraftSticks")));
     }
 
     #[tokio::test]
@@ -363,7 +376,7 @@ mod tests {
         let service = make_service();
         let Json(result) = service
             .run_action(Parameters(RunActionInput {
-                action_id: "FindLog".to_string(),
+                action: craft_basics("FindLog"),
                 input_object_paths: vec![],
             }))
             .await
@@ -376,7 +389,7 @@ mod tests {
         let service = CraftMcpService::new(Arc::new(MockCraftOps::new().with_action_in_progress()));
         let result = service
             .run_action(Parameters(RunActionInput {
-                action_id: "FindLog".to_string(),
+                action: craft_basics("FindLog"),
                 input_object_paths: vec![],
             }))
             .await;
@@ -389,7 +402,7 @@ mod tests {
         let service = make_service();
         let Json(report) = service
             .check_feasibility(Parameters(CheckFeasibilityParams {
-                action_id: "CraftWoodPick".to_string(),
+                action: craft_basics("CraftWoodPick"),
             }))
             .unwrap();
         assert!(report.feasible);
@@ -402,7 +415,7 @@ mod tests {
         let service = CraftMcpService::new(Arc::new(mock));
         let Json(report) = service
             .check_feasibility(Parameters(CheckFeasibilityParams {
-                action_id: "CraftWoodPick".to_string(),
+                action: craft_basics("CraftWoodPick"),
             }))
             .unwrap();
         assert!(!report.feasible);

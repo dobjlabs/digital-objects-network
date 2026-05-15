@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use txlib::GroundingEvidence;
 
+use crate::qualified_name::QualifiedName;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ObjectStatus {
@@ -17,8 +19,9 @@ pub enum ObjectStatus {
 #[serde(rename_all = "camelCase")]
 pub struct ObjectRecord {
     pub id: String,
-    /// Object class/type name
-    pub class_name: String,
+    /// The class this object belongs to. Plugin-scoped so two plugins with
+    /// the same bare class name stay distinguishable.
+    pub class: QualifiedName,
     /// Lifecycle status of this object.
     pub status: ObjectStatus,
     /// Optional Ethereum transaction hash for the blob that anchored this object.

@@ -19,6 +19,7 @@ use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
 };
 use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
+use crate::qualified_name::QualifiedName;
 use crate::{ActionQuery, DriverPaths, ExecuteActionInput, ObjectSelector};
 
 fn temp_paths() -> DriverPaths {
@@ -77,18 +78,22 @@ fn state_root(state: &TestState) -> StateRoot {
     )
 }
 
+fn craft_basics(name: &str) -> QualifiedName {
+    QualifiedName::new("craft-basics", name)
+}
+
 fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
     ensure_extra_pod_deserializers_registered();
     let catalog = make_catalog();
     let outputs = catalog
-        .execute_action("FindLog".to_string(), dummy_grounding_witness(), vec![])
+        .execute_action(craft_basics("FindLog"), dummy_grounding_witness(), vec![])
         .unwrap();
     let source_tx = outputs.tx.clone();
     let spendable = outputs.obj(0);
     let id = format!("{:#}", spendable.obj.commitment());
     let record = ObjectRecord {
         id,
-        class_name: "Log".to_string(),
+        class: craft_basics("Log"),
         status: ObjectStatus::Live,
         tx_hash: None,
         obj: spendable.obj,
@@ -245,17 +250,32 @@ impl RelayerClient for MockRelayer {
 
 #[test]
 fn test_list_actions_filters_by_input_class() {
-    let driver = Driver::open_default().unwrap();
+    // Use the in-memory test catalog so the assertion does not depend on
+    // whatever pexe plugins happen to live under ~/.dobj/actions/.
+    let paths = temp_paths();
+    ensure_store_dirs(&paths).unwrap();
+    let deps = DriverDeps {
+        catalog: Arc::new(make_catalog()),
+        synchronizer: Arc::new(MockSynchronizer::default()),
+        relayer: Arc::new(MockRelayer::default()),
+        payload_builder: Arc::new(MockPayloadBuilder),
+    };
+    let driver = Driver::open(paths, deps).unwrap();
+    let wood = craft_basics("Wood");
     let filtered = driver
         .list_actions(Some(&ActionQuery {
-            input_class: Some("Wood".to_string()),
+            input_class: Some(wood.clone()),
             ..ActionQuery::default()
         }))
         .unwrap();
     assert!(
+        !filtered.is_empty(),
+        "expected at least one Wood-consuming action"
+    );
+    assert!(
         filtered
             .iter()
-            .all(|action| action.total_input_classes.contains(&"Wood".to_string()))
+            .all(|action| action.total_inputs.iter().any(|r| r.class == wood))
     );
 }
 
@@ -273,7 +293,7 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
 
     let err = driver
         .execute(ExecuteActionInput {
-            action_id: "CraftWood".to_string(),
+            action: craft_basics("CraftWood"),
             input_objects: vec![ObjectSelector::FileName("log_1.dobj".to_string())],
         })
         .unwrap_err();
@@ -295,6 +315,37 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
     assert_eq!(output.record.status, ObjectStatus::Unknown);
 }
 
+/// A `.dobj` whose `class` text matches what an action expects must STILL
+/// be rejected when its on-chain `obj["type"]` predicate hash disagrees. This
+/// is the regression test for the original collision bug: if two plugins
+/// declared a class `Wood`, the bare-name check used to let the wrong
+/// `IsWood@A` object satisfy `IsWood@B`'s requirement and proof generation
+/// would burn minutes before the prover failed.
+#[test]
+fn test_execute_rejects_class_hash_mismatch_with_matching_class_id() {
+    // A real Log object (obj["type"] = IsLog hash) written to disk with a
+    // forged class of "craft-basics::Wood". CraftSticks consumes a Wood, so
+    // the qualified-name check passes; the cryptographic hash check then fires.
+    let (mut entry, deps) = make_input_record("forged_wood.dobj");
+    entry.record.class = craft_basics("Wood");
+    let paths = temp_paths();
+    ensure_store_dirs(&paths).unwrap();
+    write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
+    let driver = Driver::open(paths.clone(), deps).unwrap();
+
+    let err = driver
+        .execute(ExecuteActionInput {
+            action: craft_basics("CraftSticks"),
+            input_objects: vec![ObjectSelector::FileName("forged_wood.dobj".to_string())],
+        })
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("class hash mismatch"),
+        "expected hash-mismatch error, got: {msg}"
+    );
+}
+
 #[test]
 fn test_execute_keeps_files_after_relayer_accepts() {
     let (entry, mut deps) = make_input_record("log_1.dobj");
@@ -309,7 +360,7 @@ fn test_execute_keeps_files_after_relayer_accepts() {
 
     let err = driver
         .execute(ExecuteActionInput {
-            action_id: "CraftWood".to_string(),
+            action: craft_basics("CraftWood"),
             input_objects: vec![ObjectSelector::FileName("log_1.dobj".to_string())],
         })
         .unwrap_err();

@@ -1,6 +1,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use ::driver::{
+    ClassRef, Driver, ExecuteActionInput, ObjectSelector, ObjectStatus, ObjectSummary,
+    QualifiedName,
+};
 use craft_mcp::ops::CraftOps;
 use craft_mcp::types as mcp;
 use tauri::Emitter;
@@ -9,11 +13,11 @@ use crate::progress::TauriProgressReporter;
 
 pub(crate) struct AppCraftOps {
     app: tauri::AppHandle,
-    driver: Arc<::driver::Driver>,
+    driver: Arc<Driver>,
 }
 
 impl AppCraftOps {
-    pub(crate) fn new(app: tauri::AppHandle, driver: Arc<::driver::Driver>) -> Self {
+    pub(crate) fn new(app: tauri::AppHandle, driver: Arc<Driver>) -> Self {
         Self { app, driver }
     }
 }
@@ -34,10 +38,18 @@ impl CraftOps for AppCraftOps {
             .list_actions(None)?
             .into_iter()
             .map(|action| mcp::Action {
-                id: action.id,
+                action: to_mcp_qname(action.action),
                 description: action.description,
-                total_input_classes: action.total_input_classes,
-                total_output_classes: action.total_output_classes,
+                total_inputs: action
+                    .total_inputs
+                    .into_iter()
+                    .map(to_mcp_class_ref)
+                    .collect(),
+                total_outputs: action
+                    .total_outputs
+                    .into_iter()
+                    .map(to_mcp_class_ref)
+                    .collect(),
             })
             .collect())
     }
@@ -48,10 +60,18 @@ impl CraftOps for AppCraftOps {
             .list_classes()?
             .into_iter()
             .map(|class_info| mcp::ClassSummary {
-                name: class_info.name,
+                class: to_mcp_qname(class_info.class),
                 live_count: class_info.live_count,
-                produced_by: class_info.produced_by,
-                consumed_by: class_info.consumed_by,
+                produced_by: class_info
+                    .produced_by
+                    .into_iter()
+                    .map(to_mcp_qname)
+                    .collect(),
+                consumed_by: class_info
+                    .consumed_by
+                    .into_iter()
+                    .map(to_mcp_qname)
+                    .collect(),
             })
             .collect())
     }
@@ -63,15 +83,15 @@ impl CraftOps for AppCraftOps {
     fn inspect_object(&self, object_id: &str) -> anyhow::Result<mcp::ObjectDetail> {
         let object = self
             .driver
-            .read_object(&::driver::ObjectSelector::ObjectId(object_id.to_string()))?;
+            .read_object(&ObjectSelector::ObjectId(object_id.to_string()))?;
         let predicate_source = self
             .driver
-            .get_class(&object.class_name)
+            .get_class(&object.class)
             .map(|c| c.predicate_source)
             .unwrap_or_default();
         Ok(mcp::ObjectDetail {
             id: object.id,
-            class_name: object.class_name,
+            class: to_mcp_qname(object.class),
             status: status_string(object.status),
             tx_hash: object.tx_hash,
             state: object.fields,
@@ -79,13 +99,21 @@ impl CraftOps for AppCraftOps {
         })
     }
 
-    fn inspect_class(&self, class_name: &str) -> anyhow::Result<mcp::ClassDetail> {
-        let class_info = self.driver.get_class(class_name)?;
+    fn inspect_class(&self, class: &mcp::QualifiedName) -> anyhow::Result<mcp::ClassDetail> {
+        let class_info = self.driver.get_class(&from_mcp_qname(class.clone()))?;
         Ok(mcp::ClassDetail {
-            class_name: class_info.name,
+            class: to_mcp_qname(class_info.class),
             predicate_source: class_info.predicate_source,
-            produced_by: class_info.produced_by,
-            consumed_by: class_info.consumed_by,
+            produced_by: class_info
+                .produced_by
+                .into_iter()
+                .map(to_mcp_qname)
+                .collect(),
+            consumed_by: class_info
+                .consumed_by
+                .into_iter()
+                .map(to_mcp_qname)
+                .collect(),
         })
     }
 
@@ -104,19 +132,20 @@ impl CraftOps for AppCraftOps {
                 } else {
                     path.to_string()
                 };
-                Ok(::driver::ObjectSelector::FileName(selector))
+                Ok(ObjectSelector::FileName(selector))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
+        let action_qname = from_mcp_qname(input.action.clone());
         let _ = self.app.emit(
             "mcp-action-started",
-            serde_json::json!({ "actionId": input.action_id }),
+            serde_json::json!({ "action": &input.action }),
         );
 
-        let reporter = TauriProgressReporter::new(self.app.clone(), input.action_id.clone());
+        let reporter = TauriProgressReporter::new(self.app.clone(), action_qname.id());
         let result = self.driver.execute_with_reporter(
-            ::driver::ExecuteActionInput {
-                action_id: input.action_id.clone(),
+            ExecuteActionInput {
+                action: action_qname.clone(),
                 input_objects,
             },
             &reporter,
@@ -128,10 +157,10 @@ impl CraftOps for AppCraftOps {
             .map(|file_name| {
                 let detail = self
                     .driver
-                    .read_object(&::driver::ObjectSelector::FileName(file_name.clone()))?;
+                    .read_object(&ObjectSelector::FileName(file_name.clone()))?;
                 Ok(mcp::InventoryObject {
                     id: detail.id,
-                    class_name: detail.class_name,
+                    class: to_mcp_qname(detail.class),
                     file_name: detail.file_name,
                     status: status_string(detail.status),
                     tx_hash: detail.tx_hash,
@@ -144,28 +173,35 @@ impl CraftOps for AppCraftOps {
             success: true,
             message: format!(
                 "Action {} completed. Old root: {}, New root: {}",
-                input.action_id, result.old_root, result.new_root
+                action_qname, result.old_root, result.new_root
             ),
             outputs,
             consumed: result.nullified_files,
         })
     }
 
-    fn check_feasibility(&self, action_id: &str) -> anyhow::Result<mcp::FeasibilityReport> {
-        let report = self.driver.check_action(action_id)?;
+    fn check_feasibility(
+        &self,
+        action: &mcp::QualifiedName,
+    ) -> anyhow::Result<mcp::FeasibilityReport> {
+        let report = self.driver.check_action(&from_mcp_qname(action.clone()))?;
         Ok(mcp::FeasibilityReport {
             feasible: report.feasible,
-            action_id: report.action_id,
+            action: to_mcp_qname(report.action),
             available_inputs: report
                 .available_inputs
                 .into_iter()
                 .map(|candidate| mcp::FeasibilityInput {
-                    class_name: candidate.class_name,
+                    class: to_mcp_qname(candidate.class),
                     object_id: candidate.object_id,
                     file_name: candidate.file_name,
                 })
                 .collect(),
-            missing_inputs: report.missing_inputs,
+            missing_inputs: report
+                .missing_inputs
+                .into_iter()
+                .map(to_mcp_class_ref)
+                .collect(),
         })
     }
 
@@ -174,23 +210,41 @@ impl CraftOps for AppCraftOps {
     }
 }
 
-fn status_string(status: ::driver::ObjectStatus) -> String {
+fn status_string(status: ObjectStatus) -> String {
     match status {
-        ::driver::ObjectStatus::Unknown => "unknown",
-        ::driver::ObjectStatus::Pending => "pending",
-        ::driver::ObjectStatus::Live => "live",
-        ::driver::ObjectStatus::Nullified => "nullified",
+        ObjectStatus::Unknown => "unknown",
+        ObjectStatus::Pending => "pending",
+        ObjectStatus::Live => "live",
+        ObjectStatus::Nullified => "nullified",
     }
     .to_string()
 }
 
-fn to_mcp_inventory_object(object: ::driver::ObjectSummary) -> mcp::InventoryObject {
+fn to_mcp_inventory_object(object: ObjectSummary) -> mcp::InventoryObject {
     mcp::InventoryObject {
         id: object.id,
-        class_name: object.class_name,
+        class: to_mcp_qname(object.class),
         file_name: object.file_name,
         status: status_string(object.status),
         tx_hash: object.tx_hash,
         fields: object.fields,
     }
+}
+
+fn to_mcp_class_ref(r: ClassRef) -> mcp::ClassRef {
+    mcp::ClassRef {
+        class: to_mcp_qname(r.class),
+        hash: r.hash,
+    }
+}
+
+fn to_mcp_qname(q: QualifiedName) -> mcp::QualifiedName {
+    mcp::QualifiedName {
+        plugin_name: q.plugin_name,
+        name: q.name,
+    }
+}
+
+fn from_mcp_qname(q: mcp::QualifiedName) -> QualifiedName {
+    QualifiedName::new(q.plugin_name, q.name)
 }
