@@ -749,7 +749,7 @@ fn build_replay_nullify(
 
 /// Build `ReplayMutateEvent` (and its inner `ReplayNullify`). Shared
 /// between `build_replay_mutate` and `build_replay_step_mutate` (these
-/// inner predicates don't reference `new`/`old` via anchored keys —
+/// inner predicates don't reference `new`/`old` via anchored keys --
 /// they take the dicts directly as wildcards).
 #[allow(clippy::too_many_arguments)]
 fn build_replay_mutate_event(

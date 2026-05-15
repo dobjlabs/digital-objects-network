@@ -675,16 +675,11 @@ impl ActionHandle {
             .map(|s| s.ts)
             .unwrap_or(0);
         let action_chain_packed = chain_max_ts >= fmt_podlang::CHAIN_PACK_MIN_TS;
-        // Single pass over insts: assign a parent_ts to each
-        // Object/SubAction inst (each advances the parent chain by 1)
-        // and, for SubAction insts, extract the post-chain value from
-        // the cached `st_sub` (already baked in at Rhai time). Object
-        // chain values are filled later in the event_sts loop after
-        // `tx_builder.insert/mutate/delete` advances the chain.
-        // chain_step_values index 0 is the `_pad` placeholder;
-        // indices 1..chain_max_ts hold the chain hash at that ts.
-        // (The final chain at ts=chain_max_ts is the public `chain`
-        // wildcard and not stored here.)
+        // chain_step_values[0] is `_pad`; [1..chain_max_ts] hold per-ts
+        // chain hashes (the final ts is the public `chain` wildcard, not
+        // stored here). SubAction values come from `st_sub` (baked in at
+        // Rhai time); Object values are filled later by the event_sts
+        // loop, once `tx_builder.{insert,mutate,delete}` advances the chain.
         let mut chain_step_values: Vec<Value> = vec![Value::from(0_i64); chain_max_ts.max(1)];
         let inst_chain_ts: Vec<Option<usize>> = {
             let ctx = self.0.borrow();

@@ -897,8 +897,13 @@ impl TxBuilder {
             // Base case: empty inputs. state_root_hash is unconstrained here.
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root_hash = state_root_hash) =
-                    (Equal(set!(), set!()), Statement::None, Statement::None)
+                InputsGrounded(state_root_hash = state_root_hash) = (
+                    Equal(set!(), set!()),
+                    Statement::None,
+                    Statement::None,
+                    Statement::None,
+                    Statement::None
+                )
             )
             .unwrap();
             record(&mut stats, "InputsGrounded");
@@ -929,11 +934,17 @@ impl TxBuilder {
             .priv_op(op!(HashOf(state_root_hash, txn_null_hash, bn_gsrs_hash)))
             .unwrap();
 
-        if inputs.len() == 1 {
-            // Single-input fast path: InputsGroundedSingle avoids recursion.
-            let (obj, evidence) = &inputs[0];
-            let mut inputs_set = set!();
-            inputs_set.insert(&Value::from(obj.clone())).unwrap();
+        let extend_set = |set: &Set, obj: &Dictionary| -> Set {
+            let mut new_set = set.clone();
+            new_set.insert(&Value::from(obj.clone())).unwrap();
+            new_set
+        };
+
+        let prove_input = |ctx: &mut BuildContext,
+                           stats: &mut TxStats,
+                           evidence: &GroundingEvidence,
+                           obj: &Dictionary|
+         -> (Statement, Statement) {
             let st_tx_membership =
                 prove_source_tx_membership(ctx, grounding, transactions_root, evidence.tx_final);
             let st_tx_in_sr = st_custom!(
@@ -946,8 +957,15 @@ impl TxBuilder {
                 )
             )
             .unwrap();
-            record(&mut stats, "TxInStateRoot");
+            record(stats, "TxInStateRoot");
             let st_set_contains_live = prove_obj_in_source_tx_live(ctx, evidence, obj);
+            (st_tx_in_sr, st_set_contains_live)
+        };
+
+        if inputs.len() == 1 {
+            let (obj, evidence) = &inputs[0];
+            let inputs_set = extend_set(&set!(), obj);
+            let (st_tx_in_sr, st_set_contains_live) = prove_input(ctx, &mut stats, evidence, obj);
             let st_single = st_custom!(
                 ctx,
                 InputsGroundedSingle() = (
@@ -960,39 +978,116 @@ impl TxBuilder {
             record(&mut stats, "InputsGroundedSingle");
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root_hash = state_root_hash) =
-                    (Statement::None, st_single, Statement::None)
+                InputsGrounded(state_root_hash = state_root_hash) = (
+                    Statement::None,
+                    st_single,
+                    Statement::None,
+                    Statement::None,
+                    Statement::None
+                )
             )
             .unwrap();
             record(&mut stats, "InputsGrounded");
             return (st, inputs_set, stats);
         }
 
-        let mut st = st_custom!(
+        // For 2+ inputs: bottom out at InputsGroundedPair (N=2) or
+        // InputsGroundedTriple (N>=3), then peel any remaining inputs via
+        // InputsGroundedRecursive.
+
+        let (first_obj, first_evidence) = &inputs[0];
+        let (second_obj, second_evidence) = &inputs[1];
+
+        let set_first = extend_set(&set!(), first_obj);
+        let (st_first_tx_in_sr, st_first_set_contains_live) =
+            prove_input(ctx, &mut stats, first_evidence, first_obj);
+        let st_igsv = st_custom!(
             ctx,
-            InputsGrounded(state_root_hash = state_root_hash) =
-                (Equal(set!(), set!()), Statement::None, Statement::None)
+            InputsGroundedSingleVar() = (
+                st_first_tx_in_sr,
+                st_first_set_contains_live,
+                SetInsert(set_first, set!(), first_obj)
+            )
         )
         .unwrap();
-        record(&mut stats, "InputsGrounded");
-        let mut prev_set = set!();
-        for (obj, evidence) in inputs {
-            let mut next_set = prev_set.clone();
-            next_set.insert(&Value::from(obj.clone())).unwrap();
-            let st_tx_membership =
-                prove_source_tx_membership(ctx, grounding, transactions_root, evidence.tx_final);
-            let st_tx_in_sr = st_custom!(
+        record(&mut stats, "InputsGroundedSingleVar");
+
+        let inputs_pair = extend_set(&set_first, second_obj);
+        let (st_second_tx_in_sr, st_second_set_contains_live) =
+            prove_input(ctx, &mut stats, second_evidence, second_obj);
+
+        if inputs.len() == 2 {
+            let st_pair = st_custom!(
                 ctx,
-                TxInStateRoot() = (
-                    st_h_txn_null.clone(),
-                    st_h_bn_gsrs.clone(),
-                    st_h_state_root.clone(),
-                    st_tx_membership
+                InputsGroundedPair() = (
+                    st_igsv,
+                    st_second_tx_in_sr,
+                    st_second_set_contains_live,
+                    SetInsert(inputs_pair, set_first, second_obj)
                 )
             )
             .unwrap();
-            record(&mut stats, "TxInStateRoot");
-            let st_set_contains_live = prove_obj_in_source_tx_live(ctx, evidence, obj);
+            record(&mut stats, "InputsGroundedPair");
+            let st = st_custom!(
+                ctx,
+                InputsGrounded(state_root_hash = state_root_hash) = (
+                    Statement::None,
+                    Statement::None,
+                    st_pair,
+                    Statement::None,
+                    Statement::None
+                )
+            )
+            .unwrap();
+            record(&mut stats, "InputsGrounded");
+            return (st, inputs_pair, stats);
+        }
+
+        let st_igpv = st_custom!(
+            ctx,
+            InputsGroundedPairVar() = (
+                st_igsv,
+                st_second_tx_in_sr,
+                st_second_set_contains_live,
+                SetInsert(inputs_pair, set_first, second_obj)
+            )
+        )
+        .unwrap();
+        record(&mut stats, "InputsGroundedPairVar");
+
+        let (third_obj, third_evidence) = &inputs[2];
+        let inputs_triple = extend_set(&inputs_pair, third_obj);
+        let (st_third_tx_in_sr, st_third_set_contains_live) =
+            prove_input(ctx, &mut stats, third_evidence, third_obj);
+        let st_triple = st_custom!(
+            ctx,
+            InputsGroundedTriple() = (
+                st_igpv,
+                st_third_tx_in_sr,
+                st_third_set_contains_live,
+                SetInsert(inputs_triple, inputs_pair, third_obj)
+            )
+        )
+        .unwrap();
+        record(&mut stats, "InputsGroundedTriple");
+
+        let mut st = st_custom!(
+            ctx,
+            InputsGrounded(state_root_hash = state_root_hash) = (
+                Statement::None,
+                Statement::None,
+                Statement::None,
+                st_triple,
+                Statement::None
+            )
+        )
+        .unwrap();
+        record(&mut stats, "InputsGrounded");
+        let mut prev_set = inputs_triple;
+
+        for (obj, evidence) in &inputs[3..] {
+            let next_set = extend_set(&prev_set, obj);
+            let (st_tx_in_sr, st_set_contains_live) = prove_input(ctx, &mut stats, evidence, obj);
             let st_rec = st_custom!(
                 ctx,
                 InputsGroundedRecursive() = (
@@ -1007,7 +1102,13 @@ impl TxBuilder {
             prev_set = next_set;
             st = st_custom!(
                 ctx,
-                InputsGrounded() = (Statement::None, Statement::None, st_rec)
+                InputsGrounded() = (
+                    Statement::None,
+                    Statement::None,
+                    Statement::None,
+                    Statement::None,
+                    st_rec
+                )
             )
             .unwrap();
             record(&mut stats, "InputsGrounded");

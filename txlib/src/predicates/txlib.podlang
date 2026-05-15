@@ -312,6 +312,8 @@ InputsGrounded(inputs, state_root_hash) = OR(
   // unconstrained -- an empty-input tx needs no prior state.
   Equal(inputs, {})
   InputsGroundedSingle(inputs, state_root_hash)
+  InputsGroundedPair(inputs, state_root_hash)
+  InputsGroundedTriple(inputs, state_root_hash)
   InputsGroundedRecursive(inputs, state_root_hash)
 )
 
@@ -324,7 +326,56 @@ InputsGroundedSingle(inputs, state_root_hash,
   SetInsert(inputs, {}, input)
 )
 
-// 2+ inputs: ground one input, then recurse for the rest.
+// Same body as InputsGroundedSingle, but `input` is a public arg so a
+// caller (e.g. InputsGroundedPair) can reuse it in a subsequent SetInsert.
+// Not eligible for the InputsGrounded OR directly because the OR requires
+// all branches to share the (inputs, state_root_hash) signature.
+InputsGroundedSingleVar(inputs, state_root_hash, input,
+    private: source_tx) = AND(
+  TxInStateRoot(state_root_hash, source_tx)
+  SetContains(source_tx.live, input)
+  SetInsert(inputs, {}, input)
+)
+
+// Two-input fast path: grounds two inputs without recursion. Saves one
+// IG-dispatch + one IGR cpv vs. the recursive chain for N=2.
+// IGSV builds the {first} singleton; the second input is verified inline
+// and inserted into the singleton to form `inputs`.
+InputsGroundedPair(inputs, state_root_hash,
+    private: first_input, second_input, set_first, source_tx_second) = AND(
+  InputsGroundedSingleVar(set_first, state_root_hash, first_input)
+  TxInStateRoot(state_root_hash, source_tx_second)
+  SetContains(source_tx_second.live, second_input)
+  SetInsert(inputs, set_first, second_input)
+)
+
+// Same body as InputsGroundedPair, but first_input and second_input are
+// public args so a caller (InputsGroundedTriple) can chain through them.
+// Not eligible for the InputsGrounded OR directly because the OR requires
+// all branches to share the (inputs, state_root_hash) signature.
+InputsGroundedPairVar(inputs, state_root_hash, first_input, second_input,
+    private: set_first, source_tx_second) = AND(
+  InputsGroundedSingleVar(set_first, state_root_hash, first_input)
+  TxInStateRoot(state_root_hash, source_tx_second)
+  SetContains(source_tx_second.live, second_input)
+  SetInsert(inputs, set_first, second_input)
+)
+
+// Three-input fast path: grounds three inputs in 4 cpv (IG + IGT + IGPV +
+// IGSV). Used directly for N=3, or as the bottom-out for N>=4 (after IGR
+// peels off the outer inputs).
+InputsGroundedTriple(inputs, state_root_hash,
+    private: first_input, second_input, third_input, set_pair,
+             source_tx_third) = AND(
+  InputsGroundedPairVar(set_pair, state_root_hash, first_input, second_input)
+  TxInStateRoot(state_root_hash, source_tx_third)
+  SetContains(source_tx_third.live, third_input)
+  SetInsert(inputs, set_pair, third_input)
+)
+
+// 4+ inputs: ground one input, then recurse for the rest. Bottoms out at
+// InputsGroundedTriple for N=4, or at a further IGR -> ... -> IGT chain
+// for larger N.
 InputsGroundedRecursive(inputs, state_root_hash,
     private: input, prev_inputs, source_tx) = AND(
   TxInStateRoot(state_root_hash, source_tx)
