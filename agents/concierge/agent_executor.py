@@ -195,34 +195,42 @@ async def _fetch_one(
 def _flatten_text(chunk: Any) -> str:
     """Best-effort text extraction for streaming status messages.
 
-    The chunk can be many proto shapes: TaskStatusUpdateEvent has a
-    `status.message.parts[*].text`; TaskArtifactUpdateEvent has
-    `artifact.parts[*].text`. Parts are flat proto messages where
-    `.text` is a plain string field (empty if not set).
+    A streamed chunk from `client.send_message` is a `StreamResponse` with
+    a oneof: `task` / `message` / `status_update` / `artifact_update`.
+    Unwrap each to get to the parts.
     """
     out: list[str] = []
-    status = getattr(chunk, 'status', None)
-    if status is not None:
-        msg = getattr(status, 'message', None)
+    # status_update.status.message.parts[*].text
+    status_update = getattr(chunk, 'status_update', None)
+    if status_update is not None:
+        status = getattr(status_update, 'status', None)
+        msg = getattr(status, 'message', None) if status is not None else None
         if msg is not None:
             for p in getattr(msg, 'parts', []) or []:
                 text = getattr(p, 'text', '') or ''
                 if text:
                     out.append(text)
-    artifact = getattr(chunk, 'artifact', None)
-    if artifact is not None:
-        for p in getattr(artifact, 'parts', []) or []:
-            text = getattr(p, 'text', '') or ''
-            if text:
-                out.append(text)
+    # artifact_update.artifact.parts[*].text
+    artifact_update = getattr(chunk, 'artifact_update', None)
+    if artifact_update is not None:
+        artifact = getattr(artifact_update, 'artifact', None)
+        if artifact is not None:
+            for p in getattr(artifact, 'parts', []) or []:
+                text = getattr(p, 'text', '') or ''
+                if text:
+                    out.append(text)
     return ' '.join(out)
 
 
 def _find_file_part(chunk: Any) -> tuple[str, bytes] | None:
-    """Look for a file Part in an artifact-update chunk. In this SDK, a
-    file part is a `Part` proto with non-empty `raw` bytes and a `filename`.
+    """Look for a file Part in a streamed chunk's artifact_update.
+
+    File parts are `Part` protos with non-empty `raw` bytes and a `filename`.
     """
-    artifact = getattr(chunk, 'artifact', None)
+    artifact_update = getattr(chunk, 'artifact_update', None)
+    if artifact_update is None:
+        return None
+    artifact = getattr(artifact_update, 'artifact', None)
     if artifact is None:
         return None
     for p in getattr(artifact, 'parts', []) or []:

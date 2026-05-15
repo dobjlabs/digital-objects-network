@@ -95,10 +95,10 @@ class StonemasonAgentExecutor(AgentExecutor):
 
             await emit_working(context, event_queue, f'mining stone with {woodpick_file}…')
             mine_result = await self._run(
-                context, event_queue, 'MineStone', [woodpick_file]
+                context, event_queue, 'MineStoneWithWoodPick', [woodpick_file]
             )
-            # MineStone outputs Stone (and a damaged-but-not-nullified WoodPick
-            # if the action chooses that shape). Identify the Stone by class.
+            # MineStoneWithWoodPick outputs Stone (and a damaged WoodPick).
+            # Identify the Stone by class so we don't accidentally ship the pick.
             stone_file = None
             for f in mine_result['outputFiles']:
                 summary = await self._read_summary(f)
