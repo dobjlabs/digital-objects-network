@@ -1,0 +1,32 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build / packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test, type-check, and lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# uv / pip junk
+pip-log.txt
+pip-delete-this-directory.txt
+*.pyo

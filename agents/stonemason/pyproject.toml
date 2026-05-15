@@ -1,15 +1,13 @@
 [project]
-name = "bitcraft-inventory-a2a"
+name = "bitcraft-stonemason-a2a"
 version = "0.1.0"
-description = "A2A agent that reports a bitcraft player's inventory to peer agents."
-readme = "README.md"
+description = "A2A agent that supplies Stones for the bitcraft crafting demo."
 requires-python = ">=3.10"
 dependencies = [
     "a2a-sdk==1.0.1",
     "httpx>=0.28.1",
-    "pydantic>=2.11.4",
-    "sse-starlette>=2.3.5",
     "starlette>=0.46.2",
+    "sse-starlette>=2.3.5",
     "uvicorn>=0.34.2",
 ]
 
