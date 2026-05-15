@@ -22,8 +22,14 @@ pub async fn stream(
     let rx = state.events.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(|item| async move {
         match item {
+            // `Event` is a closed enum of structs whose fields are all
+            // primitives (`String`, `Option`, `Vec<String>`, enums with
+            // derived `Serialize`) — serialization can't fail here, so a
+            // failure means a future variant violated that invariant and
+            // we want to know loudly.
             Ok(event) => {
-                let json = serde_json::to_string(&event).ok()?;
+                let json =
+                    serde_json::to_string(&event).expect("Event must always serialize to JSON");
                 Some(Ok(SseEvent::default().data(json)))
             }
             // Lagged subscriber — silently drop, browser will keep reading.
