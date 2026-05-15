@@ -2,7 +2,7 @@
 name = "craft-basics"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build plugins/craft-basics`.
-module_hash = "b1494143db493bd9581600e0df0650d05fe643006e88269f7930c964a4969ee2"
+module_hash = "0a1fdaa3ad7806439354ea11d9a79b77ae2242772e2b692c7822761d238ecb73"
 
 [[classes]]
 name = "Log"

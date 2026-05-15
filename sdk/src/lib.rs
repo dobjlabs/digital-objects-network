@@ -1861,6 +1861,7 @@ impl SdkModule {
     ///    `[ArrayContains_st, st_action]` as sub-statements.
     /// 3. Discharge the IsX OR with the bridge statement at the matching
     ///    branch and `Statement::None` elsewhere.
+    #[allow(clippy::too_many_arguments)]
     fn build_is_x(
         &self,
         bld: &mut BuildContext,
