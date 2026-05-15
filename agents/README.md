@@ -119,33 +119,86 @@ Per-folder layout follows the
 
 ## Run it
 
-Each agent needs its own dobjd at its own URL. Easiest: four separate
-dobjd installs on four different ports. Suggested defaults:
+The full stack has three layers, in order:
 
-| Role       | dobjd                   | Notes                                         |
-| ---------- | ----------------------- | --------------------------------------------- |
-| lumberjack | `http://127.0.0.1:7717` | the default dobjd port                        |
-| stonemason | `http://127.0.0.1:7727` | second dobjd install, different `~/.dobj` dir |
-| craftsmith | `http://127.0.0.1:7737` | third                                         |
-| concierge  | `http://127.0.0.1:7747` | fourth                                        |
+### 1. Synchronizer + relayer (chain anchoring)
 
-All four point at the same hosted synchronizer + relayer.
+Two choices:
+
+- **Hosted (recommended)** — use the public default endpoints. Nothing
+  to start locally. Bootstrap script wires this up by default.
+- **Local** — `just sync` and `just relayer` in two terminals
+  (needs Postgres). `just dev` also brings them up alongside a single
+  dobjd + Vite + Tauri shell you won't use here.
+
+### 2. Four dobjd instances (one per agent)
+
+The bootstrap script creates four isolated `~/.dobj/` data dirs under
+`agents/.runtime/<name>/.dobj/` (via per-process `HOME` override) and
+launches a dobjd in each on a distinct port:
+
+| Agent      | dobjd port | MCP port | data dir                              |
+| ---------- | ---------- | -------- | ------------------------------------- |
+| lumberjack | 7717       | 7718     | `agents/.runtime/lumberjack/.dobj/`   |
+| stonemason | 7727       | 7728     | `agents/.runtime/stonemason/.dobj/`   |
+| craftsmith | 7737       | 7738     | `agents/.runtime/craftsmith/.dobj/`   |
+| concierge  | 7747       | 7748     | `agents/.runtime/concierge/.dobj/`    |
+
+One-time setup:
 
 ```bash
-cd a2a-agent
-uv sync
+cargo build -p dobjd --release
+just install-plugins                      # populates ~/.dobj/actions/craft-basics.pexe
+```
 
-# Terminal A — spin everything up
+Then in **terminal A**:
+
+```bash
+cd agents
+bash scripts/bootstrap_dobjds.sh          # default: hosted sync+relayer
+# or: bash scripts/bootstrap_dobjds.sh --local
+```
+
+Logs at `agents/.runtime/<name>/dobjd.log`. Ctrl-C stops all four.
+
+### 3. Four A2A agents
+
+In **terminal B**:
+
+```bash
+cd agents
+uv sync                                   # one-time
 bash scripts/run_all.sh
+```
 
-# Terminal B — kick off a request
+### 4. Kick off a request
+
+In **terminal C**:
+
+```bash
+cd agents
 uv run scripts/test_client.py
 ```
 
-Configure non-default ports via env:
+You'll watch the user request flow through: concierge fans out to
+lumberjack + stonemason, each runs real bitcraft actions and streams
+progress, concierge verifies and forwards to craftsmith, craftsmith
+assembles, the StonePick comes back.
 
-- `LUMBERJACK_DOBJD`, `STONEMASON_DOBJD`, `CRAFTSMITH_DOBJD`, `CONCIERGE_DOBJD`
-- `LUMBERJACK_URL`, `STONEMASON_URL`, `CRAFTSMITH_URL`, `CONCIERGE_URL`
+### TL;DR three terminals
+
+```
+A:  cd agents && bash scripts/bootstrap_dobjds.sh
+B:  cd agents && bash scripts/run_all.sh
+C:  cd agents && uv run scripts/test_client.py
+```
+
+### Overriding ports
+
+Both run scripts honor env vars:
+
+- `LUMBERJACK_DOBJD`, `STONEMASON_DOBJD`, `CRAFTSMITH_DOBJD`, `CONCIERGE_DOBJD` (dobjd URLs)
+- `LUMBERJACK_URL`, `STONEMASON_URL`, `CRAFTSMITH_URL`, `CONCIERGE_URL` (A2A URLs)
 
 ## What's deliberately missing
 

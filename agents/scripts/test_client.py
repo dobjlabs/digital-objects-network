@@ -23,8 +23,12 @@ async def main() -> None:
         display_agent_card(card)
         print()
 
+        # Pass the long-timeout httpx client through ClientConfig — without
+        # this the SDK builds its own client with ~5s default read timeout,
+        # which kills any streaming task whose proof generation takes >5s.
         client = await create_client(
-            agent=card, client_config=ClientConfig(streaming=True)
+            agent=card,
+            client_config=ClientConfig(streaming=True, httpx_client=httpx_client),
         )
         try:
             req = SendMessageRequest(

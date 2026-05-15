@@ -30,3 +30,6 @@ coverage.xml
 pip-log.txt
 pip-delete-this-directory.txt
 *.pyo
+
+# bootstrap_dobjds.sh — isolated dobjd home dirs (logs, pids, .dobj data)
+.runtime/

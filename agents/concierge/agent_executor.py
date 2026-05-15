@@ -19,7 +19,6 @@ Framework slot: would be BeeAI in a full interop build.
 from __future__ import annotations
 
 import asyncio
-import base64
 import sys
 from pathlib import Path
 from typing import Any
@@ -194,41 +193,42 @@ async def _fetch_one(
 
 
 def _flatten_text(chunk: Any) -> str:
-    """Best-effort text extraction for streaming status messages."""
-    # The chunk can be many SDK shapes (status update, artifact update, task).
-    # We try a few common attribute paths and concatenate any plain text.
+    """Best-effort text extraction for streaming status messages.
+
+    The chunk can be many proto shapes: TaskStatusUpdateEvent has a
+    `status.message.parts[*].text`; TaskArtifactUpdateEvent has
+    `artifact.parts[*].text`. Parts are flat proto messages where
+    `.text` is a plain string field (empty if not set).
+    """
     out: list[str] = []
     status = getattr(chunk, 'status', None)
     if status is not None:
         msg = getattr(status, 'message', None)
         if msg is not None:
             for p in getattr(msg, 'parts', []) or []:
-                root = getattr(p, 'root', p)
-                text = getattr(root, 'text', None)
+                text = getattr(p, 'text', '') or ''
                 if text:
                     out.append(text)
     artifact = getattr(chunk, 'artifact', None)
     if artifact is not None:
         for p in getattr(artifact, 'parts', []) or []:
-            root = getattr(p, 'root', p)
-            text = getattr(root, 'text', None)
+            text = getattr(p, 'text', '') or ''
             if text:
                 out.append(text)
     return ' '.join(out)
 
 
 def _find_file_part(chunk: Any) -> tuple[str, bytes] | None:
+    """Look for a file Part in an artifact-update chunk. In this SDK, a
+    file part is a `Part` proto with non-empty `raw` bytes and a `filename`.
+    """
     artifact = getattr(chunk, 'artifact', None)
     if artifact is None:
         return None
     for p in getattr(artifact, 'parts', []) or []:
-        root = getattr(p, 'root', p)
-        f = getattr(root, 'file', None)
-        if f is None:
+        raw = getattr(p, 'raw', b'')
+        if not raw:
             continue
-        b64 = getattr(f, 'bytes', None)
-        name = getattr(f, 'name', None) or 'unknown.dobj'
-        if not b64:
-            continue
-        return name, base64.b64decode(b64)
+        name = getattr(p, 'filename', '') or 'unknown.dobj'
+        return name, bytes(raw)
     return None
