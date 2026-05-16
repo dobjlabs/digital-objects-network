@@ -42,9 +42,10 @@ dev: ensure-plugins ensure-commands ensure-mcp
 # Like `just dev`, but without spawning the local synchronizer + relayer —
 # point dobjd at the hosted public endpoints instead. Faster spin-up when
 # you don't need to fork the chain locally and don't want a local Postgres.
-# Uses the standard 7717 default (same as `just dev`).
-dev-remote: ensure-plugins ensure-commands ensure-remote-settings ensure-mcp
-    mprocs --config mprocs.remote.yaml
+# Uses port 7757 instead of 7717 so it can coexist with the agent demo
+# (`agents/scripts/bootstrap_dobjds.sh` which reserves 7717/7727/7737/7747).
+dev-remote: ensure-plugins ensure-commands ensure-remote-settings (ensure-mcp '7758')
+    DOBJD_PORT=7757 VITE_DOBJD_URL=http://127.0.0.1:7757 mprocs --config mprocs.remote.yaml
 
 # Idempotently point ~/.dobj/settings.json at the hosted synchronizer +
 # relayer. Preserves any other keys already in the file.
@@ -81,16 +82,16 @@ ensure-plugins:
 # only loads in chats started from this directory. Other directories stay
 # uncontaminated by the bitcraft dispatch rules. Idempotent: remove + add on
 # each run so the URL stays current. Skipped silently if the `claude` CLI is
-# missing.
-ensure-mcp:
+# missing. Pass an MCP port to register a non-default URL (used by dev-remote).
+ensure-mcp mcp_port='7718':
     #!/usr/bin/env bash
     set -euo pipefail
     if ! command -v claude >/dev/null 2>&1; then
         exit 0
     fi
     claude mcp remove bitcraft 2>/dev/null || true
-    claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp \
-        && echo "registered: bitcraft MCP (project scope, http://127.0.0.1:7718/mcp)"
+    claude mcp add --transport http bitcraft http://127.0.0.1:{{mcp_port}}/mcp \
+        && echo "registered: bitcraft MCP (project scope, http://127.0.0.1:{{mcp_port}}/mcp)"
 
 # Install bitcraft commands into ~/.claude/skills/ if the built-ins are missing.
 # Runs as part of `just dev`. Re-run `just install-commands` manually after
