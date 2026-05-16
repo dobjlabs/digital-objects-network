@@ -14,7 +14,11 @@ use txlib::{GroundingWitness, StateRoot};
 
 use common::{decode_hash_hex, encode_hash_hex};
 
-pub const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
+// Patient polling: the hosted synchronizer occasionally takes a while to
+// observe a relayed tx, especially when several dobjds are submitting in
+// parallel. Wait an hour rather than fail at 2 minutes — genuine failures
+// still surface but transient lag never does.
+pub const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 3600;
 pub const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

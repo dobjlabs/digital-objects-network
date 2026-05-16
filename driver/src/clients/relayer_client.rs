@@ -5,7 +5,9 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES;
 use relayer::api_types::{JobStatus, JobStatusResponse, SubmitProofRequest, SubmitProofResponse};
 
-pub const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
+// Patient polling: the relayer occasionally backs up under load. Wait 30
+// minutes rather than fail at 3.
+pub const RELAYER_POLL_TIMEOUT_SECS: u64 = 1800;
 pub const RELAYER_POLL_INTERVAL_MS: u64 = 1500;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
