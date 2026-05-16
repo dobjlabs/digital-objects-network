@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>bitcraft agents</title>
+    <style>
+      :root {
+        --bg: #fafafa;
+        --panel: #ffffff;
+        --border: #e5e5e5;
+        --border-2: #f0f0f0;
+        --text: #171717;
+        --text-2: #525252;
+        --text-3: #a3a3a3;
+        --ok: #16a34a;
+        --bad: #dc2626;
+        --warn: #d97706;
+        --info: #2563eb;
+        --sans:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          system-ui, sans-serif;
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0a0a0a;
+          --panel: #111111;
+          --border: #1f1f1f;
+          --border-2: #161616;
+          --text: #f5f5f5;
+          --text-2: #a3a3a3;
+          --text-3: #525252;
+          --ok: #4ade80;
+          --bad: #f87171;
+          --warn: #fbbf24;
+          --info: #60a5fa;
+          color-scheme: dark;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      header {
+        padding: 20px 24px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      header p {
+        margin: 0;
+        color: var(--text-2);
+        font-size: 13px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+        padding: 12px;
+      }
+      @media (max-width: 720px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        min-height: 280px;
+        max-height: calc(50vh - 60px);
+        overflow: hidden;
+      }
+      .card-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border-2);
+      }
+      .card-head .emoji {
+        font-size: 18px;
+      }
+      .card-head .name {
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .card-head .port {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text-3);
+      }
+      .card-head .badge {
+        margin-left: auto;
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        color: var(--text-2);
+        background: transparent;
+        white-space: nowrap;
+      }
+      .badge.idle {
+        color: var(--text-3);
+      }
+      .badge.working {
+        color: var(--warn);
+        border-color: var(--warn);
+      }
+      .badge.done {
+        color: var(--ok);
+        border-color: var(--ok);
+      }
+      .badge.failed {
+        color: var(--bad);
+        border-color: var(--bad);
+      }
+      .badge.disconnected {
+        color: var(--bad);
+        border-color: var(--bad);
+        opacity: 0.7;
+      }
+
+      .card-current {
+        padding: 8px 12px;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-2);
+        background: var(--border-2);
+        border-bottom: 1px solid var(--border-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-height: 30px;
+      }
+
+      .events {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 0;
+        margin: 0;
+        list-style: none;
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.6;
+      }
+      .events li {
+        padding: 2px 12px;
+        display: flex;
+        gap: 8px;
+        border-left: 2px solid transparent;
+      }
+      .events li.phase-generateProof {
+        border-left-color: var(--info);
+      }
+      .events li.phase-commit {
+        border-left-color: var(--warn);
+      }
+      .events li.status-done {
+        border-left-color: var(--ok);
+      }
+      .events li.status-failed {
+        border-left-color: var(--bad);
+        color: var(--bad);
+      }
+      .events li.runHeader {
+        margin-top: 6px;
+        color: var(--text-3);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        border-left-color: transparent;
+        padding-top: 4px;
+      }
+      .events li .ts {
+        color: var(--text-3);
+        flex-shrink: 0;
+      }
+      .events li .msg {
+        flex: 1;
+        word-break: break-word;
+      }
+      .events li .tag {
+        color: var(--text-3);
+        font-size: 10px;
+        flex-shrink: 0;
+      }
+      .events::-webkit-scrollbar {
+        width: 6px;
+      }
+      .events::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 3px;
+      }
+
+      footer {
+        padding: 8px 16px;
+        border-top: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--text-3);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      footer .status {
+        font-family: var(--mono);
+      }
+      .empty {
+        padding: 32px 16px;
+        text-align: center;
+        color: var(--text-3);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>bitcraft agents — live</h1>
+      <p>
+        Subscribes to <code>/events</code> on each of the four dobjds and
+        streams every action's proof and commit steps in real time.
+      </p>
+    </header>
+
+    <main class="grid" id="grid">
+      <!-- Cards inserted by JS -->
+    </main>
+
+    <footer>
+      <span>auto-reconnects on stream loss</span>
+      <span class="status" id="globalStatus">waiting…</span>
+    </footer>
+
+    <script>
+      const AGENTS = [
+        {
+          id: "lumberjack",
+          port: 7717,
+          emoji: "🪓",
+          label: "Lumberjack",
+          desc: "supplies Sticks",
+        },
+        {
+          id: "stonemason",
+          port: 7727,
+          emoji: "⛏️",
+          label: "Stonemason",
+          desc: "supplies Stones",
+        },
+        {
+          id: "craftsmith",
+          port: 7737,
+          emoji: "🔨",
+          label: "Craftsmith",
+          desc: "assembles StonePicks",
+        },
+        {
+          id: "concierge",
+          port: 7747,
+          emoji: "🎩",
+          label: "Concierge",
+          desc: "orchestrates",
+        },
+      ];
+
+      const grid = document.getElementById("grid");
+      const globalStatus = document.getElementById("globalStatus");
+
+      const cards = {};
+      for (const a of AGENTS) {
+        const el = document.createElement("section");
+        el.className = "card";
+        el.id = `card-${a.id}`;
+        el.innerHTML = `
+          <div class="card-head">
+            <span class="emoji">${a.emoji}</span>
+            <span class="name">${a.label}</span>
+            <span class="port">:${a.port}</span>
+            <span class="badge idle" data-role="badge">idle</span>
+          </div>
+          <div class="card-current" data-role="current">—</div>
+          <ul class="events" data-role="events"></ul>
+        `;
+        grid.appendChild(el);
+        cards[a.id] = {
+          spec: a,
+          badge: el.querySelector('[data-role="badge"]'),
+          current: el.querySelector('[data-role="current"]'),
+          events: el.querySelector('[data-role="events"]'),
+          lastRunId: null,
+          eventCount: 0,
+        };
+      }
+
+      function ts() {
+        const d = new Date();
+        return `${String(d.getHours()).padStart(2, "0")}:${String(
+          d.getMinutes(),
+        ).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+      }
+
+      function setBadge(card, state, text) {
+        card.badge.className = `badge ${state}`;
+        card.badge.textContent = text;
+      }
+
+      function shortId(id) {
+        return id ? id.slice(0, 8) : "?";
+      }
+
+      function pushRunHeader(card, runId) {
+        const li = document.createElement("li");
+        li.className = "runHeader";
+        li.innerHTML = `<span class="ts">${ts()}</span><span class="msg">▶ run ${shortId(runId)}</span>`;
+        card.events.appendChild(li);
+      }
+
+      function pushEvent(card, ev) {
+        if (ev.runId !== card.lastRunId) {
+          pushRunHeader(card, ev.runId);
+          card.lastRunId = ev.runId;
+        }
+        const li = document.createElement("li");
+        li.className = `phase-${ev.phase} status-${ev.status}`;
+        li.innerHTML = `
+          <span class="ts">${ts()}</span>
+          <span class="msg">${escapeHtml(ev.message || "")}</span>
+          <span class="tag">${ev.phase}/${ev.status}</span>
+        `;
+        card.events.appendChild(li);
+        // Auto-scroll to bottom
+        card.events.scrollTop = card.events.scrollHeight;
+        card.eventCount++;
+      }
+
+      function updateBadgeFromEvent(card, ev) {
+        if (ev.status === "failed") {
+          setBadge(card, "failed", "failed");
+          card.current.textContent = ev.message || "failed";
+        } else if (ev.phase === "commit" && ev.status === "done") {
+          setBadge(card, "done", "done");
+          const out = (ev.outputFiles && ev.outputFiles[0]) || "";
+          card.current.textContent = out
+            ? `output → ${out.replace(/^craft-basics__/, "")}`
+            : "commit complete";
+        } else {
+          setBadge(card, "working", ev.phase || "working");
+          card.current.textContent = `${ev.phase}/${ev.status}: ${ev.message || ""}`;
+        }
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      let connected = 0;
+      function bumpGlobal() {
+        globalStatus.textContent =
+          connected === AGENTS.length
+            ? `connected to ${connected}/${AGENTS.length} dobjds`
+            : `connected to ${connected}/${AGENTS.length} dobjds — waiting on others`;
+      }
+
+      function connect(card) {
+        const url = `http://127.0.0.1:${card.spec.port}/events`;
+        const es = new EventSource(url);
+
+        es.onopen = () => {
+          connected += 1;
+          bumpGlobal();
+          if (card.eventCount === 0) {
+            setBadge(card, "idle", "idle");
+          }
+        };
+
+        es.onmessage = (e) => {
+          let event;
+          try {
+            event = JSON.parse(e.data);
+          } catch {
+            return;
+          }
+          if (event.type !== "run-action-progress") return;
+          pushEvent(card, event);
+          updateBadgeFromEvent(card, event);
+        };
+
+        es.onerror = () => {
+          setBadge(card, "disconnected", "reconnecting…");
+          connected = Math.max(0, connected - 1);
+          bumpGlobal();
+          // EventSource auto-reconnects; nothing else to do.
+        };
+      }
+
+      for (const a of AGENTS) connect(cards[a.id]);
+    </script>
+  </body>
+</html>
