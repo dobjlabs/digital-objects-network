@@ -9,6 +9,14 @@ dependencies = [
     "starlette>=0.46.2",
     "sse-starlette>=2.3.5",
     "uvicorn>=0.34.2",
+    # LLM brain — provider-agnostic via LiteLLM model strings.
+    # Set LLM_MODEL=anthropic/claude-opus-4-7, gemini/gemini-2.5-flash,
+    # openai/gpt-4o, ollama/llama3, vertex_ai/gemini-2.5-flash, etc.
+    "litellm>=1.80",
+    "langchain>=1.0",
+    "langchain-litellm>=0.2",
+    "langchain-mcp-adapters>=0.1",
+    "langgraph>=1.0",
 ]
 
 [tool.hatch.build.targets.wheel]

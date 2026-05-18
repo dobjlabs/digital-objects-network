@@ -1,17 +1,17 @@
-"""Stonemason agent — mines a Stone and ships it.
+"""Stonemason agent — LLM brain mines or fetches a Stone.
 
-MineStone requires a WoodPick. The executor first checks local inventory
-for a live WoodPick; if none exists it bootstraps one by running
-FindLog → CraftWood → CraftSticks → FindLog → CraftWood → CraftWoodPick.
-Then it runs MineStone (which consumes some of the pick's durability) and
-ships the resulting Stone as a FilePart.
+The LLM checks for a live Stone first; if missing, it bootstraps a
+WoodPick (FindLog → CraftWood → CraftSticks → FindLog → CraftWood →
+CraftWoodPick) then runs MineStoneWithWoodPick to produce a Stone.
 
-Framework slot in the demo: would be LangGraph + Claude in a full
-interop build. Framework-agnostic here.
+Provider-agnostic via LiteLLM. Set LLM_MODEL (or STONEMASON_LLM for
+per-agent override) to switch providers.
 """
 
 from __future__ import annotations
 
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -27,61 +27,44 @@ from shared.a2a_helpers import (  # noqa: E402
     emit_text_artifact,
     emit_working,
     ensure_task,
-    make_progress_forwarder,
+    extract_text,
 )
 from shared.dobjd_client import DobjdClient  # noqa: E402
+from shared.llm_brain import dobjd_mcp_url_from_http, pick_model, run_brain  # noqa: E402
 
 
-PLUGIN = 'craft-basics'
+SYSTEM_PROMPT = """You are the Stonemason agent in a bitcraft multi-agent network.
+Your job: deliver one Stone when asked.
+
+Procedure (follow exactly):
+1. Call `list_inventory` first.
+2. If the inventory contains a Stone with status "Live", you're done — pick one.
+3. Otherwise, mining requires a WoodPick. Check inventory again for a live
+   WoodPick. If none exists, bootstrap one:
+   - `run_action` "FindLog" (no inputs)            → Log #1
+   - `run_action` "CraftWood" (Log #1)             → Wood #1
+   - `run_action` "CraftSticks" (Wood #1)          → Stick (one of two)
+   - `run_action` "FindLog" (no inputs)            → Log #2
+   - `run_action` "CraftWood" (Log #2)             → Wood #2
+   - `run_action` "CraftWoodPick" (Wood #2, Stick) → WoodPick
+4. With a WoodPick in hand, run `run_action` "MineStoneWithWoodPick"
+   passing the WoodPick filename. This consumes a bit of the pick's
+   durability and outputs a Stone.
+5. Respond with ONLY the Stone's filename. No prose, no explanation, no
+   "Here is the stone:". Just the bare filename, e.g.:
+       craft-basics__stone_0xabc1234….dobj
+   The harness will parse your final message for this exact pattern."""
+
+
+_STONE_RE = re.compile(r'craft-basics__stone_0x[0-9a-fA-F]+\.dobj')
 
 
 class StonemasonAgentExecutor(AgentExecutor):
-    """Mines a Stone (bootstrapping a WoodPick if needed)."""
+    """LLM-driven Stone supplier."""
 
     def __init__(self) -> None:
         self.dobjd = DobjdClient()
-
-    async def _run(
-        self,
-        context: RequestContext,
-        event_queue: EventQueue,
-        action: str,
-        inputs: list[str],
-    ) -> dict:
-        return await self.dobjd.run_action_with_progress(
-            PLUGIN, action, inputs,
-            on_progress=make_progress_forwarder(
-                context, event_queue, action_label=action),
-        )
-
-    async def _ensure_woodpick(
-        self, context: RequestContext, event_queue: EventQueue
-    ) -> str:
-        existing = await self.dobjd.find_object('WoodPick', require_status='live')
-        if existing:
-            return existing['fileName']
-
-        await emit_working(context, event_queue, 'no WoodPick on hand — bootstrapping…')
-
-        # First Log → Wood → Sticks (yields 2 Sticks)
-        log1 = await self._run(context, event_queue, 'FindLog', [])
-        log1_file = log1['outputFiles'][0]
-        wood1 = await self._run(context, event_queue, 'CraftWood', [log1_file])
-        wood1_file = wood1['outputFiles'][0]
-        sticks = await self._run(context, event_queue, 'CraftSticks', [wood1_file])
-        stick_file = sticks['outputFiles'][0]
-
-        # Second Log → Wood (for the pick head)
-        log2 = await self._run(context, event_queue, 'FindLog', [])
-        log2_file = log2['outputFiles'][0]
-        wood2 = await self._run(context, event_queue, 'CraftWood', [log2_file])
-        wood2_file = wood2['outputFiles'][0]
-
-        await emit_working(context, event_queue, 'assembling WoodPick…')
-        pick = await self._run(
-            context, event_queue, 'CraftWoodPick', [wood2_file, stick_file]
-        )
-        return pick['outputFiles'][0]
+        self.dobjd_http = os.environ.get('DOBJD_URL', 'http://127.0.0.1:7727').rstrip('/')
 
     async def execute(
         self,
@@ -91,30 +74,57 @@ class StonemasonAgentExecutor(AgentExecutor):
         await ensure_task(context, event_queue)
 
         try:
-            woodpick_file = await self._ensure_woodpick(context, event_queue)
-
-            await emit_working(context, event_queue, f'mining stone with {woodpick_file}…')
-            mine_result = await self._run(
-                context, event_queue, 'MineStoneWithWoodPick', [woodpick_file]
+            user_request = (
+                extract_text(context.message).strip()
+                or 'Please deliver one Stone.'
             )
-            # MineStoneWithWoodPick outputs Stone (and a damaged WoodPick).
-            # Identify the Stone by class so we don't accidentally ship the pick.
-            stone_file = None
-            for f in mine_result['outputFiles']:
-                summary = await self._read_summary(f)
-                if summary and summary.get('class', {}).get('name') == 'Stone':
-                    stone_file = f
-                    break
-            if stone_file is None:
-                # Fall back to first output
-                stone_file = mine_result['outputFiles'][0]
 
-            await emit_working(context, event_queue, f'shipping {stone_file}…')
+            model = pick_model('STONEMASON_LLM')
+            await emit_working(
+                context, event_queue,
+                f'stonemason brain online ({model}); planning Stone delivery…',
+            )
+
+            async def on_step(step: dict) -> None:
+                await _forward_step(context, event_queue, step)
+
+            mcp_url = dobjd_mcp_url_from_http(self.dobjd_http)
+            final_text = await run_brain(
+                system_prompt=SYSTEM_PROMPT,
+                user_request=user_request,
+                mcp_url=mcp_url,
+                model=model,
+                on_step=on_step,
+            )
+
+            stone_file = _parse_stone_filename(final_text)
+            if not stone_file:
+                await emit_failed(
+                    context, event_queue,
+                    f'stonemason: could not parse a Stone filename out of the LLM final response: {final_text[:200]!r}',
+                )
+                return
+
+            inv = await self.dobjd.list_inventory()
+            row = next((o for o in inv if o.get('fileName') == stone_file), None)
+            if row is None:
+                await emit_failed(
+                    context, event_queue,
+                    f'stonemason: LLM returned {stone_file!r} but it is not in inventory',
+                )
+                return
+            status = (row.get('status') or '').lower()
+            if status != 'live':
+                await emit_failed(
+                    context, event_queue,
+                    f'stonemason: {stone_file} status is {status!r}, not live',
+                )
+                return
+
             stone_bytes = await self.dobjd.read_dobj_file(stone_file)
-
             await emit_text_artifact(
                 context, event_queue, 'log',
-                f'mined Stone {stone_file} ({len(stone_bytes)} bytes)',
+                f'stonemason shipping Stone {stone_file} ({len(stone_bytes):,} bytes)',
             )
             await emit_dobj_artifact(
                 context, event_queue,
@@ -123,18 +133,55 @@ class StonemasonAgentExecutor(AgentExecutor):
                 dobj_bytes=stone_bytes,
                 note=f'Stone delivered by stonemason ({stone_file})',
             )
+
+            removed = await self.dobjd.delete_dobj_file(stone_file)
+            if removed:
+                await emit_working(
+                    context, event_queue,
+                    f'stonemason: deleted {stone_file} from local inventory after delivery',
+                )
+
             await emit_completed(context, event_queue)
         except Exception as e:
             await emit_failed(context, event_queue, f'stonemason failed: {e}')
-
-    async def _read_summary(self, file_name: str) -> dict | None:
-        # Avoid a separate REST call — find it in inventory.
-        for obj in await self.dobjd.list_inventory():
-            if obj.get('fileName') == file_name:
-                return obj
-        return None
 
     async def cancel(
         self, context: RequestContext, event_queue: EventQueue
     ) -> None:
         raise Exception('cancel not supported')
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _parse_stone_filename(text: str) -> str:
+    if not text:
+        return ''
+    m = _STONE_RE.search(text)
+    return m.group(0) if m else ''
+
+
+async def _forward_step(
+    context: RequestContext, event_queue: EventQueue, step: dict
+) -> None:
+    kind = step.get('type')
+    if kind == 'tool_call':
+        name = step.get('name', '?')
+        inp = step.get('input')
+        await emit_working(context, event_queue, f'→ {name}({_compact(inp)})')
+    elif kind == 'tool_result':
+        name = step.get('name', '?')
+        out = step.get('output_summary', '')
+        await emit_working(context, event_queue, f'← {name} → {out}')
+    elif kind == 'thought':
+        text = (step.get('text') or '').strip()
+        if text and len(text) < 200:
+            await emit_working(context, event_queue, f'💭 {text}')
+
+
+def _compact(value) -> str:
+    if value is None:
+        return ''
+    s = str(value)
+    return s if len(s) <= 120 else s[:117] + '…'

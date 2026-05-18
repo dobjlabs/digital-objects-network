@@ -22,6 +22,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Auto-load agents/.env if present, so port overrides and sync/relayer URLs
+# can live there instead of being passed on the command line.
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+  echo ".env loaded"
+fi
+
 MODE="${1:---hosted}"
 
 REPO_ROOT="$(cd ../.. 2>/dev/null && pwd)"

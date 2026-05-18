@@ -157,6 +157,22 @@ class DobjdClient:
         target.write_bytes(data)
         return str(target)
 
+    async def delete_dobj_file(self, file_name: str) -> bool:
+        """Remove a .dobj from this dobjd's objects dir — used after shipping
+        an object via A2A so the same agent can't ship it twice. The chain
+        still considers the commitment live (no nullifier emitted); the
+        recipient's dobjd will see it as live when they ingest the bytes.
+
+        Returns True if the file existed and was removed, False otherwise.
+        """
+        objects_dir = await self.get_objects_dir()
+        target = Path(objects_dir, file_name)
+        try:
+            target.unlink()
+            return True
+        except FileNotFoundError:
+            return False
+
     # ---- Convenience ----------------------------------------------------
 
     async def find_object(

@@ -10,6 +10,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Auto-load agents/.env if present. `set -a` makes every variable defined
+# from here through `set +a` get exported, so anything sourced from .env
+# is visible to child processes (mprocs, uv run, dobjd binaries…).
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+  echo ".env loaded"
+fi
+
 : "${LUMBERJACK_DOBJD:=http://127.0.0.1:7717}"
 : "${STONEMASON_DOBJD:=http://127.0.0.1:7727}"
 : "${CRAFTSMITH_DOBJD:=http://127.0.0.1:7737}"

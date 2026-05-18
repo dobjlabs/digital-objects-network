@@ -33,3 +33,6 @@ pip-delete-this-directory.txt
 
 # bootstrap_dobjds.sh — isolated dobjd home dirs (logs, pids, .dobj data)
 .runtime/
+
+# Local env file with API keys etc — copy of .env.example
+.env

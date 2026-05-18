@@ -96,9 +96,65 @@ Concierge a Stick, what actually happens:
    not nullified.**
 
 **Known MVP weakness:** there's no notion of _ownership_ on chain.
-Lumberjack could ship the same Stick to two parties and consume it
-itself before either uses it. Adding a real `Transfer` action to
-`craft-basics` would close this — out of scope here.
+Lumberjack could ship the same Stick to two parties before either uses
+it. To close that gap partially, each specialist **deletes the shipped
+`.dobj` from its own objects dir after delivery** (via
+`dobjd_client.delete_dobj_file`) so it can't be re-shipped. The chain
+still considers the commitment live, so the recipient's dobjd accepts
+it normally. Adding a real `Transfer` action to `craft-basics` would
+fully close this — out of scope here.
+
+## LLM brains (specialists)
+
+Each specialist (Lumberjack, Stonemason, Craftsmith) runs its own LLM
+that decides which bitcraft actions to invoke. The LLM talks to its
+dobjd via that dobjd's **MCP server** (`http://127.0.0.1:<port+1>/mcp`,
+derived automatically from `DOBJD_URL`). The LLM follows a system prompt
+that says "check inventory first; craft only if missing", then returns
+the chosen `.dobj` filename which the harness ships as a FilePart.
+
+Concierge stays orchestration-only — it coordinates A2A peers and
+verifies received objects, no LLM call.
+
+### Provider-agnostic via LiteLLM
+
+Set `LLM_MODEL` to any LiteLLM-supported provider string. The easiest way:
+copy `.env.example` to `.env` and edit:
+
+```bash
+cd agents
+cp .env.example .env
+# edit .env — set LLM_MODEL and the matching API key
+```
+
+Both `scripts/run_all.sh` and `scripts/bootstrap_dobjds.sh` auto-load
+`.env` at startup. `.env` is gitignored — only `.env.example` is checked in.
+
+Supported model strings (see LiteLLM docs for the full list):
+
+```
+LLM_MODEL=anthropic/claude-opus-4-7        # Anthropic
+LLM_MODEL=gemini/gemini-2.5-flash          # Google direct (cheapest + fast)
+LLM_MODEL=vertex_ai/gemini-2.5-flash       # Vertex AI
+LLM_MODEL=openai/gpt-4o                    # OpenAI
+LLM_MODEL=ollama/llama3                    # local Ollama (no API key needed)
+LLM_MODEL=together_ai/<repo>/<model>       # Together
+LLM_MODEL=anthropic/claude-haiku-4-5       # cheap Anthropic option
+```
+
+Each provider reads its own API key from env (`ANTHROPIC_API_KEY`,
+`GEMINI_API_KEY`, `OPENAI_API_KEY`, …). LiteLLM handles routing.
+
+Per-agent overrides win over `LLM_MODEL` — lets you mix providers across
+the network:
+
+```
+LUMBERJACK_LLM=anthropic/claude-haiku-4-5
+STONEMASON_LLM=gemini/gemini-2.5-flash
+CRAFTSMITH_LLM=openai/gpt-4o
+```
+
+Default if nothing set: `anthropic/claude-opus-4-7`.
 
 ## Layout
 
@@ -106,24 +162,26 @@ itself before either uses it. Adding a real `Transfer` action to
 agents/
   shared/                       cross-agent helpers
     dobjd_client.py             async wrapper around dobjd REST + objects-dir
-                                (+ run_action_with_progress: streams /events SSE)
+                                (run_action_with_progress, delete_dobj_file)
     dobj_verify.py              ingest-and-verify: class + status=live
     a2a_helpers.py              emit working/completed, file-part helpers,
                                 make_progress_forwarder
+    llm_brain.py                LiteLLM + LangChain create_agent + MCP adapter
+                                (provider-agnostic; LLM_MODEL env var swaps)
     registry.py                 env-driven peer URL map
-  concierge/                    the orchestrator
+  concierge/                    the orchestrator (no LLM)
     __main__.py                 AgentCard, port 9996
     agent_executor.py           fan out, verify, forward, verify, deliver
     peer_client.py              streaming send_message wrapper
-  lumberjack/                   supplies Sticks
+  lumberjack/                   supplies Sticks (LLM-driven)
     __main__.py                 port 9997
-    agent_executor.py           FindLog → CraftWood → CraftSticks
-  stonemason/                   supplies Stones
+    agent_executor.py           LLM picks: inventory vs FindLog → CraftWood → CraftSticks
+  stonemason/                   supplies Stones (LLM-driven)
     __main__.py                 port 9998
-    agent_executor.py           bootstrap WoodPick → MineStoneWithWoodPick
-  craftsmith/                   assembles StonePicks
+    agent_executor.py           LLM picks: inventory vs bootstrap WoodPick → Mine
+  craftsmith/                   assembles StonePicks (LLM-driven)
     __main__.py                 port 9999
-    agent_executor.py           verify inputs → CraftStonePick → ship
+    agent_executor.py           ingest inputs → LLM runs CraftStonePick → ship
   scripts/
     bootstrap_dobjds.sh         spin up four isolated dobjds (HOME-overridden)
     run_all.sh                  spin up the four A2A agents
