@@ -1,13 +1,9 @@
 /*
   txlib: Transaction predicates for verifiable state transitions.
 
-  A transaction takes input objects (each proved live in a prior
-  finalized transaction) and produces output objects through a
-  sequence of insert, mutate, and delete events. The event sequence
-  is recorded as a hash chain. A proof of TxFinalized attests that
-  the chain is valid without revealing the events or the live set.
-
-  This file has four layers, bottom-up:
+  See README.md for the conceptual overview (what a transaction is,
+  what actions and classes are, how replay validates state changes).
+  This file is the implementation, organized in four layers, bottom-up:
 
   1. Chain Primitives -- hash chain steps for each event type.
      Called by application action predicates (e.g. MineStone) to
@@ -90,18 +86,27 @@ Nullify(nullifier, obj, private: obj_key_hash) = AND(
 // Replay: List Structure
 // ========================================================
 //
-// Replay walks the recorded event chain, element by element.
-// ReplayContents encodes a variable-length list (K >= 1) as a
-// recursive OR. Empty bodies are forbidden by TxBuilder, so the
-// branches only cover the K=1 leaf and the four type-specialized
-// K>=2 step variants:
-//   Element     -- exactly 1 element
+// The body of an action is a list of events (inserts, mutates,
+// deletes, sub-actions). ReplayContents is the predicate that walks
+// this list and applies each event's state change and guard dispatch
+// (see README.md for the conceptual pseudocode).
+//
+// Conceptually this is a for-loop, but in podlang it must be expressed
+// as a recursive OR: at each step the list is either a single trailing
+// event (the K=1 leaf, ReplayElement) or one head event followed by a
+// recursive ReplayContents call for the tail. Empty bodies are
+// forbidden by TxBuilder, so there's no K=0 leaf.
+//
+// A naive Step predicate would OR over all four event types inside
+// every recursion step. Instead, because the prover knows the head
+// event's type, it picks one of four specialised variants:
 //   StepInsert  -- head=Insert, tail=ReplayContents (K-1 elements)
 //   StepMutate  -- head=Mutate, tail=ReplayContents (K-1 elements)
 //   StepDelete  -- head=Delete, tail=ReplayContents (K-1 elements)
 //   StepAction  -- head=Action, tail=ReplayContents (K-1 elements)
-// Specializing the step on the head's type folds out the
-// ReplayElement OR-dispatch that the head would otherwise need.
+// Each variant fixes the head event's type at podlang level, folding
+// out the per-iteration OR-dispatch that ReplayElement still needs at
+// the trailing leaf.
 
 ReplayContents(before_tx, after_tx, before_chain, after_chain) = OR(
   ReplayElement(before_tx, after_tx, before_chain, after_chain)
@@ -111,15 +116,14 @@ ReplayContents(before_tx, after_tx, before_chain, after_chain) = OR(
   ReplayContentsStepAction(before_tx, after_tx, before_chain, after_chain)
 )
 
-// Head + recursive tail, specialized per head event type. Skips the
-// ReplayElement layer the head would otherwise need. For Insert and
-// Mutate the body of `ReplayInsert`/`ReplayMutate` is inlined here
-// (those predicates have room to fit alongside the recursive tail in
-// 5 sub-statements). To keep the wildcard count within the pod2 limit
-// of 8, head-event objects are packed into a small private dict and
-// accessed via anchored keys: `ins.new`/`ins.new_live` for Insert,
-// `pair.old`/`pair.new` for Mutate. ReplayDelete is too large to
-// inline so its Step variant just references the wrapping predicate.
+// The four specialised step variants. For Insert and Mutate the body
+// of `ReplayInsert`/`ReplayMutate` is inlined here -- both fit in 5
+// sub-statements alongside the recursive tail call. To stay within
+// pod2's 8-wildcard limit, head-event objects are packed into a small
+// private dict and accessed via anchored keys: `ins.new`/`ins.new_live`
+// for Insert, `pair.old`/`pair.new` for Mutate. Delete and Action
+// don't fit when inlined, so their step variants just call the
+// wrapping per-event predicate.
 ReplayContentsStepInsert(before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain, ins, guard) = AND(
   TxInsert(mid_chain, before_chain, ins.new, guard)
@@ -304,8 +308,13 @@ TxInStateRoot(state_root_hash, source_txn,
 // show that some transaction in that root's transactions set
 // has the input in its live set.
 //
-// Encoded as a recursive OR (like ReplayContents) since the
-// number of inputs varies per transaction.
+// Same loop-unrolling pattern as ReplayContents above: a recursive
+// OR over inputs, with explicit fast paths for small N (0/1/2/3) to
+// avoid the per-input dispatch cost of the general recursion. The
+// `Var` siblings of Single and Pair exist because the outer
+// InputsGrounded OR requires all branches to share the
+// `(inputs, state_root_hash)` signature; Pair/Triple chain through
+// them to expose additional inputs as public args along the way.
 
 InputsGrounded(inputs, state_root_hash) = OR(
   // Base case: empty inputs. state_root_hash is intentionally
