@@ -25,6 +25,7 @@ from a2a.types import (  # noqa: E402
 from starlette.applications import Starlette  # noqa: E402
 
 from lumberjack.agent_executor import LumberjackAgentExecutor  # noqa: E402
+from shared.brain_hub import BrainEventHub, make_sse_route  # noqa: E402
 
 
 HOST = os.environ.get('A2A_HOST', '127.0.0.1')
@@ -62,8 +63,10 @@ def main() -> None:
         skills=[skill],
     )
 
+    brain_hub = BrainEventHub()
+
     handler = DefaultRequestHandler(
-        agent_executor=LumberjackAgentExecutor(),
+        agent_executor=LumberjackAgentExecutor(brain_hub=brain_hub),
         task_store=InMemoryTaskStore(),
         agent_card=card,
     )
@@ -71,6 +74,7 @@ def main() -> None:
     routes = []
     routes.extend(create_agent_card_routes(card))
     routes.extend(create_jsonrpc_routes(handler, '/'))
+    routes.append(make_sse_route(brain_hub))  # GET /brain-events (SSE)
 
     uvicorn.run(Starlette(routes=routes), host=HOST, port=PORT)
 

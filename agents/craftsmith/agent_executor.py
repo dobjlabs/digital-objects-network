@@ -35,6 +35,7 @@ from shared.a2a_helpers import (  # noqa: E402
     ensure_task,
     extract_file_parts,
 )
+from shared.brain_hub import BrainEventHub  # noqa: E402
 from shared.dobjd_client import DobjdClient  # noqa: E402
 from shared.llm_brain import dobjd_mcp_url_from_http, pick_model, run_brain  # noqa: E402
 
@@ -66,9 +67,10 @@ _STONEPICK_RE = re.compile(r'craft-basics__stonepick_0x[0-9a-fA-F]+\.dobj')
 class CraftsmithAgentExecutor(AgentExecutor):
     """LLM-driven StonePick assembler."""
 
-    def __init__(self) -> None:
+    def __init__(self, brain_hub: BrainEventHub | None = None) -> None:
         self.dobjd = DobjdClient()
         self.dobjd_http = os.environ.get('DOBJD_URL', 'http://127.0.0.1:7737').rstrip('/')
+        self.brain_hub = brain_hub
 
     async def execute(
         self,
@@ -137,6 +139,8 @@ class CraftsmithAgentExecutor(AgentExecutor):
             )
 
             async def on_step(step: dict) -> None:
+                if self.brain_hub is not None:
+                    self.brain_hub.publish({'agent': 'craftsmith', **step})
                 await _forward_step(context, event_queue, step)
 
             mcp_url = dobjd_mcp_url_from_http(self.dobjd_http)
@@ -146,6 +150,7 @@ class CraftsmithAgentExecutor(AgentExecutor):
                 mcp_url=mcp_url,
                 model=model,
                 on_step=on_step,
+                agent_label='craftsmith',
             )
 
             pick_file = _parse_stonepick_filename(final_text)

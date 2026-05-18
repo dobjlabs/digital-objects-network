@@ -36,6 +36,7 @@ from shared.a2a_helpers import (  # noqa: E402
     ensure_task,
     extract_text,
 )
+from shared.brain_hub import BrainEventHub  # noqa: E402
 from shared.dobjd_client import DobjdClient  # noqa: E402
 from shared.llm_brain import dobjd_mcp_url_from_http, pick_model, run_brain  # noqa: E402
 
@@ -63,9 +64,10 @@ _STICK_RE = re.compile(r'craft-basics__stick_0x[0-9a-fA-F]+\.dobj')
 class LumberjackAgentExecutor(AgentExecutor):
     """LLM-driven Stick supplier."""
 
-    def __init__(self) -> None:
+    def __init__(self, brain_hub: BrainEventHub | None = None) -> None:
         self.dobjd = DobjdClient()
         self.dobjd_http = os.environ.get('DOBJD_URL', 'http://127.0.0.1:7717').rstrip('/')
+        self.brain_hub = brain_hub
 
     async def execute(
         self,
@@ -87,6 +89,8 @@ class LumberjackAgentExecutor(AgentExecutor):
             )
 
             async def on_step(step: dict) -> None:
+                if self.brain_hub is not None:
+                    self.brain_hub.publish({'agent': 'lumberjack', **step})
                 await _forward_step(context, event_queue, step)
 
             mcp_url = dobjd_mcp_url_from_http(self.dobjd_http)
@@ -96,6 +100,7 @@ class LumberjackAgentExecutor(AgentExecutor):
                 mcp_url=mcp_url,
                 model=model,
                 on_step=on_step,
+                agent_label='lumberjack',
             )
 
             stick_file = _parse_stick_filename(final_text)

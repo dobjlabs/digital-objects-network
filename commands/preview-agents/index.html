@@ -192,6 +192,19 @@
         border-left-color: transparent;
         padding-top: 4px;
       }
+      /* Brain (LLM) events get a distinct purple border + slightly different tone */
+      .events li.brain {
+        border-left-color: #a855f7;
+      }
+      @media (prefers-color-scheme: dark) {
+        .events li.brain {
+          border-left-color: #c084fc;
+        }
+      }
+      .events li.brain.brain-tool_call .msg { color: var(--info); }
+      .events li.brain.brain-tool_result .msg { color: var(--text-2); }
+      .events li.brain.brain-thought { background: rgba(168, 85, 247, 0.04); }
+      .events li.brain .tag { color: #a855f7; }
       .events li .ts {
         color: var(--text-3);
         flex-shrink: 0;
@@ -237,8 +250,10 @@
     <header>
       <h1>bitcraft agents — live</h1>
       <p>
-        Subscribes to <code>/events</code> on each of the four dobjds and
-        streams every action's proof and commit steps in real time.
+        Subscribes to two streams per agent: <code>/events</code> on each
+        dobjd (proof + commit steps, indigo border) and
+        <code>/brain-events</code> on each A2A agent server (LLM tool
+        calls + thoughts, purple border).
       </p>
     </header>
 
@@ -255,7 +270,8 @@
       const AGENTS = [
         {
           id: "lumberjack",
-          port: 7717,
+          port: 7717,        // dobjd HTTP (proof events)
+          brainPort: 9997,   // A2A agent server (LLM events)
           emoji: "🪓",
           label: "Lumberjack",
           desc: "supplies Sticks",
@@ -263,6 +279,7 @@
         {
           id: "stonemason",
           port: 7727,
+          brainPort: 9998,
           emoji: "⛏️",
           label: "Stonemason",
           desc: "supplies Stones",
@@ -270,6 +287,7 @@
         {
           id: "craftsmith",
           port: 7737,
+          brainPort: 9999,
           emoji: "🔨",
           label: "Craftsmith",
           desc: "assembles StonePicks",
@@ -277,6 +295,7 @@
         {
           id: "concierge",
           port: 7747,
+          // Concierge is orchestration-only — no LLM brain, no brainPort
           emoji: "🎩",
           label: "Concierge",
           desc: "orchestrates",
@@ -416,7 +435,57 @@
         };
       }
 
-      for (const a of AGENTS) connect(cards[a.id]);
+      // ---- Brain (LLM) events ------------------------------------------
+      // Subscribes to /brain-events on each specialist's A2A server.
+      // Concierge has no brainPort — skipped silently.
+      function pushBrainEvent(card, ev) {
+        const li = document.createElement("li");
+        const kind = ev.type || "?";
+        li.className = `brain brain-${kind}`;
+        let body;
+        if (kind === "tool_call") {
+          body = `<span class="msg">→ ${escapeHtml(ev.name || "?")}(${escapeHtml(short(ev.input))})</span><span class="tag">tool</span>`;
+        } else if (kind === "tool_result") {
+          body = `<span class="msg">← ${escapeHtml(ev.name || "?")} → ${escapeHtml(ev.output_summary || "")}</span><span class="tag">result</span>`;
+        } else if (kind === "thought") {
+          body = `<span class="msg">💭 ${escapeHtml(short(ev.text))}</span><span class="tag">llm</span>`;
+        } else {
+          body = `<span class="msg">${escapeHtml(JSON.stringify(ev))}</span>`;
+        }
+        li.innerHTML = `<span class="ts">${ts()}</span>${body}`;
+        card.events.appendChild(li);
+        card.events.scrollTop = card.events.scrollHeight;
+        card.eventCount++;
+      }
+
+      function short(value) {
+        if (value == null) return "";
+        const s = typeof value === "string" ? value : JSON.stringify(value);
+        return s.length <= 120 ? s : s.slice(0, 117) + "…";
+      }
+
+      function connectBrain(card) {
+        if (!card.spec.brainPort) return;
+        const url = `http://127.0.0.1:${card.spec.brainPort}/brain-events`;
+        const es = new EventSource(url);
+        es.onmessage = (e) => {
+          let event;
+          try {
+            event = JSON.parse(e.data);
+          } catch {
+            return;
+          }
+          pushBrainEvent(card, event);
+        };
+        es.onerror = () => {
+          // EventSource auto-reconnects; nothing else to do.
+        };
+      }
+
+      for (const a of AGENTS) {
+        connect(cards[a.id]);
+        connectBrain(cards[a.id]);
+      }
     </script>
   </body>
 </html>

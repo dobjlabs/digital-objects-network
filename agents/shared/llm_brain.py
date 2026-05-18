@@ -23,9 +23,18 @@ from __future__ import annotations
 
 import inspect
 import os
+import sys
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlparse
+
+# Known cosmetic warnings you'll see at module load / between brain runs:
+#  - LiteLLM "could not pre-load sagemaker-runtime" → botocore not installed;
+#    only matters if you set LLM_MODEL=sagemaker/... (we don't)
+#  - mcp client "Session termination failed: 202" → dobjd's MCP server
+#    returns 202 Accepted on session DELETE; the SDK expected 200/204 and
+#    logs a warning, but the session does close cleanly
+# Both are noise — left visible per user request.
 
 from langchain.agents import create_agent
 from langchain_litellm import ChatLiteLLM
@@ -62,6 +71,7 @@ async def run_brain(
     on_step: Callable[[dict[str, Any]], Any] | None = None,
     model: str | None = None,
     max_tokens: int = 4000,
+    agent_label: str = '',
 ) -> str:
     """Run a tool-use loop against the given MCP server. Returns the
     final assistant text.
@@ -69,8 +79,13 @@ async def run_brain(
     `on_step({"type": "tool_call"|"tool_result"|"thought", ...})` is
     invoked for every intermediate event during the loop — wire this to
     `emit_working` in your A2A executor to forward progress to the user.
+
+    `agent_label` (e.g. "lumberjack") prefixes every step in this process's
+    stdout, so you can follow each agent's LLM activity in `run_all.sh`'s
+    terminal. Defaults to no prefix.
     """
     model = model or pick_model()
+    _log(agent_label, f'brain online ({model})')
     # Dict form works across langchain-mcp-adapters versions where
     # StreamableHttpConnection is a TypedDict (not constructible as a class).
     mcp_client = MultiServerMCPClient(
@@ -95,16 +110,19 @@ async def run_brain(
         data = event.get('data', {}) or {}
 
         if kind == 'on_tool_start':
+            inp = data.get('input')
+            _log(agent_label, f'→ {name}({_summarize_tool_output(inp)})')
             if on_step is not None:
                 await _maybe_await(on_step({
                     'type': 'tool_call',
                     'name': name,
-                    'input': data.get('input'),
+                    'input': inp,
                 }))
 
         elif kind == 'on_tool_end':
             output = data.get('output')
             summary = _summarize_tool_output(output)
+            _log(agent_label, f'← {name} → {summary}')
             if on_step is not None:
                 await _maybe_await(on_step({
                     'type': 'tool_result',
@@ -117,6 +135,9 @@ async def run_brain(
             text = _extract_text(msg)
             if text:
                 final_text = text
+                # Final filenames are long; truncate stdout. on_step gets
+                # the full text so A2A consumers see everything.
+                _log(agent_label, f'💭 {_summarize_tool_output(text)}')
                 if on_step is not None:
                     await _maybe_await(on_step({
                         'type': 'thought',
@@ -135,6 +156,15 @@ async def _maybe_await(value: Any) -> None:
     a coroutine)."""
     if inspect.isawaitable(value):
         await value
+
+
+def _log(label: str, message: str) -> None:
+    """Print one brain event to stdout with the agent label prefix.
+
+    Flushed immediately so mprocs / run_all.sh sees lines as they happen.
+    """
+    prefix = f'[{label}] ' if label else ''
+    print(f'{prefix}{message}', file=sys.stdout, flush=True)
 
 
 def _extract_text(msg: Any) -> str:
