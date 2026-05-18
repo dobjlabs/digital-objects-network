@@ -47,6 +47,19 @@ dev: ensure-plugins ensure-commands ensure-mcp
 dev-remote: ensure-plugins ensure-commands ensure-remote-settings (ensure-mcp '7758')
     DOBJD_PORT=7757 VITE_DOBJD_URL=http://127.0.0.1:7757 mprocs --config mprocs.remote.yaml
 
+# Full A2A agent demo in one mprocs window:
+#   - pane 1: bootstrap_dobjds.sh  (4 dobjds on 7717/7727/7737/7747)
+#   - pane 2: run_all.sh           (4 A2A agents on 9996-9999, polls until
+#                                   pane 1's dobjds are healthy first)
+#   - pane 3: dobjd at :7757       (your own dev-remote dobjd — separate
+#                                   from the demo's 4)
+#   - pane 4: web (Vite :1420 → :7757)
+#   - pane 5: desktop (Tauri shell)
+# Uses hosted sync/relayer (no local Postgres needed). Conflicts with
+# `just dev` and `just dev-remote` standalone — pick one.
+dev-agents: ensure-plugins ensure-commands ensure-remote-settings (ensure-mcp '7758')
+    DOBJD_PORT=7757 VITE_DOBJD_URL=http://127.0.0.1:7757 mprocs --config mprocs.agents.yaml
+
 # Idempotently point ~/.dobj/settings.json at the hosted synchronizer +
 # relayer. Preserves any other keys already in the file.
 ensure-remote-settings:
