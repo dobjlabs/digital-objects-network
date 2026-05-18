@@ -67,31 +67,39 @@ async def run_brain(
     *,
     system_prompt: str,
     user_request: str,
-    mcp_url: str,
+    mcp_url: str | None = None,
     on_step: Callable[[dict[str, Any]], Any] | None = None,
     model: str | None = None,
     max_tokens: int = 4000,
     agent_label: str = '',
+    extra_tools: list[Any] | None = None,
 ) -> str:
-    """Run a tool-use loop against the given MCP server. Returns the
-    final assistant text.
+    """Run a tool-use loop. Returns the final assistant text.
+
+    Tool sources:
+      - `mcp_url`: a dobjd MCP server (skipped if None — Concierge uses no MCP)
+      - `extra_tools`: hand-built LangChain tools (e.g. peer A2A calls)
+    The two are concatenated and passed to `create_agent`.
 
     `on_step({"type": "tool_call"|"tool_result"|"thought", ...})` is
-    invoked for every intermediate event during the loop — wire this to
-    `emit_working` in your A2A executor to forward progress to the user.
+    invoked for every intermediate event — wire this to `emit_working`
+    in your A2A executor to forward progress to the user.
 
-    `agent_label` (e.g. "lumberjack") prefixes every step in this process's
-    stdout, so you can follow each agent's LLM activity in `run_all.sh`'s
-    terminal. Defaults to no prefix.
+    `agent_label` prefixes stdout for the run_all.sh terminal.
     """
     model = model or pick_model()
     _log(agent_label, f'brain online ({model})')
-    # Dict form works across langchain-mcp-adapters versions where
-    # StreamableHttpConnection is a TypedDict (not constructible as a class).
-    mcp_client = MultiServerMCPClient(
-        {'dobjd': {'transport': 'streamable_http', 'url': mcp_url}},
-    )
-    tools = await mcp_client.get_tools()
+
+    tools: list[Any] = []
+    if mcp_url is not None:
+        # Dict form works across langchain-mcp-adapters versions where
+        # StreamableHttpConnection is a TypedDict (not constructible).
+        mcp_client = MultiServerMCPClient(
+            {'dobjd': {'transport': 'streamable_http', 'url': mcp_url}},
+        )
+        tools.extend(await mcp_client.get_tools())
+    if extra_tools:
+        tools.extend(extra_tools)
 
     agent = create_agent(
         model=ChatLiteLLM(model=model, max_tokens=max_tokens),

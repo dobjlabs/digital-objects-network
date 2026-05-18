@@ -104,17 +104,24 @@ still considers the commitment live, so the recipient's dobjd accepts
 it normally. Adding a real `Transfer` action to `craft-basics` would
 fully close this — out of scope here.
 
-## LLM brains (specialists)
+## LLM brains
 
-Each specialist (Lumberjack, Stonemason, Craftsmith) runs its own LLM
-that decides which bitcraft actions to invoke. The LLM talks to its
-dobjd via that dobjd's **MCP server** (`http://127.0.0.1:<port+1>/mcp`,
-derived automatically from `DOBJD_URL`). The LLM follows a system prompt
-that says "check inventory first; craft only if missing", then returns
-the chosen `.dobj` filename which the harness ships as a FilePart.
+All four agents run an LLM brain.
 
-Concierge stays orchestration-only — it coordinates A2A peers and
-verifies received objects, no LLM call.
+The three **specialists** (Lumberjack, Stonemason, Craftsmith) use
+**LangChain + LiteLLM** to talk to their dobjd's MCP server
+(`http://127.0.0.1:<port+1>/mcp`, derived automatically from
+`DOBJD_URL`). Each follows a system prompt that says "check inventory
+first; craft only if missing", then returns the chosen `.dobj` filename
+which the harness ships as a FilePart.
+
+The **Concierge** uses **BeeAI Framework**'s `RequirementAgent` with
+`ThinkTool` + `ConditionalRequirement` + three custom A2A peer tools.
+The framework split is intentional: it mirrors the A2AWalkthrough
+healthcare-demo's "different frameworks, same A2A wire" interop story
+in a single repo. Two frameworks, one provider abstraction (LiteLLM
+under both, via `langchain-litellm` for the specialists and BeeAI's
+`LiteLLMChatModel` adapter for the Concierge).
 
 ### Provider-agnostic via LiteLLM
 
@@ -152,9 +159,17 @@ the network:
 LUMBERJACK_LLM=anthropic/claude-haiku-4-5
 STONEMASON_LLM=gemini/gemini-2.5-flash
 CRAFTSMITH_LLM=openai/gpt-4o
+CONCIERGE_LLM=anthropic/claude-opus-4-7    # auto-translated to anthropic:...
 ```
 
 Default if nothing set: `anthropic/claude-opus-4-7`.
+
+BeeAI uses `provider:model` (colon) where LiteLLM uses `provider/model`
+(slash). The Concierge auto-translates the LiteLLM shape so the same
+env var works everywhere. If you pick a LiteLLM-only provider like
+`together_ai` (no BeeAI adapter), set `CONCIERGE_LLM` separately to a
+BeeAI-supported provider — see `_LITELLM_TO_BEEAI_PROVIDER` in
+`concierge/agent_executor.py`.
 
 ## Layout
 
@@ -166,12 +181,15 @@ agents/
     dobj_verify.py              ingest-and-verify: class + status=live
     a2a_helpers.py              emit working/completed, file-part helpers,
                                 make_progress_forwarder
-    llm_brain.py                LiteLLM + LangChain create_agent + MCP adapter
-                                (provider-agnostic; LLM_MODEL env var swaps)
+    llm_brain.py                LangChain create_agent + LiteLLM + MCP adapter
+                                (provider-agnostic; powers the specialists)
+    brain_hub.py                in-memory pub-sub + SSE route for /brain-events
+    peer_tools.py               BeeAI Tool subclasses wrapping A2A peer calls
+                                (used by the Concierge)
     registry.py                 env-driven peer URL map
-  concierge/                    the orchestrator (no LLM)
-    __main__.py                 AgentCard, port 9996
-    agent_executor.py           fan out, verify, forward, verify, deliver
+  concierge/                    the orchestrator (BeeAI RequirementAgent)
+    __main__.py                 AgentCard + /brain-events SSE route, port 9996
+    agent_executor.py           BeeAI ThinkTool + 3 peer tools + ConditionalReq
     peer_client.py              streaming send_message wrapper
   lumberjack/                   supplies Sticks (LLM-driven)
     __main__.py                 port 9997
@@ -292,16 +310,12 @@ Both run scripts honor env vars:
 - **Negotiation.** Specialists deliver unconditionally; no `input-required`
   state, no price quoting, no payment. Easy to add later as a wrapper
   around the executor body.
-- **LLM brains.** Each executor runs a fixed script. To make them
-  reasoning peers, drop a model call inside `execute()` that interprets
-  the inbound message and decides what to do.
 - **Real ownership transfer.** Sender retains a usable copy of any
   shipped `.dobj` because bitcraft has no `Transfer` action yet. See
   the MVP note above.
-- **Framework variety.** All four use plain `a2a-sdk` + uvicorn. The
-  natural next step is to swap each executor for its own framework
-  (BeeAI / ADK / LangGraph / CrewAI) to mirror the healthcare-demo
-  interop story.
+- **Framework variety beyond two.** Specialists are LangChain, Concierge
+  is BeeAI. Adding a third framework (ADK or CrewAI) for a fifth agent
+  would push the interop story further but isn't done here.
 
 ## Sanity-checking individual agents
 

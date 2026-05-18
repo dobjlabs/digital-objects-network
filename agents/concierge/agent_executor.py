@@ -1,25 +1,30 @@
-"""Concierge agent — orchestrates Lumberjack + Stonemason + Craftsmith.
+"""Concierge agent — BeeAI Framework `RequirementAgent` orchestrates the
+three specialist peers.
 
-User asks for a StonePick. Concierge:
+Different framework choice from the specialists by design. The specialists
+need an MCP tool source so they use LangChain + `langchain-mcp-adapters`
+(over LiteLLM). The Concierge has no MCP needs — it just delegates to
+three peer A2A agents — so it gets BeeAI's `RequirementAgent` +
+`ThinkTool` + `ConditionalRequirement` pattern, mirroring the
+A2AWalkthrough's `a2a_healthcare_agent.py` orchestrator. Two frameworks
+in one demo on purpose: it shows A2A is provider- *and* framework-agnostic.
 
-  1. In parallel, sends `message/send` to Lumberjack ("I need 1 stick")
-     and Stonemason ("I need 1 stone"). Streams each peer's
-     Working-state updates back to the user.
-  2. Pulls the Stick .dobj and Stone .dobj out of the final artifacts,
-     ingests them into the concierge's local dobjd, verifies class +
-     status=live for each.
-  3. Sends `message/send` to Craftsmith with both .dobj FileParts
-     attached, asking for a StonePick.
-  4. Verifies the returned StonePick locally, then ships it back to
-     the user as the final artifact alongside a text summary.
+Peer calls go through custom BeeAI `Tool`s in `shared/peer_tools.py`
+that wrap our existing `send_and_stream` A2A client — we can't use
+BeeAI's stock `HandoffTool` because that expects a BeeAI `Runnable`
+target, not an external A2A endpoint.
 
-Framework slot: would be BeeAI in a full interop build.
+Provider via LLM_MODEL / CONCIERGE_LLM env vars, auto-translated from
+LiteLLM's `provider/model` shape to BeeAI's `provider:model` shape so
+the same env var works for both the specialists and the Concierge.
 """
 
 from __future__ import annotations
 
-import asyncio
+import os
+import re
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +33,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from a2a.server.agent_execution import AgentExecutor, RequestContext  # noqa: E402
 from a2a.server.events import EventQueue  # noqa: E402
 
-from concierge.peer_client import send_and_stream  # noqa: E402
+from beeai_framework.agents.requirement import RequirementAgent  # noqa: E402
+from beeai_framework.agents.requirement.requirements.conditional import (  # noqa: E402
+    ConditionalRequirement,
+)
+from beeai_framework.backend.chat import ChatModel  # noqa: E402
+from beeai_framework.backend.types import ChatModelParameters  # noqa: E402
+from beeai_framework.emitter import EmitterOptions  # noqa: E402
+from beeai_framework.errors import FrameworkError  # noqa: E402
+from beeai_framework.memory import UnconstrainedMemory  # noqa: E402
+from beeai_framework.tools.think import ThinkTool  # noqa: E402
+from beeai_framework.tools.types import ToolOutput  # noqa: E402
+
 from shared.a2a_helpers import (  # noqa: E402
     emit_completed,
     emit_dobj_artifact,
@@ -36,17 +52,72 @@ from shared.a2a_helpers import (  # noqa: E402
     emit_text_artifact,
     emit_working,
     ensure_task,
+    extract_text,
 )
-from shared.dobj_verify import DobjVerificationError, ingest_and_verify  # noqa: E402
+from shared.brain_hub import BrainEventHub  # noqa: E402
 from shared.dobjd_client import DobjdClient  # noqa: E402
-from shared.registry import CRAFTSMITH, LUMBERJACK, STONEMASON  # noqa: E402
+from shared.llm_brain import pick_model  # noqa: E402
+from shared.peer_tools import flatten_chunk_text, make_peer_tools  # noqa: E402
+
+
+_STONEPICK_RE = re.compile(r'craft-basics__stonepick_0x[0-9a-fA-F]+\.dobj')
+
+
+INSTRUCTIONS = """You are the Concierge agent in a bitcraft multi-agent network.
+Your job: deliver a fully-anchored StonePick by coordinating three peer agents.
+
+You have these tools (each calls a peer over A2A, ingests the returned
+.dobj into this concierge's local dobjd, and verifies it's live on chain
+before returning):
+  - request_stick_from_lumberjack    →  Stick filename
+  - request_stone_from_stonemason    →  Stone filename
+  - craft_stonepick_with_craftsmith  (stick_file, stone_file) → StonePick filename
+
+You also have a `think` tool — call it once at the start to plan, then
+proceed to the peer calls.
+
+Procedure:
+1. Call `think` once with your plan.
+2. Call BOTH request_stick_from_lumberjack AND request_stone_from_stonemason
+   (the framework runs independent tool calls in parallel where it can).
+3. Pass the two filenames they return to craft_stonepick_with_craftsmith.
+4. Respond with ONLY the StonePick filename. No prose, no
+   "Here is the stone pick:". Just the bare filename, e.g.:
+       craft-basics__stonepick_0xabc1234….dobj
+The harness will parse your final message for this exact pattern."""
+
+
+# LiteLLM provider names that don't match BeeAI's provider IDs exactly.
+# Add aliases here as you adopt more providers.
+_LITELLM_TO_BEEAI_PROVIDER = {
+    'vertex_ai': 'vertexai',
+}
+
+
+def _to_beeai_model_string(litellm_style: str) -> str:
+    """Translate `provider/model` (LiteLLM) → `provider:model` (BeeAI).
+
+    Lets the user set `LLM_MODEL=anthropic/claude-opus-4-7` once and
+    have it work for both the LangChain specialists and the BeeAI
+    Concierge. If the env var already uses BeeAI's colon shape (e.g.
+    `anthropic:claude-opus-4-7`), it's returned unchanged.
+    """
+    if ':' in litellm_style:
+        return litellm_style
+    if '/' not in litellm_style:
+        return litellm_style
+    provider, _, model = litellm_style.partition('/')
+    provider = _LITELLM_TO_BEEAI_PROVIDER.get(provider, provider)
+    return f'{provider}:{model}'
 
 
 class ConciergeAgentExecutor(AgentExecutor):
-    """Coordinates three specialists to deliver a StonePick to the user."""
+    """LLM-driven orchestrator built on BeeAI's RequirementAgent."""
 
-    def __init__(self) -> None:
+    def __init__(self, brain_hub: BrainEventHub | None = None) -> None:
         self.dobjd = DobjdClient()
+        self.dobjd_http = os.environ.get('DOBJD_URL', 'http://127.0.0.1:7747').rstrip('/')
+        self.brain_hub = brain_hub
 
     async def execute(
         self,
@@ -56,187 +127,324 @@ class ConciergeAgentExecutor(AgentExecutor):
         await ensure_task(context, event_queue)
 
         try:
+            user_request = (
+                extract_text(context.message).strip()
+                or 'I want a stone pick'
+            )
+
+            litellm_model = pick_model('CONCIERGE_LLM')
+            beeai_model = _to_beeai_model_string(litellm_model)
+            _log(f'brain online (beeai → {beeai_model})')
             await emit_working(
                 context, event_queue,
-                f'reaching out in parallel: {LUMBERJACK.url} + {STONEMASON.url}',
+                f'concierge brain online (beeai → {beeai_model}); planning…',
             )
 
-            lumberjack_task = asyncio.create_task(
-                _fetch_one(
-                    peer_label='lumberjack',
-                    base_url=LUMBERJACK.url,
-                    request_text='I need 1 stick',
-                    context=context,
-                    event_queue=event_queue,
+            # ----- Forward each peer stream chunk as a [peer] line ----
+            async def on_peer_chunk(peer_label: str, chunk) -> None:
+                text = flatten_chunk_text(chunk)
+                if not text:
+                    return
+                line = f'[{peer_label}] {text}'
+                _log(line)
+                await emit_working(context, event_queue, line)
+                if self.brain_hub is not None:
+                    self.brain_hub.publish({
+                        'agent': 'concierge',
+                        'type': 'peer',
+                        'peer': peer_label,
+                        'text': text,
+                    })
+
+            stick_tool, stone_tool, craft_tool = make_peer_tools(
+                self.dobjd, on_peer_chunk=on_peer_chunk,
+            )
+            think_tool = ThinkTool()
+
+            # Claude Opus 4.x extended-thinking models reject `temperature=0`
+            # (BeeAI's default) with "temperature is deprecated for this
+            # model". They require temperature=1. Setting it explicitly is
+            # also a no-op for providers that accept any value. Orchestration
+            # is gated by ConditionalRequirements so non-determinism here
+            # doesn't change the agent's behavior shape.
+            chat_model = ChatModel.from_name(
+                beeai_model, ChatModelParameters(temperature=1),
+            )
+            agent = RequirementAgent(
+                name='Concierge',
+                description='Orchestrates Lumberjack, Stonemason, Craftsmith to deliver a StonePick.',
+                llm=chat_model,
+                memory=UnconstrainedMemory(),
+                tools=[think_tool, stick_tool, stone_tool, craft_tool],
+                requirements=[
+                    # think first
+                    ConditionalRequirement(
+                        think_tool,
+                        force_at_step=1,
+                        consecutive_allowed=False,
+                    ),
+                    # each peer call exactly once
+                    ConditionalRequirement(stick_tool, max_invocations=1),
+                    ConditionalRequirement(stone_tool, max_invocations=1),
+                    # craft only after both inputs are gathered, exactly once
+                    ConditionalRequirement(
+                        craft_tool,
+                        only_after=[stick_tool, stone_tool],
+                        max_invocations=1,
+                    ),
+                ],
+                role='Concierge',
+                instructions=INSTRUCTIONS,
+            )
+
+            # Surface BeeAI tool start/success + chat-model events as A2A
+            # Working updates + brain-hub dashboard entries. `agent.emitter`
+            # only sees agent-level events (start/success/final_answer) —
+            # tool emitters are SIBLINGS under Emitter.root(), not children
+            # of agent.emitter. `Run.observe()` hooks the per-run emitter
+            # which DOES see everything (verified empirically: agent.emitter
+            # → 9 events, Run.observe → 40 including tool.think.*,
+            # backend.anthropic.chat.*, requirement.conditionthink.*).
+            handler = self._make_emitter_handler(context, event_queue)
+            response = await agent.run(user_request).observe(
+                lambda em: em.on(
+                    '*.*', handler, EmitterOptions(match_nested=True),
                 )
             )
-            stonemason_task = asyncio.create_task(
-                _fetch_one(
-                    peer_label='stonemason',
-                    base_url=STONEMASON.url,
-                    request_text='I need 1 stone',
-                    context=context,
-                    event_queue=event_queue,
-                )
-            )
+            final_text = response.last_message.text if response else ''
 
-            (stick_name, stick_bytes), (stone_name, stone_bytes) = await asyncio.gather(
-                lumberjack_task, stonemason_task
-            )
-
-            # Verify both inputs locally before forwarding to craftsmith.
-            await emit_working(context, event_queue, 'verifying Stick locally…')
-            try:
-                stick_obj = await ingest_and_verify(
-                    self.dobjd, stick_name, stick_bytes, expected_class='Stick'
-                )
-            except DobjVerificationError as e:
-                await emit_failed(context, event_queue, f'Stick verification failed: {e}')
-                return
-            await emit_text_artifact(
-                context, event_queue, 'verify-stick',
-                f'Stick {stick_obj["fileName"]} verified live on chain',
-            )
-
-            await emit_working(context, event_queue, 'verifying Stone locally…')
-            try:
-                stone_obj = await ingest_and_verify(
-                    self.dobjd, stone_name, stone_bytes, expected_class='Stone'
-                )
-            except DobjVerificationError as e:
-                await emit_failed(context, event_queue, f'Stone verification failed: {e}')
-                return
-            await emit_text_artifact(
-                context, event_queue, 'verify-stone',
-                f'Stone {stone_obj["fileName"]} verified live on chain',
-            )
-
-            # Forward both to craftsmith.
-            await emit_working(
-                context, event_queue,
-                f'forwarding inputs to craftsmith at {CRAFTSMITH.url}',
-            )
-            pick_name, pick_bytes = await _fetch_one(
-                peer_label='craftsmith',
-                base_url=CRAFTSMITH.url,
-                request_text='please assemble a stone pick from these inputs',
-                context=context,
-                event_queue=event_queue,
-                file_parts=[(stick_name, stick_bytes), (stone_name, stone_bytes)],
-            )
-
-            await emit_working(context, event_queue, 'verifying StonePick locally…')
-            try:
-                pick_obj = await ingest_and_verify(
-                    self.dobjd, pick_name, pick_bytes, expected_class='StonePick'
-                )
-            except DobjVerificationError as e:
+            pick_file = _parse_stonepick_filename(final_text)
+            if not pick_file:
                 await emit_failed(
-                    context, event_queue, f'StonePick verification failed: {e}'
+                    context, event_queue,
+                    f'concierge: could not parse a StonePick filename out of '
+                    f'the LLM final response: {final_text[:200]!r}',
                 )
                 return
 
+            # The peer tool already ingested + verified, but a final inventory
+            # check protects against the LLM hallucinating a different name.
+            inv = await self.dobjd.list_inventory()
+            row = next((o for o in inv if o.get('fileName') == pick_file), None)
+            if row is None:
+                await emit_failed(
+                    context, event_queue,
+                    f'concierge: LLM returned {pick_file!r} but it is not in inventory',
+                )
+                return
+            status = (row.get('status') or '').lower()
+            if status != 'live':
+                await emit_failed(
+                    context, event_queue,
+                    f'concierge: {pick_file} status is {status!r}, not live',
+                )
+                return
+
+            pick_bytes = await self.dobjd.read_dobj_file(pick_file)
             await emit_text_artifact(
                 context, event_queue, 'summary',
-                'StonePick delivered.\n'
-                f'  stick: {stick_obj["fileName"]}\n'
-                f'  stone: {stone_obj["fileName"]}\n'
-                f'  pick:  {pick_obj["fileName"]}\n'
-                f'all three live on chain.',
+                f'StonePick delivered.\n  pick: {pick_file} ({len(pick_bytes):,} bytes)\n'
+                'verified live on chain.',
             )
             await emit_dobj_artifact(
                 context, event_queue,
                 artifact_name='stonepick',
-                file_name=pick_obj['fileName'],
+                file_name=pick_file,
                 dobj_bytes=pick_bytes,
-                note=f'StonePick {pick_obj["fileName"]} verified live',
+                note=f'StonePick {pick_file} verified live',
             )
             await emit_completed(context, event_queue)
 
         except Exception as e:
-            await emit_failed(context, event_queue, f'concierge failed: {e}')
+            # BeeAI FrameworkError.__str__ collapses to just the class label —
+            # walk the cause chain so the real underlying error (bad model id,
+            # auth failure, API 4xx, etc.) actually reaches the user.
+            detail = _explain_exception(e)
+            # Full traceback to stdout so run_all.sh / mprocs captures it.
+            print('[concierge] EXCEPTION:', file=sys.stderr, flush=True)
+            traceback.print_exc()
+            print(f'[concierge] explained: {detail}', file=sys.stderr, flush=True)
+            await emit_failed(context, event_queue, f'concierge failed: {detail}')
 
     async def cancel(
         self, context: RequestContext, event_queue: EventQueue
     ) -> None:
         raise Exception('cancel not supported')
 
+    # ---------------------------------------------------------------------
+    # BeeAI emitter handler — translates framework events into the same
+    # `{type: tool_call|tool_result|thought}` shape the specialists publish,
+    # so the preview HTML doesn't need a separate code path for the Concierge.
+    # ---------------------------------------------------------------------
 
-async def _fetch_one(
-    *,
-    peer_label: str,
-    base_url: str,
-    request_text: str,
-    context: RequestContext,
-    event_queue: EventQueue,
-    file_parts: list[tuple[str, bytes]] | None = None,
-) -> tuple[str, bytes]:
-    """Send a message to one peer; stream its Working updates through to
-    our own user; return the (file_name, bytes) of its single .dobj artifact.
+    def _make_emitter_handler(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+    ) -> Any:
+        async def on_event(data: Any, event: Any) -> None:
+            kind = _classify_event(event, data)
+            if kind is None:
+                return
+
+            payload: dict[str, Any] = {'agent': 'concierge', **kind}
+
+            # A2A working line — short, single-line. Skip empty payloads.
+            line = _summarize_for_working(kind)
+            if line:
+                # stdout for run_all.sh / mprocs, mirroring the specialists'
+                # `_log()` format from shared/llm_brain.py.
+                _log(line)
+                await emit_working(context, event_queue, line)
+
+            if self.brain_hub is not None:
+                self.brain_hub.publish(payload)
+
+        return on_event
+
+
+# ---------------------------------------------------------------------------
+# Event classification helpers
+# ---------------------------------------------------------------------------
+
+def _classify_event(event: Any, data: Any) -> dict[str, Any] | None:
+    """Map BeeAI emitter event → the dashboard's
+    `{type: tool_call | tool_result | thought, ...}` shape.
+
+    BeeAI's `Run.observe()` stream is fire-hose-y: every tool call shows
+    up at TWO paths (`run.tool.<name>.<phase>` from the RunContext wrap
+    plus `tool.<name>.<phase>` from the tool's own emitter), plus
+    framework events for requirement evaluation, chat model rounds, and
+    the synthetic FinalAnswerTool. We filter to the cleanest, lowest-
+    noise subset:
+
+      - `tool.<name>.start`     → tool_call
+      - `tool.<name>.success`   → tool_result
+      - `agent.requirement.final_answer` → thought (the actual LLM reply)
+
+    Skips `run.tool.*` (duplicates of `tool.*`), `backend.*.chat.*` (chat
+    model rounds — noisy, no per-step value), and the FinalAnswerTool's
+    own tool events (its content overlaps with `final_answer`).
     """
-    seen_file: tuple[str, bytes] | None = None
+    name = getattr(event, 'name', '')
+    path = getattr(event, 'path', '')
 
-    async for chunk in send_and_stream(base_url, request_text, file_parts=file_parts):
-        # Forward any text-status updates we can detect
-        text_blob = _flatten_text(chunk)
-        if text_blob:
-            await emit_working(
-                context, event_queue, f'[{peer_label}] {text_blob}'
-            )
-        found = _find_file_part(chunk)
-        if found:
-            seen_file = found
+    # 1) Final answer — surface as a "thought" the dashboard styles.
+    if path == 'agent.requirement.final_answer' and data is not None:
+        text = getattr(data, 'output', '') or ''
+        if text:
+            return {'type': 'thought', 'text': text}
 
-    if seen_file is None:
-        raise RuntimeError(f'{peer_label} returned no FilePart artifact')
-    return seen_file
-
-
-def _flatten_text(chunk: Any) -> str:
-    """Best-effort text extraction for streaming status messages.
-
-    A streamed chunk from `client.send_message` is a `StreamResponse` with
-    a oneof: `task` / `message` / `status_update` / `artifact_update`.
-    Unwrap each to get to the parts.
-    """
-    out: list[str] = []
-    # status_update.status.message.parts[*].text
-    status_update = getattr(chunk, 'status_update', None)
-    if status_update is not None:
-        status = getattr(status_update, 'status', None)
-        msg = getattr(status, 'message', None) if status is not None else None
-        if msg is not None:
-            for p in getattr(msg, 'parts', []) or []:
-                text = getattr(p, 'text', '') or ''
-                if text:
-                    out.append(text)
-    # artifact_update.artifact.parts[*].text
-    artifact_update = getattr(chunk, 'artifact_update', None)
-    if artifact_update is not None:
-        artifact = getattr(artifact_update, 'artifact', None)
-        if artifact is not None:
-            for p in getattr(artifact, 'parts', []) or []:
-                text = getattr(p, 'text', '') or ''
-                if text:
-                    out.append(text)
-    return ' '.join(out)
-
-
-def _find_file_part(chunk: Any) -> tuple[str, bytes] | None:
-    """Look for a file Part in a streamed chunk's artifact_update.
-
-    File parts are `Part` protos with non-empty `raw` bytes and a `filename`.
-    """
-    artifact_update = getattr(chunk, 'artifact_update', None)
-    if artifact_update is None:
+    # 2) Tool events only at the bare `tool.<name>.*` namespace.
+    if not path.startswith('tool.'):
         return None
-    artifact = getattr(artifact_update, 'artifact', None)
-    if artifact is None:
+    # Skip the synthetic FinalAnswerTool — duplicates the final_answer event.
+    if path.startswith('tool.final_answer.'):
         return None
-    for p in getattr(artifact, 'parts', []) or []:
-        raw = getattr(p, 'raw', b'')
-        if not raw:
-            continue
-        name = getattr(p, 'filename', '') or 'unknown.dobj'
-        return name, bytes(raw)
+
+    creator = getattr(event, 'creator', None)
+    tool_name = getattr(creator, 'name', None) or type(creator).__name__
+
+    if name == 'start' and data is not None and hasattr(data, 'input'):
+        return {
+            'type': 'tool_call',
+            'name': tool_name,
+            'input': _dump(data.input),
+        }
+    if name == 'success' and data is not None and hasattr(data, 'output'):
+        return {
+            'type': 'tool_result',
+            'name': tool_name,
+            'output_summary': _stringify_output(data.output),
+        }
     return None
+
+
+def _summarize_for_working(kind: dict[str, Any]) -> str:
+    t = kind.get('type')
+    if t == 'tool_call':
+        return f'→ {kind.get("name", "?")}({_compact(kind.get("input"))})'
+    if t == 'tool_result':
+        out = kind.get('output_summary', '')
+        return f'← {kind.get("name", "?")} → {out}'
+    if t == 'thought':
+        text = (kind.get('text') or '').strip()
+        # The final answer is the bare filename — short. If a model emits
+        # a long thought it'd flood the UI, so cap it.
+        if text and len(text) < 200:
+            return f'💭 {text}'
+    return ''
+
+
+def _stringify_output(output: Any) -> str:
+    if output is None:
+        return ''
+    if isinstance(output, ToolOutput):
+        s = output.get_text_content()
+    else:
+        s = str(output)
+    return s if len(s) <= 200 else s[:197] + '…'
+
+
+def _dump(value: Any) -> Any:
+    """Render a Pydantic input model (or anything else) as a JSON-safe dict.
+
+    Pydantic models from BeeAI tool schemas serialize cleanly; primitives
+    pass through; everything else stringifies.
+    """
+    if value is None:
+        return ''
+    dump = getattr(value, 'model_dump', None)
+    if callable(dump):
+        try:
+            return dump()
+        except Exception:
+            pass
+    if isinstance(value, (str, int, float, bool, dict, list)):
+        return value
+    return str(value)
+
+
+def _compact(value: Any) -> str:
+    if value is None:
+        return ''
+    s = str(value)
+    return s if len(s) <= 120 else s[:117] + '…'
+
+
+def _log(message: str) -> None:
+    """Print one brain event to stdout with the `[concierge] ` prefix,
+    flushed immediately. Mirrors `shared/llm_brain.py::_log()` so the
+    Concierge's lines look identical to the specialists' in mprocs."""
+    print(f'[concierge] {message}', file=sys.stdout, flush=True)
+
+
+def _parse_stonepick_filename(text: str) -> str:
+    if not text:
+        return ''
+    m = _STONEPICK_RE.search(text)
+    return m.group(0) if m else ''
+
+
+def _explain_exception(e: BaseException) -> str:
+    """Format an exception including its full __cause__ chain.
+
+    BeeAI's FrameworkError has an .explain() method that walks the cause
+    chain and includes each layer's context dict (e.g. a ChatModelError
+    contains the raw LiteLLM response, an HTTPStatusError the server
+    body). Plain Pythonics fall back to a manual `cause: …` walk so we
+    still surface the root cause of LiteLLM 4xx / Anthropic SDK errors.
+    """
+    if isinstance(e, FrameworkError):
+        try:
+            return e.explain()
+        except Exception:
+            pass  # fall through to the manual walk
+    parts: list[str] = [f'{type(e).__name__}: {e}']
+    cur: BaseException | None = e.__cause__
+    depth = 1
+    while cur is not None and depth < 8:
+        parts.append(f'  caused by {type(cur).__name__}: {cur}')
+        cur = cur.__cause__
+        depth += 1
+    return '\n'.join(parts)
