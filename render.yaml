@@ -1,0 +1,169 @@
+# Render Blueprint — four bitcraft A2A agents from a single Dockerfile.
+#
+# Each service runs both the Python A2A server (port = Render's $PORT)
+# and a colocated dobjd (internal port 7717). The same image is reused
+# four times; the AGENT env var picks which module runs.
+#
+# To deploy:
+#   1. Commit this file + the Dockerfile + entrypoint to the repo.
+#   2. In Render: New → Blueprint → connect this repo.
+#   3. After services come up the first time, copy each one's URL
+#      (https://<svc>-<hash>.onrender.com) into the Concierge's
+#      LUMBERJACK_URL / STONEMASON_URL / CRAFTSMITH_URL env vars (or
+#      use fromService below — see comment).
+#   4. Set ANTHROPIC_API_KEY (or whichever provider you use) in each
+#      service's "Environment" tab. It's marked `sync: false` so Render
+#      treats it as a secret and never writes it back into this file.
+#
+# Cost: 4× Standard plan = ~$100/mo (2GB / 1 CPU each). dobjd's proof
+# generation OOMs on the Starter ($7) plan; do not downgrade unless
+# you're running a dead demo.
+
+services:
+  # -----------------------------------------------------------------------
+  # Lumberjack — supplies Sticks
+  # -----------------------------------------------------------------------
+  - type: web
+    name: lumberjack
+    runtime: docker
+    plan: standard
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /.well-known/agent-card.json
+    autoDeploy: true
+    disk:
+      name: lumberjack-dobj
+      mountPath: /root/.dobj
+      sizeGB: 5
+    envVars:
+      - key: AGENT
+        value: lumberjack
+      - key: DOBJD_PORT
+        value: 7717
+      - key: LLM_MODEL
+        value: anthropic/claude-haiku-4-5   # Haiku is plenty for the
+                                            # specialists' inventory-check
+                                            # + tool-chain reasoning.
+      - key: ANTHROPIC_API_KEY
+        sync: false                          # set in dashboard
+
+  # -----------------------------------------------------------------------
+  # Stonemason — supplies Stones
+  # -----------------------------------------------------------------------
+  - type: web
+    name: stonemason
+    runtime: docker
+    plan: standard
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /.well-known/agent-card.json
+    autoDeploy: true
+    disk:
+      name: stonemason-dobj
+      mountPath: /root/.dobj
+      sizeGB: 5
+    envVars:
+      - key: AGENT
+        value: stonemason
+      - key: DOBJD_PORT
+        value: 7717
+      - key: LLM_MODEL
+        value: anthropic/claude-haiku-4-5
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  # -----------------------------------------------------------------------
+  # Craftsmith — assembles StonePicks from inbound Stick + Stone
+  # -----------------------------------------------------------------------
+  - type: web
+    name: craftsmith
+    runtime: docker
+    plan: standard
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /.well-known/agent-card.json
+    autoDeploy: true
+    disk:
+      name: craftsmith-dobj
+      mountPath: /root/.dobj
+      sizeGB: 5
+    envVars:
+      - key: AGENT
+        value: craftsmith
+      - key: DOBJD_PORT
+        value: 7717
+      - key: LLM_MODEL
+        value: anthropic/claude-haiku-4-5
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  # -----------------------------------------------------------------------
+  # Concierge — BeeAI orchestrator. Needs the three peer URLs.
+  # -----------------------------------------------------------------------
+  # NOTE on peer URLs: Render's `fromService` syntax can pull another
+  # service's hostname (`property: host`), but it returns just the
+  # hostname (no scheme). Our registry.py expects a full URL. So:
+  #
+  #   a) Easy path: leave LUMBERJACK_URL/etc unset here, set them in
+  #      the dashboard after the first deploy when you know each
+  #      service's https://lumberjack-XXX.onrender.com address.
+  #
+  #   b) Fancy path: uncomment the fromService entries below and use
+  #      `https://` (Render injects the host). Render will resolve
+  #      these at deploy time. If your account is on a tier that
+  #      doesn't support fromService in blueprints, fall back to (a).
+  # -----------------------------------------------------------------------
+  - type: web
+    name: concierge
+    runtime: docker
+    plan: standard
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /.well-known/agent-card.json
+    autoDeploy: true
+    disk:
+      name: concierge-dobj
+      mountPath: /root/.dobj
+      sizeGB: 5
+    envVars:
+      - key: AGENT
+        value: concierge
+      - key: DOBJD_PORT
+        value: 7717
+      - key: LLM_MODEL
+        value: anthropic/claude-opus-4-7    # Concierge does the planning
+                                             # — Opus is worth the spend.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      # Peer URLs — fill in after first deploy. Leave as placeholders so
+      # the service starts; the Concierge only consults them when a
+      # request comes in.
+      - key: LUMBERJACK_URL
+        value: https://lumberjack.onrender.com
+      - key: STONEMASON_URL
+        value: https://stonemason.onrender.com
+      - key: CRAFTSMITH_URL
+        value: https://craftsmith.onrender.com
+
+      # Fancy path (uncomment if your plan supports fromService in
+      # blueprints; delete the three lines above if you use this):
+      # - key: LUMBERJACK_URL
+      #   fromService:
+      #     type: web
+      #     name: lumberjack
+      #     property: host
+      # - key: STONEMASON_URL
+      #   fromService:
+      #     type: web
+      #     name: stonemason
+      #     property: host
+      # - key: CRAFTSMITH_URL
+      #   fromService:
+      #     type: web
+      #     name: craftsmith
+      #     property: host

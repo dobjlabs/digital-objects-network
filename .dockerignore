@@ -1,0 +1,39 @@
+target/
+**/target/
+.venv/
+**/.venv/
+.runtime/
+**/.runtime/
+data/
+node_modules/
+**/node_modules/
+**/.next/
+**/dist/
+
+.git/
+.github/
+.idea/
+.vscode/
+.DS_Store
+**/.DS_Store
+
+# Local state that should never end up in the image
+.env
+**/.env
+*.log
+**/*.log
+
+# app-gui/src-tauri is a Cargo workspace member (Cargo.toml lists it),
+# so we can't drop the whole tree — cargo would fail to resolve. Drop
+# only the JS frontend bits inside it; the Rust src-tauri Cargo.toml
+# stays in the build context.
+app-gui/src/
+app-gui/public/
+app-gui/dist/
+
+# bitcraft skills — not consumed by Rust or Python builds
+commands/
+
+# Docs & misc
+*.md
+docs/
