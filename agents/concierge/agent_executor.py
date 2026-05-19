@@ -140,35 +140,49 @@ class ConciergeAgentExecutor(AgentExecutor):
                 f'concierge brain online (beeai → {beeai_model}); planning…',
             )
 
-            # ----- Forward each peer stream chunk as a [peer] line ----
+            # ----- Forward each peer stream chunk as a [peer] working line ----
+            # We forward to A2A working updates ONLY (so test_client users
+            # see live "what is Lumberjack/Stonemason doing right now"
+            # progress while the Concierge is blocked on the peer call).
+            #
+            # We deliberately do NOT push these to the Concierge brain hub
+            # or stdout — the specialist's own brain hub + stdout already
+            # publish those exact events on its own dashboard card and
+            # mprocs pane. Duplicating them on the Concierge card would
+            # make the orchestrator look like it's doing the specialists'
+            # work. The Concierge card stays focused on its own tool calls.
             async def on_peer_chunk(peer_label: str, chunk) -> None:
                 text = flatten_chunk_text(chunk)
                 if not text:
                     return
-                line = f'[{peer_label}] {text}'
-                _log(line)
-                await emit_working(context, event_queue, line)
-                if self.brain_hub is not None:
-                    self.brain_hub.publish({
-                        'agent': 'concierge',
-                        'type': 'peer',
-                        'peer': peer_label,
-                        'text': text,
-                    })
+                await emit_working(
+                    context, event_queue, f'[{peer_label}] {text}',
+                )
 
             stick_tool, stone_tool, craft_tool = make_peer_tools(
                 self.dobjd, on_peer_chunk=on_peer_chunk,
             )
             think_tool = ThinkTool()
 
-            # Claude Opus 4.x extended-thinking models reject `temperature=0`
-            # (BeeAI's default) with "temperature is deprecated for this
-            # model". They require temperature=1. Setting it explicitly is
-            # also a no-op for providers that accept any value. Orchestration
-            # is gated by ConditionalRequirements so non-determinism here
-            # doesn't change the agent's behavior shape.
+            # Two non-default model knobs:
+            #
+            # `temperature=1` — Claude Opus 4.x extended-thinking models
+            # reject `temperature=0` (BeeAI's default) with "temperature is
+            # deprecated for this model". Setting to 1 is the model-required
+            # value and a no-op for providers that accept any value.
+            #
+            # `allow_parallel_tool_calls=True` — BeeAI defaults this to
+            # False and strips multi-tool-call responses down to one
+            # (backend/chat.py:864 even logs the workaround). Without it
+            # the Concierge calls Lumberjack THEN Stonemason sequentially
+            # even though the prompt says "in parallel". With it the LLM
+            # emits both tool calls in one assistant turn and BeeAI's
+            # runner dispatches them concurrently — the two peer rounds
+            # then overlap, roughly halving wall-clock for this stage.
             chat_model = ChatModel.from_name(
-                beeai_model, ChatModelParameters(temperature=1),
+                beeai_model,
+                ChatModelParameters(temperature=1),
+                allow_parallel_tool_calls=True,
             )
             agent = RequirementAgent(
                 name='Concierge',

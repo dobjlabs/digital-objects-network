@@ -449,9 +449,6 @@
           body = `<span class="msg">← ${escapeHtml(ev.name || "?")} → ${escapeHtml(ev.output_summary || "")}</span><span class="tag">result</span>`;
         } else if (kind === "thought") {
           body = `<span class="msg">💭 ${escapeHtml(short(ev.text))}</span><span class="tag">llm</span>`;
-        } else if (kind === "peer") {
-          // Concierge-only: chunk forwarded from a peer specialist's stream
-          body = `<span class="msg">[${escapeHtml(ev.peer || "?")}] ${escapeHtml(short(ev.text))}</span><span class="tag">peer</span>`;
         } else {
           body = `<span class="msg">${escapeHtml(JSON.stringify(ev))}</span>`;
         }
