@@ -12,12 +12,14 @@ ZK-anchored StonePick.
 
 Different from the local `bitcraft-craft-stone-pick` skill, which runs
 the single `CraftStonePick` action against the user's own dobjd.
-This one outsources to four peer agents.
+This one outsources to six peer agents (Auctioneer + 2 Lumberjacks +
+Stonemason + Craftsmith + Concierge).
 
 ## Prerequisites
 
-All four dobjds must be running (ports `:7717 :7727 :7737 :7747`) and
-all four A2A agents must be running (ports `:9996 :9997 :9998 :9999`):
+All six demo dobjds must be running (ports `:7727 :7737 :7747 :7757
+:7767 :7777`) and all six A2A agents must be running (ports `:9994
+:9995 :9996 :9997 :9998 :9999`):
 
 ```
 agents/scripts/bootstrap_dobjds.sh    # terminal A

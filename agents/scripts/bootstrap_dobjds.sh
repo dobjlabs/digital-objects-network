@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# Spin up five isolated dobjd instances on this machine.
+# Spin up six isolated dobjd instances on this machine.
 #
 # Each instance gets its own fake $HOME so its ~/.dobj/ is private:
-#   .runtime/lumberjack/.dobj/   port 7717  (MCP 7718)
-#   .runtime/stonemason/.dobj/   port 7727  (MCP 7728)
-#   .runtime/craftsmith/.dobj/   port 7737  (MCP 7738)
-#   .runtime/concierge/.dobj/    port 7747  (MCP 7748)
+#   .runtime/lumberjack/.dobj/   port 7727  (MCP 7728)
+#   .runtime/stonemason/.dobj/   port 7737  (MCP 7738)
+#   .runtime/craftsmith/.dobj/   port 7747  (MCP 7748)
+#   .runtime/concierge/.dobj/    port 7757  (MCP 7758)
 #   .runtime/lumberjack_b/.dobj/ port 7767  (MCP 7768)   ← second Lumberjack
+#   .runtime/auctioneer/.dobj/   port 7777  (MCP 7778)   ← verifies forwards
 #
-# (Auctioneer doesn't get a dobjd — it's a pure routing layer.
-# We skip 7757 because `just dev-remote` reserves it for the user's
-# own dev dobjd.)
+# Auctioneer has its own dobjd so it can `ingest_and_verify` whatever
+# the winning Lumberjack ships before forwarding to the Concierge — it
+# acts as a trust boundary, not just a router.
+#
+# Port 7717 is intentionally NOT used by the demo — it's reserved for
+# the user's own dev-remote dobjd (the standard `just dev` / `just
+# dev-remote` default). The agent demo and the user's GUI dobjd coexist
+# in one `just dev-agents` mprocs window without colliding.
 #
 # Each gets:
 #   - a copy of craft-basics.pexe from the host's ~/.dobj/actions/
@@ -107,14 +113,16 @@ esac
 RUNTIME_DIR="$(pwd)/.runtime"
 mkdir -p "$RUNTIME_DIR"
 
-# Each agent's name → http port (Auctioneer has no dobjd, so it's not here)
-declare -a AGENTS=(lumberjack stonemason craftsmith concierge lumberjack_b)
+# Each agent's name → http port (demo dobjds start at 7727; 7717 is the
+# user's dev-remote dobjd, kept clear).
+declare -a AGENTS=(lumberjack stonemason craftsmith concierge lumberjack_b auctioneer)
 declare -A PORTS=(
-  [lumberjack]=7717
-  [stonemason]=7727
-  [craftsmith]=7737
-  [concierge]=7747
+  [lumberjack]=7727
+  [stonemason]=7737
+  [craftsmith]=7747
+  [concierge]=7757
   [lumberjack_b]=7767
+  [auctioneer]=7777
 )
 
 prepare_one() {
@@ -214,8 +222,8 @@ if [ "$all_up" -ne 1 ]; then
 fi
 
 echo
-echo "all five dobjds healthy."
+echo "all six dobjds healthy."
 echo
 echo "leave this terminal up.  in another:  bash scripts/run_all.sh"
-echo "ctrl-C here stops all five."
+echo "ctrl-C here stops all six."
 wait

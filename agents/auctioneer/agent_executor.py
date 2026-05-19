@@ -75,13 +75,17 @@ from shared.beeai_helpers import (  # noqa: E402
     to_beeai_model_string,
 )
 from shared.brain_hub import BrainEventHub  # noqa: E402
+from shared.dobj_verify import ingest_and_verify  # noqa: E402
+from shared.dobjd_client import DobjdClient  # noqa: E402
 from shared.llm_brain import pick_model  # noqa: E402
 from shared.peer_tools import find_file_part, flatten_chunk_text  # noqa: E402
 from shared.registry import LUMBERJACK, LUMBERJACK_BACKUP, PeerAgent  # noqa: E402
 
 
 INSTRUCTIONS = """You are the Auctioneer agent in a bitcraft multi-agent network.
-Your job: source the resource the caller asked for at the lowest advertised price.
+Your job: source the resource the caller asked for at the lowest advertised
+price, and verify that whatever the winner delivers is actually live on chain
+before forwarding it to your caller.
 
 You have these tools:
   - `think`             — plan your next steps (call once at the start).
@@ -90,18 +94,25 @@ You have these tools:
   - `fetch_agent_card(url)` — fetches one peer's agent card and returns
                           a JSON summary. Look at the skills array;
                           each relevant skill carries a `price:N` tag
-                          in its `tags` list (N is in satoshis).
-  - `delegate_request(peer_url, request_text)` — forwards the original
-                          request to the chosen peer over A2A and returns
-                          the filename of what they delivered.
+                          in its `tags` list (N is in satoshis). The skill
+                          name and description tell you what class of
+                          .dobj the peer delivers (e.g. a `supply_stick`
+                          skill named "Supply a Stick" delivers a Stick).
+  - `delegate_request(peer_url, request_text, expected_class)` —
+                          forwards the original request to the chosen
+                          peer over A2A, verifies the returned .dobj is
+                          a live `expected_class` object on chain, and
+                          returns its filename.
 
 Procedure:
 1. Call `think` to plan.
 2. Call `list_candidates` to discover the URLs to bid across.
 3. Call `fetch_agent_card` once per candidate (the framework runs these
    in parallel where it can).
-4. Pick the candidate with the LOWEST price.
-5. Call `delegate_request(winner_url, <the original request>)`.
+4. From the cards, identify (a) the LOWEST price and (b) what class of
+   .dobj that peer delivers — the skill name/description usually says
+   it directly (e.g. "Supply a Stick" → class is "Stick").
+5. Call `delegate_request(winner_url, <the original request>, "<class>")`.
 6. Respond with ONLY the filename returned by delegate_request. No prose,
    no "Here is the …". Just the bare filename like:
        craft-basics__stick_0xabc1234….dobj
@@ -125,6 +136,14 @@ class _DelegateArgs(BaseModel):
     peer_url: str = Field(description="The chosen peer's base URL.")
     request_text: str = Field(
         description="The original user request to forward verbatim.",
+    )
+    expected_class: str = Field(
+        description=(
+            "The .dobj class you expect this peer to deliver "
+            "(e.g. 'Stick' for a Lumberjack, 'Stone' for a Stonemason). "
+            "Used by the Auctioneer's dobjd to verify the bytes match "
+            "what was advertised before forwarding."
+        ),
     )
 
 
@@ -250,7 +269,7 @@ class _FetchAgentCardTool(Tool):
 
 
 class _DelegateRequestTool(Tool):
-    """Forwards a request to a peer; captures the winning FilePart."""
+    """Forwards a request to a peer; verifies + captures the winning FilePart."""
 
     def __init__(
         self,
@@ -258,11 +277,13 @@ class _DelegateRequestTool(Tool):
         publish: PublishFn,
         on_peer_chunk: Callable[[str, str], Awaitable[None]],
         capture: Callable[[str, bytes, str], None],
+        dobjd: DobjdClient,
     ) -> None:
         super().__init__()
         self._publish = publish
         self._on_peer_chunk = on_peer_chunk
         self._capture = capture
+        self._dobjd = dobjd
 
     @property
     def name(self) -> str:
@@ -272,9 +293,13 @@ class _DelegateRequestTool(Tool):
     def description(self) -> str:
         return (
             "Forwards the original request to the chosen peer's A2A "
-            'endpoint, captures the .dobj file the peer delivers, and '
-            'returns the filename. Call this exactly once, after you '
-            'have decided which candidate has the best price.'
+            'endpoint, captures the .dobj file the peer delivers, '
+            'ingests + verifies it against this Auctioneer\'s local '
+            'dobjd (class match + status=live on chain), then returns '
+            'the filename. Throws if the delivered .dobj does not '
+            "match the expected class or isn't live on chain. Call "
+            'this exactly once, after you have decided which '
+            'candidate has the best price.'
         )
 
     @cached_property
@@ -296,6 +321,7 @@ class _DelegateRequestTool(Tool):
         peer_label = _peer_label_from_url(peer_url)
         self._publish({'type': 'delegating', 'peer': peer_label, 'url': peer_url})
 
+        # ---- 1. Stream from the winning peer, capture the FilePart ----
         seen: tuple[str, bytes] | None = None
         async for chunk in send_and_stream(peer_url, input.request_text):
             text = flatten_chunk_text(chunk)
@@ -311,8 +337,32 @@ class _DelegateRequestTool(Tool):
             )
 
         name, data = seen
-        # Hand the bytes to the executor so it can re-emit them under
-        # *our* task_id after the LLM run finishes.
+
+        # ---- 2. Ingest + verify on the Auctioneer's local dobjd -------
+        # This is the Auctioneer's trust boundary: it's the agent that
+        # *chose* this supplier, so it validates the supplier actually
+        # delivered what they advertised before forwarding to the caller.
+        # If the .dobj fails verification (wrong class, not live, parse
+        # error), this raises and the auction round fails — the caller
+        # (Concierge) sees the error.
+        self._publish({'type': 'verifying', 'peer': peer_label, 'file': name})
+        await ingest_and_verify(
+            self._dobjd, name, data, expected_class=input.expected_class,
+        )
+        self._publish({
+            'type': 'verified', 'peer': peer_label, 'file': name,
+            'expected_class': input.expected_class,
+        })
+
+        # ---- 3. Delete-after-forward to keep our inventory clean ------
+        # Same pattern the specialists use: the chain still considers
+        # the .dobj live, so when the Concierge ingests it on its side
+        # the verification passes. We hold the bytes in memory; on
+        # disk we keep nothing.
+        await self._dobjd.delete_dobj_file(name)
+
+        # Hand the bytes back to the executor for re-emission under our
+        # task_id after the LLM run finishes.
         self._capture(name, data, peer_label)
         self._publish({'type': 'auction_complete', 'winner': peer_label, 'file': name})
         return StringToolOutput(name)
@@ -332,11 +382,16 @@ def _peer_label_from_url(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 class AuctioneerAgentExecutor(AgentExecutor):
-    """LLM-driven auction router."""
+    """LLM-driven auction router with a local dobjd for verification."""
 
     def __init__(self, brain_hub: BrainEventHub | None = None) -> None:
         self.brain_hub = brain_hub
         self.candidates: list[PeerAgent] = [LUMBERJACK, LUMBERJACK_BACKUP]
+        # The Auctioneer has its own dobjd (see scripts/bootstrap_dobjds.sh
+        # — port 7777 by default, configured via DOBJD_URL). That dobjd
+        # acts as the Auctioneer's trust boundary: `delegate_request`
+        # ingests + verifies every winning .dobj on it before forwarding.
+        self.dobjd = DobjdClient()
         # Per-request slot — `delegate_request` fills it; execute() drains it.
         self._captured_file: tuple[str, bytes, str] | None = None
 
@@ -384,6 +439,7 @@ class AuctioneerAgentExecutor(AgentExecutor):
                 publish=self._publish,
                 on_peer_chunk=on_peer_chunk,
                 capture=capture,
+                dobjd=self.dobjd,
             )
 
             # ----- BeeAI agent ------------------------------------------

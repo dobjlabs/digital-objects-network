@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Run all six bitcraft A2A agents locally, each pointing at its own dobjd
-# (except the Auctioneer, which is pure routing — no dobjd).
+# Run all six bitcraft A2A agents locally, each pointing at its own dobjd.
 #
-#   Lumberjack-A   :9997   dobjd :7717   STICK_PRICE=5 satoshis
+#   Lumberjack-A   :9997   dobjd :7727   STICK_PRICE=5 satoshis
 #   Lumberjack-B   :9995   dobjd :7767   STICK_PRICE=3 satoshis  ← wins
-#   Stonemason     :9998   dobjd :7727
-#   Craftsmith     :9999   dobjd :7737
-#   Auctioneer     :9994   (no dobjd)
-#   Concierge      :9996   dobjd :7747
+#   Stonemason     :9998   dobjd :7737
+#   Craftsmith     :9999   dobjd :7747
+#   Auctioneer     :9994   dobjd :7777   verifies forwards
+#   Concierge      :9996   dobjd :7757
+#
+# Port 7717 is reserved for the user's own dev-remote dobjd (`just dev`
+# / `just dev-remote` default). The demo's six dobjds occupy 7727-7777.
 #
 # The Concierge calls the Auctioneer instead of going to a Lumberjack
 # directly. The Auctioneer fans out to both Lumberjacks, picks the
@@ -30,11 +32,12 @@ if [ -f .env ]; then
   echo ".env loaded"
 fi
 
-: "${LUMBERJACK_DOBJD:=http://127.0.0.1:7717}"
+: "${LUMBERJACK_DOBJD:=http://127.0.0.1:7727}"
+: "${STONEMASON_DOBJD:=http://127.0.0.1:7737}"
+: "${CRAFTSMITH_DOBJD:=http://127.0.0.1:7747}"
+: "${CONCIERGE_DOBJD:=http://127.0.0.1:7757}"
 : "${LUMBERJACK_BACKUP_DOBJD:=http://127.0.0.1:7767}"
-: "${STONEMASON_DOBJD:=http://127.0.0.1:7727}"
-: "${CRAFTSMITH_DOBJD:=http://127.0.0.1:7737}"
-: "${CONCIERGE_DOBJD:=http://127.0.0.1:7747}"
+: "${AUCTIONEER_DOBJD:=http://127.0.0.1:7777}"
 
 : "${LUMBERJACK_URL:=http://127.0.0.1:9997}"
 : "${LUMBERJACK_BACKUP_URL:=http://127.0.0.1:9995}"
@@ -83,14 +86,15 @@ A2A_PUBLIC_URL="$CRAFTSMITH_URL" \
   uv run -m craftsmith &
 pids+=($!)
 
-# ---- Auctioneer (no dobjd) -----------------------------------------------
+# ---- Auctioneer ----------------------------------------------------------
 # Brief sleep so the two Lumberjacks are likely up before the Auctioneer
 # polls their agent cards on its first request. Not strictly required
 # (Auctioneer would just fail one round if a peer is starting up), but
 # avoids the noisy "bid failed" log line on a cold launch.
 sleep 1
 
-echo "starting auctioneer on $AUCTIONEER_URL (no dobjd)"
+echo "starting auctioneer on $AUCTIONEER_URL (dobjd=$AUCTIONEER_DOBJD)"
+DOBJD_URL="$AUCTIONEER_DOBJD" \
 A2A_PORT="${AUCTIONEER_URL##*:}" \
 A2A_PUBLIC_URL="$AUCTIONEER_URL" \
 LUMBERJACK_URL="$LUMBERJACK_URL" \
@@ -111,12 +115,12 @@ pids+=($!)
 
 echo
 echo "all six running."
-echo "  concierge     $CONCIERGE_URL"
-echo "  auctioneer    $AUCTIONEER_URL"
-echo "  lumberjack-a  $LUMBERJACK_URL          (price=5)"
-echo "  lumberjack-b  $LUMBERJACK_BACKUP_URL   (price=3)"
-echo "  stonemason    $STONEMASON_URL"
-echo "  craftsmith    $CRAFTSMITH_URL"
+echo "  concierge     $CONCIERGE_URL          (dobjd $CONCIERGE_DOBJD)"
+echo "  auctioneer    $AUCTIONEER_URL          (dobjd $AUCTIONEER_DOBJD)"
+echo "  lumberjack-a  $LUMBERJACK_URL          (dobjd $LUMBERJACK_DOBJD, price=5)"
+echo "  lumberjack-b  $LUMBERJACK_BACKUP_URL   (dobjd $LUMBERJACK_BACKUP_DOBJD, price=3)"
+echo "  stonemason    $STONEMASON_URL          (dobjd $STONEMASON_DOBJD)"
+echo "  craftsmith    $CRAFTSMITH_URL          (dobjd $CRAFTSMITH_DOBJD)"
 echo
 echo "send a request:  uv run scripts/test_client.py"
 echo "ctrl-C to stop all."

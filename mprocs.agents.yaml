@@ -4,24 +4,25 @@ procs:
       cargo build -p dobjd --release
       exec bash agents/scripts/bootstrap_dobjds.sh
 
-  # Waits for the 4 bootstrap dobjds to come up before starting the A2A
+  # Waits for the 6 bootstrap dobjds to come up before starting the A2A
   # agents — mprocs doesn't have native deps, so we poll /healthz inline.
   # Each agent's executor will fail fast if its dobjd isn't reachable, so
   # this matters.
   run_all:
     shell: |
-      echo "run_all: waiting for bootstrap dobjds (7717, 7727, 7737, 7747)…"
-      for port in 7717 7727 7737 7747; do
+      echo "run_all: waiting for bootstrap dobjds (7727, 7737, 7747, 7757, 7767, 7777)…"
+      for port in 7727 7737 7747 7757 7767 7777; do
         until curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; do
           sleep 2
         done
         echo "  :$port ready"
       done
-      echo "all four dobjds healthy — starting A2A agents"
+      echo "all six dobjds healthy — starting A2A agents"
       exec bash agents/scripts/run_all.sh
 
-  # Separate dev-remote dobjd at :7757 for the user's own inventory + the
-  # Tauri/web GUI. Distinct from the 4 bootstrap dobjds owned by the demo.
+  # The user's own dev-remote dobjd at :7717 (the standard default — same
+  # port `just dev` and `just dev-remote` use). Distinct from the 6
+  # bootstrap dobjds owned by the demo (which now start at :7727).
   dobjd:
     shell: just dobjd
 

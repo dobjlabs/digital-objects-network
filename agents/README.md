@@ -13,9 +13,9 @@ ZK-anchored StonePick.
         ┌──────────────┼──────────────┐
         ▼              ▼              │
 ┌──────────────┐ ┌──────────────┐     │
-│ Lumberjack   │ │ Stonemason   │     │
+│ Lumberjack-A │ │ Stonemason   │     │
 │ A2A  :9997   │ │ A2A  :9998   │     │
-│ dobjd :7717  │ │ dobjd :7727  │     │
+│ dobjd :7727  │ │ dobjd :7737  │     │
 └──────┬───────┘ └──────┬───────┘     │
        │  Stick.dobj    │  Stone.dobj │
        │                │             │
@@ -30,7 +30,7 @@ ZK-anchored StonePick.
                 ▼                     │
        ┌──────────────────┐           │
        │ Craftsmith :9999 │           │
-       │ dobjd :7737      │           │
+       │ dobjd :7747      │           │
        │ ingest + verify  │           │
        │ CraftStonePick   │           │
        └────────┬─────────┘           │
@@ -258,11 +258,13 @@ To verify they're up + talking to the synchronizer:
 
 ```bash
 bash scripts/ping_dobjds.sh
-# agent       http  health  inv  actions  state-root
-# lumberjack  7717  ok      0    7        0x570762999dd9769d…
-# stonemason  7727  ok      0    7        0x570762999dd9769d…
-# craftsmith  7737  ok      0    7        0x570762999dd9769d…
-# concierge   7747  ok      0    7        0x570762999dd9769d…
+# agent         http  health  inv  actions  state-root
+# lumberjack    7727  ok      0    7        0x570762999dd9769d…
+# stonemason    7737  ok      0    7        0x570762999dd9769d…
+# craftsmith    7747  ok      0    7        0x570762999dd9769d…
+# concierge     7757  ok      0    7        0x570762999dd9769d…
+# lumberjack_b  7767  ok      0    7        0x570762999dd9769d…
+# auctioneer    7777  ok      0    7        0x570762999dd9769d…
 ```
 
 ### 3. Four A2A agents

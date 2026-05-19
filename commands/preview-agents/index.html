@@ -276,7 +276,7 @@
       const AGENTS = [
         {
           id: "lumberjack",
-          port: 7717,        // dobjd HTTP (proof events)
+          port: 7727,        // dobjd HTTP (proof events)
           brainPort: 9997,   // A2A agent server (LLM events)
           emoji: "🪓",
           label: "Lumberjack-A",
@@ -292,7 +292,7 @@
         },
         {
           id: "stonemason",
-          port: 7727,
+          port: 7737,
           brainPort: 9998,
           emoji: "⛏️",
           label: "Stonemason",
@@ -300,7 +300,7 @@
         },
         {
           id: "craftsmith",
-          port: 7737,
+          port: 7747,
           brainPort: 9999,
           emoji: "🔨",
           label: "Craftsmith",
@@ -308,17 +308,18 @@
         },
         {
           id: "auctioneer",
-          // No dobjd — pure routing layer. We render `:—` for the port
-          // chip and the proof-events EventSource connect is skipped.
-          port: null,
+          // dobjd at 7777 — the Auctioneer ingest+verifies the winning
+          // Lumberjack's .dobj before forwarding (trust boundary, not
+          // just a router).
+          port: 7777,
           brainPort: 9994,
           emoji: "🏷️",
           label: "Auctioneer",
-          desc: "picks the cheapest Lumberjack",
+          desc: "picks + verifies the cheapest Lumberjack",
         },
         {
           id: "concierge",
-          port: 7747,
+          port: 7757,
           brainPort: 9996, // BeeAI RequirementAgent in the Concierge executor
           emoji: "🎩",
           label: "Concierge",
@@ -496,6 +497,10 @@
           body = `<span class="msg">🏆 winner ${escapeHtml(ev.peer || "?")} @ ${escapeHtml(String(ev.price ?? "?"))} sat</span><span class="tag">winner</span>`;
         } else if (kind === "delegating") {
           body = `<span class="msg">➜ delegating to ${escapeHtml(ev.peer || "?")}</span><span class="tag">delegate</span>`;
+        } else if (kind === "verifying") {
+          body = `<span class="msg">🔍 verifying ${escapeHtml(ev.file || "?")} from ${escapeHtml(ev.peer || "?")}</span><span class="tag">verify</span>`;
+        } else if (kind === "verified") {
+          body = `<span class="msg">✅ verified ${escapeHtml(ev.file || "?")} (class=${escapeHtml(ev.expected_class || "?")}, live)</span><span class="tag">verify</span>`;
         } else if (kind === "auction_complete") {
           body = `<span class="msg">✓ auction complete (via ${escapeHtml(ev.winner || "?")})</span><span class="tag">auction</span>`;
         } else {

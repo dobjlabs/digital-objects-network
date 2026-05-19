@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
-# Quick health summary of the four bootstrapped dobjds.
+# Quick health summary of the six bootstrapped dobjds.
 #
 # Hits each one's /healthz, /state-root, /inventory, /actions, /classes
 # and prints a one-line summary per agent. Use after bootstrap_dobjds.sh
-# is up to confirm all four are healthy and talking to the synchronizer.
+# is up to confirm all six are healthy and talking to the synchronizer.
 
 set -uo pipefail
 
 declare -a ROWS=(
-  "lumberjack:7717"
-  "stonemason:7727"
-  "craftsmith:7737"
-  "concierge:7747"
+  "lumberjack:7727"
+  "stonemason:7737"
+  "craftsmith:7747"
+  "concierge:7757"
+  "lumberjack_b:7767"
+  "auctioneer:7777"
 )
 
 fail=0
-printf "%-12s %-7s %-7s %-9s %-9s %s\n" \
+printf "%-14s %-7s %-7s %-9s %-9s %s\n" \
   "agent" "http" "health" "inv" "actions" "state-root"
-printf "%-12s %-7s %-7s %-9s %-9s %s\n" \
+printf "%-14s %-7s %-7s %-9s %-9s %s\n" \
   "-----" "----" "------" "---" "-------" "----------"
 
 for entry in "${ROWS[@]}"; do
@@ -27,7 +29,7 @@ for entry in "${ROWS[@]}"; do
 
   health=$(curl -fsS --max-time 2 "$base/healthz" 2>/dev/null || echo "DOWN")
   if [ "$health" = "DOWN" ]; then
-    printf "%-12s %-7s %-7s %-9s %-9s %s\n" \
+    printf "%-14s %-7s %-7s %-9s %-9s %s\n" \
       "$name" "$port" "DOWN" "-" "-" "-"
     fail=1
     continue

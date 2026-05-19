@@ -42,23 +42,25 @@ dev: ensure-plugins ensure-commands ensure-mcp
 # Like `just dev`, but without spawning the local synchronizer + relayer —
 # point dobjd at the hosted public endpoints instead. Faster spin-up when
 # you don't need to fork the chain locally and don't want a local Postgres.
-# Uses port 7757 instead of 7717 so it can coexist with the agent demo
-# (`agents/scripts/bootstrap_dobjds.sh` which reserves 7717/7727/7737/7747).
-dev-remote: ensure-plugins ensure-commands ensure-remote-settings (ensure-mcp '7758')
-    DOBJD_PORT=7757 VITE_DOBJD_URL=http://127.0.0.1:7757 mprocs --config mprocs.remote.yaml
+# Uses the standard 7717 default (same as `just dev`). The agent demo's
+# dobjds live at 7727 and up, so this and `just dev-agents` coexist
+# without port collisions.
+dev-remote: ensure-plugins ensure-commands ensure-remote-settings ensure-mcp
+    mprocs --config mprocs.remote.yaml
 
 # Full A2A agent demo in one mprocs window:
-#   - pane 1: bootstrap_dobjds.sh  (4 dobjds on 7717/7727/7737/7747)
-#   - pane 2: run_all.sh           (4 A2A agents on 9996-9999, polls until
+#   - pane 1: bootstrap_dobjds.sh  (6 dobjds on 7727/7737/7747/7757/7767/7777)
+#   - pane 2: run_all.sh           (6 A2A agents on 9994-9999, polls until
 #                                   pane 1's dobjds are healthy first)
-#   - pane 3: dobjd at :7757       (your own dev-remote dobjd — separate
-#                                   from the demo's 4)
-#   - pane 4: web (Vite :1420 → :7757)
+#   - pane 3: dobjd at :7717       (your own dev-remote dobjd — the
+#                                   standard default, separate from
+#                                   the demo's 6)
+#   - pane 4: web (Vite :1420 → :7717)
 #   - pane 5: desktop (Tauri shell)
 # Uses hosted sync/relayer (no local Postgres needed). Conflicts with
 # `just dev` and `just dev-remote` standalone — pick one.
-dev-agents: ensure-plugins ensure-commands ensure-remote-settings (ensure-mcp '7758')
-    DOBJD_PORT=7757 VITE_DOBJD_URL=http://127.0.0.1:7757 mprocs --config mprocs.agents.yaml
+dev-agents: ensure-plugins ensure-commands ensure-remote-settings ensure-mcp
+    mprocs --config mprocs.agents.yaml
 
 # Idempotently point ~/.dobj/settings.json at the hosted synchronizer +
 # relayer. Preserves any other keys already in the file.
