@@ -16,7 +16,12 @@ impl SseProgressReporter {
     }
 
     fn send(&self, progress: RunActionProgress) {
-        let _ = self.events.send(Event::RunActionProgress(progress));
+        if let Err(err) = self.events.send(Event::RunActionProgress(progress)) {
+            tracing::trace!(
+                run_id = %self.run_id,
+                "SSE broadcast dropped progress event: {err}",
+            );
+        }
     }
 
     /// Terminal failure event. The `ExecutionReporter` trait only fires
