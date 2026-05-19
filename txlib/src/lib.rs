@@ -783,15 +783,17 @@ impl TxBuilder {
         // is guaranteed to be a ChainEvent::Action (enforced by the
         // begin_action/end_action API), so we dispatch directly to
         // ReplayActions instead of going through ReplayContents.
-        let (st_replay, _, _, _) = replay::build_replay_actions(
-            ctx,
-            &mut stats,
+        let empty_nullifiers = set!();
+        let frame = replay::ReplayFrame {
+            live: &self.inputs_set,
+            nullifiers: &empty_nullifiers,
+            chain_start: zero,
+            chain_end: zero,
+        };
+        let (st_replay, _, _, _) = replay::Replayer::new(ctx, &mut stats).build_replay_actions(
             &self.events,
             self.chain_start,
-            &self.inputs_set,
-            &set!(),
-            zero,
-            zero,
+            frame,
         );
 
         // TxFinalized -- rebind inputs_grounded and chain_start hash
