@@ -7,7 +7,10 @@
 //! predicate that pins the focused entry via `ArrayContains` and defers
 //! to the action; the IsX OR is over those bridge predicates.
 
-use crate::{ActionContext, ClassMeta, Dependency, Inst, Intro, Loader, ObjectIO, Ref, VarOrValue};
+use crate::{
+    ActionContext, ActionMeta, ActionObjectRef, ClassMeta, Dependency, Inst, Intro, Loader,
+    ObjectIO, Ref, VarOrValue,
+};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -51,6 +54,11 @@ fn fmt_var_at(name: &str, ts: usize, max_ts: usize) -> String {
 /// fit in fewer slots than the record-typed wildcard would cost.
 pub(crate) const CHAIN_PACK_MIN_TS: usize = 3;
 
+/// Slot 0 placeholder in every records-form schema (`<Action>In`,
+/// `<Action>Out`, `<Action>Chain`). Real entries start at slot 1.
+/// Works around pod2 issue #513.
+pub(crate) const PAD_ENTRY: &str = "_pad";
+
 /// Schema name for an action's chain record (e.g. `LogToWoodChain`).
 pub(crate) fn chain_schema_name(action_name: &str) -> String {
     format!("{action_name}Chain")
@@ -58,12 +66,8 @@ pub(crate) fn chain_schema_name(action_name: &str) -> String {
 
 /// True if this action's chain has enough intermediate states to be
 /// worth packing into a record.
-pub(crate) fn chain_packed(action: &ActionContext) -> bool {
-    action
-        .var_state
-        .get("chain")
-        .map(|s| s.ts >= CHAIN_PACK_MIN_TS)
-        .unwrap_or(false)
+pub(crate) fn chain_packed(meta: &ActionMeta) -> bool {
+    meta.chain_max_ts >= CHAIN_PACK_MIN_TS
 }
 
 #[derive(Clone, Copy)]
@@ -71,14 +75,12 @@ struct VarNameFmt<'a> {
     name: &'a str,
     ts: usize,
     max_ts: usize,
-    /// For Object Refs, the IO of the Object. None for non-Object vars.
-    obj_io: Option<ObjectIO>,
-    /// Whether the Object's `in` entry needs a wildcard. Meaningless
-    /// for non-Object vars.
-    needs_in_wildcard: bool,
-    /// Whether the Object's `out` entry needs a wildcard. Meaningless
-    /// for non-Object vars.
-    needs_out_wildcard: bool,
+    /// Object Ref's pre-form collapses to `in.<name>`. False for
+    /// non-Object vars and Output-only Objects.
+    collapsed_in: bool,
+    /// Object Ref's post-form collapses to `out.<name>`. False for
+    /// non-Object vars and Input-only Objects.
+    collapsed_out: bool,
     /// Whether this action packs its intermediate chain states into a
     /// `<Action>Chain` record. Only meaningful when `name == "chain"`.
     chain_packed: bool,
@@ -94,36 +96,15 @@ impl<'a> VarNameFmt<'a> {
             ..*self
         }
     }
-    /// True if this Object Ref is at its pre-form (ts=0) AND its `in`
-    /// entry is collapsed. Triggers `in.<name>` rendering instead of
-    /// the bare name.
-    fn at_collapsed_in(&self) -> bool {
-        match self.obj_io {
-            Some(ObjectIO::Input) | Some(ObjectIO::Mutate) => {
-                self.ts == 0 && !self.needs_in_wildcard
-            }
-            _ => false,
-        }
-    }
-    /// True if this Object Ref is at its post-form (ts=max) AND its
-    /// `out` entry is collapsed.
-    fn at_collapsed_out(&self) -> bool {
-        match self.obj_io {
-            Some(ObjectIO::Output) | Some(ObjectIO::Mutate) => {
-                self.ts == self.max_ts && !self.needs_out_wildcard
-            }
-            _ => false,
-        }
-    }
 }
 
 impl<'a> fmt::Display for VarNameFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // For a Mutate Object at ts=0=max (no updates), `in` wins.
-        if self.at_collapsed_in() {
+        if self.collapsed_in && self.ts == 0 {
             return write!(f, "in.{}", self.name);
         }
-        if self.at_collapsed_out() {
+        if self.collapsed_out && self.ts == self.max_ts {
             return write!(f, "out.{}", self.name);
         }
         // Chain intermediates render as `chain_steps.step_<ts-1>` when
@@ -140,7 +121,7 @@ impl<'a> fmt::Display for VarNameFmt<'a> {
 /// `Action(in <Action>In, out <Action>Out, ...)`. Each Object inst
 /// contributes one entry to one (Input/Output) or both (Mutate) of
 /// these records.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Side {
     In,
     Out,
@@ -198,90 +179,45 @@ fn schema_name(action_name: &str, side: Side) -> String {
     format!("{action_name}{}", side.schema_suffix())
 }
 
-/// Per-action info needed to emit the records-form predicate. Owned
-/// strings throughout to keep clear of `RefCell` borrow lifetimes.
-struct ActionInfo {
-    /// Object insts in declaration order.
-    objects: Vec<ObjectInfo>,
-    in_entries: Vec<String>,  // var names (script-side) on the in side
-    out_entries: Vec<String>, // ditto, out side
-}
-
-struct ObjectInfo {
-    varname: String,
-    io: ObjectIO,
-    class: String,
-}
-
-fn collect_action_info(action: &ActionContext) -> ActionInfo {
-    let mut objects = Vec::new();
-    let mut in_entries: Vec<String> = Vec::new();
-    let mut out_entries: Vec<String> = Vec::new();
-    for inst in &action.insts {
-        if let Inst::Object { io, obj, class, .. } = inst {
-            let varname: String = obj.borrow().var_name().to_string();
-            match io {
-                ObjectIO::Input | ObjectIO::Mutate => in_entries.push(varname.clone()),
-                ObjectIO::Output => {}
-            }
-            match io {
-                ObjectIO::Output | ObjectIO::Mutate => out_entries.push(varname.clone()),
-                ObjectIO::Input => {}
-            }
-            objects.push(ObjectInfo {
-                varname,
-                io: *io,
-                class: class.clone(),
-            });
-        }
-    }
-    ActionInfo {
-        objects,
-        in_entries,
-        out_entries,
-    }
-}
-
 /// Emit `record <Action><Side> = (<entries>)` lines for any non-empty
 /// in/out schema across all actions, plus `<Action>Chain` records for
 /// actions whose chain has 2+ intermediate states. Each schema is
-/// prepended with a `_pad` entry so real entries start at index 1; see
-/// the comment in `ActionHandle::exe_action` (around the `in_dicts`
-/// init) for why.
+/// prepended with `PAD_ENTRY` so real entries start at index 1.
 fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     let render = |entries: &[String]| {
-        std::iter::once("_pad".to_string())
+        std::iter::once(PAD_ENTRY.to_string())
             .chain(entries.iter().cloned())
             .collect::<Vec<_>>()
             .join(", ")
     };
-    for action_handle in &loader.actions {
-        let action = action_handle.0.borrow();
-        let info = collect_action_info(&action);
-        if !info.in_entries.is_empty() {
+    for meta in &loader.actions_meta {
+        if !meta.in_entries.is_empty() {
+            let names: Vec<String> = meta.in_entries.iter().map(|e| e.varname.clone()).collect();
             writeln!(
                 w,
                 "record {} = ({})",
-                schema_name(&action.name, Side::In),
-                render(&info.in_entries),
+                schema_name(&meta.name, Side::In),
+                render(&names),
             )?;
         }
-        if !info.out_entries.is_empty() {
+        if !meta.out_entries.is_empty() {
+            let names: Vec<String> = meta.out_entries.iter().map(|e| e.varname.clone()).collect();
             writeln!(
                 w,
                 "record {} = ({})",
-                schema_name(&action.name, Side::Out),
-                render(&info.out_entries),
+                schema_name(&meta.name, Side::Out),
+                render(&names),
             )?;
         }
-        if chain_packed(&action) {
-            let chain_max_ts = action.var_state["chain"].ts;
-            // Intermediates: ts=1..=chain_max_ts-1 → step_0..step_(K-2).
-            let steps: Vec<String> = (0..chain_max_ts - 1).map(|i| format!("step_{i}")).collect();
+        if chain_packed(meta) {
+            // Intermediates: ts=1..=chain_max_ts-1 -> step_0..step_(K-2).
+            let steps: Vec<String> = (0..meta.chain_max_ts - 1)
+                .map(|i| format!("step_{i}"))
+                .collect();
             writeln!(
                 w,
                 "record {} = ({})",
-                chain_schema_name(&action.name),
+                chain_schema_name(&meta.name),
                 render(&steps),
             )?;
         }
@@ -322,8 +258,8 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
                 .iter()
                 .find(|m| &m.name == sub_name)
                 .unwrap_or_else(|| panic!("sub-action {sub_name} not in loader.actions_meta"));
-            let has_in = sub_meta.local_inputs().count() > 0;
-            let has_out = sub_meta.local_outputs().count() > 0;
+            let has_in = !sub_meta.in_entries.is_empty();
+            let has_out = !sub_meta.out_entries.is_empty();
 
             let idx = *idx_counter.entry(sub_name.clone()).or_insert(0);
             *idx_counter.get_mut(sub_name).unwrap() += 1;
@@ -358,7 +294,7 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
 }
 
 /// Emit one action predicate. For each Object inst, sides whose
-/// `needs_*_wildcard` is set get a leading `ArrayContains` clause + a
+/// `needs_wildcard` is set get a leading `ArrayContains` clause + a
 /// private wildcard; collapsed sides drop both and let body refs render
 /// as `in.<entry>` / `out.<entry>` anchored refs. Witness vars (e.g.,
 /// values passed to `obj.update(k, v)`) appear as plain private
@@ -366,28 +302,21 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
 /// private wildcards `_<Sub>_in_<n>` / `_<Sub>_out_<n>` matching the
 /// sub's record schemas.
 fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
-    let info = collect_action_info(action);
-    let sub_calls = collect_sub_action_calls(action, loader);
     let meta = loader
         .actions_meta
         .iter()
         .find(|m| m.name == action.name)
         .expect("ActionMeta exists at fmt time");
-
-    let object_io: HashMap<&str, ObjectIO> = info
-        .objects
-        .iter()
-        .map(|o| (o.varname.as_str(), o.io))
-        .collect();
+    let sub_calls = collect_sub_action_calls(action, loader);
 
     // ---- Signature ----
     write!(w, "{}(", action.name)?;
     let mut wrote_pub = false;
-    if !info.in_entries.is_empty() {
+    if !meta.in_entries.is_empty() {
         write!(w, "in {}", schema_name(&action.name, Side::In))?;
         wrote_pub = true;
     }
-    if !info.out_entries.is_empty() {
+    if !meta.out_entries.is_empty() {
         if wrote_pub {
             write!(w, ", ")?;
         }
@@ -406,22 +335,18 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     let alias_names: std::collections::HashSet<String> =
         sub_calls.iter().filter_map(|c| c.alias.clone()).collect();
 
-    let needs_in = |varname: &str| meta.needs_in_wildcard.contains(varname);
-    let needs_out = |varname: &str| meta.needs_out_wildcard.contains(varname);
-
     // Private wildcards: every (var, ts) except sub-action aliases,
     // the chain's ts=0/max (public as chain0/chain), and Object pre/
     // post-form ts on collapsed sides. When the chain is packed into a
     // `<Action>Chain` record, intermediate chain ts are also dropped
     // (they render as `chain_steps.step_N` anchored refs in the body).
-    let action_chain_packed = chain_packed(action);
+    let action_chain_packed = chain_packed(meta);
     let mut private_vars: Vec<String> = Vec::new();
     for var in &action.vars {
         if alias_names.contains(var.as_str()) {
             continue;
         }
         let max_ts = action.var_state[var].ts;
-        let obj = object_io.get(var.as_str()).copied();
         for i in 0..=max_ts {
             if var == "chain" && (i == 0 || i == max_ts) {
                 continue;
@@ -429,15 +354,8 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
             if var == "chain" && action_chain_packed {
                 continue;
             }
-            if let Some(io) = obj {
-                let at_in =
-                    matches!(io, ObjectIO::Input | ObjectIO::Mutate) && i == 0 && !needs_in(var);
-                let at_out = matches!(io, ObjectIO::Output | ObjectIO::Mutate)
-                    && i == max_ts
-                    && !needs_out(var);
-                if at_in || at_out {
-                    continue;
-                }
+            if meta.collapsed_at(var, i, max_ts).is_some() {
+                continue;
             }
             private_vars.push(fmt_var_at(var, i, max_ts));
         }
@@ -467,22 +385,23 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     writeln!(w, ") = AND(")?;
 
     // Per-var rendering state for body emission. Object vars carry
-    // their io + per-side `needs_*_wildcard` so VarNameFmt can pick
+    // the per-side collapse flags so `VarNameFmt` can pick
     // `in.<name>` / `out.<name>` over the bare name when collapsed.
     let mut vars: HashMap<&str, VarNameFmt> = action
         .vars
         .iter()
         .map(|v| {
-            let obj_io = object_io.get(v.as_str()).copied();
+            let max_ts = action.var_state[v].ts;
+            let collapsed_in = meta.collapsed_at(v, 0, max_ts) == Some(Side::In);
+            let collapsed_out = meta.collapsed_at(v, max_ts, max_ts) == Some(Side::Out);
             (
                 v.as_str(),
                 VarNameFmt {
                     name: v,
                     ts: 0,
-                    max_ts: action.var_state[v].ts,
-                    obj_io,
-                    needs_in_wildcard: needs_in(v),
-                    needs_out_wildcard: needs_out(v),
+                    max_ts,
+                    collapsed_in,
+                    collapsed_out,
                     chain_packed: action_chain_packed,
                 },
             )
@@ -491,43 +410,39 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
 
     // ---- ArrayContains clauses for each Object's pre/post-form on
     // sides that need a wildcard; collapsed sides drop the clause.
-    for o in &info.objects {
+    for o in &meta.object_refs {
         let max_ts = action.var_state[&o.varname].ts;
-        let pre_ssa = fmt_var_at(&o.varname, 0, max_ts);
-        let post_ssa = fmt_var_at(&o.varname, max_ts, max_ts);
-        let in_collapsed = !needs_in(&o.varname);
-        let out_collapsed = !needs_out(&o.varname);
-        let emit_in = matches!(o.io, ObjectIO::Input | ObjectIO::Mutate) && !in_collapsed;
-        let emit_out = matches!(o.io, ObjectIO::Output | ObjectIO::Mutate) && !out_collapsed;
-        if emit_in {
+        if meta
+            .in_entry(&o.varname)
+            .is_some_and(|(_, e)| e.needs_wildcard)
+        {
             writeln!(
                 w,
                 "  ArrayContains(in, {}::{}, {})",
                 schema_name(&action.name, Side::In),
                 o.varname,
-                pre_ssa,
+                fmt_var_at(&o.varname, 0, max_ts),
             )?;
         }
-        if emit_out {
+        if meta
+            .out_entry(&o.varname)
+            .is_some_and(|(_, e)| e.needs_wildcard)
+        {
             writeln!(
                 w,
                 "  ArrayContains(out, {}::{}, {})",
                 schema_name(&action.name, Side::Out),
                 o.varname,
-                post_ssa,
+                fmt_var_at(&o.varname, max_ts, max_ts),
             )?;
         }
     }
 
     // ---- Body (Insts other than Object) ----
-    let mut objs: Vec<(ObjectIO, String, String)> = Vec::new();
     let mut sub_call_idx: usize = 0;
     for inst in &action.insts {
         match inst {
-            Inst::Object { io, obj, class, .. } => {
-                let varname = obj.borrow().var_name().to_string();
-                objs.push((*io, varname, class.clone()));
-            }
+            Inst::Object { .. } => {}
             Inst::Set { obj, kvs, .. } => {
                 let obj_str = vars[obj.as_str()];
                 for (key, value) in kvs {
@@ -601,11 +516,12 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // internally, so the guard predicate ref is passed as the last
     // arg to TxInsert / TxDelete / TxMutate (and pins both sides for
     // mutate, making the type-preservation check implicit).
-    for (io, varname, class) in &objs {
+    for o in &meta.object_refs {
         let chain = vars["chain"];
         let chain_next = chain.next();
-        let obj_str = vars[varname.as_str()];
-        match io {
+        let obj_str = vars[o.varname.as_str()];
+        let class = &o.class;
+        match o.io {
             ObjectIO::Input => writeln!(
                 w,
                 "  tx::TxDelete({chain_next}, {chain}, {obj_str}, @self_predicate(Is{class}))"
@@ -615,7 +531,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 "  tx::TxInsert({chain_next}, {chain}, {obj_str}, @self_predicate(Is{class}))"
             )?,
             ObjectIO::Mutate => {
-                let mut pre = vars[varname.as_str()];
+                let mut pre = vars[o.varname.as_str()];
                 pre.ts = 0;
                 writeln!(
                     w,
@@ -630,10 +546,10 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
 }
 
 /// True if `class` appears on more than one Object inst (any side) in
-/// this action's `objects`. Such classes need their bridge predicate
+/// this action's `object_refs`. Such classes need their bridge predicate
 /// names differentiated by varname suffix; the OR over bridges
 /// enumerates one branch per (action, object-of-class).
-fn is_multi_class(objects: &[ObjectInfo], class: &str) -> bool {
+fn is_multi_class(objects: &[ActionObjectRef], class: &str) -> bool {
     objects.iter().filter(|o| o.class == class).count() > 1
 }
 
@@ -647,23 +563,21 @@ pub(crate) fn bridge_predicate_name(class: &str, action: &str, entry: &str, mult
 
 /// Emit one bridge predicate per (action, object) tuple.
 fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
-    for action_handle in &loader.actions {
-        let action = action_handle.0.borrow();
-        let info = collect_action_info(&action);
-        for o in &info.objects {
+    for meta in &loader.actions_meta {
+        for o in &meta.object_refs {
             let side = dispatch_side(&o.io);
-            let multi = is_multi_class(&info.objects, &o.class);
-            let bridge_name = bridge_predicate_name(&o.class, &action.name, &o.varname, multi);
+            let multi = is_multi_class(&meta.object_refs, &o.class);
+            let bridge_name = bridge_predicate_name(&o.class, &meta.name, &o.varname, multi);
 
             // Bridge predicate signature: state, chain0, chain (public);
             // in <ActionIn>, out <ActionOut> private as needed.
             write!(w, "{bridge_name}(state, chain0, chain")?;
             let mut priv_parts: Vec<String> = Vec::new();
-            if !info.in_entries.is_empty() {
-                priv_parts.push(format!("in {}", schema_name(&action.name, Side::In)));
+            if !meta.in_entries.is_empty() {
+                priv_parts.push(format!("in {}", schema_name(&meta.name, Side::In)));
             }
-            if !info.out_entries.is_empty() {
-                priv_parts.push(format!("out {}", schema_name(&action.name, Side::Out)));
+            if !meta.out_entries.is_empty() {
+                priv_parts.push(format!("out {}", schema_name(&meta.name, Side::Out)));
             }
             if !priv_parts.is_empty() {
                 write!(w, ", private: {}", priv_parts.join(", "))?;
@@ -675,21 +589,21 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
                 w,
                 "  ArrayContains({}, {}::{}, state)",
                 side.arg_name(),
-                schema_name(&action.name, side),
+                schema_name(&meta.name, side),
                 o.varname,
             )?;
 
             // Action call.
             let mut call_args: Vec<String> = Vec::new();
-            if !info.in_entries.is_empty() {
+            if !meta.in_entries.is_empty() {
                 call_args.push("in".to_string());
             }
-            if !info.out_entries.is_empty() {
+            if !meta.out_entries.is_empty() {
                 call_args.push("out".to_string());
             }
             call_args.push("chain0".to_string());
             call_args.push("chain".to_string());
-            writeln!(w, "  {}({})", action.name, call_args.join(", "))?;
+            writeln!(w, "  {}({})", meta.name, call_args.join(", "))?;
 
             writeln!(w, ")")?;
             writeln!(w)?;
@@ -703,15 +617,13 @@ fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt:
     let name = &class.name;
     writeln!(w, "Is{name}(state, chain0, chain) = OR(")?;
     for (action_name, obj_index) in &class.actions {
-        let action_handle = loader
-            .actions
+        let meta = loader
+            .actions_meta
             .iter()
-            .find(|h| &h.0.borrow().name == action_name)
+            .find(|m| &m.name == action_name)
             .expect("action exists");
-        let action = action_handle.0.borrow();
-        let info = collect_action_info(&action);
-        let o = &info.objects[*obj_index];
-        let multi = is_multi_class(&info.objects, &o.class);
+        let o = &meta.object_refs[*obj_index];
+        let multi = is_multi_class(&meta.object_refs, &o.class);
         let bridge_name = bridge_predicate_name(&o.class, action_name, &o.varname, multi);
         writeln!(w, "  {bridge_name}(state, chain0, chain)")?;
     }

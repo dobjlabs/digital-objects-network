@@ -512,20 +512,12 @@ impl ActionHandle {
 
         // ---- Build in/out record arrays from the action's direct
         // Object insts. Each Object contributes one entry to its
-        // dispatch side's array (Mutate contributes to both).
-        //
-        // Index 0 is a placeholder slot, matching the `_pad` entry that
-        // `fmt_record_decls` prepends to every schema. This dodges
-        // pod2 issue #513: an `ArrayContains(arr, 0, value)` anchored
-        // key has a `StatementArg::Key(root, IndexKey(0))` encoding
-        // that collides with `StatementArg::Literal(v)` when v==root,
-        // and the circuit can't disambiguate. Real entries start at
-        // index 1; remove this padding once #513 is fixed in pod2.
+        // dispatch side's array (Mutate contributes to both). Slot 0
+        // is `_pad`; real entries start at slot 1 (see PAD_ENTRY).
         let exe_rc = self.0.borrow().exe_ctx.clone().expect("exe phase");
+        let meta = module.action_by_name(&action);
         let mut in_dicts: Vec<Value> = vec![Value::from(0_i64)];
         let mut out_dicts: Vec<Value> = vec![Value::from(0_i64)];
-        let mut in_entry_idx: HashMap<String, usize> = HashMap::new();
-        let mut out_entry_idx: HashMap<String, usize> = HashMap::new();
         {
             let ctx = self.0.borrow();
             for inst in &ctx.insts {
@@ -533,15 +525,12 @@ impl ActionHandle {
                     io, obj, original, ..
                 } = inst
                 {
-                    let varname = obj.borrow().var_name().to_string();
                     let post_dict = obj.borrow().to_dict();
                     match io {
                         ObjectIO::Input => {
-                            in_entry_idx.insert(varname, in_dicts.len());
                             in_dicts.push(Value::from(post_dict));
                         }
                         ObjectIO::Output => {
-                            out_entry_idx.insert(varname, out_dicts.len());
                             out_dicts.push(Value::from(post_dict));
                         }
                         ObjectIO::Mutate => {
@@ -549,9 +538,7 @@ impl ActionHandle {
                                 .as_ref()
                                 .expect("Mutate records a pre-mutation dict")
                                 .clone();
-                            in_entry_idx.insert(varname.clone(), in_dicts.len());
                             in_dicts.push(Value::from(pre_dict));
-                            out_entry_idx.insert(varname, out_dicts.len());
                             out_dicts.push(Value::from(post_dict));
                         }
                     }
@@ -561,35 +548,6 @@ impl ActionHandle {
         let in_array = Array::new(in_dicts);
         let out_array = Array::new(out_dicts);
 
-        // Look up the action's per-side wildcard decisions. Collapsed
-        // sides drop their `ArrayContains` priv_op and the matching
-        // template sub-statement; body / event priv_ops then take
-        // anchored op-args so pod2 matches them to anchored template
-        // positions.
-        let (needs_in_wildcard, needs_out_wildcard) = {
-            let ctx = self.0.borrow();
-            let exe_ctx = ctx.exe_ctx.as_ref().expect("exe phase").borrow();
-            let meta = exe_ctx.module.action_by_name(&action);
-            (
-                meta.needs_in_wildcard.clone(),
-                meta.needs_out_wildcard.clone(),
-            )
-        };
-
-        // Per-Object io map and max_ts. Drives op-arg anchoring at
-        // pre/post-form ts below.
-        let object_io: HashMap<String, ObjectIO> = {
-            let ctx = self.0.borrow();
-            ctx.insts
-                .iter()
-                .filter_map(|inst| match inst {
-                    Inst::Object { io, obj, .. } => {
-                        Some((obj.borrow().var_name().to_string(), *io))
-                    }
-                    _ => None,
-                })
-                .collect()
-        };
         let max_ts: HashMap<String, usize> = {
             let ctx = self.0.borrow();
             ctx.var_state
@@ -601,19 +559,16 @@ impl ActionHandle {
         // Returns an anchored op-arg when the Object's side at this ts
         // is collapsed; else a literal op-arg for the dict.
         let anchor_or_literal = |obj_name: &str, dict: &Dictionary, ts: usize| -> OperationArg {
-            let Some(io) = object_io.get(obj_name).copied() else {
-                return OperationArg::Literal(Value::from(dict.clone()));
-            };
             let mts = *max_ts.get(obj_name).unwrap_or(&0);
-            let at_in = matches!(io, ObjectIO::Input | ObjectIO::Mutate) && ts == 0;
-            let at_out = matches!(io, ObjectIO::Output | ObjectIO::Mutate) && ts == mts;
-            if at_in && !needs_in_wildcard.contains(obj_name) {
-                return (&in_array, in_entry_idx[obj_name] as i64).into();
+            match meta.collapsed_at(obj_name, ts, mts) {
+                Some(fmt_podlang::Side::In) => {
+                    (&in_array, meta.in_entry(obj_name).unwrap().0 as i64).into()
+                }
+                Some(fmt_podlang::Side::Out) => {
+                    (&out_array, meta.out_entry(obj_name).unwrap().0 as i64).into()
+                }
+                None => OperationArg::Literal(Value::from(dict.clone())),
             }
-            if at_out && !needs_out_wildcard.contains(obj_name) {
-                return (&out_array, out_entry_idx[obj_name] as i64).into();
-            }
-            OperationArg::Literal(Value::from(dict.clone()))
         };
 
         // ---- Emit ArrayContains clauses for each Object's pre/post-
@@ -630,41 +585,38 @@ impl ActionHandle {
                 {
                     let varname = obj.borrow().var_name().to_string();
                     let post_dict = obj.borrow().to_dict();
-                    let emit_in = matches!(io, ObjectIO::Input | ObjectIO::Mutate)
-                        && needs_in_wildcard.contains(&varname);
-                    let emit_out = matches!(io, ObjectIO::Output | ObjectIO::Mutate)
-                        && needs_out_wildcard.contains(&varname);
                     let pre_dict = match io {
-                        ObjectIO::Mutate => Some(
-                            original
-                                .as_ref()
-                                .expect("Mutate records a pre-mutation dict")
-                                .clone(),
-                        ),
-                        ObjectIO::Input => Some(post_dict.clone()),
-                        ObjectIO::Output => None,
+                        ObjectIO::Mutate => original
+                            .as_ref()
+                            .expect("Mutate records a pre-mutation dict")
+                            .clone(),
+                        ObjectIO::Input => post_dict.clone(),
+                        ObjectIO::Output => post_dict.clone(),
                     };
-                    if emit_in {
-                        let d = pre_dict.clone().expect("in-side dict");
+                    if let Some((idx, e)) = meta.in_entry(&varname)
+                        && e.needs_wildcard
+                    {
                         let st = exe_ctx
                             .bld
                             .builder
                             .priv_op(Operation::array_contains(
                                 Value::from(in_array.clone()),
-                                in_entry_idx[&varname] as i64,
-                                Value::from(d),
+                                idx as i64,
+                                Value::from(pre_dict.clone()),
                             ))
                             .unwrap();
                         array_contains_sts.push(st);
                     }
-                    if emit_out {
+                    if let Some((idx, e)) = meta.out_entry(&varname)
+                        && e.needs_wildcard
+                    {
                         let st = exe_ctx
                             .bld
                             .builder
                             .priv_op(Operation::array_contains(
                                 Value::from(out_array.clone()),
-                                out_entry_idx[&varname] as i64,
-                                Value::from(post_dict),
+                                idx as i64,
+                                Value::from(post_dict.clone()),
                             ))
                             .unwrap();
                         array_contains_sts.push(st);
@@ -695,14 +647,8 @@ impl ActionHandle {
         // Assign a parent_ts to each Object/SubAction inst (each one
         // advances the parent chain by exactly 1, in inst-iteration
         // order). Drives chain anchoring and the chain_steps record.
-        let chain_max_ts = self
-            .0
-            .borrow()
-            .var_state
-            .get("chain")
-            .map(|s| s.ts)
-            .unwrap_or(0);
-        let action_chain_packed = chain_max_ts >= fmt_podlang::CHAIN_PACK_MIN_TS;
+        let chain_max_ts = meta.chain_max_ts;
+        let action_chain_packed = fmt_podlang::chain_packed(meta);
         // chain_step_values[0] is `_pad`; [1..chain_max_ts] hold per-ts
         // chain hashes (the final ts is the public `chain` wildcard, not
         // stored here). SubAction values come from `st_sub` (baked in at
@@ -821,22 +767,20 @@ impl ActionHandle {
             for pending in pending_object_events {
                 let varname = &pending.varname;
                 let io = pending.io;
-                let new_anchor: Option<OperationArg> =
-                    if matches!(io, ObjectIO::Output | ObjectIO::Mutate)
-                        && !needs_out_wildcard.contains(varname)
-                    {
-                        Some((&out_array, out_entry_idx[varname] as i64).into())
-                    } else {
-                        None
-                    };
-                let old_anchor: Option<OperationArg> =
-                    if matches!(io, ObjectIO::Input | ObjectIO::Mutate)
-                        && !needs_in_wildcard.contains(varname)
-                    {
-                        Some((&in_array, in_entry_idx[varname] as i64).into())
-                    } else {
-                        None
-                    };
+                let new_anchor: Option<OperationArg> = match io {
+                    ObjectIO::Output | ObjectIO::Mutate => meta
+                        .out_entry(varname)
+                        .filter(|(_, e)| !e.needs_wildcard)
+                        .map(|(idx, _)| (&out_array, idx as i64).into()),
+                    ObjectIO::Input => None,
+                };
+                let old_anchor: Option<OperationArg> = match io {
+                    ObjectIO::Input | ObjectIO::Mutate => meta
+                        .in_entry(varname)
+                        .filter(|(_, e)| !e.needs_wildcard)
+                        .map(|(idx, _)| (&in_array, idx as i64).into()),
+                    ObjectIO::Output => None,
+                };
                 let pre_ts = pending.post_ts - 1;
                 let post_ts = pending.post_ts;
                 let chain_anchor = chain_step_anchor(post_ts);
@@ -877,8 +821,11 @@ impl ActionHandle {
         // at the pre/post-form ts of an Object on a collapsed side are
         // anchored via `anchor_or_literal`; everything else is literal.
         let mut body_sts: Vec<Statement> = Vec::new();
-        let mut current_ts: HashMap<String, usize> =
-            object_io.keys().map(|n| (n.clone(), 0usize)).collect();
+        let mut current_ts: HashMap<String, usize> = meta
+            .object_refs
+            .iter()
+            .map(|o| (o.varname.clone(), 0usize))
+            .collect();
         {
             let mut exe_ctx = exe_rc.borrow_mut();
             let exe_ctx = &mut *exe_ctx;
@@ -1016,12 +963,13 @@ impl ActionHandle {
             {
                 // For inserts/deletes, post == pre == obj_dict, so it
                 // doesn't matter which form we hand the bridge.
-                let action_meta = module.action_by_name(&action);
-                let obj_ref = &action_meta.object_refs[object_refs_index];
+                let obj_ref = &meta.object_refs[object_refs_index];
                 let varname = &obj_ref.varname;
                 let (bridge_array, entry_idx) = match fmt_podlang::dispatch_side(&obj_ref.io) {
-                    fmt_podlang::Side::In => (in_array.clone(), in_entry_idx[varname]),
-                    fmt_podlang::Side::Out => (out_array.clone(), out_entry_idx[varname]),
+                    fmt_podlang::Side::In => (in_array.clone(), meta.in_entry(varname).unwrap().0),
+                    fmt_podlang::Side::Out => {
+                        (out_array.clone(), meta.out_entry(varname).unwrap().0)
+                    }
                 };
                 let st_is_x = module.build_is_x(
                     &mut exe_ctx.bld,
@@ -1450,36 +1398,46 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
 /// records-form `<Action>In` / `<Action>Out` schemas.
 #[derive(Debug, Clone)]
 pub struct ActionObjectRef {
-    io: ObjectIO,
+    pub(crate) io: ObjectIO,
     pub class: String,
     pub(crate) varname: String,
+}
+
+/// One slot in an action's `<Action>In` or `<Action>Out` record. A
+/// Mutate Object contributes one `EntryShape` to each side; Input/
+/// Output Objects contribute one to their side only. `needs_wildcard`
+/// drives whether the slot is referenced directly (collapsed to
+/// `<side>.<entry>` anchored refs) or via a private wildcard pinned
+/// by an `ArrayContains` clause.
+#[derive(Debug, Clone)]
+pub(crate) struct EntryShape {
+    pub varname: String,
+    pub needs_wildcard: bool,
 }
 
 /// Collected metadata that declares an Action.
 ///
 /// `object_refs` lists the action's direct Object instructions in
 /// declaration order, matching the action predicate's public-arg
-/// ordering. `total_inputs` / `total_outputs` flatten this action's
-/// plus all transitively-called sub-actions' inputs/outputs.
-/// `total_inputs` is used by `Executor::action` to zip against
-/// caller-supplied inputs, and both are surfaced via the
-/// `total_inputs()` / `total_outputs()` helpers for driver/GUI
-/// signature reporting.
+/// ordering. `in_entries` / `out_entries` are the records-form view of
+/// the same Objects, with mutates appearing on both sides. `total_inputs`
+/// / `total_outputs` flatten this action's plus all transitively-called
+/// sub-actions' inputs/outputs. `total_inputs` is used by
+/// `Executor::action` to zip against caller-supplied inputs, and both
+/// are surfaced via the `total_inputs()` / `total_outputs()` helpers
+/// for driver/GUI signature reporting.
 #[derive(Debug, Default)]
 pub struct ActionMeta {
     pub name: String,
-    object_refs: Vec<ActionObjectRef>,
+    pub(crate) object_refs: Vec<ActionObjectRef>,
     total_inputs: Vec<ActionObjectRef>,
     total_outputs: Vec<ActionObjectRef>,
-    /// Object var names whose entry on the `in` record needs a
-    /// wildcard (i.e. the body reads a sub-field off the pre-form, or
-    /// the pre-form appears as a whole-dict arg to an Intro statement).
-    /// Other Objects' `in` entry collapses to an `in.<entry>` anchored
-    /// ref. Computed at Load by `compute_wildcard_needs`.
-    pub(crate) needs_in_wildcard: HashSet<String>,
-    /// Object var names whose entry on the `out` record needs a
-    /// wildcard. See `needs_in_wildcard`.
-    pub(crate) needs_out_wildcard: HashSet<String>,
+    pub(crate) in_entries: Vec<EntryShape>,
+    pub(crate) out_entries: Vec<EntryShape>,
+    /// `var_state["chain"].ts` for this action — i.e. the count of
+    /// txlib events recorded by this action (Object insts + sub-action
+    /// calls). Drives whether the chain is packed into `<Action>Chain`.
+    pub(crate) chain_max_ts: usize,
 }
 
 impl ActionMeta {
@@ -1509,6 +1467,51 @@ impl ActionMeta {
         self.total_outputs.iter()
     }
 
+    /// Find this Object's `in` entry. Returns the 1-based slot in the
+    /// `<Action>In` record (slot 0 is `_pad`) and the entry shape.
+    pub(crate) fn in_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
+        self.in_entries
+            .iter()
+            .enumerate()
+            .find(|(_, e)| e.varname == varname)
+            .map(|(p, e)| (p + 1, e))
+    }
+
+    pub(crate) fn out_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
+        self.out_entries
+            .iter()
+            .enumerate()
+            .find(|(_, e)| e.varname == varname)
+            .map(|(p, e)| (p + 1, e))
+    }
+
+    /// Side the Object Ref pins at this ts, when the matching side is
+    /// collapsed. Callers render/anchor as `<side>.<entry>` on a
+    /// `Some(side)` answer; on `None` the Ref falls back to a scalar
+    /// wildcard (or whatever else).
+    pub(crate) fn collapsed_at(
+        &self,
+        varname: &str,
+        ts: usize,
+        max_ts: usize,
+    ) -> Option<fmt_podlang::Side> {
+        if ts == 0
+            && self
+                .in_entry(varname)
+                .is_some_and(|(_, e)| !e.needs_wildcard)
+        {
+            return Some(fmt_podlang::Side::In);
+        }
+        if ts == max_ts
+            && self
+                .out_entry(varname)
+                .is_some_and(|(_, e)| !e.needs_wildcard)
+        {
+            return Some(fmt_podlang::Side::Out);
+        }
+        None
+    }
+
     /// Build from a Load-time `ActionContext`, splicing in each
     /// sub-action's already-computed `total_inputs`/`total_outputs` at
     /// the point of its `subaction` call. `prior` must contain entries
@@ -1516,6 +1519,7 @@ impl ActionMeta {
     fn from_action_ctx(prior: &[ActionMeta], ctx: &ActionContext) -> Result<Self> {
         let mut meta = Self {
             name: ctx.name.clone(),
+            chain_max_ts: ctx.var_state.get("chain").map(|s| s.ts).unwrap_or(0),
             ..Self::default()
         };
         for inst in &ctx.insts {
@@ -1546,8 +1550,20 @@ impl ActionMeta {
             }
         }
         let (needs_in, needs_out) = compute_wildcard_needs(ctx);
-        meta.needs_in_wildcard = needs_in;
-        meta.needs_out_wildcard = needs_out;
+        for r in &meta.object_refs {
+            if r.io.consumes() {
+                meta.in_entries.push(EntryShape {
+                    varname: r.varname.clone(),
+                    needs_wildcard: needs_in.contains(&r.varname),
+                });
+            }
+            if r.io.produces() {
+                meta.out_entries.push(EntryShape {
+                    varname: r.varname.clone(),
+                    needs_wildcard: needs_out.contains(&r.varname),
+                });
+            }
+        }
         Ok(meta)
     }
 }
