@@ -43,7 +43,6 @@ from beeai_framework.emitter import EmitterOptions  # noqa: E402
 from beeai_framework.errors import FrameworkError  # noqa: E402
 from beeai_framework.memory import UnconstrainedMemory  # noqa: E402
 from beeai_framework.tools.think import ThinkTool  # noqa: E402
-from beeai_framework.tools.types import ToolOutput  # noqa: E402
 
 from shared.a2a_helpers import (  # noqa: E402
     emit_completed,
@@ -53,6 +52,12 @@ from shared.a2a_helpers import (  # noqa: E402
     emit_working,
     ensure_task,
     extract_text,
+)
+from shared.beeai_helpers import (  # noqa: E402
+    classify_event,
+    force_parallel_tool_calls,
+    summarize_for_working,
+    to_beeai_model_string,
 )
 from shared.brain_hub import BrainEventHub  # noqa: E402
 from shared.dobjd_client import DobjdClient  # noqa: E402
@@ -91,30 +96,6 @@ Procedure:
 The harness will parse your final message for this exact pattern."""
 
 
-# LiteLLM provider names that don't match BeeAI's provider IDs exactly.
-# Add aliases here as you adopt more providers.
-_LITELLM_TO_BEEAI_PROVIDER = {
-    'vertex_ai': 'vertexai',
-}
-
-
-def _to_beeai_model_string(litellm_style: str) -> str:
-    """Translate `provider/model` (LiteLLM) → `provider:model` (BeeAI).
-
-    Lets the user set `LLM_MODEL=anthropic/claude-opus-4-7` once and
-    have it work for both the LangChain specialists and the BeeAI
-    Concierge. If the env var already uses BeeAI's colon shape (e.g.
-    `anthropic:claude-opus-4-7`), it's returned unchanged.
-    """
-    if ':' in litellm_style:
-        return litellm_style
-    if '/' not in litellm_style:
-        return litellm_style
-    provider, _, model = litellm_style.partition('/')
-    provider = _LITELLM_TO_BEEAI_PROVIDER.get(provider, provider)
-    return f'{provider}:{model}'
-
-
 class ConciergeAgentExecutor(AgentExecutor):
     """LLM-driven orchestrator built on BeeAI's RequirementAgent."""
 
@@ -137,7 +118,7 @@ class ConciergeAgentExecutor(AgentExecutor):
             )
 
             litellm_model = pick_model('CONCIERGE_LLM')
-            beeai_model = _to_beeai_model_string(litellm_model)
+            beeai_model = to_beeai_model_string(litellm_model)
             _log(f'brain online (beeai → {beeai_model})')
             await emit_working(
                 context, event_queue,
@@ -176,14 +157,14 @@ class ConciergeAgentExecutor(AgentExecutor):
             # value and a no-op for providers that accept any value.
             #
             # `allow_parallel_tool_calls=True` — needed for `parallel`
-            # but NOT sufficient. See `_force_parallel_tool_calls()` below
-            # for the actual fix.
+            # but NOT sufficient. See `force_parallel_tool_calls()` in
+            # shared/beeai_helpers.py for the actual fix.
             chat_model = ChatModel.from_name(
                 beeai_model,
                 ChatModelParameters(temperature=1),
                 allow_parallel_tool_calls=True,
             )
-            _force_parallel_tool_calls(chat_model)
+            force_parallel_tool_calls(chat_model)
             agent = RequirementAgent(
                 name='Concierge',
                 description='Orchestrates Lumberjack, Stonemason, Craftsmith to deliver a StonePick.',
@@ -297,14 +278,14 @@ class ConciergeAgentExecutor(AgentExecutor):
         event_queue: EventQueue,
     ) -> Any:
         async def on_event(data: Any, event: Any) -> None:
-            kind = _classify_event(event, data)
+            kind = classify_event(event, data)
             if kind is None:
                 return
 
             payload: dict[str, Any] = {'agent': 'concierge', **kind}
 
             # A2A working line — short, single-line. Skip empty payloads.
-            line = _summarize_for_working(kind)
+            line = summarize_for_working(kind)
             if line:
                 # stdout for run_all.sh / mprocs, mirroring the specialists'
                 # `_log()` format from shared/llm_brain.py.
@@ -318,148 +299,8 @@ class ConciergeAgentExecutor(AgentExecutor):
 
 
 # ---------------------------------------------------------------------------
-# Event classification helpers
+# Concierge-specific helpers
 # ---------------------------------------------------------------------------
-
-def _classify_event(event: Any, data: Any) -> dict[str, Any] | None:
-    """Map BeeAI emitter event → the dashboard's
-    `{type: tool_call | tool_result | thought, ...}` shape.
-
-    BeeAI's `Run.observe()` stream is fire-hose-y: every tool call shows
-    up at TWO paths (`run.tool.<name>.<phase>` from the RunContext wrap
-    plus `tool.<name>.<phase>` from the tool's own emitter), plus
-    framework events for requirement evaluation, chat model rounds, and
-    the synthetic FinalAnswerTool. We filter to the cleanest, lowest-
-    noise subset:
-
-      - `tool.<name>.start`     → tool_call
-      - `tool.<name>.success`   → tool_result
-      - `agent.requirement.final_answer` → thought (the actual LLM reply)
-
-    Skips `run.tool.*` (duplicates of `tool.*`), `backend.*.chat.*` (chat
-    model rounds — noisy, no per-step value), and the FinalAnswerTool's
-    own tool events (its content overlaps with `final_answer`).
-    """
-    name = getattr(event, 'name', '')
-    path = getattr(event, 'path', '')
-
-    # 1) Final answer — surface as a "thought" the dashboard styles.
-    if path == 'agent.requirement.final_answer' and data is not None:
-        text = getattr(data, 'output', '') or ''
-        if text:
-            return {'type': 'thought', 'text': text}
-
-    # 2) Tool events only at the bare `tool.<name>.*` namespace.
-    if not path.startswith('tool.'):
-        return None
-    # Skip the synthetic FinalAnswerTool — duplicates the final_answer event.
-    if path.startswith('tool.final_answer.'):
-        return None
-
-    creator = getattr(event, 'creator', None)
-    tool_name = getattr(creator, 'name', None) or type(creator).__name__
-
-    if name == 'start' and data is not None and hasattr(data, 'input'):
-        return {
-            'type': 'tool_call',
-            'name': tool_name,
-            'input': _dump(data.input),
-        }
-    if name == 'success' and data is not None and hasattr(data, 'output'):
-        return {
-            'type': 'tool_result',
-            'name': tool_name,
-            'output_summary': _stringify_output(data.output),
-        }
-    return None
-
-
-def _summarize_for_working(kind: dict[str, Any]) -> str:
-    t = kind.get('type')
-    if t == 'tool_call':
-        return f'→ {kind.get("name", "?")}({_compact(kind.get("input"))})'
-    if t == 'tool_result':
-        out = kind.get('output_summary', '')
-        return f'← {kind.get("name", "?")} → {out}'
-    if t == 'thought':
-        text = (kind.get('text') or '').strip()
-        # The final answer is the bare filename — short. If a model emits
-        # a long thought it'd flood the UI, so cap it.
-        if text and len(text) < 200:
-            return f'💭 {text}'
-    return ''
-
-
-def _stringify_output(output: Any) -> str:
-    if output is None:
-        return ''
-    if isinstance(output, ToolOutput):
-        s = output.get_text_content()
-    else:
-        s = str(output)
-    return s if len(s) <= 200 else s[:197] + '…'
-
-
-def _dump(value: Any) -> Any:
-    """Render a Pydantic input model (or anything else) as a JSON-safe dict.
-
-    Pydantic models from BeeAI tool schemas serialize cleanly; primitives
-    pass through; everything else stringifies.
-    """
-    if value is None:
-        return ''
-    dump = getattr(value, 'model_dump', None)
-    if callable(dump):
-        try:
-            return dump()
-        except Exception:
-            pass
-    if isinstance(value, (str, int, float, bool, dict, list)):
-        return value
-    return str(value)
-
-
-def _compact(value: Any) -> str:
-    if value is None:
-        return ''
-    s = str(value)
-    return s if len(s) <= 120 else s[:117] + '…'
-
-
-def _force_parallel_tool_calls(chat_model: Any) -> None:
-    """Force `parallel_tool_calls=True` on every LiteLLM call this model makes.
-
-    Works around a BeeAI bug: `allow_parallel_tool_calls=True` on a
-    `ChatModel` only governs whether the *runner* accepts multi-call
-    responses (backend/chat.py:658). It is NEVER propagated to the
-    `ChatModelInput.parallel_tool_calls` field that LiteLLM actually
-    sends, because `RequirementAgent`'s runner builds `ChatModelOptions`
-    without `parallel_tool_calls` set. Result: `input.parallel_tool_calls`
-    stays `None`, line 284 of `adapters/litellm/chat.py` does
-    `bool(None) → False`, and LiteLLM translates `parallel_tool_calls=False`
-    into Anthropic's `tool_choice.disable_parallel_tool_use=True` — which
-    EXPLICITLY forbids parallel tool calls. So even though our prompt
-    says "call both in parallel" and we set `allow_parallel_tool_calls=True`,
-    Anthropic is told the opposite.
-
-    The fix wraps `chat_model._transform_input` so that just before
-    LiteLLM serializes the request, `input.parallel_tool_calls` flips
-    from None to True (only when None, so an explicit caller-provided
-    value still wins). `ChatModelInput.model_config` has `frozen=False`
-    so mutation is allowed.
-
-    Verified empirically: without this patch the LiteLLM dict carries
-    `parallel_tool_calls=False`; with it, `True`.
-    """
-    original = chat_model._transform_input
-
-    def patched(input):
-        if input.parallel_tool_calls is None:
-            input.parallel_tool_calls = True
-        return original(input)
-
-    chat_model._transform_input = patched
-
 
 def _log(message: str) -> None:
     """Print one brain event to stdout with the `[concierge] ` prefix,
