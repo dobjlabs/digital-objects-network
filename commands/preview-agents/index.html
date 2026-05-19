@@ -69,16 +69,142 @@
         font-size: 13px;
       }
 
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 12px;
+      /* Hierarchical layout: user → concierge → middle tier → suppliers.
+         Each tier is a row; the 3-col grid in the middle/supplier rows
+         keeps each peer aligned beneath its caller (Auctioneer's column
+         contains the two Lumberjacks). */
+      .network {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
         padding: 12px;
       }
+      .user-block {
+        align-self: center;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 18px;
+        border: 1px dashed var(--border);
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 500;
+        background: var(--panel);
+      }
+      .user-block .quote {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text-2);
+      }
+      .arrow-down {
+        align-self: center;
+        color: var(--text-3);
+        font-family: var(--mono);
+        font-size: 14px;
+        line-height: 1;
+        padding: 2px 0;
+      }
+      .tier {
+        position: relative;
+      }
+      .tier-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-3);
+        padding: 4px 2px;
+      }
+      /* Orchestrator: single card, centered, max-width capped */
+      .tier-orchestrator .tier-cards {
+        display: flex;
+        justify-content: center;
+      }
+      .tier-orchestrator .card {
+        max-width: 720px;
+        width: 100%;
+      }
+      /* Middle tier: three cards side by side, one per column */
+      .tier-middle .tier-cards {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 12px;
+      }
+      /* Suppliers tier: two Lumberjack cards inside a framed "owned by
+         Auctioneer" cluster. Cluster spans cols 1-2 of the 3-col grid
+         so each Lumberjack gets ~1/3 page width (same as a middle-tier
+         card) — at col-1-only width the card heads wrapped and the
+         event log lines became unreadable. Col 3 stays empty (it's
+         where Craftsmith's children *would* live if it had any). */
+      .tier-suppliers .tier-cards {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 12px;
+      }
+      .supplier-cluster {
+        position: relative;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        grid-column: 1 / 3;
+        padding: 16px 12px 12px;
+        border: 1px dashed rgba(168, 85, 247, 0.45);
+        border-radius: 10px;
+        background: rgba(168, 85, 247, 0.025);
+      }
+      /* Floating label cutting through the cluster's dashed border —
+         the visual "this group belongs to Auctioneer" cue. Background
+         matches the page so the label appears to interrupt the border. */
+      .supplier-cluster::before {
+        content: "auctioned by Auctioneer ↑";
+        position: absolute;
+        top: -7px;
+        left: 16px;
+        padding: 0 8px;
+        background: var(--bg);
+        color: #a855f7;
+        font-family: var(--mono);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+      }
+
+      /* Fan-out arrows between tiers (decorative). 3-col grid mirrors
+         the tier-cards layout so each ↓ sits centered under its caller. */
+      .fan-arrows {
+        display: grid;
+        align-items: center;
+        justify-items: center;
+        color: var(--text-3);
+        font-size: 16px;
+        line-height: 1;
+        font-family: var(--mono);
+        padding: 2px 0;
+      }
+      .fan-arrows.fan-3 { grid-template-columns: 1fr 1fr 1fr; }
+      .fan-arrows.fan-cluster {
+        grid-template-columns: 1fr 1fr 1fr;
+      }
+      .fan-arrows.fan-cluster .pair {
+        display: flex;
+        gap: 32px;
+        justify-content: center;
+      }
+      .fan-arrows.fan-cluster .none {
+        color: var(--text-3);
+        opacity: 0.3;
+        font-size: 11px;
+      }
+
       @media (max-width: 720px) {
-        .grid {
+        .tier-middle .tier-cards,
+        .tier-suppliers .tier-cards {
           grid-template-columns: 1fr;
         }
+        .supplier-cluster {
+          grid-template-columns: 1fr;
+          grid-column: 1;
+        }
+        .fan-arrows { display: none; }
       }
 
       .card {
@@ -87,9 +213,15 @@
         border-radius: 8px;
         display: flex;
         flex-direction: column;
-        min-height: 280px;
-        max-height: calc(50vh - 60px);
+        min-height: 220px;
+        max-height: 360px;
         overflow: hidden;
+      }
+      /* Lumberjack cards in the supplier tier render a bit shorter —
+         visual cue that they're downstream of the Auctioneer. */
+      .tier-suppliers .card {
+        min-height: 200px;
+        max-height: 300px;
       }
       .card-head {
         display: flex;
@@ -152,6 +284,30 @@
         overflow: hidden;
         text-overflow: ellipsis;
         min-height: 30px;
+      }
+      /* "→ calls X, Y, Z" footer under each card — declares the agent's
+         outgoing peer references so the topology is obvious from a card
+         alone, not just from the layout. */
+      .card-foot {
+        padding: 6px 12px;
+        border-top: 1px solid var(--border-2);
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--text-3);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .card-foot .label {
+        color: var(--text-3);
+        opacity: 0.7;
+      }
+      .card-foot .calls {
+        color: var(--info);
+      }
+      .card-foot.leaf {
+        font-style: italic;
+        opacity: 0.6;
       }
 
       .events {
@@ -256,15 +412,56 @@
     <header>
       <h1>bitcraft agents — live</h1>
       <p>
-        Subscribes to two streams per agent: <code>/events</code> on each
-        dobjd (proof + commit steps, indigo border) and
-        <code>/brain-events</code> on each A2A agent server (LLM tool
-        calls + thoughts, purple border).
+        Topology: user → Concierge fans out to Auctioneer / Stonemason /
+        Craftsmith; the Auctioneer fans out to the two Lumberjacks (no
+        other agent knows about them). Each card subscribes to two
+        streams: <code>/events</code> on its dobjd (proof + commit
+        steps, indigo border) and <code>/brain-events</code> on its
+        A2A server (LLM tool calls + thoughts, purple border).
       </p>
     </header>
 
-    <main class="grid" id="grid">
-      <!-- Cards inserted by JS -->
+    <main class="network">
+      <!-- Tier 0: the human caller -->
+      <div class="user-block">
+        <span class="emoji">👤</span>
+        <span>You</span>
+        <span class="quote">→ "I want a stone pick"</span>
+      </div>
+      <div class="arrow-down">↓</div>
+
+      <!-- Tier 1: orchestrator -->
+      <div class="tier tier-orchestrator">
+        <div class="tier-label">orchestrator</div>
+        <div class="tier-cards" data-tier="orchestrator"></div>
+      </div>
+
+      <!-- Concierge fans out to three peers -->
+      <div class="fan-arrows fan-3">
+        <span>↓</span><span>↓</span><span>↓</span>
+      </div>
+
+      <!-- Tier 2: routes + direct specialists -->
+      <div class="tier tier-middle">
+        <div class="tier-label">routes & specialists (Concierge ↑ calls these)</div>
+        <div class="tier-cards" data-tier="middle"></div>
+      </div>
+
+      <!-- Only the Auctioneer column fans out further; Stonemason and
+           Craftsmith are leaves with no downstream peers. -->
+      <div class="fan-arrows fan-cluster">
+        <span class="pair">↓ ↓</span>
+        <span class="none">(leaf)</span>
+        <span class="none">(leaf)</span>
+      </div>
+
+      <!-- Tier 3: suppliers, only under the Auctioneer column -->
+      <div class="tier tier-suppliers">
+        <div class="tier-label">suppliers (Auctioneer ↑ picks the cheapest)</div>
+        <div class="tier-cards" data-tier="suppliers">
+          <div class="supplier-cluster" data-cluster="suppliers"></div>
+        </div>
+      </div>
     </main>
 
     <footer>
@@ -273,71 +470,109 @@
     </footer>
 
     <script>
+      // Each agent declares which tier it lives in and which peers it
+       // calls. The `calls` list drives the "→ calls X, Y" footer on
+       // every card so the topology is visible from a card alone, not
+       // just from the layout.
+       //
+       // Ordering inside AGENTS matters: cards are appended to their
+       // tier container in array order. So the middle tier appears
+       // Auctioneer | Stonemason | Craftsmith (column 1 / 2 / 3) only
+       // because that's the order here — the supplier-cluster sits
+       // under col 1 by CSS, so Auctioneer must be first in the middle
+       // tier for vertical alignment to work.
       const AGENTS = [
-        {
-          id: "lumberjack",
-          port: 7727,        // dobjd HTTP (proof events)
-          brainPort: 9997,   // A2A agent server (LLM events)
-          emoji: "🪓",
-          label: "Lumberjack-A",
-          desc: "supplies Sticks (price=5)",
-        },
-        {
-          id: "lumberjack_b",
-          port: 7767,
-          brainPort: 9995,
-          emoji: "🪓",
-          label: "Lumberjack-B",
-          desc: "supplies Sticks (price=3)",
-        },
-        {
-          id: "stonemason",
-          port: 7737,
-          brainPort: 9998,
-          emoji: "⛏️",
-          label: "Stonemason",
-          desc: "supplies Stones",
-        },
-        {
-          id: "craftsmith",
-          port: 7747,
-          brainPort: 9999,
-          emoji: "🔨",
-          label: "Craftsmith",
-          desc: "assembles StonePicks",
-        },
-        {
-          id: "auctioneer",
-          // dobjd at 7777 — the Auctioneer ingest+verifies the winning
-          // Lumberjack's .dobj before forwarding (trust boundary, not
-          // just a router).
-          port: 7777,
-          brainPort: 9994,
-          emoji: "🏷️",
-          label: "Auctioneer",
-          desc: "picks + verifies the cheapest Lumberjack",
-        },
+        // ---------- orchestrator (tier 1) ----------
         {
           id: "concierge",
+          tier: "orchestrator",
           port: 7757,
           brainPort: 9996, // BeeAI RequirementAgent in the Concierge executor
           emoji: "🎩",
           label: "Concierge",
           desc: "orchestrates",
+          calls: ["Auctioneer", "Stonemason", "Craftsmith"],
+        },
+        // ---------- middle tier (tier 2) ----------
+        // Auctioneer is first so it lands in column 1, aligned above
+        // the framed supplier-cluster below (which spans cols 1-2).
+        {
+          id: "auctioneer",
+          tier: "middle",
+          port: 7777,
+          brainPort: 9994,
+          emoji: "🏷️",
+          label: "Auctioneer",
+          desc: "picks + verifies the cheapest Lumberjack",
+          calls: ["Lumberjack-A", "Lumberjack-B"],
+        },
+        {
+          id: "stonemason",
+          tier: "middle",
+          port: 7737,
+          brainPort: 9998,
+          emoji: "⛏️",
+          label: "Stonemason",
+          desc: "supplies Stones",
+          calls: [],
+        },
+        {
+          id: "craftsmith",
+          tier: "middle",
+          port: 7747,
+          brainPort: 9999,
+          emoji: "🔨",
+          label: "Craftsmith",
+          desc: "assembles StonePicks",
+          calls: [],
+        },
+        // ---------- suppliers (tier 3) ----------
+        // Auctioneer-owned; no other agent in the network knows their URLs.
+        {
+          id: "lumberjack",
+          tier: "suppliers",
+          port: 7727,        // dobjd HTTP (proof events)
+          brainPort: 9997,   // A2A agent server (LLM events)
+          emoji: "🪓",
+          label: "Lumberjack-A",
+          desc: "supplies Sticks (price=5)",
+          calls: [],
+        },
+        {
+          id: "lumberjack_b",
+          tier: "suppliers",
+          port: 7767,
+          brainPort: 9995,
+          emoji: "🪓",
+          label: "Lumberjack-B",
+          desc: "supplies Sticks (price=3)",
+          calls: [],
         },
       ];
 
-      const grid = document.getElementById("grid");
       const globalStatus = document.getElementById("globalStatus");
+
+      // Each tier has its own container; suppliers go into a nested
+      // cluster so the two lumberjacks align under the Auctioneer column.
+      const tierContainers = {
+        orchestrator: document.querySelector('[data-tier="orchestrator"]'),
+        middle: document.querySelector('[data-tier="middle"]'),
+        suppliers: document.querySelector('[data-cluster="suppliers"]'),
+      };
 
       const cards = {};
       for (const a of AGENTS) {
         const el = document.createElement("section");
         el.className = "card";
         el.id = `card-${a.id}`;
-        // Port chip: dobjd HTTP port when the agent has one; "—" otherwise
-        // (Auctioneer doesn't have a dobjd, just a brain port).
+        // Port chip: dobjd HTTP port when the agent has one; "—" otherwise.
         const portChip = a.port != null ? `:${a.port}` : ":—";
+        // Footer: declarative "what does this agent call" line so the
+        // network topology is readable from a single card, not just
+        // from the tier layout.
+        const footer = a.calls && a.calls.length
+          ? `<div class="card-foot"><span class="label">→ calls</span> <span class="calls">${a.calls.join(", ")}</span></div>`
+          : `<div class="card-foot leaf">(leaf — no peer calls)</div>`;
         el.innerHTML = `
           <div class="card-head">
             <span class="emoji">${a.emoji}</span>
@@ -347,8 +582,14 @@
           </div>
           <div class="card-current" data-role="current">—</div>
           <ul class="events" data-role="events"></ul>
+          ${footer}
         `;
-        grid.appendChild(el);
+        const container = tierContainers[a.tier];
+        if (!container) {
+          console.error("unknown tier for agent", a.id, a.tier);
+          continue;
+        }
+        container.appendChild(el);
         cards[a.id] = {
           spec: a,
           badge: el.querySelector('[data-role="badge"]'),
