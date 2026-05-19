@@ -204,6 +204,12 @@
       .events li.brain.brain-tool_call .msg { color: var(--info); }
       .events li.brain.brain-tool_result .msg { color: var(--text-2); }
       .events li.brain.brain-thought { background: rgba(168, 85, 247, 0.04); }
+      .events li.brain.brain-bid .msg { color: var(--warn); }
+      .events li.brain.brain-winner .msg { color: var(--ok); font-weight: 600; }
+      .events li.brain.brain-auction_start,
+      .events li.brain.brain-auction_complete {
+        background: rgba(168, 85, 247, 0.04);
+      }
       .events li.brain .tag { color: #a855f7; }
       .events li .ts {
         color: var(--text-3);
@@ -273,8 +279,16 @@
           port: 7717,        // dobjd HTTP (proof events)
           brainPort: 9997,   // A2A agent server (LLM events)
           emoji: "🪓",
-          label: "Lumberjack",
-          desc: "supplies Sticks",
+          label: "Lumberjack-A",
+          desc: "supplies Sticks (price=5)",
+        },
+        {
+          id: "lumberjack_b",
+          port: 7767,
+          brainPort: 9995,
+          emoji: "🪓",
+          label: "Lumberjack-B",
+          desc: "supplies Sticks (price=3)",
         },
         {
           id: "stonemason",
@@ -291,6 +305,16 @@
           emoji: "🔨",
           label: "Craftsmith",
           desc: "assembles StonePicks",
+        },
+        {
+          id: "auctioneer",
+          // No dobjd — pure routing layer. We render `:—` for the port
+          // chip and the proof-events EventSource connect is skipped.
+          port: null,
+          brainPort: 9994,
+          emoji: "🏷️",
+          label: "Auctioneer",
+          desc: "picks the cheapest Lumberjack",
         },
         {
           id: "concierge",
@@ -310,11 +334,14 @@
         const el = document.createElement("section");
         el.className = "card";
         el.id = `card-${a.id}`;
+        // Port chip: dobjd HTTP port when the agent has one; "—" otherwise
+        // (Auctioneer doesn't have a dobjd, just a brain port).
+        const portChip = a.port != null ? `:${a.port}` : ":—";
         el.innerHTML = `
           <div class="card-head">
             <span class="emoji">${a.emoji}</span>
             <span class="name">${a.label}</span>
-            <span class="port">:${a.port}</span>
+            <span class="port">${portChip}</span>
             <span class="badge idle" data-role="badge">idle</span>
           </div>
           <div class="card-current" data-role="current">—</div>
@@ -395,15 +422,25 @@
           .replace(/>/g, "&gt;");
       }
 
+      // Denominator counts only agents that *have* a dobjd. The
+      // Auctioneer has none (port=null), so it doesn't contribute.
+      const TOTAL_DOBJDS = AGENTS.filter((a) => a.port != null).length;
       let connected = 0;
       function bumpGlobal() {
         globalStatus.textContent =
-          connected === AGENTS.length
-            ? `connected to ${connected}/${AGENTS.length} dobjds`
-            : `connected to ${connected}/${AGENTS.length} dobjds — waiting on others`;
+          connected === TOTAL_DOBJDS
+            ? `connected to ${connected}/${TOTAL_DOBJDS} dobjds`
+            : `connected to ${connected}/${TOTAL_DOBJDS} dobjds — waiting on others`;
       }
 
       function connect(card) {
+        // Skip the dobjd /events stream for agents that don't have one
+        // (the Auctioneer, today). Brain events still come through via
+        // connectBrain().
+        if (card.spec.port == null) {
+          setBadge(card, "idle", "idle");
+          return;
+        }
         const url = `http://127.0.0.1:${card.spec.port}/events`;
         const es = new EventSource(url);
 
@@ -449,6 +486,18 @@
           body = `<span class="msg">← ${escapeHtml(ev.name || "?")} → ${escapeHtml(ev.output_summary || "")}</span><span class="tag">result</span>`;
         } else if (kind === "thought") {
           body = `<span class="msg">💭 ${escapeHtml(short(ev.text))}</span><span class="tag">llm</span>`;
+        } else if (kind === "auction_start") {
+          body = `<span class="msg">🏷️ auction: ${escapeHtml(short(ev.request))}</span><span class="tag">auction</span>`;
+        } else if (kind === "bid") {
+          body = `<span class="msg">💰 bid ${escapeHtml(ev.peer || "?")} → ${escapeHtml(String(ev.price ?? "?"))} sat</span><span class="tag">bid</span>`;
+        } else if (kind === "bid_failed") {
+          body = `<span class="msg">⚠ bid failed: ${escapeHtml(ev.peer || "?")} (${escapeHtml(short(ev.reason))})</span><span class="tag">bid</span>`;
+        } else if (kind === "winner") {
+          body = `<span class="msg">🏆 winner ${escapeHtml(ev.peer || "?")} @ ${escapeHtml(String(ev.price ?? "?"))} sat</span><span class="tag">winner</span>`;
+        } else if (kind === "delegating") {
+          body = `<span class="msg">➜ delegating to ${escapeHtml(ev.peer || "?")}</span><span class="tag">delegate</span>`;
+        } else if (kind === "auction_complete") {
+          body = `<span class="msg">✓ auction complete (via ${escapeHtml(ev.winner || "?")})</span><span class="tag">auction</span>`;
         } else {
           body = `<span class="msg">${escapeHtml(JSON.stringify(ev))}</span>`;
         }

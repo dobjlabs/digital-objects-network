@@ -69,7 +69,11 @@ Your job: deliver a fully-anchored StonePick by coordinating three peer agents.
 You have these tools (each calls a peer over A2A, ingests the returned
 .dobj into this concierge's local dobjd, and verifies it's live on chain
 before returning):
-  - request_stick_from_lumberjack    →  Stick filename
+  - auction_for_stick                →  Stick filename (via Auctioneer:
+                                        the Auctioneer runs a sealed-bid
+                                        auction across this network's
+                                        Lumberjacks and forwards the
+                                        cheapest one's delivery)
   - request_stone_from_stonemason    →  Stone filename
   - craft_stonepick_with_craftsmith  (stick_file, stone_file) → StonePick filename
 
@@ -78,7 +82,7 @@ proceed to the peer calls.
 
 Procedure:
 1. Call `think` once with your plan.
-2. Call BOTH request_stick_from_lumberjack AND request_stone_from_stonemason
+2. Call BOTH auction_for_stick AND request_stone_from_stonemason
    (the framework runs independent tool calls in parallel where it can).
 3. Pass the two filenames they return to craft_stonepick_with_craftsmith.
 4. Respond with ONLY the StonePick filename. No prose, no

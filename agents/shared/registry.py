@@ -22,6 +22,13 @@ def _peer(env_var: str, default_url: str, name: str) -> PeerAgent:
     return PeerAgent(name=name, url=os.environ.get(env_var, default_url).rstrip('/'))
 
 
-LUMBERJACK = _peer('LUMBERJACK_URL', 'http://127.0.0.1:9997', 'lumberjack')
+LUMBERJACK = _peer('LUMBERJACK_URL', 'http://127.0.0.1:9997', 'lumberjack-a')
+LUMBERJACK_BACKUP = _peer(
+    'LUMBERJACK_BACKUP_URL', 'http://127.0.0.1:9995', 'lumberjack-b',
+)
 STONEMASON = _peer('STONEMASON_URL', 'http://127.0.0.1:9998', 'stonemason')
 CRAFTSMITH = _peer('CRAFTSMITH_URL', 'http://127.0.0.1:9999', 'craftsmith')
+# Routing layer — Concierge calls the Auctioneer instead of going to
+# Lumberjacks directly. The Auctioneer fans out to both Lumberjacks,
+# picks the cheapest, and forwards the result.
+AUCTIONEER = _peer('AUCTIONEER_URL', 'http://127.0.0.1:9994', 'auctioneer')

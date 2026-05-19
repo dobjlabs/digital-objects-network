@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# Spin up four isolated dobjd instances on this machine.
+# Spin up five isolated dobjd instances on this machine.
 #
 # Each instance gets its own fake $HOME so its ~/.dobj/ is private:
 #   .runtime/lumberjack/.dobj/   port 7717  (MCP 7718)
 #   .runtime/stonemason/.dobj/   port 7727  (MCP 7728)
 #   .runtime/craftsmith/.dobj/   port 7737  (MCP 7738)
 #   .runtime/concierge/.dobj/    port 7747  (MCP 7748)
+#   .runtime/lumberjack_b/.dobj/ port 7767  (MCP 7768)   ← second Lumberjack
+#
+# (Auctioneer doesn't get a dobjd — it's a pure routing layer.
+# We skip 7757 because `just dev-remote` reserves it for the user's
+# own dev dobjd.)
 #
 # Each gets:
 #   - a copy of craft-basics.pexe from the host's ~/.dobj/actions/
@@ -102,13 +107,14 @@ esac
 RUNTIME_DIR="$(pwd)/.runtime"
 mkdir -p "$RUNTIME_DIR"
 
-# Each agent's name → http port
-declare -a AGENTS=(lumberjack stonemason craftsmith concierge)
+# Each agent's name → http port (Auctioneer has no dobjd, so it's not here)
+declare -a AGENTS=(lumberjack stonemason craftsmith concierge lumberjack_b)
 declare -A PORTS=(
   [lumberjack]=7717
   [stonemason]=7727
   [craftsmith]=7737
   [concierge]=7747
+  [lumberjack_b]=7767
 )
 
 prepare_one() {
@@ -208,8 +214,8 @@ if [ "$all_up" -ne 1 ]; then
 fi
 
 echo
-echo "all four dobjds healthy."
+echo "all five dobjds healthy."
 echo
 echo "leave this terminal up.  in another:  bash scripts/run_all.sh"
-echo "ctrl-C here stops all four."
+echo "ctrl-C here stops all five."
 wait

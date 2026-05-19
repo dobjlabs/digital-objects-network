@@ -1,7 +1,9 @@
-"""Lumberjack A2A agent entry point.
+"""Auctioneer A2A agent entry point. Default port 9994.
 
-Default port: 9997.  Override with A2A_PORT.
-Dobjd at DOBJD_URL (default http://127.0.0.1:7717).
+No dobjd. The Auctioneer's job is pure routing — it consults the
+agent cards of its candidate Lumberjacks, picks the cheapest, and
+forwards the request to that winner. Brain hub is wired so the
+dashboard's Auctioneer card shows live bid/winner events.
 """
 
 from __future__ import annotations
@@ -24,50 +26,38 @@ from a2a.types import (  # noqa: E402
 )
 from starlette.applications import Starlette  # noqa: E402
 
-from lumberjack.agent_executor import LumberjackAgentExecutor  # noqa: E402
+from auctioneer.agent_executor import AuctioneerAgentExecutor  # noqa: E402
 from shared.brain_hub import BrainEventHub, make_sse_route  # noqa: E402
 
 
 HOST = os.environ.get('A2A_HOST', '127.0.0.1')
-PORT = int(os.environ.get('A2A_PORT', '9997'))
+PORT = int(os.environ.get('A2A_PORT', '9994'))
 PUBLIC_URL = os.environ.get('A2A_PUBLIC_URL', f'http://{HOST}:{PORT}')
-# Two-Lumberjack demo: each instance advertises its own price (in
-# satoshis) on the supply_stick skill so the Auctioneer can pick the
-# cheaper one. AGENT_NAME lets each instance show up as a distinct
-# card name in the dashboard / agent registry.
-AGENT_NAME = os.environ.get('AGENT_NAME', 'Lumberjack')
-STICK_PRICE = int(os.environ.get('STICK_PRICE', '5'))
 
 
 def main() -> None:
     skill = AgentSkill(
-        id='supply_stick',
-        name='Supply a Stick',
+        id='auction_stick',
+        name='Auction for a Stick',
         description=(
-            "Crafts a fresh Stick from scratch (FindLog → CraftWood → "
-            "CraftSticks) on this lumberjack's local dobjd and returns "
-            "the raw .dobj file as a FilePart artifact. "
-            f'Asking price: {STICK_PRICE} satoshis.'
+            'Runs a sealed-bid auction across the registered Lumberjack '
+            "peers. Reads each candidate's advertised price from its "
+            'agent card, picks the cheapest, and delegates the real '
+            'delivery to that winner. Returns the winning .dobj as a '
+            'FilePart.'
         ),
-        # The `price:N` tag is what the Auctioneer parses to run its
-        # sealed-bid auction. Keep the tag format stable — it's part of
-        # the discovery contract between agents on this network.
-        tags=[
-            'bitcraft', 'wood', 'stick', 'supplier',
-            f'price:{STICK_PRICE}',
-        ],
+        tags=['bitcraft', 'auction', 'router', 'discovery'],
         examples=[
             'I need 1 stick',
-            "give me a stick please",
-            'supply a stick',
+            'find me the cheapest stick supplier',
         ],
     )
 
     card = AgentCard(
-        name=AGENT_NAME,
+        name='Auctioneer',
         description=(
-            'Owns the wood chain. Supplies Sticks on request '
-            f'at {STICK_PRICE} satoshis each.'
+            'Discovers and routes to the cheapest available Lumberjack. '
+            "Doesn't craft anything itself — pure routing layer."
         ),
         version='0.1.0',
         default_input_modes=['text/plain'],
@@ -82,7 +72,7 @@ def main() -> None:
     brain_hub = BrainEventHub()
 
     handler = DefaultRequestHandler(
-        agent_executor=LumberjackAgentExecutor(brain_hub=brain_hub),
+        agent_executor=AuctioneerAgentExecutor(brain_hub=brain_hub),
         task_store=InMemoryTaskStore(),
         agent_card=card,
     )

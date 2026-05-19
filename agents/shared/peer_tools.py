@@ -37,7 +37,7 @@ from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
 from concierge.peer_client import send_and_stream
 from shared.dobj_verify import ingest_and_verify
 from shared.dobjd_client import DobjdClient
-from shared.registry import CRAFTSMITH, LUMBERJACK, STONEMASON
+from shared.registry import AUCTIONEER, CRAFTSMITH, STONEMASON
 
 
 # `on_peer_chunk(peer_label, chunk)` — called once per streamed chunk so
@@ -122,7 +122,7 @@ class _PeerToolBase(Tool):
                 result = self._on_peer_chunk(peer_label, chunk)
                 if inspect.isawaitable(result):
                     await result
-            found = _find_file_part(chunk)
+            found = find_file_part(chunk)
             if found:
                 seen = found
         if seen is None:
@@ -134,9 +134,12 @@ class _PeerToolBase(Tool):
 # The three concrete tools
 # ---------------------------------------------------------------------------
 
-class RequestStickFromLumberjack(_PeerToolBase):
-    """Ask the Lumberjack A2A peer for one Stick. Ingests + verifies the
-    returned .dobj on the Concierge's local dobjd and returns the
+class AuctionForStick(_PeerToolBase):
+    """Ask the Auctioneer A2A peer to source one Stick. The Auctioneer
+    runs a sealed-bid auction across the registered Lumberjacks (each
+    advertises a `price:N` tag on its `supply_stick` skill), picks the
+    cheapest, and forwards the winner's delivery. Ingests + verifies
+    the returned .dobj on the Concierge's local dobjd and returns the
     Stick's filename."""
 
     @cached_property
@@ -150,7 +153,7 @@ class RequestStickFromLumberjack(_PeerToolBase):
         context: RunContext,
     ) -> StringToolOutput:
         name, data = await self._fetch(
-            'lumberjack', LUMBERJACK.url, input.task or 'I need 1 stick',
+            'auctioneer', AUCTIONEER.url, input.task or 'I need 1 stick',
         )
         await ingest_and_verify(self._dobjd, name, data, expected_class='Stick')
         return StringToolOutput(name)
@@ -210,20 +213,27 @@ class CraftStonepickWithCraftsmith(_PeerToolBase):
 def make_peer_tools(
     dobjd: DobjdClient,
     on_peer_chunk: PeerChunkCb | None = None,
-) -> tuple[RequestStickFromLumberjack, RequestStoneFromStonemason, CraftStonepickWithCraftsmith]:
+) -> tuple[AuctionForStick, RequestStoneFromStonemason, CraftStonepickWithCraftsmith]:
     """Build the three peer-call tools, bound to this Concierge's dobjd.
 
     Returned as a tuple in the natural call order (stick, stone, craft)
     so the caller can `tools=[think, *peer_tools]` cleanly.
+
+    Note: the stick tool routes through the Auctioneer rather than
+    going directly to a Lumberjack. The Concierge never knows which
+    specific Lumberjack served the Stick — discovery is the
+    Auctioneer's job.
     """
-    stick = RequestStickFromLumberjack(
-        name='request_stick_from_lumberjack',
+    stick = AuctionForStick(
+        name='auction_for_stick',
         description=(
-            'Asks the Lumberjack A2A peer for one Stick. The Lumberjack '
-            'chooses an existing live Stick from its inventory or crafts '
-            'a fresh one (FindLog → CraftWood → CraftSticks). Ingests + '
-            "verifies the returned .dobj on this Concierge's local dobjd. "
-            'Returns the Stick filename. Call once.'
+            'Asks the Auctioneer A2A peer to source one Stick via a '
+            "sealed-bid auction across this network's Lumberjacks. The "
+            'Auctioneer reads each candidate\'s advertised price from '
+            'its agent card, picks the cheapest, and forwards the '
+            'winner\'s delivery. Ingests + verifies the returned .dobj '
+            "on this Concierge's local dobjd. Returns the Stick filename. "
+            'Call once.'
         ),
         dobjd=dobjd,
         on_peer_chunk=on_peer_chunk,
@@ -260,7 +270,7 @@ def make_peer_tools(
 # Chunk parsing (shared with the executor for its on_peer_chunk forwarding)
 # ---------------------------------------------------------------------------
 
-def _find_file_part(chunk: Any) -> tuple[str, bytes] | None:
+def find_file_part(chunk: Any) -> tuple[str, bytes] | None:
     artifact_update = getattr(chunk, 'artifact_update', None)
     if artifact_update is None:
         return None
