@@ -1,6 +1,8 @@
 procs:
   bootstrap_dobjds:
-    shell: bash agents/scripts/bootstrap_dobjds.sh
+    shell: |
+      cargo build -p dobjd --release
+      exec bash agents/scripts/bootstrap_dobjds.sh
 
   # Waits for the 4 bootstrap dobjds to come up before starting the A2A
   # agents — mprocs doesn't have native deps, so we poll /healthz inline.
