@@ -648,7 +648,6 @@ impl ActionHandle {
         // advances the parent chain by exactly 1, in inst-iteration
         // order). Drives chain anchoring and the chain_steps record.
         let chain_max_ts = meta.chain_max_ts;
-        let action_chain_packed = fmt_podlang::chain_packed(meta);
         // chain_step_values[0] is `_pad`; [1..chain_max_ts] hold per-ts
         // chain hashes (the final ts is the public `chain` wildcard, not
         // stored here). SubAction values come from `st_sub` (baked in at
@@ -667,7 +666,7 @@ impl ActionHandle {
                     }
                     Inst::SubAction { st_sub, .. } => {
                         chain_ts += 1;
-                        if action_chain_packed && chain_ts < chain_max_ts {
+                        if let Some(slot) = fmt_podlang::chain_step_at(chain_ts, chain_max_ts) {
                             let st = st_sub
                                 .as_ref()
                                 .expect("SubAction statement captured at Rhai");
@@ -675,7 +674,7 @@ impl ActionHandle {
                                 Some(StatementArg::Literal(v)) => v.clone(),
                                 _ => panic!("sub-action chain arg must be a literal value"),
                             };
-                            chain_step_values[chain_ts] = post_chain;
+                            chain_step_values[slot] = post_chain;
                         }
                         Some(chain_ts)
                     }
@@ -711,8 +710,8 @@ impl ActionHandle {
                         }
                     };
                     let post_ts = inst_chain_ts[i].expect("Object inst has parent_ts");
-                    if action_chain_packed && post_ts < chain_max_ts {
-                        chain_step_values[post_ts] = Value::from(exe_ctx.tx_builder.chain);
+                    if let Some(slot) = fmt_podlang::chain_step_at(post_ts, chain_max_ts) {
+                        chain_step_values[slot] = Value::from(exe_ctx.tx_builder.chain);
                     }
                     if io.produces() {
                         exe_ctx.outputs.push(obj_dict.clone());
@@ -735,22 +734,18 @@ impl ActionHandle {
         }
 
         // Build the chain_steps record once all intermediate values
-        // are known (from sub-actions and from Object events).
-        let chain_steps_array: Option<Array> = if action_chain_packed {
-            Some(Array::new(chain_step_values))
-        } else {
-            None
-        };
+        // are known (from sub-actions and from Object events). Skipped
+        // when the chain is unpacked (intermediates remain scalar
+        // wildcards bound by literal Tx-event statements).
+        let chain_steps_array: Option<Array> =
+            fmt_podlang::chain_packed(chain_max_ts).then(|| Array::new(chain_step_values));
 
-        // Anchor an intermediate chain-step ts (1..chain_max_ts) to the
-        // packed `chain_steps` record. Endpoint ts (0 = chain0, max =
-        // chain) stay as scalar wildcards. Returns None when packing is
-        // off or `ts` is an endpoint.
+        // Anchor an intermediate chain-step ts to the `chain_steps`
+        // record. Returns None for endpoints, for unpacked actions, and
+        // for actions with no intermediates.
         let chain_step_anchor = |ts: usize| -> Option<OperationArg> {
-            if !action_chain_packed || ts == 0 || ts >= chain_max_ts {
-                return None;
-            }
-            Some((chain_steps_array.as_ref().unwrap(), ts as i64).into())
+            let slot = fmt_podlang::chain_step_at(ts, chain_max_ts)?;
+            Some((chain_steps_array.as_ref()?, slot as i64).into())
         };
 
         // Wrap each pending Tx event with its anchors. Arg layout
@@ -856,31 +851,28 @@ impl ActionHandle {
                         let st_literal = st_sub
                             .clone()
                             .expect("SubAction statement captured at Rhai");
-                        let st = if action_chain_packed {
-                            // Sub-action signature ends with `..., chain0, chain`
-                            // (parent pre/post ts); the in/out record args (if
-                            // any) precede them.
-                            let arg_count = st_literal.args().len();
-                            let post_ts = inst_chain_ts[i].expect("SubAction has parent_ts");
-                            let pre_ts = post_ts - 1;
-                            let prev_chain_anchor = chain_step_anchor(pre_ts);
-                            let chain_anchor = chain_step_anchor(post_ts);
-                            if prev_chain_anchor.is_some() || chain_anchor.is_some() {
-                                let mut replacements: Vec<Option<OperationArg>> =
-                                    vec![None; arg_count];
-                                replacements[arg_count - 2] = prev_chain_anchor;
-                                replacements[arg_count - 1] = chain_anchor;
-                                exe_ctx
-                                    .bld
-                                    .builder
-                                    .priv_op(Operation::replace_value_with_entry(
-                                        replacements,
-                                        st_literal,
-                                    ))
-                                    .unwrap()
-                            } else {
-                                st_literal
-                            }
+                        // Sub-action signature ends with `..., chain0, chain`
+                        // (parent pre/post ts); the in/out record args (if
+                        // any) precede them. Lift each chain arg to an
+                        // anchored ref when it's an intermediate of the
+                        // parent's packed chain.
+                        let arg_count = st_literal.args().len();
+                        let post_ts = inst_chain_ts[i].expect("SubAction has parent_ts");
+                        let pre_ts = post_ts - 1;
+                        let prev_chain_anchor = chain_step_anchor(pre_ts);
+                        let chain_anchor = chain_step_anchor(post_ts);
+                        let st = if prev_chain_anchor.is_some() || chain_anchor.is_some() {
+                            let mut replacements: Vec<Option<OperationArg>> = vec![None; arg_count];
+                            replacements[arg_count - 2] = prev_chain_anchor;
+                            replacements[arg_count - 1] = chain_anchor;
+                            exe_ctx
+                                .bld
+                                .builder
+                                .priv_op(Operation::replace_value_with_entry(
+                                    replacements,
+                                    st_literal,
+                                ))
+                                .unwrap()
                         } else {
                             st_literal
                         };

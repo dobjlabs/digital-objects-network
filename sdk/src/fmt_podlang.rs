@@ -8,8 +8,8 @@
 //! to the action; the IsX OR is over those bridge predicates.
 
 use crate::{
-    ActionContext, ActionMeta, ActionObjectRef, ClassMeta, Dependency, Inst, Intro, Loader,
-    ObjectIO, Ref, VarOrValue,
+    ActionContext, ActionObjectRef, ClassMeta, Dependency, Inst, Intro, Loader, ObjectIO, Ref,
+    VarOrValue,
 };
 use std::collections::HashMap;
 use std::fmt;
@@ -48,26 +48,38 @@ fn fmt_var_at(name: &str, ts: usize, max_ts: usize) -> String {
     }
 }
 
+/// Slot 0 placeholder in every records-form schema (`<Action>In`,
+/// `<Action>Out`, `<Action>Chain`). Real entries start at slot 1.
+/// Works around pod2 issue #513.
+pub(crate) const PAD_ENTRY: &str = "_pad";
+
 /// An action's chain max_ts must be at least this for the SDK to pack
 /// intermediate chain states into a `<Action>Chain` record. Below the
 /// threshold, the per-step scalar wildcards (`chain1`, `chain2`, ...)
 /// fit in fewer slots than the record-typed wildcard would cost.
 pub(crate) const CHAIN_PACK_MIN_TS: usize = 3;
 
-/// Slot 0 placeholder in every records-form schema (`<Action>In`,
-/// `<Action>Out`, `<Action>Chain`). Real entries start at slot 1.
-/// Works around pod2 issue #513.
-pub(crate) const PAD_ENTRY: &str = "_pad";
+/// True iff this action's chain is packed into a `<Action>Chain` record:
+/// the schema is emitted, a `chain_steps` typed private wildcard appears
+/// in the action signature, and intermediate chain refs render as
+/// anchored `chain_steps.step_N` instead of scalar wildcards.
+pub(crate) fn chain_packed(chain_max_ts: usize) -> bool {
+    chain_max_ts >= CHAIN_PACK_MIN_TS
+}
 
 /// Schema name for an action's chain record (e.g. `LogToWoodChain`).
 pub(crate) fn chain_schema_name(action_name: &str) -> String {
     format!("{action_name}Chain")
 }
 
-/// True if this action's chain has enough intermediate states to be
-/// worth packing into a record.
-pub(crate) fn chain_packed(meta: &ActionMeta) -> bool {
-    meta.chain_max_ts >= CHAIN_PACK_MIN_TS
+/// Slot in the `<Action>Chain` record for an intermediate chain ts when
+/// this action's chain is packed. Returns `None` for endpoints
+/// (`ts=0=chain0`, `ts=max_ts=chain`) and for unpacked actions (whose
+/// intermediates are scalar `chain1`, `chain2`, ... wildcards). The
+/// record's array layout is `[_pad, step_0_value, step_1_value, ...]`,
+/// so the slot index equals `ts` and the step name is `step_{ts-1}`.
+pub(crate) fn chain_step_at(ts: usize, chain_max_ts: usize) -> Option<usize> {
+    (chain_packed(chain_max_ts) && ts > 0 && ts < chain_max_ts).then_some(ts)
 }
 
 #[derive(Clone, Copy)]
@@ -81,9 +93,6 @@ struct VarNameFmt<'a> {
     /// Object Ref's post-form collapses to `out.<name>`. False for
     /// non-Object vars and Input-only Objects.
     collapsed_out: bool,
-    /// Whether this action packs its intermediate chain states into a
-    /// `<Action>Chain` record. Only meaningful when `name == "chain"`.
-    chain_packed: bool,
 }
 
 impl<'a> VarNameFmt<'a> {
@@ -107,11 +116,10 @@ impl<'a> fmt::Display for VarNameFmt<'a> {
         if self.collapsed_out && self.ts == self.max_ts {
             return write!(f, "out.{}", self.name);
         }
-        // Chain intermediates render as `chain_steps.step_<ts-1>` when
-        // packed; endpoints (ts=0=chain0, ts=max_ts=chain) still use
-        // the scalar names from `fmt_var_at`.
-        if self.name == "chain" && self.chain_packed && self.ts > 0 && self.ts < self.max_ts {
-            return write!(f, "chain_steps.step_{}", self.ts - 1);
+        if self.name == "chain"
+            && let Some(slot) = chain_step_at(self.ts, self.max_ts)
+        {
+            return write!(f, "chain_steps.step_{}", slot - 1);
         }
         write!(f, "{}", fmt_var_at(self.name, self.ts, self.max_ts))
     }
@@ -209,7 +217,7 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
                 render(&names),
             )?;
         }
-        if chain_packed(meta) {
+        if chain_packed(meta.chain_max_ts) {
             // Intermediates: ts=1..=chain_max_ts-1 -> step_0..step_(K-2).
             let steps: Vec<String> = (0..meta.chain_max_ts - 1)
                 .map(|i| format!("step_{i}"))
@@ -336,11 +344,10 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         sub_calls.iter().filter_map(|c| c.alias.clone()).collect();
 
     // Private wildcards: every (var, ts) except sub-action aliases,
-    // the chain's ts=0/max (public as chain0/chain), and Object pre/
-    // post-form ts on collapsed sides. When the chain is packed into a
-    // `<Action>Chain` record, intermediate chain ts are also dropped
-    // (they render as `chain_steps.step_N` anchored refs in the body).
-    let action_chain_packed = chain_packed(meta);
+    // chain endpoints (public chain0/chain), packed chain intermediates
+    // (anchored via the `chain_steps` record), and Object pre/post-form
+    // ts on collapsed sides. Unpacked chain intermediates appear as
+    // scalar `chain1, chain2, ...` privates.
     let mut private_vars: Vec<String> = Vec::new();
     for var in &action.vars {
         if alias_names.contains(var.as_str()) {
@@ -348,13 +355,12 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         }
         let max_ts = action.var_state[var].ts;
         for i in 0..=max_ts {
-            if var == "chain" && (i == 0 || i == max_ts) {
-                continue;
-            }
-            if var == "chain" && action_chain_packed {
-                continue;
-            }
-            if meta.collapsed_at(var, i, max_ts).is_some() {
+            let skip = if var == "chain" {
+                i == 0 || i == max_ts || chain_step_at(i, max_ts).is_some()
+            } else {
+                meta.collapsed_at(var, i, max_ts).is_some()
+            };
+            if skip {
                 continue;
             }
             private_vars.push(fmt_var_at(var, i, max_ts));
@@ -369,8 +375,8 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
             private_vars.push(format!("{name} {}", schema_name(&c.sub_name, Side::Out)));
         }
     }
-    // Append the chain record typed private (if this action packs chain).
-    if action_chain_packed {
+    // Append the chain record typed private when packed.
+    if chain_packed(meta.chain_max_ts) {
         private_vars.push(format!("chain_steps {}", chain_schema_name(&action.name)));
     }
     if !private_vars.is_empty() {
@@ -402,7 +408,6 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                     max_ts,
                     collapsed_in,
                     collapsed_out,
-                    chain_packed: action_chain_packed,
                 },
             )
         })
