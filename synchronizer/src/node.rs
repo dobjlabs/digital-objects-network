@@ -12,7 +12,6 @@ use alloy::{
     network as alloy_network,
     primitives::B256,
     providers as alloy_provider,
-    transports::http::reqwest,
 };
 use alloy_network::Ethereum;
 use alloy_provider::{Provider, RootProvider};

@@ -24,21 +24,8 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.37"
-txlib = { path = "../../txlib" }
 common = { path = "../../common" }
 driver = { path = "../../driver" }
-pod2utils = { path = "../../pod2utils" }
-vdfpod = { path = "../../intro_pods/vdfpod" }
-lt_eq_u256_pod = { path = "../../intro_pods/lt_eq_u256_pod" }
-synchronizer = { path = "../../synchronizer" }
-relayer = { path = "../../relayer" }
-reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
-hex = "0.4"
-base64 = "0.22"
-pod2 = { workspace = true }
-craft-mcp = { path = "../../mcp" }
-tokio = { version = "1", features = ["net"] }
-notify = "6"
 rfd = "0.14"
 anyhow = { workspace = true }
 thiserror = { workspace = true }

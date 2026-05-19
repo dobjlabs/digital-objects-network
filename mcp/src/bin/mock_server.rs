@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
     let server = McpServer::new(MockCraftOps::new(), config);
     let listener = tokio::net::TcpListener::bind(&bind_address).await?;
 
-    tracing::info!("ZK-Craft MCP mock server listening on http://{bind_address}/mcp");
+    tracing::info!("bitcraft MCP mock server listening on http://{bind_address}/mcp");
 
     let ct2 = ct.clone();
     tokio::spawn(async move {

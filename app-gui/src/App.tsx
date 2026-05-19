@@ -7,9 +7,7 @@ import { SettingsModal } from "./features/settings/SettingsModal";
 import {
   getGlobalStateRoot,
   getObjectsDir,
-  listenMcpActionStarted,
   listenOpenSettings,
-  listenObjectsChanged,
   listenRunActionProgress,
   openObjectsDir,
   sampleAppCpu,
@@ -45,7 +43,7 @@ function App() {
   const applyRunActionProgress = useStore(
     (state) => state.applyRunActionProgress,
   );
-  const initProofPanel = useStore((state) => state.initProofPanel);
+  const resetProofPanel = useStore((state) => state.resetProofPanel);
   const runProof = useStore((state) => state.runProof);
   const proofStatus = useStore((state) => state.proof.status);
   const proofRunning = useStore(
@@ -90,9 +88,40 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
+    const resetTimers = new Set<number>();
+    let refreshTimer: number | null = null;
+    const scheduleRefresh = () => {
+      if (cancelled) return;
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        if (cancelled) return;
+        hydrateData().catch((error) => {
+          if (!cancelled) {
+            console.error("Failed to refresh GUI after action progress:", error);
+          }
+        });
+      }, 120);
+    };
+
     listenRunActionProgress((event) => {
       if (!cancelled) {
         applyRunActionProgress(event);
+        if (
+          (event.outputFiles?.length ?? 0) > 0 ||
+          (event.phase === "commit" && event.status === "done")
+        ) {
+          scheduleRefresh();
+        }
+        if (event.phase === "commit" && event.status === "done") {
+          const timer = window.setTimeout(() => {
+            resetTimers.delete(timer);
+            if (!cancelled) resetProofPanel(event.runId);
+          }, 2800);
+          resetTimers.add(timer);
+        }
       }
     })
       .then((dispose) => {
@@ -108,78 +137,11 @@ function App() {
 
     return () => {
       cancelled = true;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      for (const timer of resetTimers) window.clearTimeout(timer);
       if (unlisten) unlisten();
     };
-  }, [applyRunActionProgress]);
-
-  // Listen for MCP-initiated actions so the proof panel shows progress
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    listenMcpActionStarted((event) => {
-      if (!cancelled) {
-        initProofPanel({ action: event.action, args: ["(via MCP)"] });
-      }
-    })
-      .then((dispose) => {
-        if (cancelled) {
-          dispose();
-          return;
-        }
-        unlisten = dispose;
-      })
-      .catch((error) => {
-        console.error("Failed to subscribe to mcp-action-started:", error);
-      });
-    return () => {
-      cancelled = true;
-      if (unlisten) unlisten();
-    };
-  }, [initProofPanel]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    let refreshTimer: number | null = null;
-
-    const scheduleRefresh = () => {
-      if (cancelled) return;
-      if (refreshTimer !== null) {
-        window.clearTimeout(refreshTimer);
-      }
-      refreshTimer = window.setTimeout(() => {
-        refreshTimer = null;
-        if (cancelled) return;
-        hydrateData().catch((error) => {
-          if (!cancelled) {
-            console.error("Failed to refresh GUI after objects change:", error);
-          }
-        });
-      }, 120);
-    };
-
-    listenObjectsChanged(() => {
-      scheduleRefresh();
-    })
-      .then((dispose) => {
-        if (cancelled) {
-          dispose();
-          return;
-        }
-        unlisten = dispose;
-      })
-      .catch((error) => {
-        console.error("Failed to subscribe to objects-changed:", error);
-      });
-
-    return () => {
-      cancelled = true;
-      if (refreshTimer !== null) {
-        window.clearTimeout(refreshTimer);
-      }
-      if (unlisten) unlisten();
-    };
-  }, [hydrateData]);
+  }, [applyRunActionProgress, hydrateData, resetProofPanel]);
 
   useEffect(() => {
     let cancelled = false;

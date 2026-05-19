@@ -28,8 +28,7 @@ use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
 use txlib::GroundingWitness;
 
 use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
-use crate::qualified_name::QualifiedName;
-use crate::types::{ActionSummary, ClassRef};
+use wire_types::{ActionSummary, ClassRef, QualifiedName};
 
 struct Plugin {
     #[allow(dead_code)]
@@ -210,6 +209,10 @@ impl PexeCatalog {
                     .action_hash(&bare)
                     .map(|h| format!("{:#}", h))
                     .unwrap_or_default();
+                // Action predicates use the bare action name (no `Is`
+                // prefix like classes get).
+                let predicate_source = extract_predicate(&podlang_src, &bare)
+                    .unwrap_or_else(|| format!("{bare}(state) = AND(...)"));
                 all_actions.push(ActionSummary {
                     action: qname,
                     emoji: meta.map_or("⚙️", |m| m.emoji.as_str()).to_string(),
@@ -219,6 +222,7 @@ impl PexeCatalog {
                         .to_string(),
                     total_inputs,
                     total_outputs,
+                    predicate_source,
                 });
             }
 

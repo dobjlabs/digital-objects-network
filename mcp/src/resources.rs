@@ -1,9 +1,9 @@
 use rmcp::model::{Annotated, RawResource, ReadResourceResult, Resource, ResourceContents};
 
-const PODLANG_REFERENCE_URI: &str = "zk-craft://docs/podlang-reference";
-const TXLIB_PREDICATES_URI: &str = "zk-craft://source/txlib.podlang";
-const TIME_PREDICATES_URI: &str = "zk-craft://source/time.podlang";
-const OBJECT_LIFECYCLE_URI: &str = "zk-craft://docs/object-lifecycle";
+const PODLANG_REFERENCE_URI: &str = "bitcraft://docs/podlang-reference";
+const TXLIB_PREDICATES_URI: &str = "bitcraft://source/txlib.podlang";
+const TIME_PREDICATES_URI: &str = "bitcraft://source/time.podlang";
+const OBJECT_LIFECYCLE_URI: &str = "bitcraft://docs/object-lifecycle";
 
 pub fn list() -> Vec<Resource> {
     vec![

@@ -14,23 +14,24 @@ use crate::clients::{
     RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS,
     SynchronizerClient,
 };
+use crate::error::DriverError;
 use crate::execute::{
     build_relayer_payload, obj_type_hash, reconcile_objects, resolve_inputs, save_results,
     update_output_files, validate_execute_request,
 };
-use crate::object_record::ObjectStatus;
 use crate::object_record::parse_object_record_file;
 use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, select_object,
-    write_object_file,
+    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
-use crate::qualified_name::QualifiedName;
 use crate::settings::{default_settings, read_settings, write_settings};
 use crate::types::{
-    ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverPaths,
-    DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase, ExecutionReporter,
-    ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSelector, ObjectSummary,
+    ActionQuery, DriverPaths, ExecuteActionInput, ExecuteActionResult, ExecutionReporter,
+    ExecutionStepContext, NoopExecutionReporter, ObjectQuery,
+};
+use wire_types::{
+    ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverSettings,
+    ExecutionPhase, ObjectStatus, ObjectSummary, QualifiedName,
 };
 
 pub trait PayloadBuilder: Send + Sync {
@@ -123,24 +124,38 @@ impl Driver {
         Ok(entries
             .iter()
             .filter(|entry| query.is_none_or(|query| matches_query(entry, query)))
-            .map(|entry| self.object_summary(entry, None))
+            .map(|entry| self.object_summary(entry))
             .collect())
     }
 
-    pub fn read_object(&self, selector: &ObjectSelector) -> Result<ObjectSummary> {
-        let entries = load_object_files(&self.paths)?;
-        let entry = select_object(&entries, selector)?;
-        Ok(self.object_summary(entry, None))
+    /// Resolve an object by either a bare basename (`Wood.dobj`) or an
+    /// absolute path. Only the file name is consulted, so user-pasted
+    /// paths work the same as basenames, and `..` segments can't
+    /// escape the inventory.
+    ///
+    /// Missing files produce [`DriverError::ObjectFileNotFound`] (HTTP
+    /// 404), not a generic 500.
+    pub fn read_object(&self, path: &Path) -> Result<ObjectSummary> {
+        let file_name = extract_basename(path)?;
+        let resolved = self.resolve_managed_path(&file_name);
+        if !resolved.exists() {
+            return Err(DriverError::ObjectFileNotFound(file_name).into());
+        }
+        let record = parse_object_record_file(&resolved)?;
+        Ok(self.object_summary(&ObjectFileEntry { file_name, record }))
     }
 
-    pub fn read_object_file(&self, path: &Path) -> Result<ObjectSummary> {
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| anyhow!("invalid input path (missing file name): {}", path.display()))?
-            .to_string();
-        let record = parse_object_record_file(path)?;
-        Ok(self.object_summary(&ObjectFileEntry { file_name, record }, None))
+    /// Look up a basename in the live dir, falling back to the nullified
+    /// dir. Either path is returned even if the file doesn't exist on
+    /// disk — the caller is expected to follow up with an existence check
+    /// or a parse attempt.
+    fn resolve_managed_path(&self, file_name: &str) -> std::path::PathBuf {
+        let live = self.paths.objects_dir.join(file_name);
+        if live.exists() {
+            live
+        } else {
+            self.paths.nullified_objects_dir.join(file_name)
+        }
     }
 
     pub fn sync_inventory(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
@@ -190,12 +205,7 @@ impl Driver {
         Ok(entries
             .iter()
             .filter(|entry| query.is_none_or(|query| matches_query(entry, query)))
-            .map(|entry| {
-                let source_tx_hash = entry.record.spendable().tx.dict().commitment();
-                let grounded = entry.record.is_nullified()
-                    || membership.grounded_txs.contains(&source_tx_hash);
-                self.object_summary(entry, Some(grounded))
-            })
+            .map(|entry| self.object_summary(entry))
             .collect())
     }
 
@@ -217,6 +227,15 @@ impl Driver {
                 })
             })
             .collect())
+    }
+
+    /// Look up a single action by its qualified name. Errors if no plugin
+    /// provides the action.
+    pub fn get_action(&self, action: &QualifiedName) -> Result<ActionSummary> {
+        self.deps
+            .catalog
+            .get_action(action)
+            .ok_or_else(|| anyhow!("unknown action: {action}"))
     }
 
     pub fn list_classes(&self) -> Result<Vec<ClassSummary>> {
@@ -337,7 +356,7 @@ impl Driver {
         validate_execute_request(&input, &action)?;
 
         let no_ctx = ExecutionStepContext::default();
-        reporter.on_step(ExecutionPhase::GenerateProof, "Verifying Inputs", &no_ctx);
+        reporter.on_step(ExecutionPhase::GenerateProof, "Verifying inputs", &no_ctx);
         let entries = load_object_files(&self.paths)?;
         let resolved_inputs = resolve_inputs(&entries, &input, &action)?;
         let source_tx_hashes = resolved_inputs
@@ -363,8 +382,10 @@ impl Driver {
         )?;
         reporter.on_done(ExecutionPhase::GenerateProof, None);
 
-        let commit_ctx = ExecutionStepContext {
+        let mut commit_ctx = ExecutionStepContext {
             old_root: Some(old_root.clone()),
+            output_files: Vec::new(),
+            output_status: None,
         };
         reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &commit_ctx);
         let payload_bytes = self
@@ -375,6 +396,12 @@ impl Driver {
 
         reporter.on_step(ExecutionPhase::Commit, "Creating files", &commit_ctx);
         let saved = save_results(&self.paths, &action, &resolved_inputs, &spendable_outputs)?;
+        commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Unknown);
+        reporter.on_step(
+            ExecutionPhase::Commit,
+            "Output object files created with status unknown",
+            &commit_ctx,
+        );
 
         // Submit to relayer. Output files are kept as Unknown on failure so
         // the user can retry submission later without regenerating proofs.
@@ -417,6 +444,12 @@ impl Driver {
             ObjectStatus::Pending,
             Some(&eth_tx_hash),
         )?;
+        commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Pending);
+        reporter.on_step(
+            ExecutionPhase::Commit,
+            "Got transaction hash; output object files updated to pending while waiting for submission confirmation",
+            &commit_ctx,
+        );
 
         let confirmation = self.deps.relayer.wait_for_confirmation(
             &settings.relayer_api_url,
@@ -438,6 +471,11 @@ impl Driver {
                 ObjectStatus::Pending,
                 Some(final_tx_hash),
             )?;
+            reporter.on_step(
+                ExecutionPhase::Commit,
+                "Got replacement transaction hash; output object files updated to pending",
+                &commit_ctx,
+            );
         }
 
         reporter.on_step(
@@ -462,6 +500,12 @@ impl Driver {
                     ObjectStatus::Unknown,
                     Some(final_tx_hash),
                 )?;
+                commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Unknown);
+                reporter.on_step(
+                    ExecutionPhase::Commit,
+                    "Synchronizer did not observe commit; output object files reverted to unknown",
+                    &commit_ctx,
+                );
                 return Err(err);
             }
         };
@@ -473,6 +517,12 @@ impl Driver {
             ObjectStatus::Live,
             Some(final_tx_hash),
         )?;
+        commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Live);
+        reporter.on_step(
+            ExecutionPhase::Commit,
+            "Commit observed; output object files updated to live",
+            &commit_ctx,
+        );
 
         let result = ExecuteActionResult {
             old_root,
@@ -491,7 +541,7 @@ impl Driver {
         self.deps.catalog.generated_podlang()
     }
 
-    fn object_summary(&self, entry: &ObjectFileEntry, grounded: Option<bool>) -> ObjectSummary {
+    fn object_summary(&self, entry: &ObjectFileEntry) -> ObjectSummary {
         let class_hash = self
             .deps
             .catalog
@@ -505,7 +555,6 @@ impl Driver {
             class_hash,
             status: entry.record.status,
             tx_hash: entry.record.tx_hash.clone(),
-            grounded,
             fields: entry.record.fields_map(),
         }
     }
@@ -522,4 +571,29 @@ impl Driver {
             predicate_source: class_info.predicate_source,
         }
     }
+}
+
+fn file_write_ctx(
+    old_root: &str,
+    output_files: &[String],
+    output_status: ObjectStatus,
+) -> ExecutionStepContext {
+    ExecutionStepContext {
+        old_root: Some(old_root.to_string()),
+        output_files: output_files.to_vec(),
+        output_status: Some(output_status),
+    }
+}
+
+/// Normalize an input path (absolute or basename) to its file name. Used
+/// by `read_object` and by action execution to turn user-supplied paths
+/// into managed-store basenames before lookup.
+pub(crate) fn extract_basename(path: &Path) -> Result<String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            DriverError::InvalidInput(format!("missing file name in path: {}", path.display()))
+                .into()
+        })
 }

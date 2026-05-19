@@ -22,9 +22,9 @@ export interface InventoryObjectPayload {
   emoji: string;
   status: ObjectStatus;
   txHash: string | null;
-  grounded: boolean;
   description?: string;
-  obj: unknown;
+  /** Application-layer fields (e.g. `blueprint`, `durability`, `key`). */
+  fields: Record<string, unknown>;
 }
 
 export interface ClassRefPayload {
@@ -41,18 +41,14 @@ export interface ActionPayload {
   description: string;
 }
 
-export interface LoadGuiInventoryResult {
-  inventory: InventoryObjectPayload[];
-  actions: ActionPayload[];
-}
-
 export interface RunActionInput {
   action: QualifiedNamePayload;
   inputObjectPaths: string[];
+  runId: string;
 }
 
 export interface RunActionResult {
-  ok: boolean;
+  runId: string;
   oldRoot: string;
   newRoot: string;
   outputFiles: string[];
@@ -77,6 +73,8 @@ export interface RunActionProgress {
   oldRoot: string | null;
   newRoot: string | null;
   outputFiles: string[] | null;
+  outputStatus: ObjectStatus | null;
+  nullifiedFiles: string[] | null;
 }
 
 export interface CpuSample {

@@ -1,32 +1,12 @@
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{fs, path::PathBuf};
 
 use crate::error::CommandError;
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use rfd::FileDialog;
 use tauri_plugin_opener::OpenerExt;
 
-#[tauri::command]
-pub fn get_objects_dir(
-    driver: tauri::State<'_, Arc<::driver::Driver>>,
-) -> Result<String, CommandError> {
-    let path = driver.paths().objects_dir.clone();
-    Ok(path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-pub fn open_objects_dir(
-    app: tauri::AppHandle,
-    driver: tauri::State<'_, Arc<::driver::Driver>>,
-) -> Result<String, CommandError> {
-    let path: PathBuf = driver.paths().objects_dir.clone();
-    fs::create_dir_all(&path)
-        .map_err(|err| anyhow!("failed to create objects directory: {err}"))?;
-    app.opener()
-        .open_path(path.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|err| anyhow!("failed to open objects directory: {err}"))?;
-    Ok(path.to_string_lossy().to_string())
-}
-
+/// Native file picker for `.dobj` files. Returns the absolute path of the
+/// chosen file. Desktop-only convenience.
 #[tauri::command]
 pub fn pick_dobj_file_path() -> Result<String, CommandError> {
     let Some(path) = FileDialog::new()
@@ -38,6 +18,9 @@ pub fn pick_dobj_file_path() -> Result<String, CommandError> {
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Parse a `.dobj` file from disk, without going through the driver
+/// process. Used by the desktop GUI to inspect a freshly-picked file before
+/// passing its name to a `runAction` call (which still goes through dobjd).
 #[tauri::command]
 pub fn read_dobj_file(path: String) -> Result<::driver::ObjectRecord, CommandError> {
     let path = PathBuf::from(path.trim());
@@ -45,4 +28,23 @@ pub fn read_dobj_file(path: String) -> Result<::driver::ObjectRecord, CommandErr
         return Err(anyhow!("selected file does not exist: {}", path.display()).into());
     }
     Ok(::driver::parse_object_record_file(&path)?)
+}
+
+/// Reveal `~/.dobj/objects/` in the OS file manager (Finder / Explorer /
+/// xdg-open). Desktop-only — browsers can't open native folders by design,
+/// so the website shows the path as text instead.
+///
+/// Path comes from `driver::paths::default_paths()`, which is the same free
+/// function dobjd uses, so the desktop and dobjd agree on the directory
+/// even though they're separate processes.
+#[tauri::command]
+pub fn open_objects_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
+    let paths = ::driver::paths::default_paths()
+        .map_err(|err| anyhow!("failed to resolve objects directory: {err}"))?;
+    let dir = paths.objects_dir;
+    fs::create_dir_all(&dir).map_err(|err| anyhow!("failed to create objects directory: {err}"))?;
+    app.opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|err| anyhow!("failed to open objects directory: {err}"))?;
+    Ok(dir.to_string_lossy().to_string())
 }

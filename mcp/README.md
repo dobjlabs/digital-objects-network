@@ -1,14 +1,32 @@
-# ZK-Craft MCP Server
+# bitcraft MCP Server
 
-An MCP (Model Context Protocol) server that exposes ZK-Craft's digital object operations to AI agents. Claude Desktop or Claude Code can inspect inventory, explore crafting actions, read documentation, and execute ZK proof-based crafting operations through this server.
+An MCP (Model Context Protocol) server that exposes bitcraft's digital
+object operations to AI agents. Claude Code, Claude Desktop, Cursor, and any
+other MCP-aware client can inspect inventory, explore crafting actions, read
+documentation, and execute ZK-proof-based crafting through this server.
 
 ## Architecture
 
 ```
-Claude Desktop <--stdio--> craft-mcp-proxy <--HTTP--> Tauri app (MCP + GUI)
+Claude Code, Cursor, …       ──HTTP──┐
+Claude Desktop ──stdio── bitcraft-mcp-proxy ──HTTP──┤
+                                                   ▼
+                                                 dobjd
+                                          (one driver process,
+                                            shared with the
+                                            desktop / web GUIs
+                                            and the dobj CLI)
 ```
 
-The Tauri app embeds a streamable HTTP MCP server on port 3001. A thin stdio proxy binary bridges Claude Desktop (which expects stdio transport) to the app's HTTP endpoint. The GUI and MCP server share in-process state — when Claude runs an action, the GUI shows real-time progress.
+The MCP server is hosted by `dobjd` on `http://127.0.0.1:7718/mcp` alongside
+the REST API on `:7717`. Both share the same `Arc<Driver>` and the same
+broadcast hub, so an action kicked off via MCP shows real-time progress in
+the desktop window or browser tab.
+
+Clients that speak streamable HTTP MCP (Claude Code, Cursor, Continue, …)
+connect to dobjd directly. Claude Desktop only speaks stdio MCP, so it
+launches `bitcraft-mcp-proxy` as a child process; the proxy bridges its
+stdin/stdout to dobjd's HTTP endpoint.
 
 ### Crate structure
 
@@ -16,107 +34,84 @@ The Tauri app embeds a streamable HTTP MCP server on port 3001. A thin stdio pro
 mcp/
   src/
     lib.rs          McpServer, McpConfig — HTTP embedding interface
-    ops.rs          CraftOps trait — boundary between MCP and the host app
-    types.rs        MCP request/response types (simple, LLM-friendly, with JsonSchema)
-    server.rs       CraftMcpService — rmcp tool handlers and ServerHandler impl
+    ops.rs          CraftOps trait — boundary between MCP and the host
+    types.rs        MCP request/response types (JsonSchema-derived)
+    server.rs       CraftMcpService — rmcp tool handlers + ServerHandler
     mock.rs         MockCraftOps — realistic test fixtures
     resources.rs    MCP resources (docs + podlang source files)
     bin/
-      mock_server.rs   Standalone HTTP server with mock data (port 3001)
+      mock_server.rs   Standalone HTTP server with mock data (port 7718)
       mock_stdio.rs    Standalone stdio server with mock data
-      proxy_stdio.rs   Stdio-to-HTTP proxy for Claude Desktop
+      proxy_stdio.rs   Stdio↔HTTP proxy (binary: bitcraft-mcp-proxy)
   docs/
     podlang-reference.md   Full podlang language reference
     object-lifecycle.md    Digital Object lifecycle walkthrough
 ```
 
-The `mcp` crate has **no dependencies** on pod2, txlib, craft_sdk, or app-gui. The `CraftOps` trait is the integration boundary — the real implementation lives in `app-gui/src-tauri/src/mcp.rs`.
+The `mcp` crate has **no dependencies** on pod2, txlib, craft_sdk, dobjd,
+or app-gui. The `CraftOps` trait is the integration boundary — the
+production implementation lives in
+[`dobjd/src/mcp.rs`](../dobjd/src/mcp.rs); the test implementation is
+`MockCraftOps`.
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `list_inventory` | All objects with types, fields, liveness status |
-| `list_actions` | Available crafting actions with input/output classes and CPU cost |
-| `list_classes` | All object classes with live counts and producing/consuming actions |
-| `get_state_root` | Current global state root from the synchronizer |
-| `inspect_object` | Full object detail: fields, class, liveness, predicate source |
-| `inspect_class` | Class predicate definition and related actions |
-| `run_action` | Execute a crafting action (blocks for proof generation) |
-| `check_feasibility` | Check if an action can run with current inventory |
-| `read_doc` | Read reference docs (podlang ref, object lifecycle, predicate sources, generated podlang) |
+| Tool                               | Description                                                   |
+| ---------------------------------- | ------------------------------------------------------------- |
+| `list_inventory`                   | All objects with types, fields, liveness status               |
+| `list_actions`                     | Available crafting actions with input/output classes          |
+| `list_classes`                     | All object classes with live counts and related actions       |
+| `get_state_root`                   | Current global state root from the synchronizer               |
+| `inspect_object`                   | Full object detail: fields, class, liveness, predicate        |
+| `inspect_class`                    | Class predicate definition and related actions                |
+| `run_action`                       | Execute a crafting action (blocks for proof generation)       |
+| `check_feasibility`                | Whether an action can run with current inventory              |
+| `read_settings` / `write_settings` | Synchronizer + relayer URLs                                   |
+| `get_objects_dir`                  | Path to `~/.dobj/objects/`                                    |
+| `read_doc`                         | Reference docs (podlang, object-lifecycle, generated podlang) |
 
-All tools return structured content (`structuredContent` + `outputSchema`) for clients that support it, with a text fallback for older clients.
+All tools return structured content (`structuredContent` + `outputSchema`)
+for clients that support it, with a text fallback for older clients.
 
-## Setup with Claude Desktop
+## Setup
 
-### 1. Build the proxy
+### Streamable HTTP clients (Claude Code, Cursor, Continue, …)
+
+Make sure dobjd is running, then point the client at
+`http://127.0.0.1:7718/mcp`:
 
 ```sh
-cd zk-craft
-cargo build -p craft-mcp --bin craft-mcp-proxy --features proxy --release
+claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp
 ```
 
-### 2. Add to Claude Desktop config
+This is what [SKILL.md](../SKILL.md) automates as part of end-user install.
 
-Open Claude Desktop settings and edit the MCP server configuration (`claude_desktop_config.json`):
+### Claude Desktop (stdio only)
+
+Claude Desktop launches `bitcraft-mcp-proxy` as a child process. The proxy
+connects to dobjd's HTTP MCP endpoint over loopback. Edit
+`claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
-    "zk-craft": {
-      "command": "/absolute/path/to/zk-craft/target/release/craft-mcp-proxy",
-      "args": ["--port", "3001"]
+    "bitcraft": {
+      "command": "/Users/<you>/.dobj/bin/bitcraft-mcp-proxy",
+      "args": ["--port", "7718"]
     }
   }
 }
 ```
 
-### 3. Start the Tauri app
+The proxy accepts `--port <PORT>` or `--url <URL>`. Default upstream:
+`http://127.0.0.1:7718/mcp`.
 
-The proxy connects to the app's MCP endpoint. The app (plus the synchronizer and relayer it depends on) must be running first:
-
-```sh
-cd zk-craft
-just dev
-```
-
-This starts the synchronizer, relayer, and GUI together. The MCP server starts automatically on `http://127.0.0.1:3001/mcp`.
-
-### 4. Restart Claude Desktop
-
-Claude Desktop reads the config on startup. After adding the server config and starting the app, restart Claude Desktop. You should see "zk-craft" listed as a connected MCP server.
-
-## Setup with Claude Code
-
-The proxy works with Claude Code the same way as Claude Desktop. With the app running:
+The release tarball ships the proxy binary at `~/.dobj/bin/bitcraft-mcp-proxy`
+alongside `dobjd` and `dobj`. For a from-source build:
 
 ```sh
-claude mcp add zk-craft /absolute/path/to/zk-craft/target/release/craft-mcp-proxy -- --port 3001
+cargo build -p craft-mcp --bin bitcraft-mcp-proxy --features proxy --release
 ```
-
-Or add to `.claude/settings.json` manually:
-
-```json
-{
-  "mcpServers": {
-    "zk-craft": {
-      "command": "/absolute/path/to/zk-craft/target/release/craft-mcp-proxy",
-      "args": ["--port", "3001"]
-    }
-  }
-}
-```
-
-### Mock mode (no app required)
-
-For development and testing without the full app stack, use the stdio mock server:
-
-```sh
-claude mcp add zk-craft-mock /absolute/path/to/zk-craft/target/release/craft-mcp-stdio
-```
-
-This serves mock data — useful for testing MCP tools or developing new ones.
 
 ## Development
 
@@ -126,30 +121,24 @@ This serves mock data — useful for testing MCP tools or developing new ones.
 cargo test -p craft-mcp --release
 ```
 
-Tests run against `MockCraftOps` and cover tool handlers, structured output, error cases, and server startup.
+Tests run against `MockCraftOps` and cover tool handlers, structured
+output, error cases, and concurrent action dispatch.
 
-### Mock servers
+### Mock servers (no dobjd required)
 
-**HTTP mock** (for testing the proxy or direct HTTP clients):
+**HTTP mock** — for poking the wire format directly or testing the proxy
+without dobjd:
 
 ```sh
 cargo run -p craft-mcp --bin craft-mcp-mock --release
-# Listens on http://127.0.0.1:3001/mcp
+# Listens on http://127.0.0.1:7718/mcp
 ```
 
-**Stdio mock** (for testing with Claude Desktop/Code without the app):
+**Stdio mock** — for wiring Claude Desktop/Code straight to fixture data:
 
 ```sh
 cargo run -p craft-mcp --bin craft-mcp-stdio --release
 ```
-
-### Proxy
-
-```sh
-cargo run -p craft-mcp --bin craft-mcp-proxy --features proxy --release -- --port 3001
-```
-
-The proxy accepts `--port <PORT>` or `--url <URL>` to configure the upstream endpoint. Default: `http://127.0.0.1:3001/mcp`.
 
 ### Adding tools
 
@@ -157,4 +146,5 @@ The proxy accepts `--port <PORT>` or `--url <URL>` to configure the upstream end
 2. Add the mock implementation in `mock.rs`
 3. Add the tool handler in `server.rs` (use `#[tool(description = "...")]`)
 4. Add request/response types to `types.rs` if needed
-5. Update the tool count assertion in the test
+5. Add the matching method to `DobjdCraftOps` in `dobjd/src/mcp.rs`
+6. Update the tool count assertion in `tests::test_tool_router_lists_all_tools`

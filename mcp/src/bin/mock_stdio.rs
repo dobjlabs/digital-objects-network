@@ -7,7 +7,7 @@ use rmcp::transport::io::stdio;
 async fn main() -> anyhow::Result<()> {
     craft_mcp::logging::init_stderr();
 
-    tracing::info!("ZK-Craft MCP mock server starting (stdio transport)");
+    tracing::info!("bitcraft MCP mock server starting (stdio transport)");
 
     let service = CraftMcpService::new(std::sync::Arc::new(MockCraftOps::new()));
     let running = service.serve(stdio()).await?;
