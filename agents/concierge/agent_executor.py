@@ -171,19 +171,15 @@ class ConciergeAgentExecutor(AgentExecutor):
             # deprecated for this model". Setting to 1 is the model-required
             # value and a no-op for providers that accept any value.
             #
-            # `allow_parallel_tool_calls=True` — BeeAI defaults this to
-            # False and strips multi-tool-call responses down to one
-            # (backend/chat.py:864 even logs the workaround). Without it
-            # the Concierge calls Lumberjack THEN Stonemason sequentially
-            # even though the prompt says "in parallel". With it the LLM
-            # emits both tool calls in one assistant turn and BeeAI's
-            # runner dispatches them concurrently — the two peer rounds
-            # then overlap, roughly halving wall-clock for this stage.
+            # `allow_parallel_tool_calls=True` — needed for `parallel`
+            # but NOT sufficient. See `_force_parallel_tool_calls()` below
+            # for the actual fix.
             chat_model = ChatModel.from_name(
                 beeai_model,
                 ChatModelParameters(temperature=1),
                 allow_parallel_tool_calls=True,
             )
+            _force_parallel_tool_calls(chat_model)
             agent = RequirementAgent(
                 name='Concierge',
                 description='Orchestrates Lumberjack, Stonemason, Craftsmith to deliver a StonePick.',
@@ -424,6 +420,41 @@ def _compact(value: Any) -> str:
         return ''
     s = str(value)
     return s if len(s) <= 120 else s[:117] + '…'
+
+
+def _force_parallel_tool_calls(chat_model: Any) -> None:
+    """Force `parallel_tool_calls=True` on every LiteLLM call this model makes.
+
+    Works around a BeeAI bug: `allow_parallel_tool_calls=True` on a
+    `ChatModel` only governs whether the *runner* accepts multi-call
+    responses (backend/chat.py:658). It is NEVER propagated to the
+    `ChatModelInput.parallel_tool_calls` field that LiteLLM actually
+    sends, because `RequirementAgent`'s runner builds `ChatModelOptions`
+    without `parallel_tool_calls` set. Result: `input.parallel_tool_calls`
+    stays `None`, line 284 of `adapters/litellm/chat.py` does
+    `bool(None) → False`, and LiteLLM translates `parallel_tool_calls=False`
+    into Anthropic's `tool_choice.disable_parallel_tool_use=True` — which
+    EXPLICITLY forbids parallel tool calls. So even though our prompt
+    says "call both in parallel" and we set `allow_parallel_tool_calls=True`,
+    Anthropic is told the opposite.
+
+    The fix wraps `chat_model._transform_input` so that just before
+    LiteLLM serializes the request, `input.parallel_tool_calls` flips
+    from None to True (only when None, so an explicit caller-provided
+    value still wins). `ChatModelInput.model_config` has `frozen=False`
+    so mutation is allowed.
+
+    Verified empirically: without this patch the LiteLLM dict carries
+    `parallel_tool_calls=False`; with it, `True`.
+    """
+    original = chat_model._transform_input
+
+    def patched(input):
+        if input.parallel_tool_calls is None:
+            input.parallel_tool_calls = True
+        return original(input)
+
+    chat_model._transform_input = patched
 
 
 def _log(message: str) -> None:
