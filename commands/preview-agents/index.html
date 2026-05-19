@@ -114,7 +114,11 @@
         color: var(--text-3);
         padding: 4px 2px;
       }
-      /* Orchestrator: single card, centered, max-width capped */
+      /* Orchestrator: single card, centered, max-width capped. Height
+         matches the middle-tier cards so the Concierge doesn't look
+         comparatively cramped — it's the busiest agent on the network
+         (think + 3 peer calls + verifications) and benefits from the
+         vertical room. */
       .tier-orchestrator .tier-cards {
         display: flex;
         justify-content: center;
@@ -122,6 +126,8 @@
       .tier-orchestrator .card {
         max-width: 720px;
         width: 100%;
+        min-height: 360px;
+        max-height: 440px;
       }
       /* Middle tier: three cards side by side, one per column */
       .tier-middle .tier-cards {

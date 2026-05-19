@@ -104,15 +104,20 @@ You have these tools:
                           a live `expected_class` object on chain, and
                           returns its filename.
 
-Procedure:
+Procedure (follow EXACTLY in this order):
 1. Call `think` to plan.
-2. Call `list_candidates` to discover the URLs to bid across.
-3. Call `fetch_agent_card` once per candidate (the framework runs these
-   in parallel where it can).
+2. Call `list_candidates` FIRST — this is the ONLY source of truth for
+   which URLs you may bid across. Do not guess URLs from common port
+   conventions or from earlier context; use exactly the URLs this tool
+   returns. fetch_agent_card and delegate_request will REJECT any URL
+   that wasn't returned by list_candidates.
+3. Call `fetch_agent_card` once per URL list_candidates returned (in
+   parallel where the framework can).
 4. From the cards, identify (a) the LOWEST price and (b) what class of
    .dobj that peer delivers — the skill name/description usually says
    it directly (e.g. "Supply a Stick" → class is "Stick").
-5. Call `delegate_request(winner_url, <the original request>, "<class>")`.
+5. Call `delegate_request(winner_url, <the original request>, "<class>")`
+   passing one of the URLs from list_candidates.
 6. Respond with ONLY the filename returned by delegate_request. No prose,
    no "Here is the …". Just the bare filename like:
        craft-basics__stick_0xabc1234….dobj
@@ -190,9 +195,17 @@ class _ListCandidatesTool(Tool):
 class _FetchAgentCardTool(Tool):
     """Fetches a peer's /.well-known/agent-card.json and returns it as JSON."""
 
-    def __init__(self, publish: PublishFn) -> None:
+    def __init__(
+        self, *, publish: PublishFn, candidates: list[PeerAgent],
+    ) -> None:
         super().__init__()
         self._publish = publish
+        # Whitelist of allowed URLs. The LLM has gotten the URLs from
+        # `list_candidates` already; this is defense-in-depth against
+        # hallucinated peer URLs (observed in practice: Haiku skipped
+        # list_candidates and went straight to fetching 9997/9998/9999
+        # — the second two aren't Lumberjacks at all).
+        self._allowed_urls = {c.url.rstrip('/') for c in candidates}
 
     @property
     def name(self) -> str:
@@ -224,6 +237,16 @@ class _FetchAgentCardTool(Tool):
         context: RunContext,
     ) -> StringToolOutput:
         url = input.url.rstrip('/')
+        # Reject anything outside the candidate whitelist. The LLM gets
+        # this exact list from `list_candidates`; anything else is a
+        # hallucination and should be loudly rejected so the LLM
+        # re-thinks rather than silently picking a wrong winner.
+        if url not in self._allowed_urls:
+            allowed = ', '.join(sorted(self._allowed_urls))
+            return StringToolOutput(
+                f'ERROR: {url!r} is not a registered candidate. '
+                f'Use only URLs returned by list_candidates: {allowed}'
+            )
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f'{url}/.well-known/agent-card.json')
@@ -278,12 +301,17 @@ class _DelegateRequestTool(Tool):
         on_peer_chunk: Callable[[str, str], Awaitable[None]],
         capture: Callable[[str, bytes, str], None],
         dobjd: DobjdClient,
+        candidates: list[PeerAgent],
     ) -> None:
         super().__init__()
         self._publish = publish
         self._on_peer_chunk = on_peer_chunk
         self._capture = capture
         self._dobjd = dobjd
+        # Same whitelist defense as _FetchAgentCardTool — even if the
+        # LLM skipped list_candidates, it can't delegate to a peer
+        # that wasn't in the registered candidate set.
+        self._allowed_urls = {c.url.rstrip('/') for c in candidates}
 
     @property
     def name(self) -> str:
@@ -318,6 +346,12 @@ class _DelegateRequestTool(Tool):
         context: RunContext,
     ) -> StringToolOutput:
         peer_url = input.peer_url.rstrip('/')
+        if peer_url not in self._allowed_urls:
+            allowed = ', '.join(sorted(self._allowed_urls))
+            raise RuntimeError(
+                f'delegate_request: {peer_url!r} is not a registered '
+                f'candidate. Allowed: {allowed}'
+            )
         peer_label = _peer_label_from_url(peer_url)
         self._publish({'type': 'delegating', 'peer': peer_label, 'url': peer_url})
 
@@ -434,12 +468,15 @@ class AuctioneerAgentExecutor(AgentExecutor):
 
             think_tool = ThinkTool()
             list_tool = _ListCandidatesTool(self.candidates)
-            fetch_tool = _FetchAgentCardTool(publish=self._publish)
+            fetch_tool = _FetchAgentCardTool(
+                publish=self._publish, candidates=self.candidates,
+            )
             delegate_tool = _DelegateRequestTool(
                 publish=self._publish,
                 on_peer_chunk=on_peer_chunk,
                 capture=capture,
                 dobjd=self.dobjd,
+                candidates=self.candidates,
             )
 
             # ----- BeeAI agent ------------------------------------------
@@ -461,11 +498,23 @@ class AuctioneerAgentExecutor(AgentExecutor):
                         think_tool, force_at_step=1,
                         consecutive_allowed=False,
                     ),
-                    ConditionalRequirement(list_tool, max_invocations=1),
-                    # Allow one fetch per candidate (cap generous for safety).
-                    ConditionalRequirement(fetch_tool, max_invocations=8),
-                    # Delegate exactly once, only after at least one fetch
-                    # (so we never delegate before seeing prices).
+                    # list_candidates MUST be called (min=1) and at most
+                    # once. Without this, observed behavior: Haiku skipped
+                    # discovery and hallucinated URLs (9997/9998/9999) —
+                    # picking Lumberjack-A by accident and missing
+                    # Lumberjack-B at 9995 entirely.
+                    ConditionalRequirement(
+                        list_tool, min_invocations=1, max_invocations=1,
+                    ),
+                    # fetch_agent_card only runs AFTER list_candidates,
+                    # so the LLM has the real URL set in context before
+                    # it can fetch anything.
+                    ConditionalRequirement(
+                        fetch_tool, only_after=[list_tool], max_invocations=8,
+                    ),
+                    # Delegate exactly once, only after at least one
+                    # fetch_agent_card (so we never delegate before
+                    # seeing prices).
                     ConditionalRequirement(
                         delegate_tool,
                         only_after=[fetch_tool],
