@@ -89,16 +89,17 @@ impl<'a> ReplayFrame<'a> {
 }
 
 /// Derived state needed to build a Mutate event's replay clauses.
-/// `btx` is the pre-mutate tx-context dict; `lm` is the live set with
-/// `old` removed; `nl` is `lm` with `new` inserted; `nn` is the
-/// nullifiers set with `nullifier(old)` accumulated. Owned because
-/// the caller also needs `nl`/`nn` to thread into the recursive tail
+/// `btx` is the pre-mutate tx-context dict; `live_minus_old` is the
+/// live set with `old` removed; `new_live` is `live_minus_old` with
+/// `new` inserted; `new_nullifiers` is the nullifiers set with
+/// `nullifier(old)` accumulated. Owned because the caller also needs
+/// `new_live` / `new_nullifiers` to thread into the recursive tail
 /// frame.
 pub(crate) struct MutateScratch {
     pub(crate) btx: Dictionary,
-    pub(crate) lm: Set,
-    pub(crate) nl: Set,
-    pub(crate) nn: Set,
+    pub(crate) live_minus_old: Set,
+    pub(crate) new_live: Set,
+    pub(crate) new_nullifiers: Set,
 }
 
 impl<'a> ReplayFrame<'a> {
@@ -106,14 +107,21 @@ impl<'a> ReplayFrame<'a> {
     /// for a `(old -> new)` mutate.
     pub(crate) fn mutate_scratch(self, old: &Dictionary, new: &Dictionary) -> MutateScratch {
         let btx = self.to_tx_dict();
-        let mut lm = self.live.clone();
-        lm.delete(&Value::from(old.commitment())).unwrap();
-        let mut nl = lm.clone();
-        nl.insert(&Value::from(new.clone())).unwrap();
+        let mut live_minus_old = self.live.clone();
+        live_minus_old
+            .delete(&Value::from(old.commitment()))
+            .unwrap();
+        let mut new_live = live_minus_old.clone();
+        new_live.insert(&Value::from(new.clone())).unwrap();
         let nul = object_nullifier_from_key_hash(object_key_hash(old).unwrap());
-        let mut nn = self.nullifiers.clone();
-        nn.insert(&Value::from(nul)).unwrap();
-        MutateScratch { btx, lm, nl, nn }
+        let mut new_nullifiers = self.nullifiers.clone();
+        new_nullifiers.insert(&Value::from(nul)).unwrap();
+        MutateScratch {
+            btx,
+            live_minus_old,
+            new_live,
+            new_nullifiers,
+        }
     }
 }
 
@@ -144,21 +152,24 @@ impl<'a> Replayer<'a> {
 
         if events.len() == 1 {
             // Single action: no step wrapping.
-            let (st_action, c, l, n) = self.build_top_level_action(&events[0], chain, frame);
+            let (st_action, next_chain, next_live, next_nulls) =
+                self.build_top_level_action(&events[0], chain, frame);
             let st = st_custom!(self.ctx, ReplayActions() = (st_action, Statement::None)).unwrap();
             self.record("ReplayActions");
-            return (st, c, l, n);
+            return (st, next_chain, next_live, next_nulls);
         }
 
         // Step: first action + recursive tail.
         let (first, rest) = events.split_first().unwrap();
-        let (st_action, c, l, n) = self.build_top_level_action(first, chain, frame);
-        let (st_rest, c2, l2, n2) = self.build_replay_actions(rest, c, frame.advance(&l, &n));
+        let (st_action, next_chain, next_live, next_nulls) =
+            self.build_top_level_action(first, chain, frame);
+        let (st_rest, final_chain, final_live, final_nulls) =
+            self.build_replay_actions(rest, next_chain, frame.advance(&next_live, &next_nulls));
         let st_step = st_custom!(self.ctx, ReplayActionsStep() = (st_action, st_rest)).unwrap();
         self.record("ReplayActionsStep");
         let st = st_custom!(self.ctx, ReplayActions() = (Statement::None, st_step)).unwrap();
         self.record("ReplayActions");
-        (st, c2, l2, n2)
+        (st, final_chain, final_live, final_nulls)
     }
 
     /// Extract an action from a top-level `ChainEvent` and delegate to
@@ -202,7 +213,8 @@ impl<'a> Replayer<'a> {
         );
 
         if events.len() == 1 {
-            let (st_elem, c, l, n) = self.build_replay_element(&events[0], chain, frame);
+            let (st_elem, next_chain, next_live, next_nulls) =
+                self.build_replay_element(&events[0], chain, frame);
             let st = st_custom!(
                 self.ctx,
                 ReplayContents() = (
@@ -215,7 +227,7 @@ impl<'a> Replayer<'a> {
             )
             .unwrap();
             self.record("ReplayContents");
-            return (st, c, l, n);
+            return (st, next_chain, next_live, next_nulls);
         }
 
         // K>=2 step: peel off head, dispatch on its type, recurse on tail.
@@ -226,7 +238,7 @@ impl<'a> Replayer<'a> {
         // ReplayDelete wrapping (already at the 5-sub-stmt limit), and
         // Action is opaque to this dispatch.
         let (first, rest) = events.split_first().unwrap();
-        let (st_step, tag, c2, l2, n2) = match first {
+        let (st_step, tag, final_chain, final_live, final_nulls) = match first {
             ChainEvent::Insert {
                 new,
                 chain_after,
@@ -237,19 +249,19 @@ impl<'a> Replayer<'a> {
                 let evidence = guard_evidence
                     .clone()
                     .expect("missing guard evidence for insert");
-                let mut nl = frame.live.clone();
-                nl.insert(&Value::from(new.clone())).unwrap();
-                let (st_rest, c2, l2, n2) =
-                    self.build_replay_contents(rest, *chain_after, frame.with_live(&nl));
+                let mut new_live = frame.live.clone();
+                new_live.insert(&Value::from(new.clone())).unwrap();
+                let (st_rest, final_chain, final_live, final_nulls) =
+                    self.build_replay_contents(rest, *chain_after, frame.with_live(&new_live));
                 let st = self.build_replay_step_insert(
                     new,
                     frame,
-                    &nl,
+                    &new_live,
                     tx_stmt.clone(),
                     evidence,
                     st_rest,
                 );
-                (st, EventTag::Insert, c2, l2, n2)
+                (st, EventTag::Insert, final_chain, final_live, final_nulls)
             }
             ChainEvent::Mutate {
                 new,
@@ -263,10 +275,10 @@ impl<'a> Replayer<'a> {
                     .clone()
                     .expect("missing guard evidence for mutate");
                 let scratch = frame.mutate_scratch(old, new);
-                let (st_rest, c2, l2, n2) = self.build_replay_contents(
+                let (st_rest, final_chain, final_live, final_nulls) = self.build_replay_contents(
                     rest,
                     *chain_after,
-                    frame.advance(&scratch.nl, &scratch.nn),
+                    frame.advance(&scratch.new_live, &scratch.new_nullifiers),
                 );
                 let st = self.build_replay_step_mutate(
                     new,
@@ -276,7 +288,7 @@ impl<'a> Replayer<'a> {
                     evidence,
                     st_rest,
                 );
-                (st, EventTag::Mutate, c2, l2, n2)
+                (st, EventTag::Mutate, final_chain, final_live, final_nulls)
             }
             ChainEvent::Delete {
                 old,
@@ -288,10 +300,13 @@ impl<'a> Replayer<'a> {
                 let evidence = guard_evidence
                     .clone()
                     .expect("missing guard evidence for delete");
-                let (st_head, l, n) =
+                let (st_head, next_live, next_nulls) =
                     self.build_replay_delete(old, frame, tx_stmt.clone(), evidence);
-                let (st_rest, c2, l2, n2) =
-                    self.build_replay_contents(rest, *chain_after, frame.advance(&l, &n));
+                let (st_rest, final_chain, final_live, final_nulls) = self.build_replay_contents(
+                    rest,
+                    *chain_after,
+                    frame.advance(&next_live, &next_nulls),
+                );
                 let st = self
                     .ctx
                     .apply_custom_pred_simple(
@@ -301,17 +316,20 @@ impl<'a> Replayer<'a> {
                     )
                     .unwrap();
                 self.record("ReplayContentsStepDelete");
-                (st, EventTag::Delete, c2, l2, n2)
+                (st, EventTag::Delete, final_chain, final_live, final_nulls)
             }
             ChainEvent::Action {
                 chain_after,
                 contents,
                 ..
             } => {
-                let (st_head, l, n) =
+                let (st_head, next_live, next_nulls) =
                     self.build_replay_action(contents, chain, frame, *chain_after);
-                let (st_rest, c2, l2, n2) =
-                    self.build_replay_contents(rest, *chain_after, frame.advance(&l, &n));
+                let (st_rest, final_chain, final_live, final_nulls) = self.build_replay_contents(
+                    rest,
+                    *chain_after,
+                    frame.advance(&next_live, &next_nulls),
+                );
                 let st = self
                     .ctx
                     .apply_custom_pred_simple(
@@ -321,7 +339,7 @@ impl<'a> Replayer<'a> {
                     )
                     .unwrap();
                 self.record("ReplayContentsStepAction");
-                (st, EventTag::Action, c2, l2, n2)
+                (st, EventTag::Action, final_chain, final_live, final_nulls)
             }
         };
 
@@ -369,7 +387,7 @@ impl<'a> Replayer<'a> {
         }
         .unwrap();
         self.record("ReplayContents");
-        (st, c2, l2, n2)
+        (st, final_chain, final_live, final_nulls)
     }
 
     /// Build the inner `Replay<X>` statement for one event, returning
@@ -451,7 +469,8 @@ impl<'a> Replayer<'a> {
         chain: Hash,
         frame: ReplayFrame<'_>,
     ) -> (Statement, Hash, Set, Set) {
-        let (st_inner, tag, c, l, n) = self.build_replay_event(event, chain, frame);
+        let (st_inner, tag, next_chain, next_live, next_nulls) =
+            self.build_replay_event(event, chain, frame);
         let st = match tag {
             EventTag::Insert => st_custom!(
                 self.ctx,
@@ -472,7 +491,7 @@ impl<'a> Replayer<'a> {
         }
         .unwrap();
         self.record("ReplayElement");
-        (st, c, l, n)
+        (st, next_chain, next_live, next_nulls)
     }
 
     fn build_replay_insert(
@@ -483,19 +502,19 @@ impl<'a> Replayer<'a> {
         guard_evidence: Statement,
     ) -> (Statement, Set) {
         let btx = frame.to_tx_dict();
-        let mut nl = frame.live.clone();
-        nl.insert(&Value::from(new.clone())).unwrap();
-        let atx = tx_with(&btx, "live", Value::from(nl.clone()));
+        let mut new_live = frame.live.clone();
+        new_live.insert(&Value::from(new.clone())).unwrap();
+        let atx = tx_with(&btx, "live", Value::from(new_live.clone()));
 
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert(nl, (&btx, "live"), new)))
+            .priv_op(op!(SetInsert(new_live, (&btx, "live"), new)))
             .unwrap();
         let op_du = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(atx, btx, "live", nl)))
+            .priv_op(op!(DictUpdate(atx, btx, "live", new_live)))
             .unwrap();
         let rebound_evidence = self
             .ctx
@@ -514,7 +533,7 @@ impl<'a> Replayer<'a> {
             )
             .unwrap();
         self.record("ReplayInsert");
-        (st, nl)
+        (st, new_live)
     }
 
     /// Build a `ReplayContentsStepInsert` statement: the inlined body
@@ -523,22 +542,22 @@ impl<'a> Replayer<'a> {
     /// tiny `ins` dict so they share a single wildcard slot (keeps the
     /// predicate at 8 wildcards). Body sub-statements anchor to
     /// `ins.new` / `ins.new_live` instead of using bare wildcards.
-    /// `nl` is `live + {new}`, supplied by the caller (which already
+    /// `new_live` is `live + {new}`, supplied by the caller (which already
     /// needs it for the recursive tail).
     fn build_replay_step_insert(
         &mut self,
         new: &Dictionary,
         frame: ReplayFrame<'_>,
-        nl: &Set,
+        new_live: &Set,
         tx_stmt: Statement,
         guard_evidence: Statement,
         st_rest: Statement,
     ) -> Statement {
         let btx = frame.to_tx_dict();
-        let atx = tx_with(&btx, "live", Value::from(nl.clone()));
+        let atx = tx_with(&btx, "live", Value::from(new_live.clone()));
         let ins = dict!({
             "new" => new.clone(),
-            "new_live" => nl.clone()
+            "new_live" => new_live.clone()
         });
 
         // Re-anchor TxInsert's `new` slot (slot 2) from literal to ins.new.
@@ -622,22 +641,26 @@ impl<'a> Replayer<'a> {
             )
             .unwrap();
         self.record("ReplayMutate");
-        let MutateScratch { nl, nn, .. } = scratch;
-        (st, nl, nn)
+        let MutateScratch {
+            new_live,
+            new_nullifiers,
+            ..
+        } = scratch;
+        (st, new_live, new_nullifiers)
     }
 
     /// Build a `ReplayNullify` statement: derives the object key hash
     /// and nullifier from `old`, then accumulates the nullifier into
     /// the tx's nullifiers set. `mid_tx` is the tx state with the new
     /// live set already in place; `after_tx` is `mid_tx` with
-    /// `nullifiers` updated to `nn`. Used by both mutate and delete
+    /// `nullifiers` updated to `new_nullifiers`. Used by both mutate and delete
     /// replay.
     fn build_replay_nullify(
         &mut self,
         old: &Dictionary,
         mid_tx: &Dictionary,
         after_tx: &Dictionary,
-        nn: &Set,
+        new_nullifiers: &Set,
     ) -> Statement {
         let okh = object_key_hash(old).unwrap();
         let nul = object_nullifier_from_key_hash(okh);
@@ -654,12 +677,17 @@ impl<'a> Replayer<'a> {
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert(nn, (mid_tx, "nullifiers"), nul)))
+            .priv_op(op!(SetInsert(new_nullifiers, (mid_tx, "nullifiers"), nul)))
             .unwrap();
         let op_du_null = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(after_tx, mid_tx, "nullifiers", nn)))
+            .priv_op(op!(DictUpdate(
+                after_tx,
+                mid_tx,
+                "nullifiers",
+                new_nullifiers
+            )))
             .unwrap();
         let st = self
             .ctx
@@ -684,27 +712,32 @@ impl<'a> Replayer<'a> {
         old: &Dictionary,
         scratch: &MutateScratch,
     ) -> Statement {
-        let MutateScratch { btx, lm, nl, nn } = scratch;
-        let m1 = tx_with(btx, "live", Value::from(nl.clone()));
-        let atx = tx_with(&m1, "nullifiers", Value::from(nn.clone()));
-        let st_nullify = self.build_replay_nullify(old, &m1, &atx, nn);
+        let MutateScratch {
+            btx,
+            live_minus_old,
+            new_live,
+            new_nullifiers,
+        } = scratch;
+        let m1 = tx_with(btx, "live", Value::from(new_live.clone()));
+        let atx = tx_with(&m1, "nullifiers", Value::from(new_nullifiers.clone()));
+        let st_nullify = self.build_replay_nullify(old, &m1, &atx, new_nullifiers);
 
         // Live swap + nullify; chain/event-hash work is delegated to the
         // parent's TxMutate statement.
         let op_sd = self
             .ctx
             .builder
-            .priv_op(op!(SetDelete(lm, (btx, "live"), old)))
+            .priv_op(op!(SetDelete(live_minus_old, (btx, "live"), old)))
             .unwrap();
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert(nl, lm, new)))
+            .priv_op(op!(SetInsert(new_live, live_minus_old, new)))
             .unwrap();
         let op_du_live = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(m1, btx, "live", nl)))
+            .priv_op(op!(DictUpdate(m1, btx, "live", new_live)))
             .unwrap();
         let st_event = self
             .ctx
@@ -724,7 +757,7 @@ impl<'a> Replayer<'a> {
     /// single wildcard slot (keeps the predicate at 8 wildcards). The
     /// TxMutate and guard sub-statements are re-anchored to
     /// `pair.old` / `pair.new`. `scratch` is supplied by the caller
-    /// (which already needs `nl`/`nn` for the recursive tail).
+    /// (which already needs `new_live`/`new_nullifiers` for the recursive tail).
     fn build_replay_step_mutate(
         &mut self,
         new: &Dictionary,
@@ -784,25 +817,25 @@ impl<'a> Replayer<'a> {
     ) -> (Statement, Set, Set) {
         let btx = frame.to_tx_dict();
 
-        let mut nl = frame.live.clone();
-        nl.delete(&Value::from(old.commitment())).unwrap();
+        let mut new_live = frame.live.clone();
+        new_live.delete(&Value::from(old.commitment())).unwrap();
         let nul = object_nullifier_from_key_hash(object_key_hash(old).unwrap());
-        let mut nn = frame.nullifiers.clone();
-        nn.insert(&Value::from(nul)).unwrap();
-        let m1 = tx_with(&btx, "live", Value::from(nl.clone()));
-        let atx = tx_with(&m1, "nullifiers", Value::from(nn.clone()));
+        let mut new_nullifiers = frame.nullifiers.clone();
+        new_nullifiers.insert(&Value::from(nul)).unwrap();
+        let m1 = tx_with(&btx, "live", Value::from(new_live.clone()));
+        let atx = tx_with(&m1, "nullifiers", Value::from(new_nullifiers.clone()));
 
-        let st_nullify = self.build_replay_nullify(old, &m1, &atx, &nn);
+        let st_nullify = self.build_replay_nullify(old, &m1, &atx, &new_nullifiers);
 
         let op_sd = self
             .ctx
             .builder
-            .priv_op(op!(SetDelete(nl, (&btx, "live"), old)))
+            .priv_op(op!(SetDelete(new_live, (&btx, "live"), old)))
             .unwrap();
         let op_du_live = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(m1, btx, "live", nl)))
+            .priv_op(op!(DictUpdate(m1, btx, "live", new_live)))
             .unwrap();
         let rebound_evidence = self
             .ctx
@@ -821,7 +854,7 @@ impl<'a> Replayer<'a> {
             )
             .unwrap();
         self.record("ReplayDelete");
-        (st, nl, nn)
+        (st, new_live, new_nullifiers)
     }
 
     /// Build `ReplayAction`: open the action scope (rebind
@@ -840,13 +873,13 @@ impl<'a> Replayer<'a> {
         let ms = tx_with(&btx, "chain_start", Value::from(chain));
         let itx = tx_with(&ms, "chain_end", Value::from(chain_after));
 
-        let (st_contents, _ce, le, ne) =
+        let (st_contents, _next_chain, next_live, next_nulls) =
             self.build_replay_contents(contents, chain, parent.rescope(chain, chain_after));
 
-        let etx = build_tx(&le, &ne, chain, chain_after);
+        let etx = build_tx(&next_live, &next_nulls, chain, chain_after);
 
-        let fm1 = tx_with(&btx, "live", Value::from(le.clone()));
-        let atx = tx_with(&fm1, "nullifiers", Value::from(ne.clone()));
+        let fm1 = tx_with(&btx, "live", Value::from(next_live.clone()));
+        let atx = tx_with(&fm1, "nullifiers", Value::from(next_nulls.clone()));
 
         // ReplayAction (scope setup + contents + live/nullifier copy-back)
         let op_scope1 = self
@@ -884,7 +917,7 @@ impl<'a> Replayer<'a> {
             )
             .unwrap();
         self.record("ReplayAction");
-        (st, le, ne)
+        (st, next_live, next_nulls)
     }
 }
 

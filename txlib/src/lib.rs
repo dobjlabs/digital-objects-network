@@ -198,13 +198,16 @@ pub struct GroundingEvidence {
 }
 
 impl GroundingEvidence {
-    /// Construct from the source transaction's `ctx` dict and `live` set
-    /// (both available to the prover at finalize time) plus the produced
-    /// object whose membership we attest.
-    pub fn new(ctx: &Dictionary, live: &Set, obj: &Dictionary) -> anyhow::Result<Self> {
+    /// Construct from the source transaction's `ctx` dict (which carries
+    /// the `live` set under the `"live"` key) plus the produced object
+    /// whose membership we attest.
+    pub fn new(ctx: &Dictionary, obj: &Dictionary) -> anyhow::Result<Self> {
         let tx_final = ctx.commitment();
+        let (live_value, live_in_tx_proof) = ctx.prove(&StrKey::from("live"))?;
+        let live = live_value
+            .as_set()
+            .ok_or_else(|| anyhow::anyhow!("ctx.live is not a Set"))?;
         let live_root = live.commitment();
-        let (_, live_in_tx_proof) = ctx.prove(&StrKey::from("live"))?;
         let obj_in_live_proof = live.prove(&Value::from(obj.clone()))?;
         Ok(Self {
             tx_final,
@@ -1415,7 +1418,7 @@ mod tests {
         let stone = make_object(is_stone.clone(), &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx0));
-        let evidence = GroundingEvidence::new(&tx0.ctx, &tx0.live, &pick).unwrap();
+        let evidence = GroundingEvidence::new(&tx0.ctx, &pick).unwrap();
         let inputs = vec![(pick.clone(), evidence)];
         let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
 
@@ -1543,7 +1546,7 @@ mod tests {
         let wood = make_object(is_wood.clone(), &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx1_out));
-        let evidence = GroundingEvidence::new(&tx1_out.ctx, &tx1_out.live, &log).unwrap();
+        let evidence = GroundingEvidence::new(&tx1_out.ctx, &log).unwrap();
         let inputs = vec![(log.clone(), evidence)];
         let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
 
@@ -1596,7 +1599,7 @@ mod tests {
         let stick_b = make_object(is_stick, &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx2_out));
-        let evidence = GroundingEvidence::new(&tx2_out.ctx, &tx2_out.live, &wood).unwrap();
+        let evidence = GroundingEvidence::new(&tx2_out.ctx, &wood).unwrap();
         let inputs = vec![(wood.clone(), evidence)];
         let mut tx3 = TxBuilder::new(&mut ctx, &inputs, witness);
 
