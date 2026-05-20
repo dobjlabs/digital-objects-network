@@ -21,6 +21,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"], optional = true }
+wire-types = { workspace = true, features = ["schemars"] }
 
 [features]
 default = []
@@ -38,6 +39,6 @@ name = "craft-mcp-stdio"
 path = "src/bin/mock_stdio.rs"
 
 [[bin]]
-name = "craft-mcp-proxy"
+name = "bitcraft-mcp-proxy"
 path = "src/bin/proxy_stdio.rs"
 required-features = ["proxy"]

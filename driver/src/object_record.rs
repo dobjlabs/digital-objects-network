@@ -4,16 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use txlib::GroundingEvidence;
 
-use crate::qualified_name::QualifiedName;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ObjectStatus {
-    Unknown,
-    Pending,
-    Live,
-    Nullified,
-}
+use wire_types::{ObjectStatus, QualifiedName};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

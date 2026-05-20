@@ -15,10 +15,14 @@ use serde::Deserialize;
 use crate::ops::CraftOps;
 use crate::types::*;
 
-/// MCP server service that exposes zk-craft operations as tools.
+/// MCP server service that exposes bitcraft operations as tools.
 #[derive(Clone)]
 pub struct CraftMcpService<T: CraftOps> {
     ops: Arc<T>,
+    /// Used by the `#[tool_handler]` macro at request-dispatch time and by
+    /// the test below. Plain dead-code analysis can't see the macro
+    /// expansion, so silence the warning.
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
 
@@ -35,8 +39,10 @@ impl<T: CraftOps> CraftMcpService<T> {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct InspectObjectParams {
-    /// The object ID (hex hash) to inspect
-    pub object_id: String,
+    /// The `.dobj` file name (e.g. `craft-basics__wood_0xabc….dobj`) to
+    /// inspect. Must be a basename in `~/.dobj/objects/` — use
+    /// `list_inventory` to see what's available.
+    pub file_name: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -44,6 +50,13 @@ pub struct InspectClassParams {
     /// The plugin-scoped class to inspect, e.g.
     /// `{ "pluginName": "craft-basics", "name": "WoodPick" }`.
     pub class: QualifiedName,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InspectActionParams {
+    /// The plugin-scoped action to inspect, e.g.
+    /// `{ "pluginName": "craft-basics", "name": "CraftWoodPick" }`.
+    pub action: QualifiedName,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -102,20 +115,20 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Inspect an object by ID: full detail including fields, class, liveness, and predicate source"
+        description = "Inspect an object by file name: full detail including fields, class, liveness, and predicate source. The file_name is a `.dobj` basename from list_inventory (e.g. `craft-basics__wood_0xabc….dobj`)."
     )]
     fn inspect_object(
         &self,
         Parameters(params): Parameters<InspectObjectParams>,
     ) -> Result<Json<ObjectDetail>, String> {
         self.ops
-            .inspect_object(&params.object_id)
+            .inspect_object(&params.file_name)
             .map(Json)
             .map_err(|e| e.to_string())
     }
 
     #[tool(
-        description = "Inspect a class by name: predicate definition, and which actions produce/consume it"
+        description = "Inspect a class by plugin-scoped name: predicate definition, and which actions produce/consume it"
     )]
     fn inspect_class(
         &self,
@@ -128,7 +141,20 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Execute a crafting action. Blocks until proof generation completes. Returns error if another action is already in progress."
+        description = "Inspect an action by plugin-scoped name: predicate definition, description, and input/output class requirements"
+    )]
+    fn inspect_action(
+        &self,
+        Parameters(params): Parameters<InspectActionParams>,
+    ) -> Result<Json<ActionDetail>, String> {
+        self.ops
+            .inspect_action(&params.action)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Execute a crafting action. Blocks until proof generation completes. Multiple actions can run concurrently."
     )]
     async fn run_action(
         &self,
@@ -154,6 +180,37 @@ impl<T: CraftOps> CraftMcpService<T> {
         self.ops
             .check_feasibility(&params.action)
             .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(description = "Read the driver's current configuration: synchronizer + relayer URLs.")]
+    fn read_settings(&self) -> Result<Json<DriverSettings>, String> {
+        self.ops
+            .read_settings()
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Update the driver's configuration. Both synchronizer and relayer URLs are required — pass the current value for whichever you don't want to change. Most callers will read_settings first, mutate, then write_settings."
+    )]
+    fn write_settings(
+        &self,
+        Parameters(params): Parameters<DriverSettings>,
+    ) -> Result<Json<DriverSettings>, String> {
+        self.ops
+            .write_settings(params)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Filesystem path to the local objects directory (~/.dobj/objects/). Returned as a string the user can paste into a file manager."
+    )]
+    fn get_objects_dir(&self) -> Result<Json<ObjectsDirInfo>, String> {
+        self.ops
+            .get_objects_dir()
+            .map(|path| Json(ObjectsDirInfo { path }))
             .map_err(|e| e.to_string())
     }
 
@@ -183,10 +240,10 @@ impl<T: CraftOps> CraftMcpService<T> {
             }
             _ => {
                 let uri = match params.name.as_str() {
-                    "podlang-reference" => "zk-craft://docs/podlang-reference",
-                    "object-lifecycle" => "zk-craft://docs/object-lifecycle",
-                    "txlib.podlang" => "zk-craft://source/txlib.podlang",
-                    "time.podlang" => "zk-craft://source/time.podlang",
+                    "podlang-reference" => "bitcraft://docs/podlang-reference",
+                    "object-lifecycle" => "bitcraft://docs/object-lifecycle",
+                    "txlib.podlang" => "bitcraft://source/txlib.podlang",
+                    "time.podlang" => "bitcraft://source/time.podlang",
                     "generated.podlang" => {
                         return self
                             .ops
@@ -273,8 +330,15 @@ mod tests {
         CraftMcpService::new(Arc::new(MockCraftOps::new()))
     }
 
+    fn craft_basics(name: &str) -> QualifiedName {
+        QualifiedName {
+            plugin_name: "craft-basics".to_string(),
+            name: name.to_string(),
+        }
+    }
+
     #[test]
-    fn test_tool_router_lists_all_seven_tools() {
+    fn test_tool_router_lists_all_tools() {
         let service = make_service();
         let tools: Vec<String> = service
             .tool_router
@@ -287,11 +351,15 @@ mod tests {
         assert!(tools.contains(&"get_state_root".to_string()));
         assert!(tools.contains(&"inspect_object".to_string()));
         assert!(tools.contains(&"inspect_class".to_string()));
+        assert!(tools.contains(&"inspect_action".to_string()));
         assert!(tools.contains(&"run_action".to_string()));
         assert!(tools.contains(&"check_feasibility".to_string()));
         assert!(tools.contains(&"list_classes".to_string()));
         assert!(tools.contains(&"read_doc".to_string()));
-        assert_eq!(tools.len(), 9);
+        assert!(tools.contains(&"read_settings".to_string()));
+        assert!(tools.contains(&"write_settings".to_string()));
+        assert!(tools.contains(&"get_objects_dir".to_string()));
+        assert_eq!(tools.len(), 13);
     }
 
     #[test]
@@ -300,14 +368,7 @@ mod tests {
         let info = service.get_info();
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
-        assert!(info.instructions.unwrap().contains("ZK-Craft MCP Server"));
-    }
-
-    fn craft_basics(name: &str) -> QualifiedName {
-        QualifiedName {
-            plugin_name: "craft-basics".to_string(),
-            name: name.to_string(),
-        }
+        assert!(info.instructions.unwrap().contains("bitcraft MCP Server"));
     }
 
     #[test]
@@ -342,18 +403,17 @@ mod tests {
         let service = make_service();
         let Json(detail) = service
             .inspect_object(Parameters(InspectObjectParams {
-                object_id: "0xabc4444444444444".to_string(),
+                file_name: "craft-basics__woodpick_0xabc4.dobj".to_string(),
             }))
             .unwrap();
         assert_eq!(detail.class.name, "WoodPick");
-        assert!(detail.predicate_source.contains("CraftWoodPick"));
     }
 
     #[test]
     fn test_inspect_object_not_found_returns_error() {
         let service = make_service();
         let result = service.inspect_object(Parameters(InspectObjectParams {
-            object_id: "0xnonexistent".to_string(),
+            file_name: "nonexistent.dobj".to_string(),
         }));
         let err = result.err().expect("should be an error");
         assert!(err.contains("not found"));
@@ -371,6 +431,29 @@ mod tests {
         assert!(detail.produced_by.contains(&craft_basics("CraftSticks")));
     }
 
+    #[test]
+    fn test_inspect_action_via_handler() {
+        let service = make_service();
+        let Json(detail) = service
+            .inspect_action(Parameters(InspectActionParams {
+                action: craft_basics("CraftWoodPick"),
+            }))
+            .unwrap();
+        assert_eq!(detail.action.name, "CraftWoodPick");
+        assert!(detail.total_inputs.iter().any(|r| r.class.name == "Wood"));
+        assert!(detail.total_inputs.iter().any(|r| r.class.name == "Stick"));
+        assert!(detail.predicate_source.contains("CraftWoodPick"));
+    }
+
+    #[test]
+    fn test_inspect_action_unknown_returns_error() {
+        let service = make_service();
+        let result = service.inspect_action(Parameters(InspectActionParams {
+            action: craft_basics("CraftDiamond"),
+        }));
+        assert!(result.is_err());
+    }
+
     #[tokio::test]
     async fn test_run_action_via_handler() {
         let service = make_service();
@@ -378,6 +461,7 @@ mod tests {
             .run_action(Parameters(RunActionInput {
                 action: craft_basics("FindLog"),
                 input_object_paths: vec![],
+                run_id: None,
             }))
             .await
             .unwrap();
@@ -385,16 +469,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_action_in_progress_returns_error() {
-        let service = CraftMcpService::new(Arc::new(MockCraftOps::new().with_action_in_progress()));
-        let result = service
-            .run_action(Parameters(RunActionInput {
-                action: craft_basics("FindLog"),
-                input_object_paths: vec![],
-            }))
-            .await;
-        let err = result.err().expect("should be an error");
-        assert!(err.contains("already in progress"));
+    async fn test_run_action_concurrent() {
+        let service = Arc::new(make_service());
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let svc = service.clone();
+            handles.push(tokio::spawn(async move {
+                svc.run_action(Parameters(RunActionInput {
+                    action: craft_basics("FindLog"),
+                    input_object_paths: vec![],
+                    run_id: None,
+                }))
+                .await
+            }));
+        }
+        for handle in handles {
+            let result = handle.await.unwrap();
+            assert!(result.is_ok());
+            assert!(result.unwrap().0.success);
+        }
     }
 
     #[test]

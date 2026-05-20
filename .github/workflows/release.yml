@@ -1,4 +1,15 @@
-name: Release Desktop App
+name: Release
+
+# Single workflow producing every bitcraft release artifact: the daemon
+# (`dobjd`), CLI (`dobj`), Claude Desktop stdio bridge (`bitcraft-mcp-proxy`),
+# and the bundled `craft-basics` plugin. Triggered on `v*` tags or via the
+# Actions UI with a tag name.
+#
+# On macOS, every native binary and dylib is codesigned + notarized so users
+# get an online verification on first run instead of the "could not verify
+# is free of malware" Gatekeeper dialog. Both Mac targets build on the
+# `macos-latest` (Apple Silicon) runner; the x86_64 build is cross-compiled
+# because GitHub's free `macos-13` Intel runners were deprecated end of 2025.
 
 on:
   push:
@@ -6,148 +17,260 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: "Build release artifacts without publishing a GitHub release"
-        required: false
-        default: false
-        type: boolean
       tag_name:
-        description: "Release tag to publish when dry_run is false (for example v0.1.0)"
-        required: false
+        description: "Release tag to publish (e.g. v0.1.0)"
+        required: true
         type: string
 
+# Single sources of truth — every job and the release-notes template draws
+# from here so a value change is one edit.
+env:
+  # `inputs.tag_name` is required:true on workflow_dispatch and empty on
+  # push:tags, so the `||` falls through to the tag ref cleanly.
+  RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
+  # Hosted defaults baked into dobjd at compile time (see
+  # driver/src/settings.rs::default_settings) AND surfaced in the release
+  # notes via envsubst. Change here, both move together.
+  DEFAULT_SYNCHRONIZER_API_URL: http://18.217.144.33:3000
+  DEFAULT_RELAYER_API_URL: http://18.217.144.33:3200
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+# Two pushes to the same tag (or a push + a manual dispatch) racing on the
+# same draft release would clobber each other's uploads. Serialize per-tag.
+concurrency:
+  group: release-${{ github.ref_name || inputs.tag_name }}
+  cancel-in-progress: false
+
+# No CI gate (Clippy/Tests/Rustfmt). Those workflows run on `push: branches:
+# [main]` and on PRs, not on tag pushes — so requiring a green run for the
+# tagged SHA blocks every release. Reintroduce a gate before the first
+# stable release if needed (e.g. by extending the prerequisite workflows
+# to also fire on tag push, or by polling for completion).
+
 jobs:
-  check-ci:
-    if: github.event_name != 'workflow_dispatch' && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
+  validate:
+    # Tiny gate so a malformed dispatch tag fails in seconds instead of
+    # 30 minutes into a macOS notarization. push:tags filtering already
+    # rejects non-`v*` refs, but workflow_dispatch accepts any string.
+    runs-on: ubuntu-22.04
     steps:
-      - name: Check CI status
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const workflows = [
-              { name: 'Clippy Check', file: 'clippy.yml' },
-              { name: 'Rust Tests', file: 'rust_tests.yml' },
-              { name: 'Rustfmt Check', file: 'rustfmt.yml' },
-            ];
-
-            for (const workflow of workflows) {
-              const runs = await github.rest.actions.listWorkflowRunsForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: workflow.file,
-                head_sha: context.sha,
-                status: 'completed',
-              });
-
-              const latestRun = runs.data.workflow_runs[0];
-              if (!latestRun || latestRun.conclusion !== 'success') {
-                core.setFailed(`Workflow "${workflow.name}" has not passed for this commit`);
-                return;
-              }
-            }
-
-  validate-dispatch:
-    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run && inputs.tag_name == ''
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require a tag for manual publish
+      - name: Validate tag shape
         run: |
-          echo "::error::workflow_dispatch releases require tag_name when dry_run is false."
-          exit 1
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(rc|alpha|beta)\.[0-9]+)?$ ]]; then
+            echo "::error::tag must be vMAJOR.MINOR.PATCH[-rc.N | -alpha.N | -beta.N], got '$RELEASE_TAG'"
+            exit 1
+          fi
+          echo "tag ok: $RELEASE_TAG"
 
-  release:
-    needs:
-      - check-ci
-      - validate-dispatch
-    if: |
-      always() &&
-      (needs.check-ci.result == 'success' || needs.check-ci.result == 'skipped') &&
-      (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
-    permissions:
-      contents: write
+  dobjd:
+    # Builds and signs every native binary that ships in the release: the
+    # daemon (`dobjd`) is the dominant artifact, with `dobj` (the CLI) and
+    # `bitcraft-mcp-proxy` riding alongside. Named after dobjd because the
+    # daemon is the load-bearing piece — the others are thin wrappers
+    # around its HTTP/MCP surfaces.
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: "macos-latest"
-            args: "--target aarch64-apple-darwin"
-            artifact_name: "macos-aarch64"
-          - platform: "macos-latest"
-            args: "--target x86_64-apple-darwin"
-            artifact_name: "macos-x86_64"
-          - platform: "ubuntu-22.04"
-            args: ""
-            artifact_name: "linux"
-          - platform: "windows-latest"
-            args: ""
-            artifact_name: "windows"
+          # Both macOS targets run on `macos-latest` (Apple Silicon) — the
+          # arm64 build is native, x86_64 is cross-compiled. Free
+          # macos-13 (Intel) runners were deprecated end of 2025 and are
+          # unavailable in the public queue, so cross-compile is the only
+          # path to ship Intel binaries without paying for a runner.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            scip_glob: libscip*.dylib
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            scip_glob: libscip*.dylib
+          # Pin Linux runner to 22.04 (not -latest / 24.04) intentionally.
+          # Linking against an older glibc widens the set of distros that
+          # can run our prebuilt binary; bumping the runner bumps the
+          # required minimum glibc on end-user machines.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            scip_glob: "libscip.so*"
 
-    runs-on: ${{ matrix.platform }}
-    defaults:
-      run:
-        working-directory: app-gui
+    runs-on: ${{ matrix.os }}
+
+    # Apple secrets used across signing/notarize steps. Job-level (not
+    # per-step) so they're declared once. Linux steps don't reference
+    # them; macOS-gated steps see them as needed.
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            file \
-            libfuse2 \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libsoup-3.0-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
+      - uses: actions/checkout@v4
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: nightly-2026-01-25
-          cache-shared-key: release-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('**/Cargo.lock') }}
+          # toolchain version comes from rust-toolchain.toml — single source
+          # for the workspace, the daily CI workflows, and this release.
+          target: ${{ matrix.target }}
+          cache-shared-key: dobjd-${{ matrix.target }}
           cache-workspace-crates: true
 
-      - name: Add Rust targets (macOS only)
-        if: matrix.platform == 'macos-latest'
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Install x86_64 Homebrew + gcc@13 (cross-compile prerequisite)
+        # Cross-compiling SCIP from an arm64 runner to x86_64 needs x86_64
+        # GCC to link Fortran libraries against. Without this, scip-sys's
+        # cmake step writes /usr/local/opt/gcc@13/... paths into libscip's
+        # install_names but the actual libs aren't on disk, so we can't
+        # bundle them and the resulting tarball is broken at runtime.
+        #
+        # Installing x86_64 Homebrew under Rosetta gives us a real
+        # /usr/local/opt/gcc@13 with x86_64 libs that match the paths
+        # cmake would write, so the build links cleanly and the bundle
+        # has the right binaries.
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          set -euo pipefail
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
+          # Make sure Rosetta 2 is installed so we can run x86_64 binaries.
+          # `softwareupdate --install-rosetta` is idempotent.
+          sudo softwareupdate --install-rosetta --agree-to-license
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-          cache-dependency-path: app-gui/pnpm-lock.yaml
+          # Install x86_64 Homebrew at /usr/local (the canonical Intel
+          # Homebrew prefix) under Rosetta. NONINTERACTIVE=1 skips the
+          # confirmation prompt.
+          if [ ! -x /usr/local/bin/brew ]; then
+            echo "installing x86_64 Homebrew under Rosetta"
+            NONINTERACTIVE=1 arch -x86_64 /bin/bash -c \
+              "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          fi
 
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+          # gcc@13 specifically — that's the formula scip-sys's cmake links
+          # against (per the install_name paths in libscip). Bottles are
+          # pre-compiled, so this is a download not a build.
+          arch -x86_64 /usr/local/bin/brew install gcc@13
+
+          echo "--- /usr/local/opt/gcc@13/lib/gcc/13 ---"
+          # Pure diagnostic display — `ls -la` is intentional and not parsed.
+          # shellcheck disable=SC2012
+          ls -la /usr/local/opt/gcc@13/lib/gcc/13 | head -30
+
+      - name: Build dobjd
+        # DEFAULT_*_URL come from the workflow-level env block — driver/src/
+        # settings.rs reads them via option_env! at compile time and bakes
+        # them into the binary as the hosted defaults.
+        run: cargo build --release --locked -p dobjd --target ${{ matrix.target }}
+
+      - name: Build dobj
+        run: cargo build --release --locked -p cli --target ${{ matrix.target }}
+
+      - name: Build bitcraft-mcp-proxy
+        # Stdio↔HTTP bridge that Claude Desktop launches as a child process
+        # to reach dobjd's MCP endpoint. Ships in the dobjd tarball because
+        # it's a companion to the MCP server inside dobjd — anyone running
+        # the daemon can wire it into Claude Desktop without also needing
+        # the dobj CLI.
+        run: cargo build --release --locked -p craft-mcp --bin bitcraft-mcp-proxy --features proxy --target ${{ matrix.target }}
+
+      - name: Stage tarball directories
+        run: |
+          set -euo pipefail
+          OUT="target/${{ matrix.target }}/release"
+
+          # Use deterministic paths under the workspace so subsequent steps
+          # (codesign, notarize, tar) can find them by env var.
+          #
+          # Final layout inside dobjd-{target}.tar.gz:
+          #   dobjd
+          #   bitcraft-mcp-proxy
+          #   .libs/{libscip*, libgfortran*, libquadmath*, libgcc_s*}
+          #
+          # The `.libs/` subdir keeps `~/.dobj/bin/` clean — only the three
+          # user-facing executables show up in `ls`. dobjd's RPATH is baked
+          # to `@loader_path/.libs` (mac) / `$ORIGIN/.libs` (linux) so the
+          # libs resolve at runtime without env vars.
+          DOBJD_STAGE="$GITHUB_WORKSPACE/staging/dobjd"
+          DOBJD_LIBS="$DOBJD_STAGE/.libs"
+          DOBJ_STAGE="$GITHUB_WORKSPACE/staging/dobj"
+          mkdir -p "$DOBJD_STAGE" "$DOBJD_LIBS" "$DOBJ_STAGE"
+
+          cp "$OUT/dobjd"               "$DOBJD_STAGE/"
+          cp "$OUT/bitcraft-mcp-proxy"  "$DOBJD_STAGE/"
+          cp "$OUT/dobj"                "$DOBJ_STAGE/"
+
+          # ---- Diagnostics ---------------------------------------------------
+          # If anything's off, the logs show the actual layout cargo produced.
+
+          echo "--- scip-sys build directories anywhere in target/ ---"
+          find target -type d -name 'scip-sys-*' 2>/dev/null | head -20 || true
+          echo "--- libscip files anywhere in target/ ---"
+          find target -name 'libscip*' 2>/dev/null | head -20 || true
+          echo "--- dobjd dynamic deps ---"
+          case "${{ matrix.target }}" in
+            *-apple-darwin) otool -L "$DOBJD_STAGE/dobjd" || true ;;
+            *-linux-*)      ldd        "$DOBJD_STAGE/dobjd" || true ;;
+          esac
+
+          # ---- Locate scip_install/lib --------------------------------------
+          # Search the whole target/ tree (not just $OUT/build) — cargo with
+          # --target {triple} sometimes places build outputs in a different
+          # subdir than expected, especially when host == target.
+          #
+          # Multiple scip-sys-* build hashes can coexist (one per Cargo.lock
+          # state), but they all install the same SCIP version, so the first
+          # match is fine — no need to pick the freshest.
+          SCIP_DIR=$(find target -type d -path '*scip-sys-*/out/scip_install/lib' 2>/dev/null \
+                     | head -1)
+
+          if [ -n "$SCIP_DIR" ] && [ -d "$SCIP_DIR" ]; then
+            echo "scip dir: $SCIP_DIR"
+            cp -P "$SCIP_DIR"/${{ matrix.scip_glob }} "$DOBJD_LIBS/" 2>/dev/null || true
+          else
+            # No scip_install/lib found. This is fine if dobjd statically
+            # linked SCIP — the binary is self-contained in that case. If it
+            # didn't, the dynamic-deps log above will show libscip and the
+            # binary will fail to run; treat that as a CI failure below.
+            echo "::warning::no scip_install/lib found in target/; assuming static linkage"
+          fi
+
+          # ---- Sanity check: dobjd must not have unresolved libscip refs ----
+          case "${{ matrix.target }}" in
+            *-apple-darwin)
+              if otool -L "$DOBJD_STAGE/dobjd" | grep -q 'libscip' \
+                 && ! ls "$DOBJD_LIBS"/libscip*.dylib >/dev/null 2>&1; then
+                echo "::error::dobjd dynamic-links libscip but no dylib was bundled in .libs/"
+                exit 1
+              fi
+              ;;
+            *-linux-*)
+              if ldd "$DOBJD_STAGE/dobjd" | grep -q 'libscip' \
+                 && ! ls "$DOBJD_LIBS"/libscip.so* >/dev/null 2>&1; then
+                echo "::error::dobjd dynamic-links libscip but no .so was bundled in .libs/"
+                exit 1
+              fi
+              ;;
+          esac
+
+          ls -la "$DOBJD_STAGE" "$DOBJD_LIBS" "$DOBJ_STAGE"
+
+          {
+            echo "DOBJD_STAGE=$DOBJD_STAGE"
+            echo "DOBJD_LIBS=$DOBJD_LIBS"
+            echo "DOBJ_STAGE=$DOBJ_STAGE"
+          } >> "$GITHUB_ENV"
+
+      # ---------- macOS codesign + notarize -----------------------------------
 
       - name: Validate macOS signing secrets
-        if: |
-          runner.os == 'macOS' &&
-          (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run))
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        if: runner.os == 'macOS'
         run: |
           missing=()
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY_SECRET KEYCHAIN_PASSWORD APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_CONTENT; do
@@ -162,108 +285,274 @@ jobs:
 
       - name: Prepare macOS signing assets
         if: runner.os == 'macOS'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
         run: |
-          if [[ -n "$APPLE_CERTIFICATE" && -n "$APPLE_CERTIFICATE_PASSWORD" && -n "$APPLE_SIGNING_IDENTITY_SECRET" && -n "$KEYCHAIN_PASSWORD" ]]; then
-            CERT_PATH="$RUNNER_TEMP/apple-certificate.p12"
-            KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-            echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
-            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-            security default-keychain -s "$KEYCHAIN_PATH"
-            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-            security set-keychain-settings -t 3600 -u "$KEYCHAIN_PATH"
-            security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-            echo "MACOS_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY_SECRET" >> "$GITHUB_ENV"
-          else
-            echo "MACOS_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
-          fi
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/apple-certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          # printf %s avoids the trailing newline `echo` would add — the
+          # base64 decoder tolerates it but the explicit form is clearer.
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -t 3600 -u "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          # App Store Connect API key (used by xcrun notarytool).
+          APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY.p8"
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY_PATH"
 
-          if [[ -n "$APPLE_API_KEY_CONTENT" && -n "$APPLE_API_KEY" && -n "$APPLE_API_ISSUER" ]]; then
-            APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY.p8"
-            printf '%s' "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY_PATH"
-            echo "APPLE_API_KEY=$APPLE_API_KEY" >> "$GITHUB_ENV"
-            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
-            echo "APPLE_API_KEY_PATH=$APPLE_API_KEY_PATH" >> "$GITHUB_ENV"
-          fi
+          {
+            echo "MACOS_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY_SECRET"
+            echo "APPLE_API_KEY_ID=$APPLE_API_KEY"
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
+            echo "APPLE_API_KEY_PATH=$APPLE_API_KEY_PATH"
+          } >> "$GITHUB_ENV"
 
-      - name: Build Tauri application (dry run)
-        if: |
-          github.event_name == 'workflow_dispatch' && inputs.dry_run
-        run: pnpm tauri build ${{ matrix.args }} --verbose
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && env.MACOS_SIGNING_IDENTITY || '' }}
-          DEFAULT_SYNCHRONIZER_API_URL: http://18.119.100.201:3000
-          DEFAULT_RELAYER_API_URL: http://18.119.100.201:3200
-          # Work around upstream linuxdeploy AppImage failures on Linux:
-          # https://github.com/tauri-apps/tauri/issues/8929
-          NO_STRIP: ${{ matrix.platform == 'ubuntu-22.04' && 'true' || '' }}
-          LDAI_VERBOSE: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
+      - name: Bundle macOS GCC runtime deps
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
 
-      - name: Upload final bundle artifacts
-        if: |
-          github.event_name == 'workflow_dispatch' && inputs.dry_run
-        uses: actions/upload-artifact@v4
+          # libscip on macOS dynamically links to GCC's libgfortran, which in
+          # turn pulls in libquadmath and libgcc_s. Apple's hardened runtime
+          # (which we enable via `--options runtime` for notarization) refuses
+          # to load any dylib not signed by our team, so we must:
+          #
+          # 1. Copy libgfortran/libquadmath/libgcc_s next to libscip
+          # 2. Rewrite their install_names to @rpath so they resolve via the
+          #    same `@loader_path` that libscip uses
+          # 3. Re-sign them with our team identity (later step)
+
+          # Bundle GCC runtime libs (libgfortran/libquadmath/libgcc_s, plus
+          # whatever the install_name walk pulls in transitively, e.g.
+          # libstdc++) for the target architecture.
+          #
+          # arm64 build: native, libs from /opt/homebrew (latest gcc).
+          # x86_64 build: cross-compile, libs from x86_64 Homebrew at
+          # /usr/local/opt/gcc@13 (installed via Rosetta in an earlier step).
+          # Picking gcc@13 specifically matches the install_names baked
+          # into the cross-compiled libscip.
+          GCC_RUNTIME_NAMES=(libgfortran.5.dylib libquadmath.0.dylib libgcc_s.1.1.dylib)
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              GCC_ROOTS=(/opt/homebrew/opt/gcc/lib/gcc/current)
+              ;;
+            x86_64-apple-darwin)
+              GCC_ROOTS=(/usr/local/opt/gcc@13/lib/gcc/13)
+              ;;
+            *)
+              GCC_ROOTS=()
+              ;;
+          esac
+
+          for root in "${GCC_ROOTS[@]}"; do
+            [ -d "$root" ] || continue
+            for name in "${GCC_RUNTIME_NAMES[@]}"; do
+              src="$root/$name"
+              [ -e "$src" ] || continue
+              cp -P "$src" "$DOBJD_LIBS/$name"
+              chmod u+w "$DOBJD_LIBS/$name"
+            done
+          done
+
+          # Walk every dylib transitively, rewriting:
+          #   - its own LC_ID_DYLIB to @rpath/<basename>
+          #   - any dependency under /opt/homebrew or /usr/local to
+          #     @rpath/<basename>, copying the dep into .libs/ if it isn't
+          #     already there *and the source file actually exists* (some
+          #     Homebrew bottles bake stale absolute paths into install_names
+          #     that resolve nowhere — leave those references unchanged
+          #     rather than aborting the build).
+          declare -A SEEN
+          QUEUE=()
+          for f in "$DOBJD_LIBS"/*.dylib; do
+            [ -L "$f" ] && continue
+            QUEUE+=("$f")
+          done
+
+          while [ ${#QUEUE[@]} -gt 0 ]; do
+            lib="${QUEUE[0]}"
+            QUEUE=("${QUEUE[@]:1}")
+            [ -n "${SEEN[$lib]:-}" ] && continue
+            SEEN[$lib]=1
+
+            base=$(basename "$lib")
+            install_name_tool -id "@rpath/$base" "$lib"
+
+            while read -r dep; do
+              case "$dep" in
+                /opt/homebrew/*|/usr/local/*)
+                  dep_name=$(basename "$dep")
+                  dep_dest="$DOBJD_LIBS/$dep_name"
+                  if [ ! -e "$dep_dest" ]; then
+                    if [ ! -e "$dep" ]; then
+                      echo "::warning::skipping missing dep $dep (referenced by $base)"
+                      continue
+                    fi
+                    cp -P "$dep" "$dep_dest"
+                    chmod u+w "$dep_dest"
+                    QUEUE+=("$dep_dest")
+                  fi
+                  install_name_tool -change "$dep" "@rpath/$dep_name" "$lib"
+                  ;;
+              esac
+            done < <(otool -L "$lib" | tail -n +2 | awk '{print $1}')
+          done
+
+          # Sanity check: every /opt/homebrew/* or /usr/local/* dep
+          # libscip references should have been rewritten to @rpath/<name>
+          # by the walk above, and the corresponding lib should exist in
+          # .libs/. If any absolute Homebrew path remains in libscip's deps
+          # we'd ship a broken bundle.
+          for lib in "$DOBJD_LIBS"/libscip*.dylib; do
+            [ -L "$lib" ] && continue
+            if otool -L "$lib" | tail -n +2 | awk '{print $1}' \
+               | grep -E '^(/opt/homebrew|/usr/local)/'; then
+              echo "::error::libscip still has absolute Homebrew references after install_name rewrite"
+              echo "::error::expected the GCC runtime libs to be present at the paths above"
+              otool -L "$lib"
+              exit 1
+            fi
+          done
+
+          echo "--- final bundle ---"
+          ls -la "$DOBJD_STAGE" "$DOBJD_LIBS"
+          for f in "$DOBJD_LIBS"/*.dylib; do
+            [ -L "$f" ] && continue
+            echo "--- $(basename "$f") deps ---"
+            otool -L "$f" | tail -n +2
+          done
+
+      - name: Codesign macOS binaries
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          IDENTITY="${MACOS_SIGNING_IDENTITY}"
+
+          # Sign every dylib in .libs/ (libscip + GCC runtime deps + any
+          # transitives we pulled in). Sign dylibs before binaries because
+          # dobjd's signature includes hashes of its load-time deps.
+          for f in "$DOBJD_LIBS"/*.dylib; do
+            [ -L "$f" ] && continue
+            codesign --force --sign "$IDENTITY" \
+              --options runtime --timestamp "$f"
+          done
+
+          codesign --force --sign "$IDENTITY" \
+            --options runtime --timestamp "$DOBJD_STAGE/dobjd"
+          codesign --force --sign "$IDENTITY" \
+            --options runtime --timestamp "$DOBJD_STAGE/bitcraft-mcp-proxy"
+          codesign --force --sign "$IDENTITY" \
+            --options runtime --timestamp "$DOBJ_STAGE/dobj"
+
+          # Verify each one. `codesign --verify` exits non-zero if anything's
+          # off — we want the workflow to fail loudly here rather than ship
+          # broken signatures.
+          codesign --verify --verbose=2 "$DOBJD_STAGE/dobjd"
+          codesign --verify --verbose=2 "$DOBJD_STAGE/bitcraft-mcp-proxy"
+          codesign --verify --verbose=2 "$DOBJ_STAGE/dobj"
+          for f in "$DOBJD_LIBS"/*.dylib; do
+            [ -L "$f" ] && continue
+            codesign --verify --verbose=2 "$f"
+          done
+
+      - name: Notarize macOS binaries
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+
+          # `xcrun notarytool` accepts a single .zip / .dmg / .pkg per
+          # submission. Bundle dobjd + dobj together and submit once.
+          BUNDLE="$RUNNER_TEMP/dobjd-${{ matrix.target }}.zip"
+          (cd "$GITHUB_WORKSPACE/staging" && /usr/bin/zip -ry "$BUNDLE" .)
+
+          xcrun notarytool submit "$BUNDLE" \
+            --key      "$APPLE_API_KEY_PATH" \
+            --key-id   "$APPLE_API_KEY_ID" \
+            --issuer   "$APPLE_API_ISSUER" \
+            --wait \
+            --timeout 30m
+
+          # No `stapler staple` step — Apple doesn't support stapling raw
+          # Mach-O binaries (only .app, .dmg, .pkg). macOS does an online
+          # ticket lookup the first time the user runs the binary; that
+          # check passes because notarytool above registered the hashes.
+
+      # ---------- Tarball + upload --------------------------------------------
+
+      - name: Stage tarballs
+        run: |
+          set -euo pipefail
+          tar -czf "dobjd-${{ matrix.target }}.tar.gz" -C "$DOBJD_STAGE" .
+          tar -czf "dobj-${{ matrix.target }}.tar.gz"  -C "$DOBJ_STAGE"  .
+
+      - name: Render release notes
+        # Substitute DEFAULT_*_URL into the template so the body shown on
+        # the GitHub release page matches the URLs baked into the binary.
+        # Whitelist the variables to avoid touching unrelated `$foo` text.
+        run: |
+          set -euo pipefail
+          # envsubst's first arg is a whitelist of `$VAR` names to substitute
+          # — single quotes are intentional (shellcheck SC2016 warns by
+          # default but it's wrong here, the names must NOT expand in shell).
+          # shellcheck disable=SC2016
+          envsubst '$DEFAULT_SYNCHRONIZER_API_URL $DEFAULT_RELAYER_API_URL' \
+            < .github/release-notes.md.tpl > release-notes.md
+
+      - name: Upload to draft release
+        uses: softprops/action-gh-release@v2
         with:
-          name: zk-craft-${{ matrix.artifact_name }}
-          if-no-files-found: error
-          path: |
-            target/release/bundle/deb/*.deb
-            target/release/bundle/rpm/*.rpm
-            target/release/bundle/appimage/*.AppImage
-            target/release/bundle/dmg/*.dmg
-            target/release/bundle/macos/*.app.tar.gz
-            target/release/bundle/nsis/*.exe
-            target/release/bundle/msi/*.msi
-            target/*/release/bundle/deb/*.deb
-            target/*/release/bundle/rpm/*.rpm
-            target/*/release/bundle/appimage/*.AppImage
-            target/*/release/bundle/dmg/*.dmg
-            target/*/release/bundle/macos/*.app.tar.gz
-            target/*/release/bundle/nsis/*.exe
-            target/*/release/bundle/msi/*.msi
+          files: |
+            dobjd-${{ matrix.target }}.tar.gz
+            dobj-${{ matrix.target }}.tar.gz
+          tag_name: ${{ env.RELEASE_TAG }}
+          draft: true
+          fail_on_unmatched_files: true
+          body_path: release-notes.md
 
-      - name: Publish Tauri release
-        if: |
-          github.ref_type == 'tag' ||
-          (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
-        uses: tauri-apps/tauri-action@v0.6.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && env.MACOS_SIGNING_IDENTITY || '' }}
-          APPLE_API_KEY: ${{ env.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER }}
-          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
-          DEFAULT_SYNCHRONIZER_API_URL: http://18.119.100.201:3000
-          DEFAULT_RELAYER_API_URL: http://18.119.100.201:3200
-          # Work around upstream linuxdeploy AppImage failures on Linux:
-          # https://github.com/tauri-apps/tauri/issues/8929
-          NO_STRIP: ${{ matrix.platform == 'ubuntu-22.04' && 'true' || '' }}
-          LDAI_VERBOSE: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
+  plugin:
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          projectPath: app-gui
-          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
-          releaseName: "zk-craft ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}"
-          releaseBody: |
-            Release ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }} for the zk-craft desktop app.
+          # toolchain version comes from rust-toolchain.toml.
+          cache-shared-key: plugin
 
-            Included assets:
-            - macOS (Apple Silicon)
-            - macOS (Intel)
-            - Windows
-            - Linux
+      - name: Build craft-basics.pexe
+        run: cargo run --release --locked -p pexe -- build plugins/craft-basics
 
-            Notes:
-            - macOS release builds are signed and notarized.
-            - The app defaults to http://18.119.100.201:3000 for the synchronizer and http://18.119.100.201:3200 for the relayer unless changed in Settings.
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+      - name: Locate artifact
+        id: find
+        run: |
+          set -euo pipefail
+          PEXE=$(find target -path '*pexe*' -name 'craft-basics*.pexe' | head -1)
+          if [ -z "$PEXE" ]; then
+            echo "::error::craft-basics.pexe not produced"
+            exit 1
+          fi
+          echo "pexe=$PEXE" >> "$GITHUB_OUTPUT"
+          echo "found: $PEXE"
+
+      - name: Render release notes
+        run: |
+          set -euo pipefail
+          # envsubst's first arg is a whitelist of `$VAR` names to substitute
+          # — single quotes are intentional (shellcheck SC2016 warns by
+          # default but it's wrong here, the names must NOT expand in shell).
+          # shellcheck disable=SC2016
+          envsubst '$DEFAULT_SYNCHRONIZER_API_URL $DEFAULT_RELAYER_API_URL' \
+            < .github/release-notes.md.tpl > release-notes.md
+
+      - name: Upload to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.find.outputs.pexe }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          draft: true
+          fail_on_unmatched_files: true
+          body_path: release-notes.md

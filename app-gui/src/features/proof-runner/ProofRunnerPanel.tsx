@@ -32,7 +32,7 @@ export function ProofRunnerPanel() {
     if (!runActive) {
       setShowCpuDuringRun(false);
     }
-  }, [runActive, proof.runAction]);
+  }, [runActive, proof.action]);
 
   const globalRootRaw = proof.stats.globalStateRoot?.trim() ?? "";
   const globalRootDisplay = globalRootRaw
@@ -50,18 +50,18 @@ export function ProofRunnerPanel() {
   };
 
   const canReturnToAction =
-    proof.runAction !== null &&
+    proof.action !== null &&
     (proof.status === "generating" ||
       proof.status === "committing" ||
       proof.status === "summary");
   const alreadyViewingRunningAction =
-    proof.runAction !== null &&
+    proof.action !== null &&
     contextSelection.kind === "action" &&
-    qualifiedEq(contextSelection.action, proof.runAction);
+    qualifiedEq(contextSelection.action, proof.action);
 
   const returnToRunningAction = () => {
-    if (!proof.runAction) return;
-    selectAction(proof.runAction);
+    if (!proof.action) return;
+    selectAction(proof.action);
   };
 
   const toggleProofPanelView = () => {

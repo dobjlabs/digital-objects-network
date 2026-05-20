@@ -104,6 +104,7 @@ pub async fn run_api_server(
         )
         .route("/v1/state/tx/{tx_hash}", get(get_state_tx))
         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
+        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(AppState { app_db, sync_db });
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;

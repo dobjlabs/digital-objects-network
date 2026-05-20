@@ -1,5 +1,5 @@
 [Unit]
-Description=zk-craft relayer
+Description=bitcraft relayer
 After=network-online.target postgresql.service synchronizer.service
 Wants=network-online.target
 

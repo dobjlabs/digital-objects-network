@@ -2,7 +2,8 @@ use std::fs;
 
 use anyhow::{Result, anyhow};
 
-use crate::types::{DriverPaths, DriverSettings};
+use crate::types::DriverPaths;
+use wire_types::DriverSettings;
 
 const DEFAULT_SYNCHRONIZER_API_URL: &str = "http://127.0.0.1:3000";
 const DEFAULT_RELAYER_API_URL: &str = "http://127.0.0.1:3200";

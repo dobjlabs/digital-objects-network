@@ -10,10 +10,15 @@ use pod2::middleware::{Hash, Params, StrKey};
 use sdk::SpendableObjects;
 use txlib::object_nullifier_hash;
 
-use crate::object_record::{ObjectRecord as StoredObjectRecord, ObjectStatus};
-use crate::object_store::{ObjectFileEntry, select_object, write_object_file};
+use std::path::Path;
+
+use crate::driver::extract_basename;
+use crate::error::DriverError;
+use crate::object_record::ObjectRecord as StoredObjectRecord;
+use crate::object_store::{ObjectFileEntry, write_object_file};
 use crate::paths::DOBJ_EXTENSION;
-use crate::types::{ActionSummary, DriverPaths, ExecuteActionInput, ObjectSelector};
+use crate::types::{DriverPaths, ExecuteActionInput};
+use wire_types::{ActionSummary, ObjectStatus};
 
 pub(crate) fn reconcile_objects(
     paths: &DriverPaths,
@@ -118,15 +123,14 @@ pub(crate) fn validate_execute_request(
         ));
     }
 
+    // Dedupe by basename so `Wood.dobj` and `/abs/path/Wood.dobj` are
+    // treated as the same input — they resolve to the same managed file.
     let mut seen = HashSet::new();
-    for selector in &input.input_objects {
-        let key = match selector {
-            ObjectSelector::FileName(file_name) => format!("file:{file_name}"),
-            ObjectSelector::ObjectId(object_id) => format!("id:{object_id}"),
-        };
-        if !seen.insert(key.clone()) {
+    for raw in &input.input_objects {
+        let file_name = extract_basename(Path::new(raw))?;
+        if !seen.insert(file_name.clone()) {
             return Err(anyhow!(
-                "duplicate input object selector is not allowed: {key}"
+                "duplicate input object is not allowed: {file_name}"
             ));
         }
     }
@@ -146,10 +150,14 @@ pub(crate) fn resolve_inputs(
     action: &ActionSummary,
 ) -> Result<Vec<ResolvedInput>> {
     let mut resolved_inputs = Vec::new();
-    for (selector, required) in input.input_objects.iter().zip(action.total_inputs.iter()) {
+    for (raw, required) in input.input_objects.iter().zip(action.total_inputs.iter()) {
         let expected_class_hash = decode_hash_hex(required.hash.as_str())?;
 
-        let entry = select_object(entries, selector)?;
+        let file_name = extract_basename(Path::new(raw))?;
+        let entry = entries
+            .iter()
+            .find(|entry| entry.file_name == file_name)
+            .ok_or_else(|| DriverError::ObjectFileNotFound(file_name.clone()))?;
         if entry.record.status != ObjectStatus::Live {
             return Err(anyhow!(
                 "input object is not live (status: {:?}): {}",

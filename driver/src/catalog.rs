@@ -3,8 +3,7 @@ use pod2::middleware::Hash;
 use sdk::{SpendableObject, SpendableObjects};
 use txlib::GroundingWitness;
 
-use crate::qualified_name::QualifiedName;
-use crate::types::ActionSummary;
+use wire_types::{ActionSummary, QualifiedName};
 
 /// A class entry surfaced by an [`ActionCatalog`]. `class` is the canonical
 /// plugin-scoped handle; `hash` is the on-chain `Is{class}` predicate hash

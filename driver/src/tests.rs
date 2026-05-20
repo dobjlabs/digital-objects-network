@@ -14,13 +14,13 @@ use crate::clients::{
     SynchronizerMembership,
 };
 use crate::driver::{Driver, DriverDeps, PayloadBuilder};
-use crate::object_record::{ObjectRecord, ObjectStatus, ensure_extra_pod_deserializers_registered};
+use crate::object_record::{ObjectRecord, ensure_extra_pod_deserializers_registered};
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
 };
 use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
-use crate::qualified_name::QualifiedName;
-use crate::{ActionQuery, DriverPaths, ExecuteActionInput, ObjectSelector};
+use crate::{ActionQuery, DriverPaths, ExecuteActionInput};
+use wire_types::{ObjectStatus, QualifiedName};
 
 fn temp_paths() -> DriverPaths {
     let dir = tempdir().unwrap();
@@ -294,7 +294,7 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
     let err = driver
         .execute(ExecuteActionInput {
             action: craft_basics("CraftWood"),
-            input_objects: vec![ObjectSelector::FileName("log_1.dobj".to_string())],
+            input_objects: vec!["log_1.dobj".to_string()],
         })
         .unwrap_err();
     assert!(err.to_string().contains("relayer submit failed"));
@@ -336,7 +336,7 @@ fn test_execute_rejects_class_hash_mismatch_with_matching_class_id() {
     let err = driver
         .execute(ExecuteActionInput {
             action: craft_basics("CraftSticks"),
-            input_objects: vec![ObjectSelector::FileName("forged_wood.dobj".to_string())],
+            input_objects: vec!["forged_wood.dobj".to_string()],
         })
         .unwrap_err();
     let msg = err.to_string();
@@ -361,7 +361,7 @@ fn test_execute_keeps_files_after_relayer_accepts() {
     let err = driver
         .execute(ExecuteActionInput {
             action: craft_basics("CraftWood"),
-            input_objects: vec![ObjectSelector::FileName("log_1.dobj".to_string())],
+            input_objects: vec!["log_1.dobj".to_string()],
         })
         .unwrap_err();
     assert!(err.to_string().contains("relayer timeout"));

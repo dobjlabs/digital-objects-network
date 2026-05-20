@@ -1,13 +1,13 @@
 # pexe
 
-The `.pexe` archive format plus tooling for zk-craft plugins.
+The `.pexe` archive format plus tooling for bitcraft plugins.
 
 A **pexe** is a zip with exactly two entries:
 
-| Entry           | Contents                                                                 |
-| --------------- | ------------------------------------------------------------------------ |
-| `manifest.toml` | Static metadata — plugin name, version, module hash, classes, actions    |
-| `plugin.rhai`   | Action logic as a Rhai script, using the `sdk` crate's host functions    |
+| Entry           | Contents                                                              |
+| --------------- | --------------------------------------------------------------------- |
+| `manifest.toml` | Static metadata — plugin name, version, module hash, classes, actions |
+| `plugin.rhai`   | Action logic as a Rhai script, using the `sdk` crate's host functions |
 
 The driver scans `~/.dobj/actions/*.pexe` at startup, unpacks each archive,
 compiles the script via `sdk::Sdk::load_module_from_src_manifest` (which

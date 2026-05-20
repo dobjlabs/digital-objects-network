@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use std::{collections::HashMap, fs, path::Path};
 
 use crate::object_record::ObjectRecord;
-use crate::types::{DriverPaths, ObjectQuery, ObjectSelector};
+use crate::types::{DriverPaths, ObjectQuery};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ObjectFileEntry {
@@ -66,7 +66,7 @@ pub(crate) fn write_object_file(
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => {
                 eprintln!(
-                    "zk-craft: failed to remove stale object file {}: {err}",
+                    "bitcraft: failed to remove stale object file {}: {err}",
                     stale_path.display()
                 );
             }
@@ -102,7 +102,7 @@ fn load_object_files_from_dir(
         let contents = match fs::read_to_string(&path) {
             Ok(contents) => contents,
             Err(err) => {
-                eprintln!("zk-craft: failed to read {file_name}, skipping: {err}");
+                eprintln!("bitcraft: failed to read {file_name}, skipping: {err}");
                 continue;
             }
         };
@@ -133,7 +133,7 @@ fn load_object_files_from_dir(
 
                 objects.insert(file_name.to_string(), record);
             }
-            Err(err) => eprintln!("zk-craft: failed to parse {file_name}, skipping: {err}"),
+            Err(err) => eprintln!("bitcraft: failed to parse {file_name}, skipping: {err}"),
         }
     }
 
@@ -154,22 +154,6 @@ pub(crate) fn load_object_files(paths: &DriverPaths) -> Result<Vec<ObjectFileEnt
     Ok(objects)
 }
 
-pub(crate) fn select_object<'a>(
-    entries: &'a [ObjectFileEntry],
-    selector: &ObjectSelector,
-) -> Result<&'a ObjectFileEntry> {
-    match selector {
-        ObjectSelector::FileName(file_name) => entries
-            .iter()
-            .find(|entry| entry.file_name == *file_name)
-            .ok_or_else(|| anyhow!("object file not found: {file_name}")),
-        ObjectSelector::ObjectId(object_id) => entries
-            .iter()
-            .find(|entry| entry.record.id == *object_id)
-            .ok_or_else(|| anyhow!("object not found: {object_id}")),
-    }
-}
-
 pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> bool {
     if let Some(class) = &query.class
         && &entry.record.class != class
@@ -178,16 +162,6 @@ pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> boo
     }
     if let Some(status) = query.status
         && status != entry.record.status
-    {
-        return false;
-    }
-    if let Some(id) = &query.id
-        && &entry.record.id != id
-    {
-        return false;
-    }
-    if let Some(file_name) = &query.file_name
-        && &entry.file_name != file_name
     {
         return false;
     }
@@ -205,11 +179,11 @@ mod tests {
     use crate::paths::default_paths;
     use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
     use crate::types::DriverPaths;
+    use wire_types::ObjectStatus;
 
     use super::{load_object_files, write_object_file};
     use crate::object_record::{
-        ObjectRecord, ObjectStatus, ensure_extra_pod_deserializers_registered,
-        parse_object_record_file,
+        ObjectRecord, ensure_extra_pod_deserializers_registered, parse_object_record_file,
     };
 
     fn temp_paths() -> DriverPaths {
@@ -241,7 +215,7 @@ mod tests {
         .unwrap();
         let outputs = catalog
             .execute_action(
-                crate::QualifiedName::new("craft-basics", "FindLog"),
+                wire_types::QualifiedName::new("craft-basics", "FindLog"),
                 dummy_grounding_witness(),
                 vec![],
             )
@@ -249,7 +223,7 @@ mod tests {
         let spendable = outputs.obj(0);
         ObjectRecord {
             id: format!("{:#}", spendable.obj.commitment()),
-            class: crate::QualifiedName::new("craft-basics", "Log"),
+            class: wire_types::QualifiedName::new("craft-basics", "Log"),
             status: ObjectStatus::Live,
             tx_hash: None,
             obj: spendable.obj,

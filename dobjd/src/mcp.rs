@@ -1,0 +1,165 @@
+//! MCP (Model Context Protocol) operations backed by the same `Arc<Driver>`
+//! and broadcast hub used by the HTTP routes.
+//!
+//! Most methods are thin passes through the driver — the MCP types are
+//! aliases for the same `wire-types` definitions the HTTP routes use, so
+//! there's nothing to convert.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use ::driver::ExecuteActionInput;
+use craft_mcp::ops::CraftOps;
+use craft_mcp::types as mcp;
+use wire_types::RunActionResult as RunActionInner;
+
+use crate::events::EventTx;
+use crate::progress::SseProgressReporter;
+
+pub struct DobjdCraftOps {
+    driver: Arc<::driver::Driver>,
+    events: EventTx,
+}
+
+impl DobjdCraftOps {
+    pub fn new(driver: Arc<::driver::Driver>, events: EventTx) -> Self {
+        Self { driver, events }
+    }
+}
+
+impl CraftOps for DobjdCraftOps {
+    fn list_inventory(&self) -> anyhow::Result<Vec<mcp::InventoryObject>> {
+        // Driver returns the basic `ObjectSummary`; the inventory wire
+        // shape folds in per-class metadata (emoji, description) so
+        // clients can render rows without a `/classes` round-trip. Same
+        // logic as `routes::inventory::load_inventory`.
+        let classes = self
+            .driver
+            .list_classes()?
+            .into_iter()
+            .map(|c| (c.class.clone(), c))
+            .collect::<HashMap<_, _>>();
+
+        Ok(self
+            .driver
+            .sync_inventory(None)?
+            .into_iter()
+            .map(|object| {
+                let class_info = classes.get(&object.class);
+                mcp::InventoryObject {
+                    id: object.id,
+                    file_name: object.file_name,
+                    class: object.class.clone(),
+                    class_hash: object.class_hash,
+                    emoji: class_info
+                        .map(|c| c.emoji.clone())
+                        .unwrap_or_else(|| "📦".to_string()),
+                    status: object.status,
+                    tx_hash: object.tx_hash,
+                    description: class_info.map(|c| c.description.clone()),
+                    fields: object.fields,
+                }
+            })
+            .collect())
+    }
+
+    fn list_actions(&self) -> anyhow::Result<Vec<mcp::Action>> {
+        self.driver.list_actions(None)
+    }
+
+    fn list_classes(&self) -> anyhow::Result<Vec<mcp::ClassSummary>> {
+        self.driver.list_classes()
+    }
+
+    fn get_state_root(&self) -> anyhow::Result<String> {
+        self.driver.get_state_root()
+    }
+
+    fn inspect_object(&self, file_name: &str) -> anyhow::Result<mcp::ObjectDetail> {
+        self.driver.read_object(std::path::Path::new(file_name))
+    }
+
+    fn inspect_class(&self, class: &mcp::QualifiedName) -> anyhow::Result<mcp::ClassDetail> {
+        self.driver.get_class(class)
+    }
+
+    fn inspect_action(&self, action: &mcp::QualifiedName) -> anyhow::Result<mcp::ActionDetail> {
+        self.driver.get_action(action)
+    }
+
+    fn run_action(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::RunActionResult> {
+        // Pass strings through verbatim — the driver extracts basenames
+        // via `Path::file_name`, so an absolute path or a bare basename
+        // resolve to the same managed file.
+        let input_objects: Vec<String> = input
+            .input_object_paths
+            .iter()
+            .map(|path| path.trim().to_string())
+            .collect();
+
+        // Use the client-supplied run id if present, otherwise mint one.
+        // Same convention as the HTTP `/actions/run` route.
+        let run_id = input
+            .run_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let action_qname = input.action.clone();
+        let reporter = SseProgressReporter::new(self.events.clone(), run_id.clone());
+        let result = match self.driver.execute_with_reporter(
+            ExecuteActionInput {
+                action: action_qname.clone(),
+                input_objects,
+            },
+            &reporter,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                reporter.commit_failed(err.to_string());
+                return Err(err);
+            }
+        };
+
+        Ok(mcp::RunActionResult {
+            success: true,
+            message: format!(
+                "Action {} completed. Old root: {}, New root: {}",
+                action_qname, result.old_root, result.new_root
+            ),
+            result: RunActionInner {
+                run_id,
+                old_root: result.old_root,
+                new_root: result.new_root,
+                output_files: result.output_files,
+                nullified_files: result.nullified_files,
+            },
+        })
+    }
+
+    fn check_feasibility(
+        &self,
+        action: &mcp::QualifiedName,
+    ) -> anyhow::Result<mcp::FeasibilityReport> {
+        self.driver.check_action(action)
+    }
+
+    fn read_settings(&self) -> anyhow::Result<mcp::DriverSettings> {
+        self.driver.load_settings()
+    }
+
+    fn write_settings(&self, settings: mcp::DriverSettings) -> anyhow::Result<mcp::DriverSettings> {
+        self.driver.save_settings(&settings)
+    }
+
+    fn get_objects_dir(&self) -> anyhow::Result<String> {
+        Ok(self
+            .driver
+            .paths()
+            .objects_dir
+            .to_string_lossy()
+            .to_string())
+    }
+
+    fn generated_podlang(&self) -> Option<String> {
+        self.driver.generated_podlang()
+    }
+}

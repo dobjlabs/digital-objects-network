@@ -1,12 +1,12 @@
 mod catalog;
 mod clients;
 mod driver;
+mod error;
 mod execute;
 mod object_record;
 mod object_store;
 pub mod paths;
 mod pexe_catalog;
-mod qualified_name;
 mod settings;
 mod types;
 
@@ -19,13 +19,10 @@ pub use crate::clients::{
     SYNCHRONIZER_POLL_TIMEOUT_SECS,
 };
 pub use crate::driver::{Driver, DriverDeps, PayloadBuilder};
-pub use crate::object_record::parse_object_record_file;
-pub use crate::object_record::{ObjectRecord, ObjectStatus};
+pub use crate::error::DriverError;
+pub use crate::object_record::{ObjectRecord, parse_object_record_file};
 pub use crate::pexe_catalog::PexeCatalog;
-pub use crate::qualified_name::QualifiedName;
 pub use crate::types::{
-    ActionQuery, ActionSummary, CheckActionCandidate, CheckActionReport, ClassRef, ClassSummary,
-    DriverPaths, DriverSettings, ExecuteActionInput, ExecuteActionResult, ExecutionPhase,
-    ExecutionReporter, ExecutionStepContext, NoopExecutionReporter, ObjectQuery, ObjectSelector,
-    ObjectSummary,
+    ActionQuery, DriverPaths, ExecuteActionInput, ExecuteActionResult, ExecutionReporter,
+    ExecutionStepContext, NoopExecutionReporter, ObjectQuery,
 };

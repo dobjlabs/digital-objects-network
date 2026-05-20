@@ -12,6 +12,9 @@ members = [
     "intro_pods/vdfpod",
     "intro_pods/lt_eq_u256_pod",
     "mcp",
+    "dobjd",
+    "cli",
+    "wire-types",
 ]
 resolver = "2"
 
@@ -57,3 +60,4 @@ tracing-log = "0.1.1"
 time = { version = "0.3.44", features = ["formatting", "local-offset"] }
 rand = { version = "0.9.2", features = ["std_rng"] }
 thiserror = "2.0.18"
+wire-types = { path = "wire-types" }
