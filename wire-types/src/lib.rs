@@ -177,7 +177,7 @@ pub struct InventoryObject {
     pub status: ObjectStatus,
     pub tx_hash: Option<String>,
     pub description: Option<String>,
-    /// Application-layer fields (e.g. `blueprint`, `durability`, `key`).
+    /// Application-layer fields (e.g. `durability`, `key`, `work`).
     /// Same shape as [`ObjectSummary::fields`].
     pub fields: HashMap<String, serde_json::Value>,
 }

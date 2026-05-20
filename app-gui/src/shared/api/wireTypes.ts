@@ -23,7 +23,7 @@ export interface InventoryObjectPayload {
   status: ObjectStatus;
   txHash: string | null;
   description?: string;
-  /** Application-layer fields (e.g. `blueprint`, `durability`, `key`). */
+  /** Application-layer fields (e.g. `durability`, `key`, `work`). */
   fields: Record<string, unknown>;
 }
 

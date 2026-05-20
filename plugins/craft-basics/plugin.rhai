@@ -1,6 +1,5 @@
 fn FindLog(action) {
     var log = action.output("Log");
-    log.set([["blueprint", "Log"]]);
     var work = action.intro_vdf(3, log);
     log.update("work", work);
 }
@@ -8,7 +7,6 @@ fn FindLog(action) {
 fn CraftWood(action) {
     var log = action.input("Log");
     var wood = action.output("Wood");
-    wood.set([["blueprint", "Wood"]]);
     // Difficulty target: top limb ≤ 2^53. Both pow_obj_grind and
     // intro_lt_eq_u256 consume the same u256, so the proved statement
     // matches what grinding produced.
@@ -22,8 +20,6 @@ fn CraftSticks(action) {
     var wood = action.input("Wood");
     var stick_a = action.output("Stick");
     var stick_b = action.output("Stick");
-    stick_a.set([["blueprint", "Stick"]]);
-    stick_b.set([["blueprint", "Stick"]]);
 }
 
 fn CraftWoodPick(action) {
@@ -31,7 +27,6 @@ fn CraftWoodPick(action) {
     var stick = action.input("Stick");
     var pick = action.output("WoodPick");
     pick.set([
-        ["blueprint", "WoodPick"],
         ["durability", 100]
     ]);
 }
@@ -55,7 +50,6 @@ fn UseWoodPick(action) {
 fn MineStoneWithWoodPick(action) {
     var pick = action.subaction("UseWoodPick");
     var stone = action.output("Stone");
-    stone.set([["blueprint", "Stone"]]);
 }
 
 fn CraftStonePick(action) {
@@ -63,7 +57,6 @@ fn CraftStonePick(action) {
     var stick = action.input("Stick");
     var pick = action.output("StonePick");
     pick.set([
-        ["blueprint", "StonePick"],
         ["durability", 200]
     ]);
 }
@@ -76,5 +69,4 @@ fn UseStonePick(action) {
 fn MineStoneWithStonePick(action) {
     var pick = action.subaction("UseStonePick");
     var stone = action.output("Stone");
-    stone.set([["blueprint", "Stone"]]);
 }
