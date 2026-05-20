@@ -338,6 +338,7 @@
     <main>
       <header>
         <h1>bitcraft</h1>
+        <span class="ts" id="header-dobjd">dobjd → —</span>
         <span class="ts" id="header-time">—</span>
       </header>
 
@@ -391,7 +392,21 @@
     </main>
 
     <script>
-      const DOBJD = "http://127.0.0.1:7717";
+      // Dobjd URL is `?port=NNNN` or `?dobjd=http://host:NNNN`, default :7717.
+      const _params = new URLSearchParams(location.search);
+      const DOBJD = (() => {
+        const explicit = _params.get("dobjd");
+        if (explicit) return explicit.replace(/\/+$/, "");
+        const port = _params.get("port") || "7717";
+        return `http://127.0.0.1:${port}`;
+      })();
+      // Surface the active dobjd URL in the page title so it's obvious which
+      // one you're looking at when multiple instances are running.
+      document.title = `bitcraft — ${DOBJD.replace(/^https?:\/\//, "")}`;
+      const _hdrDobjd = document.getElementById("header-dobjd");
+      if (_hdrDobjd)
+        _hdrDobjd.textContent = `dobjd → ${DOBJD.replace(/^https?:\/\//, "")}`;
+
       let syncUrl = null;
 
       function shortHash(h, head = 6, tail = 4) {
