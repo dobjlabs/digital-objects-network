@@ -6,7 +6,7 @@ use common::{
     payload::{Payload, PayloadProof},
     shrink::{ShrunkMainPodSetup, shrink_compress_pod},
 };
-use pod2::middleware::{Hash, Key, Params};
+use pod2::middleware::{Hash, Params, StrKey};
 use sdk::SpendableObjects;
 use txlib::object_nullifier_hash;
 
@@ -84,7 +84,7 @@ pub(crate) fn reconcile_objects(
         if entry.record.is_nullified() || entry.record.status == ObjectStatus::Live {
             continue;
         }
-        let source_tx_hash = entry.record.tx.dict().commitment();
+        let source_tx_hash = entry.record.evidence.tx_final;
         if !grounded_txs.contains(&source_tx_hash) {
             continue;
         }
@@ -200,7 +200,7 @@ pub(crate) fn resolve_inputs(
 }
 
 pub(crate) fn obj_type_hash(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {
-    let value = obj.get(&Key::from("type")).ok()??;
+    let value = obj.get(&StrKey::from("type")).ok()??;
     Some(Hash(value.raw().0))
 }
 
@@ -246,9 +246,8 @@ pub(crate) fn save_results(
             class: output.class.clone(),
             status: ObjectStatus::Unknown,
             tx_hash: None,
-            pod: spendable.pod,
             obj: spendable.obj,
-            tx: spendable.tx,
+            evidence: spendable.evidence,
         };
         write_object_file(paths, &live_record, &file_name)?;
     }

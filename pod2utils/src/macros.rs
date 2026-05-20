@@ -4,7 +4,7 @@ use pod2::{
     frontend::MultiPodBuilder,
     lang::Module,
     middleware::{
-        CustomPredicateRef, Key, Statement, Value,
+        CustomPredicateRef, Statement, StrKey, Value,
         containers::{Dictionary, Set},
     },
 };
@@ -34,7 +34,7 @@ macro_rules! dict {
     );
     ({ $($key:expr => $val:expr),* }) => ({
         let mut map = std::collections::HashMap::new();
-        $( map.insert(pod2::middleware::Key::from($key), pod2::middleware::Value::from($val)); )*
+        $( map.insert(pod2::middleware::StrKey::from($key), pod2::middleware::Value::from($val)); )*
         pod2::middleware::containers::Dictionary::new( map)
     });
 }
@@ -61,7 +61,7 @@ macro_rules! dict_define {
     );
     ({ $($key:expr => $val:expr),* }) => ({
         let mut kvs = Vec::new();
-        $( kvs.push((pod2::middleware::Key::from($key), pod2::middleware::Value::from($val.clone()))); )*
+        $( kvs.push((pod2::middleware::StrKey::from($key), pod2::middleware::Value::from($val.clone()))); )*
         $crate::macros::_dict_update(dict!(), kvs)
     });
 }
@@ -73,14 +73,14 @@ macro_rules! dict_update {
     );
     ($init:expr, { $($key:expr => $val:expr),* }) => ({
         let mut kvs = Vec::new();
-        $( kvs.push((pod2::middleware::Key::from($key), pod2::middleware::Value::from($val.clone()))); )*
+        $( kvs.push((pod2::middleware::StrKey::from($key), pod2::middleware::Value::from($val.clone()))); )*
         $crate::macros::_dict_update($init, kvs)
     });
 }
 
 pub fn _dict_update<const N: usize>(
     mut init: Dictionary,
-    kvs: Vec<(Key, Value)>,
+    kvs: Vec<(StrKey, Value)>,
 ) -> [Dictionary; N] {
     let mut dict_states = Vec::with_capacity(N);
     dict_states.push(init.clone());

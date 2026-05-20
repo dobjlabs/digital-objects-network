@@ -226,9 +226,8 @@ mod tests {
             class: wire_types::QualifiedName::new("craft-basics", "Log"),
             status: ObjectStatus::Live,
             tx_hash: None,
-            pod: spendable.pod,
             obj: spendable.obj,
-            tx: spendable.tx,
+            evidence: spendable.evidence,
         }
     }
 

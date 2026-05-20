@@ -31,9 +31,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
-    frontend::Operation,
+    frontend::{Operation, OperationArg},
     middleware::{
-        EMPTY_VALUE, Hash, Key, NativeOperation, OperationAux, OperationType, Statement, Value,
+        EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
         containers::{Dictionary, Set},
         hash_values,
     },
@@ -173,13 +173,66 @@ impl<'de> Deserialize<'de> for Tx {
     }
 }
 
+/// Per-object membership evidence: the source transaction's commitment,
+/// the live-set commitment, and Merkle proofs that anchor the object
+/// inside that source transaction's live set. Produced at mint time by
+/// the source transaction's prover and packaged alongside each output
+/// object; consumed at proof time by [`TxBuilder`] when the object is
+/// spent.
+///
+/// State-root anchoring (proving the source tx is in `transactions_root`)
+/// is supplied separately at consume time by the synchronizer via
+/// [`GroundingWitness`]; it cannot be pre-computed at mint time because
+/// the source tx is not yet anchored.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingEvidence {
+    /// Source transaction commitment (== `source_tx.ctx.commitment()`).
+    pub tx_final: Hash,
+    /// Commitment of the source transaction's live set.
+    pub live_root: Hash,
+    /// Merkle proof for `DictContains(source_tx_ctx, "live", live_root)`.
+    pub live_in_tx_proof: MerkleProof,
+    /// Merkle proof for `SetContains(live, obj)`.
+    pub obj_in_live_proof: MerkleProof,
+}
+
+impl GroundingEvidence {
+    /// Construct from the source transaction's `ctx` dict (which carries
+    /// the `live` set under the `"live"` key) plus the produced object
+    /// whose membership we attest.
+    pub fn new(ctx: &Dictionary, obj: &Dictionary) -> anyhow::Result<Self> {
+        let tx_final = ctx.commitment();
+        let (live_value, live_in_tx_proof) = ctx.prove(&StrKey::from("live"))?;
+        let live = live_value
+            .as_set()
+            .ok_or_else(|| anyhow::anyhow!("ctx.live is not a Set"))?;
+        let live_root = live.commitment();
+        let obj_in_live_proof = live.prove(&Value::from(obj.clone()))?;
+        Ok(Self {
+            tx_final,
+            live_root,
+            live_in_tx_proof,
+            obj_in_live_proof,
+        })
+    }
+}
+
 pub(crate) const OBJECT_NULLIFIER_VERSION: &str = "txlib-nullifier-v1";
 
 pub fn object_key_hash(obj: &Dictionary) -> anyhow::Result<Hash> {
     let key = obj
-        .get(&Key::from("key"))?
+        .get(&StrKey::from("key"))?
         .ok_or_else(|| anyhow::anyhow!("object missing required key field"))?;
     Ok(hash_values(&[Value::from(obj.commitment()), key]))
+}
+
+/// Extract the `type` field from an object dict. The type is a
+/// predicate hash that identifies the object's `IsX` rule.
+pub fn object_type(obj: &Dictionary) -> Value {
+    obj.get(&StrKey::from("type"))
+        .expect("object dict lookup")
+        .expect("object missing required type field")
 }
 
 pub fn object_nullifier_from_key_hash(obj_key_hash: Hash) -> Hash {
@@ -200,14 +253,14 @@ pub fn compute_nullifier(obj: &Dictionary) -> Hash {
 }
 
 pub fn rekey(obj: &mut Dictionary) {
-    obj.update(&Key::from("key"), &Value::from(rand_raw_value()))
+    obj.update(&StrKey::from("key"), &Value::from(rand_raw_value()))
         .unwrap();
 }
 
 pub fn new_obj() -> Dictionary {
     let mut map = HashMap::new();
-    map.insert(Key::from("key"), Value::from(rand_raw_value()));
-    map.insert(Key::from("work"), Value::from(EMPTY_VALUE));
+    map.insert(StrKey::from("key"), Value::from(rand_raw_value()));
+    map.insert(StrKey::from("work"), Value::from(EMPTY_VALUE));
     Dictionary::new(map)
 }
 
@@ -284,7 +337,7 @@ pub(crate) fn build_tx(
 /// Return a clone of `tx` with one field replaced.
 pub(crate) fn tx_with(tx: &Dictionary, key: &str, value: Value) -> Dictionary {
     let mut result = tx.clone();
-    result.update(&Key::from(key), &value).unwrap();
+    result.update(&StrKey::from(key), &value).unwrap();
     result
 }
 
@@ -356,7 +409,7 @@ fn mutation_diff(old: &Dictionary, new: &Dictionary) -> String {
         if k == "type" {
             continue;
         }
-        let old_val = old.get(&Key::from(&k)).ok().flatten();
+        let old_val = old.get(&StrKey::from(&k)).ok().flatten();
         match old_val {
             Some(ov) if ov.raw() != new_val.raw() => {
                 diffs.push(format!("{k}: {ov} -> {new_val}"));
@@ -434,7 +487,7 @@ impl TxBuilder {
     /// Seeds `chain_start = H(inputs, 0)`.
     pub fn new(
         ctx: &mut BuildContext,
-        inputs: &[(Dictionary, Tx)],
+        inputs: &[(Dictionary, GroundingEvidence)],
         grounding: Arc<GroundingWitness>,
     ) -> Self {
         let (st_inputs_grounded, inputs_set, stats) =
@@ -480,8 +533,9 @@ impl TxBuilder {
 
     /// Close the action scope identified by `scope_id`. Verifies that
     /// every direct event in the scope has guard evidence attached
-    /// (panics on the first missing one) and that the supplied id
-    /// matches the top-of-stack scope.
+    /// (panics on the first missing one), that the supplied id matches
+    /// the top-of-stack scope, and that the scope is non-empty (the
+    /// replay predicates only cover K>=1 bodies).
     pub fn end_action(&mut self, scope_id: u64) {
         self.verify_scope_guards(scope_id);
         let scope = self.action_stack.pop().expect("no action scope to close");
@@ -489,6 +543,10 @@ impl TxBuilder {
             scope.scope_id, scope_id,
             "end_action scope id mismatch (expected {scope_id}, got {})",
             scope.scope_id
+        );
+        assert!(
+            !scope.events.is_empty(),
+            "end_action: action scope must contain at least one event"
         );
         self.push_event(ChainEvent::Action {
             chain_after: self.chain,
@@ -566,6 +624,11 @@ impl TxBuilder {
         self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
         self.live.insert(&Value::from(new.clone())).unwrap();
 
+        let new_type = object_type(new);
+        let st_dc = ctx
+            .builder
+            .priv_op(op!(DictContains(new, "type", new_type.clone())))
+            .unwrap();
         let st_h1 = ctx
             .builder
             .priv_op(op!(HashOf(event_hash, EMPTY_VALUE, new)))
@@ -578,8 +641,8 @@ impl TxBuilder {
             .apply_custom_pred(
                 false,
                 "TxInsert",
-                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone()}),
-                vec![st_h1, st_h2],
+                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "type" => new_type}),
+                vec![st_dc, st_h1, st_h2],
             )
             .unwrap();
         record(&mut self.stats, "TxInsert");
@@ -616,6 +679,17 @@ impl TxBuilder {
             .insert(&Value::from(compute_nullifier(old)))
             .unwrap();
 
+        let new_type = object_type(new);
+        let old_type = object_type(old);
+        assert_eq!(new_type, old_type, "mutate must preserve object type");
+        let st_dc_new = ctx
+            .builder
+            .priv_op(op!(DictContains(new, "type", new_type.clone())))
+            .unwrap();
+        let st_dc_old = ctx
+            .builder
+            .priv_op(op!(DictContains(old, "type", new_type.clone())))
+            .unwrap();
         let st_h1 = ctx
             .builder
             .priv_op(op!(HashOf(event_hash, old, new)))
@@ -628,8 +702,8 @@ impl TxBuilder {
             .apply_custom_pred(
                 false,
                 "TxMutate",
-                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "old" => old.clone()}),
-                vec![st_h1, st_h2],
+                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "old" => old.clone(), "type" => new_type}),
+                vec![st_dc_new, st_dc_old, st_h1, st_h2],
             )
             .unwrap();
         record(&mut self.stats, "TxMutate");
@@ -661,6 +735,11 @@ impl TxBuilder {
             .insert(&Value::from(compute_nullifier(old)))
             .unwrap();
 
+        let old_type = object_type(old);
+        let st_dc = ctx
+            .builder
+            .priv_op(op!(DictContains(old, "type", old_type.clone())))
+            .unwrap();
         let st_h1 = ctx
             .builder
             .priv_op(op!(HashOf(event_hash, old, EMPTY_VALUE)))
@@ -673,8 +752,8 @@ impl TxBuilder {
             .apply_custom_pred(
                 false,
                 "TxDelete",
-                map!({"chain" => self.chain, "prev_chain" => prev, "old" => old.clone()}),
-                vec![st_h1, st_h2],
+                map!({"chain" => self.chain, "prev_chain" => prev, "old" => old.clone(), "type" => old_type}),
+                vec![st_dc, st_h1, st_h2],
             )
             .unwrap();
         record(&mut self.stats, "TxDelete");
@@ -692,6 +771,10 @@ impl TxBuilder {
     /// Build the replay chain and emit TxFinalized.
     pub fn finalize(self, ctx: &mut BuildContext) -> (Statement, Tx, TxStats) {
         assert!(self.action_stack.is_empty(), "unclosed action scopes");
+        assert!(
+            !self.events.is_empty(),
+            "finalize: Tx must contain at least one top-level action"
+        );
 
         let mut stats = self.stats;
         let zero: Hash = EMPTY_VALUE.into();
@@ -703,15 +786,17 @@ impl TxBuilder {
         // is guaranteed to be a ChainEvent::Action (enforced by the
         // begin_action/end_action API), so we dispatch directly to
         // ReplayActions instead of going through ReplayContents.
-        let (st_replay, _, _, _) = replay::build_replay_actions(
-            ctx,
-            &mut stats,
+        let empty_nullifiers = set!();
+        let frame = replay::ReplayFrame {
+            live: &self.inputs_set,
+            nullifiers: &empty_nullifiers,
+            chain_start: zero,
+            chain_end: zero,
+        };
+        let (st_replay, _, _, _) = replay::Replayer::new(ctx, &mut stats).build_replay_actions(
             &self.events,
             self.chain_start,
-            &self.inputs_set,
-            &set!(),
-            zero,
-            zero,
+            frame,
         );
 
         // TxFinalized -- rebind inputs_grounded and chain_start hash
@@ -802,7 +887,7 @@ impl TxBuilder {
 
     fn build_inputs_grounded(
         ctx: &mut BuildContext,
-        inputs: &[(Dictionary, Tx)],
+        inputs: &[(Dictionary, GroundingEvidence)],
         grounding: &GroundingWitness,
     ) -> (Statement, Set, TxStats) {
         let mut stats = TxStats::new();
@@ -817,8 +902,13 @@ impl TxBuilder {
             // Base case: empty inputs. state_root_hash is unconstrained here.
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root_hash = state_root_hash) =
-                    (Equal(set!(), set!()), Statement::None, Statement::None)
+                InputsGrounded(state_root_hash = state_root_hash) = (
+                    Equal(set!(), set!()),
+                    Statement::None,
+                    Statement::None,
+                    Statement::None,
+                    Statement::None
+                )
             )
             .unwrap();
             record(&mut stats, "InputsGrounded");
@@ -849,14 +939,19 @@ impl TxBuilder {
             .priv_op(op!(HashOf(state_root_hash, txn_null_hash, bn_gsrs_hash)))
             .unwrap();
 
-        if inputs.len() == 1 {
-            // Single-input fast path: InputsGroundedSingle avoids recursion.
-            let (obj, prior_tx) = &inputs[0];
-            let source_tx = prior_tx.ctx.clone();
-            let mut inputs_set = set!();
-            inputs_set.insert(&Value::from(obj.clone())).unwrap();
+        let extend_set = |set: &Set, obj: &Dictionary| -> Set {
+            let mut new_set = set.clone();
+            new_set.insert(&Value::from(obj.clone())).unwrap();
+            new_set
+        };
+
+        let prove_input = |ctx: &mut BuildContext,
+                           stats: &mut TxStats,
+                           evidence: &GroundingEvidence,
+                           obj: &Dictionary|
+         -> (Statement, Statement) {
             let st_tx_membership =
-                prove_source_tx_membership(ctx, grounding, transactions_root, &source_tx);
+                prove_source_tx_membership(ctx, grounding, transactions_root, evidence.tx_final);
             let st_tx_in_sr = st_custom!(
                 ctx,
                 TxInStateRoot() = (
@@ -867,12 +962,20 @@ impl TxBuilder {
                 )
             )
             .unwrap();
-            record(&mut stats, "TxInStateRoot");
+            record(stats, "TxInStateRoot");
+            let st_set_contains_live = prove_obj_in_source_tx_live(ctx, evidence, obj);
+            (st_tx_in_sr, st_set_contains_live)
+        };
+
+        if inputs.len() == 1 {
+            let (obj, evidence) = &inputs[0];
+            let inputs_set = extend_set(&set!(), obj);
+            let (st_tx_in_sr, st_set_contains_live) = prove_input(ctx, &mut stats, evidence, obj);
             let st_single = st_custom!(
                 ctx,
                 InputsGroundedSingle() = (
                     st_tx_in_sr,
-                    SetContains((&source_tx, "live"), obj),
+                    st_set_contains_live,
                     SetInsert(inputs_set, set!(), obj)
                 )
             )
@@ -880,44 +983,121 @@ impl TxBuilder {
             record(&mut stats, "InputsGroundedSingle");
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root_hash = state_root_hash) =
-                    (Statement::None, st_single, Statement::None)
+                InputsGrounded(state_root_hash = state_root_hash) = (
+                    Statement::None,
+                    st_single,
+                    Statement::None,
+                    Statement::None,
+                    Statement::None
+                )
             )
             .unwrap();
             record(&mut stats, "InputsGrounded");
             return (st, inputs_set, stats);
         }
 
-        let mut st = st_custom!(
+        // For 2+ inputs: bottom out at InputsGroundedPair (N=2) or
+        // InputsGroundedTriple (N>=3), then peel any remaining inputs via
+        // InputsGroundedRecursive.
+
+        let (first_obj, first_evidence) = &inputs[0];
+        let (second_obj, second_evidence) = &inputs[1];
+
+        let set_first = extend_set(&set!(), first_obj);
+        let (st_first_tx_in_sr, st_first_set_contains_live) =
+            prove_input(ctx, &mut stats, first_evidence, first_obj);
+        let st_igsv = st_custom!(
             ctx,
-            InputsGrounded(state_root_hash = state_root_hash) =
-                (Equal(set!(), set!()), Statement::None, Statement::None)
+            InputsGroundedSingleVar() = (
+                st_first_tx_in_sr,
+                st_first_set_contains_live,
+                SetInsert(set_first, set!(), first_obj)
+            )
         )
         .unwrap();
-        record(&mut stats, "InputsGrounded");
-        let mut prev_set = set!();
-        for (obj, prior_tx) in inputs {
-            let source_tx = prior_tx.ctx.clone();
-            let mut next_set = prev_set.clone();
-            next_set.insert(&Value::from(obj.clone())).unwrap();
-            let st_tx_membership =
-                prove_source_tx_membership(ctx, grounding, transactions_root, &source_tx);
-            let st_tx_in_sr = st_custom!(
+        record(&mut stats, "InputsGroundedSingleVar");
+
+        let inputs_pair = extend_set(&set_first, second_obj);
+        let (st_second_tx_in_sr, st_second_set_contains_live) =
+            prove_input(ctx, &mut stats, second_evidence, second_obj);
+
+        if inputs.len() == 2 {
+            let st_pair = st_custom!(
                 ctx,
-                TxInStateRoot() = (
-                    st_h_txn_null.clone(),
-                    st_h_bn_gsrs.clone(),
-                    st_h_state_root.clone(),
-                    st_tx_membership
+                InputsGroundedPair() = (
+                    st_igsv,
+                    st_second_tx_in_sr,
+                    st_second_set_contains_live,
+                    SetInsert(inputs_pair, set_first, second_obj)
                 )
             )
             .unwrap();
-            record(&mut stats, "TxInStateRoot");
+            record(&mut stats, "InputsGroundedPair");
+            let st = st_custom!(
+                ctx,
+                InputsGrounded(state_root_hash = state_root_hash) = (
+                    Statement::None,
+                    Statement::None,
+                    st_pair,
+                    Statement::None,
+                    Statement::None
+                )
+            )
+            .unwrap();
+            record(&mut stats, "InputsGrounded");
+            return (st, inputs_pair, stats);
+        }
+
+        let st_igpv = st_custom!(
+            ctx,
+            InputsGroundedPairVar() = (
+                st_igsv,
+                st_second_tx_in_sr,
+                st_second_set_contains_live,
+                SetInsert(inputs_pair, set_first, second_obj)
+            )
+        )
+        .unwrap();
+        record(&mut stats, "InputsGroundedPairVar");
+
+        let (third_obj, third_evidence) = &inputs[2];
+        let inputs_triple = extend_set(&inputs_pair, third_obj);
+        let (st_third_tx_in_sr, st_third_set_contains_live) =
+            prove_input(ctx, &mut stats, third_evidence, third_obj);
+        let st_triple = st_custom!(
+            ctx,
+            InputsGroundedTriple() = (
+                st_igpv,
+                st_third_tx_in_sr,
+                st_third_set_contains_live,
+                SetInsert(inputs_triple, inputs_pair, third_obj)
+            )
+        )
+        .unwrap();
+        record(&mut stats, "InputsGroundedTriple");
+
+        let mut st = st_custom!(
+            ctx,
+            InputsGrounded(state_root_hash = state_root_hash) = (
+                Statement::None,
+                Statement::None,
+                Statement::None,
+                st_triple,
+                Statement::None
+            )
+        )
+        .unwrap();
+        record(&mut stats, "InputsGrounded");
+        let mut prev_set = inputs_triple;
+
+        for (obj, evidence) in &inputs[3..] {
+            let next_set = extend_set(&prev_set, obj);
+            let (st_tx_in_sr, st_set_contains_live) = prove_input(ctx, &mut stats, evidence, obj);
             let st_rec = st_custom!(
                 ctx,
                 InputsGroundedRecursive() = (
                     st_tx_in_sr,
-                    SetContains((&source_tx, "live"), obj),
+                    st_set_contains_live,
                     SetInsert(next_set, prev_set, obj),
                     st
                 )
@@ -927,7 +1107,13 @@ impl TxBuilder {
             prev_set = next_set;
             st = st_custom!(
                 ctx,
-                InputsGrounded() = (Statement::None, Statement::None, st_rec)
+                InputsGrounded() = (
+                    Statement::None,
+                    Statement::None,
+                    Statement::None,
+                    Statement::None,
+                    st_rec
+                )
             )
             .unwrap();
             record(&mut stats, "InputsGrounded");
@@ -936,24 +1122,64 @@ impl TxBuilder {
     }
 }
 
-/// Prove `SetContains(transactions_root, source_tx)` using a Merkle proof
-/// supplied by the grounding witness.
+/// Prove `SetContains(transactions_root, tx_final)` using a Merkle proof
+/// supplied by the grounding witness. The source tx is identified by its
+/// commitment alone (the literal `ctx` dict is not required).
 fn prove_source_tx_membership(
     ctx: &mut BuildContext,
     grounding: &GroundingWitness,
     transactions_root: Hash,
-    source_tx: &Dictionary,
+    tx_final: Hash,
 ) -> Statement {
     let proof = grounding
         .source_tx_proofs
-        .get(&source_tx.commitment())
+        .get(&tx_final)
         .cloned()
         .expect("missing source tx proof in grounding witness");
     ctx.builder
         .priv_op(Operation(
             OperationType::Native(NativeOperation::SetContainsFromEntries),
-            vec![transactions_root.into(), source_tx.clone().into()],
+            vec![transactions_root.into(), Value::from(tx_final).into()],
             OperationAux::MerkleProof(proof),
+        ))
+        .unwrap()
+}
+
+/// Build `SetContains(source_tx.live, obj)` from a [`GroundingEvidence`].
+///
+/// Discharges two Merkle proofs:
+///   * `DictContains(source_tx_ctx, "live", live_root)` via `live_in_tx_proof`.
+///   * `SetContains(live_root, obj)` via `obj_in_live_proof`.
+///
+/// The DictContains statement is fed as the first arg of the SetContains
+/// op as `OperationArg::Statement(...)`. Pod2 then promotes that arg to
+/// `ValueRef::Key(AnchoredKey(tx_final, "live"))`, which is the form the
+/// `source_tx.live` template arg requires.
+fn prove_obj_in_source_tx_live(
+    ctx: &mut BuildContext,
+    evidence: &GroundingEvidence,
+    obj: &Dictionary,
+) -> Statement {
+    let st_dict_contains = ctx
+        .builder
+        .priv_op(Operation(
+            OperationType::Native(NativeOperation::DictContainsFromEntries),
+            vec![
+                Value::from(evidence.tx_final).into(),
+                Value::from("live").into(),
+                Value::from(evidence.live_root).into(),
+            ],
+            OperationAux::MerkleProof(evidence.live_in_tx_proof.clone()),
+        ))
+        .unwrap();
+    ctx.builder
+        .priv_op(Operation(
+            OperationType::Native(NativeOperation::SetContainsFromEntries),
+            vec![
+                OperationArg::Statement(st_dict_contains),
+                Value::from(obj.clone()).into(),
+            ],
+            OperationAux::MerkleProof(evidence.obj_in_live_proof.clone()),
         ))
         .unwrap()
 }
@@ -1047,7 +1273,7 @@ mod tests {
             "key" => rand_raw_value()
         });
         for (k, v) in fields {
-            d.insert(&Key::from(*k), v).unwrap();
+            d.insert(&StrKey::from(*k), v).unwrap();
         }
         d
     }
@@ -1068,7 +1294,7 @@ mod tests {
     #[test]
     fn object_nullifier_hash_errors_without_key() {
         let mut obj = new_obj();
-        obj.delete(&Key::from("key")).unwrap();
+        obj.delete(&StrKey::from("key")).unwrap();
         let err = object_nullifier_hash(&obj).expect_err("missing key must fail");
         assert!(format!("{err}").contains("missing required key field"));
     }
@@ -1120,25 +1346,6 @@ mod tests {
         assert_eq!(decoded, original);
     }
 
-    #[test]
-    fn test_tx_builder_empty() {
-        let modules = vec![Arc::new(crate::predicates::module())];
-        let state = TestState::empty(0);
-        let params = Params::default();
-        let vd_set = VDSet::new(&[]);
-        let builder = MultiPodBuilder::new(&params, &vd_set);
-        let mut ctx = BuildContext { builder, modules };
-
-        let tx = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
-        let (st, tx, stats) = tx.finalize(&mut ctx);
-        print_stats(&stats);
-        ctx.builder.reveal(&st).unwrap();
-
-        solve_and_verify(ctx.builder);
-        assert!(tx.live.iter().next().is_none());
-        assert!(tx.nullifiers.iter().next().is_none());
-    }
-
     /// Tx 1: Spawn a WoodPick (insert, no inputs).
     /// Tx 2: MineStone using the WoodPick (mutate pick + insert stone).
     #[test]
@@ -1174,16 +1381,12 @@ mod tests {
 
         let scope = tx1.begin_action();
         let (st_insert, h) = tx1.insert(&mut ctx, &pick);
-        let op_type = ctx
-            .builder
-            .priv_op(op!(DictContains(pick, "type", is_wood_pick.clone())))
-            .unwrap();
         let op_dur = ctx
             .builder
             .priv_op(op!(DictContains(pick, "durability", 100_i64)))
             .unwrap();
         let st_spawn = ctx
-            .apply_custom_pred_simple(false, "SpawnWoodPick", vec![op_type, op_dur, st_insert])
+            .apply_custom_pred_simple(false, "SpawnWoodPick", vec![op_dur, st_insert])
             .unwrap();
         let st_guard = ctx
             .apply_custom_pred_simple(
@@ -1210,12 +1413,13 @@ mod tests {
 
         let mut pick_new = pick.clone();
         pick_new
-            .update(&Key::from("durability"), &Value::from(99_i64))
+            .update(&StrKey::from("durability"), &Value::from(99_i64))
             .unwrap();
         let stone = make_object(is_stone.clone(), &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx0));
-        let inputs = vec![(pick.clone(), tx0)];
+        let evidence = GroundingEvidence::new(&tx0.ctx, &pick).unwrap();
+        let inputs = vec![(pick.clone(), evidence)];
         let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
 
         let scope_outer = tx2.begin_action();
@@ -1224,11 +1428,6 @@ mod tests {
         let st_use_wp = {
             let scope_sub = tx2.begin_action();
             let (st_mutate, h_sub) = tx2.mutate(&mut ctx, &pick_new, &pick);
-            let pick_type = pick.get(&Key::from("type")).unwrap().unwrap();
-            let op_type = ctx
-                .builder
-                .priv_op(op!(DictContains(pick, "type", pick_type)))
-                .unwrap();
             let op_gt = ctx
                 .builder
                 .priv_op(op!(Gt((&pick, "durability"), 0_i64)))
@@ -1245,7 +1444,7 @@ mod tests {
                 .apply_custom_pred_simple(
                     false,
                     "UseWoodPick",
-                    vec![op_type, op_gt, op_sum, op_du, st_mutate],
+                    vec![op_gt, op_sum, op_du, st_mutate],
                 )
                 .unwrap();
             let st_guard = ctx
@@ -1262,16 +1461,8 @@ mod tests {
 
         // Direct: insert stone
         let (st_stone_insert, h) = tx2.insert(&mut ctx, &stone);
-        let op_type = ctx
-            .builder
-            .priv_op(op!(DictContains(stone, "type", is_stone.clone())))
-            .unwrap();
         let st_mine = ctx
-            .apply_custom_pred_simple(
-                false,
-                "MineStone",
-                vec![st_use_wp, op_type, st_stone_insert],
-            )
+            .apply_custom_pred_simple(false, "MineStone", vec![st_use_wp, st_stone_insert])
             .unwrap();
         let st_guard = ctx
             .apply_custom_pred_simple(false, "IsStone", vec![st_mine.clone()])
@@ -1327,12 +1518,8 @@ mod tests {
 
         let scope = tx1.begin_action();
         let (st_insert, h) = tx1.insert(&mut ctx, &log);
-        let op_type = ctx
-            .builder
-            .priv_op(op!(DictContains(log, "type", is_log.clone())))
-            .unwrap();
         let st_find = ctx
-            .apply_custom_pred_simple(false, "FindLog", vec![op_type, st_insert])
+            .apply_custom_pred_simple(false, "FindLog", vec![st_insert])
             .unwrap();
         let st_guard = ctx
             .apply_custom_pred_simple(false, "IsLog", vec![st_find.clone(), Statement::None])
@@ -1359,7 +1546,8 @@ mod tests {
         let wood = make_object(is_wood.clone(), &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx1_out));
-        let inputs = vec![(log.clone(), tx1_out)];
+        let evidence = GroundingEvidence::new(&tx1_out.ctx, &log).unwrap();
+        let inputs = vec![(log.clone(), evidence)];
         let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
 
         let scope_outer = tx2.begin_action();
@@ -1368,13 +1556,8 @@ mod tests {
         let st_del_log = {
             let scope_sub = tx2.begin_action();
             let (st_del, h_sub) = tx2.delete(&mut ctx, &log);
-            let log_type = log.get(&Key::from("type")).unwrap().unwrap();
-            let op_type = ctx
-                .builder
-                .priv_op(op!(DictContains(log, "type", log_type)))
-                .unwrap();
             let st_action = ctx
-                .apply_custom_pred_simple(false, "DeleteLog", vec![op_type, st_del])
+                .apply_custom_pred_simple(false, "DeleteLog", vec![st_del])
                 .unwrap();
             let st_guard = ctx
                 .apply_custom_pred_simple(false, "IsLog", vec![Statement::None, st_action.clone()])
@@ -1386,12 +1569,8 @@ mod tests {
 
         // Direct: insert wood
         let (st_ins, h) = tx2.insert(&mut ctx, &wood);
-        let op_type = ctx
-            .builder
-            .priv_op(op!(DictContains(wood, "type", is_wood.clone())))
-            .unwrap();
         let st_craft_wood = ctx
-            .apply_custom_pred_simple(false, "CraftWood", vec![st_del_log, op_type, st_ins])
+            .apply_custom_pred_simple(false, "CraftWood", vec![st_del_log, st_ins])
             .unwrap();
         let st_guard = ctx
             .apply_custom_pred_simple(
@@ -1420,7 +1599,8 @@ mod tests {
         let stick_b = make_object(is_stick, &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx2_out));
-        let inputs = vec![(wood.clone(), tx2_out)];
+        let evidence = GroundingEvidence::new(&tx2_out.ctx, &wood).unwrap();
+        let inputs = vec![(wood.clone(), evidence)];
         let mut tx3 = TxBuilder::new(&mut ctx, &inputs, witness);
 
         let scope_outer = tx3.begin_action();
@@ -1429,13 +1609,8 @@ mod tests {
         let st_del_wood = {
             let scope_sub = tx3.begin_action();
             let (st_del, h_sub) = tx3.delete(&mut ctx, &wood);
-            let wood_type = wood.get(&Key::from("type")).unwrap().unwrap();
-            let op_type = ctx
-                .builder
-                .priv_op(op!(DictContains(wood, "type", wood_type)))
-                .unwrap();
             let st_action = ctx
-                .apply_custom_pred_simple(false, "DeleteWood", vec![op_type, st_del])
+                .apply_custom_pred_simple(false, "DeleteWood", vec![st_del])
                 .unwrap();
             let st_guard = ctx
                 .apply_custom_pred_simple(false, "IsWood", vec![Statement::None, st_action.clone()])
@@ -1447,25 +1622,12 @@ mod tests {
 
         // Direct: insert stick_a
         let (st_ins_a, h_a) = tx3.insert(&mut ctx, &stick_a);
-        let stick_type = stick_a.get(&Key::from("type")).unwrap().unwrap();
-        let op_type_a = ctx
-            .builder
-            .priv_op(op!(DictContains(stick_a, "type", stick_type.clone())))
-            .unwrap();
 
         // Direct: insert stick_b
         let (st_ins_b, h_b) = tx3.insert(&mut ctx, &stick_b);
-        let op_type_b = ctx
-            .builder
-            .priv_op(op!(DictContains(stick_b, "type", stick_type)))
-            .unwrap();
 
         let st_craft_sticks = ctx
-            .apply_custom_pred_simple(
-                false,
-                "CraftSticks",
-                vec![st_del_wood, op_type_a, st_ins_a, op_type_b, st_ins_b],
-            )
+            .apply_custom_pred_simple(false, "CraftSticks", vec![st_del_wood, st_ins_a, st_ins_b])
             .unwrap();
 
         // stick_a: IsStick branch 2 = CraftSticks(obj, other, chain_start, chain_end)

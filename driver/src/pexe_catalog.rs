@@ -765,7 +765,7 @@ description = "consume a Foo to make a Bar"
     }
 
     fn obj_type_hash_for_test(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {
-        let value = obj.get(&pod2::middleware::Key::from("type")).ok()??;
+        let value = obj.get(&pod2::middleware::StrKey::from("type")).ok()??;
         Some(Hash(value.raw().0))
     }
 }

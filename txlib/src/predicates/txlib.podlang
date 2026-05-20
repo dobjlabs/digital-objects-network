@@ -1,13 +1,9 @@
 /*
   txlib: Transaction predicates for verifiable state transitions.
 
-  A transaction takes input objects (each proved live in a prior
-  finalized transaction) and produces output objects through a
-  sequence of insert, mutate, and delete events. The event sequence
-  is recorded as a hash chain. A proof of TxFinalized attests that
-  the chain is valid without revealing the events or the live set.
-
-  This file has four layers, bottom-up:
+  See README.md for the conceptual overview (what a transaction is,
+  what actions and classes are, how replay validates state changes).
+  This file is the implementation, organized in four layers, bottom-up:
 
   1. Chain Primitives -- hash chain steps for each event type.
      Called by application action predicates (e.g. MineStone) to
@@ -47,21 +43,29 @@
 // the hash relationship but do not update live/nullifier sets --
 // that happens during replay.
 
-// Insert: chain = H(prev, H(0, new))
-TxInsert(chain, prev_chain, new, private: event_hash) = AND(
+// Insert: chain = H(prev, H(0, new)). The `type` arg pins the
+// inserted object's type field so ReplayInsert can dispatch the
+// guard without re-extracting it.
+TxInsert(chain, prev_chain, new, type, private: event_hash) = AND(
+  DictContains(new, "type", type)
   HashOf(event_hash, 0, new)
   HashOf(chain, prev_chain, event_hash)
 )
 
-// Mutate: chain = H(prev, H(old, new)). The type-preservation check
-// is enforced by ReplayMutate, not here.
-TxMutate(chain, prev_chain, new, old, private: event_hash) = AND(
+// Mutate: chain = H(prev, H(old, new)). The shared `type` arg pins
+// both old and new to the same type, enforcing type preservation
+// implicitly (no separate Equal needed).
+TxMutate(chain, prev_chain, new, old, type, private: event_hash) = AND(
+  DictContains(new, "type", type)
+  DictContains(old, "type", type)
   HashOf(event_hash, old, new)
   HashOf(chain, prev_chain, event_hash)
 )
 
-// Delete: chain = H(prev, H(old, 0))
-TxDelete(chain, prev_chain, old, private: event_hash) = AND(
+// Delete: chain = H(prev, H(old, 0)). The `type` arg pins the
+// deleted object's type field for guard dispatch.
+TxDelete(chain, prev_chain, old, type, private: event_hash) = AND(
+  DictContains(old, "type", type)
   HashOf(event_hash, old, 0)
   HashOf(chain, prev_chain, event_hash)
 )
@@ -82,38 +86,70 @@ Nullify(nullifier, obj, private: obj_key_hash) = AND(
 // Replay: List Structure
 // ========================================================
 //
-// Replay walks the recorded event chain, element by element.
-// ReplayContents encodes a variable-length list as a recursive OR.
-// The four branches handle different list lengths:
-//   Done    -- 0 elements (before == after)
-//   Element -- exactly 1 element
-//   Pair    -- exactly 2 elements (avoids one recursion level)
-//   Step    -- 1 element + recursive tail (3+ elements)
+// The body of an action is a list of events (inserts, mutates,
+// deletes, sub-actions). ReplayContents is the predicate that walks
+// this list and applies each event's state change and guard dispatch
+// (see README.md for the conceptual pseudocode).
+//
+// Conceptually this is a for-loop, but in podlang it must be expressed
+// as a recursive OR: at each step the list is either a single trailing
+// event (the K=1 leaf, ReplayElement) or one head event followed by a
+// recursive ReplayContents call for the tail. Empty bodies are
+// forbidden by TxBuilder, so there's no K=0 leaf.
+//
+// A naive Step predicate would OR over all four event types inside
+// every recursion step. Instead, because the prover knows the head
+// event's type, it picks one of four specialised variants:
+//   StepInsert  -- head=Insert, tail=ReplayContents (K-1 elements)
+//   StepMutate  -- head=Mutate, tail=ReplayContents (K-1 elements)
+//   StepDelete  -- head=Delete, tail=ReplayContents (K-1 elements)
+//   StepAction  -- head=Action, tail=ReplayContents (K-1 elements)
+// Each variant fixes the head event's type at podlang level, folding
+// out the per-iteration OR-dispatch that ReplayElement still needs at
+// the trailing leaf.
 
 ReplayContents(before_tx, after_tx, before_chain, after_chain) = OR(
-  ReplayContentsDone(before_tx, after_tx, before_chain, after_chain)
   ReplayElement(before_tx, after_tx, before_chain, after_chain)
-  ReplayContentsPair(before_tx, after_tx, before_chain, after_chain)
-  ReplayContentsStep(before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepInsert(before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepMutate(before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepDelete(before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepAction(before_tx, after_tx, before_chain, after_chain)
 )
 
-// Empty list: nothing to replay, state passes through unchanged.
-ReplayContentsDone(before_tx, after_tx, before_chain, after_chain) = AND(
-  Equal(before_tx, after_tx)
-  Equal(before_chain, after_chain)
+// The four specialised step variants. For Insert and Mutate the body
+// of `ReplayInsert`/`ReplayMutate` is inlined here -- both fit in 5
+// sub-statements alongside the recursive tail call. To stay within
+// pod2's 8-wildcard limit, head-event objects are packed into a small
+// private dict and accessed via anchored keys: `ins.new`/`ins.new_live`
+// for Insert, `pair.old`/`pair.new` for Mutate. Delete and Action
+// don't fit when inlined, so their step variants just call the
+// wrapping per-event predicate.
+ReplayContentsStepInsert(before_tx, after_tx, before_chain, after_chain,
+    private: mid_tx, mid_chain, ins, guard) = AND(
+  TxInsert(mid_chain, before_chain, ins.new, guard)
+  SetInsert(ins.new_live, before_tx.live, ins.new)
+  DictUpdate(mid_tx, before_tx, "live", ins.new_live)
+  guard(ins.new, before_tx.chain_start, before_tx.chain_end)
+  ReplayContents(mid_tx, after_tx, mid_chain, after_chain)
 )
 
-// Exactly two elements, threaded through a midpoint.
-ReplayContentsPair(before_tx, after_tx, before_chain, after_chain,
+ReplayContentsStepMutate(before_tx, after_tx, before_chain, after_chain,
+    private: mid_tx, mid_chain, pair, guard) = AND(
+  TxMutate(mid_chain, before_chain, pair.new, pair.old, guard)
+  ReplayMutateEvent(before_tx, mid_tx, pair.old, pair.new)
+  guard(pair.new, before_tx.chain_start, before_tx.chain_end)
+  ReplayContents(mid_tx, after_tx, mid_chain, after_chain)
+)
+
+ReplayContentsStepDelete(before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain) = AND(
-  ReplayElement(before_tx, mid_tx, before_chain, mid_chain)
-  ReplayElement(mid_tx, after_tx, mid_chain, after_chain)
+  ReplayDelete(before_tx, mid_tx, before_chain, mid_chain)
+  ReplayContents(mid_tx, after_tx, mid_chain, after_chain)
 )
 
-// Head + recursive tail (for 3+ elements).
-ReplayContentsStep(before_tx, after_tx, before_chain, after_chain,
+ReplayContentsStepAction(before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain) = AND(
-  ReplayElement(before_tx, mid_tx, before_chain, mid_chain)
+  ReplayAction(before_tx, mid_tx, before_chain, mid_chain)
   ReplayContents(mid_tx, after_tx, mid_chain, after_chain)
 )
 
@@ -159,9 +195,9 @@ ReplayAction(before_tx, after_tx, before_chain, after_chain,
 // to ReplayAction here skips the ReplayElement layer that would
 // otherwise be needed to discriminate between event variants.
 // ReplayContents is still used *within* an action, where inserts,
-// mutates, deletes, and sub-actions can all appear.
+// mutates, deletes, and sub-actions can all appear. Empty top-level
+// transactions are forbidden by TxBuilder, so there is no Done leaf.
 ReplayActions(before_tx, after_tx, before_chain, after_chain) = OR(
-  ReplayContentsDone(before_tx, after_tx, before_chain, after_chain)
   ReplayAction(before_tx, after_tx, before_chain, after_chain)
   ReplayActionsStep(before_tx, after_tx, before_chain, after_chain)
 )
@@ -184,10 +220,9 @@ ReplayActionsStep(before_tx, after_tx, before_chain, after_chain,
 // that it already built for the application's action predicate.
 ReplayInsert(before_tx, after_tx, before_chain, after_chain,
     private: new, new_live, guard) = AND(
-  TxInsert(after_chain, before_chain, new)
+  TxInsert(after_chain, before_chain, new, guard)
   SetInsert(new_live, before_tx.live, new)
   DictUpdate(after_tx, before_tx, "live", new_live)
-  DictContains(new, "type", guard)
   guard(new, before_tx.chain_start, before_tx.chain_end)
 )
 
@@ -216,17 +251,13 @@ ReplayMutateEvent(before_tx, after_tx, old, new,
   ReplayNullify(mid_tx, after_tx, old)
 )
 
-// Full mutate replay: type-preserve check + chain step (via TxMutate)
-// + state update + guard dispatch. The explicit old.type == new.type
-// check lets the guard dispatch on *new* alone (the authorizing action
-// predicate can reference either old or new, since their types are
-// equal here).
+// Full mutate replay: chain step (via TxMutate) + state update +
+// guard dispatch. The guard dispatches on `new` alone because
+// TxMutate's shared `type` arg already pins old.type == new.type.
 ReplayMutate(before_tx, after_tx, before_chain, after_chain,
     private: old, new, guard) = AND(
-  Equal(old.type, new.type)
-  TxMutate(after_chain, before_chain, new, old)
+  TxMutate(after_chain, before_chain, new, old, guard)
   ReplayMutateEvent(before_tx, after_tx, old, new)
-  DictContains(new, "type", guard)
   guard(new, before_tx.chain_start, before_tx.chain_end)
 )
 
@@ -234,22 +265,14 @@ ReplayMutate(before_tx, after_tx, before_chain, after_chain,
 // Replay: Delete
 // ========================================================
 
-// Live-set removal + nullifier accumulation. Chain/event-hash work is
-// delegated to TxDelete in the ReplayDelete parent.
-ReplayDeleteEvent(before_tx, after_tx, old,
-    private: new_live, mid_tx) = AND(
+// Full delete replay: chain step (via TxDelete) + live-set removal
+// + nullifier accumulation + guard dispatch.
+ReplayDelete(before_tx, after_tx, before_chain, after_chain,
+    private: old, guard, new_live, mid_tx) = AND(
+  TxDelete(after_chain, before_chain, old, guard)
   SetDelete(new_live, before_tx.live, old)
   DictUpdate(mid_tx, before_tx, "live", new_live)
   ReplayNullify(mid_tx, after_tx, old)
-)
-
-// Full delete replay: chain step (via TxDelete) + state update +
-// guard dispatch.
-ReplayDelete(before_tx, after_tx, before_chain, after_chain,
-    private: old, guard) = AND(
-  TxDelete(after_chain, before_chain, old)
-  ReplayDeleteEvent(before_tx, after_tx, old)
-  DictContains(old, "type", guard)
   guard(old, before_tx.chain_start, before_tx.chain_end)
 )
 
@@ -285,14 +308,21 @@ TxInStateRoot(state_root_hash, source_txn,
 // show that some transaction in that root's transactions set
 // has the input in its live set.
 //
-// Encoded as a recursive OR (like ReplayContents) since the
-// number of inputs varies per transaction.
+// Same loop-unrolling pattern as ReplayContents above: a recursive
+// OR over inputs, with explicit fast paths for small N (0/1/2/3) to
+// avoid the per-input dispatch cost of the general recursion. The
+// `Var` siblings of Single and Pair exist because the outer
+// InputsGrounded OR requires all branches to share the
+// `(inputs, state_root_hash)` signature; Pair/Triple chain through
+// them to expose additional inputs as public args along the way.
 
 InputsGrounded(inputs, state_root_hash) = OR(
   // Base case: empty inputs. state_root_hash is intentionally
   // unconstrained -- an empty-input tx needs no prior state.
   Equal(inputs, {})
   InputsGroundedSingle(inputs, state_root_hash)
+  InputsGroundedPair(inputs, state_root_hash)
+  InputsGroundedTriple(inputs, state_root_hash)
   InputsGroundedRecursive(inputs, state_root_hash)
 )
 
@@ -305,7 +335,56 @@ InputsGroundedSingle(inputs, state_root_hash,
   SetInsert(inputs, {}, input)
 )
 
-// 2+ inputs: ground one input, then recurse for the rest.
+// Same body as InputsGroundedSingle, but `input` is a public arg so a
+// caller (e.g. InputsGroundedPair) can reuse it in a subsequent SetInsert.
+// Not eligible for the InputsGrounded OR directly because the OR requires
+// all branches to share the (inputs, state_root_hash) signature.
+InputsGroundedSingleVar(inputs, state_root_hash, input,
+    private: source_tx) = AND(
+  TxInStateRoot(state_root_hash, source_tx)
+  SetContains(source_tx.live, input)
+  SetInsert(inputs, {}, input)
+)
+
+// Two-input fast path: grounds two inputs without recursion. Saves one
+// IG-dispatch + one IGR cpv vs. the recursive chain for N=2.
+// IGSV builds the {first} singleton; the second input is verified inline
+// and inserted into the singleton to form `inputs`.
+InputsGroundedPair(inputs, state_root_hash,
+    private: first_input, second_input, set_first, source_tx_second) = AND(
+  InputsGroundedSingleVar(set_first, state_root_hash, first_input)
+  TxInStateRoot(state_root_hash, source_tx_second)
+  SetContains(source_tx_second.live, second_input)
+  SetInsert(inputs, set_first, second_input)
+)
+
+// Same body as InputsGroundedPair, but first_input and second_input are
+// public args so a caller (InputsGroundedTriple) can chain through them.
+// Not eligible for the InputsGrounded OR directly because the OR requires
+// all branches to share the (inputs, state_root_hash) signature.
+InputsGroundedPairVar(inputs, state_root_hash, first_input, second_input,
+    private: set_first, source_tx_second) = AND(
+  InputsGroundedSingleVar(set_first, state_root_hash, first_input)
+  TxInStateRoot(state_root_hash, source_tx_second)
+  SetContains(source_tx_second.live, second_input)
+  SetInsert(inputs, set_first, second_input)
+)
+
+// Three-input fast path: grounds three inputs in 4 cpv (IG + IGT + IGPV +
+// IGSV). Used directly for N=3, or as the bottom-out for N>=4 (after IGR
+// peels off the outer inputs).
+InputsGroundedTriple(inputs, state_root_hash,
+    private: first_input, second_input, third_input, set_pair,
+             source_tx_third) = AND(
+  InputsGroundedPairVar(set_pair, state_root_hash, first_input, second_input)
+  TxInStateRoot(state_root_hash, source_tx_third)
+  SetContains(source_tx_third.live, third_input)
+  SetInsert(inputs, set_pair, third_input)
+)
+
+// 4+ inputs: ground one input, then recurse for the rest. Bottoms out at
+// InputsGroundedTriple for N=4, or at a further IGR -> ... -> IGT chain
+// for larger N.
 InputsGroundedRecursive(inputs, state_root_hash,
     private: input, prev_inputs, source_tx) = AND(
   TxInStateRoot(state_root_hash, source_tx)

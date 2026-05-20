@@ -13,7 +13,7 @@ relayer:
 # Use this when you only want the desktop window. Inside `just dev` we use
 # `desktop-shell` instead so a shared Vite serves both desktop and browser.
 desktop:
-    cd app-gui && RUST_LOG=info pnpm tauri dev --release
+    cd app-gui && RUST_BACKTRACE=1 RUST_LOG=info pnpm tauri dev --release
 
 # Run the Tauri shell pointing at an *already-running* Vite at :1420.
 # Skips Tauri's `beforeDevCommand` so it doesn't fight the standalone web

@@ -163,7 +163,7 @@ impl Driver {
         let settings = self.load_settings()?;
         let source_tx_hashes = entries
             .iter()
-            .map(|entry| entry.record.spendable().tx.dict().commitment())
+            .map(|entry| entry.record.evidence.tx_final)
             .collect::<HashSet<_>>();
         let all_nullifiers = entries
             .iter()
@@ -189,7 +189,7 @@ impl Driver {
             if entry.record.status != ObjectStatus::Pending {
                 continue;
             }
-            let tx_final = encode_hash_hex(&entry.record.tx.dict().commitment());
+            let tx_final = encode_hash_hex(&entry.record.evidence.tx_final);
             let current_hash = self
                 .deps
                 .relayer
@@ -361,7 +361,7 @@ impl Driver {
         let resolved_inputs = resolve_inputs(&entries, &input, &action)?;
         let source_tx_hashes = resolved_inputs
             .iter()
-            .map(|entry| entry.record.spendable().tx.dict().commitment())
+            .map(|entry| entry.record.evidence.tx_final)
             .collect::<Vec<_>>();
         let grounding_witness = self
             .deps
