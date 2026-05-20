@@ -115,8 +115,8 @@ Run individual pieces standalone with `just sync`, `just relayer`,
 | [`plugins/craft-basics/`](plugins/craft-basics)                                                    | the bundled crafting plugin (Log, Wood, Stone, sticks, picks…)                                                                 |
 | [`common/`](common), [`pod2utils/`](pod2utils), [`intro_pods/`](intro_pods) | shared utilities + intro proof-of-work / VDF pods                                                                              |
 
-Built on **pod2** (0xPARC's predicate-of-data system) using `plonky2` +
-Groth16 — proofs are constant-size regardless of input count.
+Built on **pod2** (0xPARC's predicate-of-data system) using `plonky2` —
+proofs are constant-size regardless of input count.
 
 ## Plugins
 

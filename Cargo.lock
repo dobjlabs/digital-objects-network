@@ -3,17 +3,6 @@
 version = 4
 
 [[package]]
-name = "addchain"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e33f6a175ec6a9e0aca777567f9ff7c3deefc255660df887e7fa3585e9801d8"
-dependencies = [
- "num-bigint 0.3.3",
- "num-integer",
- "num-traits",
-]
-
-[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1003,7 +992,7 @@ dependencies = [
  "ark-serialize 0.3.0",
  "ark-std 0.3.0",
  "derivative",
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-traits",
  "paste",
  "rustc_version 0.3.3",
@@ -1023,7 +1012,7 @@ dependencies = [
  "derivative",
  "digest 0.10.7",
  "itertools 0.10.5",
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-traits",
  "paste",
  "rustc_version 0.4.1",
@@ -1044,7 +1033,7 @@ dependencies = [
  "digest 0.10.7",
  "educe",
  "itertools 0.13.0",
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-traits",
  "paste",
  "zeroize",
@@ -1086,7 +1075,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db2fd794a08ccb318058009eefdf15bcaaaaf6f8161eb3345f907222bac38b20"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-traits",
  "quote",
  "syn 1.0.109",
@@ -1098,7 +1087,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7abe79b0e4288889c4574159ab790824d0033b9fdcb2a112a3182fac2e514565"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-traits",
  "proc-macro2",
  "quote",
@@ -1111,7 +1100,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09be120733ee33f7693ceaa202ca41accd5653b779563608f1234f78ae07c4b3"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-traits",
  "proc-macro2",
  "quote",
@@ -1136,7 +1125,7 @@ checksum = "adb7b85a02b83d2f22f89bd5cac66c9c89474240cb6207cb1efc16d098e822a5"
 dependencies = [
  "ark-std 0.4.0",
  "digest 0.10.7",
- "num-bigint 0.4.6",
+ "num-bigint",
 ]
 
 [[package]]
@@ -1148,7 +1137,7 @@ dependencies = [
  "ark-std 0.5.0",
  "arrayvec",
  "digest 0.10.7",
- "num-bigint 0.4.6",
+ "num-bigint",
 ]
 
 [[package]]
@@ -2058,8 +2047,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=6129bd04ae14ee0f2baf6f71f77ba92a93cb523e)",
- "pod2_onchain",
+ "pod2",
  "serde",
  "serde_json",
  "time 0.3.47",
@@ -2827,7 +2815,7 @@ dependencies = [
  "lt_eq_u256_pod",
  "pexe",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=6129bd04ae14ee0f2baf6f71f77ba92a93cb523e)",
+ "pod2",
  "pod2utils",
  "rand 0.9.2",
  "relayer",
@@ -3154,26 +3142,8 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0b50bfb653653f9ca9095b427bed08ab8d75a137839d9ad64eb11810d5b6393"
 dependencies = [
- "bitvec",
- "byteorder",
- "ff_derive",
  "rand_core 0.6.4",
  "subtle",
-]
-
-[[package]]
-name = "ff_derive"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f10d12652036b0e99197587c6ba87a8fc3031986499973c030d8b44fcc151b60"
-dependencies = [
- "addchain",
- "num-bigint 0.3.3",
- "num-integer",
- "num-traits",
- "proc-macro2",
- "quote",
- "syn 1.0.109",
 ]
 
 [[package]]
@@ -4742,7 +4712,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=6129bd04ae14ee0f2baf6f71f77ba92a93cb523e)",
+ "pod2",
  "pod2utils",
  "serde",
  "serde_json",
@@ -5050,22 +5020,11 @@ version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-complex",
  "num-integer",
  "num-iter",
  "num-rational",
- "num-traits",
-]
-
-[[package]]
-name = "num-bigint"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f6f7833f2cbf2360a6cfd58cd41a53aa7a90bd4c202f5b1c7dd2ed73c57b2c3"
-dependencies = [
- "autocfg",
- "num-integer",
  "num-traits",
 ]
 
@@ -5138,7 +5097,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-integer",
  "num-traits",
 ]
@@ -5730,7 +5689,7 @@ dependencies = [
  "env_logger",
  "hex",
  "log",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=6129bd04ae14ee0f2baf6f71f77ba92a93cb523e)",
+ "pod2",
  "sdk",
  "serde",
  "thiserror 2.0.18",
@@ -6122,7 +6081,7 @@ dependencies = [
  "log",
  "minicbor-serde",
  "num",
- "num-bigint 0.4.6",
+ "num-bigint",
  "pest",
  "pest_derive",
  "petgraph",
@@ -6143,62 +6102,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pod2"
-version = "0.1.0"
-source = "git+https://github.com/0xPARC/pod2?rev=ffed5b4fbda9189d7452824a54978a730cb10964#ffed5b4fbda9189d7452824a54978a730cb10964"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "bs58",
- "directories",
- "dyn-clone",
- "env_logger",
- "hashbrown 0.14.5",
- "hex",
- "itertools 0.14.0",
- "lazy_static",
- "log",
- "minicbor-serde",
- "num",
- "num-bigint 0.4.6",
- "pest",
- "pest_derive",
- "plonky2",
- "plonky2_u32",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "schemars 0.8.22",
- "serde",
- "serde_arrays",
- "serde_bytes",
- "serde_json",
- "sha2",
- "strum 0.26.3",
- "strum_macros 0.26.4",
- "thiserror 2.0.18",
- "vergen-gitcl",
-]
-
-[[package]]
-name = "pod2_onchain"
-version = "0.1.0"
-source = "git+https://github.com/0xPARC/pod2-onchain.git?rev=5f2047752349a0f06665bc8f6ba82f50bc5ad435#5f2047752349a0f06665bc8f6ba82f50bc5ad435"
-dependencies = [
- "anyhow",
- "bindgen",
- "ff",
- "itertools 0.14.0",
- "lazy_static",
- "num",
- "num-bigint 0.4.6",
- "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=ffed5b4fbda9189d7452824a54978a730cb10964)",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "pod2utils"
 version = "0.1.0"
 dependencies = [
@@ -6206,7 +6109,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=6129bd04ae14ee0f2baf6f71f77ba92a93cb523e)",
+ "pod2",
  "rand 0.9.2",
  "serde",
  "serde_json",
@@ -6784,7 +6687,7 @@ dependencies = [
  "common",
  "dotenvy",
  "hex",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=6129bd04ae14ee0f2baf6f71f77ba92a93cb523e)",
+ "pod2",
  "serde",
  "serde_json",
  "sqlx",
@@ -7066,7 +6969,7 @@ dependencies = [
  "bytes",
  "fastrlp 0.3.1",
  "fastrlp 0.4.0",
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-integer",
  "num-traits",
  "parity-scale-codec",
@@ -7316,7 +7219,7 @@ dependencies = [
  "log",
  "lt_eq_u256_pod",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=6129bd04ae14ee0f2baf6f71f77ba92a93cb523e)",
+ "pod2",
  "pod2utils",
  "rand 0.9.2",
  "rhai",
@@ -8272,7 +8175,7 @@ dependencies = [
  "futures-util",
  "hex",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=6129bd04ae14ee0f2baf6f71f77ba92a93cb523e)",
+ "pod2",
  "pod2utils",
  "reqwest 0.12.28",
  "reqwest-eventsource",
@@ -9250,7 +9153,7 @@ dependencies = [
  "hex",
  "log",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=6129bd04ae14ee0f2baf6f71f77ba92a93cb523e)",
+ "pod2",
  "pod2utils",
  "rand 0.9.2",
  "serde",
@@ -9510,7 +9413,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "plonky2",
- "pod2 0.1.0 (git+https://github.com/0xPARC/pod2?rev=6129bd04ae14ee0f2baf6f71f77ba92a93cb523e)",
+ "pod2",
  "pod2utils",
  "serde",
  "serde_json",

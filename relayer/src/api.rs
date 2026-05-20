@@ -294,7 +294,7 @@ mod tests {
         fn parse_blob(&self, _blob_bytes: &[u8]) -> anyhow::Result<Option<Payload>> {
             match self.mode {
                 ParseMode::Valid => Ok(Some(Payload {
-                    proof: PayloadProof::Groth16(vec![]),
+                    proof: PayloadProof::empty_for_test(),
                     tx_final: EMPTY_HASH,
                     state_root_hash: EMPTY_HASH,
                     nullifiers: vec![],
