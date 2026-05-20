@@ -39,6 +39,35 @@ dobjd:
 dev: ensure-plugins ensure-commands ensure-mcp
     mprocs --config mprocs.yaml
 
+# Like `just dev`, but without spawning the local synchronizer + relayer —
+# point dobjd at the hosted public endpoints instead. Faster spin-up when
+# you don't need to fork the chain locally and don't want a local Postgres.
+# Uses the standard 7717 default (same as `just dev`).
+dev-remote: ensure-plugins ensure-commands ensure-remote-settings ensure-mcp
+    mprocs --config mprocs.remote.yaml
+
+# Idempotently point ~/.dobj/settings.json at the hosted synchronizer +
+# relayer. Preserves any other keys already in the file.
+ensure-remote-settings:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p ~/.dobj
+    python3 - <<'PY'
+    import json
+    from pathlib import Path
+    p = Path.home() / '.dobj' / 'settings.json'
+    try:
+        data = json.loads(p.read_text())
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    data['synchronizerApiUrl'] = 'http://18.217.144.33:3000'
+    data['relayerApiUrl'] = 'http://18.217.144.33:3200'
+    p.write_text(json.dumps(data, indent=2) + '\n')
+    print(f"~/.dobj/settings.json → hosted sync ({data['synchronizerApiUrl']}) + relayer ({data['relayerApiUrl']})")
+    PY
+
 # Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
 # `just dev` so a fresh clone (or a `just reset`-ed dev env) boots cleanly.
 ensure-plugins:
