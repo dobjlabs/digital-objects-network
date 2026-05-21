@@ -593,4 +593,50 @@ mod tests {
 
         Ok(())
     }
+
+    /// Reproduce the dobjd "wire set twice" failure path: build an intro pod, build a MainPod
+    /// that opens its statement publicly, then build a SECOND MainPod that opens that statement
+    /// from the first MainPod's chain.
+    #[ignore]
+    #[test]
+    fn test_chained_main_pod_with_intro_statement() -> Result<()> {
+        use pod2::{backends::plonky2::mainpod, frontend};
+
+        let _ = env_logger::builder().is_test(true).try_init();
+        let params = Params::default();
+        let vd_set = &*DEFAULT_VD_SET;
+        let prover = mainpod::Prover {};
+
+        // 1. Build an intro pod and wrap it as a frontend MainPod.
+        let lhs = RawValue([F(1), F(0), F(0), F(0)]);
+        let rhs = RawValue([F(2), F(0), F(0), F(0)]);
+        let intro_pod = LtEqU256Pod::new(&params, vd_set.clone(), lhs, rhs)?;
+        let intro_st = intro_pod.pub_statements()[0].clone();
+        let intro_main_pod = frontend::MainPod {
+            pod: Box::new(intro_pod.clone()),
+            public_statements: intro_pod.pub_statements(),
+            params: params.clone(),
+        };
+
+        // 2. Build MainPod #1 that opens the intro statement publicly.
+        println!("Building MainPod #1 (opens intro statement)");
+        let mut builder1 = frontend::MainPodBuilder::new(&params, vd_set);
+        builder1.add_pod(intro_main_pod)?;
+        builder1.open_input_st(true, 0, &intro_st)?;
+        let main_pod_1 = builder1.prove(&prover)?;
+        main_pod_1.pod.verify()?;
+        println!("MainPod #1 verified OK");
+
+        // 3. Build MainPod #2 that opens the intro statement from MainPod #1's chain.
+        println!("Building MainPod #2 (chains from MainPod #1)");
+        let main_pod_1_pub_st = main_pod_1.public_statements[0].clone();
+        let mut builder2 = frontend::MainPodBuilder::new(&params, vd_set);
+        builder2.add_pod(main_pod_1)?;
+        builder2.open_input_st(true, 0, &main_pod_1_pub_st)?;
+        let main_pod_2 = builder2.prove(&prover)?;
+        main_pod_2.pod.verify()?;
+        println!("MainPod #2 verified OK");
+
+        Ok(())
+    }
 }
