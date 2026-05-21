@@ -68,7 +68,7 @@ pub fn parse_object_record_file(path: &Path) -> anyhow::Result<ObjectRecord> {
 pub(crate) fn ensure_extra_pod_deserializers_registered() {
     use std::sync::Once;
 
-    use pod2::middleware::{self, BackendError, Hash, Params, Pod, VDSet};
+    use pod2::middleware::{self, BackendError, Params, Pod, VDSet};
     use serde_json::Value;
 
     static REGISTER_EXTRA_DESERIALIZERS: Once = Once::new();
@@ -78,11 +78,10 @@ pub(crate) fn ensure_extra_pod_deserializers_registered() {
             params: Params,
             data: Value,
             vd_set: VDSet,
-            sts_hash: Hash,
         ) -> Result<Box<dyn Pod>, BackendError> {
             Ok(Box::new(
                 <pod2utils::mockintro::MockIntroPod as Pod>::deserialize_data(
-                    params, data, vd_set, sts_hash,
+                    params, data, vd_set,
                 )?,
             ))
         }

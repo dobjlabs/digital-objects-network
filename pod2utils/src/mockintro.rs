@@ -1,11 +1,8 @@
 use pod2::{
-    backends::plonky2::{
-        Result,
-        mainpod::{self, calculate_statements_hash},
-    },
+    backends::plonky2::Result,
     middleware::{
         self, EMPTY_HASH, Hash, IntroPredicateRef, Params, Pod, Proof, Statement, VDSet, Value,
-        VerifierOnlyCircuitData,
+        VerifierOnlyCircuitData, containers::Array,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -14,7 +11,6 @@ use serde::{Deserialize, Serialize};
 pub struct MockIntroPod {
     params: Params,
     vd_set: VDSet,
-    sts_hash: Hash,
     statement: Statement,
     vd_hash: Hash,
 }
@@ -41,12 +37,9 @@ impl MockIntroPod {
         args: Vec<Value>,
     ) -> Self {
         let statement = intro_self_statement(name, args);
-        let statements = [mainpod::Statement::from(statement.clone())];
-        let sts_hash = calculate_statements_hash(&statements);
         Self {
             params: params.clone(),
             vd_set,
-            sts_hash,
             statement,
             vd_hash,
         }
@@ -75,13 +68,15 @@ impl Pod for MockIntroPod {
         Ok(())
     }
 
-    fn statements_hash(&self) -> Hash {
-        self.sts_hash
-    }
     fn pod_type(&self) -> (usize, &'static str) {
         (999, "MockIntro")
     }
-    fn pub_self_statements(&self) -> Vec<middleware::Statement> {
+
+    fn pub_raw_statements_mt(&self) -> Array {
+        Array::new(vec![Value::from(self.statement.hash())])
+    }
+
+    fn pub_raw_statements(&self) -> Vec<middleware::Statement> {
         vec![self.statement.clone()]
     }
 
@@ -108,17 +103,11 @@ impl Pod for MockIntroPod {
         })
         .expect("serialization to json")
     }
-    fn deserialize_data(
-        params: Params,
-        data: serde_json::Value,
-        vd_set: VDSet,
-        sts_hash: Hash,
-    ) -> Result<Self> {
+    fn deserialize_data(params: Params, data: serde_json::Value, vd_set: VDSet) -> Result<Self> {
         let data: Data = serde_json::from_value(data)?;
         Ok(Self {
             params,
             vd_set,
-            sts_hash,
             statement: data.statement,
             vd_hash: data.vd_hash,
         })

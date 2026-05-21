@@ -28,10 +28,12 @@
 //! ```
 
 use anyhow::Result;
-use itertools::Itertools;
 use plonky2::{
     field::types::{Field, PrimeField64},
-    hash::hash_types::{HashOut, HashOutTarget},
+    hash::{
+        hash_types::{HashOut, HashOutTarget},
+        poseidon::PoseidonHash,
+    },
     iop::{
         target::Target,
         witness::{PartialWitness, WitnessWrite},
@@ -45,23 +47,21 @@ use plonky2::{
 use pod2::{
     backends::plonky2::{
         Error, Result as BResult,
-        circuits::{
-            common::{
-                CircuitBuilderPod, PredicateTarget, StatementArgTarget, StatementTarget,
-                ValueTarget,
-            },
-            mainpod::calculate_statements_hash_circuit,
+        circuits::common::{
+            CircuitBuilderPod, Flattenable, PredicateTarget, StatementArgTarget, StatementTarget,
+            ValueTarget,
         },
-        deserialize_proof, mainpod,
-        mainpod::calculate_statements_hash,
+        deserialize_proof,
+        mainpod::public_inputs,
+        primitives::merkletree::kv_hash_target,
         serialization::CircuitDataSerializer,
         serialize_proof,
     },
     cache::{self, CacheEntry},
     measure_gates_begin, measure_gates_end, middleware,
     middleware::{
-        C, D, EMPTY_HASH, F, Hash, IntroPredicateRef, Params, Pod, Proof, RawValue, ToFields,
-        VDSet, Value,
+        C, D, EMPTY_HASH, F, Hash, IntroPredicateRef, Params, Pod, Proof, RawValue, VDSet, Value,
+        containers::Array,
     },
     timed,
 };
@@ -115,7 +115,6 @@ pub struct LtEqU256Pod {
     pub rhs: RawValue,
 
     pub vd_set: VDSet,
-    pub statements_hash: Hash,
     pub proof: Proof,
 
     pub common_hash: String,
@@ -167,11 +166,6 @@ impl LtEqU256Pod {
 
         // Build the proof
         let (lt_eq_u256_pod_target, circuit_data) = &**STANDARD_LT_EQ_U256_POD_DATA;
-        let statements = pub_self_statements(lhs, rhs)
-            .into_iter()
-            .map(mainpod::Statement::from)
-            .collect_vec();
-        let statements_hash: Hash = calculate_statements_hash(&statements);
 
         // set targets
         let lt_eq_u256_input = LtEqU256PodInput {
@@ -198,7 +192,6 @@ impl LtEqU256Pod {
 
         Ok(LtEqU256Pod {
             params: params.clone(),
-            statements_hash,
             lhs,
             rhs,
             proof: proof_with_pis.proof,
@@ -222,45 +215,28 @@ impl Pod for LtEqU256Pod {
     }
 
     fn verify(&self) -> pod2::backends::plonky2::Result<()> {
-        let statements = pub_self_statements(self.lhs, self.rhs)
-            .into_iter()
-            .map(mainpod::Statement::from)
-            .collect_vec();
-        let statements_hash: Hash = calculate_statements_hash(&statements);
-        if statements_hash != self.statements_hash {
-            return Err(Error::statements_hash_not_equal(
-                self.statements_hash,
-                statements_hash,
-            ));
-        }
+        let sts_root = self.pub_raw_statements_mt().commitment();
 
         let (_, circuit_data) = &**STANDARD_LT_EQ_U256_POD_DATA;
-
-        let public_inputs = statements_hash
-            .to_fields()
-            .iter()
-            .chain(self.vd_set().root().0.iter())
-            .cloned()
-            .collect_vec();
 
         circuit_data
             .verify(ProofWithPublicInputs {
                 proof: self.proof.clone(),
-                public_inputs,
+                public_inputs: public_inputs(sts_root, self.vd_set().root(), false),
             })
             .map_err(|e| Error::custom(format!("LtEqU256Pod proof verification failure: {e:?}")))
-    }
-
-    fn statements_hash(&self) -> Hash {
-        self.statements_hash
     }
 
     fn pod_type(&self) -> (usize, &'static str) {
         LT_EQ_U256_POD_TYPE
     }
 
-    fn pub_self_statements(&self) -> Vec<middleware::Statement> {
-        pub_self_statements(self.lhs, self.rhs)
+    fn pub_raw_statements_mt(&self) -> Array {
+        single_statement_mt(&pub_raw_statements(self.lhs, self.rhs)[0])
+    }
+
+    fn pub_raw_statements(&self) -> Vec<middleware::Statement> {
+        pub_raw_statements(self.lhs, self.rhs)
     }
 
     fn serialize_data(&self) -> serde_json::Value {
@@ -273,12 +249,7 @@ impl Pod for LtEqU256Pod {
         .expect("serialization to json")
     }
 
-    fn deserialize_data(
-        params: Params,
-        data: serde_json::Value,
-        vd_set: VDSet,
-        statements_hash: Hash,
-    ) -> BResult<Self> {
+    fn deserialize_data(params: Params, data: serde_json::Value, vd_set: VDSet) -> BResult<Self> {
         let data: Data = serde_json::from_value(data)?;
         let common =
             &*pod2::backends::plonky2::cache_get_standard_rec_main_pod_common_circuit_data();
@@ -288,7 +259,6 @@ impl Pod for LtEqU256Pod {
             lhs: data.lhs,
             rhs: data.rhs,
             vd_set,
-            statements_hash,
             proof,
             common_hash: data.common_hash,
         })
@@ -312,7 +282,11 @@ impl Pod for LtEqU256Pod {
     }
 }
 
-fn pub_self_statements(lhs: RawValue, rhs: RawValue) -> Vec<middleware::Statement> {
+fn single_statement_mt(st: &middleware::Statement) -> Array {
+    Array::new(vec![Value::from(st.hash())])
+}
+
+fn pub_raw_statements(lhs: RawValue, rhs: RawValue) -> Vec<middleware::Statement> {
     vec![middleware::Statement::Intro(
         IntroPredicateRef {
             name: LT_EQ_U256_POD_TYPE.1.to_string(),
@@ -323,7 +297,7 @@ fn pub_self_statements(lhs: RawValue, rhs: RawValue) -> Vec<middleware::Statemen
     )]
 }
 
-fn pub_self_statements_target(
+fn pub_raw_statements_target(
     builder: &mut CircuitBuilder<F, D>,
     params: &Params,
     lhs: &[Target],
@@ -338,7 +312,7 @@ fn pub_self_statements_target(
             StatementArgTarget::none(builder)
         }))
         .take(Params::max_statement_args())
-        .collect_vec();
+        .collect::<Vec<_>>();
 
     let verifier_data_hash = builder.constant_hash(HashOut {
         elements: EMPTY_HASH.0,
@@ -415,14 +389,23 @@ impl LtEqU256PodTarget {
         let rhs_bits = value_to_32b_limbs(builder, rhs);
         assert_lt_eq(builder, &lhs_bits, &rhs_bits);
 
-        // Calculate statements_hash
-        let statements = pub_self_statements_target(builder, params, &lhs.elements, &rhs.elements);
-        let statements_hash = calculate_statements_hash_circuit(builder, &statements);
+        // Build the public statements Merkle root: a 1-element sparse array with the single
+        // intro statement's hash at index 0. The MT root for that shape equals
+        // kv_hash(key=0, value=st_hash).
+        let statements = pub_raw_statements_target(builder, params, &lhs.elements, &rhs.elements);
+        let st_hash = builder.hash_n_to_hash_no_pad::<PoseidonHash>(statements[0].flatten());
+        let zero_key = ValueTarget::zero(builder);
+        let st_hash_value = ValueTarget {
+            elements: st_hash.elements,
+        };
+        let statements_root = kv_hash_target(builder, &zero_key, &st_hash_value);
 
-        // Register public inputs
+        // Register public inputs: statements_root (4), vd_root (4), is_main (1)
         let vd_root = builder.add_virtual_hash();
-        builder.register_public_inputs(&statements_hash.elements);
+        builder.register_public_inputs(&statements_root.elements);
         builder.register_public_inputs(&vd_root.elements);
+        let is_main = builder._false();
+        builder.register_public_input(is_main.target);
 
         measure_gates_end!(builder, measure);
 

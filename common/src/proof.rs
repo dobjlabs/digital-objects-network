@@ -7,10 +7,10 @@ use crate::{
 use anyhow::{Result, anyhow};
 use plonky2::plonk::proof::CompressedProofWithPublicInputs;
 use pod2::{
-    backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::calculate_statements_hash},
+    backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::public_inputs},
     middleware::{
         CommonCircuitData, CustomPredicateRef, Hash, Params, Statement, Value, VerifierCircuitData,
-        containers::Set,
+        containers::{Array, Set},
     },
 };
 
@@ -106,12 +106,11 @@ impl ProofParser {
     /// Verify a shrunk MainPod proof against a single expected `Statement`.
     ///
     /// The shrunk wrapper circuit re-exposes the original MainPod public inputs unchanged:
-    /// `[statements_hash (4 field elems) || vds_root (4 field elems)]`.
-    /// We reconstruct those expected public inputs from `st` and `self.vds_root`, then
-    /// decompress and verify the Plonky2 proof.
+    /// `[statements_root (4) || vds_root (4) || is_main (1)]`. We reconstruct those expected
+    /// public inputs from `st` and `self.vds_root`, then decompress and verify the Plonky2 proof.
     fn verify_shrunk_main_pod(&self, proof: PayloadProof, st: Statement) -> Result<()> {
-        let sts_hash = calculate_statements_hash(&[st.into()]);
-        let public_inputs = [sts_hash.0, self.vds_root.0].concat();
+        let sts_root = Array::new(vec![Value::from(st.hash())]).commitment();
+        let public_inputs = public_inputs(sts_root, self.vds_root, true);
         let compressed_proof = match proof {
             PayloadProof::Plonky2(proof) => proof,
             PayloadProof::Groth16(_) => {
