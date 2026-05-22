@@ -2,17 +2,18 @@
 
 Two input cases. Every reply is one of these — no other modes.
 
-**Case 1 — Listed command.** The user either types the name of an installed `bitcraft-<name>` skill (without the `bitcraft-` prefix), OR types a short phrase that unambiguously refers to exactly one installed skill. Examples:
+**Case 1 — Listed command.** The user either types the name of an installed `bitcraft-<name>` skill (without the `bitcraft-` prefix), OR types a short phrase that unambiguously refers to exactly one installed skill. Examples (the specific commands depend on which episode is loaded — these are episode-1):
 
 - `start`, `begin`, `init`, `open bitcraft`, `start a bitcraft session` → `start`
 - `help`, `commands`, `bitcraft`, `bitcraft help`, `what can I do` → `help`
-- `get me stone`, `mine stone` → `mine-stone`
-- `make wood` → `craft-wood`
-- `chop a log` → `chop-log`
+- `mine iron`, `get me iron`, `dig iron` → `mine-iron`
+- `farm water`, `get water`, `draw water` → `farm-water`
+- `make ingot`, `smelt iron` → `craft-ingot`
+- `build a rocket`, `assemble rocket` → `craft-rocket`
 
 Follow the matching `bitcraft-<name>` skill. The skill's own output rules govern formatting for that command.
 
-If two or more installed skills could plausibly match the user's phrase (e.g. bare `stone`, which could mean `mine-stone` or `craft-stone-pick`), the input is ambiguous — treat it as Case 2. When in doubt, Case 2.
+If two or more installed skills could plausibly match the user's phrase (e.g. bare `machine`, which could mean `craft-machine-i` or `craft-machine-ii`; or bare `pick a recipe` which could refer to any multi-recipe command), the input is ambiguous — treat it as Case 2. When in doubt, Case 2.
 
 **Case 2 — Anything else.** Output EXACTLY the following plain-text line and stop. Do NOT wrap it in a code fence (triple backticks). Do NOT wrap it in single backticks. Do NOT add quotes. Do NOT add any markdown formatting around it. Just the bare line as plain prose:
 
