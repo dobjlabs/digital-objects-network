@@ -169,12 +169,12 @@ fn CraftIngotFlux(action) {
 }
 
 fn CraftIngotDrilled(action) {
+    var tool = action.subaction("UseDrillBit");
     var iron = action.input("Iron");
     var ingot_a = action.output("Ingot");
     var ingot_b = action.output("Ingot");
     ingot_a.set([["blueprint", "Ingot"]]);
     ingot_b.set([["blueprint", "Ingot"]]);
-    var tool = action.subaction("UseDrillBit");
     vdf_proof(action, ingot_a, 9);
 }
 
@@ -723,12 +723,12 @@ fn CraftCircuit(action) {
 
 fn CraftCircuitSoldered(action) {
     var m1 = action.subaction("TouchMachineI");
+    var tool = action.subaction("UseSolderingIron");
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var steel = action.input("Steel");
     var circuit = action.output("Circuit");
     circuit.set([["blueprint", "Circuit"]]);
-    var tool = action.subaction("UseSolderingIron");
     vdf_proof(action, circuit, 25);
 }
 
@@ -853,12 +853,12 @@ fn CraftResin(action) {
 
 fn CraftResinPressurized(action) {
     var m1 = action.subaction("TouchMachineI");
+    var tool = action.subaction("UsePressureValve");
     var grease = action.input("Grease");
     var solvent = action.input("Solvent");
     var rubber = action.input("Rubber");
     var resin = action.output("Resin");
     resin.set([["blueprint", "Resin"]]);
-    var tool = action.subaction("UsePressureValve");
     vdf_proof(action, resin, 40);
 }
 
