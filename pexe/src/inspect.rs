@@ -3,7 +3,7 @@
 //! path that is either a `.pexe` archive or a source directory holding
 //! `manifest.toml` + `plugin.rhai`.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -13,7 +13,7 @@ use pod2::middleware::{
     CustomPredicateBatch, Hash, NativePredicate, Predicate, PredicateOrWildcard, StatementTmpl,
     StatementTmplArg, Wildcard,
 };
-use sdk::{Sdk, SdkModule, manifest::Manifest};
+use sdk::{Dependency, Sdk, SdkModule, manifest::Manifest};
 
 use crate::{PluginSource, unpack};
 
@@ -243,6 +243,723 @@ fn find_record_decl<'a>(src: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+/// `pexe inspect plan`.
+///
+/// Mint one synthetic object per input declared by `action`, fabricate
+/// a grounded state for them, and run the SDK's solver in mock mode
+/// without proving. Prints three sections to stdout:
+///
+/// 1. **Header** — action name with input / output classes.
+/// 2. **Solution breakdown** — the multi-pod solver's per-POD
+///    utilization summary (statements, merkle proofs, etc.).
+/// 3. **Statement dep graph** — per-POD list of statements in chain
+///    order, labelled by predicate name with internal dependency
+///    indices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PlanSection {
+    Header,
+    Summary,
+    Totals,
+    Deps,
+}
+
+impl PlanSection {
+    /// All sections that `--show all` (or no `--show` flag) expand to.
+    pub fn default_all() -> [PlanSection; 4] {
+        [Self::Header, Self::Summary, Self::Totals, Self::Deps]
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum PlanOutput {
+    Text(BTreeSet<PlanSection>),
+    DotCompressed,
+    DotFull,
+    MermaidCompressed,
+    MermaidFull,
+    MermaidLinkCompressed,
+    MermaidLinkFull,
+}
+
+pub fn plan(target: &Path, action_name: &str, mode: PlanOutput) -> Result<()> {
+    let (manifest, script) = load_target(target)?;
+    let module = load_sdk_module(&manifest, &script)?;
+    let action = module
+        .actions()
+        .iter()
+        .find(|a| a.name == action_name)
+        .ok_or_else(|| anyhow!("no action named {action_name} in this plugin"))?;
+
+    let input_classes: Vec<String> = action.total_inputs().map(|r| r.class.clone()).collect();
+    let output_classes: Vec<String> = action.total_outputs().map(|r| r.class.clone()).collect();
+
+    let mut minted = Vec::with_capacity(input_classes.len());
+    for class in &input_classes {
+        let obj = crate::fixtures::mint_class(&module, class)?;
+        minted.push(obj);
+    }
+    let state = crate::fixtures::build_synthetic_state(&minted)?;
+    let executor = module.executor(true, state.grounding_witness.clone());
+    let plan = executor
+        .plan_action(action_name, state.spendable)
+        .map_err(|err| anyhow!("planning failed: {err}"))?;
+    let aliases = build_alias_map(&module);
+
+    match mode {
+        PlanOutput::DotCompressed => print_dep_graph_dot(
+            action_name,
+            &input_classes,
+            &output_classes,
+            &plan,
+            &aliases,
+            true,
+        ),
+        PlanOutput::DotFull => print_dep_graph_dot(
+            action_name,
+            &input_classes,
+            &output_classes,
+            &plan,
+            &aliases,
+            false,
+        ),
+        PlanOutput::MermaidCompressed => print_dep_graph_mermaid(
+            action_name,
+            &input_classes,
+            &output_classes,
+            &plan,
+            &aliases,
+            true,
+            false,
+        ),
+        PlanOutput::MermaidFull => print_dep_graph_mermaid(
+            action_name,
+            &input_classes,
+            &output_classes,
+            &plan,
+            &aliases,
+            false,
+            false,
+        ),
+        PlanOutput::MermaidLinkCompressed => print_dep_graph_mermaid(
+            action_name,
+            &input_classes,
+            &output_classes,
+            &plan,
+            &aliases,
+            true,
+            true,
+        ),
+        PlanOutput::MermaidLinkFull => print_dep_graph_mermaid(
+            action_name,
+            &input_classes,
+            &output_classes,
+            &plan,
+            &aliases,
+            false,
+            true,
+        ),
+        PlanOutput::Text(sections) => {
+            let mut printed_above = false;
+            if sections.contains(&PlanSection::Header) {
+                println!("Plan: {}", action_name);
+                println!("  Inputs ({}):", input_classes.len());
+                for class in &input_classes {
+                    println!("    - {class}");
+                }
+                println!("  Outputs ({}):", output_classes.len());
+                for class in &output_classes {
+                    println!("    - {class}");
+                }
+                printed_above = true;
+            }
+            if sections.contains(&PlanSection::Summary) {
+                if printed_above {
+                    println!();
+                }
+                print!("{}", plan.solved.solution_breakdown());
+                printed_above = true;
+            }
+            if sections.contains(&PlanSection::Totals) {
+                if printed_above {
+                    println!();
+                }
+                print_custom_predicate_totals(&plan, &aliases);
+                printed_above = true;
+            }
+            if sections.contains(&PlanSection::Deps) {
+                if printed_above {
+                    println!();
+                }
+                print_dep_graph(&plan, &aliases);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn print_dep_graph(plan: &sdk::PlanData, aliases: &HashMap<Hash, String>) {
+    use pod2::frontend::AbstractDep;
+
+    let shape = plan.solved.input_shape();
+    let output = plan.solved.solution();
+    let n_original = plan.statements.len();
+
+    println!("Statement dep graph:");
+    for (pod_idx, stmts) in output.pod_statements.iter().enumerate() {
+        let role = if output.is_output_pod(pod_idx) {
+            "output"
+        } else {
+            "intermediate"
+        };
+        println!("  POD {pod_idx} ({role}):");
+        for &s in stmts {
+            // The shape's `dep_edges` is augmented at solve time with
+            // synthetic republish entries at indices >= n_original;
+            // those don't correspond to user statements and we just
+            // skip them in the dep-graph view.
+            if s >= n_original {
+                continue;
+            }
+            let label = statement_label(&plan.statements[s], aliases);
+            let deps: Vec<String> = shape.dep_edges[s]
+                .iter()
+                .filter_map(|dep| match dep {
+                    AbstractDep::Internal(idx) => Some(format!("[{idx}]")),
+                    AbstractDep::External { pod, statement } => {
+                        Some(format!("ext{pod}:{statement}"))
+                    }
+                })
+                .collect();
+            if deps.is_empty() {
+                println!("    [{s}] {label}");
+            } else {
+                println!("    [{s}] {label} <- {}", deps.join(", "));
+            }
+        }
+    }
+}
+
+/// Map each imported module's batch hash to its declared alias (e.g.
+/// `txlib`'s batch id -> `"tx"`). Used to qualify foreign predicate
+/// names in label rendering. The local module's batch is *not* in the
+/// dependency list, so its customs come out unprefixed naturally.
+fn build_alias_map(module: &SdkModule) -> HashMap<Hash, String> {
+    let mut map = HashMap::new();
+    for dep in module.dependencies() {
+        if let Dependency::Module { name, hash } = dep {
+            map.insert(*hash, name.clone());
+        }
+    }
+    map
+}
+
+fn format_custom_name(
+    custom_ref: &pod2::middleware::CustomPredicateRef,
+    aliases: &HashMap<Hash, String>,
+) -> String {
+    let name = &custom_ref.predicate().name;
+    let batch_id = custom_ref.batch.id();
+    match aliases.get(&batch_id) {
+        Some(alias) => format!("{alias}::{name}"),
+        None => name.clone(),
+    }
+}
+
+fn statement_label(
+    stmt: &pod2::middleware::Statement,
+    aliases: &HashMap<Hash, String>,
+) -> String {
+    match stmt.predicate() {
+        Predicate::Native(n) => format!("{n}"),
+        Predicate::Custom(c) => format_custom_name(&c, aliases),
+        Predicate::Intro(i) => i.name.clone(),
+        Predicate::BatchSelf(idx) => format!("batch_self_{idx}"),
+    }
+}
+
+/// Count each distinct custom predicate by occurrences in the plan's
+/// statement list. Native and Intro statements are excluded — they're
+/// already covered by the solution breakdown's resource categories.
+/// Statements produced by `ReplaceValueWithEntry` are skipped so a
+/// custom predicate that gets rewritten doesn't get double-counted.
+/// Imported predicates use their qualified `<alias>::<name>` form.
+fn print_custom_predicate_totals(plan: &sdk::PlanData, aliases: &HashMap<Hash, String>) {
+    let rewrites = build_rewrite_source(plan);
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for (idx, stmt) in plan.statements.iter().enumerate() {
+        if rewrites.contains_key(&idx) {
+            continue;
+        }
+        if let Predicate::Custom(custom_ref) = stmt.predicate() {
+            *counts
+                .entry(format_custom_name(&custom_ref, aliases))
+                .or_insert(0) += 1;
+        }
+    }
+    if counts.is_empty() {
+        return;
+    }
+    // Sort by count desc, name asc (BTreeMap iteration gives name-asc;
+    // stable sort by -count preserves alphabetical tie-break).
+    let mut sorted: Vec<(String, usize)> = counts.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    println!("Custom predicates (by usage):");
+    for (name, count) in sorted {
+        println!("  {count:>3}  {name}");
+    }
+}
+
+/// Map each statement index that was produced by `ReplaceValueWithEntry`
+/// to the index of the statement it rewrites. The source statement is
+/// the last `OperationArg` (see `Operation::replace_value_with_entry`
+/// in pod2).
+fn build_rewrite_source(plan: &sdk::PlanData) -> BTreeMap<usize, usize> {
+    use pod2::frontend::OperationArg;
+    use pod2::middleware::{NativeOperation, OperationType};
+
+    let mut out: BTreeMap<usize, usize> = BTreeMap::new();
+    for (idx, op) in plan.operations.iter().enumerate() {
+        if !matches!(
+            op.0,
+            OperationType::Native(NativeOperation::ReplaceValueWithEntry)
+        ) {
+            continue;
+        }
+        let source_stmt = match op.1.last() {
+            Some(OperationArg::Statement(s)) => s,
+            _ => continue,
+        };
+        if let Some(src_idx) = plan.statements.iter().position(|s| s == source_stmt) {
+            out.insert(idx, src_idx);
+        }
+    }
+    out
+}
+
+fn print_dep_graph_dot(
+    action_name: &str,
+    input_classes: &[String],
+    output_classes: &[String],
+    plan: &sdk::PlanData,
+    aliases: &HashMap<Hash, String>,
+    compressed: bool,
+) {
+    use pod2::frontend::AbstractDep;
+
+    let shape = plan.solved.input_shape();
+    let output = plan.solved.solution();
+    let n_original = plan.statements.len();
+
+    // In compressed mode, hide statements that are anchored-key
+    // rewrites of an earlier statement and redirect their consumers to
+    // the source. The full view shows every statement so it doesn't
+    // build the map.
+    let rewrite_source = if compressed {
+        build_rewrite_source(plan)
+    } else {
+        BTreeMap::new()
+    };
+    // Follow rewrite chains so the redirect target is always a
+    // "real" statement (not another rewrite). Each chain bottoms out
+    // in O(chain_length) iterations.
+    let resolve = |mut idx: usize| -> usize {
+        while let Some(&src) = rewrite_source.get(&idx) {
+            idx = src;
+        }
+        idx
+    };
+
+    // In compressed mode, a statement is a graph node iff its predicate
+    // is Custom or Intro AND it isn't a rewrite of an earlier statement.
+    let is_node = |s: usize| -> bool {
+        if s >= n_original {
+            return false;
+        }
+        if !compressed {
+            return true;
+        }
+        if rewrite_source.contains_key(&s) {
+            return false;
+        }
+        matches!(
+            plan.statements[s].predicate(),
+            Predicate::Custom(_) | Predicate::Intro(_)
+        )
+    };
+
+    // For each visible node, the set of visible producer indices and
+    // external (pod, stmt) refs. In compressed mode this walks through
+    // hidden Native statements until reaching a visible producer, and
+    // resolves rewritten statements to their source.
+    let producer_set =
+        |s: usize| -> (BTreeSet<usize>, BTreeSet<(usize, usize)>) {
+            let mut internal: BTreeSet<usize> = BTreeSet::new();
+            let mut external: BTreeSet<(usize, usize)> = BTreeSet::new();
+            let mut visited: BTreeSet<usize> = BTreeSet::new();
+            let mut queue: Vec<&AbstractDep> = shape.dep_edges[s].iter().collect();
+            while let Some(dep) = queue.pop() {
+                match dep {
+                    AbstractDep::Internal(d) => {
+                        let d = resolve(*d);
+                        if !visited.insert(d) {
+                            continue;
+                        }
+                        if d >= n_original {
+                            continue;
+                        }
+                        if d == s {
+                            // Self-loops can appear if a statement is
+                            // both a rewrite of itself's predecessor
+                            // and also references that predecessor;
+                            // resolve collapses both ends.
+                            continue;
+                        }
+                        if is_node(d) {
+                            internal.insert(d);
+                        } else if compressed {
+                            queue.extend(shape.dep_edges[d].iter());
+                        }
+                    }
+                    AbstractDep::External { pod, statement } => {
+                        external.insert((*pod, *statement));
+                    }
+                }
+            }
+            (internal, external)
+        };
+
+    let mut out = String::new();
+    let suffix = if compressed { "" } else { "_full" };
+    out.push_str(&format!(
+        "digraph plan_{}{suffix} {{\n",
+        sanitize(action_name)
+    ));
+    out.push_str("  rankdir=TB;\n");
+    out.push_str("  node [fontname=\"Helvetica\", shape=box, style=\"rounded,filled\", fillcolor=\"#f6f8fa\"];\n");
+    out.push_str("  edge [fontname=\"Helvetica\", fontsize=10];\n");
+    out.push_str("  concentrate=true;\n");
+    let mode_tag = if compressed { "compressed" } else { "full" };
+    out.push_str(&format!(
+        "  label=\"{} ({mode_tag}) -- inputs: [{}], outputs: [{}]\";\n",
+        action_name,
+        input_classes.join(", "),
+        output_classes.join(", "),
+    ));
+    out.push_str("  labelloc=t;\n\n");
+
+    // Per-POD clusters group statements visually. In compressed mode
+    // a POD with no visible nodes is skipped entirely.
+    for (pod_idx, stmts) in output.pod_statements.iter().enumerate() {
+        let visible: Vec<usize> = stmts.iter().copied().filter(|&s| is_node(s)).collect();
+        if visible.is_empty() {
+            continue;
+        }
+        let role = if output.is_output_pod(pod_idx) {
+            "output"
+        } else {
+            "intermediate"
+        };
+        out.push_str(&format!("  subgraph cluster_pod_{pod_idx} {{\n"));
+        out.push_str(&format!("    label=\"POD {pod_idx} ({role})\";\n"));
+        out.push_str("    style=dashed;\n");
+        for s in visible {
+            let label = statement_label(&plan.statements[s], aliases);
+            out.push_str(&format!("    s{s} [label=\"[{s}] {label}\"];\n"));
+        }
+        out.push_str("  }\n");
+    }
+    out.push('\n');
+
+    // External-pod statements live in a single dotted cluster with
+    // distinctive node styling.
+    let mut ext_refs: BTreeSet<(usize, usize)> = BTreeSet::new();
+    for s in 0..n_original {
+        if !is_node(s) {
+            continue;
+        }
+        let (_internal, external) = producer_set(s);
+        ext_refs.extend(external);
+    }
+    if !ext_refs.is_empty() {
+        out.push_str("  subgraph cluster_external {\n");
+        out.push_str("    label=\"external pods\";\n");
+        out.push_str("    style=dotted;\n");
+        for (pod, stmt) in &ext_refs {
+            out.push_str(&format!(
+                "    ext{pod}_{stmt} [label=\"ext{pod}:{stmt}\", shape=note, fillcolor=\"#fff5b7\"];\n",
+            ));
+        }
+        out.push_str("  }\n\n");
+    }
+
+    // Edges: producer -> consumer.
+    for s in 0..n_original {
+        if !is_node(s) {
+            continue;
+        }
+        let (internal, external) = producer_set(s);
+        for d in internal {
+            out.push_str(&format!("  s{d} -> s{s};\n"));
+        }
+        for (pod, stmt) in external {
+            out.push_str(&format!("  ext{pod}_{stmt} -> s{s};\n"));
+        }
+    }
+
+    out.push_str("}\n");
+    print!("{}", out);
+}
+
+fn sanitize(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// Structural view of the dep graph, abstracted away from the output
+/// format. Built once per plan + compression-mode and consumed by
+/// either the DOT or Mermaid renderer.
+struct GraphView {
+    /// Per-POD list of statement indices visible in this view.
+    pod_visible: Vec<Vec<usize>>,
+    /// Per-visible-node, the set of internal producer indices and
+    /// external (pod, stmt) refs after Native folding and rewrite
+    /// resolution.
+    edges: BTreeMap<usize, (BTreeSet<usize>, BTreeSet<(usize, usize)>)>,
+    /// Distinct external refs across the whole view.
+    external_refs: BTreeSet<(usize, usize)>,
+    compressed: bool,
+}
+
+fn build_graph_view(plan: &sdk::PlanData, compressed: bool) -> GraphView {
+    use pod2::frontend::AbstractDep;
+
+    let shape = plan.solved.input_shape();
+    let output = plan.solved.solution();
+    let n_original = plan.statements.len();
+
+    let rewrite_source = if compressed {
+        build_rewrite_source(plan)
+    } else {
+        BTreeMap::new()
+    };
+    let resolve = |mut idx: usize| -> usize {
+        while let Some(&src) = rewrite_source.get(&idx) {
+            idx = src;
+        }
+        idx
+    };
+    let is_node = |s: usize| -> bool {
+        if s >= n_original {
+            return false;
+        }
+        if !compressed {
+            return true;
+        }
+        if rewrite_source.contains_key(&s) {
+            return false;
+        }
+        matches!(
+            plan.statements[s].predicate(),
+            Predicate::Custom(_) | Predicate::Intro(_)
+        )
+    };
+
+    let pod_visible: Vec<Vec<usize>> = output
+        .pod_statements
+        .iter()
+        .map(|stmts| stmts.iter().copied().filter(|&s| is_node(s)).collect())
+        .collect();
+
+    let mut edges: BTreeMap<usize, (BTreeSet<usize>, BTreeSet<(usize, usize)>)> = BTreeMap::new();
+    let mut external_refs: BTreeSet<(usize, usize)> = BTreeSet::new();
+    for s in 0..n_original {
+        if !is_node(s) {
+            continue;
+        }
+        let mut internal: BTreeSet<usize> = BTreeSet::new();
+        let mut external: BTreeSet<(usize, usize)> = BTreeSet::new();
+        let mut visited: BTreeSet<usize> = BTreeSet::new();
+        let mut queue: Vec<&AbstractDep> = shape.dep_edges[s].iter().collect();
+        while let Some(dep) = queue.pop() {
+            match dep {
+                AbstractDep::Internal(d) => {
+                    let d = resolve(*d);
+                    if !visited.insert(d) {
+                        continue;
+                    }
+                    if d >= n_original || d == s {
+                        continue;
+                    }
+                    if is_node(d) {
+                        internal.insert(d);
+                    } else if compressed {
+                        queue.extend(shape.dep_edges[d].iter());
+                    }
+                }
+                AbstractDep::External { pod, statement } => {
+                    external.insert((*pod, *statement));
+                    external_refs.insert((*pod, *statement));
+                }
+            }
+        }
+        edges.insert(s, (internal, external));
+    }
+
+    GraphView {
+        pod_visible,
+        edges,
+        external_refs,
+        compressed,
+    }
+}
+
+fn print_dep_graph_mermaid(
+    action_name: &str,
+    input_classes: &[String],
+    output_classes: &[String],
+    plan: &sdk::PlanData,
+    aliases: &HashMap<Hash, String>,
+    compressed: bool,
+    as_link: bool,
+) {
+    let source = build_mermaid_source(
+        action_name,
+        input_classes,
+        output_classes,
+        plan,
+        aliases,
+        compressed,
+    );
+    if as_link {
+        match mermaid_live_url(&source) {
+            Ok(url) => println!("{url}"),
+            Err(err) => {
+                eprintln!("failed to build mermaid.live URL: {err}");
+                print!("{source}");
+            }
+        }
+    } else {
+        print!("{source}");
+    }
+}
+
+fn build_mermaid_source(
+    action_name: &str,
+    input_classes: &[String],
+    output_classes: &[String],
+    plan: &sdk::PlanData,
+    aliases: &HashMap<Hash, String>,
+    compressed: bool,
+) -> String {
+    let view = build_graph_view(plan, compressed);
+    let output = plan.solved.solution();
+    let mode_tag = if view.compressed { "compressed" } else { "full" };
+
+    let mut out = String::new();
+    out.push_str("flowchart TD\n");
+    // Mermaid renders a title via the `flowchart` directive's
+    // `subgraph`-style label or via the `%%{init: {...}}%%` directive;
+    // a leading comment is the simplest portable approach.
+    out.push_str(&format!(
+        "%% {} ({}) -- inputs: [{}], outputs: [{}]\n",
+        action_name,
+        mode_tag,
+        input_classes.join(", "),
+        output_classes.join(", "),
+    ));
+
+    for (pod_idx, visible) in view.pod_visible.iter().enumerate() {
+        if visible.is_empty() {
+            continue;
+        }
+        let role = if output.is_output_pod(pod_idx) {
+            "output"
+        } else {
+            "intermediate"
+        };
+        out.push_str(&format!(
+            "  subgraph pod{pod_idx}[\"POD {pod_idx} ({role})\"]\n"
+        ));
+        for &s in visible {
+            let label = statement_label(&plan.statements[s], aliases);
+            out.push_str(&format!("    s{s}[\"[{s}] {}\"]\n", escape_mermaid(&label)));
+        }
+        out.push_str("  end\n");
+    }
+
+    if !view.external_refs.is_empty() {
+        out.push_str("  subgraph ext_pods[\"external pods\"]\n");
+        for (pod, stmt) in &view.external_refs {
+            out.push_str(&format!("    ext{pod}_{stmt}[\"ext{pod}:{stmt}\"]\n"));
+        }
+        out.push_str("  end\n");
+    }
+
+    out.push_str("\n");
+    for (&s, (internal, external)) in &view.edges {
+        for d in internal {
+            out.push_str(&format!("  s{d} --> s{s}\n"));
+        }
+        for (pod, stmt) in external {
+            out.push_str(&format!("  ext{pod}_{stmt} --> s{s}\n"));
+        }
+    }
+
+    // Style external nodes distinctively.
+    if !view.external_refs.is_empty() {
+        out.push_str("  classDef external fill:#fff5b7,stroke:#aa8800;\n");
+        for (pod, stmt) in &view.external_refs {
+            out.push_str(&format!("  class ext{pod}_{stmt} external;\n"));
+        }
+    }
+
+    out
+}
+
+/// Build a `https://mermaid.live/edit#pako:<encoded>` URL for `source`.
+/// Format matches what mermaid.live's `pako:` decoder expects:
+/// JSON-encode `{code, mermaid: theme JSON, updateEditor: ...}`, zlib-
+/// compress (deflate with zlib wrapper) at level 9, then base64-encode.
+fn mermaid_live_url(source: &str) -> Result<String> {
+    use base64::Engine;
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write;
+
+    // Minimal state object the editor accepts. `updateDiagram` lets
+    // edits re-render automatically; `autoSync` keeps the URL in sync
+    // with the editor.
+    let state = serde_json::json!({
+        "code": source,
+        "mermaid": "{\n  \"theme\": \"default\"\n}",
+        "autoSync": true,
+        "updateDiagram": true,
+        "panZoom": true,
+    });
+    let json = serde_json::to_vec(&state)?;
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+    encoder
+        .write_all(&json)
+        .map_err(|err| anyhow!("zlib write: {err}"))?;
+    let compressed = encoder
+        .finish()
+        .map_err(|err| anyhow!("zlib finish: {err}"))?;
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&compressed);
+    Ok(format!("https://mermaid.live/edit#pako:{encoded}"))
+}
+
+/// Mermaid labels in double quotes still need `"` and backslashes
+/// escaped. Brackets and other special chars are fine inside quoted
+/// strings.
+fn escape_mermaid(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// `pexe inspect graph`.
 ///
 /// Emits Graphviz DOT for the action/class relationship graph. Class
@@ -355,23 +1072,34 @@ pub fn classes(target: &Path, class_filter: Option<&str>) -> Result<()> {
 }
 
 /// Per-class collected info: fields and crypto provenance flags.
-struct ClassSignature {
-    name: String,
-    fields: BTreeMap<String, FieldInfo>,
-    uses_vdf: bool,
-    uses_pow: bool,
+pub(crate) struct ClassSignature {
+    pub(crate) name: String,
+    pub(crate) fields: BTreeMap<String, FieldInfo>,
+    pub(crate) uses_vdf: bool,
+    pub(crate) uses_pow: bool,
 }
 
 #[derive(Default)]
-struct FieldInfo {
+pub(crate) struct FieldInfo {
     /// Literal string values ever assigned to this field.
-    string_literals: BTreeSet<String>,
+    pub(crate) string_literals: BTreeSet<String>,
     /// Integer literals ever assigned.
-    int_literals: BTreeSet<i64>,
+    pub(crate) int_literals: BTreeSet<i64>,
     /// True if any assignment was a wildcard whose source is a VDF intro.
-    from_vdf: bool,
+    pub(crate) from_vdf: bool,
     /// True if any assignment was a wildcard with no other inferable provenance.
-    from_witness: bool,
+    pub(crate) from_witness: bool,
+}
+
+/// Re-export of [`derive_class_signature`] under a name that signals
+/// it's for use by external fixture builders. Same semantics; same
+/// return type.
+pub(crate) fn derive_class_signature_for_fixture(
+    module: &SdkModule,
+    batch: &std::sync::Arc<CustomPredicateBatch>,
+    class_name: &str,
+) -> ClassSignature {
+    derive_class_signature(module, batch, class_name)
 }
 
 fn derive_class_signature(
@@ -391,8 +1119,14 @@ fn derive_class_signature(
     };
 
     for predicate in batch.predicates() {
+        // Iterate the inlined scope, not just the direct body. Some
+        // actions get split so the TxInsert / TxMutate event lands in
+        // a `<Action>_N` helper while the dict-construction (Contains /
+        // ContainerUpdate linking output[i] to its inner wildcard)
+        // stays in the caller. We need both to be visible to one
+        // chain-tracing pass.
         let scope = inline_action(predicate, batch);
-        for stmt in predicate.statements() {
+        for stmt in &scope {
             let focused = match tx_producer_focused(stmt, batch, class_hash) {
                 Some(arg) => arg,
                 None => continue,
