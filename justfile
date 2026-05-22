@@ -1,12 +1,11 @@
 # bitcraft justfile
 # Install just: https://github.com/casey/just
 
-# Which episode (a.k.a. plugin) `just dev` loads. Determines:
-#   - which plugin under plugins/<EPISODE>/ is packaged + installed to ~/.dobj/actions/
-#   - which commands under commands/<EPISODE>/ are installed to ~/.claude/skills/
-#
-# Meta commands (start, help, create-command, preview, consult-docs) live in
-# commands/_meta/ and are installed regardless.
+# Which plugin under plugins/<EPISODE>/ `just dev` packages + installs to
+# ~/.dobj/actions/. Bitcraft no longer ships any per-class command files —
+# users author their own commands via `create-command` once a plugin is loaded.
+# `commands/` only contains the meta commands (start, help, create-command,
+# preview, consult-docs), which are plugin-agnostic and always installed.
 #
 # Override per-invocation: `just dev EPISODE=craft-basics`
 # Or via env: `BITCRAFT_EPISODE=craft-basics just dev`
@@ -118,11 +117,9 @@ ensure-mcp:
     claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp \
         && echo "registered: bitcraft MCP (project scope, http://127.0.0.1:7718/mcp)"
 
-# Install bitcraft commands into ~/.claude/skills/ if no bitcraft skills are
-# present yet (fresh clone, or post-`just reset`). Re-run `just install-commands`
-# manually after editing a command source file in commands/<episode>/ or
-# commands/_meta/. Switching episodes also requires a re-run — `install-commands`
-# wipes ~/.claude/skills/bitcraft-* first to avoid mixing episodes.
+# Install bitcraft meta commands into ~/.claude/skills/ if none are present
+# yet (fresh clone, or post-`just reset`). Re-run `just install-commands`
+# manually after editing a SKILL.md in commands/.
 ensure-commands:
     @mkdir -p ~/.claude/skills
     @if [ -z "$(find ~/.claude/skills -maxdepth 1 -type d -name 'bitcraft-*' -print -quit)" ]; then \
@@ -137,8 +134,8 @@ reset:
     @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
     rm -rf ~/.claude/skills/bitcraft-*
-    @python3 commands/_meta/start/ensure_launch.py --remove && echo "removed: bitcraft-preview from ~/.claude/launch.json"
-    @python3 commands/_meta/start/ensure_hook.py --remove && echo "removed: bitcraft compact hook from ~/.claude/settings.json"
+    @python3 commands/start/ensure_launch.py --remove && echo "removed: bitcraft-preview from ~/.claude/launch.json"
+    @python3 commands/start/ensure_hook.py --remove && echo "removed: bitcraft compact hook from ~/.claude/settings.json"
     @command -v claude >/dev/null 2>&1 && claude mcp remove bitcraft 2>/dev/null && echo "removed: bitcraft MCP registration" || true
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
@@ -159,13 +156,6 @@ test-e2e:
 build:
     cargo build --workspace
 
-# Regenerate per-class command SKILL.md files for the active EPISODE from
-# plugins/<EPISODE>/manifest.toml + plugin.rhai. Idempotent: wipes
-# commands/<EPISODE>/ first so removed classes don't linger. Re-run after
-# editing the plugin.
-gen-commands:
-    python3 commands/_gen.py {{EPISODE}}
-
 # Build all plugins (every dir under plugins/) into target/pexe/*.pexe. Useful
 # for release builds where you want every episode's pexe artifact.
 pack-plugins:
@@ -181,41 +171,35 @@ install-plugins:
 pexe *ARGS:
     cargo run -p pexe --release -- {{ARGS}}
 
-# Install bitcraft commands into ~/.claude/skills/bitcraft-*/. Sources are:
-#   - commands/_meta/<name>/   — always installed (start, help, create-command, …)
-#   - commands/<EPISODE>/<name>/ — installed only for the active episode
+# Install bitcraft meta commands into ~/.claude/skills/bitcraft-*/. Copies
+# each commands/<name>/ directory (SKILL.md + any sibling files like index.html
+# or helper scripts) to ~/.claude/skills/bitcraft-<name>/.
 #
-# Copies SKILL.md plus any sibling files (e.g. index.html, sibling scripts).
-# Wipes ALL `~/.claude/skills/bitcraft-*` first so switching episodes doesn't
-# leave commands from the previous one lingering. Also registers the compact-
-# re-injection hook in ~/.claude/settings.json (idempotent).
+# Wipes each target directory before copy, so renaming a sibling file in
+# commands/<name>/ is reflected. ONLY wipes the names we're about to reinstall
+# — user-authored commands (written by `create-command` to ~/.claude/skills/
+# bitcraft-<name>/) survive `just install-commands` because they don't appear
+# in commands/.
+#
+# Also registers the compact-re-injection hook in ~/.claude/settings.json
+# (idempotent).
 install-commands:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p ~/.claude/skills
-    # Wipe any existing bitcraft-* skills so a fresh install reflects exactly
-    # the current EPISODE + _meta set.
-    rm -rf ~/.claude/skills/bitcraft-*
     install_dir() {
         local dir="$1"
         local name
         name=$(basename "$dir")
         local target="$HOME/.claude/skills/bitcraft-$name"
+        rm -rf "$target"
         mkdir -p "$target"
         cp -R "$dir"* "$target/"
         echo "installed: bitcraft-$name"
     }
-    for dir in commands/_meta/*/; do
+    for dir in commands/*/; do
         install_dir "$dir"
     done
-    if [ -d "commands/{{EPISODE}}" ]; then
-        for dir in commands/{{EPISODE}}/*/; do
-            [ -d "$dir" ] || continue
-            install_dir "$dir"
-        done
-    else
-        echo "warning: commands/{{EPISODE}}/ does not exist; only _meta commands installed"
-    fi
     if [ -f ~/.claude/skills/bitcraft-start/ensure_hook.py ]; then
         python3 ~/.claude/skills/bitcraft-start/ensure_hook.py && echo "registered: SessionStart compact hook"
     fi
