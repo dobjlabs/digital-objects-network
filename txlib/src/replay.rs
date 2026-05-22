@@ -139,6 +139,14 @@ impl<'a> Replayer<'a> {
     /// the prover API enforces this by construction, and we panic here
     /// if not. `events` is guaranteed non-empty (TxBuilder::finalize
     /// asserts). Callers: `TxBuilder::finalize`.
+    ///
+    /// For a single top-level action whose body is a lone Insert event,
+    /// dispatches into the `ReplayActionInsert` K=1 fast path (slot 3
+    /// of the `ReplayActions` OR), which proves the whole transaction
+    /// in 2 cpvs instead of going through ReplayAction/ReplayContents/
+    /// ReplayElement/ReplayInsert. Multi-action transactions always use
+    /// the slow ReplayAction for each action, because `ReplayActionsStep`
+    /// expects a `ReplayAction` statement in its first slot.
     pub(crate) fn build_replay_actions(
         &mut self,
         events: &[ChainEvent],
@@ -151,12 +159,38 @@ impl<'a> Replayer<'a> {
         );
 
         if events.len() == 1 {
-            // Single action: no step wrapping.
-            let (st_action, next_chain, next_live, next_nulls) =
-                self.build_top_level_action(&events[0], chain, frame);
-            let st = st_custom!(self.ctx, ReplayActions() = (st_action, Statement::None)).unwrap();
+            let event = &events[0];
+            let ChainEvent::Action {
+                chain_after,
+                contents,
+            } = event
+            else {
+                panic!(
+                    "top-level event must be a ChainEvent::Action (bare events are only allowed inside an action scope)"
+                );
+            };
+
+            if let [ChainEvent::Insert { .. }] = contents.as_slice() {
+                let (st_inner, new_live, new_nulls) =
+                    self.build_replay_action_insert(contents, frame);
+                let st = st_custom!(
+                    self.ctx,
+                    ReplayActions() = (Statement::None, Statement::None, st_inner)
+                )
+                .unwrap();
+                self.record("ReplayActions");
+                return (st, *chain_after, new_live, new_nulls);
+            }
+
+            let (st_action, new_live, new_nulls) =
+                self.build_replay_action(contents, chain, frame, *chain_after);
+            let st = st_custom!(
+                self.ctx,
+                ReplayActions() = (st_action, Statement::None, Statement::None)
+            )
+            .unwrap();
             self.record("ReplayActions");
-            return (st, next_chain, next_live, next_nulls);
+            return (st, *chain_after, new_live, new_nulls);
         }
 
         // Step: first action + recursive tail.
@@ -167,7 +201,11 @@ impl<'a> Replayer<'a> {
             self.build_replay_actions(rest, next_chain, frame.advance(&next_live, &next_nulls));
         let st_step = st_custom!(self.ctx, ReplayActionsStep() = (st_action, st_rest)).unwrap();
         self.record("ReplayActionsStep");
-        let st = st_custom!(self.ctx, ReplayActions() = (Statement::None, st_step)).unwrap();
+        let st = st_custom!(
+            self.ctx,
+            ReplayActions() = (Statement::None, st_step, Statement::None)
+        )
+        .unwrap();
         self.record("ReplayActions");
         (st, final_chain, final_live, final_nulls)
     }
@@ -918,6 +956,67 @@ impl<'a> Replayer<'a> {
             .unwrap();
         self.record("ReplayAction");
         (st, next_live, next_nulls)
+    }
+
+    /// Build a `ReplayActionInsert` statement: the K=1 fast path for a
+    /// single top-level action whose body is one Insert. Same shape as
+    /// `build_replay_insert`, except the guard call uses `before_chain`
+    /// and `after_chain` (the action's chain bounds, which are also the
+    /// transaction's chain bounds in the K=1 single-action case)
+    /// directly as public args rather than anchoring to
+    /// `before_tx.chain_start`/`chain_end`. That means we don't need to
+    /// rebind the chain slots of `guard_evidence` -- the literal chain
+    /// values it carries from record time already match the public arg
+    /// bindings.
+    ///
+    /// Caller must have verified that `contents` is `[ChainEvent::Insert
+    /// { .. }]`; this method panics otherwise. The action's `chain_after`
+    /// equals `contents[0].chain_after` by construction (K=1 makes the
+    /// single Insert span the whole action), so we read it from there
+    /// rather than threading it through a parameter.
+    fn build_replay_action_insert(
+        &mut self,
+        contents: &[ChainEvent],
+        parent: ReplayFrame<'_>,
+    ) -> (Statement, Set, Set) {
+        let ChainEvent::Insert {
+            new,
+            tx_stmt,
+            guard_evidence,
+            ..
+        } = &contents[0]
+        else {
+            unreachable!("ReplayActionInsert fast path requires a single Insert event");
+        };
+        let evidence = guard_evidence
+            .clone()
+            .expect("missing guard evidence for insert");
+
+        let btx = parent.to_tx_dict();
+        let mut new_live = parent.live.clone();
+        new_live.insert(&Value::from(new.clone())).unwrap();
+        let atx = tx_with(&btx, "live", Value::from(new_live.clone()));
+
+        let op_si = self
+            .ctx
+            .builder
+            .priv_op(op!(SetInsert(new_live, (&btx, "live"), new)))
+            .unwrap();
+        let op_du = self
+            .ctx
+            .builder
+            .priv_op(op!(DictUpdate(atx, btx, "live", new_live)))
+            .unwrap();
+        let st = self
+            .ctx
+            .apply_custom_pred_simple(
+                false,
+                "ReplayActionInsert",
+                vec![tx_stmt.clone(), op_si, op_du, evidence],
+            )
+            .unwrap();
+        self.record("ReplayActionInsert");
+        (st, new_live, parent.nullifiers.clone())
     }
 }
 

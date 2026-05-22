@@ -197,9 +197,16 @@ ReplayAction(before_tx, after_tx, before_chain, after_chain,
 // ReplayContents is still used *within* an action, where inserts,
 // mutates, deletes, and sub-actions can all appear. Empty top-level
 // transactions are forbidden by TxBuilder, so there is no Done leaf.
+//
+// `ReplayActionInsert` is a K=1 fast path: when the single top-level
+// action's body is a lone Insert, the entire transaction proves in
+// 2 cpvs from this OR (ReplayActions -> ReplayActionInsert), bypassing
+// ReplayAction/ReplayContents/ReplayElement/ReplayInsert (5 cpvs).
+// "Mining" actions that just produce one object hit this path.
 ReplayActions(before_tx, after_tx, before_chain, after_chain) = OR(
   ReplayAction(before_tx, after_tx, before_chain, after_chain)
   ReplayActionsStep(before_tx, after_tx, before_chain, after_chain)
+  ReplayActionInsert(before_tx, after_tx, before_chain, after_chain)
 )
 
 // One action, then a recursive tail. Used for transactions that
@@ -208,6 +215,22 @@ ReplayActionsStep(before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain) = AND(
   ReplayAction(before_tx, mid_tx, before_chain, mid_chain)
   ReplayActions(mid_tx, after_tx, mid_chain, after_chain)
+)
+
+// K=1 fast path: a single-event action whose only event is an Insert.
+// Same body as ReplayInsert, but the guard's chain bounds come from
+// the predicate's public args (`before_chain`/`after_chain`) instead
+// of `before_tx.chain_start`/`before_tx.chain_end`. Because the
+// action spans the whole chain range, the public args ARE the action's
+// chain scope, so the guard sees the same values it would have seen
+// inside a `ReplayAction`-materialized `inner_tx`. Skipping that
+// materialization is what saves the three intermediate cpvs.
+ReplayActionInsert(before_tx, after_tx, before_chain, after_chain,
+    private: new, new_live, guard) = AND(
+  TxInsert(after_chain, before_chain, new, guard)
+  SetInsert(new_live, before_tx.live, new)
+  DictUpdate(after_tx, before_tx, "live", new_live)
+  guard(new, before_chain, after_chain)
 )
 
 // ========================================================

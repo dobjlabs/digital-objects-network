@@ -77,6 +77,7 @@ mod tests {
             .unwrap();
         module.predicate_ref_by_name("ReplayElement").unwrap();
         module.predicate_ref_by_name("ReplayAction").unwrap();
+        module.predicate_ref_by_name("ReplayActionInsert").unwrap();
         module.predicate_ref_by_name("ReplayInsert").unwrap();
         module.predicate_ref_by_name("ReplayMutate").unwrap();
         module.predicate_ref_by_name("ReplayDelete").unwrap();
