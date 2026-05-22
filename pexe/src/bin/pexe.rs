@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use pexe::{
-    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash, install, pack,
+    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash, inspect, install, pack,
     set_manifest_hash, unpack,
 };
 
@@ -59,6 +59,48 @@ enum Cmd {
         /// Path to the .pexe file.
         pexe: PathBuf,
     },
+    /// Inspect a plugin's predicates, classes, or action graph.
+    Inspect {
+        #[command(subcommand)]
+        cmd: InspectCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum InspectCmd {
+    /// Render the Podlang for the plugin's predicates.
+    ///
+    /// Default form is the SDK-synthesized frontend Podlang. With
+    /// `--middleware`, the compiled `CustomPredicateBatch` is rendered
+    /// instead via pod2's pretty-printer.
+    Predicates {
+        /// Path to a `.pexe` archive or a plugin source directory
+        /// (containing `manifest.toml` and `plugin.rhai`).
+        target: PathBuf,
+
+        /// Restrict output to a single predicate name. Without this,
+        /// every predicate is emitted with a `--- name ---` header.
+        #[arg(long)]
+        action: Option<String>,
+
+        /// Render the compiled middleware form rather than the
+        /// SDK-synthesized frontend form.
+        #[arg(long)]
+        middleware: bool,
+    },
+    /// Render each class's state-space signature.
+    Classes {
+        /// Path to a `.pexe` archive or a plugin source directory.
+        target: PathBuf,
+
+        /// Restrict output to a single class.
+        class: Option<String>,
+    },
+    /// Emit Graphviz DOT for the action/class relationship graph.
+    Graph {
+        /// Path to a `.pexe` archive or a plugin source directory.
+        target: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -95,6 +137,21 @@ fn main() -> Result<()> {
             println!("\n# plugin.rhai");
             println!("{}", script);
         }
+        Cmd::Inspect { cmd } => match cmd {
+            InspectCmd::Predicates {
+                target,
+                action,
+                middleware,
+            } => {
+                inspect::predicates(&target, action.as_deref(), middleware)?;
+            }
+            InspectCmd::Classes { target, class } => {
+                inspect::classes(&target, class.as_deref())?;
+            }
+            InspectCmd::Graph { target } => {
+                inspect::graph(&target)?;
+            }
+        },
     }
     Ok(())
 }
