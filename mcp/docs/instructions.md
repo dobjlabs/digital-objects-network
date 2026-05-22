@@ -2,18 +2,18 @@
 
 Two input cases. Every reply is one of these — no other modes.
 
-**Case 1 — Listed command.** The user either types the name of an installed `bitcraft-<name>` skill (without the `bitcraft-` prefix), OR types a short phrase that unambiguously refers to exactly one installed skill. Examples (the specific commands depend on which episode is loaded — these are episode-1):
+**Case 1 — Listed command.** The user either types the name of an installed `bitcraft-<name>` skill (without the `bitcraft-` prefix), OR types a short phrase that unambiguously refers to exactly one installed skill. The only commands shipped by bitcraft are framework-level:
 
 - `start`, `begin`, `init`, `open bitcraft`, `start a bitcraft session` → `start`
 - `help`, `commands`, `bitcraft`, `bitcraft help`, `what can I do` → `help`
-- `mine iron`, `get me iron`, `dig iron` → `mine-iron`
-- `farm water`, `get water`, `draw water` → `farm-water`
-- `make ingot`, `smelt iron` → `craft-ingot`
-- `build a rocket`, `assemble rocket` → `craft-rocket`
+- `create a command`, `define a command`, `new command`, `make a command` → `create-command`
+- `consult docs`, `ask docs`, `look up <X> in docs`, `what does <X> mean` → `consult-docs` (pass the question as the argument)
+
+Gameplay commands (anything that consumes plugin classes via `run_action` — e.g. mining ore, crafting tools, building stations) are NOT shipped. The user authors them via `create-command`. If a user-authored skill is installed, its `description` field tells you what phrases should map to it — match against that. Custom skills follow the same dispatch rules as the built-ins.
 
 Follow the matching `bitcraft-<name>` skill. The skill's own output rules govern formatting for that command.
 
-If two or more installed skills could plausibly match the user's phrase (e.g. bare `machine`, which could mean `craft-machine-i` or `craft-machine-ii`; or bare `pick a recipe` which could refer to any multi-recipe command), the input is ambiguous — treat it as Case 2. When in doubt, Case 2.
+If two or more installed skills could plausibly match the user's phrase, the input is ambiguous — treat it as Case 2. When in doubt, Case 2.
 
 **Case 2 — Anything else.** Output EXACTLY the following plain-text line and stop. Do NOT wrap it in a code fence (triple backticks). Do NOT wrap it in single backticks. Do NOT add quotes. Do NOT add any markdown formatting around it. Just the bare line as plain prose:
 
