@@ -6,7 +6,7 @@ Install the **bitcraft driver** on this machine. After this skill runs you'll ha
   - REST/SSE on `http://127.0.0.1:7717`
   - MCP on `http://127.0.0.1:7718/mcp`
 - `~/.dobj/bin/dobj` — terminal CLI that talks to dobjd
-- `~/.dobj/actions/craft-basics.pexe` — the bundled crafting plugin
+- `~/.dobj/actions/episode-1.pexe` — the bundled crafting plugin
 - `~/.dobj/settings.json` — pointing at the hosted synchronizer + relayer
 - `~/.claude/skills/bitcraft-*/SKILL.md` — bitcraft commands (one per crafting class plus `create-command`)
 
@@ -41,7 +41,7 @@ where `<label>` is exactly:
 - 1: `detect platform`
 - 2: `create dobj home`
 - 3: `download dobjd + dobj`
-- 4: `download craft-basics.pexe`
+- 4: `download episode-1.pexe`
 - 5: `write settings.json`
 - 6: `start dobjd`
 - 7: `verify`
@@ -54,7 +54,7 @@ So a successful run prints exactly:
 [1/9] detect platform
 [2/9] create dobj home
 [3/9] download dobjd + dobj
-[4/9] download craft-basics.pexe
+[4/9] download episode-1.pexe
 [5/9] write settings.json
 [6/9] start dobjd
 [7/9] verify
@@ -97,11 +97,11 @@ curl -fsSL "$RELEASE/dobj-$TARGET.tar.gz"  | tar -xz -C ~/.dobj/bin
 chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj
 ```
 
-### 4. Download the `craft-basics` plugin
+### 4. Download the `episode-1` plugin
 
 ```bash
-curl -fsSL "$RELEASE/craft-basics.pexe" \
-  -o ~/.dobj/actions/craft-basics.pexe
+curl -fsSL "$RELEASE/episode-1.pexe" \
+  -o ~/.dobj/actions/episode-1.pexe
 ```
 
 ### 5. Point the driver at the hosted synchronizer + relayer
@@ -128,12 +128,13 @@ land at `~/.dobj/dobjd.log`; pid at `~/.dobj/dobjd.pid`.
 
 ```bash
 ~/.dobj/bin/dobj status      # pid + HTTP healthcheck
-~/.dobj/bin/dobj actions     # confirms craft-basics plugin is loaded
+~/.dobj/bin/dobj actions     # confirms episode-1 plugin is loaded
 ~/.dobj/bin/dobj state-root  # confirms hosted synchronizer is reachable
 ```
 
-You should see `dobjd is running (pid …)`, ~7 actions including `FindLog`
-and `CraftWood`, and a 64-character hex state root.
+You should see `dobjd is running (pid …)`, a long list of actions
+(episode-1 ships ~75: `MineIron`, `CraftIngot`, `CraftSteel`,
+`CraftRocket`, …), and a 64-character hex state root.
 
 ### 8. Register MCP with the agent
 
@@ -244,7 +245,7 @@ bitcraft is ready.
 installed:
   ~/.dobj/bin/dobjd                     — driver daemon (HTTP :7717, MCP :7718)
   ~/.dobj/bin/dobj                      — terminal CLI
-  ~/.dobj/actions/craft-basics.pexe     — bundled crafting plugin
+  ~/.dobj/actions/episode-1.pexe     — bundled crafting plugin
   ~/.dobj/settings.json                 — points at hosted synchronizer + relayer
   ~/.claude/skills/bitcraft-*/SKILL.md  — bitcraft commands
 
