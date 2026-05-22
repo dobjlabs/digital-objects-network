@@ -1,8 +1,6 @@
-# bitcraft — game rules (episode-1)
+# bitcraft — game rules
 
 bitcraft is a crafting game where every item you own is private. The world doesn't see your inventory; the chain only sees that *something valid* happened. You play by mining raw resources, refining them through several tiers, and combining them into a finished rocket.
-
-This doc describes **episode-1** — the current default plugin. Other episodes (e.g. `craft-basics`) have their own tech trees; switch with `BITCRAFT_EPISODE=… just dev`.
 
 ## The tech tree at a glance
 

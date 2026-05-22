@@ -1,6 +1,6 @@
 # Digital Objects — what they are
 
-In bitcraft, everything you own is a **Digital Object**: an Iron ore, a refined Ingot, a Wire, a Circuit, a DrillBit. Each one is a small file on your machine, and it carries a cryptographic proof of where it came from. Class names depend on which episode is loaded — these are examples from episode-1.
+In bitcraft, everything you own is a **Digital Object**: an Iron ore, a refined Ingot, a Wire, a Circuit, a DrillBit. Each one is a small file on your machine, and it carries a cryptographic proof of where it came from.
 
 ## How they look on your machine
 
