@@ -2,8 +2,14 @@ name: Release
 
 # Single workflow producing every bitcraft release artifact: the daemon
 # (`dobjd`), CLI (`dobj`), Claude Desktop stdio bridge (`bitcraft-mcp-proxy`),
-# and the bundled `craft-basics` plugin. Triggered on `v*` tags or via the
+# and the bundled `episode-1` plugin. Triggered on `v*` tags or via the
 # Actions UI with a tag name.
+#
+# Other plugins under `plugins/` (e.g. `craft-basics/`) are NOT released — the
+# `plugin` job below only builds `episode-1.pexe`. To switch the shipped
+# plugin, change the path in the `Build episode-1.pexe` step + the
+# `find ... -name 'episode-1*.pexe'` glob in `Locate artifact` (and the
+# matching mention in `release-notes.md.tpl`).
 #
 # On macOS, every native binary and dylib is codesigned + notarized so users
 # get an online verification on first run instead of the "could not verify
@@ -523,16 +529,16 @@ jobs:
           # toolchain version comes from rust-toolchain.toml.
           cache-shared-key: plugin
 
-      - name: Build craft-basics.pexe
-        run: cargo run --release --locked -p pexe -- build plugins/craft-basics
+      - name: Build episode-1.pexe
+        run: cargo run --release --locked -p pexe -- build plugins/episode-1
 
       - name: Locate artifact
         id: find
         run: |
           set -euo pipefail
-          PEXE=$(find target -path '*pexe*' -name 'craft-basics*.pexe' | head -1)
+          PEXE=$(find target -path '*pexe*' -name 'episode-1*.pexe' | head -1)
           if [ -z "$PEXE" ]; then
-            echo "::error::craft-basics.pexe not produced"
+            echo "::error::episode-1.pexe not produced"
             exit 1
           fi
           echo "pexe=$PEXE" >> "$GITHUB_OUTPUT"
