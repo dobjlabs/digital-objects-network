@@ -174,7 +174,7 @@ These are sibling files in this skill's directory. Read with the `Read` tool whe
 
 create-command produces **skills** (SKILL.md files that wrap existing actions and MCP tools). It does NOT produce **pexes** (the `.pexe` plugin archives that define the underlying classes and actions). Pexe authoring has no public tooling yet.
 
-If between steps 3 and 4 you realize the user's intent requires introducing a new class of object, a new craftable recipe, or any state transition that doesn't map to an action already in the catalog, do NOT proceed to draft a skill. Output exactly the following three lines and stop:
+If the user's intent requires introducing a new class of object, a new craftable recipe, or any state transition that doesn't map to an action already in the catalog, do NOT proceed to draft a skill. Output exactly the following three lines and stop:
 
 ```
 creating new classes or recipes is not yet supported (requires pexe authoring, which has no public tooling).
@@ -182,16 +182,28 @@ create-command can only wrap existing actions.
 try a different intent, or run `help` to see what's available.
 ```
 
-Signals the intent needs a pexe (any of these → reject as above):
+**Verification before rejecting (REQUIRED).** Pattern-matching on words is NOT enough — class names that sound novel (e.g. `Rocket`, `Engine`, `Circuit`, `MachineII`) may very well be in the catalog. Before emitting the rejection block, you MUST:
 
-- The user names a **new type of object** that isn't in the help list or in `list_classes` output (e.g. "rocket", "garden", "weapon", "sword", etc. when none of those are existing classes).
-- The user describes a **new recipe**: "combine A + B → new C", where C is not an existing class.
+1. Call `list_classes` and scan the response for every noun the user mentioned. Compare class names case-insensitively, and try both the bare noun and its plural/singular form.
+2. Call `list_actions` and check whether actions exist for the verbs the user mentioned (mine, farm, craft, build, refine, smelt, etc., concatenated with the class).
+
+Only reject if BOTH:
+- The user's intent introduces a NOUN (the desired output) that does NOT appear in `list_classes`, AND
+- There is no existing action in `list_actions` that could plausibly produce the user's stated outcome with the user's stated inputs.
+
+If the noun IS in `list_classes` and `list_actions` has at least one action that produces it, the intent is IN SCOPE — proceed to draft a skill that wraps those existing actions (the user is asking for an orchestration/UX layer over real recipes, not a new recipe).
+
+Signals the intent genuinely needs a pexe (only after the verification above confirms it):
+
+- The user names a noun that is verified absent from `list_classes` output AND no existing action produces something equivalent.
+- The user describes a new recipe: "combine A + B → new C", where C is verified absent from `list_classes`.
 - The user explicitly asks to "add a class", "make a new item type", "create a new recipe", "extend the crafting tree".
 
-By contrast, these intents ARE in scope (proceed with normal draft flow):
+By contrast, these intents are IN SCOPE (proceed with normal draft flow):
 
 - Inspecting, listing, filtering, or formatting existing objects / actions / classes.
 - Wrapping an existing action with custom input-picking or output-rendering logic.
-- Chaining multiple existing commands (e.g. "obtain a log then craft wood").
+- **Multi-step recipes that walk the existing tech tree backwards** — e.g. "craft a Rocket using what's in inventory, mine/craft missing inputs end-to-end" is IN SCOPE if `Rocket` is in `list_classes` (it is, in episode-1) and `CraftRocket` is in `list_actions` (it is). This is just orchestration over real recipes; see `worked-examples.md` Pattern C for the template.
+- Chaining multiple existing commands.
 - Reporting on chain state (state root, transactions, nullifiers, etc.).
 - Anything that calls existing MCP tools and produces text output.
