@@ -7,13 +7,13 @@ description: Define a new bitcraft command.
 
 ## Output rules
 
-- Plain text. The SKILL.md draft in step 4 is the ONE allowed fenced code block. Everything else is bare lines.
-- No preamble. No commentary outside the four prompts and the final result line.
+- Plain text. The SKILL.md draft in step 3 is the ONE allowed fenced code block. Everything else is bare lines.
+- No preamble. No commentary outside the three prompts and the final result line.
 - Do not mention any other command or skill outside the draft body.
 
 ## Available primitives — REFERENCE FOR DRAFTING
 
-When you draft a new command in step 4, build the body from these primitives. Reference them by name. Do NOT just paraphrase the user's intent — translate it into concrete tool calls, paths, or scripts.
+When you draft a new command in step 3, build the body from these primitives. Reference them by name. Do NOT just paraphrase the user's intent — translate it into concrete tool calls, paths, or scripts.
 
 ### bitcraft MCP tools (invoked by the future agent running the new skill)
 
@@ -78,7 +78,7 @@ Indexed arguments use shell-style quoting: `/skill "hello world" foo` makes `$0 
 
 - **Inline scripts** in fenced code blocks: ` ```bash `, ` ```python `, ` ```node `, etc. The agent runs them via Bash (e.g. `python3 -c '...'`).
 - **Dynamic context injection** — Claude Code supports a special inline syntax where a bang followed by a backticked shell command (the exclamation-mark-then-backtick form) gets replaced with the command's stdout before the agent sees the skill. Useful for cheap up-front data fetches like a `git diff HEAD` inlined into the prompt. See the Claude Code skills docs for the exact syntax — do NOT paste literal examples of this form into a SKILL.md body unless you intend the command to run.
-- **Sibling files** for longer scripts: save as `${CLAUDE_SKILL_DIR}/<filename>` and reference by that absolute path from the SKILL.md body. Step 6 will write any sibling files you declare.
+- **Sibling files** for longer scripts: save as `${CLAUDE_SKILL_DIR}/<filename>` and reference by that absolute path from the SKILL.md body. Step 5 will write any sibling files you declare.
 
 ### Chaining other bitcraft commands
 
@@ -86,17 +86,17 @@ Reference another command by name in prose (e.g. "if no Wood, first invoke `craf
 
 ## Steps
 
-Ask the user four questions, ONE AT A TIME. Output each prompt on a single line, end the turn, wait for the reply before asking the next.
+Ask the user two questions, ONE AT A TIME. Output each prompt on a single line, end the turn, wait for the reply before asking the next.
 
-**Exit handling for every prompt below (steps 1, 2, 3, and the confirm in 4).** Before parsing any user reply, check whether the reply (case-insensitive, trimmed) is `cancel`, `quit`, `exit`, `q`, or `nevermind`. If yes, output exactly `cancelled` and stop the entire create-command flow — do not proceed to the next step, do not write any file.
+**Exit handling for every prompt below (steps 1, 2, and the confirm in 3).** Before parsing any user reply, check whether the reply (case-insensitive, trimmed) is `cancel`, `quit`, `exit`, `q`, or `nevermind`. If yes, output exactly `cancelled` and stop the entire create-command flow — do not proceed to the next step, do not write any file.
 
 1. Output exactly `name?` and wait. Save as `<name>`. Validate: the reply must match the regex `^[a-z0-9]([a-z0-9-]{0,63})$` — lowercase letters and digits, optionally with hyphens, up to 64 chars total. Single-word names like `ideas` or `notes` are VALID. Hyphens are NOT required. Examples of valid names: `ideas`, `chop-log`, `mine-stone-x10`, `notes2`. Examples of invalid names: `Ideas` (uppercase), `chop_log` (underscore), `-foo` (leading hyphen), empty string. If invalid, output `invalid name (lowercase letters, digits, optional hyphens; max 64 chars; no leading hyphen)` and stop.
 
-2. Output exactly `description?` and wait. Save as `<description>` (one short sentence — this is what shows in `help`).
+2. Output exactly `what should it do?` and wait. Save as `<intent>`. The user's reply is INTENT, not the body. You will not paste it into the body verbatim.
 
-3. Output exactly `what should it do?` and wait. Save as `<intent>`. The user's reply is INTENT, not the body. You will not paste it into the body verbatim.
+3. **Design the skill body.** First, derive `<description>` — a single concrete sentence summarizing what the command does, in the style of existing help-line descriptions (e.g. `Chop a new Log.`, `Refine one Log into a Wood object.`, `Combine one Wood and one Stick into a WoodPick.`). It should read as an imperative or stative one-liner, capitalized, ending in a period. Do NOT ask the user for this — generate it from `<intent>`. It will go in the frontmatter and the help block.
 
-4. **Design the skill body.** Translate `<intent>` into concrete, executable steps using the primitives above. Before writing, decide:
+   Then translate `<intent>` into concrete, executable steps using the primitives above. Before writing, decide:
 
    - **Which MCP tool(s)** does this need? With what arguments? (Look at the Available primitives table.)
    - **Arguments vs. interactive prompting**: does this command take command-line arguments (e.g. `/inspect-object foo.dobj`) or prompt the user mid-flow? Argument-style is direct and scriptable; interactive is more discoverable. If you choose arguments, set `argument-hint` and (optionally) `arguments` in the frontmatter, and reference `$0`, `$1`, or `$name` in the body. If you choose interactive, the body asks the user and parses their reply.
@@ -143,20 +143,20 @@ Ask the user four questions, ONE AT A TIME. Output each prompt on a single line,
 
    End the turn. Wait for the reply.
 
-5. If `n`, ask `what to change?`, take the reply, revise the draft, and re-output (return to the draft + `confirm? (y/n)`). If anything other than `y` or `n`, output `invalid choice` and stop. If `y`, continue.
+4. If `n`, ask `what to change?`, take the reply, revise the draft, and re-output (return to the draft + `confirm? (y/n)`). If anything other than `y` or `n`, output `invalid choice` and stop. If `y`, continue.
 
-6. Create the directory `~/.claude/skills/bitcraft-<name>/`. Write the assembled SKILL.md to `~/.claude/skills/bitcraft-<name>/SKILL.md`. For each `(filename, contents)` in `<extra_files>`, write to `~/.claude/skills/bitcraft-<name>/<filename>`.
+5. Create the directory `~/.claude/skills/bitcraft-<name>/`. Write the assembled SKILL.md to `~/.claude/skills/bitcraft-<name>/SKILL.md`. For each `(filename, contents)` in `<extra_files>`, write to `~/.claude/skills/bitcraft-<name>/<filename>`.
 
-7. Output exactly two lines and stop:
+6. Output exactly two lines and stop:
 
    ```
    command → ~/.claude/skills/bitcraft-<name>/
-   type `help` then restart the agent to start using it.
+   type `help` to see the command and to start using it.
    ```
 
-8. On any tool error during step 6, output the error message verbatim and stop.
+7. On any tool error during step 5, output the error message verbatim and stop.
 
-## Reference docs (read on demand during step 4)
+## Reference docs (read on demand during step 3)
 
 | Doc | When to read |
 |-----|-------------|
