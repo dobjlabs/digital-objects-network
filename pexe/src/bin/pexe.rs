@@ -101,6 +101,60 @@ enum InspectCmd {
         /// Path to a `.pexe` archive or a plugin source directory.
         target: PathBuf,
     },
+    /// Mint synthetic inputs for an action and run it in mock mode so
+    /// the SDK's multi-pod solver runs. Prints the solution breakdown
+    /// and a statement dependency graph.
+    Plan {
+        /// Path to a `.pexe` archive or a plugin source directory.
+        target: PathBuf,
+
+        /// Action to plan.
+        #[arg(long)]
+        action: String,
+
+        /// Output format. `text` (default) prints the breakdown plus
+        /// an indented dep listing. `dot` emits only a Graphviz digraph
+        /// of the statement DAG, clustered by POD.
+        #[arg(long, value_enum, default_value_t = PlanFormat::Text)]
+        format: PlanFormat,
+
+        /// Only meaningful with `--format mermaid` / `mermaid-full`.
+        /// Emit a mermaid.live URL instead of the raw source so the
+        /// graph can be opened in a browser with one click.
+        #[arg(long)]
+        link: bool,
+
+        /// Restrict the `text` format to specific sections. Comma-
+        /// separated list of: `header`, `summary`, `totals`, `deps`,
+        /// `all`. Default is `all` (full output). Has no effect on
+        /// non-text formats.
+        #[arg(long, value_delimiter = ',', value_enum)]
+        show: Vec<PlanSection>,
+    },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum PlanSection {
+    Header,
+    Summary,
+    Totals,
+    Deps,
+    All,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum PlanFormat {
+    Text,
+    /// Graphviz DOT, compressed: only Custom and Intro predicate
+    /// nodes, with native plumbing folded into the consumer.
+    Dot,
+    /// Graphviz DOT, full: every Native statement included.
+    DotFull,
+    /// Mermaid flowchart, compressed. Embeds in GitHub markdown and
+    /// pastes into mermaid.live for a shareable link.
+    Mermaid,
+    /// Mermaid flowchart, full.
+    MermaidFull,
 }
 
 fn main() -> Result<()> {
@@ -150,6 +204,50 @@ fn main() -> Result<()> {
             }
             InspectCmd::Graph { target } => {
                 inspect::graph(&target)?;
+            }
+            InspectCmd::Plan {
+                target,
+                action,
+                format,
+                link,
+                show,
+            } => {
+                use std::collections::BTreeSet;
+                let sections: BTreeSet<inspect::PlanSection> = if show.is_empty() {
+                    inspect::PlanSection::default_all().into_iter().collect()
+                } else {
+                    let mut s = BTreeSet::new();
+                    for sec in show {
+                        match sec {
+                            PlanSection::Header => {
+                                s.insert(inspect::PlanSection::Header);
+                            }
+                            PlanSection::Summary => {
+                                s.insert(inspect::PlanSection::Summary);
+                            }
+                            PlanSection::Totals => {
+                                s.insert(inspect::PlanSection::Totals);
+                            }
+                            PlanSection::Deps => {
+                                s.insert(inspect::PlanSection::Deps);
+                            }
+                            PlanSection::All => {
+                                s.extend(inspect::PlanSection::default_all());
+                            }
+                        }
+                    }
+                    s
+                };
+                let mode = match format {
+                    PlanFormat::Text => inspect::PlanOutput::Text(sections),
+                    PlanFormat::Dot => inspect::PlanOutput::DotCompressed,
+                    PlanFormat::DotFull => inspect::PlanOutput::DotFull,
+                    PlanFormat::Mermaid if link => inspect::PlanOutput::MermaidLinkCompressed,
+                    PlanFormat::Mermaid => inspect::PlanOutput::MermaidCompressed,
+                    PlanFormat::MermaidFull if link => inspect::PlanOutput::MermaidLinkFull,
+                    PlanFormat::MermaidFull => inspect::PlanOutput::MermaidFull,
+                };
+                inspect::plan(&target, &action, mode)?;
             }
         },
     }
