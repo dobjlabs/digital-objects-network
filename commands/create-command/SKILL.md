@@ -25,7 +25,7 @@ When you draft a new command in step 3, build the body from these primitives. Re
 | `inspect_object` | `(file_name)` | `{id, className, status, txHash, state, predicateSource}` |
 | `inspect_class` | `(class_name)` | `{className, predicateSource, producedBy, consumedBy}` |
 | `inspect_action` | `(action_id)` | `{id, description, totalInputClasses, totalOutputClasses, predicateSource}` |
-| `run_action` | `(action_id, input_object_paths)` | `{success, message, runId, outputs, consumed}` — blocks for proof gen |
+| `run_action` | `(action, input_object_paths)` — `action` is `{pluginName, name}` | `{success, message, runId, outputs, consumed}` — blocks for proof gen |
 | `check_feasibility` | `(action_id)` | `{feasible, actionId, availableInputs, missingInputs}` |
 | `get_state_root` | `()` | `{stateRoot}` |
 | `read_settings` | `()` | `{synchronizerApiUrl, relayerApiUrl}` |
@@ -97,6 +97,12 @@ Ask the user two questions, ONE AT A TIME. Output each prompt on a single line, 
 3. **Design the skill body.** First, derive `<description>` — a single concrete sentence summarizing what the command does, in the style of existing help-line descriptions (e.g. `Chop a new Log.`, `Refine one Log into a Wood object.`, `Combine one Wood and one Stick into a WoodPick.`). It should read as an imperative or stative one-liner, capitalized, ending in a period. Do NOT ask the user for this — generate it from `<intent>`. It will go in the frontmatter and the help block.
 
    Then translate `<intent>` into concrete, executable steps using the primitives above. Before writing, decide:
+
+   **CRITICAL — qualified action names.** Every `run_action` invocation takes an `action` field of shape `{pluginName, name}`. The `pluginName` is `"episode-1"` — hardcode that string into every `run_action` step you generate. It is NOT `"bitcraft"` (that's the MCP server name); it is NOT a guess. Example:
+
+   ```
+   Call `run_action` with `action={pluginName: "episode-1", name: "<Action>"}` and `input_object_paths=[...]`.
+   ```
 
    - **Which MCP tool(s)** does this need? With what arguments? (Look at the Available primitives table.)
    - **Arguments vs. interactive prompting**: does this command take command-line arguments (e.g. `/inspect-object foo.dobj`) or prompt the user mid-flow? Argument-style is direct and scriptable; interactive is more discoverable. If you choose arguments, set `argument-hint` and (optionally) `arguments` in the frontmatter, and reference `$0`, `$1`, or `$name` in the body. If you choose interactive, the body asks the user and parses their reply.

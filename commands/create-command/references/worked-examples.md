@@ -88,6 +88,8 @@ This pattern fits commands whose job is to *reach a target class*: the body walk
 
 "Base recipe only" means: when a class has multiple producing actions, pick the one with the simplest input list — no station gates (`-blast`, `-fabbed`, `-cracked`, `-cast`), no tool durability (`-drilled`, `-soldered`, `-pressurized`), no recipe shifts (`-flash`, `-crude`, `-flux`, `-lye`), no chamber stabilization (`-stable`, `-tuned`). For example: `CraftSteel` not `CraftSteelBlast`; `CraftIngot` not `CraftIngotFlux` or `CraftIngotDrilled`; `CraftAcid` not `CraftAcidFlash` or `CraftAcidCrude`.
 
+**Important:** every `run_action` `action` field is a `QualifiedName` — `{pluginName, name}`. The `pluginName` is always `"episode-1"` — hardcode that exact string into the SKILL.md you draft. Do NOT use `"bitcraft"` — that's the MCP server name, not a plugin name.
+
 ```
 ---
 name: bitcraft-make-steel
@@ -100,16 +102,18 @@ description: Make a Steel — reuse inventory, mine and craft missing inputs end
 
 - Plain text. One plan line per class. One execution line per action call.
 - Plan lines look like `<Class> have:<N> need:<M>`.
-- Execution lines look like `<action_id> → <output_path>` (one line per output).
+- Execution lines look like `<Action> → <output_path>` (one line per output).
 - No markdown bullets, bold, or tables. No commentary outside these lines.
 
 ## Recipe chain (base only — DO NOT substitute specialization variants)
 
-| Target | action_id    | Inputs   | Outputs  |
-|--------|--------------|----------|----------|
-| Iron   | `MineIron`   | (none)   | 1 Iron   |
-| Ingot  | `CraftIngot` | 1 Iron   | 1 Ingot  |
-| Steel  | `CraftSteel` | 3 Ingot  | 2 Steel  |
+Every action below lives in the `episode-1` plugin. Pass them to `run_action` as `{pluginName: "episode-1", name: <Action>}`.
+
+| Target | action                                                | Inputs   | Outputs  |
+|--------|-------------------------------------------------------|----------|----------|
+| Iron   | `{pluginName: "episode-1", name: "MineIron"}`         | (none)   | 1 Iron   |
+| Ingot  | `{pluginName: "episode-1", name: "CraftIngot"}`       | 1 Iron   | 1 Ingot  |
+| Steel  | `{pluginName: "episode-1", name: "CraftSteel"}`       | 3 Ingot  | 2 Steel  |
 
 ## Steps
 
@@ -130,19 +134,19 @@ description: Make a Steel — reuse inventory, mine and craft missing inputs end
    ```
 
 4. Mining loop. Repeat `iron_need` times:
-   - Call `run_action` with `action_id="MineIron"` and `input_object_paths=[]`.
+   - Call `run_action` with `action={pluginName: "episode-1", name: "MineIron"}` and `input_object_paths=[]`.
    - Append the first entry of the result's `outputs` to `iron_paths`.
    - Output one line: `MineIron → <output_path>`.
    - On tool error, output the error message verbatim and stop the entire flow.
 
 5. Crafting Ingot loop. Repeat `ingot_need` times, consuming one Iron each time:
    - Pop the first element of `iron_paths` as `iron_path`.
-   - Call `run_action` with `action_id="CraftIngot"` and `input_object_paths=[iron_path]`.
+   - Call `run_action` with `action={pluginName: "episode-1", name: "CraftIngot"}` and `input_object_paths=[iron_path]`.
    - Append the first entry of the result's `outputs` to `ingot_paths`.
    - Output one line: `CraftIngot → <output_path>`.
    - On tool error, output the error message verbatim and stop.
 
-6. Final step. Pop the first 3 entries from `ingot_paths` as `[a, b, c]`. Call `run_action` with `action_id="CraftSteel"` and `input_object_paths=[a, b, c]`.
+6. Final step. Pop the first 3 entries from `ingot_paths` as `[a, b, c]`. Call `run_action` with `action={pluginName: "episode-1", name: "CraftSteel"}` and `input_object_paths=[a, b, c]`.
 
 7. On success, the result's `outputs` array has 2 entries (CraftSteel produces 2 Steel). Output one line per entry:
 
