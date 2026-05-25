@@ -111,6 +111,12 @@ enum InspectCmd {
         /// Action to prove.
         #[arg(long)]
         action: String,
+
+        /// Seed the RNG used by fixture minting and `action.random()`
+        /// for reproducible output (commitments, tx_final, proof
+        /// bytes). Default uses OS entropy.
+        #[arg(long)]
+        seed: Option<u64>,
     },
     /// Mint synthetic inputs for an action and run it in mock mode so
     /// the SDK's multi-pod solver runs. Prints the solution breakdown
@@ -141,6 +147,13 @@ enum InspectCmd {
         /// non-text formats.
         #[arg(long, value_delimiter = ',', value_enum)]
         show: Vec<PlanSection>,
+
+        /// Seed the RNG used by fixture minting and `action.random()`
+        /// for reproducible structural output (statement indices,
+        /// commitments shown in the dep graph). Default uses OS
+        /// entropy.
+        #[arg(long)]
+        seed: Option<u64>,
     },
 }
 
@@ -216,7 +229,14 @@ fn main() -> Result<()> {
             InspectCmd::Graph { target } => {
                 inspect::graph(&target)?;
             }
-            InspectCmd::Prove { target, action } => {
+            InspectCmd::Prove {
+                target,
+                action,
+                seed,
+            } => {
+                if let Some(seed) = seed {
+                    pod2utils::set_seed(seed);
+                }
                 inspect::prove_action(&target, &action)?;
             }
             InspectCmd::Plan {
@@ -225,7 +245,11 @@ fn main() -> Result<()> {
                 format,
                 link,
                 show,
+                seed,
             } => {
+                if let Some(seed) = seed {
+                    pod2utils::set_seed(seed);
+                }
                 use std::collections::BTreeSet;
                 let sections: BTreeSet<inspect::PlanSection> = if show.is_empty() {
                     inspect::PlanSection::default_all().into_iter().collect()
