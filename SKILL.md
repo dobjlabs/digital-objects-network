@@ -81,7 +81,6 @@ Before step 1, check whether bitcraft is already installed:
 - **`exists`** → prompt the user (use AskUserQuestion or whatever interactive prompt your agent supports):
 
   > An existing bitcraft install was detected at `~/.dobj`. Wipe it before reinstalling? Choosing yes removes everything under `~/.dobj` plus the bitcraft skills and MCP registration, then does a fresh install. Choosing no re-runs the install in place — every step is idempotent.
-
   - **No** → proceed directly to step 1.
   - **Yes** → run the uninstall substeps below, then proceed to step 1. (The install always runs; uninstall is just a prefix.)
 
@@ -162,7 +161,7 @@ mkdir -p ~/.dobj/bin ~/.dobj/actions
 ### 3. Download `dobjd` and `dobj`
 
 ```bash
-RELEASE=https://bitcraft.s3.us-east-2.amazonaws.com/v0.1.0-rc.21
+RELEASE=https://bitcraft.s3.us-east-2.amazonaws.com/v0.1.0-rc.24
 curl -fsSL "$RELEASE/dobjd-$TARGET.tar.gz" | tar -xz -C ~/.dobj/bin
 curl -fsSL "$RELEASE/dobj-$TARGET.tar.gz"  | tar -xz -C ~/.dobj/bin
 chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj
