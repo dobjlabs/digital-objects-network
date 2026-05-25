@@ -1067,8 +1067,7 @@ impl ActionHandle {
             let target_raw = target.borrow().as_value().raw();
             // Initialize k to obj's current key so that when the loop body doesn't run (mock mode,
             // or the initial random already satisfies the constraint), the returned k still
-            // matches what's in obj. Otherwise the caller's `obj.update("key", k)` would replace
-            // the satisfying key with an unrelated random, breaking the subsequent intro_lt_eq_u256.
+            // matches what's in obj.
             let mut k = obj
                 .get(&StrKey::from("key"))
                 .expect("dict op")
@@ -2001,7 +2000,6 @@ impl ExeContext {
 }
 
 fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
-    log::info!("{}", builder.resource_summary());
     let solution = builder.solve().unwrap();
     log::info!("multi-pod solve:\n{}", solution.solution_breakdown());
     solution.prove(prover).unwrap().pods.pop().unwrap()
