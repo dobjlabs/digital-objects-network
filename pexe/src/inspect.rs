@@ -281,6 +281,62 @@ pub enum PlanOutput {
     MermaidLinkFull,
 }
 
+/// `pexe prove`. Same shape as `inspect plan` but with `mock=false`,
+/// so the action is actually proved via the real plonky2 prover. This
+/// is much slower than `plan` (minutes for actions with many PODs).
+pub fn prove_action(target: &Path, action_name: &str) -> Result<()> {
+    let (manifest, script) = load_target(target)?;
+    let module = load_sdk_module(&manifest, &script)?;
+    let action = module
+        .actions()
+        .iter()
+        .find(|a| a.name == action_name)
+        .ok_or_else(|| anyhow!("no action named {action_name} in this plugin"))?;
+
+    let input_classes: Vec<String> = action.total_inputs().map(|r| r.class.clone()).collect();
+    let output_classes: Vec<String> = action.total_outputs().map(|r| r.class.clone()).collect();
+
+    println!("Prove: {}", action_name);
+    println!("  Inputs ({}):", input_classes.len());
+    for class in &input_classes {
+        println!("    - {class}");
+    }
+    println!("  Outputs ({}):", output_classes.len());
+    for class in &output_classes {
+        println!("    - {class}");
+    }
+    println!();
+    println!("Proving via real plonky2 backend — this may take several minutes.");
+    println!();
+
+    let mut minted = Vec::with_capacity(input_classes.len());
+    for class in &input_classes {
+        let obj = crate::fixtures::mint_class(&module, class)?;
+        minted.push(obj);
+    }
+    let state = crate::fixtures::build_synthetic_state(&minted)?;
+    let executor = module.executor(false, state.grounding_witness.clone());
+
+    let start = std::time::Instant::now();
+    let outputs = executor
+        .action(action_name, state.spendable)
+        .map_err(|err| anyhow!("proving failed: {err}"))?;
+    let elapsed = start.elapsed();
+
+    println!();
+    println!("Proved in {:.2}s", elapsed.as_secs_f64());
+    println!(
+        "tx_final: {:#}",
+        outputs.tx.ctx.commitment()
+    );
+    println!("Output objects ({}):", outputs.objs.len());
+    for (i, obj) in outputs.objs.iter().enumerate() {
+        println!("  [{i}] commitment={:#}", obj.obj.commitment());
+    }
+
+    Ok(())
+}
+
 pub fn plan(target: &Path, action_name: &str, mode: PlanOutput) -> Result<()> {
     let (manifest, script) = load_target(target)?;
     let module = load_sdk_module(&manifest, &script)?;
