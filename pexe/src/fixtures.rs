@@ -14,16 +14,48 @@ use pod2::middleware::{
 };
 use pod2utils::{dict, rand_raw_value, set};
 use sdk::{SdkModule, SpendableObject};
-use txlib::{GroundingEvidence, GroundingWitness, StateRoot, Tx};
+use txlib::{GroundingEvidence, GroundingWitness, StateRoot};
 
-use crate::inspect::derive_class_signature_for_fixture;
+use crate::inspect::derive_class_signature;
 
 /// Mint a synthetic instance of `class_name` whose dict shape matches
 /// the class's IsX rule. Fields the signature analyzer recognises
 /// (string literals, int initials, witnesses) are populated with a
 /// representative value; SDK-pre-populated keys (`type`, `key`, `work`)
-/// are stamped on regardless.
-pub fn mint_class(module: &SdkModule, class_name: &str) -> Result<pod2::middleware::containers::Dictionary> {
+/// are added in all cases.
+pub fn mint_class(
+    module: &SdkModule,
+    class_name: &str,
+) -> Result<pod2::middleware::containers::Dictionary> {
+    let batch = &module.module().batch;
+    let signature = derive_class_signature(module, batch, class_name);
+    mint_with_signature(module, class_name, &signature)
+}
+
+/// Mint one synthetic instance per class name. Class signatures are
+/// memoized so repeating a class (e.g. `[Wire, Wire, Steel]`) doesn't
+/// re-derive the same signature.
+pub fn mint_classes(
+    module: &SdkModule,
+    class_names: &[String],
+) -> Result<Vec<pod2::middleware::containers::Dictionary>> {
+    let batch = &module.module().batch;
+    let mut cache: HashMap<&str, crate::inspect::ClassSignature> = HashMap::new();
+    let mut out = Vec::with_capacity(class_names.len());
+    for class in class_names {
+        let sig = cache
+            .entry(class.as_str())
+            .or_insert_with(|| derive_class_signature(module, batch, class));
+        out.push(mint_with_signature(module, class, sig)?);
+    }
+    Ok(out)
+}
+
+fn mint_with_signature(
+    module: &SdkModule,
+    class_name: &str,
+    signature: &crate::inspect::ClassSignature,
+) -> Result<pod2::middleware::containers::Dictionary> {
     let class_hash = module
         .class_hash(class_name)
         .ok_or_else(|| anyhow!("unknown class: {class_name}"))?;
@@ -34,10 +66,8 @@ pub fn mint_class(module: &SdkModule, class_name: &str) -> Result<pod2::middlewa
         "work" => Value::from(EMPTY_VALUE),
     });
 
-    let batch = &module.module().batch;
-    let signature = derive_class_signature_for_fixture(module, batch, class_name);
     for (field_name, info) in &signature.fields {
-        // Skip SDK-managed keys; we already stamped them above.
+        // `type`/`key`/`work` are SDK-pre-populated and already stamped.
         if matches!(field_name.as_str(), "type" | "key" | "work") {
             continue;
         }
@@ -46,9 +76,9 @@ pub fn mint_class(module: &SdkModule, class_name: &str) -> Result<pod2::middlewa
         } else if let Some(initial) = info.int_literals.iter().next() {
             Value::from(*initial)
         } else {
-            // Witness-derived application field — just hand it a random
-            // Raw. Mock mode skips the constraints that would otherwise
-            // bind these values to real intro outputs.
+            // Witness-derived application field: hand it a random Raw.
+            // Mock mode skips the constraints that would otherwise bind
+            // these values to real intro outputs.
             Value::from(rand_raw_value())
         };
         d.insert(&StrKey::from(field_name.as_str()), &value)
@@ -72,12 +102,13 @@ pub struct SyntheticState {
 ///
 /// For each input, a [`GroundingEvidence`] is constructed against its
 /// source tx so the SDK's [`txlib::TxBuilder`] can verify the live-set
-/// membership chain. The proofs are real (the SDK doesn't trust
-/// mock-mode bypasses for these); only the surrounding chain history
-/// is synthetic.
-pub fn build_synthetic_state(objs: &[pod2::middleware::containers::Dictionary]) -> Result<SyntheticState> {
+/// membership chain.
+pub fn build_synthetic_state(
+    objs: &[pod2::middleware::containers::Dictionary],
+) -> Result<SyntheticState> {
     let mut transactions: Set = set!();
-    let mut source_ctxs: Vec<pod2::middleware::containers::Dictionary> = Vec::with_capacity(objs.len());
+    let mut source_ctxs: Vec<pod2::middleware::containers::Dictionary> =
+        Vec::with_capacity(objs.len());
 
     for obj in objs {
         let live: Set = set!(obj.clone());
@@ -86,10 +117,7 @@ pub fn build_synthetic_state(objs: &[pod2::middleware::containers::Dictionary]) 
         // grounding checks; the chain_start/chain_end fields are
         // included for shape consistency with real txs but their
         // contents aren't checked at grounding time.
-        let chain_seed = hash_values(&[
-            Value::from(live.commitment()),
-            Value::from(EMPTY_VALUE),
-        ]);
+        let chain_seed = hash_values(&[Value::from(live.commitment()), Value::from(EMPTY_VALUE)]);
         let ctx = dict!({
             "live" => Value::from(live.clone()),
             "nullifiers" => Value::from(nullifiers.clone()),
@@ -102,12 +130,7 @@ pub fn build_synthetic_state(objs: &[pod2::middleware::containers::Dictionary]) 
         source_ctxs.push(ctx);
     }
 
-    let state_root = StateRoot::new(
-        1,
-        transactions.commitment(),
-        EMPTY_HASH,
-        EMPTY_HASH,
-    );
+    let state_root = StateRoot::new(1, transactions.commitment(), EMPTY_HASH, EMPTY_HASH);
 
     let mut source_tx_proofs: HashMap<Hash, _> = HashMap::with_capacity(source_ctxs.len());
     for ctx in &source_ctxs {
@@ -129,10 +152,6 @@ pub fn build_synthetic_state(objs: &[pod2::middleware::containers::Dictionary]) 
             evidence,
         });
     }
-
-    // Silence unused-Tx warning: we don't currently expose Tx values
-    // since `executor.action` only reads spendables + the witness.
-    let _ = std::marker::PhantomData::<Tx>;
 
     Ok(SyntheticState {
         grounding_witness,
