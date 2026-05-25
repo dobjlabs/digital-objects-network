@@ -1,4 +1,4 @@
-//! `pexe` — build and install bitcraft plugin archives.
+//! `pexe`: build and install bitcraft plugin archives.
 
 use std::path::{Path, PathBuf};
 

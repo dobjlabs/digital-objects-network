@@ -1,4 +1,4 @@
-//! `pexe inspect` subcommand handlers — read-only views of a plugin's
+//! `pexe inspect` subcommand handlers: read-only views of a plugin's
 //! predicates, classes, and action graph. Each handler accepts a target
 //! path that is either a `.pexe` archive or a source directory holding
 //! `manifest.toml` + `plugin.rhai`.
@@ -17,15 +17,17 @@ use sdk::{Dependency, Sdk, SdkModule, manifest::Manifest};
 
 use crate::{PluginSource, unpack};
 
-/// Hash of `Predicate::Custom(txlib::TxInsert)`. Computed once on first
-/// access; identifies txlib's TxInsert event regardless of which batch
-/// referenced it.
+/// txlib's compiled predicate module. Building it isn't free, so we
+/// share one instance between the two event-hash statics below.
+static TXLIB_MODULE: LazyLock<pod2::lang::Module> = LazyLock::new(txlib::predicates::module);
+
+/// Hashes of `Predicate::Custom(txlib::TxInsert)` and `TxMutate`. Used
+/// to identify txlib events regardless of which batch referenced them.
 static TX_INSERT_HASH: LazyLock<Hash> = LazyLock::new(|| txlib_event_hash("TxInsert"));
 static TX_MUTATE_HASH: LazyLock<Hash> = LazyLock::new(|| txlib_event_hash("TxMutate"));
 
 fn txlib_event_hash(name: &str) -> Hash {
-    let module = txlib::predicates::module();
-    let custom_ref = module
+    let custom_ref = TXLIB_MODULE
         .batch
         .predicate_ref_by_name(name)
         .unwrap_or_else(|| panic!("txlib module is missing predicate {name}"));
@@ -121,12 +123,15 @@ fn print_middleware(module: &SdkModule, action: Option<&str>) -> Result<()> {
                 }
             }
         }
+        // Scan `batch_text` once to build a name -> block map so the
+        // per-predicate lookups in the queue are O(1) instead of O(len).
+        let block_index = index_predicate_blocks(&batch_text);
         let mut first = true;
         for idx in order {
             let Some(pred) = predicates.get(idx) else {
                 continue;
             };
-            let Some(block) = find_predicate_block(&batch_text, &pred.name) else {
+            let Some(block) = block_index.get(pred.name.as_str()) else {
                 continue;
             };
             if !first {
@@ -249,10 +254,10 @@ fn find_record_decl<'a>(src: &'a str, name: &str) -> Option<&'a str> {
 /// a grounded state for them, and run the SDK's solver in mock mode
 /// without proving. Prints three sections to stdout:
 ///
-/// 1. **Header** — action name with input / output classes.
-/// 2. **Solution breakdown** — the multi-pod solver's per-POD
+/// 1. **Header**: action name with input / output classes.
+/// 2. **Solution breakdown**: the multi-pod solver's per-POD
 ///    utilization summary (statements, merkle proofs, etc.).
-/// 3. **Statement dep graph** — per-POD list of statements in chain
+/// 3. **Statement dep graph**: per-POD list of statements in chain
 ///    order, labelled by predicate name with internal dependency
 ///    indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -281,10 +286,17 @@ pub enum PlanOutput {
     MermaidLinkFull,
 }
 
-/// `pexe prove`. Same shape as `inspect plan` but with `mock=false`,
-/// so the action is actually proved via the real plonky2 prover. This
-/// is much slower than `plan` (minutes for actions with many PODs).
-pub fn prove_action(target: &Path, action_name: &str) -> Result<()> {
+/// Shared loaded state for `plan` and `prove_action`: the compiled
+/// plugin, the named action's input/output class lists, the synthetic
+/// grounded state ready to feed into an executor.
+struct ActionRun {
+    module: std::rc::Rc<SdkModule>,
+    input_classes: Vec<String>,
+    output_classes: Vec<String>,
+    state: crate::fixtures::SyntheticState,
+}
+
+fn prepare_run(target: &Path, action_name: &str) -> Result<ActionRun> {
     let (manifest, script) = load_target(target)?;
     let module = load_sdk_module(&manifest, &script)?;
     let action = module
@@ -292,43 +304,47 @@ pub fn prove_action(target: &Path, action_name: &str) -> Result<()> {
         .iter()
         .find(|a| a.name == action_name)
         .ok_or_else(|| anyhow!("no action named {action_name} in this plugin"))?;
-
     let input_classes: Vec<String> = action.total_inputs().map(|r| r.class.clone()).collect();
     let output_classes: Vec<String> = action.total_outputs().map(|r| r.class.clone()).collect();
+    let minted = crate::fixtures::mint_classes(&module, &input_classes)?;
+    let state = crate::fixtures::build_synthetic_state(&minted)?;
+    Ok(ActionRun {
+        module,
+        input_classes,
+        output_classes,
+        state,
+    })
+}
+
+/// `pexe prove`. Same shape as `inspect plan` but with `mock=false`,
+/// so the action is actually proved via the real plonky2 prover. This
+/// is much slower than `plan` (minutes for actions with many PODs).
+pub fn prove_action(target: &Path, action_name: &str) -> Result<()> {
+    let run = prepare_run(target, action_name)?;
 
     println!("Prove: {}", action_name);
-    println!("  Inputs ({}):", input_classes.len());
-    for class in &input_classes {
+    println!("  Inputs ({}):", run.input_classes.len());
+    for class in &run.input_classes {
         println!("    - {class}");
     }
-    println!("  Outputs ({}):", output_classes.len());
-    for class in &output_classes {
+    println!("  Outputs ({}):", run.output_classes.len());
+    for class in &run.output_classes {
         println!("    - {class}");
     }
     println!();
-    println!("Proving via real plonky2 backend — this may take several minutes.");
+    println!("Proving via real plonky2 backend. This may take several minutes.");
     println!();
 
-    let mut minted = Vec::with_capacity(input_classes.len());
-    for class in &input_classes {
-        let obj = crate::fixtures::mint_class(&module, class)?;
-        minted.push(obj);
-    }
-    let state = crate::fixtures::build_synthetic_state(&minted)?;
-    let executor = module.executor(false, state.grounding_witness.clone());
-
+    let executor = run.module.executor(false, run.state.grounding_witness.clone());
     let start = std::time::Instant::now();
     let outputs = executor
-        .action(action_name, state.spendable)
+        .action(action_name, run.state.spendable)
         .map_err(|err| anyhow!("proving failed: {err}"))?;
     let elapsed = start.elapsed();
 
     println!();
     println!("Proved in {:.2}s", elapsed.as_secs_f64());
-    println!(
-        "tx_final: {:#}",
-        outputs.tx.ctx.commitment()
-    );
+    println!("tx_final: {:#}", outputs.tx.ctx.commitment());
     println!("Output objects ({}):", outputs.objs.len());
     for (i, obj) in outputs.objs.iter().enumerate() {
         println!("  [{i}] commitment={:#}", obj.obj.commitment());
@@ -338,28 +354,14 @@ pub fn prove_action(target: &Path, action_name: &str) -> Result<()> {
 }
 
 pub fn plan(target: &Path, action_name: &str, mode: PlanOutput) -> Result<()> {
-    let (manifest, script) = load_target(target)?;
-    let module = load_sdk_module(&manifest, &script)?;
-    let action = module
-        .actions()
-        .iter()
-        .find(|a| a.name == action_name)
-        .ok_or_else(|| anyhow!("no action named {action_name} in this plugin"))?;
-
-    let input_classes: Vec<String> = action.total_inputs().map(|r| r.class.clone()).collect();
-    let output_classes: Vec<String> = action.total_outputs().map(|r| r.class.clone()).collect();
-
-    let mut minted = Vec::with_capacity(input_classes.len());
-    for class in &input_classes {
-        let obj = crate::fixtures::mint_class(&module, class)?;
-        minted.push(obj);
-    }
-    let state = crate::fixtures::build_synthetic_state(&minted)?;
-    let executor = module.executor(true, state.grounding_witness.clone());
+    let run = prepare_run(target, action_name)?;
+    let input_classes = run.input_classes;
+    let output_classes = run.output_classes;
+    let executor = run.module.executor(true, run.state.grounding_witness.clone());
     let plan = executor
-        .plan_action(action_name, state.spendable)
+        .plan_action(action_name, run.state.spendable)
         .map_err(|err| anyhow!("planning failed: {err}"))?;
-    let aliases = build_alias_map(&module);
+    let aliases = build_alias_map(&run.module);
 
     match mode {
         PlanOutput::DotCompressed => print_dep_graph_dot(
@@ -535,7 +537,7 @@ fn statement_label(
 }
 
 /// Count each distinct custom predicate by occurrences in the plan's
-/// statement list. Native and Intro statements are excluded — they're
+/// statement list. Native and Intro statements are excluded: they're
 /// already covered by the solution breakdown's resource categories.
 /// Statements produced by `ReplaceValueWithEntry` are skipped so a
 /// custom predicate that gets rewritten doesn't get double-counted.
@@ -575,6 +577,15 @@ fn build_rewrite_source(plan: &sdk::PlanData) -> BTreeMap<usize, usize> {
     use pod2::frontend::OperationArg;
     use pod2::middleware::{NativeOperation, OperationType};
 
+    // Index statements once so each ReplaceValueWithEntry op resolves
+    // its source in O(1) instead of scanning the statement list.
+    let stmt_index: HashMap<&pod2::middleware::Statement, usize> = plan
+        .statements
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s, i))
+        .collect();
+
     let mut out: BTreeMap<usize, usize> = BTreeMap::new();
     for (idx, op) in plan.operations.iter().enumerate() {
         if !matches!(
@@ -587,7 +598,7 @@ fn build_rewrite_source(plan: &sdk::PlanData) -> BTreeMap<usize, usize> {
             Some(OperationArg::Statement(s)) => s,
             _ => continue,
         };
-        if let Some(src_idx) = plan.statements.iter().position(|s| s == source_stmt) {
+        if let Some(&src_idx) = stmt_index.get(source_stmt) {
             out.insert(idx, src_idx);
         }
     }
@@ -602,92 +613,12 @@ fn print_dep_graph_dot(
     aliases: &HashMap<Hash, String>,
     compressed: bool,
 ) {
-    use pod2::frontend::AbstractDep;
-
-    let shape = plan.solved.input_shape();
+    let view = build_graph_view(plan, compressed);
     let output = plan.solved.solution();
-    let n_original = plan.statements.len();
-
-    // In compressed mode, hide statements that are anchored-key
-    // rewrites of an earlier statement and redirect their consumers to
-    // the source. The full view shows every statement so it doesn't
-    // build the map.
-    let rewrite_source = if compressed {
-        build_rewrite_source(plan)
-    } else {
-        BTreeMap::new()
-    };
-    // Follow rewrite chains so the redirect target is always a
-    // "real" statement (not another rewrite). Each chain bottoms out
-    // in O(chain_length) iterations.
-    let resolve = |mut idx: usize| -> usize {
-        while let Some(&src) = rewrite_source.get(&idx) {
-            idx = src;
-        }
-        idx
-    };
-
-    // In compressed mode, a statement is a graph node iff its predicate
-    // is Custom or Intro AND it isn't a rewrite of an earlier statement.
-    let is_node = |s: usize| -> bool {
-        if s >= n_original {
-            return false;
-        }
-        if !compressed {
-            return true;
-        }
-        if rewrite_source.contains_key(&s) {
-            return false;
-        }
-        matches!(
-            plan.statements[s].predicate(),
-            Predicate::Custom(_) | Predicate::Intro(_)
-        )
-    };
-
-    // For each visible node, the set of visible producer indices and
-    // external (pod, stmt) refs. In compressed mode this walks through
-    // hidden Native statements until reaching a visible producer, and
-    // resolves rewritten statements to their source.
-    let producer_set =
-        |s: usize| -> (BTreeSet<usize>, BTreeSet<(usize, usize)>) {
-            let mut internal: BTreeSet<usize> = BTreeSet::new();
-            let mut external: BTreeSet<(usize, usize)> = BTreeSet::new();
-            let mut visited: BTreeSet<usize> = BTreeSet::new();
-            let mut queue: Vec<&AbstractDep> = shape.dep_edges[s].iter().collect();
-            while let Some(dep) = queue.pop() {
-                match dep {
-                    AbstractDep::Internal(d) => {
-                        let d = resolve(*d);
-                        if !visited.insert(d) {
-                            continue;
-                        }
-                        if d >= n_original {
-                            continue;
-                        }
-                        if d == s {
-                            // Self-loops can appear if a statement is
-                            // both a rewrite of itself's predecessor
-                            // and also references that predecessor;
-                            // resolve collapses both ends.
-                            continue;
-                        }
-                        if is_node(d) {
-                            internal.insert(d);
-                        } else if compressed {
-                            queue.extend(shape.dep_edges[d].iter());
-                        }
-                    }
-                    AbstractDep::External { pod, statement } => {
-                        external.insert((*pod, *statement));
-                    }
-                }
-            }
-            (internal, external)
-        };
+    let mode_tag = if view.compressed { "compressed" } else { "full" };
+    let suffix = if compressed { "" } else { "_full" };
 
     let mut out = String::new();
-    let suffix = if compressed { "" } else { "_full" };
     out.push_str(&format!(
         "digraph plan_{}{suffix} {{\n",
         sanitize(action_name)
@@ -696,7 +627,6 @@ fn print_dep_graph_dot(
     out.push_str("  node [fontname=\"Helvetica\", shape=box, style=\"rounded,filled\", fillcolor=\"#f6f8fa\"];\n");
     out.push_str("  edge [fontname=\"Helvetica\", fontsize=10];\n");
     out.push_str("  concentrate=true;\n");
-    let mode_tag = if compressed { "compressed" } else { "full" };
     out.push_str(&format!(
         "  label=\"{} ({mode_tag}) -- inputs: [{}], outputs: [{}]\";\n",
         action_name,
@@ -705,10 +635,7 @@ fn print_dep_graph_dot(
     ));
     out.push_str("  labelloc=t;\n\n");
 
-    // Per-POD clusters group statements visually. In compressed mode
-    // a POD with no visible nodes is skipped entirely.
-    for (pod_idx, stmts) in output.pod_statements.iter().enumerate() {
-        let visible: Vec<usize> = stmts.iter().copied().filter(|&s| is_node(s)).collect();
+    for (pod_idx, visible) in view.pod_visible.iter().enumerate() {
         if visible.is_empty() {
             continue;
         }
@@ -720,7 +647,7 @@ fn print_dep_graph_dot(
         out.push_str(&format!("  subgraph cluster_pod_{pod_idx} {{\n"));
         out.push_str(&format!("    label=\"POD {pod_idx} ({role})\";\n"));
         out.push_str("    style=dashed;\n");
-        for s in visible {
+        for &s in visible {
             let label = statement_label(&plan.statements[s], aliases);
             out.push_str(&format!("    s{s} [label=\"[{s}] {label}\"];\n"));
         }
@@ -728,21 +655,11 @@ fn print_dep_graph_dot(
     }
     out.push('\n');
 
-    // External-pod statements live in a single dotted cluster with
-    // distinctive node styling.
-    let mut ext_refs: BTreeSet<(usize, usize)> = BTreeSet::new();
-    for s in 0..n_original {
-        if !is_node(s) {
-            continue;
-        }
-        let (_internal, external) = producer_set(s);
-        ext_refs.extend(external);
-    }
-    if !ext_refs.is_empty() {
+    if !view.external_refs.is_empty() {
         out.push_str("  subgraph cluster_external {\n");
         out.push_str("    label=\"external pods\";\n");
         out.push_str("    style=dotted;\n");
-        for (pod, stmt) in &ext_refs {
+        for (pod, stmt) in &view.external_refs {
             out.push_str(&format!(
                 "    ext{pod}_{stmt} [label=\"ext{pod}:{stmt}\", shape=note, fillcolor=\"#fff5b7\"];\n",
             ));
@@ -750,12 +667,7 @@ fn print_dep_graph_dot(
         out.push_str("  }\n\n");
     }
 
-    // Edges: producer -> consumer.
-    for s in 0..n_original {
-        if !is_node(s) {
-            continue;
-        }
-        let (internal, external) = producer_set(s);
+    for (&s, (internal, external)) in &view.edges {
         for d in internal {
             out.push_str(&format!("  s{d} -> s{s};\n"));
         }
@@ -1095,7 +1007,7 @@ pub fn graph(target: &Path) -> Result<()> {
 
 /// `pexe inspect classes`.
 ///
-/// Render each class's state-space signature in "Notation A" — a
+/// Render each class's state-space signature in "Notation A": a
 /// pod2-typed record listing application fields with literal narrowing
 /// where possible and a crypto appendix for VDF/PoW-derived fields.
 pub fn classes(target: &Path, class_filter: Option<&str>) -> Result<()> {
@@ -1147,18 +1059,8 @@ pub(crate) struct FieldInfo {
     pub(crate) from_witness: bool,
 }
 
-/// Re-export of [`derive_class_signature`] under a name that signals
-/// it's for use by external fixture builders. Same semantics; same
-/// return type.
-pub(crate) fn derive_class_signature_for_fixture(
-    module: &SdkModule,
-    batch: &std::sync::Arc<CustomPredicateBatch>,
-    class_name: &str,
-) -> ClassSignature {
-    derive_class_signature(module, batch, class_name)
-}
 
-fn derive_class_signature(
+pub(crate) fn derive_class_signature(
     module: &SdkModule,
     batch: &std::sync::Arc<CustomPredicateBatch>,
     class_name: &str,
@@ -1182,18 +1084,23 @@ fn derive_class_signature(
         // stays in the caller. We need both to be visible to one
         // chain-tracing pass.
         let scope = inline_action(predicate, batch);
+        let vdf_producers = collect_intro_outputs(&scope, &VDF_VD_HASH);
+        let scope_uses_pow = scope_uses_intro(&scope, &LT_EQ_U256_VD_HASH);
+        let mut scope_targets_class = false;
         for stmt in &scope {
             let focused = match tx_producer_focused(stmt, batch, class_hash) {
                 Some(arg) => arg,
                 None => continue,
             };
             let chain = trace_state_chain(&scope, &focused);
-            let vdf_producers = collect_intro_outputs(&scope, &VDF_VD_HASH);
             collect_fields_into_scope(&scope, &chain, &vdf_producers, &mut sig);
+            scope_targets_class = true;
+        }
+        if scope_targets_class {
             if !vdf_producers.is_empty() {
                 sig.uses_vdf = true;
             }
-            if scope_uses_intro(&scope, &LT_EQ_U256_VD_HASH) {
+            if scope_uses_pow {
                 sig.uses_pow = true;
             }
         }
@@ -1277,7 +1184,7 @@ fn substitute_arg(
                 // the AnchoredKey to reference the caller's wildcard.
                 // For other binding shapes (Literal, AnchoredKey,
                 // SelfPredicateHash) the construct isn't expressible and
-                // we leave the arg as-is — best-effort fallback.
+                // we leave the arg as-is (best-effort fallback).
                 match &bindings[wc.index] {
                     StatementTmplArg::Wildcard(w) => {
                         StatementTmplArg::AnchoredKey(w.clone(), key.clone())
@@ -1612,6 +1519,43 @@ fn find_predicate_block<'a>(src: &'a str, name: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+/// Single-pass index of every top-level predicate block in `src`,
+/// keyed by predicate name. Used by [`print_middleware`] so its
+/// per-predicate lookups don't each rescan the whole batch text.
+fn index_predicate_blocks(src: &str) -> HashMap<&str, &str> {
+    let mut out: HashMap<&str, &str> = HashMap::new();
+    let mut block_start: Option<usize> = None;
+    let mut block_name: Option<&str> = None;
+    let mut cursor = 0;
+    for line in src.split_inclusive('\n') {
+        let line_start = cursor;
+        cursor += line.len();
+        let trimmed_end = line.trim_end_matches('\n');
+        if block_start.is_none() {
+            if let Some(paren) = trimmed_end.find('(') {
+                let name = &trimmed_end[..paren];
+                if !name.is_empty()
+                    && name
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                {
+                    block_start = Some(line_start);
+                    block_name = Some(&src[line_start..line_start + paren]);
+                }
+            }
+        } else if trimmed_end == ")" {
+            if let (Some(s), Some(n)) = (block_start, block_name) {
+                let block = src[s..cursor].trim_end_matches('\n');
+                out.insert(n, block);
+            }
+            block_start = None;
+            block_name = None;
+        }
+    }
+    out
 }
 
 #[cfg(test)]
