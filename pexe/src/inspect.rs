@@ -928,16 +928,56 @@ fn escape_mermaid(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+#[derive(Clone, Debug)]
+pub enum GraphOutput {
+    Dot,
+    Mermaid,
+    MermaidLink,
+}
+
 /// `pexe inspect graph`.
 ///
-/// Emits Graphviz DOT for the action/class relationship graph. Class
-/// nodes (boxes) sit at the perimeter; action nodes (ellipses) are
-/// connected via `in` / `out` / `mutate` edges. Pipe the output to
-/// `dot -Tsvg` (or your renderer of choice) to produce an image.
-pub fn graph(target: &Path) -> Result<()> {
+/// Emits the action/class relationship graph. Class nodes (boxes) sit
+/// at the perimeter; action nodes (ellipses) are connected via `in` /
+/// `out` / `mutate` edges. With `GraphOutput::Dot`, pipe to `dot -Tsvg`;
+/// with `GraphOutput::Mermaid`, paste into a markdown renderer; with
+/// `GraphOutput::MermaidLink`, opens directly in mermaid.live.
+pub fn graph(target: &Path, mode: GraphOutput) -> Result<()> {
     let (manifest, script) = load_target(target)?;
     let module = load_sdk_module(&manifest, &script)?;
 
+    match mode {
+        GraphOutput::Dot => print!("{}", build_class_graph_dot(&module)),
+        GraphOutput::Mermaid => print!("{}", build_class_graph_mermaid(&module)),
+        GraphOutput::MermaidLink => {
+            let source = build_class_graph_mermaid(&module);
+            match mermaid_live_url(&source) {
+                Ok(url) => println!("{url}"),
+                Err(err) => {
+                    eprintln!("failed to build mermaid.live URL: {err}");
+                    print!("{source}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Per-action partition of class refs into pure-in, pure-out, and
+/// mutate (intersection of inputs and outputs). Used by both the DOT
+/// and Mermaid class-graph renderers.
+fn action_edges(
+    action: &sdk::ActionMeta,
+) -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
+    let inputs: BTreeSet<String> = action.local_inputs().map(|r| r.class.clone()).collect();
+    let outputs: BTreeSet<String> = action.local_outputs().map(|r| r.class.clone()).collect();
+    let mutates: BTreeSet<String> = inputs.intersection(&outputs).cloned().collect();
+    let pure_in: BTreeSet<String> = inputs.difference(&mutates).cloned().collect();
+    let pure_out: BTreeSet<String> = outputs.difference(&mutates).cloned().collect();
+    (pure_in, pure_out, mutates)
+}
+
+fn build_class_graph_dot(module: &SdkModule) -> String {
     let mut out = String::new();
     out.push_str("digraph pexe {\n");
     out.push_str("  rankdir=LR;\n");
@@ -964,35 +1004,20 @@ pub fn graph(target: &Path) -> Result<()> {
 
     out.push_str("  // edges\n");
     for action in module.actions() {
-        let inputs: BTreeSet<String> = action
-            .local_inputs()
-            .map(|r| r.class.clone())
-            .collect();
-        let outputs: BTreeSet<String> = action
-            .local_outputs()
-            .map(|r| r.class.clone())
-            .collect();
-        let mutates: BTreeSet<&String> = inputs.intersection(&outputs).collect();
-
-        for class in &inputs {
-            if mutates.contains(class) {
-                continue;
-            }
+        let (pure_in, pure_out, mutates) = action_edges(action);
+        for class in &pure_in {
             out.push_str(&format!(
                 "  \"class_{class}\" -> \"action_{action}\" [label=\"in\"];\n",
                 action = action.name,
             ));
         }
-        for class in &outputs {
-            if mutates.contains(class) {
-                continue;
-            }
+        for class in &pure_out {
             out.push_str(&format!(
                 "  \"action_{}\" -> \"class_{class}\" [label=\"out\"];\n",
                 action.name,
             ));
         }
-        for class in mutates {
+        for class in &mutates {
             out.push_str(&format!(
                 "  \"action_{}\" -> \"class_{class}\" [label=\"mutate\", dir=both, color=darkorange];\n",
                 action.name,
@@ -1001,8 +1026,64 @@ pub fn graph(target: &Path) -> Result<()> {
     }
 
     out.push_str("}\n");
-    print!("{}", out);
-    Ok(())
+    out
+}
+
+fn build_class_graph_mermaid(module: &SdkModule) -> String {
+    let mut out = String::new();
+    out.push_str("flowchart LR\n");
+
+    for class in module.classes() {
+        out.push_str(&format!(
+            "  class_{}[\"{}\"]\n",
+            sanitize(&class.name),
+            escape_mermaid(&class.name),
+        ));
+    }
+    for action in module.actions() {
+        out.push_str(&format!(
+            "  action_{}([\"{}\"])\n",
+            sanitize(&action.name),
+            escape_mermaid(&action.name),
+        ));
+    }
+    out.push('\n');
+
+    for action in module.actions() {
+        let action_id = sanitize(&action.name);
+        let (pure_in, pure_out, mutates) = action_edges(action);
+        for class in &pure_in {
+            out.push_str(&format!(
+                "  class_{} -->|in| action_{action_id}\n",
+                sanitize(class),
+            ));
+        }
+        for class in &pure_out {
+            out.push_str(&format!(
+                "  action_{action_id} -->|out| class_{}\n",
+                sanitize(class),
+            ));
+        }
+        for class in &mutates {
+            out.push_str(&format!(
+                "  action_{action_id} <-->|mutate| class_{}\n",
+                sanitize(class),
+            ));
+        }
+    }
+
+    if !module.classes().is_empty() {
+        out.push('\n');
+        out.push_str("  classDef cls fill:#add8e6,stroke:#333,color:#000;\n");
+        let ids: Vec<String> = module
+            .classes()
+            .iter()
+            .map(|c| format!("class_{}", sanitize(&c.name)))
+            .collect();
+        out.push_str(&format!("  class {} cls;\n", ids.join(",")));
+    }
+
+    out
 }
 
 /// `pexe inspect classes`.

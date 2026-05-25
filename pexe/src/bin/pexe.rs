@@ -96,10 +96,22 @@ enum InspectCmd {
         /// Restrict output to a single class.
         class: Option<String>,
     },
-    /// Emit Graphviz DOT for the action/class relationship graph.
+    /// Emit the action/class relationship graph.
     Graph {
         /// Path to a `.pexe` archive or a plugin source directory.
         target: PathBuf,
+
+        /// Output format. `dot` (default) emits Graphviz; `mermaid`
+        /// emits a Mermaid flowchart that pastes into mermaid.live or
+        /// renders inline in GitHub markdown.
+        #[arg(long, value_enum, default_value_t = GraphFormat::Dot)]
+        format: GraphFormat,
+
+        /// Only meaningful with `--format mermaid`. Emit a mermaid.live
+        /// URL instead of the raw source so the graph can be opened in
+        /// a browser with one click.
+        #[arg(long)]
+        link: bool,
     },
     /// Mint synthetic inputs for an action and generate a real
     /// plonky2 proof. Much slower than `plan` (uses the real prover,
@@ -167,6 +179,12 @@ enum PlanSection {
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
+enum GraphFormat {
+    Dot,
+    Mermaid,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
 enum PlanFormat {
     Text,
     /// Graphviz DOT, compressed: only Custom and Intro predicate
@@ -226,8 +244,17 @@ fn main() -> Result<()> {
             InspectCmd::Classes { target, class } => {
                 inspect::classes(&target, class.as_deref())?;
             }
-            InspectCmd::Graph { target } => {
-                inspect::graph(&target)?;
+            InspectCmd::Graph {
+                target,
+                format,
+                link,
+            } => {
+                let mode = match format {
+                    GraphFormat::Dot => inspect::GraphOutput::Dot,
+                    GraphFormat::Mermaid if link => inspect::GraphOutput::MermaidLink,
+                    GraphFormat::Mermaid => inspect::GraphOutput::Mermaid,
+                };
+                inspect::graph(&target, mode)?;
             }
             InspectCmd::Prove {
                 target,
