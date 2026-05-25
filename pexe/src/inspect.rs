@@ -43,8 +43,8 @@ fn load_target(path: &Path) -> Result<(Manifest, String)> {
         let manifest = source.parse_manifest()?;
         Ok((manifest, source.script))
     } else {
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
+        let bytes =
+            std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
         unpack(&bytes)
     }
 }
@@ -240,12 +240,7 @@ fn referenced_records(block: &str) -> Vec<String> {
 /// Find the line `record <Name> = (...)` in the source, if present.
 fn find_record_decl<'a>(src: &'a str, name: &str) -> Option<&'a str> {
     let needle = format!("record {name} = ");
-    for line in src.lines() {
-        if line.starts_with(&needle) {
-            return Some(line);
-        }
-    }
-    None
+    src.lines().find(|line| line.starts_with(&needle))
 }
 
 /// `pexe inspect plan`.
@@ -335,7 +330,9 @@ pub fn prove_action(target: &Path, action_name: &str) -> Result<()> {
     println!("Proving via real plonky2 backend. This may take several minutes.");
     println!();
 
-    let executor = run.module.executor(false, run.state.grounding_witness.clone());
+    let executor = run
+        .module
+        .executor(false, run.state.grounding_witness.clone());
     let start = std::time::Instant::now();
     let outputs = executor
         .action(action_name, run.state.spendable)
@@ -357,7 +354,9 @@ pub fn plan(target: &Path, action_name: &str, mode: PlanOutput) -> Result<()> {
     let run = prepare_run(target, action_name)?;
     let input_classes = run.input_classes;
     let output_classes = run.output_classes;
-    let executor = run.module.executor(true, run.state.grounding_witness.clone());
+    let executor = run
+        .module
+        .executor(true, run.state.grounding_witness.clone());
     let plan = executor
         .plan_action(action_name, run.state.spendable)
         .map_err(|err| anyhow!("planning failed: {err}"))?;
@@ -482,11 +481,9 @@ fn print_dep_graph(plan: &sdk::PlanData, aliases: &HashMap<Hash, String>) {
             let label = statement_label(&plan.statements[s], aliases);
             let deps: Vec<String> = shape.dep_edges[s]
                 .iter()
-                .filter_map(|dep| match dep {
-                    AbstractDep::Internal(idx) => Some(format!("[{idx}]")),
-                    AbstractDep::External { pod, statement } => {
-                        Some(format!("ext{pod}:{statement}"))
-                    }
+                .map(|dep| match dep {
+                    AbstractDep::Internal(idx) => format!("[{idx}]"),
+                    AbstractDep::External { pod, statement } => format!("ext{pod}:{statement}"),
                 })
                 .collect();
             if deps.is_empty() {
@@ -524,10 +521,7 @@ fn format_custom_name(
     }
 }
 
-fn statement_label(
-    stmt: &pod2::middleware::Statement,
-    aliases: &HashMap<Hash, String>,
-) -> String {
+fn statement_label(stmt: &pod2::middleware::Statement, aliases: &HashMap<Hash, String>) -> String {
     match stmt.predicate() {
         Predicate::Native(n) => format!("{n}"),
         Predicate::Custom(c) => format_custom_name(&c, aliases),
@@ -615,7 +609,11 @@ fn print_dep_graph_dot(
 ) {
     let view = build_graph_view(plan, compressed);
     let output = plan.solved.solution();
-    let mode_tag = if view.compressed { "compressed" } else { "full" };
+    let mode_tag = if view.compressed {
+        "compressed"
+    } else {
+        "full"
+    };
     let suffix = if compressed { "" } else { "_full" };
 
     let mut out = String::new();
@@ -686,16 +684,18 @@ fn sanitize(name: &str) -> String {
         .collect()
 }
 
+/// (internal producer indices, external (pod, stmt) refs) for one
+/// visible node after Native folding and rewrite resolution.
+type EdgeSet = (BTreeSet<usize>, BTreeSet<(usize, usize)>);
+
 /// Structural view of the dep graph, abstracted away from the output
 /// format. Built once per plan + compression-mode and consumed by
 /// either the DOT or Mermaid renderer.
 struct GraphView {
     /// Per-POD list of statement indices visible in this view.
     pod_visible: Vec<Vec<usize>>,
-    /// Per-visible-node, the set of internal producer indices and
-    /// external (pod, stmt) refs after Native folding and rewrite
-    /// resolution.
-    edges: BTreeMap<usize, (BTreeSet<usize>, BTreeSet<(usize, usize)>)>,
+    /// Per-visible-node, its inbound edge set.
+    edges: BTreeMap<usize, EdgeSet>,
     /// Distinct external refs across the whole view.
     external_refs: BTreeSet<(usize, usize)>,
     compressed: bool,
@@ -741,7 +741,7 @@ fn build_graph_view(plan: &sdk::PlanData, compressed: bool) -> GraphView {
         .map(|stmts| stmts.iter().copied().filter(|&s| is_node(s)).collect())
         .collect();
 
-    let mut edges: BTreeMap<usize, (BTreeSet<usize>, BTreeSet<(usize, usize)>)> = BTreeMap::new();
+    let mut edges: BTreeMap<usize, EdgeSet> = BTreeMap::new();
     let mut external_refs: BTreeSet<(usize, usize)> = BTreeSet::new();
     for s in 0..n_original {
         if !is_node(s) {
@@ -824,7 +824,11 @@ fn build_mermaid_source(
 ) -> String {
     let view = build_graph_view(plan, compressed);
     let output = plan.solved.solution();
-    let mode_tag = if view.compressed { "compressed" } else { "full" };
+    let mode_tag = if view.compressed {
+        "compressed"
+    } else {
+        "full"
+    };
 
     let mut out = String::new();
     out.push_str("flowchart TD\n");
@@ -866,7 +870,7 @@ fn build_mermaid_source(
         out.push_str("  end\n");
     }
 
-    out.push_str("\n");
+    out.push('\n');
     for (&s, (internal, external)) in &view.edges {
         for d in internal {
             out.push_str(&format!("  s{d} --> s{s}\n"));
@@ -1099,10 +1103,10 @@ pub fn classes(target: &Path, class_filter: Option<&str>) -> Result<()> {
     let mut first = true;
     let mut matched = false;
     for class in module.classes() {
-        if let Some(name) = class_filter {
-            if class.name != name {
-                continue;
-            }
+        if let Some(name) = class_filter
+            && class.name != name
+        {
+            continue;
         }
         matched = true;
         if !first {
@@ -1112,10 +1116,10 @@ pub fn classes(target: &Path, class_filter: Option<&str>) -> Result<()> {
         let signature = derive_class_signature(&module, batch, &class.name);
         println!("{}", render_signature(&signature));
     }
-    if let Some(name) = class_filter {
-        if !matched {
-            return Err(anyhow!("no class named {name} in this plugin"));
-        }
+    if let Some(name) = class_filter
+        && !matched
+    {
+        return Err(anyhow!("no class named {name} in this plugin"));
     }
     Ok(())
 }
@@ -1139,7 +1143,6 @@ pub(crate) struct FieldInfo {
     /// True if any assignment was a wildcard with no other inferable provenance.
     pub(crate) from_witness: bool,
 }
-
 
 pub(crate) fn derive_class_signature(
     module: &SdkModule,
@@ -1286,7 +1289,6 @@ fn substitute_arg(
     }
 }
 
-
 /// If `stmt` is a txlib producer event (TxInsert or TxMutate) whose
 /// `@self_predicate(IsX)` arg resolves to the given `class_hash`, return
 /// the focused state arg. Compares predicates by hash, not name, so a
@@ -1334,14 +1336,14 @@ fn trace_state_chain(
     loop {
         let mut grew = false;
         for stmt in scope {
-            if let Some((new, old)) = dict_transition(stmt) {
-                if chain.contains(&new) || chain.contains(&old) {
-                    if chain.insert(new.clone()) {
-                        grew = true;
-                    }
-                    if chain.insert(old.clone()) {
-                        grew = true;
-                    }
+            if let Some((new, old)) = dict_transition(stmt)
+                && (chain.contains(&new) || chain.contains(&old))
+            {
+                if chain.insert(new.clone()) {
+                    grew = true;
+                }
+                if chain.insert(old.clone()) {
+                    grew = true;
                 }
             }
         }
@@ -1402,12 +1404,11 @@ fn scope_uses_intro(scope: &[StatementTmpl], vd_hash: &Hash) -> bool {
 fn collect_intro_outputs(scope: &[StatementTmpl], vd_hash: &Hash) -> HashSet<Wildcard> {
     let mut out = HashSet::new();
     for stmt in scope {
-        if let PredicateOrWildcard::Predicate(Predicate::Intro(intro)) = &stmt.pred_or_wc {
-            if &intro.verifier_data_hash == vd_hash {
-                if let Some(StatementTmplArg::Wildcard(wc)) = stmt.args.last() {
-                    out.insert(wc.clone());
-                }
-            }
+        if let PredicateOrWildcard::Predicate(Predicate::Intro(intro)) = &stmt.pred_or_wc
+            && &intro.verifier_data_hash == vd_hash
+            && let Some(StatementTmplArg::Wildcard(wc)) = stmt.args.last()
+        {
+            out.insert(wc.clone());
         }
     }
     out
@@ -1447,10 +1448,11 @@ fn collect_fields_into_scope(
                 | NativePredicate::DictUpdate
         );
         let mut in_chain = chain.contains(state_arg);
-        if !in_chain && is_transition {
-            if let Some(old) = stmt.args.get(1) {
-                in_chain = chain.contains(old);
-            }
+        if !in_chain
+            && is_transition
+            && let Some(old) = stmt.args.get(1)
+        {
+            in_chain = chain.contains(old);
         }
         if !in_chain {
             continue;
@@ -1505,13 +1507,14 @@ fn render_signature(sig: &ClassSignature) -> String {
     for (name, info) in &sig.fields {
         field_lines.push((name.clone(), render_field_value(info)));
     }
-    let name_width = field_lines
-        .iter()
-        .map(|(n, _)| n.len())
-        .max()
-        .unwrap_or(0);
+    let name_width = field_lines.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
     for (name, value) in &field_lines {
-        out.push_str(&format!("  {:width$}  {}\n", name, value, width = name_width));
+        out.push_str(&format!(
+            "  {:width$}  {}\n",
+            name,
+            value,
+            width = name_width
+        ));
     }
     if sig.uses_vdf || sig.uses_pow {
         out.push_str("  // identity:");
@@ -1591,12 +1594,16 @@ fn find_predicate_block<'a>(src: &'a str, name: &str) -> Option<&'a str> {
         let line_start = cursor;
         cursor += line.len();
         let trimmed_end = line.trim_end_matches('\n');
-        if start.is_none() {
-            if trimmed_end.starts_with(&header_prefix) {
-                start = Some(line_start);
+        match start {
+            None => {
+                if trimmed_end.starts_with(&header_prefix) {
+                    start = Some(line_start);
+                }
             }
-        } else if trimmed_end == ")" {
-            return Some(src[start.unwrap()..cursor].trim_end_matches('\n'));
+            Some(s) if trimmed_end == ")" => {
+                return Some(src[s..cursor].trim_end_matches('\n'));
+            }
+            _ => {}
         }
     }
     None
@@ -1656,10 +1663,7 @@ CraftWood(in, out) = AND(
 )
 ";
         let block = find_predicate_block(src, "CraftWood").unwrap();
-        assert_eq!(
-            block,
-            "CraftWood(in, out) = AND(\n  Z(d)\n)"
-        );
+        assert_eq!(block, "CraftWood(in, out) = AND(\n  Z(d)\n)");
     }
 
     #[test]
