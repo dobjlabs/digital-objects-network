@@ -7,15 +7,15 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use pod2::lang::PrettyPrint;
 use pod2::middleware::{
     CustomPredicateBatch, Hash, NativePredicate, Predicate, PredicateOrWildcard, StatementTmpl,
     StatementTmplArg, Wildcard,
 };
-use sdk::{Dependency, Sdk, SdkModule, manifest::Manifest};
+use sdk::{manifest::Manifest, Dependency, Sdk, SdkModule};
 
-use crate::{PluginSource, unpack};
+use crate::{unpack, PluginSource};
 
 /// Hash of `Predicate::Custom(txlib::TxInsert)`. Computed once on first
 /// access; identifies txlib's TxInsert event regardless of which batch
@@ -41,8 +41,8 @@ fn load_target(path: &Path) -> Result<(Manifest, String)> {
         let manifest = source.parse_manifest()?;
         Ok((manifest, source.script))
     } else {
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
+        let bytes =
+            std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
         unpack(&bytes)
     }
 }
@@ -325,10 +325,7 @@ pub fn prove_action(target: &Path, action_name: &str) -> Result<()> {
 
     println!();
     println!("Proved in {:.2}s", elapsed.as_secs_f64());
-    println!(
-        "tx_final: {:#}",
-        outputs.tx.ctx.commitment()
-    );
+    println!("tx_final: {:#}", outputs.tx.ctx.commitment());
     println!("Output objects ({}):", outputs.objs.len());
     for (i, obj) in outputs.objs.iter().enumerate() {
         println!("  [{i}] commitment={:#}", obj.obj.commitment());
@@ -522,10 +519,7 @@ fn format_custom_name(
     }
 }
 
-fn statement_label(
-    stmt: &pod2::middleware::Statement,
-    aliases: &HashMap<Hash, String>,
-) -> String {
+fn statement_label(stmt: &pod2::middleware::Statement, aliases: &HashMap<Hash, String>) -> String {
     match stmt.predicate() {
         Predicate::Native(n) => format!("{n}"),
         Predicate::Custom(c) => format_custom_name(&c, aliases),
@@ -649,42 +643,41 @@ fn print_dep_graph_dot(
     // external (pod, stmt) refs. In compressed mode this walks through
     // hidden Native statements until reaching a visible producer, and
     // resolves rewritten statements to their source.
-    let producer_set =
-        |s: usize| -> (BTreeSet<usize>, BTreeSet<(usize, usize)>) {
-            let mut internal: BTreeSet<usize> = BTreeSet::new();
-            let mut external: BTreeSet<(usize, usize)> = BTreeSet::new();
-            let mut visited: BTreeSet<usize> = BTreeSet::new();
-            let mut queue: Vec<&AbstractDep> = shape.dep_edges[s].iter().collect();
-            while let Some(dep) = queue.pop() {
-                match dep {
-                    AbstractDep::Internal(d) => {
-                        let d = resolve(*d);
-                        if !visited.insert(d) {
-                            continue;
-                        }
-                        if d >= n_original {
-                            continue;
-                        }
-                        if d == s {
-                            // Self-loops can appear if a statement is
-                            // both a rewrite of itself's predecessor
-                            // and also references that predecessor;
-                            // resolve collapses both ends.
-                            continue;
-                        }
-                        if is_node(d) {
-                            internal.insert(d);
-                        } else if compressed {
-                            queue.extend(shape.dep_edges[d].iter());
-                        }
+    let producer_set = |s: usize| -> (BTreeSet<usize>, BTreeSet<(usize, usize)>) {
+        let mut internal: BTreeSet<usize> = BTreeSet::new();
+        let mut external: BTreeSet<(usize, usize)> = BTreeSet::new();
+        let mut visited: BTreeSet<usize> = BTreeSet::new();
+        let mut queue: Vec<&AbstractDep> = shape.dep_edges[s].iter().collect();
+        while let Some(dep) = queue.pop() {
+            match dep {
+                AbstractDep::Internal(d) => {
+                    let d = resolve(*d);
+                    if !visited.insert(d) {
+                        continue;
                     }
-                    AbstractDep::External { pod, statement } => {
-                        external.insert((*pod, *statement));
+                    if d >= n_original {
+                        continue;
+                    }
+                    if d == s {
+                        // Self-loops can appear if a statement is
+                        // both a rewrite of itself's predecessor
+                        // and also references that predecessor;
+                        // resolve collapses both ends.
+                        continue;
+                    }
+                    if is_node(d) {
+                        internal.insert(d);
+                    } else if compressed {
+                        queue.extend(shape.dep_edges[d].iter());
                     }
                 }
+                AbstractDep::External { pod, statement } => {
+                    external.insert((*pod, *statement));
+                }
             }
-            (internal, external)
-        };
+        }
+        (internal, external)
+    };
 
     let mut out = String::new();
     let suffix = if compressed { "" } else { "_full" };
@@ -912,7 +905,11 @@ fn build_mermaid_source(
 ) -> String {
     let view = build_graph_view(plan, compressed);
     let output = plan.solved.solution();
-    let mode_tag = if view.compressed { "compressed" } else { "full" };
+    let mode_tag = if view.compressed {
+        "compressed"
+    } else {
+        "full"
+    };
 
     let mut out = String::new();
     out.push_str("flowchart TD\n");
@@ -981,8 +978,8 @@ fn build_mermaid_source(
 /// compress (deflate with zlib wrapper) at level 9, then base64-encode.
 fn mermaid_live_url(source: &str) -> Result<String> {
     use base64::Engine;
-    use flate2::Compression;
     use flate2::write::ZlibEncoder;
+    use flate2::Compression;
     use std::io::Write;
 
     // Minimal state object the editor accepts. `updateDiagram` lets
@@ -1052,14 +1049,8 @@ pub fn graph(target: &Path) -> Result<()> {
 
     out.push_str("  // edges\n");
     for action in module.actions() {
-        let inputs: BTreeSet<String> = action
-            .local_inputs()
-            .map(|r| r.class.clone())
-            .collect();
-        let outputs: BTreeSet<String> = action
-            .local_outputs()
-            .map(|r| r.class.clone())
-            .collect();
+        let inputs: BTreeSet<String> = action.local_inputs().map(|r| r.class.clone()).collect();
+        let outputs: BTreeSet<String> = action.local_outputs().map(|r| r.class.clone()).collect();
         let mutates: BTreeSet<&String> = inputs.intersection(&outputs).collect();
 
         for class in &inputs {
@@ -1298,7 +1289,6 @@ fn substitute_arg(
     }
 }
 
-
 /// If `stmt` is a txlib producer event (TxInsert or TxMutate) whose
 /// `@self_predicate(IsX)` arg resolves to the given `class_hash`, return
 /// the focused state arg. Compares predicates by hash, not name, so a
@@ -1517,13 +1507,14 @@ fn render_signature(sig: &ClassSignature) -> String {
     for (name, info) in &sig.fields {
         field_lines.push((name.clone(), render_field_value(info)));
     }
-    let name_width = field_lines
-        .iter()
-        .map(|(n, _)| n.len())
-        .max()
-        .unwrap_or(0);
+    let name_width = field_lines.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
     for (name, value) in &field_lines {
-        out.push_str(&format!("  {:width$}  {}\n", name, value, width = name_width));
+        out.push_str(&format!(
+            "  {:width$}  {}\n",
+            name,
+            value,
+            width = name_width
+        ));
     }
     if sig.uses_vdf || sig.uses_pow {
         out.push_str("  // identity:");
@@ -1631,10 +1622,7 @@ CraftWood(in, out) = AND(
 )
 ";
         let block = find_predicate_block(src, "CraftWood").unwrap();
-        assert_eq!(
-            block,
-            "CraftWood(in, out) = AND(\n  Z(d)\n)"
-        );
+        assert_eq!(block, "CraftWood(in, out) = AND(\n  Z(d)\n)");
     }
 
     #[test]

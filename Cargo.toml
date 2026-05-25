@@ -61,3 +61,14 @@ time = { version = "0.3.44", features = ["formatting", "local-offset"] }
 rand = { version = "0.9.2", features = ["std_rng"] }
 thiserror = "2.0.18"
 wire-types = { path = "wire-types" }
+
+# Uncomment for debugging with https://github.com/ed255/plonky2/ at branch `feat/debug`.  The repo directory needs to be checked out next to the pod2 repo directory.
+[patch."https://github.com/0xPARC/plonky2"]
+plonky2 = { path = "../plonky2/plonky2" }
+
+[patch."https://github.com/0xPARC/pod2"]
+pod2 = { path = "../pod2" }
+
+# Uncomment in order to enable debug information in the release builds.  This allows getting panic backtraces with a performance similar to regular release.
+[profile.release]
+debug = true
