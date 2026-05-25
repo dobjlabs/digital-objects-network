@@ -209,16 +209,6 @@ curl -fsSL "$RELEASE/bitcraft-commands.tar.gz" | tar -xz -C "$SKILLS_DIR"
 
 The tarball unpacks into `~/.claude/skills/bitcraft-<name>/SKILL.md`.
 
-Register the compact-re-injection hook in `~/.claude/settings.json` so
-that whenever Claude Code auto-compacts a conversation, the bitcraft
-dispatch reminder + the live help block are re-emitted as fresh context.
-The script is idempotent — safe to re-run, preserves any existing hooks
-or settings:
-
-```bash
-python3 "$SKILLS_DIR/bitcraft-start/ensure_hook.py"
-```
-
 After it lands, fully restart Claude Code (close and reopen the chat)
 so the new skills register.
 

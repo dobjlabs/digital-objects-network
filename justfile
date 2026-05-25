@@ -128,14 +128,12 @@ ensure-commands:
     fi
 
 # Wipe local state: RocksDB, local Postgres DBs, objects, installed bitcraft
-# commands, the bitcraft-preview entry in ~/.claude/launch.json, and the
-# SessionStart compact hook in ~/.claude/settings.json.
+# commands, and the bitcraft-preview entry in ~/.claude/launch.json.
 reset:
     @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
     rm -rf ~/.claude/skills/bitcraft-*
     @python3 commands/start/ensure_launch.py --remove && echo "removed: bitcraft-preview from ~/.claude/launch.json"
-    @python3 commands/start/ensure_hook.py --remove && echo "removed: bitcraft compact hook from ~/.claude/settings.json"
     @command -v claude >/dev/null 2>&1 && claude mcp remove bitcraft 2>/dev/null && echo "removed: bitcraft MCP registration" || true
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
@@ -185,9 +183,6 @@ cli *ARGS:
 # — user-authored commands (written by `create-command` to ~/.claude/skills/
 # bitcraft-<name>/) survive `just install-commands` because they don't appear
 # in commands/.
-#
-# Also registers the compact-re-injection hook in ~/.claude/settings.json
-# (idempotent).
 install-commands:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -205,6 +200,3 @@ install-commands:
     for dir in commands/*/; do
         install_dir "$dir"
     done
-    if [ -f ~/.claude/skills/bitcraft-start/ensure_hook.py ]; then
-        python3 ~/.claude/skills/bitcraft-start/ensure_hook.py && echo "registered: SessionStart compact hook"
-    fi

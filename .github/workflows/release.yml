@@ -567,8 +567,8 @@ jobs:
     # Packages every `commands/<name>/` subdirectory as `bitcraft-<name>/`
     # inside `bitcraft-commands.tar.gz`. The install SKILL.md fetches this
     # tarball and extracts into `~/.claude/skills/`, so the agent skills (one
-    # SKILL.md per command, plus any sibling files like preview/index.html
-    # or start/ensure_hook.py) ship alongside the daemon + plugin.
+    # SKILL.md per command, plus any sibling files like preview/index.html)
+    # ship alongside the daemon + plugin.
     #
     # No Rust needed — pure file packaging.
     needs: validate
@@ -585,7 +585,7 @@ jobs:
           # Mirror the on-disk layout `~/.claude/skills/` expects: each
           # `commands/<name>/` becomes `bitcraft-<name>/` in the tarball.
           # Copies SKILL.md plus every sibling file (e.g. preview/index.html,
-          # help/format_help.py, start/ensure_hook.py, create-command/references/*).
+          # help/format_help.py, create-command/references/*).
           if [ ! -d commands ]; then
             echo "::error::commands/ directory not found at repo root"
             exit 1
