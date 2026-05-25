@@ -22,13 +22,16 @@ every client (CLI, agents via MCP, and optional desktop / web GUIs).
 
 ## Output rules
 
-Your user-facing output is deterministic. Emit EXACTLY:
+Your user-facing output is deterministic. This skill ALWAYS ends with a fresh install. The preflight may run an uninstall first as a prefix, but it never replaces the install.
 
-1. One line per step (steps 1–9) as each step's commands complete successfully — see the per-step label list below.
-2. The final success or failure block from "## Final output".
-3. Verbatim tool error messages, only when a command fails.
+Emit EXACTLY:
 
-Do NOT emit anything else. No preamble, no greeting, no narration ("I'll start by..."), no commentary after a step completes ("that worked", "now I'll..."), no closing summary, no markdown bullets or headers around the per-step lines, no reflection.
+1. If the user confirms uninstall at preflight: one line per uninstall substep (`[U1/4] …` through `[U4/4] …`), then continue to step 1.
+2. One line per install step (`[1/9] …` through `[9/9] …`) as each completes successfully.
+3. The final success or failure block from "## Final output".
+4. Verbatim tool error messages, only when a command fails.
+
+The preflight prompt itself is the one exception to the "no other output" rule. Beyond that: no preamble, no greeting, no narration ("I'll start by..."), no commentary between steps ("that worked", "now I'll..."), no closing summary, no markdown bullets or headers around the per-step lines, no reflection.
 
 Per-step line format (one line, plain text, output after the step succeeds):
 
@@ -65,6 +68,74 @@ So a successful run prints exactly:
 ```
 
 On step failure: skip remaining steps, print the failure block (with the failing step number and the verbatim error message), and stop.
+
+## Preflight
+
+Before step 1, check whether bitcraft is already installed:
+
+```bash
+[ -e ~/.dobj ] && echo "exists" || echo "fresh"
+```
+
+- **`fresh`** → skip the rest of this section and start at step 1.
+- **`exists`** → prompt the user (use AskUserQuestion or whatever interactive prompt your agent supports):
+
+  > An existing bitcraft install was detected at `~/.dobj`. Wipe it before reinstalling? Choosing yes removes everything under `~/.dobj` plus the bitcraft skills and MCP registration, then does a fresh install. Choosing no re-runs the install in place — every step is idempotent.
+
+  - **No** → proceed directly to step 1.
+  - **Yes** → run the uninstall substeps below, then proceed to step 1. (The install always runs; uninstall is just a prefix.)
+
+### Uninstall substeps
+
+Run in order. Each is best-effort — if a command fails (e.g. dobjd already stopped, `claude` not on PATH), continue.
+
+#### U1. Stop dobjd
+
+```bash
+[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
+```
+
+#### U2. Remove the bitcraft-preview entry from `~/.claude/launch.json`
+
+The remover script lives inside the skills dir, so run it before U4 wipes the skills:
+
+```bash
+if [ -f ~/.claude/skills/bitcraft-start/ensure_launch.py ]; then
+  python3 ~/.claude/skills/bitcraft-start/ensure_launch.py --remove || true
+fi
+```
+
+#### U3. Unregister MCP with Claude Code
+
+```bash
+if command -v claude >/dev/null 2>&1; then
+  claude mcp remove bitcraft 2>/dev/null || true
+fi
+```
+
+For Claude Desktop, edit `~/Library/Application Support/Claude/claude_desktop_config.json` by hand and drop the `bitcraft` entry from `mcpServers` — there's no CLI for it.
+
+#### U4. Remove `~/.dobj` and the skills shipped by this repo
+
+Only remove the five skills bundled in `bitcraft-commands.tar.gz`. Any other `~/.claude/skills/bitcraft-*` directory is user-authored (via `create-command`) and must survive uninstall:
+
+```bash
+rm -rf ~/.dobj
+for name in consult-docs create-command help preview start; do
+  rm -rf "$HOME/.claude/skills/bitcraft-$name"
+done
+```
+
+Per-substep line format (one line, plain text, output after the substep succeeds):
+
+```
+[U1/4] stop dobjd
+[U2/4] remove launch.json entry
+[U3/4] unregister MCP
+[U4/4] remove ~/.dobj and bundled skills
+```
+
+After `[U4/4]`, continue to step 1.
 
 ## Steps
 
