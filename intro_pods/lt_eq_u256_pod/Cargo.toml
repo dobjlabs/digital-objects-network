@@ -14,3 +14,6 @@ serde_json = { workspace = true }
 hex = { workspace = true }
 
 pod2utils = { path = "../../pod2utils" }
+
+[dev-dependencies]
+env_logger = { workspace = true }

@@ -4,7 +4,6 @@
 use std::time::Instant;
 
 use anyhow::Result;
-use itertools::Itertools;
 use plonky2::{
     iop::witness::{PartialWitness, WitnessWrite},
     plonk::{
@@ -17,13 +16,13 @@ use pod2::{
         basetypes::{CircuitBuilder, CircuitData, Proof, ProofWithPublicInputs},
         mainpod::{
             cache_get_rec_main_pod_common_circuit_data,
-            cache_get_rec_main_pod_verifier_circuit_data,
+            cache_get_rec_main_pod_verifier_circuit_data, public_inputs,
         },
         serialization::{CommonCircuitDataSerializer, VerifierCircuitDataSerializer},
     },
     cache,
     cache::CacheEntry,
-    middleware::{C, CommonCircuitData, D, F, Params, ToFields, VerifierCircuitData},
+    middleware::{C, CommonCircuitData, D, F, Params, VerifierCircuitData},
 };
 use tracing::info;
 
@@ -122,16 +121,13 @@ impl ShrunkMainPodBuild {
 
         // generate first MainPod's proof
         let pod_proof: Proof = pod.pod.proof();
-        let public_inputs = pod
-            .statements_hash()
-            .to_fields()
-            .iter()
-            .chain(pod.pod.vd_set().root().0.iter())
-            .cloned()
-            .collect_vec();
         let pod_proof_with_pis = ProofWithPublicInputs {
             proof: pod_proof.clone(),
-            public_inputs,
+            public_inputs: public_inputs(
+                pod.pod.statements_root(),
+                pod.pod.vd_set().root(),
+                pod.pod.is_main(),
+            ),
         };
 
         // shrink the MainPod's proof, obtaining a smaller plonky2 proof

@@ -1065,7 +1065,13 @@ impl ActionHandle {
             // This is a copy of the object, we don't modify the obj argument.
             let mut obj = obj.borrow().to_dict();
             let target_raw = target.borrow().as_value().raw();
-            let mut k = exe_ctx.rand_value();
+            // Initialize k to obj's current key so that when the loop body doesn't run (mock mode,
+            // or the initial random already satisfies the constraint), the returned k still
+            // matches what's in obj.
+            let mut k = obj
+                .get(&StrKey::from("key"))
+                .expect("dict op")
+                .expect("obj has key");
             if !exe_ctx.mock {
                 while u256_gt(&RawValue::from(obj.commitment()), &target_raw) {
                     k = exe_ctx.rand_value();
