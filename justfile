@@ -171,6 +171,11 @@ install-plugins:
 pexe *ARGS:
     cargo run -p pexe --release -- {{ARGS}}
 
+# Run the dobj `cli` CLI with arbitrary args. Example:
+#   just cli inspect-action craft-basics::FindLog
+cli *ARGS:
+    cargo run -p cli --release -- {{ARGS}}
+
 # Install bitcraft meta commands into ~/.claude/skills/bitcraft-*/. Copies
 # each commands/<name>/ directory (SKILL.md + any sibling files like index.html
 # or helper scripts) to ~/.claude/skills/bitcraft-<name>/.
