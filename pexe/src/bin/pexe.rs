@@ -101,6 +101,17 @@ enum InspectCmd {
         /// Path to a `.pexe` archive or a plugin source directory.
         target: PathBuf,
     },
+    /// Mint synthetic inputs for an action and generate a real
+    /// plonky2 proof. Much slower than `plan` (uses the real prover,
+    /// not MockProver) and produces a verifiable MainPod.
+    Prove {
+        /// Path to a `.pexe` archive or a plugin source directory.
+        target: PathBuf,
+
+        /// Action to prove.
+        #[arg(long)]
+        action: String,
+    },
     /// Mint synthetic inputs for an action and run it in mock mode so
     /// the SDK's multi-pod solver runs. Prints the solution breakdown
     /// and a statement dependency graph.
@@ -204,6 +215,9 @@ fn main() -> Result<()> {
             }
             InspectCmd::Graph { target } => {
                 inspect::graph(&target)?;
+            }
+            InspectCmd::Prove { target, action } => {
+                inspect::prove_action(&target, &action)?;
             }
             InspectCmd::Plan {
                 target,
