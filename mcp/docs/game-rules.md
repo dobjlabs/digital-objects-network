@@ -5,21 +5,30 @@ bitcraft is a crafting game where every item you own is private. The world doesn
 ## The tech tree at a glance
 
 ```
-  raw                t1                t2               t3              t4 / t5
-  ───                ──                ──               ──              ───────
-  Iron      ──►  Ingot          ──►  Steel        ──►  Bearing                Engine
-  Copper    ──►  Plate          ──►  Wire / Coil  ──►  Circuit                Casing       ──► Rocket
-  Oil       ──►  Tar/Fuel/Gas   ──►  Wax/Grease   ──►  Pistons                Payload
-  Sulfur    ──►  Acid           ──►  Solvent      ──►  Resin
-  Water     ──►  (combines into recipes above)
-  Cane      ──►  Pulp           ──►  Board        ──►  Panel
-  Hemp      ──►  Fiber          ──►  Cloth        ──►  Canvas
+  raw            t1                  t2                          t3                      t4 / t5
+  ───            ──                  ──                          ──                      ───────
+  Iron      ──► Ingot           ──► Steel ──► Gear           ──► Bearing                     Engine
+  Copper    ──► Plate           ──► Wire / Coil              ──► Circuit                     Casing     ──► Rocket
+  Oil       ──► Tar/Fuel/Gas    ──► Wax / Grease / Rubber    ──► Pistons                     Payload
+  Sulfur    ──► Acid            ──► Solvent / Extract        ──► Resin / Panel
+  Water     ──► (combines into recipes above)
+  Cane      ──► Pulp            ──► Board                    ──► Panel
+  Hemp      ──► Fiber           ──► Cloth                    ──► Canvas
+
+   ┌─ branches the columns above flatten ────────────────────────────────────────────┐
+   │ Steel and Gear are both T2 (Gear: 2 Steel → 3 Gear). Both feed T3:               │
+   │   Steel + Grease → Bearing, Steel + Mold → Gear-via-blast-furnace variant.       │
+   │ Acid splits at T2: Solvent (→ Resin via Grease+Rubber) and Extract (→ Panel,     │
+   │ also yields Sludge → Catalyst / Binder).                                         │
+   │ Gas (T1 byproduct of refining Oil) feeds Rubber (T2), which is required for      │
+   │ Resin (T3).                                                                      │
+   └──────────────────────────────────────────────────────────────────────────────────┘
 
    ┌─ gates ──────────────────────────────────────────────────────────────────┐
-   │ MachineI unlocks t3 recipes; MachineII unlocks t4 + t5.                   │
-   │ Stations (BlastFurnace, CircuitFab, CrackingUnit, ReactionChamber) unlock │
-   │ alternative recipe variants with better yield or faster timing.           │
-   └───────────────────────────────────────────────────────────────────────────┘
+   │ MachineI unlocks t3 recipes; MachineII unlocks t4 + t5.                  │
+   │ Stations (BlastFurnace, CircuitFab, CrackingUnit, ReactionChamber)       │
+   │ unlock alternative recipe variants with better yield or faster timing.   │
+   └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Actions, by tier
