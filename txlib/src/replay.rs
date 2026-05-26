@@ -143,7 +143,7 @@ impl<'a> Replayer<'a> {
     /// For a single top-level action whose body is a lone Insert event,
     /// dispatches into the `ReplayActionInsert` K=1 fast path (slot 3
     /// of the `ReplayActions` OR), which proves the whole transaction
-    /// in 2 cpvs instead of going through ReplayAction/ReplayContents/
+    /// in 2 statements instead of going through ReplayAction/ReplayContents/
     /// ReplayElement/ReplayInsert. Multi-action transactions always use
     /// the slow ReplayAction for each action, because `ReplayActionsStep`
     /// expects a `ReplayAction` statement in its first slot.
