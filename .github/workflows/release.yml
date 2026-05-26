@@ -2,14 +2,17 @@ name: Release
 
 # Single workflow producing every bitcraft release artifact: the daemon
 # (`dobjd`), CLI (`dobj`), Claude Desktop stdio bridge (`bitcraft-mcp-proxy`),
-# and the bundled `episode-1` plugin. Triggered on `v*` tags or via the
-# Actions UI with a tag name.
+# and one bundled plugin. Triggered on `v*` tags or via the Actions UI with
+# a tag name.
 #
-# Other plugins under `plugins/` (e.g. `craft-basics/`) are NOT released — the
-# `plugin` job below only builds `episode-1.pexe`. To switch the shipped
-# plugin, change the path in the `Build episode-1.pexe` step + the
-# `find ... -name 'episode-1*.pexe'` glob in `Locate artifact` (and the
-# matching mention in `release-notes.md.tpl`).
+# Which plugin under `plugins/` ships is controlled by the `EPISODE` env var
+# at the top of this file (default: `episode-1`). To release a DIFFERENT
+# plugin on a tag push, edit that one value. To release a different plugin
+# from a one-off manual run without touching the file, dispatch the workflow
+# via the Actions UI and set the `episode` input — that overrides the
+# default for that run only. The `plugin` job uses `$EPISODE` everywhere
+# (build path, artifact glob, error messages, release-notes body), so no
+# other code needs to move.
 #
 # On macOS, every native binary and dylib is codesigned + notarized so users
 # get an online verification on first run instead of the "could not verify
@@ -27,6 +30,10 @@ on:
         description: "Release tag to publish (e.g. v0.1.0)"
         required: true
         type: string
+      episode:
+        description: "Plugin under plugins/ to bundle in this release (leave blank for default)"
+        required: false
+        type: string
 
 # Single sources of truth — every job and the release-notes template draws
 # from here so a value change is one edit.
@@ -34,6 +41,12 @@ env:
   # `inputs.tag_name` is required:true on workflow_dispatch and empty on
   # push:tags, so the `||` falls through to the tag ref cleanly.
   RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
+  # Which plugin's `.pexe` is bundled in the release. Override per-run via
+  # `workflow_dispatch.inputs.episode`; tag pushes use the default below.
+  # The `plugin` job builds `plugins/$EPISODE/` and ships the resulting
+  # `<EPISODE>.pexe` artifact. Other directories under `plugins/` are not
+  # built or uploaded.
+  EPISODE: ${{ inputs.episode || 'episode-1' }}
   # Hosted defaults baked into dobjd at compile time (see
   # driver/src/settings.rs::default_settings) AND surfaced in the release
   # notes via envsubst. Change here, both move together.
@@ -529,16 +542,27 @@ jobs:
           # toolchain version comes from rust-toolchain.toml.
           cache-shared-key: plugin
 
-      - name: Build episode-1.pexe
-        run: cargo run --release --locked -p pexe -- build plugins/episode-1
+      - name: Validate plugin directory exists
+        # Catch typos in EPISODE before kicking off the (slow) Rust build.
+        run: |
+          set -euo pipefail
+          if [ ! -d "plugins/$EPISODE" ]; then
+            echo "::error::plugins/$EPISODE/ does not exist. Available plugins:"
+            ls -1 plugins/ | sed 's/^/  /' >&2
+            exit 1
+          fi
+          echo "shipping plugin: $EPISODE"
+
+      - name: Build ${{ env.EPISODE }}.pexe
+        run: cargo run --release --locked -p pexe -- build "plugins/$EPISODE"
 
       - name: Locate artifact
         id: find
         run: |
           set -euo pipefail
-          PEXE=$(find target -path '*pexe*' -name 'episode-1*.pexe' | head -1)
+          PEXE=$(find target -path '*pexe*' -name "${EPISODE}*.pexe" | head -1)
           if [ -z "$PEXE" ]; then
-            echo "::error::episode-1.pexe not produced"
+            echo "::error::${EPISODE}.pexe not produced"
             exit 1
           fi
           echo "pexe=$PEXE" >> "$GITHUB_OUTPUT"
@@ -550,8 +574,11 @@ jobs:
           # envsubst's first arg is a whitelist of `$VAR` names to substitute
           # — single quotes are intentional (shellcheck SC2016 warns by
           # default but it's wrong here, the names must NOT expand in shell).
+          # The `$EPISODE` slot is what makes "switching the released plugin"
+          # propagate to the release notes' artifact list without editing
+          # the template.
           # shellcheck disable=SC2016
-          envsubst '$DEFAULT_SYNCHRONIZER_API_URL $DEFAULT_RELAYER_API_URL' \
+          envsubst '$DEFAULT_SYNCHRONIZER_API_URL $DEFAULT_RELAYER_API_URL $EPISODE' \
             < .github/release-notes.md.tpl > release-notes.md
 
       - name: Upload to draft release

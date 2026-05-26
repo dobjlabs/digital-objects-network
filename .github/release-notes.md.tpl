@@ -5,7 +5,7 @@ Paste this to Claude Code, Cursor, or any MCP-aware agent:
 > Read https://raw.githubusercontent.com/dobjlabs/zk-craft/main/SKILL.md and set up bitcraft.
 
 The skill installs `dobjd`, `dobj`, `bitcraft-mcp-proxy`, the
-`episode-1` plugin into `~/.dobj/`, and the bitcraft command
+`${EPISODE}` plugin into `~/.dobj/`, and the bitcraft command
 skills into `~/.claude/skills/bitcraft-*/`. Then it registers MCP
 with the agent so you can drive bitcraft directly.
 
@@ -19,8 +19,9 @@ See [SKILL.md](https://github.com/dobjlabs/zk-craft/blob/main/SKILL.md) for the 
   MCP on `:7718`). Bundles `bitcraft-mcp-proxy` + `libscip` + GCC
   runtime libs in `.libs/`.
 - **`dobj-{target}.tar.gz`** — terminal CLI for the daemon.
-- **`episode-1.pexe`** — the bundled crafting plugin (Iron,
-  Copper, Oil, Sulfur, … all the way through to Rocket).
+- **`${EPISODE}.pexe`** — the bundled crafting plugin
+  (classes, actions, and recipe predicates this release ships with).
+  Inspect with `dobj actions` / `dobj classes` after installing.
 - **`bitcraft-commands.tar.gz`** — the framework-level command
   skills (`help`, `consult-docs`, `create-command`, plus internal
   `start` / `preview`) installed into `~/.claude/skills/bitcraft-*/`.
