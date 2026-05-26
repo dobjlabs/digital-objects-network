@@ -678,10 +678,21 @@ fn print_dep_graph_dot(
     print!("{}", out);
 }
 
+/// Map a class or action name to a Mermaid-safe node id. Mermaid
+/// flowchart ids accept `[A-Za-z0-9_]` only, but class/action names
+/// also allow `-`. Escape both punctuation chars distinctly so that
+/// `Foo_Bar` and `Foo-Bar` don't collapse onto the same node.
 fn sanitize(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        match c {
+            c if c.is_ascii_alphanumeric() => out.push(c),
+            '_' => out.push_str("_u"),
+            '-' => out.push_str("_h"),
+            _ => out.push('_'),
+        }
+    }
+    out
 }
 
 /// (internal producer indices, external (pod, stmt) refs) for one
@@ -1549,7 +1560,7 @@ fn render_field_value(info: &FieldInfo) -> String {
                 .map(|i| i.to_string())
                 .collect::<Vec<_>>()
                 .join(" | ");
-            vec![format!("Int  // initial: {union}")]
+            vec![format!("Int  // at mint: {union}")]
         }
         (false, false) => {
             let strs = strings
@@ -1670,6 +1681,31 @@ CraftWood(in, out) = AND(
     fn find_predicate_block_returns_none_when_absent() {
         let src = "FindLog(out) = AND(\n  X(a)\n)\n";
         assert!(find_predicate_block(src, "Missing").is_none());
+    }
+
+    #[test]
+    fn sanitize_distinguishes_underscore_and_hyphen() {
+        assert_eq!(sanitize("Foo_Bar"), "Foo_uBar");
+        assert_eq!(sanitize("Foo-Bar"), "Foo_hBar");
+        assert_ne!(sanitize("Foo_Bar"), sanitize("Foo-Bar"));
+        assert_eq!(sanitize("PlainName"), "PlainName");
+    }
+
+    #[test]
+    fn render_signature_labels_int_literal_as_at_mint() {
+        let mut fields = BTreeMap::new();
+        let mut durability = FieldInfo::default();
+        durability.int_literals.insert(100);
+        fields.insert("durability".to_string(), durability);
+        let sig = ClassSignature {
+            name: "WoodPick".to_string(),
+            fields,
+            uses_vdf: false,
+            uses_pow: false,
+        };
+        let rendered = render_signature(&sig);
+        assert!(rendered.contains("// at mint: 100"));
+        assert!(!rendered.contains("// initial"));
     }
 
     #[test]
