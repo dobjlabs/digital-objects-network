@@ -34,7 +34,7 @@ use pod2::{
     frontend::{Operation, OperationArg},
     middleware::{
         EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
-        containers::{Dictionary, Set},
+        containers::{Array, Dictionary, Set},
         hash_values,
     },
 };
@@ -75,23 +75,32 @@ impl StateRoot {
         }
     }
 
-    /// Merkleized dictionary view; its commitment is the canonical GSR.
+    /// Padded-array view used as the canonical state root record. Slot
+    /// layout matches the `record StateRoot` declaration in txlib.podlang.
     /// Predicates access fields via anchored-key syntax (e.g.
     /// `state_root.transactions`).
-    pub fn dict(&self) -> Dictionary {
-        dict!({
-            "block_number" => self.block_number,
-            "transactions" => self.transactions_root,
-            "nullifiers" => self.nullifiers_root,
-            "gsrs" => self.gsrs_root
-        })
+    pub fn array(&self) -> Array {
+        Array::new(vec![
+            Value::from(0_i64),
+            Value::from(self.block_number),
+            Value::from(self.transactions_root),
+            Value::from(self.nullifiers_root),
+            Value::from(self.gsrs_root),
+        ])
     }
 
-    /// Commitment of the state root dictionary.
+    /// Commitment of the state root array.
     pub fn hash(&self) -> Hash {
-        self.dict().commitment()
+        self.array().commitment()
     }
 }
+
+/// Slot indices for the `StateRoot` record. Slot 0 is `_pad` (works
+/// around pod2 issue #513); real fields start at slot 1.
+pub const STATE_ROOT_BLOCK_NUMBER_SLOT: usize = 1;
+pub const STATE_ROOT_TRANSACTIONS_SLOT: usize = 2;
+pub const STATE_ROOT_NULLIFIERS_SLOT: usize = 3;
+pub const STATE_ROOT_GSRS_SLOT: usize = 4;
 
 /// Proof-bearing grounding data required to build a new transaction.
 ///
@@ -893,13 +902,13 @@ impl TxBuilder {
         grounding: &GroundingWitness,
     ) -> (Statement, Set, TxStats) {
         let mut stats = TxStats::new();
-        let state_root_dict = grounding.state_root.dict();
+        let state_root_arr = grounding.state_root.array();
 
         if inputs.is_empty() {
             // Base case: empty inputs. state_root is unconstrained here.
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root = state_root_dict) = (
+                InputsGrounded(state_root = state_root_arr) = (
                     Equal(set!(), set!()),
                     Statement::None,
                     Statement::None,
@@ -912,18 +921,18 @@ impl TxBuilder {
             return (st, set!(), stats);
         }
 
-        // One DictContains witness for `state_root.transactions`, reused
+        // One ArrayContains witness for `state_root.transactions`, reused
         // as the anchored-key arg for every per-input SetContains below.
-        let (_, txns_proof) = state_root_dict
-            .prove(&StrKey::from("transactions"))
-            .expect("state_root dict has 'transactions' field");
+        let (_, txns_proof) = state_root_arr
+            .prove(STATE_ROOT_TRANSACTIONS_SLOT)
+            .expect("state_root array has transactions slot");
         let st_state_root_transactions = ctx
             .builder
             .priv_op(Operation(
-                OperationType::Native(NativeOperation::DictContainsFromEntries),
+                OperationType::Native(NativeOperation::ArrayContainsFromEntries),
                 vec![
-                    Value::from(state_root_dict.commitment()).into(),
-                    Value::from("transactions").into(),
+                    Value::from(state_root_arr.commitment()).into(),
+                    Value::from(STATE_ROOT_TRANSACTIONS_SLOT as i64).into(),
                     Value::from(grounding.state_root.transactions_root).into(),
                 ],
                 OperationAux::MerkleProof(txns_proof),
@@ -966,7 +975,7 @@ impl TxBuilder {
             record(&mut stats, "InputsGroundedSingle");
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root = state_root_dict) = (
+                InputsGrounded(state_root = state_root_arr) = (
                     Statement::None,
                     st_single,
                     Statement::None,
@@ -1018,7 +1027,7 @@ impl TxBuilder {
             record(&mut stats, "InputsGroundedPair");
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root = state_root_dict) = (
+                InputsGrounded(state_root = state_root_arr) = (
                     Statement::None,
                     Statement::None,
                     st_pair,
@@ -1061,7 +1070,7 @@ impl TxBuilder {
 
         let mut st = st_custom!(
             ctx,
-            InputsGrounded(state_root = state_root_dict) = (
+            InputsGrounded(state_root = state_root_arr) = (
                 Statement::None,
                 Statement::None,
                 Statement::None,
@@ -1284,9 +1293,9 @@ mod tests {
     }
 
     #[test]
-    fn state_root_hash_matches_dict_commitment() {
+    fn state_root_hash_matches_array_commitment() {
         let sr = StateRoot::new(7, test_hash(1), test_hash(2), test_hash(3));
-        assert_eq!(sr.hash(), sr.dict().commitment());
+        assert_eq!(sr.hash(), sr.array().commitment());
     }
 
     #[test]

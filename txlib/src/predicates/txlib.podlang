@@ -18,7 +18,7 @@
 
   4. TxFinalized -- the public entry point. Ties input grounding,
      chain seeding, and full replay together. Exposes
-     (state_root_hash, tx_final, nullifiers) publicly.
+     (state_root, tx_final, nullifiers) publicly.
 
   State convention: most predicates thread four public arguments:
   (before_tx, after_tx, before_chain, after_chain). Each step
@@ -304,10 +304,11 @@ ReplayDelete(before_tx, after_tx, before_chain, after_chain,
 // Inputs Grounded
 // ========================================================
 //
-// The state root is a Merkleized dictionary
-//   { block_number, transactions, nullifiers, gsrs }
-// whose commitment is the canonical GSR. Predicates access its
-// fields via anchored-key syntax (e.g. `state_root.transactions`).
+// The state root is a Record (typed padded array) whose commitment
+// is the canonical GSR. Slot 0 is `_pad` (workaround for pod2 issue
+// #513); real entries are `block_number`, `transactions`, `nullifiers`,
+// `gsrs`. Predicates access fields via anchored-key syntax (e.g.
+// `state_root.transactions` resolves to the transactions set).
 //
 // InputsGrounded proves each input object was live in some prior
 // finalized transaction in `state_root.transactions`.
@@ -320,7 +321,9 @@ ReplayDelete(before_tx, after_tx, before_chain, after_chain,
 // `(inputs, state_root)` signature; Pair/Triple chain through
 // them to expose additional inputs as public args along the way.
 
-InputsGrounded(inputs, state_root) = OR(
+record StateRoot = (_pad, block_number, transactions, nullifiers, gsrs)
+
+InputsGrounded(inputs, state_root StateRoot) = OR(
   // Base case: empty inputs. state_root is intentionally
   // unconstrained -- an empty-input tx needs no prior state.
   Equal(inputs, {})
@@ -332,7 +335,7 @@ InputsGrounded(inputs, state_root) = OR(
 
 // Single-input fast path: avoids the cost of a recursive
 // InputsGrounded call.
-InputsGroundedSingle(inputs, state_root,
+InputsGroundedSingle(inputs, state_root StateRoot,
     private: input, source_tx) = AND(
   SetContains(state_root.transactions, source_tx)
   SetContains(source_tx.live, input)
@@ -343,7 +346,7 @@ InputsGroundedSingle(inputs, state_root,
 // caller (e.g. InputsGroundedPair) can reuse it in a subsequent SetInsert.
 // Not eligible for the InputsGrounded OR directly because the OR requires
 // all branches to share the (inputs, state_root) signature.
-InputsGroundedSingleVar(inputs, state_root, input,
+InputsGroundedSingleVar(inputs, state_root StateRoot, input,
     private: source_tx) = AND(
   SetContains(state_root.transactions, source_tx)
   SetContains(source_tx.live, input)
@@ -354,7 +357,7 @@ InputsGroundedSingleVar(inputs, state_root, input,
 // IG-dispatch + one IGR vs. the recursive chain for N=2.
 // IGSV builds the {first} singleton; the second input is verified inline
 // and inserted into the singleton to form `inputs`.
-InputsGroundedPair(inputs, state_root,
+InputsGroundedPair(inputs, state_root StateRoot,
     private: first_input, second_input, set_first, source_tx_second) = AND(
   InputsGroundedSingleVar(set_first, state_root, first_input)
   SetContains(state_root.transactions, source_tx_second)
@@ -366,7 +369,7 @@ InputsGroundedPair(inputs, state_root,
 // public args so a caller (InputsGroundedTriple) can chain through them.
 // Not eligible for the InputsGrounded OR directly because the OR requires
 // all branches to share the (inputs, state_root) signature.
-InputsGroundedPairVar(inputs, state_root, first_input, second_input,
+InputsGroundedPairVar(inputs, state_root StateRoot, first_input, second_input,
     private: set_first, source_tx_second) = AND(
   InputsGroundedSingleVar(set_first, state_root, first_input)
   SetContains(state_root.transactions, source_tx_second)
@@ -375,9 +378,9 @@ InputsGroundedPairVar(inputs, state_root, first_input, second_input,
 )
 
 // Three-input fast path: grounds three inputs in 4 statements (IG + IGT +
-// IGPV + IGSV). Used directly for N=3, or as the bottom-out for N>=4
-// (after IGR peels off the outer inputs).
-InputsGroundedTriple(inputs, state_root,
+// IGPV + IGSV). Used directly for N=3, or as the bottom-out for N>=4 (after
+// IGR peels off the outer inputs).
+InputsGroundedTriple(inputs, state_root StateRoot,
     private: first_input, second_input, third_input, set_pair,
              source_tx_third) = AND(
   InputsGroundedPairVar(set_pair, state_root, first_input, second_input)
@@ -389,7 +392,7 @@ InputsGroundedTriple(inputs, state_root,
 // 4+ inputs: ground one input, then recurse for the rest. Bottoms out at
 // InputsGroundedTriple for N=4, or at a further IGR -> ... -> IGT chain
 // for larger N.
-InputsGroundedRecursive(inputs, state_root,
+InputsGroundedRecursive(inputs, state_root StateRoot,
     private: input, prev_inputs, source_tx) = AND(
   SetContains(state_root.transactions, source_tx)
   SetContains(source_tx.live, input)
@@ -406,8 +409,8 @@ InputsGroundedRecursive(inputs, state_root,
 // event sequence that produced it.
 
 // Exposes (state_root, tx_final, nullifiers) publicly. The verifier
-// sees `state_root` as a single hash -- the commitment of the state
-// root dictionary { block_number, transactions, nullifiers, gsrs }.
+// sees `state_root` as a single hash -- the commitment of the
+// `StateRoot` record.
 // tx_final is the after_tx dictionary commitment, which binds the
 // live set, nullifiers, and final chain_start/chain_end together. The
 // live set and chain are private. The top-level walker is
@@ -421,8 +424,8 @@ InputsGroundedRecursive(inputs, state_root,
 // values for those two fields (they pass through ReplayActions
 // verbatim into `tx_final`, since ReplayAction only updates the
 // `live` and `nullifiers` keys).
-TxFinalized(state_root, tx_final, nullifiers,
-    private: before_tx, chain_start, chain_final) = AND(
+TxFinalized(state_root StateRoot, tx_final, nullifiers,
+     private: before_tx, chain_start, chain_final) = AND(
   InputsGrounded(before_tx.live, state_root)
   HashOf(chain_start, before_tx.live, 0)
   DictInsert(before_tx, {"nullifiers": {}, "chain_start": 0, "chain_end": 0}, "live", before_tx.live)

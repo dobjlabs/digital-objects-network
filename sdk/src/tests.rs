@@ -246,7 +246,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "2d35c4b66e08964e9680cb93a3e8418a77315b421a4e85aba322cefdccbd2c5b"
+        module_hash = "4b73f3a8fa7f2bed3032bedfacd11c9909af751067b7bc4cdb5a92b7389a6168"
 
         [[classes]]
         name = "Log"
