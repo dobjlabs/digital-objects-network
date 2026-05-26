@@ -19,5 +19,12 @@ hex = { workspace = true }
 pod2 = { workspace = true }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sdk = { path = "../sdk" }
+txlib = { path = "../txlib" }
+vdfpod = { path = "../intro_pods/vdfpod" }
+lt_eq_u256_pod = { path = "../intro_pods/lt_eq_u256_pod" }
+pod2utils = { path = "../pod2utils" }
 dirs = "6.0.0"
 clap = { version = "4", features = ["derive"] }
+serde_json = { workspace = true }
+flate2 = "1"
+base64 = "0.22"

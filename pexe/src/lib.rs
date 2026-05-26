@@ -15,6 +15,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use sdk::{Sdk, manifest::Manifest};
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
+pub mod fixtures;
+pub mod inspect;
+
 pub const MANIFEST_FILE: &str = "manifest.toml";
 pub const SCRIPT_FILE: &str = "plugin.rhai";
 

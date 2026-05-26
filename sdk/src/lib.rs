@@ -865,6 +865,11 @@ impl ActionHandle {
                             let mut replacements: Vec<Option<OperationArg>> = vec![None; arg_count];
                             replacements[arg_count - 2] = prev_chain_anchor;
                             replacements[arg_count - 1] = chain_anchor;
+                            // Propagate rather than panic so dev tools
+                            // running with synthetic inputs (e.g.
+                            // `pexe inspect plan`) can surface chain-
+                            // anchor mismatches as ordinary errors
+                            // rather than aborts.
                             exe_ctx
                                 .bld
                                 .builder
@@ -872,7 +877,7 @@ impl ActionHandle {
                                     replacements,
                                     st_literal,
                                 ))
-                                .unwrap()
+                                .map_err(|err| format!("SubAction chain anchor failed: {err}"))?
                         } else {
                             st_literal
                         };
@@ -1782,6 +1787,7 @@ impl Loader {
             engine,
             ast,
             class_hashes,
+            dependencies: self.dependencies,
         }
     }
 }
@@ -1803,6 +1809,10 @@ pub struct SdkModule {
     // build the `DictContains(obj, "type", ...)` guard priv_op for
     // every Object inst.
     class_hashes: HashMap<String, Hash>,
+    // The imported modules and intro predicates this module pulls in.
+    // Exposed so callers can map a foreign batch hash back to its
+    // declared module alias (e.g. for qualified-name rendering).
+    dependencies: Vec<Dependency>,
 }
 
 impl SdkModule {
@@ -1823,6 +1833,9 @@ impl SdkModule {
     }
     pub fn module(&self) -> &Arc<Module> {
         &self.module
+    }
+    pub fn dependencies(&self) -> &[Dependency] {
+        &self.dependencies
     }
     /// Hash of the action's custom predicate in the loaded module.
     pub fn action_hash(&self, action_name: &str) -> Option<Hash> {
@@ -2131,6 +2144,85 @@ impl Executor {
 
         Ok(SpendableObjects { tx_pod, objs, tx })
     }
+
+    /// Run the action body up to (and including) the multi-pod
+    /// partitioning solve, but stop before proving. Returns the
+    /// solver's output plus the original statement list so callers
+    /// (the `pexe inspect plan` dev tool) can render the breakdown
+    /// and dep graph themselves rather than relying on log output.
+    pub fn plan_action(
+        &self,
+        action: &str,
+        inputs: Vec<SpendableObject>,
+    ) -> Result<PlanData, SdkError> {
+        let builder = self.new_builder();
+        let mut bld = BuildContext {
+            builder,
+            modules: self.pod_modules.clone(),
+        };
+
+        let total = &self.module.action_by_name(action).total_inputs;
+
+        let mut tx_inputs = Vec::with_capacity(inputs.len());
+        let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
+        for (input, _ref) in zip_eq(inputs, total.iter()) {
+            let SpendableObject { obj, evidence } = input;
+            tx_inputs.push((obj.clone(), evidence));
+            rhai_input_objs.push(obj);
+        }
+        rhai_input_objs.reverse();
+
+        let tx_builder = self.new_tx_builder(&mut bld, &tx_inputs);
+        let exe_rc = Rc::new(RefCell::new(ExeContext {
+            mock: self.mock,
+            params: self.params.clone(),
+            vd_set: self.vd_set.clone(),
+            inputs: rhai_input_objs,
+            bld,
+            tx_builder,
+            module: self.module.clone(),
+            outputs: Vec::new(),
+        }));
+        let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
+        action_handle.exe_action()?;
+        action_handle.0.borrow_mut().exe_ctx = None;
+        let ExeContext {
+            tx_builder,
+            mut bld,
+            ..
+        } = Rc::try_unwrap(exe_rc)
+            .ok()
+            .expect("unique ExeContext reference after rhai")
+            .into_inner();
+
+        let (st_tx_finalize, _tx, _stats) = tx_builder.finalize(&mut bld);
+        bld.builder.reveal(&st_tx_finalize).unwrap();
+
+        // Snapshot the statements + operations before `solve` consumes
+        // the builder. Operations let downstream consumers spot e.g.
+        // `ReplaceValueWithEntry` pairs in the dep graph.
+        let statements = bld.builder.statements();
+        let operations: Vec<pod2::frontend::Operation> = bld.builder.operations().to_vec();
+        let solved = bld
+            .builder
+            .solve()
+            .map_err(|err| anyhow!("multi-pod solve failed: {err}"))?;
+        Ok(PlanData {
+            statements,
+            operations,
+            solved,
+        })
+    }
+}
+
+/// Output of [`Executor::plan_action`]: enough material to render the
+/// solver's per-POD breakdown and a statement dependency graph without
+/// re-running anything. Statements are positional and align with
+/// `solved.input_shape().dep_edges` and `solved.solution().pod_statements`.
+pub struct PlanData {
+    pub statements: Vec<pod2::middleware::Statement>,
+    pub operations: Vec<pod2::frontend::Operation>,
+    pub solved: pod2::frontend::SolvedMultiPod,
 }
 
 /// The Sdk is the main entrypoint of this crate.  It's used to load modules from manifests and

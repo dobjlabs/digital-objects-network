@@ -1,11 +1,11 @@
-//! `pexe` — build and install bitcraft plugin archives.
+//! `pexe`: build and install bitcraft plugin archives.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use pexe::{
-    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash, install, pack,
+    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash, inspect, install, pack,
     set_manifest_hash, unpack,
 };
 
@@ -59,6 +59,144 @@ enum Cmd {
         /// Path to the .pexe file.
         pexe: PathBuf,
     },
+    /// Inspect a plugin's predicates, classes, or action graph.
+    Inspect {
+        #[command(subcommand)]
+        cmd: InspectCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum InspectCmd {
+    /// Render the Podlang for the plugin's predicates.
+    ///
+    /// Default form is the SDK-synthesized frontend Podlang. With
+    /// `--middleware`, the compiled `CustomPredicateBatch` is rendered
+    /// instead via pod2's pretty-printer.
+    Predicates {
+        /// Path to a `.pexe` archive or a plugin source directory
+        /// (containing `manifest.toml` and `plugin.rhai`).
+        target: PathBuf,
+
+        /// Restrict output to a single predicate name. Without this,
+        /// every predicate is emitted with a `--- name ---` header.
+        #[arg(long)]
+        action: Option<String>,
+
+        /// Render the compiled middleware form rather than the
+        /// SDK-synthesized frontend form.
+        #[arg(long)]
+        middleware: bool,
+    },
+    /// Render each class's state-space signature.
+    Classes {
+        /// Path to a `.pexe` archive or a plugin source directory.
+        target: PathBuf,
+
+        /// Restrict output to a single class.
+        class: Option<String>,
+    },
+    /// Emit the action/class relationship graph.
+    Graph {
+        /// Path to a `.pexe` archive or a plugin source directory.
+        target: PathBuf,
+
+        /// Output format. `dot` (default) emits Graphviz; `mermaid`
+        /// emits a Mermaid flowchart that pastes into mermaid.live or
+        /// renders inline in GitHub markdown.
+        #[arg(long, value_enum, default_value_t = GraphFormat::Dot)]
+        format: GraphFormat,
+
+        /// Only meaningful with `--format mermaid`. Emit a mermaid.live
+        /// URL instead of the raw source so the graph can be opened in
+        /// a browser with one click.
+        #[arg(long)]
+        link: bool,
+    },
+    /// Mint synthetic inputs for an action and generate a real
+    /// plonky2 proof. Much slower than `plan` (uses the real prover,
+    /// not MockProver) and produces a verifiable MainPod.
+    Prove {
+        /// Path to a `.pexe` archive or a plugin source directory.
+        target: PathBuf,
+
+        /// Action to prove.
+        #[arg(long)]
+        action: String,
+
+        /// Seed the RNG used by fixture minting and `action.random()`
+        /// for reproducible output (commitments, tx_final, proof
+        /// bytes). Default uses OS entropy.
+        #[arg(long)]
+        seed: Option<u64>,
+    },
+    /// Mint synthetic inputs for an action and run it in mock mode so
+    /// the SDK's multi-pod solver runs. Prints the solution breakdown
+    /// and a statement dependency graph.
+    Plan {
+        /// Path to a `.pexe` archive or a plugin source directory.
+        target: PathBuf,
+
+        /// Action to plan.
+        #[arg(long)]
+        action: String,
+
+        /// Output format. `text` (default) prints the breakdown plus
+        /// an indented dep listing. `dot` emits only a Graphviz digraph
+        /// of the statement DAG, clustered by POD.
+        #[arg(long, value_enum, default_value_t = PlanFormat::Text)]
+        format: PlanFormat,
+
+        /// Only meaningful with `--format mermaid` / `mermaid-full`.
+        /// Emit a mermaid.live URL instead of the raw source so the
+        /// graph can be opened in a browser with one click.
+        #[arg(long)]
+        link: bool,
+
+        /// Restrict the `text` format to specific sections. Comma-
+        /// separated list of: `header`, `summary`, `totals`, `deps`,
+        /// `all`. Default is `all` (full output). Has no effect on
+        /// non-text formats.
+        #[arg(long, value_delimiter = ',', value_enum)]
+        show: Vec<PlanSection>,
+
+        /// Seed the RNG used by fixture minting and `action.random()`
+        /// for reproducible structural output (statement indices,
+        /// commitments shown in the dep graph). Default uses OS
+        /// entropy.
+        #[arg(long)]
+        seed: Option<u64>,
+    },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum PlanSection {
+    Header,
+    Summary,
+    Totals,
+    Deps,
+    All,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum GraphFormat {
+    Dot,
+    Mermaid,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum PlanFormat {
+    Text,
+    /// Graphviz DOT, compressed: only Custom and Intro predicate
+    /// nodes, with native plumbing folded into the consumer.
+    Dot,
+    /// Graphviz DOT, full: every Native statement included.
+    DotFull,
+    /// Mermaid flowchart, compressed. Embeds in GitHub markdown and
+    /// pastes into mermaid.live for a shareable link.
+    Mermaid,
+    /// Mermaid flowchart, full.
+    MermaidFull,
 }
 
 fn main() -> Result<()> {
@@ -95,6 +233,88 @@ fn main() -> Result<()> {
             println!("\n# plugin.rhai");
             println!("{}", script);
         }
+        Cmd::Inspect { cmd } => match cmd {
+            InspectCmd::Predicates {
+                target,
+                action,
+                middleware,
+            } => {
+                inspect::predicates(&target, action.as_deref(), middleware)?;
+            }
+            InspectCmd::Classes { target, class } => {
+                inspect::classes(&target, class.as_deref())?;
+            }
+            InspectCmd::Graph {
+                target,
+                format,
+                link,
+            } => {
+                let mode = match format {
+                    GraphFormat::Dot => inspect::GraphOutput::Dot,
+                    GraphFormat::Mermaid if link => inspect::GraphOutput::MermaidLink,
+                    GraphFormat::Mermaid => inspect::GraphOutput::Mermaid,
+                };
+                inspect::graph(&target, mode)?;
+            }
+            InspectCmd::Prove {
+                target,
+                action,
+                seed,
+            } => {
+                if let Some(seed) = seed {
+                    pod2utils::set_seed(seed);
+                }
+                inspect::prove_action(&target, &action)?;
+            }
+            InspectCmd::Plan {
+                target,
+                action,
+                format,
+                link,
+                show,
+                seed,
+            } => {
+                if let Some(seed) = seed {
+                    pod2utils::set_seed(seed);
+                }
+                use std::collections::BTreeSet;
+                let sections: BTreeSet<inspect::PlanSection> = if show.is_empty() {
+                    inspect::PlanSection::default_all().into_iter().collect()
+                } else {
+                    let mut s = BTreeSet::new();
+                    for sec in show {
+                        match sec {
+                            PlanSection::Header => {
+                                s.insert(inspect::PlanSection::Header);
+                            }
+                            PlanSection::Summary => {
+                                s.insert(inspect::PlanSection::Summary);
+                            }
+                            PlanSection::Totals => {
+                                s.insert(inspect::PlanSection::Totals);
+                            }
+                            PlanSection::Deps => {
+                                s.insert(inspect::PlanSection::Deps);
+                            }
+                            PlanSection::All => {
+                                s.extend(inspect::PlanSection::default_all());
+                            }
+                        }
+                    }
+                    s
+                };
+                let mode = match format {
+                    PlanFormat::Text => inspect::PlanOutput::Text(sections),
+                    PlanFormat::Dot => inspect::PlanOutput::DotCompressed,
+                    PlanFormat::DotFull => inspect::PlanOutput::DotFull,
+                    PlanFormat::Mermaid if link => inspect::PlanOutput::MermaidLinkCompressed,
+                    PlanFormat::Mermaid => inspect::PlanOutput::MermaidCompressed,
+                    PlanFormat::MermaidFull if link => inspect::PlanOutput::MermaidLinkFull,
+                    PlanFormat::MermaidFull => inspect::PlanOutput::MermaidFull,
+                };
+                inspect::plan(&target, &action, mode)?;
+            }
+        },
     }
     Ok(())
 }

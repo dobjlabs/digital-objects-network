@@ -94,3 +94,8 @@ pack-plugins:
 # Build and install plugins into ~/.dobj/actions/
 install-plugins:
     cargo run -p pexe --release -- build --install plugins/*
+
+# Run the `pexe` CLI with arbitrary args. Example:
+#   just pexe inspect plan --action CraftWood plugins/craft-basics
+pexe *ARGS:
+    cargo run -p pexe --release -- {{ARGS}}
