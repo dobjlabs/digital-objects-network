@@ -38,7 +38,6 @@
 //! of this file).
 
 use anyhow::{Result, anyhow};
-use itertools::Itertools;
 use plonky2::{
     field::types::Field,
     hash::{
@@ -58,15 +57,13 @@ use plonky2::{
 use pod2::{
     backends::plonky2::{
         Error, Result as BResult,
-        circuits::{
-            common::{
-                CircuitBuilderPod, PredicateTarget, StatementArgTarget, StatementTarget,
-                ValueTarget,
-            },
-            mainpod::calculate_statements_hash_circuit,
+        circuits::common::{
+            CircuitBuilderPod, Flattenable, PredicateTarget, StatementArgTarget, StatementTarget,
+            ValueTarget,
         },
-        deserialize_proof, mainpod,
-        mainpod::calculate_statements_hash,
+        deserialize_proof,
+        mainpod::public_inputs,
+        primitives::merkletree::kv_hash_target,
         recursion::{
             InnerCircuit, RecursiveCircuit, RecursiveParams, VerifiedProofTarget,
             circuit::{dummy as dummy_recursive, hash_verifier_data_gadget},
@@ -79,7 +76,7 @@ use pod2::{
     measure_gates_begin, measure_gates_end, middleware,
     middleware::{
         C, D, EMPTY_HASH, F, HASH_SIZE, Hash, IntroPredicateRef, Params, Pod, Proof, RawValue,
-        ToFields, VDSet, Value,
+        VDSet, Value, containers::Array,
     },
     timed,
 };
@@ -147,7 +144,6 @@ pub struct VdfPod {
     pub output: RawValue, // output = H(H(H( ...H(input) ))) (count times)
 
     pub vd_set: VDSet,
-    pub statements_hash: Hash,
     pub proof: Proof,
 
     pub common_hash: String,
@@ -227,15 +223,9 @@ impl VdfPod {
     ) -> Result<VdfPod> {
         // verify the given proof in a VdfPodTarget circuit
         let (vdf_pod_target, circuit_data) = &**STANDARD_VDF_POD_DATA;
-        let statements = pub_self_statements(count, input, output)
-            .into_iter()
-            .map(mainpod::Statement::from)
-            .collect_vec();
-        let statements_hash: Hash = calculate_statements_hash(&statements);
         // set targets
         let pod_vdf_input = VdfPodVerifyInput {
             vd_root: vd_set.root(),
-            statements_hash,
             proof,
         };
         let mut pw = PartialWitness::<F>::new();
@@ -254,7 +244,6 @@ impl VdfPod {
 
         Ok(VdfPod {
             params: params.clone(),
-            statements_hash,
             count,
             input,
             output,
@@ -336,46 +325,29 @@ impl Pod for VdfPod {
         &self.params
     }
     fn verify(&self) -> pod2::backends::plonky2::Result<()> {
-        let statements = pub_self_statements(self.count, self.input, self.output)
-            .into_iter()
-            .map(mainpod::Statement::from)
-            .collect_vec();
-        let statements_hash: Hash = calculate_statements_hash(&statements);
-        if statements_hash != self.statements_hash {
-            return Err(Error::statements_hash_not_equal(
-                self.statements_hash,
-                statements_hash,
-            ));
-        }
+        let sts_root = self.pub_raw_statements_mt().commitment();
 
         let (_, circuit_data) = &**STANDARD_VDF_POD_DATA;
-
-        let public_inputs = statements_hash
-            .to_fields()
-            .iter()
-            .chain(self.vd_set().root().0.iter())
-            .cloned()
-            .collect_vec();
 
         circuit_data
             .verify(ProofWithPublicInputs {
                 proof: self.proof.clone(),
-                public_inputs,
+                public_inputs: public_inputs(sts_root, self.vd_set().root(), false),
             })
             .map_err(|e| Error::custom(format!("VdfPod proof verification failure: {e:?}")))
-    }
-
-    fn statements_hash(&self) -> Hash {
-        self.statements_hash
     }
 
     fn pod_type(&self) -> (usize, &'static str) {
         VDF_POD_TYPE
     }
 
-    fn pub_self_statements(&self) -> Vec<middleware::Statement> {
+    fn pub_raw_statements_mt(&self) -> Array {
+        single_statement_mt(&pub_raw_statements(self.count, self.input, self.output)[0])
+    }
+
+    fn pub_raw_statements(&self) -> Vec<middleware::Statement> {
         // exposed as a separate function for easier isolated testing
-        pub_self_statements(self.count, self.input, self.output)
+        pub_raw_statements(self.count, self.input, self.output)
     }
 
     fn serialize_data(&self) -> serde_json::Value {
@@ -388,12 +360,7 @@ impl Pod for VdfPod {
         })
         .expect("serialization to json")
     }
-    fn deserialize_data(
-        params: Params,
-        data: serde_json::Value,
-        vd_set: VDSet,
-        statements_hash: Hash,
-    ) -> BResult<Self> {
+    fn deserialize_data(params: Params, data: serde_json::Value, vd_set: VDSet) -> BResult<Self> {
         let data: Data = serde_json::from_value(data)?;
         let common =
             &*pod2::backends::plonky2::cache_get_standard_rec_main_pod_common_circuit_data();
@@ -404,7 +371,6 @@ impl Pod for VdfPod {
             input: data.input,
             output: data.output,
             vd_set,
-            statements_hash,
             proof,
             common_hash: data.common_hash,
         })
@@ -426,7 +392,11 @@ impl Pod for VdfPod {
     }
 }
 
-fn pub_self_statements(count: F, input: RawValue, output: RawValue) -> Vec<middleware::Statement> {
+fn single_statement_mt(st: &middleware::Statement) -> Array {
+    Array::new(vec![Value::from(st.hash())])
+}
+
+fn pub_raw_statements(count: F, input: RawValue, output: RawValue) -> Vec<middleware::Statement> {
     vec![middleware::Statement::Intro(
         IntroPredicateRef {
             name: VDF_POD_TYPE.1.to_string(),
@@ -440,7 +410,7 @@ fn pub_self_statements(count: F, input: RawValue, output: RawValue) -> Vec<middl
         ],
     )]
 }
-fn pub_self_statements_target(
+fn pub_raw_statements_target(
     builder: &mut CircuitBuilder<F, D>,
     params: &Params,
     count: Target,
@@ -460,7 +430,7 @@ fn pub_self_statements_target(
             StatementArgTarget::none(builder)
         }))
         .take(Params::max_statement_args())
-        .collect_vec();
+        .collect::<Vec<_>>();
 
     let verifier_data_hash = builder.constant_hash(HashOut {
         elements: EMPTY_HASH.0,
@@ -474,12 +444,10 @@ fn pub_self_statements_target(
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct VdfPodTarget {
     vd_root: HashOutTarget,
-    statements_hash: HashOutTarget,
     proof: ProofWithPublicInputsTarget<D>,
 }
 struct VdfPodVerifyInput {
     vd_root: Hash,
-    statements_hash: Hash,
     proof: ProofWithPublicInputs<F, C, D>,
 }
 impl VdfPodTarget {
@@ -505,32 +473,31 @@ impl VdfPodTarget {
             );
         }
 
-        // calculate statements_hash
+        // Build the 1-element public statements Merkle root: kv_hash(key=0, value=st_hash).
         let count = proof.public_inputs[0];
         let input = &proof.public_inputs[1..5];
         let output = &proof.public_inputs[5..9];
-        let statements = pub_self_statements_target(builder, params, count, input, output);
-        let statements_hash = calculate_statements_hash_circuit(builder, &statements);
+        let statements = pub_raw_statements_target(builder, params, count, input, output);
+        let st_hash = builder.hash_n_to_hash_no_pad::<PoseidonHash>(statements[0].flatten());
+        let zero_key = ValueTarget::zero(builder);
+        let st_hash_value = ValueTarget {
+            elements: st_hash.elements,
+        };
+        let statements_root = kv_hash_target(builder, &zero_key, &st_hash_value);
 
-        // register the public inputs
+        // Register public inputs: statements_root (4), vd_root (4), is_main (1)
         let vd_root = builder.add_virtual_hash();
-        builder.register_public_inputs(&statements_hash.elements);
+        builder.register_public_inputs(&statements_root.elements);
         builder.register_public_inputs(&vd_root.elements);
+        let is_main = builder._false();
+        builder.register_public_input(is_main.target);
 
         measure_gates_end!(builder, measure);
-        Ok(VdfPodTarget {
-            vd_root,
-            statements_hash,
-            proof,
-        })
+        Ok(VdfPodTarget { vd_root, proof })
     }
 
     fn set_targets(&self, pw: &mut PartialWitness<F>, input: &VdfPodVerifyInput) -> Result<()> {
         pw.set_proof_with_pis_target(&self.proof, &input.proof)?;
-        pw.set_hash_target(
-            self.statements_hash,
-            HashOut::from_vec(input.statements_hash.0.to_vec()),
-        )?;
         pw.set_target_arr(&self.vd_root.elements, &input.vd_root.0)?;
 
         Ok(())
@@ -649,7 +616,9 @@ impl InnerCircuit for VdfInnerCircuit {
 mod tests {
     use plonky2::plonk::circuit_data::CircuitConfig;
     use pod2::{
-        backends::plonky2::{basetypes::DEFAULT_VD_SET, recursion::circuit::hash_verifier_data},
+        backends::plonky2::{
+            basetypes::DEFAULT_VD_SET, mainpod, recursion::circuit::hash_verifier_data,
+        },
         frontend, measure_gates_print,
         middleware::{Value, hash_str},
     };
@@ -748,13 +717,11 @@ mod tests {
         Ok(())
     }
 
-    /// test to ensure that the pub_self_statements methods match between the
-    /// in-circuit and the out-circuit implementations
+    /// test to ensure that the public statements Merkle root matches between
+    /// the in-circuit and out-of-circuit implementations
     #[ignore]
     #[test]
-    fn test_pub_self_statements_target() -> Result<()> {
-        // first generate all the circuits data so that it does not need to be
-        // computed at further stages of the test (affecting the time reports)
+    fn test_pub_raw_statements_target() -> Result<()> {
         timed!(
             "generate VDF_RECURSIVE_CIRCUIT, STANDARD_VDF_POD_DATA, STANDARD_REC_MAIN_POD_CIRCUIT",
             {
@@ -772,42 +739,43 @@ mod tests {
         let input = RawValue::from(hash_str("starting input"));
         let output = RawValue::from(pod2::middleware::hash_value(&input));
 
-        let st = pub_self_statements(count, input, output)
-            .into_iter()
-            .map(mainpod::Statement::from)
-            .collect_vec();
-        let statements_hash: HashOut<F> =
-            HashOut::<F>::from_vec(calculate_statements_hash(&st).0.to_vec());
+        let st = &pub_raw_statements(count, input, output)[0];
+        let expected_sts_root: HashOut<F> =
+            HashOut::<F>::from_vec(single_statement_mt(st).commitment().0.to_vec());
 
-        // circuit
         let config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(config);
         let mut pw = PartialWitness::<F>::new();
 
-        // add targets
         let count_targ = builder.add_virtual_target();
         let input_targ = builder.add_virtual_value();
         let output_targ = builder.add_virtual_value();
-        let expected_statements_hash_targ = builder.add_virtual_hash();
+        let expected_sts_root_targ = builder.add_virtual_hash();
 
-        // set values to targets
         pw.set_target(count_targ, count)?;
         pw.set_target_arr(&input_targ.elements, &input.0)?;
         pw.set_target_arr(&output_targ.elements, &output.0)?;
-        pw.set_hash_target(expected_statements_hash_targ, statements_hash)?;
+        pw.set_hash_target(expected_sts_root_targ, expected_sts_root)?;
 
-        let st_targ = pub_self_statements_target(
+        let st_targ = pub_raw_statements_target(
             &mut builder,
             params,
             count_targ,
             &input_targ.elements,
             &output_targ.elements,
         );
-        let statements_hash_targ = calculate_statements_hash_circuit(&mut builder, &st_targ);
+        let st_hash_targ = builder.hash_n_to_hash_no_pad::<PoseidonHash>(st_targ[0].flatten());
+        let zero_key = ValueTarget::zero(&mut builder);
+        let sts_root_targ = kv_hash_target(
+            &mut builder,
+            &zero_key,
+            &ValueTarget {
+                elements: st_hash_targ.elements,
+            },
+        );
 
-        builder.connect_hashes(expected_statements_hash_targ, statements_hash_targ);
+        builder.connect_hashes(expected_sts_root_targ, sts_root_targ);
 
-        // generate & verify proof
         let data = builder.build::<C>();
         let proof = data.prove(pw)?;
         data.verify(proof.clone())?;

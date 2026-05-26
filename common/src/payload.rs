@@ -175,10 +175,13 @@ mod tests {
     use pod2::{
         backends::plonky2::{
             basetypes::DEFAULT_VD_SET,
-            mainpod::{Prover, calculate_statements_hash},
+            mainpod::{Prover, public_inputs},
         },
         frontend::{MainPodBuilder, Operation},
-        middleware::{Params, Statement, Value, containers::Set},
+        middleware::{
+            Params, Statement, Value,
+            containers::{Array, Set},
+        },
     };
 
     use super::*;
@@ -265,8 +268,8 @@ mod tests {
         );
         println!("st: {st:?}");
 
-        let sts_hash = calculate_statements_hash(&[st.clone().into()]);
-        let public_inputs = [sts_hash.0, vds_root.0].concat();
+        let sts_root = Array::new(vec![Value::from(st.hash())]).commitment();
+        let public_inputs = public_inputs(sts_root, vds_root, true);
         let PayloadProof::Plonky2(shrunk_main_pod_proof) = payload.proof;
         let proof_with_pis = CompressedProofWithPublicInputs {
             proof: *shrunk_main_pod_proof,

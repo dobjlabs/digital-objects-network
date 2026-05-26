@@ -20,7 +20,7 @@ resolver = "2"
 
 [workspace.dependencies]
 # Branch next-2026-05-13
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "6129bd04ae14ee0f2baf6f71f77ba92a93cb523e", default-features = false, features = [
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "52d96a5a0dfb3e43a3ec8a0c42b8f2b6d40baecc", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
