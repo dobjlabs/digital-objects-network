@@ -514,20 +514,21 @@ mod tests {
     //
     // `alpha` and `beta` both declare classes named `Foo` and `Bar` and actions
     // named `MakeFoo` and `ConsumeFoo`. The class names collide; the script
-    // bodies differ (`blueprint = "FooA"` vs `"FooB"`), which gives each
-    // plugin a different `CustomPredicateBatch` id and therefore different
-    // class/action predicate hashes. This is the exact shape the catalog
-    // collision bug used to mishandle.
+    // bodies differ in the `durability` constant they bake into each output
+    // (alpha bakes 100, beta bakes 200), which gives each plugin a different
+    // `CustomPredicateBatch` id and therefore different class/action predicate
+    // hashes. This is the same mechanism that gives the real craft-basics
+    // plugin distinct hashes for `WoodPick` (durability 100) and `StonePick`
+    // (durability 200) — it's the exact shape the catalog collision bug used
+    // to mishandle.
     //
-    // Each action introduces a private `key` wildcard so the compiled
-    // podlang has a non-empty `private:` clause (an empty one is a syntax
-    // error). The literal blueprint string ("FooA" vs "FooB", "BarA" vs
-    // "BarB") makes the two modules' predicate batches differ.
+    // Each action introduces a private `key` wildcard so the compiled podlang
+    // has a non-empty `private:` clause (an empty one is a syntax error).
 
     const ALPHA_SCRIPT: &str = r#"
 fn MakeFoo(action) {
     var foo = action.output("Foo");
-    foo.set([["blueprint", "FooA"]]);
+    foo.set([["durability", 100]]);
     var key = action.random();
     foo.update("key", key);
 }
@@ -535,7 +536,7 @@ fn MakeFoo(action) {
 fn ConsumeFoo(action) {
     var foo = action.input("Foo");
     var bar = action.output("Bar");
-    bar.set([["blueprint", "BarA"]]);
+    bar.set([["durability", 100]]);
     var key = action.random();
     bar.update("key", key);
 }
@@ -544,7 +545,7 @@ fn ConsumeFoo(action) {
     const BETA_SCRIPT: &str = r#"
 fn MakeFoo(action) {
     var foo = action.output("Foo");
-    foo.set([["blueprint", "FooB"]]);
+    foo.set([["durability", 200]]);
     var key = action.random();
     foo.update("key", key);
 }
@@ -552,7 +553,7 @@ fn MakeFoo(action) {
 fn ConsumeFoo(action) {
     var foo = action.input("Foo");
     var bar = action.output("Bar");
-    bar.set([["blueprint", "BarB"]]);
+    bar.set([["durability", 200]]);
     var key = action.random();
     bar.update("key", key);
 }

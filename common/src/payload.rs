@@ -100,32 +100,16 @@ impl Payload {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PayloadProof {
     Plonky2(Box<CompressedProof<F, C, D>>),
-    Groth16(Vec<u8>),
 }
 
 impl PayloadProof {
     pub fn write_bytes(&self, buffer: &mut Vec<u8>) {
-        match self {
-            PayloadProof::Plonky2(shrunk_main_pod_proof) => {
-                buffer
-                    .write_all(&[ProofType::Plonky2.to_byte()])
-                    .expect("byte write");
-                plonky2::util::serialization::Write::write_compressed_proof(
-                    buffer,
-                    shrunk_main_pod_proof,
-                )
-                .expect("vec write");
-            }
-            PayloadProof::Groth16(b) => {
-                buffer
-                    .write_all(&[ProofType::Groth16.to_byte()])
-                    .expect("byte write");
-                buffer
-                    .write_all(&b.len().to_le_bytes())
-                    .expect("g16 proof bytes length write");
-                buffer.write_all(b).expect("g16 proof bytes write");
-            }
-        }
+        let PayloadProof::Plonky2(shrunk_main_pod_proof) = self;
+        buffer
+            .write_all(&[ProofType::Plonky2.to_byte()])
+            .expect("byte write");
+        plonky2::util::serialization::Write::write_compressed_proof(buffer, shrunk_main_pod_proof)
+            .expect("vec write");
     }
     pub fn from_bytes(bytes: &[u8], common_data: &CommonCircuitData) -> Result<(Self, usize)> {
         let proof_type = ProofType::from_byte(&bytes[0])?;
@@ -141,18 +125,45 @@ impl PayloadProof {
                 let len = buffer.pos();
                 (PayloadProof::Plonky2(Box::new(proof)), len)
             }
-            ProofType::Groth16 => {
-                // get the length
-                let len_bytes: [u8; 8] = bytes[0..8].try_into()?;
-                let len: usize = u64::from_le_bytes(len_bytes) as usize;
-                // return the rest of bytes of the Groth16 proof
-                (PayloadProof::Groth16(bytes[8..8 + len].to_vec()), 8 + len)
-            }
         };
 
         // len+1 because at the beginning we used the first byte for the
         // proof_type
         Ok((proof, len + 1))
+    }
+
+    /// Construct a structurally-valid but unverifiable Plonky2 proof for test
+    /// fixtures. The inner `CompressedProof` is hand-built with empty Merkle
+    /// caps, empty openings, and an empty FRI proof — useful for mock parsers
+    /// that need to return a `Payload` without paying the cost of generating
+    /// a real proof.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn empty_for_test() -> Self {
+        use plonky2::{
+            field::polynomial::PolynomialCoeffs,
+            fri::proof::{CompressedFriProof, CompressedFriQueryRounds},
+            hash::merkle_tree::MerkleCap,
+            plonk::proof::OpeningSet,
+        };
+
+        PayloadProof::Plonky2(Box::new(CompressedProof {
+            wires_cap: MerkleCap::default(),
+            plonk_zs_partial_products_cap: MerkleCap::default(),
+            quotient_polys_cap: MerkleCap::default(),
+            openings: OpeningSet::default(),
+            opening_proof: CompressedFriProof {
+                commit_phase_merkle_caps: Vec::new(),
+                query_round_proofs: CompressedFriQueryRounds {
+                    indices: Vec::new(),
+                    // plonky2 uses hashbrown's HashMap here, not std's; defer
+                    // to Default to avoid pulling in hashbrown as a direct dep.
+                    initial_trees_proofs: Default::default(),
+                    steps: Vec::new(),
+                },
+                final_poly: PolynomialCoeffs { coeffs: Vec::new() },
+                pow_witness: F::ZERO,
+            },
+        }))
     }
 }
 
@@ -259,10 +270,7 @@ mod tests {
 
         let sts_root = Array::new(vec![Value::from(st.hash())]).commitment();
         let public_inputs = public_inputs(sts_root, vds_root, true);
-        let shrunk_main_pod_proof = match payload.proof {
-            PayloadProof::Plonky2(proof) => proof,
-            PayloadProof::Groth16(_) => todo!(),
-        };
+        let PayloadProof::Plonky2(shrunk_main_pod_proof) = payload.proof;
         let proof_with_pis = CompressedProofWithPublicInputs {
             proof: *shrunk_main_pod_proof,
             public_inputs,

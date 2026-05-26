@@ -6,7 +6,7 @@ This document walks through the lifecycle of a Digital Object from creation to c
 
 When an action creates a new object, it:
 
-1. Builds a fresh dictionary with the object's fields (e.g. `{key: 0xabc, blueprint: "Wood"}`).
+1. Builds a fresh dictionary with the object's fields (e.g. `{key: 0xabc, durability: 100}` for a WoodPick).
 2. Generates a ZK proof that this dictionary satisfies the class predicate (e.g. `IsWood(state) = AND(CraftWood(state, log))`). The proof includes verification that the input `log` was itself valid.
 3. Records the new object in a transaction via `TxInserted`, adding it to the transaction's live set.
 4. The object appears in inventory as `live: true` with its fields visible.
@@ -18,7 +18,7 @@ The resulting `.dobj` file contains the state dictionary and the proof. The proo
 When you inspect a live object, you see:
 - **id**: a hash uniquely identifying this object state
 - **className**: determined by the predicate that certifies it
-- **fields**: the key-value pairs (blueprint, durability, key, etc.)
+- **fields**: the key-value pairs (durability, key, work, etc.)
 - **predicateSource**: the podlang rule showing all valid transitions
 - **live**: true, meaning its nullifier has not been published
 

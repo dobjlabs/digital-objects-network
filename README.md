@@ -113,10 +113,10 @@ Run individual pieces standalone with `just sync`, `just relayer`,
 | [`sdk/`](sdk)                                                                                      | higher-level helpers used inside plugin actions                                                                                |
 | [`pexe/`](pexe)                                                                                    | plugin packager — bundles `manifest.toml` + `plugin.rhai` into `.pexe` archives                                                |
 | [`plugins/craft-basics/`](plugins/craft-basics)                                                    | the bundled crafting plugin (Log, Wood, Stone, sticks, picks…)                                                                 |
-| [`common/`](common), [`pod2utils/`](pod2utils), [`intro_pods/`](intro_pods), [`timelib/`](timelib) | shared utilities + intro proof-of-work / VDF pods                                                                              |
+| [`common/`](common), [`pod2utils/`](pod2utils), [`intro_pods/`](intro_pods) | shared utilities + intro proof-of-work / VDF pods                                                                              |
 
-Built on **pod2** (0xPARC's predicate-of-data system) using `plonky2` +
-Groth16 — proofs are constant-size regardless of input count.
+Built on **pod2** (0xPARC's predicate-of-data system) using `plonky2` —
+proofs are constant-size regardless of input count.
 
 ## Plugins
 

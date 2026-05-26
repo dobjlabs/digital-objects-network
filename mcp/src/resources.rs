@@ -2,7 +2,6 @@ use rmcp::model::{Annotated, RawResource, ReadResourceResult, Resource, Resource
 
 const PODLANG_REFERENCE_URI: &str = "bitcraft://docs/podlang-reference";
 const TXLIB_PREDICATES_URI: &str = "bitcraft://source/txlib.podlang";
-const TIME_PREDICATES_URI: &str = "bitcraft://source/time.podlang";
 const OBJECT_LIFECYCLE_URI: &str = "bitcraft://docs/object-lifecycle";
 
 pub fn list() -> Vec<Resource> {
@@ -28,16 +27,6 @@ pub fn list() -> Vec<Resource> {
             None,
         ),
         Annotated::new(
-            RawResource::new(TIME_PREDICATES_URI, "time.podlang")
-                .with_description(
-                    "Time-related predicates: LockObject, UnlockObject, \
-                     SetExpiry, NotExpired, DistanceBetweenStateRoots. Used \
-                     for time-locked objects and expiry deadlines.",
-                )
-                .with_mime_type("text/plain"),
-            None,
-        ),
-        Annotated::new(
             RawResource::new(OBJECT_LIFECYCLE_URI, "Object Lifecycle")
                 .with_description(
                     "Worked example of a Digital Object's lifecycle: creation, \
@@ -54,7 +43,6 @@ pub fn read(uri: &str) -> Option<ReadResourceResult> {
     let (content, mime) = match uri {
         PODLANG_REFERENCE_URI => (PODLANG_REFERENCE, "text/markdown"),
         TXLIB_PREDICATES_URI => (TXLIB_PREDICATES, "text/plain"),
-        TIME_PREDICATES_URI => (TIME_PREDICATES, "text/plain"),
         OBJECT_LIFECYCLE_URI => (OBJECT_LIFECYCLE, "text/markdown"),
         _ => return None,
     };
@@ -66,4 +54,3 @@ pub fn read(uri: &str) -> Option<ReadResourceResult> {
 const PODLANG_REFERENCE: &str = include_str!("../docs/podlang-reference.md");
 const OBJECT_LIFECYCLE: &str = include_str!("../docs/object-lifecycle.md");
 const TXLIB_PREDICATES: &str = include_str!("../../txlib/src/predicates/txlib.podlang");
-const TIME_PREDICATES: &str = include_str!("../../timelib/src/predicates/time.podlang");

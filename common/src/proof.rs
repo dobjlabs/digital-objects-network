@@ -30,8 +30,8 @@ pub trait BlobParser: Send + Sync {
 
 /// Mock parser: accepts JSON `{ "tx_final": "0x...", "nullifiers": [...], "state_root_hash": "0x..." }`
 /// Hash bytes serialized as lowercase hex strings.
-/// Returns a `Payload` with a dummy `PayloadProof::Groth16(vec![])` since no real proof is needed
-/// for mock testing.
+/// Returns a `Payload` with a dummy empty `PayloadProof` since no real proof
+/// is needed for mock testing.
 #[cfg(any(test, feature = "test-utils"))]
 pub struct MockBlobParser;
 
@@ -59,7 +59,7 @@ impl BlobParser for MockBlobParser {
             .collect::<Result<Vec<_>>>()?;
         let state_root_hash = decode_hash_hex(&json.state_root_hash)?;
         Ok(Some(Payload {
-            proof: PayloadProof::Groth16(vec![]),
+            proof: PayloadProof::empty_for_test(),
             tx_final,
             state_root_hash,
             nullifiers,
@@ -111,12 +111,7 @@ impl ProofParser {
     fn verify_shrunk_main_pod(&self, proof: PayloadProof, st: Statement) -> Result<()> {
         let sts_root = Array::new(vec![Value::from(st.hash())]).commitment();
         let public_inputs = public_inputs(sts_root, self.vds_root, true);
-        let compressed_proof = match proof {
-            PayloadProof::Plonky2(proof) => proof,
-            PayloadProof::Groth16(_) => {
-                return Err(anyhow!("Groth16 proof verification is not yet implemented"));
-            }
-        };
+        let PayloadProof::Plonky2(compressed_proof) = proof;
         let proof_with_pis = CompressedProofWithPublicInputs {
             proof: *compressed_proof,
             public_inputs,

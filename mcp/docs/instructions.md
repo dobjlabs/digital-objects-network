@@ -9,7 +9,7 @@ stores locally.
 ## Core concepts
 
 **Digital Objects.** Each object is a key-value dictionary (fields like
-`blueprint`, `durability`, `key`) paired with a ZK proof that the object
+`durability`, `key`, `work`) paired with a ZK proof that the object
 was created or transformed by a valid sequence of actions. The proof is
 constant-size regardless of history — it does not reveal how many
 transitions occurred or when the object was created.

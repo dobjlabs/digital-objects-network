@@ -179,8 +179,6 @@ mod tests {
     fn mint_log_has_expected_shape() {
         let module = load_craft_basics();
         let log = mint_class(&module, "Log").unwrap();
-        let blueprint = log.get(&StrKey::from("blueprint")).unwrap().unwrap();
-        assert_eq!(blueprint.as_string().unwrap(), "Log");
         let class_hash = module.class_hash("Log").unwrap();
         let typ = log.get(&StrKey::from("type")).unwrap().unwrap();
         assert_eq!(typ.raw(), Value::from(class_hash).raw());
@@ -198,7 +196,8 @@ mod tests {
         // CraftWood consumes one Log, produces one Wood object.
         assert_eq!(outputs.objs.len(), 1);
         let wood = &outputs.objs[0].obj;
-        let blueprint = wood.get(&StrKey::from("blueprint")).unwrap().unwrap();
-        assert_eq!(blueprint.as_string().unwrap(), "Wood");
+        let class_hash = module.class_hash("Wood").unwrap();
+        let typ = wood.get(&StrKey::from("type")).unwrap().unwrap();
+        assert_eq!(typ.raw(), Value::from(class_hash).raw());
     }
 }
