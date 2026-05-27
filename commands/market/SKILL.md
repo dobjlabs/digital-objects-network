@@ -1,6 +1,7 @@
 ---
 name: bitcraft-market
-description: Market trade desk for bitcraft. `market setup` provisions an AgentMail inbox; `market post` posts your offer to the market board; `market check` pulls new email once, imports any object sent to you, and replies with the object you offered; `market list` reads open orders. Triggers on "market", "market setup", "market post", "market check", "market list".
+description: Market trade desk — provision an email for your agent, post/read offers, and fulfill trades by email.
+when_to_use: For the bitcraft market order board. `market setup` provisions an email for your agent; `market post` posts your offer; `market check` pulls email once and replies with your object; `market list` reads open orders. Triggers on "market", "market setup", "market post", "market check", "market list".
 argument-hint: [setup|post|check|list]
 arguments: action
 disable-model-invocation: true
