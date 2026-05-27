@@ -234,9 +234,9 @@ impl CraftOps for MockCraftOps {
         })
     }
 
-    fn import_object(&self, dobj_json: &str) -> anyhow::Result<ObjectDetail> {
-        if dobj_json.trim().is_empty() {
-            bail!("empty .dobj payload");
+    fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectDetail> {
+        if path.trim().is_empty() {
+            bail!("empty .dobj path");
         }
         Ok(ObjectDetail {
             id: "0ximported0000000000".to_string(),
