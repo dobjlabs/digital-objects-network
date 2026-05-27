@@ -67,6 +67,15 @@ pub struct CheckFeasibilityParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ImportObjectParams {
+    /// The raw JSON contents of a `.dobj` file received from another player
+    /// (e.g. a trade attachment). The object is validated (class identity +
+    /// on-chain grounding) and filed under a canonical name derived from its
+    /// commitment.
+    pub dobj: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadDocParams {
     /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "txlib.podlang", "time.podlang"
     pub name: String,
@@ -179,6 +188,19 @@ impl<T: CraftOps> CraftMcpService<T> {
     ) -> Result<Json<FeasibilityReport>, String> {
         self.ops
             .check_feasibility(&params.action)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Import a .dobj object received from another player into local inventory. Pass the full JSON contents of the .dobj file as `dobj`. Validates the object's class identity and on-chain grounding, files it under a canonical name, and returns its summary (status is `live` if grounded, otherwise `unknown`). Errors if the object is already in inventory or already spent on-chain."
+    )]
+    fn import_object(
+        &self,
+        Parameters(params): Parameters<ImportObjectParams>,
+    ) -> Result<Json<ObjectDetail>, String> {
+        self.ops
+            .import_object(&params.dobj)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -359,7 +381,8 @@ mod tests {
         assert!(tools.contains(&"read_settings".to_string()));
         assert!(tools.contains(&"write_settings".to_string()));
         assert!(tools.contains(&"get_objects_dir".to_string()));
-        assert_eq!(tools.len(), 13);
+        assert!(tools.contains(&"import_object".to_string()));
+        assert_eq!(tools.len(), 14);
     }
 
     #[test]

@@ -142,6 +142,10 @@ impl CraftOps for DobjdCraftOps {
         self.driver.check_action(action)
     }
 
+    fn import_object(&self, dobj_json: &str) -> anyhow::Result<mcp::ObjectDetail> {
+        self.driver.import_object(dobj_json)
+    }
+
     fn read_settings(&self) -> anyhow::Result<mcp::DriverSettings> {
         self.driver.load_settings()
     }

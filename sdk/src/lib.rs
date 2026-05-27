@@ -877,9 +877,7 @@ impl ActionHandle {
                                     replacements,
                                     st_literal,
                                 ))
-                                .map_err(|err| {
-                                    format!("SubAction chain anchor failed: {err}")
-                                })?
+                                .map_err(|err| format!("SubAction chain anchor failed: {err}"))?
                         } else {
                             st_literal
                         };

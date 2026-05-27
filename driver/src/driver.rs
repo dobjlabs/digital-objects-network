@@ -19,7 +19,7 @@ use crate::execute::{
     build_relayer_payload, obj_type_hash, reconcile_objects, resolve_inputs, save_results,
     update_output_files, validate_execute_request,
 };
-use crate::object_record::parse_object_record_file;
+use crate::object_record::{ObjectRecord, parse_object_record_file};
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, write_object_file,
 };
@@ -335,6 +335,121 @@ impl Driver {
             .synchronizer
             .fetch_head(&settings.synchronizer_api_url)?;
         Ok(encode_hash_hex(&head.current_gsr))
+    }
+
+    /// Import a `.dobj` object received out-of-band (e.g. a trade attachment)
+    /// into local inventory.
+    ///
+    /// `dobj_json` is the raw JSON contents of a `.dobj` file. The object is
+    /// filed under a canonical name derived from its commitment — the
+    /// sender's filename and `id` are not trusted.
+    ///
+    /// Validation:
+    /// - the `class` must be one this driver's catalog knows, and the object's
+    ///   on-chain `obj["type"]` predicate hash must equal that class's hash
+    ///   (the same belt-and-suspenders check `execute` runs on its inputs);
+    /// - the object must not already be in inventory (live or nullified);
+    /// - the object's nullifier must not already be spent on-chain.
+    ///
+    /// Status is decided by grounding: `Live` if the source tx is canonical,
+    /// otherwise `Unknown` (a later `sync_inventory` promotes it). If the
+    /// synchronizer is unreachable the object is imported as `Unknown` rather
+    /// than failing, so the flow still works offline.
+    pub fn import_object(&self, dobj_json: &str) -> Result<ObjectSummary> {
+        let mut record: ObjectRecord = serde_json::from_str(dobj_json).map_err(|err| {
+            DriverError::InvalidInput(format!("could not parse .dobj contents: {err}"))
+        })?;
+
+        // 1. Class must be known, and the pod's on-chain `type` hash must
+        //    match the catalog's class hash. A mismatch on either is fatal —
+        //    the second check catches a `class` label that drifted from the
+        //    object's actual pod-level identity.
+        let class_info = self
+            .deps
+            .catalog
+            .get_class(&record.class)
+            .ok_or_else(|| DriverError::UnknownClass(record.class.to_string()))?;
+        let expected_class_hash = decode_hash_hex(class_info.hash.as_str()).map_err(|err| {
+            anyhow!(
+                "catalog class {} has an unreadable hash: {err}",
+                record.class
+            )
+        })?;
+        let actual_class_hash = obj_type_hash(&record.obj).ok_or_else(|| {
+            DriverError::InvalidInput("imported object has no readable 'type' field".to_string())
+        })?;
+        if actual_class_hash != expected_class_hash {
+            return Err(DriverError::InvalidInput(format!(
+                "class hash mismatch: pod 'type' = {actual_class_hash:#}, class {} expects {}",
+                record.class, class_info.hash
+            ))
+            .into());
+        }
+
+        // 2. Recompute id + file name from the commitment; never trust the
+        //    sender's. The id is self-certifying — it IS the commitment.
+        let object_id = format!("{:#}", record.obj.commitment());
+        let file_name = format!(
+            "{}_{}.{}",
+            record.class.file_prefix(),
+            object_id.to_ascii_lowercase(),
+            crate::paths::DOBJ_EXTENSION
+        );
+        record.id = object_id.clone();
+
+        // 3. Reject if we already hold this object (live or nullified).
+        let entries = load_object_files(&self.paths)?;
+        if entries
+            .iter()
+            .any(|entry| entry.record.id == object_id || entry.file_name == file_name)
+        {
+            return Err(
+                DriverError::Conflict(format!("object already in inventory: {file_name}")).into(),
+            );
+        }
+
+        // 4. Grounding decides status. A nullifier already on-chain means the
+        //    object has been spent — reject it. Otherwise Live if the source
+        //    tx is canonical, else Unknown. Tolerate an unreachable
+        //    synchronizer by importing as Unknown.
+        let settings = self.load_settings()?;
+        let source_tx = record.evidence.tx_final;
+        let nullifier = object_nullifier_hash(&record.obj).map_err(|err| {
+            DriverError::InvalidInput(format!(
+                "could not derive nullifier from imported object: {err}"
+            ))
+        })?;
+        let status = match self.deps.synchronizer.fetch_membership_with_nullifiers(
+            &settings.synchronizer_api_url,
+            &[source_tx],
+            &[nullifier],
+        ) {
+            Ok(membership) => {
+                if membership.on_chain_nullifiers.contains(&nullifier) {
+                    return Err(DriverError::Conflict(
+                        "imported object has already been spent on-chain".to_string(),
+                    )
+                    .into());
+                } else if membership.grounded_txs.contains(&source_tx) {
+                    ObjectStatus::Live
+                } else {
+                    ObjectStatus::Unknown
+                }
+            }
+            Err(err) => {
+                log::warn!(
+                    "import: grounding check failed, importing {file_name} as unknown: {err:#}"
+                );
+                ObjectStatus::Unknown
+            }
+        };
+        record.status = status;
+
+        // 5. File it. `write_object_file` routes to the live or nullified dir
+        //    based on status, so a freshly-imported Unknown/Live lands live.
+        write_object_file(&self.paths, &record, &file_name)?;
+
+        Ok(self.object_summary(&ObjectFileEntry { file_name, record }))
     }
 
     pub fn execute(&self, input: ExecuteActionInput) -> Result<ExecuteActionResult> {

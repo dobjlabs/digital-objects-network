@@ -35,6 +35,7 @@ fn status_for_driver_error(err: &DriverError) -> StatusCode {
         | DriverError::ObjectNotFound(_)
         | DriverError::ObjectFileNotFound(_) => StatusCode::NOT_FOUND,
         DriverError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+        DriverError::Conflict(_) => StatusCode::CONFLICT,
     }
 }
 

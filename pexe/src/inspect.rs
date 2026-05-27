@@ -43,8 +43,8 @@ fn load_target(path: &Path) -> Result<(Manifest, String)> {
         let manifest = source.parse_manifest()?;
         Ok((manifest, source.script))
     } else {
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
+        let bytes =
+            std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
         unpack(&bytes)
     }
 }
@@ -335,7 +335,9 @@ pub fn prove_action(target: &Path, action_name: &str) -> Result<()> {
     println!("Proving via real plonky2 backend. This may take several minutes.");
     println!();
 
-    let executor = run.module.executor(false, run.state.grounding_witness.clone());
+    let executor = run
+        .module
+        .executor(false, run.state.grounding_witness.clone());
     let start = std::time::Instant::now();
     let outputs = executor
         .action(action_name, run.state.spendable)
@@ -357,7 +359,9 @@ pub fn plan(target: &Path, action_name: &str, mode: PlanOutput) -> Result<()> {
     let run = prepare_run(target, action_name)?;
     let input_classes = run.input_classes;
     let output_classes = run.output_classes;
-    let executor = run.module.executor(true, run.state.grounding_witness.clone());
+    let executor = run
+        .module
+        .executor(true, run.state.grounding_witness.clone());
     let plan = executor
         .plan_action(action_name, run.state.spendable)
         .map_err(|err| anyhow!("planning failed: {err}"))?;
@@ -524,10 +528,7 @@ fn format_custom_name(
     }
 }
 
-fn statement_label(
-    stmt: &pod2::middleware::Statement,
-    aliases: &HashMap<Hash, String>,
-) -> String {
+fn statement_label(stmt: &pod2::middleware::Statement, aliases: &HashMap<Hash, String>) -> String {
     match stmt.predicate() {
         Predicate::Native(n) => format!("{n}"),
         Predicate::Custom(c) => format_custom_name(&c, aliases),
@@ -615,7 +616,11 @@ fn print_dep_graph_dot(
 ) {
     let view = build_graph_view(plan, compressed);
     let output = plan.solved.solution();
-    let mode_tag = if view.compressed { "compressed" } else { "full" };
+    let mode_tag = if view.compressed {
+        "compressed"
+    } else {
+        "full"
+    };
     let suffix = if compressed { "" } else { "_full" };
 
     let mut out = String::new();
@@ -824,7 +829,11 @@ fn build_mermaid_source(
 ) -> String {
     let view = build_graph_view(plan, compressed);
     let output = plan.solved.solution();
-    let mode_tag = if view.compressed { "compressed" } else { "full" };
+    let mode_tag = if view.compressed {
+        "compressed"
+    } else {
+        "full"
+    };
 
     let mut out = String::new();
     out.push_str("flowchart TD\n");
@@ -964,14 +973,8 @@ pub fn graph(target: &Path) -> Result<()> {
 
     out.push_str("  // edges\n");
     for action in module.actions() {
-        let inputs: BTreeSet<String> = action
-            .local_inputs()
-            .map(|r| r.class.clone())
-            .collect();
-        let outputs: BTreeSet<String> = action
-            .local_outputs()
-            .map(|r| r.class.clone())
-            .collect();
+        let inputs: BTreeSet<String> = action.local_inputs().map(|r| r.class.clone()).collect();
+        let outputs: BTreeSet<String> = action.local_outputs().map(|r| r.class.clone()).collect();
         let mutates: BTreeSet<&String> = inputs.intersection(&outputs).collect();
 
         for class in &inputs {
@@ -1058,7 +1061,6 @@ pub(crate) struct FieldInfo {
     /// True if any assignment was a wildcard with no other inferable provenance.
     pub(crate) from_witness: bool,
 }
-
 
 pub(crate) fn derive_class_signature(
     module: &SdkModule,
@@ -1204,7 +1206,6 @@ fn substitute_arg(
         _ => arg.clone(),
     }
 }
-
 
 /// If `stmt` is a txlib producer event (TxInsert or TxMutate) whose
 /// `@self_predicate(IsX)` arg resolves to the given `class_hash`, return
@@ -1424,13 +1425,14 @@ fn render_signature(sig: &ClassSignature) -> String {
     for (name, info) in &sig.fields {
         field_lines.push((name.clone(), render_field_value(info)));
     }
-    let name_width = field_lines
-        .iter()
-        .map(|(n, _)| n.len())
-        .max()
-        .unwrap_or(0);
+    let name_width = field_lines.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
     for (name, value) in &field_lines {
-        out.push_str(&format!("  {:width$}  {}\n", name, value, width = name_width));
+        out.push_str(&format!(
+            "  {:width$}  {}\n",
+            name,
+            value,
+            width = name_width
+        ));
     }
     if sig.uses_vdf || sig.uses_pow {
         out.push_str("  // identity:");
@@ -1575,10 +1577,7 @@ CraftWood(in, out) = AND(
 )
 ";
         let block = find_predicate_block(src, "CraftWood").unwrap();
-        assert_eq!(
-            block,
-            "CraftWood(in, out) = AND(\n  Z(d)\n)"
-        );
+        assert_eq!(block, "CraftWood(in, out) = AND(\n  Z(d)\n)");
     }
 
     #[test]
