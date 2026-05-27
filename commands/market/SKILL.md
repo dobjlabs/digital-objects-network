@@ -13,7 +13,7 @@ code sent to your human email. After that, each run announces your standing offe
 (once), pulls new email, imports any `.dobj` someone sent to fulfill it, verifies
 it, and replies with the object you promised.
 
-Run it once by hand to finish setup — it asks two questions, then has you restart
+Run it once by hand to finish setup — it asks a few questions, then has you restart
 Claude Code so the AgentMail MCP activates. After that, drive it on an interval:
 `/loop 2m bitcraft-market`. "Reply automatically on receive" is just the loop
 polling your inbox — pure outbound, no inbound webhook needed.
@@ -25,6 +25,7 @@ polling your inbox — pure outbound, no inbound webhook needed.
   - `agentmail cli: installed`
   - `agentmail mcp: registered (restart Claude Code to activate)`
   - `agentmail inbox ready: <address>`
+  - `username <name> is taken — pick another`
   - `setup complete — restart Claude Code, then run: /loop 2m bitcraft-market`
   - `posted offer #<tradeId>`
   - `no new trades for #<tradeId>`
@@ -34,7 +35,7 @@ polling your inbox — pure outbound, no inbound webhook needed.
   - `rejected <messageId>: expected <want>, got <class>/<status>`
   - `cannot fulfill #<tradeId>: no live <give> in inventory`
   - `cancelled`
-- The two setup questions in step 0 are the ONLY questions this command asks.
+- The setup questions in step 0 are the ONLY questions this command asks.
   Output each on one line, end the turn, and wait for the reply. Before parsing
   any reply, if it is `cancel`/`quit`/`exit`/`q`/`nevermind` (case-insensitive,
   trimmed), output `cancelled` and stop.
@@ -105,32 +106,28 @@ proceed now without restarting.)
 
 **0c. Inbox + key** — only if `~/.dobj/agentmail.key` is missing OR `agentmailInboxId` in config is empty:
 
-1. Output exactly `your email (for the AgentMail sign-up code)?` and END THE TURN. Wait.
-2. On the reply (an email address), sign up — this creates your agent inbox and
-   returns an `api_key` + `inbox_id`:
+1. Output exactly `your email (for the AgentMail sign-up code)?` and END THE TURN. Wait; hold the reply as `<email>`.
+2. Output exactly `pick a username for your trade inbox (becomes <name>@agentmail.to)?` and END THE TURN. Wait; hold the reply as `<username>`. (Usernames are global — each user needs a unique one.)
+3. Run the deterministic sign-up helper — it runs `agentmail agent sign-up`, parses
+   the JSON, writes `~/.dobj/agentmail.key` (mode 600), and fills `agentmailInboxId`
+   + `contactEmail` in `~/.dobj/market.json`:
 
    ```bash
-   agentmail agent sign-up --human-email "<reply>" --username "bitcraft-trader"
+   python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" signup "<email>" "<username>"
    ```
 
-   Parse `api_key` and `inbox_id` from the output, then store the key:
+   Read its last `STATUS=` line: `OK`/`ALREADY` → continue. `TAKEN` → output
+   `username <username> is taken — pick another` and go back to step 2. Anything
+   else → output the `STATUS=` line and stop. The helper never prints the key.
+4. Output exactly `6-digit code sent to <email>?` and END THE TURN. Wait.
+5. On the reply (the code), verify with the helper:
 
    ```bash
-   umask 077; printf '%s' "<api_key>" > "$HOME/.dobj/agentmail.key"
+   python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" verify "<reply>"
    ```
 
-   If the username is already taken, retry with a numeric suffix (`bitcraft-trader-2`, …).
-3. Output exactly `6-digit code sent to your email?` and END THE TURN. Wait.
-4. On the reply (the code), verify:
-
-   ```bash
-   AGENTMAIL_API_KEY="$(cat "$HOME/.dobj/agentmail.key")" agentmail agent verify --otp-code "<reply>"
-   ```
-5. Resolve the inbox address (`AGENTMAIL_API_KEY="$(cat "$HOME/.dobj/agentmail.key")" agentmail inboxes list`,
-   or `inboxes get --inbox-id <inbox_id>`; run `agentmail inboxes --help` if unsure).
-   Write `agentmailInboxId` (the inbox id) and `contactEmail` (the inbox's email
-   address) into `~/.dobj/market.json`.
-6. Output `agentmail inbox ready: <address>`.
+   `STATUS=VERIFIED` → continue; anything else → output the `STATUS=` line and stop.
+6. Output `agentmail inbox ready: <address>` (`<address>` = `agentmailInboxId` from config).
 
 **0d. MCP gate** — if your AgentMail MCP tools are NOT available in this session
 (you just registered the server in 0b and haven't restarted yet), output
@@ -139,8 +136,10 @@ STOP. Otherwise continue to step 1.
 
 ### 1. Load config
 Read `~/.dobj/market.json`. If missing → write the template (see Config) and go to
-step 0. Otherwise hold `tradeId`, `give`, `want`, `contactEmail`,
-`agentmailInboxId`, `discordWebhookUrl`.
+step 0. Otherwise run `python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" sync-config`
+(idempotent — sets `contactEmail` from `agentmailInboxId` when empty; no improvised
+edits), then hold `tradeId`, `give`, `want`, `contactEmail`, `agentmailInboxId`,
+`discordWebhookUrl`.
 
 ### 2. Announce the offer once
 If `~/.dobj/.market-posted-<tradeId>` does NOT exist, post to the Discord webhook
