@@ -34,7 +34,7 @@ use pod2::{
     frontend::{Operation, OperationArg},
     middleware::{
         EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
-        containers::{Dictionary, Set},
+        containers::{Array, Dictionary, Set},
         hash_values,
     },
 };
@@ -75,21 +75,32 @@ impl StateRoot {
         }
     }
 
-    /// 3-layer hash:
-    ///   H(H(txns_root, nullifiers_root), H(block_number, gsrs_root))
-    pub fn hash(&self) -> Hash {
-        let txn_nullifiers_hash = hash_values(&[
+    /// Padded-array view used as the canonical state root record. Slot
+    /// layout matches the `record StateRoot` declaration in txlib.podlang.
+    /// Predicates access fields via anchored-key syntax (e.g.
+    /// `state_root.transactions`).
+    pub fn array(&self) -> Array {
+        Array::new(vec![
+            Value::from(0_i64),
+            Value::from(self.block_number),
             Value::from(self.transactions_root),
             Value::from(self.nullifiers_root),
-        ]);
-        let block_number_gsrs_hash =
-            hash_values(&[Value::from(self.block_number), Value::from(self.gsrs_root)]);
-        hash_values(&[
-            Value::from(txn_nullifiers_hash),
-            Value::from(block_number_gsrs_hash),
+            Value::from(self.gsrs_root),
         ])
     }
+
+    /// Commitment of the state root array.
+    pub fn hash(&self) -> Hash {
+        self.array().commitment()
+    }
 }
+
+/// Slot indices for the `StateRoot` record. Slot 0 is `_pad` (works
+/// around pod2 issue #513); real fields start at slot 1.
+pub const STATE_ROOT_BLOCK_NUMBER_SLOT: usize = 1;
+pub const STATE_ROOT_TRANSACTIONS_SLOT: usize = 2;
+pub const STATE_ROOT_NULLIFIERS_SLOT: usize = 3;
+pub const STATE_ROOT_GSRS_SLOT: usize = 4;
 
 /// Proof-bearing grounding data required to build a new transaction.
 ///
@@ -891,18 +902,13 @@ impl TxBuilder {
         grounding: &GroundingWitness,
     ) -> (Statement, Set, TxStats) {
         let mut stats = TxStats::new();
-        let state_root = &grounding.state_root;
-        let state_root_hash = state_root.hash();
-        let block_number = state_root.block_number;
-        let transactions_root = state_root.transactions_root;
-        let nullifiers_root = state_root.nullifiers_root;
-        let gsrs_root = state_root.gsrs_root;
+        let state_root_arr = grounding.state_root.array();
 
         if inputs.is_empty() {
-            // Base case: empty inputs. state_root_hash is unconstrained here.
+            // Base case: empty inputs. state_root is unconstrained here.
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root_hash = state_root_hash) = (
+                InputsGrounded(state_root = state_root_arr) = (
                     Equal(set!(), set!()),
                     Statement::None,
                     Statement::None,
@@ -915,28 +921,22 @@ impl TxBuilder {
             return (st, set!(), stats);
         }
 
-        // Intermediate hashes for the 3-layer state-root commitment.
-        let txn_null_hash =
-            hash_values(&[Value::from(transactions_root), Value::from(nullifiers_root)]);
-        let bn_gsrs_hash = hash_values(&[Value::from(block_number), Value::from(gsrs_root)]);
-
-        // Build the three HashOf statements that unpack the state-root
-        // hash once; reused as sub-clauses by each TxInStateRoot below.
-        let st_h_txn_null = ctx
+        // One ArrayContains witness for `state_root.transactions`, reused
+        // as the anchored-key arg for every per-input SetContains below.
+        let (_, txns_proof) = state_root_arr
+            .prove(STATE_ROOT_TRANSACTIONS_SLOT)
+            .expect("state_root array has transactions slot");
+        let st_state_root_transactions = ctx
             .builder
-            .priv_op(op!(HashOf(
-                txn_null_hash,
-                transactions_root,
-                nullifiers_root
-            )))
-            .unwrap();
-        let st_h_bn_gsrs = ctx
-            .builder
-            .priv_op(op!(HashOf(bn_gsrs_hash, block_number, gsrs_root)))
-            .unwrap();
-        let st_h_state_root = ctx
-            .builder
-            .priv_op(op!(HashOf(state_root_hash, txn_null_hash, bn_gsrs_hash)))
+            .priv_op(Operation(
+                OperationType::Native(NativeOperation::ArrayContainsFromEntries),
+                vec![
+                    Value::from(state_root_arr.commitment()).into(),
+                    Value::from(STATE_ROOT_TRANSACTIONS_SLOT as i64).into(),
+                    Value::from(grounding.state_root.transactions_root).into(),
+                ],
+                OperationAux::MerkleProof(txns_proof),
+            ))
             .unwrap();
 
         let extend_set = |set: &Set, obj: &Dictionary| -> Set {
@@ -946,31 +946,23 @@ impl TxBuilder {
         };
 
         let prove_input = |ctx: &mut BuildContext,
-                           stats: &mut TxStats,
                            evidence: &GroundingEvidence,
                            obj: &Dictionary|
          -> (Statement, Statement) {
-            let st_tx_membership =
-                prove_source_tx_membership(ctx, grounding, transactions_root, evidence.tx_final);
-            let st_tx_in_sr = st_custom!(
+            let st_tx_in_transactions = prove_source_tx_membership(
                 ctx,
-                TxInStateRoot() = (
-                    st_h_txn_null.clone(),
-                    st_h_bn_gsrs.clone(),
-                    st_h_state_root.clone(),
-                    st_tx_membership
-                )
-            )
-            .unwrap();
-            record(stats, "TxInStateRoot");
+                &st_state_root_transactions,
+                grounding,
+                evidence.tx_final,
+            );
             let st_set_contains_live = prove_obj_in_source_tx_live(ctx, evidence, obj);
-            (st_tx_in_sr, st_set_contains_live)
+            (st_tx_in_transactions, st_set_contains_live)
         };
 
         if inputs.len() == 1 {
             let (obj, evidence) = &inputs[0];
             let inputs_set = extend_set(&set!(), obj);
-            let (st_tx_in_sr, st_set_contains_live) = prove_input(ctx, &mut stats, evidence, obj);
+            let (st_tx_in_sr, st_set_contains_live) = prove_input(ctx, evidence, obj);
             let st_single = st_custom!(
                 ctx,
                 InputsGroundedSingle() = (
@@ -983,7 +975,7 @@ impl TxBuilder {
             record(&mut stats, "InputsGroundedSingle");
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root_hash = state_root_hash) = (
+                InputsGrounded(state_root = state_root_arr) = (
                     Statement::None,
                     st_single,
                     Statement::None,
@@ -1005,7 +997,7 @@ impl TxBuilder {
 
         let set_first = extend_set(&set!(), first_obj);
         let (st_first_tx_in_sr, st_first_set_contains_live) =
-            prove_input(ctx, &mut stats, first_evidence, first_obj);
+            prove_input(ctx, first_evidence, first_obj);
         let st_igsv = st_custom!(
             ctx,
             InputsGroundedSingleVar() = (
@@ -1019,7 +1011,7 @@ impl TxBuilder {
 
         let inputs_pair = extend_set(&set_first, second_obj);
         let (st_second_tx_in_sr, st_second_set_contains_live) =
-            prove_input(ctx, &mut stats, second_evidence, second_obj);
+            prove_input(ctx, second_evidence, second_obj);
 
         if inputs.len() == 2 {
             let st_pair = st_custom!(
@@ -1035,7 +1027,7 @@ impl TxBuilder {
             record(&mut stats, "InputsGroundedPair");
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root_hash = state_root_hash) = (
+                InputsGrounded(state_root = state_root_arr) = (
                     Statement::None,
                     Statement::None,
                     st_pair,
@@ -1063,7 +1055,7 @@ impl TxBuilder {
         let (third_obj, third_evidence) = &inputs[2];
         let inputs_triple = extend_set(&inputs_pair, third_obj);
         let (st_third_tx_in_sr, st_third_set_contains_live) =
-            prove_input(ctx, &mut stats, third_evidence, third_obj);
+            prove_input(ctx, third_evidence, third_obj);
         let st_triple = st_custom!(
             ctx,
             InputsGroundedTriple() = (
@@ -1078,7 +1070,7 @@ impl TxBuilder {
 
         let mut st = st_custom!(
             ctx,
-            InputsGrounded(state_root_hash = state_root_hash) = (
+            InputsGrounded(state_root = state_root_arr) = (
                 Statement::None,
                 Statement::None,
                 Statement::None,
@@ -1092,7 +1084,7 @@ impl TxBuilder {
 
         for (obj, evidence) in &inputs[3..] {
             let next_set = extend_set(&prev_set, obj);
-            let (st_tx_in_sr, st_set_contains_live) = prove_input(ctx, &mut stats, evidence, obj);
+            let (st_tx_in_sr, st_set_contains_live) = prove_input(ctx, evidence, obj);
             let st_rec = st_custom!(
                 ctx,
                 InputsGroundedRecursive() = (
@@ -1122,24 +1114,27 @@ impl TxBuilder {
     }
 }
 
-/// Prove `SetContains(transactions_root, tx_final)` using a Merkle proof
-/// supplied by the grounding witness. The source tx is identified by its
-/// commitment alone (the literal `ctx` dict is not required).
+/// Prove `SetContains(state_root.transactions, tx_hash)`. The supplied
+/// statement must already witness `state_root["transactions"]` so we can
+/// use it for the anchored key.
 fn prove_source_tx_membership(
     ctx: &mut BuildContext,
+    st_state_root_transactions: &Statement,
     grounding: &GroundingWitness,
-    transactions_root: Hash,
-    tx_final: Hash,
+    tx_hash: Hash,
 ) -> Statement {
     let proof = grounding
         .source_tx_proofs
-        .get(&tx_final)
+        .get(&tx_hash)
         .cloned()
         .expect("missing source tx proof in grounding witness");
     ctx.builder
         .priv_op(Operation(
             OperationType::Native(NativeOperation::SetContainsFromEntries),
-            vec![transactions_root.into(), Value::from(tx_final).into()],
+            vec![
+                OperationArg::Statement(st_state_root_transactions.clone()),
+                Value::from(tx_hash).into(),
+            ],
             OperationAux::MerkleProof(proof),
         ))
         .unwrap()
@@ -1190,8 +1185,6 @@ fn prove_obj_in_source_tx_live(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use hex::FromHex;
     use pod2::{
         backends::plonky2::mock::mainpod::MockProver,
@@ -1300,28 +1293,9 @@ mod tests {
     }
 
     #[test]
-    fn state_root_hash_matches_legacy_commitments() {
-        let txns = [test_hash(1), test_hash(2)]
-            .into_iter()
-            .collect::<HashSet<_>>();
-        let nullifiers = [test_hash(3)].into_iter().collect::<HashSet<_>>();
-        let prior_gsrs = [test_hash(4), test_hash(5)];
-
-        let txs = Set::new(txns.iter().map(|hash| Value::from(*hash)).collect());
-        let nulls = Set::new(nullifiers.iter().map(|hash| Value::from(*hash)).collect());
-        let gsrs = Array::new(prior_gsrs.iter().map(|hash| Value::from(*hash)).collect());
-        let compact = StateRoot::new(7, txs.commitment(), nulls.commitment(), gsrs.commitment());
-        let legacy_hash = hash_values(&[
-            Value::from(hash_values(&[
-                Value::from(txs.commitment()),
-                Value::from(nulls.commitment()),
-            ])),
-            Value::from(hash_values(&[
-                Value::from(7_i64),
-                Value::from(gsrs.commitment()),
-            ])),
-        ]);
-        assert_eq!(compact.hash(), legacy_hash);
+    fn state_root_hash_matches_array_commitment() {
+        let sr = StateRoot::new(7, test_hash(1), test_hash(2), test_hash(3));
+        assert_eq!(sr.hash(), sr.array().commitment());
     }
 
     #[test]
