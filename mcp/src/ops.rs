@@ -14,10 +14,10 @@ pub trait CraftOps: Send + Sync + 'static {
     fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunActionResult>;
     fn check_feasibility(&self, action: &QualifiedName) -> anyhow::Result<FeasibilityReport>;
 
-    /// Import an external `.dobj` object — one not produced by this driver
-    /// (raw JSON contents) — into local inventory. Returns the filed object's
-    /// summary.
-    fn import_object(&self, dobj_json: &str) -> anyhow::Result<ObjectDetail>;
+    /// Import an external `.dobj` object — one not produced by this driver —
+    /// into local inventory by reading it from a local filesystem path.
+    /// Returns the filed object's summary.
+    fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectDetail>;
 
     /// Read the driver's current configuration (synchronizer + relayer URLs).
     fn read_settings(&self) -> anyhow::Result<DriverSettings>;

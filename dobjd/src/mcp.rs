@@ -142,8 +142,14 @@ impl CraftOps for DobjdCraftOps {
         self.driver.check_action(action)
     }
 
-    fn import_object(&self, dobj_json: &str) -> anyhow::Result<mcp::ObjectDetail> {
-        self.driver.import_object(dobj_json)
+    fn import_object_file(&self, path: &str) -> anyhow::Result<mcp::ObjectDetail> {
+        // MCP runs in-process with the driver on the user's machine, so it
+        // reads the file here and hands the contents to the same validation
+        // core the HTTP route uses. Arbitrary path is fine: the agent already
+        // has filesystem access, and import only ingests (never discloses).
+        let contents = std::fs::read_to_string(path)
+            .map_err(|err| anyhow::anyhow!("could not read .dobj file at {path}: {err}"))?;
+        self.driver.import_object(&contents)
     }
 
     fn read_settings(&self) -> anyhow::Result<mcp::DriverSettings> {
