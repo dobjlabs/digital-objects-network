@@ -182,8 +182,8 @@ pub struct InventoryObject {
     pub fields: HashMap<String, serde_json::Value>,
 }
 
-/// `POST /objects/import` body — the raw JSON contents of a `.dobj` file
-/// received out-of-band (e.g. a trade attachment over email). The driver
+/// `POST /objects/import` body — the raw JSON contents of an external `.dobj`
+/// file, one not produced by this driver (e.g. from outside `~/.dobj/`). The driver
 /// validates the object's class identity and on-chain grounding, then files
 /// it into local inventory under a canonical name derived from its
 /// commitment. Consumers handle their own file I/O and pass the bytes as a

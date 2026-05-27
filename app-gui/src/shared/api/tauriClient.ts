@@ -128,7 +128,7 @@ export function runAction(input: RunActionInput): Promise<RunActionResult> {
   }).then(httpJson<RunActionResult>);
 }
 
-// Import a `.dobj` received out-of-band (e.g. a trade attachment). The body
+// Import an external `.dobj` (one not produced by this driver). The body
 // is the raw file contents as a string; the driver validates + files it and
 // returns the object summary. 409 if it's already held or already spent.
 export function importObject(dobj: string): Promise<ObjectSummaryPayload> {
