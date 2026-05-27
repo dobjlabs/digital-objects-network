@@ -19,10 +19,10 @@ run from `$action` (the first argument):
 - `list`  → **List**: read open orders from the market board.
 - empty or anything else → output `usage: market [setup|post|check|list]` and stop.
 
-The committed helper `setup_inbox.py` wraps every AgentMail / market-board / config
+The committed helper `market.py` wraps every AgentMail / market-board / config
 operation as a deterministic subcommand (AgentMail key in `~/.dobj/agentmail.key`;
 the board lives at `marketApiUrl`) — no MCP, no OAuth, no loop. Run it as
-`python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" <sub> …`; subs: `signup`, `verify`,
+`python3 "${CLAUDE_SKILL_DIR}/market.py" <sub> …`; subs: `signup`, `verify`,
 `sync-config`, `announce`, `list-orders`, `poll`, `reply`, `mark-processed`.
 
 ## Output rules
@@ -73,7 +73,7 @@ lives in `~/.dobj/agentmail.key` (mode 600), written by Setup. State markers liv
 5. Run:
 
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" signup "<email>" "<username>"
+   python3 "${CLAUDE_SKILL_DIR}/market.py" signup "<email>" "<username>"
    ```
 
    `OK`/`ALREADY` → continue. `TAKEN` → output `username <username> is taken — pick another`
@@ -85,7 +85,7 @@ lives in `~/.dobj/agentmail.key` (mode 600), written by Setup. State markers liv
    If the reply is `skip` → continue. Otherwise:
 
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" verify "<reply>"
+   python3 "${CLAUDE_SKILL_DIR}/market.py" verify "<reply>"
    ```
 
    `STATUS=VERIFIED` → continue; anything else → output the `STATUS=` line and stop.
@@ -95,12 +95,12 @@ lives in `~/.dobj/agentmail.key` (mode 600), written by Setup. State markers liv
 
 1. If `~/.dobj/agentmail.key` is missing OR `agentmailInboxId` is empty → output
    `run market setup first` and stop.
-2. Run `python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" sync-config`, then read `tradeId`
+2. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" sync-config`, then read `tradeId`
    from `~/.dobj/market.json`.
 3. Run:
 
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" announce "<tradeId>"
+   python3 "${CLAUDE_SKILL_DIR}/market.py" announce "<tradeId>"
    ```
 
    `STATUS=OK` or `POSTED` → output `posted offer #<tradeId>`. Anything else → output
@@ -112,12 +112,12 @@ One pass over the inbox; no loop.
 
 1. If `~/.dobj/agentmail.key` is missing OR `agentmailInboxId` is empty → output
    `run market setup first` and stop.
-2. Run `python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" sync-config`, then read `tradeId`,
+2. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" sync-config`, then read `tradeId`,
    `give`, `want` from `~/.dobj/market.json`.
 3. Run:
 
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" poll "<tradeId>"
+   python3 "${CLAUDE_SKILL_DIR}/market.py" poll "<tradeId>"
    ```
 
    If the last line is `STATUS=NONE`, output `no new trades for #<tradeId>` and stop.
@@ -126,7 +126,7 @@ One pass over the inbox; no loop.
 4. For each `TRADE` line:
    a. Call `import_object_file` with `path` = the line's `attachmentPath`. If it errors
       (duplicate, already-spent, bad class), output the error verbatim, run
-      `python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" mark-processed "<tradeId>" "<messageId>"`,
+      `python3 "${CLAUDE_SKILL_DIR}/market.py" mark-processed "<tradeId>" "<messageId>"`,
       and move to the next line (do NOT reply).
    b. Verify with `inspect_object` on the returned `fileName`. If its class name !=
       `<want>` OR status != `live`: output `rejected <messageId>: expected <want>, got
@@ -139,12 +139,12 @@ One pass over the inbox; no loop.
    e. Reply:
 
       ```bash
-      python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" reply "<messageId>" "<givePath>" "Here is your <give> for #<tradeId>."
+      python3 "${CLAUDE_SKILL_DIR}/market.py" reply "<messageId>" "<givePath>" "Here is your <give> for #<tradeId>."
       ```
 
       `STATUS=OK` → output `replied to <from> with <fileName>`. Anything else → output
       the `STATUS=` line and stop.
-   f. Run `python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" mark-processed "<tradeId>" "<messageId>"`,
+   f. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" mark-processed "<tradeId>" "<messageId>"`,
       then output `fulfilled #<tradeId>`.
 
 ## List  — run when `$action` is `list`
@@ -152,7 +152,7 @@ One pass over the inbox; no loop.
 Read the open orders on the board:
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" list-orders
+python3 "${CLAUDE_SKILL_DIR}/market.py" list-orders
 ```
 
 Each `ORDER {…}` line is an open order shaped `{id, tradeId, give, want, contact, status}`.

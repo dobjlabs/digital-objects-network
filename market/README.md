@@ -39,7 +39,7 @@ curl -s 'localhost:8088/api/orders?status=open'
 
 ## Bot integration
 
-The `bitcraft-market` command's helper (`commands/market/setup_inbox.py`) posts and
+The `bitcraft-market` command's helper (`commands/market/market.py`) posts and
 reads here: `market post` → `POST /api/orders`, `market list` → `GET /api/orders`.
 Point it at this server with `marketApiUrl` in `~/.dobj/market.json` (default
 `http://localhost:8088`).
