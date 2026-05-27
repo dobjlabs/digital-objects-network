@@ -1,6 +1,8 @@
 procs:
   dobjd:
     shell: just dobjd
+  market:
+    shell: just market
   web:
     shell: just web
   desktop:

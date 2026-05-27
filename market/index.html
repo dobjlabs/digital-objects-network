@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bitcraft market</title>
+<style>
+  :root {
+    --bg:#0e0f12; --panel:#16181d; --border:#262a31; --text:#d7dae0;
+    --dim:#8b919c; --accent:#7fd1b9;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  header { padding:18px 22px; border-bottom:2px solid var(--border);
+           display:flex; align-items:baseline; gap:12px; }
+  header h1 { margin:0; font-size:16px; letter-spacing:.04em; }
+  header .sub { color:var(--dim); font-size:12px; }
+  main { max-width:880px; margin:0 auto; padding:20px; }
+  form { background:var(--panel); border:1px solid var(--border); border-radius:8px;
+         padding:14px; margin-bottom:22px; display:grid;
+         grid-template-columns:repeat(2,1fr); gap:10px; }
+  .full { grid-column:1 / -1; }
+  label { display:block; color:var(--dim); font-size:11px; margin-bottom:3px;
+          text-transform:uppercase; letter-spacing:.05em; }
+  input { width:100%; background:var(--bg); border:1px solid var(--border);
+          color:var(--text); padding:7px 9px; border-radius:5px; font:inherit; }
+  button { background:var(--accent); color:#0e0f12; border:0; padding:9px 14px;
+           border-radius:5px; font:inherit; font-weight:600; cursor:pointer; }
+  button:hover { filter:brightness(1.08); }
+  .orders { display:flex; flex-direction:column; gap:10px; }
+  .order { background:var(--panel); border:1px solid var(--border); border-radius:8px;
+           padding:12px 14px; display:flex; align-items:center; gap:14px; }
+  .trade { font-size:15px; white-space:nowrap; }
+  .trade .arrow { color:var(--accent); margin:0 7px; }
+  .meta { color:var(--dim); font-size:12px; flex:1; overflow:hidden;
+          text-overflow:ellipsis; }
+  .meta code { color:var(--text); }
+  .status { font-size:11px; text-transform:uppercase; letter-spacing:.05em;
+            padding:2px 9px; border-radius:999px; border:1px solid var(--border);
+            color:var(--dim); }
+  .status.open { color:var(--accent); border-color:var(--accent); }
+  .empty { color:var(--dim); text-align:center; padding:34px; }
+</style>
+</head>
+<body>
+  <header><h1>bitcraft market</h1><span class="sub">order board</span></header>
+  <main>
+    <form id="post">
+      <div><label>trade id</label><input name="tradeId" value="t1" required></div>
+      <div><label>contact (email)</label><input name="contact" placeholder="you@agentmail.to" required></div>
+      <div><label>give</label><input name="give" placeholder="Iron" required></div>
+      <div><label>want</label><input name="want" placeholder="Copper" required></div>
+      <div class="full"><label>note (optional)</label><input name="note"></div>
+      <div class="full"><button type="submit">post order</button></div>
+    </form>
+    <div class="orders" id="orders"></div>
+  </main>
+  <script>
+    const el = document.getElementById('orders');
+    const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g,
+      c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+    const fmt = t => new Date(t * 1000).toLocaleString();
+
+    async function load() {
+      try {
+        const orders = await (await fetch('/api/orders')).json();
+        if (!orders.length) { el.innerHTML = '<div class="empty">no orders yet</div>'; return; }
+        el.innerHTML = orders.map(o => `
+          <div class="order">
+            <div class="trade">1 ${esc(o.give)}<span class="arrow">&rarr;</span>1 ${esc(o.want)}</div>
+            <div class="meta">#${esc(o.tradeId)} &middot; <code>${esc(o.contact)}</code> &middot; ${fmt(o.createdAt)}${o.note ? ' &middot; ' + esc(o.note) : ''}</div>
+            <span class="status ${esc(o.status)}">${esc(o.status)}</span>
+          </div>`).join('');
+      } catch (e) {
+        el.innerHTML = '<div class="empty">market server unreachable</div>';
+      }
+    }
+
+    document.getElementById('post').addEventListener('submit', async e => {
+      e.preventDefault();
+      const body = Object.fromEntries(new FormData(e.target).entries());
+      const r = await fetch('/api/orders', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) { e.target.reset(); load(); }
+      else { const b = await r.json().catch(() => ({})); alert('post failed: ' + (b.error || r.status)); }
+    });
+
+    load();
+    setInterval(load, 5000);
+  </script>
+</body>
+</html>

@@ -82,13 +82,14 @@ cp relayer/.env.example relayer/.env
 just dev
 ```
 
-`just dev` brings up five panes via mprocs:
+`just dev` brings up six panes via mprocs:
 
 | Pane           | Purpose                                                    |
 | -------------- | ---------------------------------------------------------- |
 | `synchronizer` | rebuilds canonical state from chain data (Postgres-backed) |
 | `relayer`      | submits proof payloads as EIP-4844 blobs                   |
 | `dobjd`        | the driver daemon — HTTP on `:7717`, MCP on `:7718`        |
+| `market`       | order-board API + web board on `:8088` ([market/](market)) |
 | `web`          | Vite on `:1420`, hot-reload for the React app              |
 | `desktop`      | Tauri shell pointing at the standalone Vite                |
 
@@ -97,7 +98,7 @@ any browser to use the website client. MCP-aware agents can connect via
 `claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp`.
 
 Run individual pieces standalone with `just sync`, `just relayer`,
-`just dobjd`, `just web`, `just desktop`.
+`just dobjd`, `just market`, `just web`, `just desktop`.
 
 ## Workspace map
 

@@ -1,7 +1,7 @@
 ---
 name: bitcraft-market
-description: Market trade desk for bitcraft. `market setup` provisions an AgentMail inbox; `market post` announces your offer to Discord; `market check` pulls new email once, imports any object sent to you, and replies with the object you offered. Triggers on "market", "market setup", "market post", "market check".
-argument-hint: [setup|post|check]
+description: Market trade desk for bitcraft. `market setup` provisions an AgentMail inbox; `market post` posts your offer to the market board; `market check` pulls new email once, imports any object sent to you, and replies with the object you offered; `market list` reads open orders. Triggers on "market", "market setup", "market post", "market check", "market list".
+argument-hint: [setup|post|check|list]
 arguments: action
 disable-model-invocation: true
 allowed-tools: Bash, Read, Write
@@ -13,14 +13,16 @@ Trade objects by email, driven manually — one subcommand per run, no loop. Pic
 run from `$action` (the first argument):
 
 - `setup` → **Setup**: provision your AgentMail inbox (one-time).
-- `post`  → **Post**: announce your standing offer to Discord.
+- `post`  → **Post**: post your standing offer to the market board.
 - `check` → **Check**: pull new email once, import any object sent to you, reply with yours.
-- empty or anything else → output `usage: market [setup|post|check]` and stop.
+- `list`  → **List**: read open orders from the market board.
+- empty or anything else → output `usage: market [setup|post|check|list]` and stop.
 
-All email goes through the AgentMail REST API via the committed helper
-`setup_inbox.py` (key in `~/.dobj/agentmail.key`) — no MCP, no OAuth, no loop. Run
-the helper as `python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" <sub> …`; subs:
-`signup`, `verify`, `sync-config`, `announce`, `poll`, `reply`, `mark-processed`.
+The committed helper `setup_inbox.py` wraps every AgentMail / market-board / config
+operation as a deterministic subcommand (AgentMail key in `~/.dobj/agentmail.key`;
+the board lives at `marketApiUrl`) — no MCP, no OAuth, no loop. Run it as
+`python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" <sub> …`; subs: `signup`, `verify`,
+`sync-config`, `announce`, `list-orders`, `poll`, `reply`, `mark-processed`.
 
 ## Output rules
 
@@ -36,8 +38,8 @@ the helper as `python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" <sub> …`; subs:
   `run market setup first`, `posted offer #<tradeId>`, `no new trades for #<tradeId>`,
   `imported <fileName> (<status>)`, `replied to <sender> with <fileName>`,
   `fulfilled #<tradeId>`, `rejected <messageId>: expected <want>, got <class>/<status>`,
-  `cannot fulfill #<tradeId>: no live <give> in inventory`, `cancelled`,
-  `usage: market [setup|post|check]`.
+  `cannot fulfill #<tradeId>: no live <give> in inventory`, `no open orders`,
+  `cancelled`, `usage: market [setup|post|check|list]`.
 
 ## Config
 
@@ -50,14 +52,15 @@ the helper as `python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" <sub> …`; subs:
   "want": "Copper",
   "contactEmail": "",
   "agentmailInboxId": "",
-  "discordWebhookUrl": "https://discord.com/api/webhooks/1508996202106978484/fHY5dHNXnU0y1tgl3mFcRul8kMBm2KOgRl1I5FK0Rxtxjdo_6jUSwlRha3fiNEFrXFAD"
+  "marketApiUrl": "http://localhost:8088"
 }
 ```
 
 `give`/`want` are episode-1 class names — the offer gives 1 `give`, wants 1 `want`
-(`Iron`/`Copper` here). The AgentMail key lives in `~/.dobj/agentmail.key` (mode 600),
-written by Setup. State markers live in `~/.dobj/` so the offer posts once and no
-email is fulfilled twice.
+(`Iron`/`Copper` here). `marketApiUrl` points at your market board server (default
+`http://localhost:8088` — run it with `python3 market/server.py`). The AgentMail key
+lives in `~/.dobj/agentmail.key` (mode 600), written by Setup. State markers live in
+`~/.dobj/` so the offer posts once and no email is fulfilled twice.
 
 ## Setup  — run when `$action` is `setup`
 
@@ -143,11 +146,24 @@ One pass over the inbox; no loop.
    f. Run `python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" mark-processed "<tradeId>" "<messageId>"`,
       then output `fulfilled #<tradeId>`.
 
+## List  — run when `$action` is `list`
+
+Read the open orders on the board:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/setup_inbox.py" list-orders
+```
+
+Each `ORDER {…}` line is an open order shaped `{id, tradeId, give, want, contact, status}`.
+Render them one per line for the user, e.g. `#<tradeId>  1 <give> → 1 <want>  <contact>`.
+If the helper prints `count=0`, output `no open orders`. On a non-`OK` `STATUS=` line
+(e.g. `NOAPI`, `FAIL`), output it and stop.
+
 ## Guardrails
 
 - Only act on YOUR `<tradeId>` — `poll` filters by subject, so you only see matching mail.
 - One fulfillment per message — `mark-processed` plus `poll`'s dedupe enforce it; never reply twice.
 - Never reply unless the imported object is a `live` `<want>`.
-- `~/.dobj/agentmail.key` and the webhook URL are secrets — never echo them or post them anywhere.
+- `~/.dobj/agentmail.key` is a secret — never echo it or post it anywhere.
 - After you reply you still hold a local copy of the given object (no nullify-on-send yet) — expected for now.
 - Re-arm / change terms: edit `~/.dobj/market.json`, then `rm ~/.dobj/.market-posted-<tradeId> ~/.dobj/.market-processed-<tradeId>.log`.

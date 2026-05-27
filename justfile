@@ -42,9 +42,16 @@ web:
 dobjd:
     RUST_LOG=info cargo run -p dobjd --release
 
-# Bring up everything: synchronizer, relayer, dobjd, Vite, and the Tauri
-# shell — all backed by one dobjd process. Open http://localhost:1420 in a
-# browser to use the website client; the desktop window opens automatically.
+# Run the market order-board server: a JSON API bots use to post/read orders,
+# plus a web board for humans — both on http://localhost:8088. Stdlib Python +
+# SQLite (market/market.db); no build. See market/README.md.
+market:
+    python3 market/server.py
+
+# Bring up everything: synchronizer, relayer, dobjd, the market board, Vite,
+# and the Tauri shell — all backed by one dobjd process. Open
+# http://localhost:1420 for the website client and http://localhost:8088 for
+# the market board; the desktop window opens automatically.
 # https://github.com/pvolok/mprocs
 dev: ensure-plugins ensure-commands ensure-mcp
     mprocs --config mprocs.yaml
@@ -127,11 +134,12 @@ ensure-commands:
         just install-commands; \
     fi
 
-# Wipe local state: RocksDB, local Postgres DBs, objects, installed bitcraft
-# commands, and the bitcraft-preview entry in ~/.claude/launch.json.
+# Wipe local state: RocksDB, local Postgres DBs, objects, the market board DB,
+# installed bitcraft commands, and the bitcraft-preview entry in ~/.claude/launch.json.
 reset:
     @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
+    rm -f market/*.db
     rm -rf ~/.claude/skills/bitcraft-*
     @python3 commands/start/ensure_launch.py --remove && echo "removed: bitcraft-preview from ~/.claude/launch.json"
     @command -v claude >/dev/null 2>&1 && claude mcp remove bitcraft 2>/dev/null && echo "removed: bitcraft MCP registration" || true

@@ -2,7 +2,7 @@
 """AgentMail + market helper for the bitcraft-market command.
 
 A pure-REST (urllib) AgentMail client authenticated by ~/.dobj/agentmail.key —
-no CLI, no MCP, no OAuth. Every AgentMail / Discord / config / processed-log
+no CLI, no MCP, no OAuth. Every AgentMail / config / processed-log
 operation the command needs is a deterministic subcommand here, so the agent
 only makes bitcraft MCP calls and trade decisions; it never improvises HTTP
 calls or output parsing.
@@ -11,7 +11,8 @@ Subcommands:
   signup <human-email> <username>     POST /agent/sign-up; persist key + inbox
   verify <otp-code>                   POST /agent/verify
   sync-config                         contactEmail := agentmailInboxId when empty
-  announce <tradeId>                  post the offer to the Discord webhook (once)
+  announce <tradeId>                  post the offer to the market board (once)
+  list-orders                         read open orders from the market board
   poll <tradeId>                      list unread #<tradeId> mail, download .dobj attachments
   reply <message_id> <file> [text]    reply to a message with <file> attached
   mark-processed <tradeId> <msg_id>   record a message id as handled
@@ -171,7 +172,29 @@ def verify(argv):
     return 0
 
 
-# --- discord ---
+# --- market board ---
+
+def http_json(method, url, body=None):
+    """Generic JSON HTTP for the market board (a non-AgentMail host)."""
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Content-Type": "application/json"} if data else {}
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+            return resp.status, (json.loads(raw) if raw else {})
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read())
+        except ValueError:
+            return e.code, {}
+    except urllib.error.URLError:
+        return 0, {}
+
+
+def _market_url(cfg):
+    return (cfg.get("marketApiUrl") or "").strip().rstrip("/")
+
 
 def announce(argv):
     if not argv:
@@ -183,28 +206,47 @@ def announce(argv):
         emit("STATUS=POSTED")
         return 0
     cfg = load_cfg()
-    give, want = cfg.get("give") or "?", cfg.get("want") or "?"
-    email = (cfg.get("contactEmail") or "").strip()
-    webhook = (cfg.get("discordWebhookUrl") or "").strip()
-    if not email or not webhook:
-        emit("STATUS=INCOMPLETE")  # need contactEmail + discordWebhookUrl
+    give = (cfg.get("give") or "").strip()
+    want = (cfg.get("want") or "").strip()
+    contact = (cfg.get("contactEmail") or "").strip()
+    api = _market_url(cfg)
+    if not (give and want and contact and api):
+        emit("STATUS=INCOMPLETE")  # need give + want + contactEmail + marketApiUrl
         return 1
-    content = ("**OFFER #%s** — give 1 %s, want 1 %s. Send the %s .dobj to %s "
-               "with #%s in the subject." % (trade_id, give, want, want, email, trade_id))
-    req = urllib.request.Request(
-        webhook, data=json.dumps({"content": content}).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            ok = 200 <= resp.status < 300
-    except (urllib.error.HTTPError, urllib.error.URLError):
-        ok = False
-    if not ok:
+    status, _ = http_json("POST", api + "/api/orders", {
+        "tradeId": trade_id, "give": give, "want": want,
+        "contact": contact, "note": "bitcraft trade desk",
+    })
+    if status not in (200, 201):
         emit("STATUS=FAIL")
+        emit("http=%d" % status)
         return 1
     open(marker, "w").close()
     emit("STATUS=OK")
     emit("posted offer #" + trade_id)
+    return 0
+
+
+def list_orders(argv):
+    cfg = load_cfg()
+    api = _market_url(cfg)
+    if not api:
+        emit("STATUS=NOAPI")
+        return 1
+    status, data = http_json("GET", api + "/api/orders?status=open")
+    if status != 200:
+        emit("STATUS=FAIL")
+        emit("http=%d" % status)
+        return 1
+    orders = data if isinstance(data, list) else []
+    for o in orders:
+        emit("ORDER " + json.dumps({
+            "id": o.get("id"), "tradeId": o.get("tradeId"),
+            "give": o.get("give"), "want": o.get("want"),
+            "contact": o.get("contact"), "status": o.get("status"),
+        }))
+    emit("STATUS=OK")
+    emit("count=%d" % len(orders))
     return 0
 
 
@@ -324,8 +366,8 @@ def main():
         return 2
     fns = {
         "signup": signup, "verify": verify, "sync-config": sync_config,
-        "announce": announce, "poll": poll, "reply": reply,
-        "mark-processed": mark_processed,
+        "announce": announce, "list-orders": list_orders, "poll": poll,
+        "reply": reply, "mark-processed": mark_processed,
     }
     fn = fns.get(sys.argv[1])
     if not fn:

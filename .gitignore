@@ -25,3 +25,6 @@ target
 /data/
 *.log
 __pycache__/
+
+# market board SQLite DB (created by `python3 market/server.py`)
+market/*.db

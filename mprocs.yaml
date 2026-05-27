@@ -5,6 +5,8 @@ procs:
     shell: just relayer
   dobjd:
     shell: just dobjd
+  market:
+    shell: just market
   web:
     shell: just web
   desktop:
