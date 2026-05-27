@@ -11,9 +11,9 @@ Subcommands:
   signup <human-email> <username>              POST /agent/sign-up; persist key + inbox
   verify <otp-code>                            POST /agent/verify
   sync-config                                  contactEmail := agentmailInboxId when empty
-  set-offer <giveQty> <give> <wantQty> <want>  set the standing offer in config
-  announce <tradeId>                           post the current offer to the market board
-  list-orders                                  read open orders from the market board
+  announce <giveQty> <give> <wantQty> <want>   post a new offer; server assigns the tradeId
+  list-orders                                  read all open orders from the market board
+  my-offers                                    list my own open offers (matched by contact)
   close-order <id>                             close (retire) an order on the market board
   poll <tradeId>                               list unread #<tradeId> mail; download all .dobj attachments
   reply <message_id> <text> <file...>          reply to a message, attaching one or more files
@@ -198,8 +198,9 @@ def _market_url(cfg):
     return (cfg.get("marketApiUrl") or "").strip().rstrip("/")
 
 
-def set_offer(argv):
-    """set-offer <giveQty> <give> <wantQty> <want> — persist the standing offer."""
+def announce(argv):
+    """announce <giveQty> <give> <wantQty> <want> — post a NEW offer. The server
+    assigns the tradeId; we echo it back (clients never choose it)."""
     if len(argv) < 4:
         emit("STATUS=USAGE")
         return 2
@@ -213,40 +214,23 @@ def set_offer(argv):
         emit("STATUS=BADOFFER")  # positive quantities + non-empty class names
         return 1
     cfg = load_cfg()
-    cfg["giveQty"], cfg["give"] = give_qty, give
-    cfg["wantQty"], cfg["want"] = want_qty, want
-    save_cfg(cfg)
-    emit("STATUS=OK")
-    emit("offer=%d %s -> %d %s" % (give_qty, give, want_qty, want))
-    return 0
-
-
-def announce(argv):
-    if not argv:
-        emit("STATUS=USAGE")
-        return 2
-    trade_id = argv[0]
-    cfg = load_cfg()
-    give = (cfg.get("give") or "").strip()
-    want = (cfg.get("want") or "").strip()
-    give_qty = cfg.get("giveQty") or 1
-    want_qty = cfg.get("wantQty") or 1
     contact = (cfg.get("contactEmail") or "").strip()
-    api = _market_url(cfg)
-    if not (give and want and contact and api):
-        emit("STATUS=INCOMPLETE")  # need give + want + contactEmail + marketApiUrl
+    apiurl = _market_url(cfg)
+    if not (contact and apiurl):
+        emit("STATUS=INCOMPLETE")  # need contactEmail + marketApiUrl
         return 1
-    status, _ = http_json("POST", api + "/api/orders", {
-        "tradeId": trade_id, "give": give, "giveQty": give_qty,
-        "want": want, "wantQty": want_qty,
+    status, data = http_json("POST", apiurl + "/api/orders", {
+        "give": give, "giveQty": give_qty, "want": want, "wantQty": want_qty,
         "contact": contact, "note": "bitcraft trade desk",
     })
-    if status not in (200, 201):
+    if status not in (200, 201) or not isinstance(data, dict):
         emit("STATUS=FAIL")
         emit("http=%d" % status)
         return 1
+    tid = data.get("tradeId", "")
     emit("STATUS=OK")
-    emit("posted offer #%s: %d %s -> %d %s" % (trade_id, give_qty, give, want_qty, want))
+    emit("tradeId=%s" % tid)
+    emit("posted offer #%s: %d %s -> %d %s" % (tid, give_qty, give, want_qty, want))
     return 0
 
 
@@ -268,6 +252,36 @@ def list_orders(argv):
             "give": o.get("give"), "giveQty": o.get("giveQty"),
             "want": o.get("want"), "wantQty": o.get("wantQty"),
             "contact": o.get("contact"), "status": o.get("status"),
+        }))
+    emit("STATUS=OK")
+    emit("count=%d" % len(orders))
+    return 0
+
+
+def my_offers(argv):
+    """List MY open offers — board orders whose contact is my inbox. Each line
+    carries the tradeId + terms so `check` knows what to poll and fulfill."""
+    cfg = load_cfg()
+    apiurl = _market_url(cfg)
+    mine = (cfg.get("contactEmail") or cfg.get("agentmailInboxId") or "").strip().lower()
+    if not apiurl:
+        emit("STATUS=NOAPI")
+        return 1
+    if not mine:
+        emit("STATUS=NOINBOX")
+        return 1
+    status, data = http_json("GET", apiurl + "/api/orders?status=open")
+    if status != 200:
+        emit("STATUS=FAIL")
+        emit("http=%d" % status)
+        return 1
+    orders = [o for o in (data if isinstance(data, list) else [])
+              if (o.get("contact") or "").strip().lower() == mine]
+    for o in orders:
+        emit("OFFER " + json.dumps({
+            "tradeId": o.get("tradeId"),
+            "give": o.get("give"), "giveQty": o.get("giveQty"),
+            "want": o.get("want"), "wantQty": o.get("wantQty"),
         }))
     emit("STATUS=OK")
     emit("count=%d" % len(orders))
@@ -424,7 +438,7 @@ def main():
         return 2
     fns = {
         "signup": signup, "verify": verify, "sync-config": sync_config,
-        "set-offer": set_offer, "announce": announce, "list-orders": list_orders,
+        "announce": announce, "list-orders": list_orders, "my-offers": my_offers,
         "close-order": close_order, "poll": poll, "reply": reply,
         "mark-processed": mark_processed,
     }

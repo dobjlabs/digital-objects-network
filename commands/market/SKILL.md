@@ -14,7 +14,7 @@ Trade objects by email, driven manually — one subcommand per run, no loop. Pic
 run from `$action` (the first argument):
 
 - `setup` → **Setup**: provision your AgentMail inbox (one-time).
-- `post`  → **Post**: post your standing offer to the market board.
+- `post`  → **Post**: post a new offer to the market board (you give the terms).
 - `check` → **Check**: pull new email once, import any object sent to you, reply with yours.
 - `list`  → **List**: read open orders from the market board.
 - empty or anything else → output `usage: market [setup|post|check|list]` and stop.
@@ -23,7 +23,7 @@ The committed helper `market.py` wraps every AgentMail / market-board / config
 operation as a deterministic subcommand (AgentMail key in `~/.dobj/agentmail.key`;
 the board lives at `marketApiUrl`) — no MCP, no OAuth, no loop. Run it as
 `python3 "${CLAUDE_SKILL_DIR}/market.py" <sub> …`; subs: `signup`, `verify`,
-`sync-config`, `set-offer`, `announce`, `list-orders`, `close-order`, `poll`, `reply`, `mark-processed`.
+`sync-config`, `announce`, `list-orders`, `my-offers`, `close-order`, `poll`, `reply`, `mark-processed`.
 
 ## Output rules
 
@@ -40,7 +40,9 @@ the board lives at `marketApiUrl`) — no MCP, no OAuth, no loop. Run it as
   `imported <n> <want> (live)`, `replied to <sender> with <giveQty> <give>`,
   `fulfilled #<tradeId>`, `rejected <messageId>: expected <wantQty> <want>, got <n> <class>/<status>`,
   `cannot fulfill #<tradeId>: no live <give> in inventory`, `no open orders`,
-  `cancelled`, `usage: market [setup|post|check|list]`.
+  `no active offers`, `posted offer #<tradeId>: <giveQty> <give> → <wantQty> <want>`,
+  `cancelled`, `usage: market [setup|post|check|list]`,
+  `usage: market post <giveQty> <give> <wantQty> <want>`.
 
 ## Config
 
@@ -48,23 +50,18 @@ the board lives at `marketApiUrl`) — no MCP, no OAuth, no loop. Run it as
 
 ```json
 {
-  "tradeId": "t1",
-  "give": "Iron",
-  "giveQty": 1,
-  "want": "Copper",
-  "wantQty": 1,
   "contactEmail": "",
   "agentmailInboxId": "",
   "marketApiUrl": "http://localhost:8088"
 }
 ```
 
-`give`/`want` are episode-1 class names and `giveQty`/`wantQty` their counts — the
-offer gives `giveQty` `give` for `wantQty` `want` (1 Iron for 1 Copper here), and
-`market post` can override them per run. `marketApiUrl` points at your market board
-server (default `http://localhost:8088` — run it with `python3 market/server.py`).
-The AgentMail key lives in `~/.dobj/agentmail.key` (mode 600), written by Setup. The
-`~/.dobj/.market-processed-<tradeId>.log` marker ensures no email is fulfilled twice.
+The config holds only your identity + board URL. Offers are **per-post** — the terms
+are `market post` arguments, and each offer's **tradeId is assigned by the server**,
+not stored here. `marketApiUrl` points at your market board (default
+`http://localhost:8088` — run it with `python3 market/server.py`). The AgentMail key
+lives in `~/.dobj/agentmail.key` (mode 600), written by Setup. A per-offer
+`~/.dobj/.market-processed-<tradeId>.log` ensures no email is fulfilled twice.
 
 ## Setup  — run when `$action` is `setup`
 
@@ -96,72 +93,66 @@ The AgentMail key lives in `~/.dobj/agentmail.key` (mode 600), written by Setup.
 
 ## Post  — run when `$action` is `post`
 
-The offer is configurable inline — the user may say e.g. `market post 5 Iron for 2 Copper`,
-`market post give 2 Iron want 1 Copper`, or just `market post` (reuse the saved offer).
+Post a NEW offer; the user gives the terms, e.g. `market post 5 Iron for 2 Copper` or
+`market post give 2 Iron want 1 Copper`. You can post several — each is its own offer
+with its own server-assigned tradeId.
 
 1. If `~/.dobj/agentmail.key` is missing OR `agentmailInboxId` is empty → output
    `run market setup first` and stop.
-2. If the user specified an offer, parse it into `<giveQty> <give> <wantQty> <want>`
-   (positive-integer quantities; `give`/`want` are episode-1 class names) and save it:
-
-   ```bash
-   python3 "${CLAUDE_SKILL_DIR}/market.py" set-offer "<giveQty>" "<give>" "<wantQty>" "<want>"
-   ```
-
-   `STATUS=OK` → continue; `BADOFFER`/`USAGE` → output it and stop. If the user gave no
-   offer, skip this step — `announce` uses the saved offer.
-3. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" sync-config`, then read `tradeId` from `~/.dobj/market.json`.
-4. Run:
-
-   ```bash
-   python3 "${CLAUDE_SKILL_DIR}/market.py" announce "<tradeId>"
-   ```
-
-   `STATUS=OK` → output `posted offer #<tradeId>` (the helper echoes the quantities).
-   Anything else → output the `STATUS=` line and stop.
-
-## Check  — run when `$action` is `check`
-
-One pass over the inbox; no loop.
-
-1. If `~/.dobj/agentmail.key` is missing OR `agentmailInboxId` is empty → output
-   `run market setup first` and stop.
-2. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" sync-config`, then read `tradeId`,
-   `give`, `giveQty`, `want`, `wantQty` from `~/.dobj/market.json` (quantities default to 1).
+2. Parse the user's offer into `<giveQty> <give> <wantQty> <want>` (positive-integer
+   quantities; `give`/`want` are episode-1 class names). If the user gave no terms,
+   output `usage: market post <giveQty> <give> <wantQty> <want>` and stop.
 3. Run:
 
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/market.py" poll "<tradeId>"
+   python3 "${CLAUDE_SKILL_DIR}/market.py" announce "<giveQty>" "<give>" "<wantQty>" "<want>"
    ```
 
-   If the last line is `STATUS=NONE`, output `no new trades for #<tradeId>` and stop.
-   Otherwise each `TRADE {…}` line is a job, shaped `{messageId, from, subject,
-   attachmentPaths}` — the sender's `.dobj` files are already downloaded to the paths
-   in `attachmentPaths`.
-4. For each `TRADE` line:
-   a. Import every path in `attachmentPaths`: call `import_object_file` on each. If any
-      errors (duplicate, already-spent, bad class), output the error verbatim, run
-      `python3 "${CLAUDE_SKILL_DIR}/market.py" mark-processed "<tradeId>" "<messageId>"`,
-      and move to the next TRADE (do NOT reply).
-   b. Verify each imported `fileName` with `inspect_object`. You need `<wantQty>` of them
-      to be class `<want>` AND status `live`. If fewer: output
-      `rejected <messageId>: expected <wantQty> <want>, got <n> <class>/<status>`, run
-      `mark-processed` as above, do NOT reply. Else output `imported <n> <want> (live)`.
-   c. Pick `<giveQty>` objects to give: `list_inventory` → objects whose class name is
-      `<give>` and status `live`. If fewer than `<giveQty>` → output `cannot fulfill
-      #<tradeId>: no live <give> in inventory` and stop (do NOT mark processed — retry
-      later once you have enough).
-   d. Resolve each give object's path: `get_objects_dir` joined with its `fileName`.
-   e. Reply, attaching ALL the give files (text first, then every path):
+   On `STATUS=OK` the helper prints `tradeId=<token>` — output
+   `posted offer #<token>: <giveQty> <give> → <wantQty> <want>`. On `BADOFFER` /
+   `INCOMPLETE` / anything else, output the `STATUS=` line and stop.
 
-      ```bash
-      python3 "${CLAUDE_SKILL_DIR}/market.py" reply "<messageId>" "Here is your <giveQty> <give> for #<tradeId>." <givePath1> <givePath2> …
-      ```
+## Check  — run when `$action` is `check`
 
-      `STATUS=OK` → output `replied to <from> with <giveQty> <give>`. Anything else →
-      output the `STATUS=` line and stop.
-   f. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" mark-processed "<tradeId>" "<messageId>"`,
-      then output `fulfilled #<tradeId>`.
+One pass over all your open offers; no loop.
+
+1. If `~/.dobj/agentmail.key` is missing OR `agentmailInboxId` is empty → output
+   `run market setup first` and stop.
+2. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" sync-config`, then list your open offers:
+
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/market.py" my-offers
+   ```
+
+   Each `OFFER {…}` line is one of your offers, shaped `{tradeId, give, giveQty, want,
+   wantQty}`. If `count=0`, output `no active offers` and stop.
+3. For each `OFFER` (use its own `tradeId`, `give`, `giveQty`, `want`, `wantQty`):
+   a. Poll its inbox tag — `python3 "${CLAUDE_SKILL_DIR}/market.py" poll "<tradeId>"`. If
+      the last line is `STATUS=NONE`, output `no new trades for #<tradeId>` and move to
+      the next offer. Otherwise each `TRADE {…}` line is `{messageId, from, subject,
+      attachmentPaths}` — the sender's `.dobj` files are already downloaded.
+   b. For each `TRADE`:
+      i. Import every path in `attachmentPaths` (`import_object_file` on each). On any
+         import error, output it verbatim, run `python3 "${CLAUDE_SKILL_DIR}/market.py"
+         mark-processed "<tradeId>" "<messageId>"`, and move to the next TRADE (no reply).
+      ii. Verify with `inspect_object`: you need `<wantQty>` imports that are class
+          `<want>` AND status `live`. If fewer: output `rejected <messageId>: expected
+          <wantQty> <want>, got <n> <class>/<status>`, run `mark-processed`, do NOT reply.
+          Else output `imported <n> <want> (live)`.
+      iii. Pick `<giveQty>` live `<give>` objects (`list_inventory`). If fewer than
+           `<giveQty>` → output `cannot fulfill #<tradeId>: no live <give> in inventory`
+           and move to the next offer (do NOT mark processed).
+      iv. Resolve each give object's path (`get_objects_dir` + `fileName`) and reply with
+          ALL of them attached:
+
+          ```bash
+          python3 "${CLAUDE_SKILL_DIR}/market.py" reply "<messageId>" "Here is your <giveQty> <give> for #<tradeId>." <givePath1> …
+          ```
+
+          `STATUS=OK` → output `replied to <from> with <giveQty> <give>`; else output the
+          `STATUS=` line and stop.
+      v. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" mark-processed "<tradeId>" "<messageId>"`,
+         then output `fulfilled #<tradeId>`.
 
 ## List  — run when `$action` is `list`
 
@@ -187,4 +178,4 @@ the order `closed` (the row stays).
 - Never reply unless the imported object is a `live` `<want>`.
 - `~/.dobj/agentmail.key` is a secret — never echo it or post it anywhere.
 - After you reply you still hold a local copy of the given object (no nullify-on-send yet) — expected for now.
-- Change terms anytime with `market post <giveQty> <give> <wantQty> <want>` (posts a fresh order). To re-accept a fulfilled trade, `rm ~/.dobj/.market-processed-<tradeId>.log`.
+- Post more offers anytime with `market post <giveQty> <give> <wantQty> <want>` — each is independent with its own server tradeId. To re-accept on a tradeId, `rm ~/.dobj/.market-processed-<tradeId>.log`.

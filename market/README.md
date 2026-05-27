@@ -20,7 +20,7 @@ Open <http://localhost:8088> for the board. Env overrides: `MARKET_PORT` (8088),
 | Method | Path | Body / notes |
 | --- | --- | --- |
 | `GET` | `/api/orders` | list all orders, newest first. `?status=open` to filter. |
-| `POST` | `/api/orders` | create. `{ "tradeId", "give", "want", "contact", "giveQty"?, "wantQty"?, "note"? }` (quantities default to 1) → `201` with the order. |
+| `POST` | `/api/orders` | create. `{ "give", "want", "contact", "giveQty"?, "wantQty"?, "note"? }` → `201` with the order; its `tradeId` is **server-assigned** (a random token; any client-supplied `tradeId` is ignored). |
 | `GET` | `/api/orders/{id}` | one order. |
 | `POST` | `/api/orders/{id}/close` | mark an order `closed` (append-only — the row stays). |
 | `GET` | `/` | the web board (list + post + close). |
@@ -29,9 +29,9 @@ An order: `{ id, tradeId, give, giveQty, want, wantQty, contact, note, status, c
 (`status` is `open` or `closed`; timestamps are unix seconds).
 
 ```bash
-# post an order
+# post an order (tradeId comes back in the response)
 curl -s -X POST localhost:8088/api/orders -H 'Content-Type: application/json' \
-  -d '{"tradeId":"t1","give":"Iron","want":"Copper","contact":"bitcraft-trader@agentmail.to"}'
+  -d '{"give":"Iron","want":"Copper","contact":"bitcraft-trader@agentmail.to"}'
 
 # read open orders
 curl -s 'localhost:8088/api/orders?status=open'

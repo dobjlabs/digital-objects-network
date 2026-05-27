@@ -164,10 +164,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             now = int(time.time())
             with db() as conn:
+                tid = _new_trade_id(conn)
                 cur = conn.execute(
                     "INSERT INTO orders (trade_id, give, give_qty, want, want_qty, contact, note, status, created_at, updated_at)"
                     " VALUES (?,?,?,?,?,?,?,'open',?,?)",
-                    (str(body["tradeId"]).strip(), str(body["give"]).strip(), _qty(body.get("giveQty", 1)),
+                    (tid, str(body["give"]).strip(), _qty(body.get("giveQty", 1)),
                      str(body["want"]).strip(), _qty(body.get("wantQty", 1)), str(body["contact"]).strip(),
                      (str(body.get("note", "")).strip() or None), now, now),
                 )
