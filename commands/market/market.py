@@ -18,6 +18,7 @@ Subcommands:
   close-order <id>                             close (retire) an order on the market board
   poll <tradeId>                               list unread #<tradeId> mail; download all .dobj attachments
   reply <message_id> <text> <file...>          reply with attachments; move sent files out of inventory (.sent/)
+  fulfill <tradeId> <file...>                  take an open order: email the want-objects to its poster; move them out
   mark-processed <tradeId> <msg_id>            record a message id as handled
 
 Prints STATUS=... lines for the caller to branch on; never prints the API key.
@@ -216,6 +217,17 @@ def http_json(method, url, body=None):
 
 def _market_url(cfg):
     return ((cfg.get("marketApiUrl") or "").strip() or DEFAULT_MARKET_URL).rstrip("/")
+
+
+def _find_open_order(apiurl, trade_id):
+    """Return (order_dict_or_None, http_status) for an OPEN order by tradeId."""
+    status, data = http_json("GET", apiurl + "/api/orders?status=open")
+    if status != 200:
+        return None, status
+    for o in (data if isinstance(data, list) else []):
+        if (o.get("tradeId") or "") == trade_id:
+            return o, 200
+    return None, 200
 
 
 def announce(argv):
@@ -418,41 +430,29 @@ def poll(argv):
     return 0
 
 
-def reply(argv):
-    if len(argv) < 3:
-        emit("STATUS=USAGE")  # reply <message_id> <text> <file...>
-        return 2
-    msg_id, text, paths = argv[0], argv[1], argv[2:]
-    cfg = load_cfg()
-    inbox = (cfg.get("agentmailInboxId") or "").strip()
-    if not inbox:
-        emit("STATUS=NOINBOX")
-        return 1
+def _build_attachments(paths):
+    """Base64-encode each file into an AgentMail attachment. Returns
+    (attachments, missing_path) — missing_path is set if a file can't be read."""
     attachments = []
     for path in paths:
         try:
             with open(path, "rb") as f:
                 content = base64.b64encode(f.read()).decode()
         except OSError:
-            emit("STATUS=NOFILE")
-            emit("missing=" + path)
-            return 1
+            return None, path
         attachments.append({
             "content": content,
             "filename": os.path.basename(path),
             "content_type": "application/json",
         })
-    body = {"text": text, "attachments": attachments}
-    status, _ = api("POST", "/inboxes/%s/messages/%s/reply" % (seg(inbox), seg(msg_id)), body)
-    if status not in (200, 201, 202):
-        emit("STATUS=FAIL")
-        emit("http=%d" % status)
-        return 1
-    # The attached objects are now the counterpart's — move our local copies out
-    # of inventory so we no longer hold them live. The driver only scans
-    # <objects>/ (skipping subdirs) + .nullified/, so a `.sent/` sibling drops
-    # out of inventory while staying on disk. Best-effort: the mail already went
-    # out, so a move failure must not fail the reply.
+    return attachments, None
+
+
+def _archive_sent(paths):
+    """Move objects we just emailed out of inventory into objects/.sent/. The
+    driver scans only <objects>/ (skipping subdirs) + .nullified/, so a `.sent/`
+    sibling drops out of inventory while staying on disk. Best-effort: the mail
+    already went out, so a move failure must not fail the send. Returns count."""
     sent_dir = os.path.join(DOBJ, "objects", ".sent")
     moved = 0
     try:
@@ -465,7 +465,85 @@ def reply(argv):
                 pass
     except OSError:
         pass
+    return moved
+
+
+def reply(argv):
+    if len(argv) < 3:
+        emit("STATUS=USAGE")  # reply <message_id> <text> <file...>
+        return 2
+    msg_id, text, paths = argv[0], argv[1], argv[2:]
+    cfg = load_cfg()
+    inbox = (cfg.get("agentmailInboxId") or "").strip()
+    if not inbox:
+        emit("STATUS=NOINBOX")
+        return 1
+    attachments, missing = _build_attachments(paths)
+    if missing is not None:
+        emit("STATUS=NOFILE")
+        emit("missing=" + missing)
+        return 1
+    body = {"text": text, "attachments": attachments}
+    status, _ = api("POST", "/inboxes/%s/messages/%s/reply" % (seg(inbox), seg(msg_id)), body)
+    if status not in (200, 201, 202):
+        emit("STATUS=FAIL")
+        emit("http=%d" % status)
+        return 1
+    moved = _archive_sent(paths)
     emit("STATUS=OK")
+    emit("moved=%d" % moved)
+    return 0
+
+
+def fulfill(argv):
+    """fulfill <tradeId> <file...> — take someone's open order: email the objects
+    they want to the order's poster (subject tagged #<tradeId> so their `check`
+    matches it), then move our sent copies out of inventory. The caller (SKILL)
+    picks the right files via the bitcraft MCP first; we look up the recipient."""
+    if len(argv) < 2:
+        emit("STATUS=USAGE")  # fulfill <tradeId> <file...>
+        return 2
+    trade_id, paths = argv[0], argv[1:]
+    cfg = load_cfg()
+    inbox = (cfg.get("agentmailInboxId") or "").strip()
+    apiurl = _market_url(cfg)
+    if not inbox:
+        emit("STATUS=NOINBOX")
+        return 1
+    o, st = _find_open_order(apiurl, trade_id)
+    if st != 200:
+        emit("STATUS=FAIL")
+        emit("http=%d" % st)
+        return 1
+    if not o:
+        emit("STATUS=NOORDER")
+        return 1
+    contact = (o.get("contact") or "").strip()
+    if not contact:
+        emit("STATUS=NOCONTACT")
+        return 1
+    want, want_qty = o.get("want", ""), o.get("wantQty", len(paths))
+    give, give_qty = o.get("give", ""), o.get("giveQty", "")
+    attachments, missing = _build_attachments(paths)
+    if missing is not None:
+        emit("STATUS=NOFILE")
+        emit("missing=" + missing)
+        return 1
+    subject = "Trade #%s: %s %s for %s %s" % (trade_id, want_qty, want, give_qty, give)
+    verb = "is" if len(paths) == 1 else "are"
+    text = "Fulfilling your offer #%s: here %s %d %s for your %s %s." % (
+        trade_id, verb, len(paths), want, give_qty, give)
+    body = {"to": contact, "subject": subject, "text": text, "attachments": attachments}
+    status, _ = api("POST", "/inboxes/%s/messages/send" % seg(inbox), body)
+    if status not in (200, 201, 202):
+        emit("STATUS=FAIL")
+        emit("http=%d" % status)
+        return 1
+    moved = _archive_sent(paths)
+    emit("STATUS=OK")
+    emit("contact=%s" % contact)
+    emit("want=%s" % want)
+    emit("sent=%d" % len(paths))
     emit("moved=%d" % moved)
     return 0
 
@@ -478,7 +556,7 @@ def main():
         "signup": signup, "verify": verify, "sync-config": sync_config,
         "status": status, "announce": announce, "list-orders": list_orders,
         "my-offers": my_offers, "close-order": close_order, "poll": poll,
-        "reply": reply, "mark-processed": mark_processed,
+        "reply": reply, "fulfill": fulfill, "mark-processed": mark_processed,
     }
     fn = fns.get(sys.argv[1])
     if not fn:

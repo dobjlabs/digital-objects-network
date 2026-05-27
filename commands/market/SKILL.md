@@ -1,8 +1,8 @@
 ---
 name: bitcraft-market
-description: Market trade desk — provision an email for your agent, post/read offers, and fulfill trades by email.
-when_to_use: For the bitcraft market order board. `market setup` provisions an email for your agent; `market post` posts your offer; `market check` pulls email once and replies with your object; `market list` reads open orders. Triggers on "market", "market setup", "market post", "market check", "market list".
-argument-hint: [setup|post|check|list]
+description: Market trade desk — provision an email for your agent, post/read offers, take others' orders, and trade objects by email.
+when_to_use: For the bitcraft market order board. `market setup` provisions an email for your agent; `market post` posts your offer; `market check` pulls email once and replies with your object (poster side); `market list` reads open orders; `market fulfill <tradeId>` takes someone else's order by emailing them what they want (taker side); `market collect <tradeId>` imports the reply objects from an order you fulfilled. Triggers on "market", "market setup", "market post", "market check", "market list", "market fulfill", "market collect".
+argument-hint: [setup|post|check|list|fulfill <tradeId>|collect <tradeId>]
 arguments: action
 disable-model-invocation: true
 allowed-tools: Bash, Read, Write
@@ -13,11 +13,13 @@ allowed-tools: Bash, Read, Write
 Trade objects by email, driven manually — one subcommand per run, no loop. Pick the
 run from `$action` (the first argument):
 
-- `setup` → **Setup**: provision your AgentMail inbox (one-time).
-- `post`  → **Post**: post a new offer to the market board (you give the terms).
-- `check` → **Check**: pull new email once, import any object sent to you, reply with yours.
-- `list`  → **List**: read open orders from the market board.
-- empty or anything else → output `usage: market [setup|post|check|list]` and stop.
+- `setup`   → **Setup**: provision your AgentMail inbox (one-time).
+- `post`    → **Post**: post a new offer to the market board (you give the terms).
+- `check`   → **Check**: (poster side) pull new email once, import any object sent to you, reply with yours.
+- `list`    → **List**: read open orders from the market board.
+- `fulfill` → **Fulfill**: (taker side) take someone else's open order — email them the object they want.
+- `collect` → **Collect**: (taker side) import the objects the poster replied with after you fulfilled their order.
+- empty or anything else → output `usage: market [setup|post|check|list|fulfill <tradeId>|collect <tradeId>]` and stop.
 
 The committed helper `market.py` wraps every AgentMail / market-board / config
 operation as a deterministic subcommand (AgentMail key in `~/.dobj/agentmail.key`;
@@ -41,8 +43,12 @@ the board lives at `marketApiUrl`) — no MCP, no OAuth, no loop. Run it as
   `fulfilled #<tradeId>`, `rejected <messageId>: expected <wantQty> <want>, got <n> <class>/<status>`,
   `cannot fulfill #<tradeId>: no live <give> in inventory`, `no open orders`,
   `no active offers`, `posted offer #<tradeId>: <giveQty> <give> → <wantQty> <want>`,
-  `cancelled`, `usage: market [setup|post|check|list]`,
-  `usage: market post <giveQty> <give> <wantQty> <want>`.
+  `fulfilled #<tradeId>: sent <wantQty> <want> to <contact>`,
+  `cannot fulfill #<tradeId>: no live <want> in inventory`, `no such open order #<tradeId>`,
+  `no reply yet for #<tradeId>`, `collected <n> <class> (live)`,
+  `cancelled`, `usage: market [setup|post|check|list|fulfill <tradeId>|collect <tradeId>]`,
+  `usage: market post <giveQty> <give> <wantQty> <want>`,
+  `usage: market fulfill <tradeId>`, `usage: market collect <tradeId>`.
 
 ## Config
 
@@ -176,14 +182,65 @@ The board is append-only; to retire an order, click **close** on the web board
 (`:8088`) or run `python3 "${CLAUDE_SKILL_DIR}/market.py" close-order <id>` — it marks
 the order `closed` (the row stays).
 
+## Fulfill  — run when `$action` is `fulfill`
+
+Take someone else's open order: email them the object they **want** (tagged with the
+tradeId so their `check` matches it). The user gives the tradeId, e.g. `market fulfill d3731s`.
+
+1. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" status`. On `STATUS=NEW` → output
+   `run market setup first` and stop.
+2. Parse `<tradeId>` from the args. If none → output `usage: market fulfill <tradeId>` and stop.
+3. Find the order: run `python3 "${CLAUDE_SKILL_DIR}/market.py" list-orders` and pick the
+   `ORDER {…}` whose `tradeId` is `<tradeId>`. If none matches → output
+   `no such open order #<tradeId>` and stop. Read its `want`, `wantQty` (and `give`,
+   `giveQty`): you must send the poster **`<wantQty>` objects of class `<want>`** — that's
+   what they asked for; you'll get their `<giveQty> <give>` back.
+4. Pick `<wantQty>` live `<want>` objects from your inventory (`list_inventory`: class
+   `<want>`, status `live`). If fewer than `<wantQty>` → output
+   `cannot fulfill #<tradeId>: no live <want> in inventory` and stop. Resolve each one's
+   path (`get_objects_dir` + `fileName`).
+5. Send them:
+
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/market.py" fulfill "<tradeId>" <wantPath1> …
+   ```
+
+   `STATUS=OK` → the helper emailed the objects to the poster (`contact=…`, subject tagged
+   `#<tradeId>`) and moved your sent copies out of inventory into `objects/.sent/`. Output
+   `fulfilled #<tradeId>: sent <wantQty> <want> to <contact>`, then tell the user to run
+   `market collect <tradeId>` once the poster replies. `NOORDER` → output
+   `no such open order #<tradeId>`; any other non-`OK` `STATUS=` line → output it and stop.
+
+## Collect  — run when `$action` is `collect`
+
+Pull the poster's reply to an order you fulfilled and import what they sent back. Same
+tradeId, e.g. `market collect d3731s`.
+
+1. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" status`. On `STATUS=NEW` → output
+   `run market setup first` and stop.
+2. Parse `<tradeId>`. If none → output `usage: market collect <tradeId>` and stop.
+3. Poll your inbox — `python3 "${CLAUDE_SKILL_DIR}/market.py" poll "<tradeId>"`. If the last
+   line is `STATUS=NONE`, output `no reply yet for #<tradeId>` and stop. Otherwise each
+   `TRADE {…}` line is `{messageId, from, subject, attachmentPaths}` — the poster's `.dobj`
+   files are already downloaded.
+4. For each `TRADE`:
+   a. Import every path in `attachmentPaths` (`import_object_file` on each). On any import
+      error, output it verbatim, run `python3 "${CLAUDE_SKILL_DIR}/market.py" mark-processed
+      "<tradeId>" "<messageId>"`, and move to the next TRADE.
+   b. `inspect_object` each import; for each live one output `collected <n> <class> (live)`.
+   c. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" mark-processed "<tradeId>" "<messageId>"`.
+
 ## Guardrails
 
 - Only act on YOUR `<tradeId>` — `poll` filters by subject, so you only see matching mail.
 - One fulfillment per message — `mark-processed` plus `poll`'s dedupe enforce it; never reply twice.
 - Never reply unless the imported object is a `live` `<want>`.
 - `~/.dobj/agentmail.key` is a secret — never echo it or post it anywhere.
-- On a successful reply the helper moves each object you sent out of your inventory
-  (into `objects/.sent/`) — it's the counterpart's now, so you no longer hold it live;
-  the `.dobj` stays on disk, recoverable. There's no cryptographic nullify-on-send yet;
-  this is the honest-removal convention.
+- On a successful reply (poster) or fulfill (taker) the helper moves each object you sent
+  out of your inventory (into `objects/.sent/`) — it's the counterpart's now, so you no
+  longer hold it live; the `.dobj` stays on disk, recoverable. There's no cryptographic
+  nullify-on-send yet; this is the honest-removal convention.
+- Taker side: `fulfill` sends what the order **wants** (not what it gives) — `<wantQty>`
+  of class `<want>`. `collect` only imports a `live` object the poster replied with, and
+  dedupes per `<tradeId>` exactly like `check`.
 - Post more offers anytime with `market post <giveQty> <give> <wantQty> <want>` — each is independent with its own server tradeId. To re-accept on a tradeId, `rm ~/.dobj/.market-processed-<tradeId>.log`.

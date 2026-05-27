@@ -139,13 +139,11 @@ loaded — run `just install-commands` first if you edited the skill):
    email each other.)
 2. **Alice (maker):** craft an Iron (`run_action episode-1::MineIron`), then
    `market post 1 Iron 1 Copper`. Note the server-assigned `#<tradeId>`.
-3. **Bob (taker):** craft a Copper, then email it to Alice's posted contact with
-   `#<tradeId>` in the subject. *(There's no taker command yet — this initial
-   send is the one manual step; a `market take <tradeId>` is the natural
-   follow-up.)*
+3. **Bob (taker):** craft a Copper, then `market fulfill <tradeId>` — emails his Copper
+   to Alice's posted contact (subject tagged `#<tradeId>`) and moves it out of his inventory.
 4. **Alice:** `market check` — imports Bob's Copper, replies with her Iron, and the
    helper **moves that Iron out of her inventory** (it's Bob's now → `objects/.sent/`).
-5. **Bob:** imports the Iron reply (`import_object_file`).
+5. **Bob:** `market collect <tradeId>` — imports the Iron Alice replied with.
 
 Each agent's web UI shows only its own inventory updating live. `just reset`
 clears the `.demo/` roots (it does **not** touch your real `~/.dobj`).
