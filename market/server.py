@@ -32,6 +32,15 @@ PORT = int(os.environ.get("MARKET_PORT", "8088"))
 REQUIRED = ("tradeId", "give", "want", "contact")
 
 
+def _qty(v):
+    """Coerce a quantity to a positive int, defaulting to 1."""
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return 1
+    return n if n > 0 else 1
+
+
 def db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -45,7 +54,9 @@ def init_db():
                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
                    trade_id    TEXT NOT NULL,
                    give        TEXT NOT NULL,
+                   give_qty    INTEGER NOT NULL DEFAULT 1,
                    want        TEXT NOT NULL,
+                   want_qty    INTEGER NOT NULL DEFAULT 1,
                    contact     TEXT NOT NULL,
                    note        TEXT,
                    status      TEXT NOT NULL DEFAULT 'open',
@@ -53,11 +64,19 @@ def init_db():
                    updated_at  INTEGER NOT NULL
                )"""
         )
+        # Migrate pre-quantity DBs: add the columns if an older table exists.
+        for col in ("give_qty", "want_qty"):
+            try:
+                conn.execute("ALTER TABLE orders ADD COLUMN %s INTEGER NOT NULL DEFAULT 1" % col)
+            except sqlite3.OperationalError:
+                pass  # column already present
 
 
 def to_order(r):
     return {
-        "id": r["id"], "tradeId": r["trade_id"], "give": r["give"], "want": r["want"],
+        "id": r["id"], "tradeId": r["trade_id"],
+        "give": r["give"], "giveQty": r["give_qty"],
+        "want": r["want"], "wantQty": r["want_qty"],
         "contact": r["contact"], "note": r["note"], "status": r["status"],
         "createdAt": r["created_at"], "updatedAt": r["updated_at"],
     }
@@ -133,10 +152,10 @@ class Handler(BaseHTTPRequestHandler):
             now = int(time.time())
             with db() as conn:
                 cur = conn.execute(
-                    "INSERT INTO orders (trade_id, give, want, contact, note, status, created_at, updated_at)"
-                    " VALUES (?,?,?,?,?,'open',?,?)",
-                    (str(body["tradeId"]).strip(), str(body["give"]).strip(),
-                     str(body["want"]).strip(), str(body["contact"]).strip(),
+                    "INSERT INTO orders (trade_id, give, give_qty, want, want_qty, contact, note, status, created_at, updated_at)"
+                    " VALUES (?,?,?,?,?,?,?,'open',?,?)",
+                    (str(body["tradeId"]).strip(), str(body["give"]).strip(), _qty(body.get("giveQty", 1)),
+                     str(body["want"]).strip(), _qty(body.get("wantQty", 1)), str(body["contact"]).strip(),
                      (str(body.get("note", "")).strip() or None), now, now),
                 )
                 r = conn.execute("SELECT * FROM orders WHERE id=?", (cur.lastrowid,)).fetchone()

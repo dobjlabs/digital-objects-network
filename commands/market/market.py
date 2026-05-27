@@ -8,14 +8,15 @@ only makes bitcraft MCP calls and trade decisions; it never improvises HTTP
 calls or output parsing.
 
 Subcommands:
-  signup <human-email> <username>     POST /agent/sign-up; persist key + inbox
-  verify <otp-code>                   POST /agent/verify
-  sync-config                         contactEmail := agentmailInboxId when empty
-  announce <tradeId>                  post the offer to the market board (once)
-  list-orders                         read open orders from the market board
-  poll <tradeId>                      list unread #<tradeId> mail, download .dobj attachments
-  reply <message_id> <file> [text]    reply to a message with <file> attached
-  mark-processed <tradeId> <msg_id>   record a message id as handled
+  signup <human-email> <username>              POST /agent/sign-up; persist key + inbox
+  verify <otp-code>                            POST /agent/verify
+  sync-config                                  contactEmail := agentmailInboxId when empty
+  set-offer <giveQty> <give> <wantQty> <want>  set the standing offer in config
+  announce <tradeId>                           post the current offer to the market board
+  list-orders                                  read open orders from the market board
+  poll <tradeId>                               list unread #<tradeId> mail; download all .dobj attachments
+  reply <message_id> <text> <file...>          reply to a message, attaching one or more files
+  mark-processed <tradeId> <msg_id>            record a message id as handled
 
 Prints STATUS=... lines for the caller to branch on; never prints the API key.
 """
@@ -196,34 +197,55 @@ def _market_url(cfg):
     return (cfg.get("marketApiUrl") or "").strip().rstrip("/")
 
 
+def set_offer(argv):
+    """set-offer <giveQty> <give> <wantQty> <want> — persist the standing offer."""
+    if len(argv) < 4:
+        emit("STATUS=USAGE")
+        return 2
+    try:
+        give_qty, want_qty = int(argv[0]), int(argv[2])
+    except ValueError:
+        emit("STATUS=BADOFFER")
+        return 1
+    give, want = argv[1].strip(), argv[3].strip()
+    if give_qty < 1 or want_qty < 1 or not give or not want:
+        emit("STATUS=BADOFFER")  # positive quantities + non-empty class names
+        return 1
+    cfg = load_cfg()
+    cfg["giveQty"], cfg["give"] = give_qty, give
+    cfg["wantQty"], cfg["want"] = want_qty, want
+    save_cfg(cfg)
+    emit("STATUS=OK")
+    emit("offer=%d %s -> %d %s" % (give_qty, give, want_qty, want))
+    return 0
+
+
 def announce(argv):
     if not argv:
         emit("STATUS=USAGE")
         return 2
     trade_id = argv[0]
-    marker = os.path.join(DOBJ, ".market-posted-" + trade_id)
-    if os.path.exists(marker):
-        emit("STATUS=POSTED")
-        return 0
     cfg = load_cfg()
     give = (cfg.get("give") or "").strip()
     want = (cfg.get("want") or "").strip()
+    give_qty = cfg.get("giveQty") or 1
+    want_qty = cfg.get("wantQty") or 1
     contact = (cfg.get("contactEmail") or "").strip()
     api = _market_url(cfg)
     if not (give and want and contact and api):
         emit("STATUS=INCOMPLETE")  # need give + want + contactEmail + marketApiUrl
         return 1
     status, _ = http_json("POST", api + "/api/orders", {
-        "tradeId": trade_id, "give": give, "want": want,
+        "tradeId": trade_id, "give": give, "giveQty": give_qty,
+        "want": want, "wantQty": want_qty,
         "contact": contact, "note": "bitcraft trade desk",
     })
     if status not in (200, 201):
         emit("STATUS=FAIL")
         emit("http=%d" % status)
         return 1
-    open(marker, "w").close()
     emit("STATUS=OK")
-    emit("posted offer #" + trade_id)
+    emit("posted offer #%s: %d %s -> %d %s" % (trade_id, give_qty, give, want_qty, want))
     return 0
 
 
@@ -242,7 +264,8 @@ def list_orders(argv):
     for o in orders:
         emit("ORDER " + json.dumps({
             "id": o.get("id"), "tradeId": o.get("tradeId"),
-            "give": o.get("give"), "want": o.get("want"),
+            "give": o.get("give"), "giveQty": o.get("giveQty"),
+            "want": o.get("want"), "wantQty": o.get("wantQty"),
             "contact": o.get("contact"), "status": o.get("status"),
         }))
     emit("STATUS=OK")
@@ -306,30 +329,35 @@ def poll(argv):
         subject = m.get("subject") or ""
         if needle not in subject.lower():
             continue
-        att = next((a for a in (m.get("attachments") or [])
-                    if (a.get("filename") or "").lower().endswith(".dobj")), None)
-        if not att:
-            continue
-        aid = att.get("attachment_id") or att.get("id")
-        # The attachment endpoint returns METADATA with a signed `download_url`;
-        # the raw bytes live behind that CDN URL, not at the API path itself.
-        st, meta = api("GET", "/inboxes/%s/messages/%s/attachments/%s"
-                       % (seg(inbox), seg(mid), seg(aid)))
-        url = meta.get("download_url") if isinstance(meta, dict) else None
-        if st != 200 or not url:
-            continue
-        try:  # pre-signed CDN URL — fetch with no auth header
-            with urllib.request.urlopen(url, timeout=30) as r:
-                raw = r.read()
-        except (urllib.error.HTTPError, urllib.error.URLError):
+        atts = [a for a in (m.get("attachments") or [])
+                if (a.get("filename") or "").lower().endswith(".dobj")]
+        if not atts:
             continue
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(mid))
-        path = "/tmp/market-%s.dobj" % safe
-        with open(path, "wb") as f:
-            f.write(raw)
+        paths = []
+        for i, att in enumerate(atts):
+            aid = att.get("attachment_id") or att.get("id")
+            # The attachment endpoint returns METADATA with a signed `download_url`;
+            # the raw bytes live behind that CDN URL, not at the API path itself.
+            st, meta = api("GET", "/inboxes/%s/messages/%s/attachments/%s"
+                           % (seg(inbox), seg(mid), seg(aid)))
+            url = meta.get("download_url") if isinstance(meta, dict) else None
+            if st != 200 or not url:
+                continue
+            try:  # pre-signed CDN URL — fetch with no auth header
+                with urllib.request.urlopen(url, timeout=30) as r:
+                    raw = r.read()
+            except (urllib.error.HTTPError, urllib.error.URLError):
+                continue
+            path = "/tmp/market-%s-%d.dobj" % (safe, i)
+            with open(path, "wb") as f:
+                f.write(raw)
+            paths.append(path)
+        if not paths:
+            continue
         sender = m.get("from") or m.get("from_address") or m.get("sender") or ""
         emit("TRADE " + json.dumps({"messageId": mid, "from": sender,
-                                    "subject": subject, "attachmentPath": path}))
+                                    "subject": subject, "attachmentPaths": paths}))
         found += 1
 
     emit("STATUS=" + ("OK" if found else "NONE"))
@@ -338,27 +366,30 @@ def poll(argv):
 
 
 def reply(argv):
-    if len(argv) < 2:
-        emit("STATUS=USAGE")
+    if len(argv) < 3:
+        emit("STATUS=USAGE")  # reply <message_id> <text> <file...>
         return 2
-    msg_id, path = argv[0], argv[1]
-    text = argv[2] if len(argv) > 2 and argv[2].strip() else "Here is your trade item."
+    msg_id, text, paths = argv[0], argv[1], argv[2:]
     cfg = load_cfg()
     inbox = (cfg.get("agentmailInboxId") or "").strip()
     if not inbox:
         emit("STATUS=NOINBOX")
         return 1
-    try:
-        with open(path, "rb") as f:
-            content = base64.b64encode(f.read()).decode()
-    except OSError:
-        emit("STATUS=NOFILE")
-        return 1
-    body = {"text": text, "attachments": [{
-        "content": content,
-        "filename": os.path.basename(path),
-        "content_type": "application/json",
-    }]}
+    attachments = []
+    for path in paths:
+        try:
+            with open(path, "rb") as f:
+                content = base64.b64encode(f.read()).decode()
+        except OSError:
+            emit("STATUS=NOFILE")
+            emit("missing=" + path)
+            return 1
+        attachments.append({
+            "content": content,
+            "filename": os.path.basename(path),
+            "content_type": "application/json",
+        })
+    body = {"text": text, "attachments": attachments}
     status, _ = api("POST", "/inboxes/%s/messages/%s/reply" % (seg(inbox), seg(msg_id)), body)
     if status not in (200, 201, 202):
         emit("STATUS=FAIL")
@@ -374,8 +405,8 @@ def main():
         return 2
     fns = {
         "signup": signup, "verify": verify, "sync-config": sync_config,
-        "announce": announce, "list-orders": list_orders, "poll": poll,
-        "reply": reply, "mark-processed": mark_processed,
+        "set-offer": set_offer, "announce": announce, "list-orders": list_orders,
+        "poll": poll, "reply": reply, "mark-processed": mark_processed,
     }
     fn = fns.get(sys.argv[1])
     if not fn:

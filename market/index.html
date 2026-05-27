@@ -49,7 +49,9 @@
     <form id="post">
       <div><label>trade id</label><input name="tradeId" value="t1" required></div>
       <div><label>contact (email)</label><input name="contact" placeholder="you@agentmail.to" required></div>
+      <div><label>give qty</label><input name="giveQty" type="number" min="1" value="1" required></div>
       <div><label>give</label><input name="give" placeholder="Iron" required></div>
+      <div><label>want qty</label><input name="wantQty" type="number" min="1" value="1" required></div>
       <div><label>want</label><input name="want" placeholder="Copper" required></div>
       <div class="full"><label>note (optional)</label><input name="note"></div>
       <div class="full"><button type="submit">post order</button></div>
@@ -68,7 +70,7 @@
         if (!orders.length) { el.innerHTML = '<div class="empty">no orders yet</div>'; return; }
         el.innerHTML = orders.map(o => `
           <div class="order">
-            <div class="trade">1 ${esc(o.give)}<span class="arrow">&rarr;</span>1 ${esc(o.want)}</div>
+            <div class="trade">${o.giveQty || 1} ${esc(o.give)}<span class="arrow">&rarr;</span>${o.wantQty || 1} ${esc(o.want)}</div>
             <div class="meta">#${esc(o.tradeId)} &middot; <code>${esc(o.contact)}</code> &middot; ${fmt(o.createdAt)}${o.note ? ' &middot; ' + esc(o.note) : ''}</div>
             <span class="status ${esc(o.status)}">${esc(o.status)}</span>
           </div>`).join('');
