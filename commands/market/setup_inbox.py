@@ -311,9 +311,17 @@ def poll(argv):
         if not att:
             continue
         aid = att.get("attachment_id") or att.get("id")
-        st, raw = api("GET", "/inboxes/%s/messages/%s/attachments/%s"
-                      % (seg(inbox), seg(mid), seg(aid)), raw=True)
-        if st != 200:
+        # The attachment endpoint returns METADATA with a signed `download_url`;
+        # the raw bytes live behind that CDN URL, not at the API path itself.
+        st, meta = api("GET", "/inboxes/%s/messages/%s/attachments/%s"
+                       % (seg(inbox), seg(mid), seg(aid)))
+        url = meta.get("download_url") if isinstance(meta, dict) else None
+        if st != 200 or not url:
+            continue
+        try:  # pre-signed CDN URL — fetch with no auth header
+            with urllib.request.urlopen(url, timeout=30) as r:
+                raw = r.read()
+        except (urllib.error.HTTPError, urllib.error.URLError):
             continue
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(mid))
         path = "/tmp/market-%s.dobj" % safe
