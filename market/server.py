@@ -18,7 +18,9 @@ API:
 """
 import json
 import os
+import secrets
 import sqlite3
+import string
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -29,7 +31,7 @@ INDEX = os.path.join(HERE, "index.html")
 HOST = os.environ.get("MARKET_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MARKET_PORT", "8088"))
 
-REQUIRED = ("tradeId", "give", "want", "contact")
+REQUIRED = ("give", "want", "contact")
 
 
 def _qty(v):
@@ -39,6 +41,17 @@ def _qty(v):
     except (TypeError, ValueError):
         return 1
     return n if n > 0 else 1
+
+
+def _new_trade_id(conn):
+    """Server-issued unique short token — the order's public handle and the
+    email-subject tag. Clients do not choose it."""
+    alphabet = string.ascii_lowercase + string.digits
+    for _ in range(10):
+        tid = "".join(secrets.choice(alphabet) for _ in range(6))
+        if not conn.execute("SELECT 1 FROM orders WHERE trade_id=?", (tid,)).fetchone():
+            return tid
+    return "".join(secrets.choice(alphabet) for _ in range(10))
 
 
 def db():

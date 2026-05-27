@@ -14,6 +14,7 @@ Subcommands:
   set-offer <giveQty> <give> <wantQty> <want>  set the standing offer in config
   announce <tradeId>                           post the current offer to the market board
   list-orders                                  read open orders from the market board
+  close-order <id>                             close (retire) an order on the market board
   poll <tradeId>                               list unread #<tradeId> mail; download all .dobj attachments
   reply <message_id> <text> <file...>          reply to a message, attaching one or more files
   mark-processed <tradeId> <msg_id>            record a message id as handled
@@ -273,6 +274,24 @@ def list_orders(argv):
     return 0
 
 
+def close_order(argv):
+    if not argv:
+        emit("STATUS=USAGE")
+        return 2
+    cfg = load_cfg()
+    apiurl = _market_url(cfg)
+    if not apiurl:
+        emit("STATUS=NOAPI")
+        return 1
+    status, _ = http_json("POST", apiurl + "/api/orders/" + seg(argv[0]) + "/close")
+    if status not in (200, 204):
+        emit("STATUS=FAIL")
+        emit("http=%d" % status)
+        return 1
+    emit("STATUS=OK")
+    return 0
+
+
 # --- inbox ---
 
 def _processed_path(trade_id):
@@ -406,7 +425,8 @@ def main():
     fns = {
         "signup": signup, "verify": verify, "sync-config": sync_config,
         "set-offer": set_offer, "announce": announce, "list-orders": list_orders,
-        "poll": poll, "reply": reply, "mark-processed": mark_processed,
+        "close-order": close_order, "poll": poll, "reply": reply,
+        "mark-processed": mark_processed,
     }
     fn = fns.get(sys.argv[1])
     if not fn:

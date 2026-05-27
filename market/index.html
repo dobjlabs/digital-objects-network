@@ -41,6 +41,10 @@
             color:var(--dim); }
   .status.open { color:var(--accent); border-color:var(--accent); }
   .empty { color:var(--dim); text-align:center; padding:34px; }
+  .close-btn { background:transparent; border:1px solid var(--border); color:var(--dim);
+               font:inherit; font-size:10px; padding:3px 8px; border-radius:5px; cursor:pointer; }
+  .close-btn:hover { color:var(--text); border-color:var(--dim); filter:none; }
+  .order.closed { opacity:.55; }
 </style>
 </head>
 <body>
@@ -69,14 +73,22 @@
         const orders = await (await fetch('/api/orders')).json();
         if (!orders.length) { el.innerHTML = '<div class="empty">no orders yet</div>'; return; }
         el.innerHTML = orders.map(o => `
-          <div class="order">
+          <div class="order${o.status === 'open' ? '' : ' closed'}">
             <div class="trade">${o.giveQty || 1} ${esc(o.give)}<span class="arrow">&rarr;</span>${o.wantQty || 1} ${esc(o.want)}</div>
             <div class="meta">#${esc(o.tradeId)} &middot; <code>${esc(o.contact)}</code> &middot; ${fmt(o.createdAt)}${o.note ? ' &middot; ' + esc(o.note) : ''}</div>
             <span class="status ${esc(o.status)}">${esc(o.status)}</span>
+            ${o.status === 'open' ? `<button class="close-btn" title="close order" onclick="closeOrder(${o.id})">close</button>` : ''}
           </div>`).join('');
       } catch (e) {
         el.innerHTML = '<div class="empty">market server unreachable</div>';
       }
+    }
+
+    async function closeOrder(id) {
+      if (!confirm('Close order #' + id + '?')) return;
+      const r = await fetch('/api/orders/' + id + '/close', { method: 'POST' });
+      if (r.ok) load();
+      else alert('close failed (' + r.status + ')');
     }
 
     document.getElementById('post').addEventListener('submit', async e => {

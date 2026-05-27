@@ -20,12 +20,12 @@ Open <http://localhost:8088> for the board. Env overrides: `MARKET_PORT` (8088),
 | Method | Path | Body / notes |
 | --- | --- | --- |
 | `GET` | `/api/orders` | list all orders, newest first. `?status=open` to filter. |
-| `POST` | `/api/orders` | create. `{ "tradeId", "give", "want", "contact", "note"? }` → `201` with the order. |
+| `POST` | `/api/orders` | create. `{ "tradeId", "give", "want", "contact", "giveQty"?, "wantQty"?, "note"? }` (quantities default to 1) → `201` with the order. |
 | `GET` | `/api/orders/{id}` | one order. |
-| `POST` | `/api/orders/{id}/close` | mark an order `closed`. |
-| `GET` | `/` | the web board. |
+| `POST` | `/api/orders/{id}/close` | mark an order `closed` (append-only — the row stays). |
+| `GET` | `/` | the web board (list + post + close). |
 
-An order: `{ id, tradeId, give, want, contact, note, status, createdAt, updatedAt }`
+An order: `{ id, tradeId, give, giveQty, want, wantQty, contact, note, status, createdAt, updatedAt }`
 (`status` is `open` or `closed`; timestamps are unix seconds).
 
 ```bash
@@ -40,9 +40,9 @@ curl -s 'localhost:8088/api/orders?status=open'
 ## Bot integration
 
 The `bitcraft-market` command's helper (`commands/market/market.py`) posts and
-reads here: `market post` → `POST /api/orders`, `market list` → `GET /api/orders`.
-Point it at this server with `marketApiUrl` in `~/.dobj/market.json` (default
-`http://localhost:8088`).
+reads here: `market post` → `POST /api/orders`, `market list` → `GET /api/orders`,
+and `close-order <id>` → `POST /api/orders/{id}/close`. Point it at this server with
+`marketApiUrl` in `~/.dobj/market.json` (default `http://localhost:8088`).
 
 ## Notes
 

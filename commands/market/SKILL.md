@@ -23,7 +23,7 @@ The committed helper `market.py` wraps every AgentMail / market-board / config
 operation as a deterministic subcommand (AgentMail key in `~/.dobj/agentmail.key`;
 the board lives at `marketApiUrl`) — no MCP, no OAuth, no loop. Run it as
 `python3 "${CLAUDE_SKILL_DIR}/market.py" <sub> …`; subs: `signup`, `verify`,
-`sync-config`, `set-offer`, `announce`, `list-orders`, `poll`, `reply`, `mark-processed`.
+`sync-config`, `set-offer`, `announce`, `list-orders`, `close-order`, `poll`, `reply`, `mark-processed`.
 
 ## Output rules
 
@@ -175,6 +175,10 @@ Each `ORDER {…}` line is an open order shaped `{id, tradeId, give, giveQty, wa
 Render them one per line for the user, e.g. `#<tradeId>  <giveQty> <give> → <wantQty> <want>  <contact>`.
 If the helper prints `count=0`, output `no open orders`. On a non-`OK` `STATUS=` line
 (e.g. `NOAPI`, `FAIL`), output it and stop.
+
+The board is append-only; to retire an order, click **close** on the web board
+(`:8088`) or run `python3 "${CLAUDE_SKILL_DIR}/market.py" close-order <id>` — it marks
+the order `closed` (the row stays).
 
 ## Guardrails
 
