@@ -1,5 +1,5 @@
-import { useRef } from "react";
-import type { DragEvent } from "react";
+import { useRef, useState } from "react";
+import type { ChangeEvent, DragEvent } from "react";
 import type { InventoryObjectPayload as InventoryObject } from "../../shared/api/wireTypes";
 import { truncateDisplayHash } from "../../shared/format";
 import {
@@ -18,6 +18,7 @@ interface InventoryPanelProps {
   onSelectObject: (objectId: string) => void;
   onToggleNullified: () => void;
   onOpenObjectsDir: () => void;
+  onImportObject: (dobj: string) => Promise<void>;
 }
 
 export function InventoryPanel({
@@ -28,8 +29,34 @@ export function InventoryPanel({
   onSelectObject,
   onToggleNullified,
   onOpenObjectsDir,
+  onImportObject,
 }: InventoryPanelProps) {
   const isDraggingRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+
+  const handleImportClick = () => {
+    setImportError(null);
+    fileInputRef.current?.click();
+  };
+
+  const handleImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    // Reset the input so picking the same file again still fires `change`.
+    event.target.value = "";
+    if (!file) return;
+    setImporting(true);
+    setImportError(null);
+    try {
+      const text = await file.text();
+      await onImportObject(text);
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const isUsable = (object: InventoryObject) => isLiveObject(object);
 
@@ -111,6 +138,29 @@ export function InventoryPanel({
       >
         Your Objects
       </button>
+
+      <div className="inventory-import">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".dobj,application/json"
+          style={{ display: "none" }}
+          onChange={handleImportFile}
+        />
+        <button
+          type="button"
+          className="inventory-import-button"
+          onClick={handleImportClick}
+          disabled={importing}
+        >
+          {importing ? "Importing…" : "+ Import .dobj"}
+        </button>
+        {importError && (
+          <span className="inventory-import-error" title={importError}>
+            {importError}
+          </span>
+        )}
+      </div>
 
       <div className="inventory-list">
         {activeObjects.map(renderInventoryObject)}

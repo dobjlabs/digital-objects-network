@@ -14,6 +14,10 @@ pub trait CraftOps: Send + Sync + 'static {
     fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunActionResult>;
     fn check_feasibility(&self, action: &QualifiedName) -> anyhow::Result<FeasibilityReport>;
 
+    /// Import a `.dobj` object received out-of-band (raw JSON contents) into
+    /// local inventory. Returns the filed object's summary.
+    fn import_object(&self, dobj_json: &str) -> anyhow::Result<ObjectDetail>;
+
     /// Read the driver's current configuration (synchronizer + relayer URLs).
     fn read_settings(&self) -> anyhow::Result<DriverSettings>;
     /// Persist updated driver configuration. Implementations should accept

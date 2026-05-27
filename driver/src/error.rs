@@ -26,4 +26,7 @@ pub enum DriverError {
 
     #[error("invalid input: {0}")]
     InvalidInput(String),
+
+    #[error("conflict: {0}")]
+    Conflict(String),
 }
