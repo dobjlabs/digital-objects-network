@@ -100,6 +100,56 @@ any browser to use the website client. MCP-aware agents can connect via
 Run individual pieces standalone with `just sync`, `just relayer`,
 `just dobjd`, `just market`, `just web`, `just desktop`.
 
+## Two-agent trade demo
+
+Run two independent agents — "alice" and "bob" — on one machine and have them
+trade a Digital Object by email. The trick is isolation: each agent gets its
+own `.dobj` root via the **`DOBJ_HOME`** env var (the only thing that was ever
+hardcoded to `~/.dobj`), its own dobjd port, its own web UI, and its own
+AgentMail identity. Both point at the **hosted** chain (no local
+synchronizer/relayer/Postgres) and share one market board.
+
+```bash
+just demo   # bootstraps .demo/{alice,bob}/ and brings up the board + 2 stacks
+```
+
+| Agent   | dobjd / MCP   | web UI                   | .dobj root          |
+| ------- | ------------- | ------------------------ | ------------------- |
+| `alice` | `7717`/`7718` | `http://localhost:1420`  | `.demo/alice/.dobj` |
+| `bob`   | `7727`/`7728` | `http://localhost:1421`  | `.demo/bob/.dobj`   |
+| board   | —             | `http://localhost:8088`  | shared              |
+
+`just demo` writes a project-scoped `.mcp.json` into each `.demo/<name>/`, so a
+Claude session started there auto-connects to that agent's MCP port. Open two
+shells and **export `DOBJ_HOME`** so the `bitcraft-market` command reads that
+agent's identity (key, inbox, processed logs):
+
+```bash
+# shell A — alice            # shell B — bob
+cd .demo/alice               cd .demo/bob
+DOBJ_HOME="$PWD/.dobj" claude DOBJ_HOME="$PWD/.dobj" claude
+```
+
+Then, in each session (the bitcraft MCP + `/bitcraft-market` skill are already
+loaded — run `just install-commands` first if you edited the skill):
+
+1. **Both:** `market setup` — pick a **unique** username, then paste the 6-digit
+   code AgentMail emails you. (Setup always verifies now; an unverified inbox can
+   only email its own sign-up address, so this is required for the two agents to
+   email each other.)
+2. **Alice (maker):** craft an Iron (`run_action episode-1::MineIron`), then
+   `market post 1 Iron 1 Copper`. Note the server-assigned `#<tradeId>`.
+3. **Bob (taker):** craft a Copper, then email it to Alice's posted contact with
+   `#<tradeId>` in the subject. *(There's no taker command yet — this initial
+   send is the one manual step; a `market take <tradeId>` is the natural
+   follow-up.)*
+4. **Alice:** `market check` — imports Bob's Copper, replies with her Iron, and the
+   helper **moves that Iron out of her inventory** (it's Bob's now → `objects/.sent/`).
+5. **Bob:** imports the Iron reply (`import_object_file`).
+
+Each agent's web UI shows only its own inventory updating live. `just reset`
+clears the `.demo/` roots (it does **not** touch your real `~/.dobj`).
+
 ## Workspace map
 
 | Crate                                                                                              | Role                                                                                                                           |

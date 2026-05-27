@@ -85,6 +85,51 @@ ensure-remote-settings:
     print(f"~/.dobj/settings.json → hosted sync ({data['synchronizerApiUrl']}) + relayer ({data['relayerApiUrl']})")
     PY
 
+# Two-agent trade demo: two fully-isolated drivers (Alice + Bob) on one machine,
+# each with its own DOBJ_HOME-rooted .dobj (separate inventories + AgentMail
+# identities), both pointed at the HOSTED chain + a shared market board. Brings
+# up the board, two dobjd, and two web UIs. Then open two Claude sessions — one
+# per agent dir — to trade by email. See README "Two-agent trade demo".
+# `install-commands` (not `ensure-commands`) so the demo always runs the latest
+# bitcraft-market skill + helper, even if an older copy is already installed.
+demo: install-commands ensure-demo
+    mprocs --config mprocs.demo.yaml
+
+# Run one demo agent's dobjd: DOBJ_HOME-rooted at .demo/<NAME>/.dobj, HTTP on
+# PORT, MCP on PORT+1. (Alice: 7717/7718, Bob: 7727/7728.)
+demo-dobjd NAME PORT:
+    DOBJ_HOME="{{justfile_directory()}}/.demo/{{NAME}}/.dobj" DOBJD_PORT={{PORT}} RUST_LOG=info cargo run -p dobjd --release
+
+# Run one demo agent's web UI (Vite) on VITE_PORT, talking to the dobjd at
+# DOBJD_PORT. (Alice: 1420→7717, Bob: 1421→7727.)
+demo-web VITE_PORT DOBJD_PORT:
+    cd app-gui && VITE_DOBJD_URL="http://127.0.0.1:{{DOBJD_PORT}}" pnpm exec vite --port {{VITE_PORT}} --strictPort
+
+# Bootstrap the two demo agent roots (idempotent): create .demo/<name>/.dobj,
+# install the active episode plugin, point settings.json at the hosted chain,
+# and drop a project-scoped .mcp.json so `claude` launched in .demo/<name>/
+# auto-connects to that agent's MCP port. Does NOT touch your real ~/.dobj.
+ensure-demo:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="{{justfile_directory()}}"
+    write_agent() {
+        name="$1"; mcp="$2"
+        agent="$root/.demo/$name/.dobj"
+        mkdir -p "$agent/objects" "$agent/actions"
+        if [ ! -f "$agent/actions/{{EPISODE}}.pexe" ]; then
+            echo "Installing plugins/{{EPISODE}} into .demo/$name ..."
+            cargo run -q -p pexe --release -- build --install --install-dir "$agent/actions" "plugins/{{EPISODE}}"
+        fi
+        printf '{\n  "synchronizerApiUrl": "http://18.217.144.33:3000",\n  "relayerApiUrl": "http://18.217.144.33:3200"\n}\n' > "$agent/settings.json"
+        printf '{\n  "mcpServers": {\n    "bitcraft": { "type": "http", "url": "http://127.0.0.1:%s/mcp" }\n  }\n}\n' "$mcp" > "$root/.demo/$name/.mcp.json"
+    }
+    write_agent alice 7718   # dobjd 7717, MCP 7718, web 1420
+    write_agent bob   7728   # dobjd 7727, MCP 7728, web 1421
+    echo "demo ready -> alice: dobjd 7717 / mcp 7718 / web http://localhost:1420"
+    echo "           -> bob:   dobjd 7727 / mcp 7728 / web http://localhost:1421"
+    echo "next: 'just demo', then two shells: (cd .demo/alice && DOBJ_HOME=\$PWD/.dobj claude) and (cd .demo/bob && DOBJ_HOME=\$PWD/.dobj claude)"
+
 # Install the EPISODE plugin into ~/.dobj/actions/ if missing, AND prune any
 # OTHER plugins (e.g. swapping from craft-basics → episode-1 leaves the old
 # craft-basics.pexe lying around, which would shadow class/action lookups).
@@ -140,6 +185,7 @@ reset:
     @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
     rm -f market/*.db
+    rm -rf .demo
     rm -rf ~/.claude/skills/bitcraft-*
     @python3 commands/start/ensure_launch.py --remove && echo "removed: bitcraft-preview from ~/.claude/launch.json"
     @command -v claude >/dev/null 2>&1 && claude mcp remove bitcraft 2>/dev/null && echo "removed: bitcraft MCP registration" || true

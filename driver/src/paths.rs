@@ -16,6 +16,13 @@ pub const OBJECTS_DIR: &str = "objects";
 /// Subdirectory (inside [`OBJECTS_DIR`]) holding already-nullified objects.
 pub const NULLIFIED_DIR: &str = ".nullified";
 
+/// Environment variable that overrides the `.dobj` root directory. When set
+/// to a non-empty path it is used verbatim as the root (the directory that
+/// holds `objects/`, `settings.json`, `actions/`) — analogous to `CARGO_HOME`.
+/// This is what lets two driver instances on one machine keep fully isolated
+/// inventories (see `just demo`). Unset → `~/.dobj`.
+pub const DOBJ_HOME_ENV: &str = "DOBJ_HOME";
+
 /// Subdirectory (inside [`DOBJ_HOME_DIR`]) holding installed `.pexe` plugins.
 pub const ACTIONS_DIR: &str = "actions";
 
@@ -39,8 +46,16 @@ impl DriverPaths {
     }
 }
 
-/// The `.dobj` directory under the user's home.
+/// The `.dobj` root directory. Honors the [`DOBJ_HOME_ENV`] override (used to
+/// give two co-located driver instances separate inventories); otherwise
+/// `~/.dobj`.
 pub fn default_dobj_root() -> Result<PathBuf> {
+    if let Ok(custom) = std::env::var(DOBJ_HOME_ENV) {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
     let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory"))?;
     Ok(home.join(DOBJ_HOME_DIR))
 }

@@ -46,7 +46,7 @@ the board lives at `marketApiUrl`) — no MCP, no OAuth, no loop. Run it as
 
 ## Config
 
-`~/.dobj/market.json`:
+`<root>/market.json` (`<root>` = `$DOBJ_HOME`, default `~/.dobj`):
 
 ```json
 {
@@ -58,38 +58,42 @@ the board lives at `marketApiUrl`) — no MCP, no OAuth, no loop. Run it as
 
 The config holds only your identity + board URL. Offers are **per-post** — the terms
 are `market post` arguments, and each offer's **tradeId is assigned by the server**,
-not stored here. `marketApiUrl` points at your market board (default
-`http://localhost:8088` — run it with `python3 market/server.py`). The AgentMail key
-lives in `~/.dobj/agentmail.key` (mode 600), written by Setup. A per-offer
-`~/.dobj/.market-processed-<tradeId>.log` ensures no email is fulfilled twice.
+not stored here. `marketApiUrl` is optional (default `http://localhost:8088` — run the
+board with `python3 market/server.py`). The AgentMail key lives in
+`<root>/agentmail.key` (mode 600), written by Setup; a per-offer
+`<root>/.market-processed-<tradeId>.log` ensures no email is fulfilled twice. **`<root>`
+is `~/.dobj` by default, or `$DOBJ_HOME` when set** — the helper derives every path
+(key, config, processed logs) from it, so a per-agent `DOBJ_HOME` fully isolates two
+traders on one machine (see the two-agent demo in the repo `README.md`). Let the helper
+manage these files; never touch them by hand.
 
 ## Setup  — run when `$action` is `setup`
 
-1. If `~/.dobj/market.json` is missing, Write the Config template above.
-2. If `~/.dobj/agentmail.key` exists AND `agentmailInboxId` in config is non-empty →
-   output `already set up: <agentmailInboxId>` and stop.
-3. Output exactly `your email (for the AgentMail sign-up code)?` and END THE TURN. Wait; hold the reply as `<email>`.
-4. Output exactly `pick a username for your trade inbox (becomes <name>@agentmail.to)?` and END THE TURN. Wait; hold the reply as `<username>`. (Usernames are global — each user needs a unique one.)
-5. Run:
+1. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" status`. On `STATUS=READY` it also prints
+   `inbox=<address>` → output `already set up: <address>` and stop. On `STATUS=NEW`,
+   continue. (The helper resolves your `.dobj` root from `DOBJ_HOME`, so this checks the
+   right place in a per-agent demo — never test `~/.dobj/...` by hand.)
+2. Output exactly `your email (for the AgentMail sign-up code)?` and END THE TURN. Wait; hold the reply as `<email>`.
+3. Output exactly `pick a username for your trade inbox (becomes <name>@agentmail.to)?` and END THE TURN. Wait; hold the reply as `<username>`. (Usernames are global — each user needs a unique one.)
+4. Run:
 
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/market.py" signup "<email>" "<username>"
    ```
 
    `OK`/`ALREADY` → continue. `TAKEN` → output `username <username> is taken — pick another`
-   and go back to step 4. Anything else → output the `STATUS=` line and stop.
-6. *(Optional — only needed to email addresses other than your sign-up email. An
-   unverified inbox can only send to the sign-up address, so verify if your trading
-   counterpart uses a different one.)* Output exactly
-   `6-digit code emailed to <email> (paste it, or 'skip')?` and END THE TURN. Wait.
-   If the reply is `skip` → continue. Otherwise:
+   and go back to step 3. Anything else → output the `STATUS=` line and stop.
+5. Signup emailed a 6-digit code to `<email>`. Verifying is **required**: an unverified
+   inbox can only send to its own sign-up address, so without it you can't fulfill a trade
+   with anyone else. Output exactly `6-digit code emailed to <email> (paste it)?` and END
+   THE TURN. Wait, then:
 
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/market.py" verify "<reply>"
    ```
 
    `STATUS=VERIFIED` → continue; anything else → output the `STATUS=` line and stop.
-7. Output `agentmail inbox ready: <address>` (`<address>` = `agentmailInboxId` from config).
+6. Output `agentmail inbox ready: <address>` (`<address>` = `agentmailInboxId` from config).
 
 ## Post  — run when `$action` is `post`
 
@@ -97,7 +101,7 @@ Post a NEW offer; the user gives the terms, e.g. `market post 5 Iron for 2 Coppe
 `market post give 2 Iron want 1 Copper`. You can post several — each is its own offer
 with its own server-assigned tradeId.
 
-1. If `~/.dobj/agentmail.key` is missing OR `agentmailInboxId` is empty → output
+1. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" status`. On `STATUS=NEW` → output
    `run market setup first` and stop.
 2. Parse the user's offer into `<giveQty> <give> <wantQty> <want>` (positive-integer
    quantities; `give`/`want` are episode-1 class names). If the user gave no terms,
@@ -116,7 +120,7 @@ with its own server-assigned tradeId.
 
 One pass over all your open offers; no loop.
 
-1. If `~/.dobj/agentmail.key` is missing OR `agentmailInboxId` is empty → output
+1. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" status`. On `STATUS=NEW` → output
    `run market setup first` and stop.
 2. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" sync-config`, then list your open offers:
 
@@ -149,8 +153,9 @@ One pass over all your open offers; no loop.
           python3 "${CLAUDE_SKILL_DIR}/market.py" reply "<messageId>" "Here is your <giveQty> <give> for #<tradeId>." <givePath1> …
           ```
 
-          `STATUS=OK` → output `replied to <from> with <giveQty> <give>`; else output the
-          `STATUS=` line and stop.
+          `STATUS=OK` → output `replied to <from> with <giveQty> <give>` (on success the
+          helper has already moved those objects out of your inventory into `objects/.sent/`
+          — they're the counterpart's now); else output the `STATUS=` line and stop.
       v. Run `python3 "${CLAUDE_SKILL_DIR}/market.py" mark-processed "<tradeId>" "<messageId>"`,
          then output `fulfilled #<tradeId>`.
 
@@ -177,5 +182,8 @@ the order `closed` (the row stays).
 - One fulfillment per message — `mark-processed` plus `poll`'s dedupe enforce it; never reply twice.
 - Never reply unless the imported object is a `live` `<want>`.
 - `~/.dobj/agentmail.key` is a secret — never echo it or post it anywhere.
-- After you reply you still hold a local copy of the given object (no nullify-on-send yet) — expected for now.
+- On a successful reply the helper moves each object you sent out of your inventory
+  (into `objects/.sent/`) — it's the counterpart's now, so you no longer hold it live;
+  the `.dobj` stays on disk, recoverable. There's no cryptographic nullify-on-send yet;
+  this is the honest-removal convention.
 - Post more offers anytime with `market post <giveQty> <give> <wantQty> <want>` — each is independent with its own server tradeId. To re-accept on a tradeId, `rm ~/.dobj/.market-processed-<tradeId>.log`.

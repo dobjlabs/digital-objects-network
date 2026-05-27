@@ -28,3 +28,6 @@ __pycache__/
 
 # market board SQLite DB (created by `python3 market/server.py`)
 market/*.db
+
+# Two-agent demo scratch roots (created by `just demo`)
+.demo/

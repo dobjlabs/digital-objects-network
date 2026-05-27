@@ -1,0 +1,23 @@
+# Two-agent trade demo (see `just demo` and README "Two-agent trade demo").
+#
+# One shared market board + two fully-isolated driver stacks, both pointed at
+# the HOSTED chain (no local synchronizer/relayer/Postgres). Each agent has its
+# own DOBJ_HOME-rooted .dobj, so inventories + AgentMail identities never mix.
+#
+#   alice → dobjd 7717 / mcp 7718 / web http://localhost:1420
+#   bob   → dobjd 7727 / mcp 7728 / web http://localhost:1421
+#   board → http://localhost:8088 (shared)
+#
+# Trade by email from two Claude sessions: `cd .demo/alice && claude` and
+# `cd .demo/bob && claude` (each auto-loads its own .mcp.json).
+procs:
+  market:
+    shell: just market
+  dobjd-alice:
+    shell: just demo-dobjd alice 7717
+  web-alice:
+    shell: just demo-web 1420 7717
+  dobjd-bob:
+    shell: just demo-dobjd bob 7727
+  web-bob:
+    shell: just demo-web 1421 7727

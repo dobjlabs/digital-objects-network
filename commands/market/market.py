@@ -10,13 +10,14 @@ calls or output parsing.
 Subcommands:
   signup <human-email> <username>              POST /agent/sign-up; persist key + inbox
   verify <otp-code>                            POST /agent/verify
+  status                                       READY (key+inbox present) or NEW; honors DOBJ_HOME
   sync-config                                  contactEmail := agentmailInboxId when empty
   announce <giveQty> <give> <wantQty> <want>   post a new offer; server assigns the tradeId
   list-orders                                  read all open orders from the market board
   my-offers                                    list my own open offers (matched by contact)
   close-order <id>                             close (retire) an order on the market board
   poll <tradeId>                               list unread #<tradeId> mail; download all .dobj attachments
-  reply <message_id> <text> <file...>          reply to a message, attaching one or more files
+  reply <message_id> <text> <file...>          reply with attachments; move sent files out of inventory (.sent/)
   mark-processed <tradeId> <msg_id>            record a message id as handled
 
 Prints STATUS=... lines for the caller to branch on; never prints the API key.
@@ -32,10 +33,15 @@ from urllib.parse import quote
 
 BASE = "https://api.agentmail.to"
 HOME = os.path.expanduser("~")
-DOBJ = os.path.join(HOME, ".dobj")
+# The driver's `.dobj` root. `DOBJ_HOME` (same env var the Rust driver honors)
+# relocates it so two agents on one machine keep separate identities + state;
+# unset → `~/.dobj`. Everything below (key, config, processed logs) derives
+# from this, so a per-agent root isolates the whole market identity.
+DOBJ = os.environ.get("DOBJ_HOME", "").strip() or os.path.join(HOME, ".dobj")
 KEY_PATH = os.path.join(DOBJ, "agentmail.key")
 CFG_PATH = os.path.join(DOBJ, "market.json")
 DEFAULT_USERNAME = "bitcraft-trader"
+DEFAULT_MARKET_URL = "http://localhost:8088"
 
 
 def emit(line):
@@ -119,6 +125,20 @@ def sync_config(argv):
     return 0
 
 
+def status(argv):
+    """Report whether this agent's inbox is already provisioned, honoring
+    DOBJ_HOME — so the Setup flow checks the *right* root, not a hardcoded
+    ~/.dobj. READY (key present + inbox known) → also prints the address."""
+    cfg = load_cfg()
+    inbox = (cfg.get("agentmailInboxId") or "").strip()
+    if read_key() and inbox:
+        emit("STATUS=READY")
+        emit("inbox=" + inbox)
+        return 0
+    emit("STATUS=NEW")
+    return 0
+
+
 # --- bootstrap ---
 
 def signup(argv):
@@ -195,7 +215,7 @@ def http_json(method, url, body=None):
 
 
 def _market_url(cfg):
-    return (cfg.get("marketApiUrl") or "").strip().rstrip("/")
+    return ((cfg.get("marketApiUrl") or "").strip() or DEFAULT_MARKET_URL).rstrip("/")
 
 
 def announce(argv):
@@ -428,7 +448,25 @@ def reply(argv):
         emit("STATUS=FAIL")
         emit("http=%d" % status)
         return 1
+    # The attached objects are now the counterpart's — move our local copies out
+    # of inventory so we no longer hold them live. The driver only scans
+    # <objects>/ (skipping subdirs) + .nullified/, so a `.sent/` sibling drops
+    # out of inventory while staying on disk. Best-effort: the mail already went
+    # out, so a move failure must not fail the reply.
+    sent_dir = os.path.join(DOBJ, "objects", ".sent")
+    moved = 0
+    try:
+        os.makedirs(sent_dir, exist_ok=True)
+        for path in paths:
+            try:
+                os.replace(path, os.path.join(sent_dir, os.path.basename(path)))
+                moved += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
     emit("STATUS=OK")
+    emit("moved=%d" % moved)
     return 0
 
 
@@ -438,9 +476,9 @@ def main():
         return 2
     fns = {
         "signup": signup, "verify": verify, "sync-config": sync_config,
-        "announce": announce, "list-orders": list_orders, "my-offers": my_offers,
-        "close-order": close_order, "poll": poll, "reply": reply,
-        "mark-processed": mark_processed,
+        "status": status, "announce": announce, "list-orders": list_orders,
+        "my-offers": my_offers, "close-order": close_order, "poll": poll,
+        "reply": reply, "mark-processed": mark_processed,
     }
     fn = fns.get(sys.argv[1])
     if not fn:

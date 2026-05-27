@@ -46,6 +46,10 @@ and `close-order <id>` → `POST /api/orders/{id}/close`. Point it at this serve
 
 ## Notes
 
+- **Hand-off on send.** When the bot fulfills a trade it gives the object away, so the
+  `market` helper moves its local copy out of inventory — `mv`'d into `objects/.sent/`,
+  a dir the driver's inventory scan skips (gone from inventory, still on disk). No driver
+  change needed: it's just a file move on a path the bot already had.
 - SQLite file lives at `market/market.db` (gitignore it). Delete it to reset the board.
 - This is the simple, local version. For a shared/production board, the same API
   maps cleanly onto the repo's axum + Postgres pattern (see `synchronizer/`,
