@@ -76,7 +76,7 @@ enum Cmd {
     StateRoot,
     /// Print the local objects directory path (`~/.dobj/objects/`).
     ObjectsDir,
-    /// Import a `.dobj` object received from another player into inventory.
+    /// Import an external `.dobj` file into inventory.
     Import {
         /// Path to the `.dobj` file to import. Its contents are read and sent
         /// to dobjd, which files the object under a canonical name.

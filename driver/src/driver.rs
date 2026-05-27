@@ -337,12 +337,12 @@ impl Driver {
         Ok(encode_hash_hex(&head.current_gsr))
     }
 
-    /// Import a `.dobj` object received out-of-band (e.g. a trade attachment)
-    /// into local inventory.
+    /// Import an external `.dobj` object — one not produced by this driver
+    /// (e.g. a file from outside `~/.dobj/`) — into local inventory.
     ///
     /// `dobj_json` is the raw JSON contents of a `.dobj` file. The object is
-    /// filed under a canonical name derived from its commitment — the
-    /// sender's filename and `id` are not trusted.
+    /// filed under a canonical name derived from its commitment — the file's
+    /// own `id` and filename are not trusted.
     ///
     /// Validation:
     /// - the `class` must be one this driver's catalog knows, and the object's

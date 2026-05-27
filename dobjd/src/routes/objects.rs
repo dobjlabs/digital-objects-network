@@ -33,8 +33,8 @@ pub async fn inspect_object(
     Ok(Json(summary))
 }
 
-/// `POST /objects/import` — adopt a `.dobj` received out-of-band (e.g. a
-/// trade attachment) into local inventory. Body is `{ "dobj": "<json>" }`;
+/// `POST /objects/import` — adopt an external `.dobj` (one not produced by
+/// this driver, e.g. from outside `~/.dobj/`) into local inventory. Body is `{ "dobj": "<json>" }`;
 /// the driver validates class identity + on-chain grounding and files it
 /// under a canonical name. Returns the filed object's summary. 409 if the
 /// object is already held or already spent on-chain.

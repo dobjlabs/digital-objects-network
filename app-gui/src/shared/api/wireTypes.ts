@@ -40,8 +40,8 @@ export interface ObjectSummaryPayload {
   fields: Record<string, unknown>;
 }
 
-/** `POST /objects/import` request body — the raw JSON contents of a `.dobj`
- * file received out-of-band (e.g. a trade attachment). */
+/** `POST /objects/import` request body — the raw JSON contents of an external
+ * `.dobj` file, one not produced by this driver (e.g. from outside `~/.dobj/`). */
 export interface ImportObjectRequest {
   dobj: string;
 }
