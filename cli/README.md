@@ -29,6 +29,7 @@ Two flavors of commands.
 | `feasibility <plugin::action>`                  | `GET /actions/{id}/feasibility`                                            |
 | `state-root`                                    | `GET /state-root`                                                          |
 | `objects-dir`                                   | `GET /objects/dir`                                                         |
+| `import <path>`                                 | `POST /objects/import` (reads the `.dobj` file locally, sends contents)    |
 | `settings get`                                  | `GET /settings`                                                            |
 | `settings set --synchronizer URL --relayer URL` | `PUT /settings` (omitted flags left unchanged)                             |
 | `run <action> [paths...]`                       | `POST /actions/run` + filters `/events` for matching `run-action-progress` |

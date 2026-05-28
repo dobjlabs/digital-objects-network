@@ -21,6 +21,9 @@ It is intentionally a library, not a daemon and not a CLI.
 - listing actions and classes from the built-in world
 - checking whether an action is feasible with the current local inventory
 - syncing local inventory state against the synchronizer
+- importing an external `.dobj` (one not produced by this driver) — validates
+  class identity + on-chain grounding, then files it under a canonical name
+  derived from its commitment
 - executing an action end to end:
   - resolve inputs
   - fetch grounding witness
@@ -58,6 +61,10 @@ Core read APIs:
 - `get_class(name)`
 - `check_action(action_id)`
 - `get_state_root()`
+- `import_object(dobj_json)` — adopt an external `.dobj`; rejects if class
+  identity doesn't match, the object is already held, or its nullifier is
+  already spent on-chain. Tolerates an unreachable synchronizer by importing
+  the object as `Unknown`
 
 Execution APIs:
 
