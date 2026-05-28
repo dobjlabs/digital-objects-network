@@ -17,6 +17,17 @@ use common::{decode_hash_hex, encode_hash_hex};
 pub const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
 pub const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
 
+/// Per-request cap on `tx_hashes.len() + nullifiers.len()` accepted by the
+/// synchronizer's `POST /v1/state/membership` endpoint. MUST stay at or
+/// below the server's `MAX_HASH_QUERY_ITEMS` (synchronizer/src/api.rs).
+/// Above that, the server returns 400 and `sync_inventory` falls back to
+/// stale local listing without on-chain reconciliation.
+///
+/// We chunk client-side at this value so inventories with hundreds of
+/// objects still reconcile in a single `sync_inventory` call (just spread
+/// across multiple HTTP requests).
+const MEMBERSHIP_BATCH_LIMIT: usize = 256;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynchronizerHead {
     pub current_gsr: Hash,
@@ -123,29 +134,63 @@ impl SynchronizerClient for HttpSynchronizerClient {
         nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership> {
         let endpoint = format!("{}/v1/state/membership", sync_api_url.trim_end_matches('/'));
-        let request = MembershipRequest {
-            tx_hashes: tx_hashes.iter().map(encode_hash_hex).collect(),
-            nullifiers: nullifiers.iter().map(encode_hash_hex).collect(),
-        };
         let client = reqwest::blocking::Client::new();
-        let payload: MembershipResponse = send_json_request(
-            client.post(&endpoint).json(&request),
-            &endpoint,
-            "synchronizer membership response",
-        )?;
 
-        let mut grounded_txs = HashSet::new();
-        for entry in payload.tx_results {
-            if entry.present {
-                grounded_txs.insert(parse_hash_hex(&entry.tx_hash)?);
-            }
+        let mut grounded_txs: HashSet<Hash> = HashSet::new();
+        let mut on_chain_nullifiers: HashSet<Hash> = HashSet::new();
+
+        // Empty inputs → no network call. The membership endpoint accepts
+        // a request with both lists empty, but it's a wasted round trip.
+        if tx_hashes.is_empty() && nullifiers.is_empty() {
+            return Ok(SynchronizerMembership {
+                grounded_txs,
+                on_chain_nullifiers,
+            });
         }
 
-        let mut on_chain_nullifiers = HashSet::new();
-        for entry in payload.nullifier_results {
-            if entry.present {
-                on_chain_nullifiers.insert(parse_hash_hex(&entry.nullifier)?);
+        // The synchronizer rejects bodies where `tx_hashes.len() +
+        // nullifiers.len() > MEMBERSHIP_BATCH_LIMIT` with 400. Pack each
+        // batch tightly: take as many tx_hashes as possible (up to the
+        // limit), then fill the remainder with nullifiers. Continue until
+        // both lists are drained. Sequential because reqwest::blocking
+        // and synchronizer responses are fast.
+        let mut tx_cursor = 0usize;
+        let mut null_cursor = 0usize;
+        while tx_cursor < tx_hashes.len() || null_cursor < nullifiers.len() {
+            let tx_take = (tx_hashes.len() - tx_cursor).min(MEMBERSHIP_BATCH_LIMIT);
+            let remaining_capacity = MEMBERSHIP_BATCH_LIMIT - tx_take;
+            let null_take = (nullifiers.len() - null_cursor).min(remaining_capacity);
+
+            let request = MembershipRequest {
+                tx_hashes: tx_hashes[tx_cursor..tx_cursor + tx_take]
+                    .iter()
+                    .map(encode_hash_hex)
+                    .collect(),
+                nullifiers: nullifiers[null_cursor..null_cursor + null_take]
+                    .iter()
+                    .map(encode_hash_hex)
+                    .collect(),
+            };
+
+            let payload: MembershipResponse = send_json_request(
+                client.post(&endpoint).json(&request),
+                &endpoint,
+                "synchronizer membership response",
+            )?;
+
+            for entry in payload.tx_results {
+                if entry.present {
+                    grounded_txs.insert(parse_hash_hex(&entry.tx_hash)?);
+                }
             }
+            for entry in payload.nullifier_results {
+                if entry.present {
+                    on_chain_nullifiers.insert(parse_hash_hex(&entry.nullifier)?);
+                }
+            }
+
+            tx_cursor += tx_take;
+            null_cursor += null_take;
         }
 
         Ok(SynchronizerMembership {
