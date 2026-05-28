@@ -20,7 +20,7 @@ use pod2::{
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
-use txlib::{EventHandle, GroundingEvidence, GroundingWitness, Tx, TxBuilder};
+use txlib::{EventHandle, GroundingEvidence, GroundingWitness, Tx, TxBuilder, with_identity};
 use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 
 mod error;
@@ -53,7 +53,7 @@ enum Intro {
     LtEqU256, // (lhs, rhs)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectIO {
     Input,
     Mutate,
@@ -514,8 +514,34 @@ impl ActionHandle {
         // Object insts. Each Object contributes one entry to its
         // dispatch side's array (Mutate contributes to both). Slot 0
         // is `_pad`; real entries start at slot 1 (see PAD_ENTRY).
+        //
+        // For Output objects the script's view is pre-identity, but
+        // TxInsert stamps `new.identity = commitment(initial)` and
+        // the predicate references the stamped form via the `out`
+        // record. We cache the stamped dict once here so the
+        // out_array entry, the array_contains anchor below, and the
+        // post-event obj_dict downstream all see the same value.
+        // Input/Mutate dicts pass through unchanged (identity is
+        // preserved from the prior tx).
         let exe_rc = self.0.borrow().exe_ctx.clone().expect("exe phase");
         let meta = module.action_by_name(&action);
+        let stamped_outputs: HashMap<String, Dictionary> = {
+            let ctx = self.0.borrow();
+            ctx.insts
+                .iter()
+                .filter_map(|inst| match inst {
+                    Inst::Object {
+                        io: ObjectIO::Output,
+                        obj,
+                        ..
+                    } => {
+                        let obj = obj.borrow();
+                        Some((obj.var_name().to_string(), with_identity(&obj.to_dict())))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
         let mut in_dicts: Vec<Value> = vec![Value::from(0_i64)];
         let mut out_dicts: Vec<Value> = vec![Value::from(0_i64)];
         {
@@ -525,13 +551,14 @@ impl ActionHandle {
                     io, obj, original, ..
                 } = inst
                 {
+                    let varname = obj.borrow().var_name().to_string();
                     let post_dict = obj.borrow().to_dict();
                     match io {
                         ObjectIO::Input => {
                             in_dicts.push(Value::from(post_dict));
                         }
                         ObjectIO::Output => {
-                            out_dicts.push(Value::from(post_dict));
+                            out_dicts.push(Value::from(stamped_outputs[&varname].clone()));
                         }
                         ObjectIO::Mutate => {
                             let pre_dict = original
@@ -548,11 +575,32 @@ impl ActionHandle {
         let in_array = Array::new(in_dicts);
         let out_array = Array::new(out_dicts);
 
+        // Mirror fmt_podlang's per-Output ts bump (see
+        // `fmt_podlang::output_max_ts`): the script-final ts on an
+        // Output object is the pre-identity intermediate, not
+        // `out.<name>`, so `anchor_or_literal` must not collapse it.
         let max_ts: HashMap<String, usize> = {
             let ctx = self.0.borrow();
+            let output_vars: HashSet<String> = ctx
+                .insts
+                .iter()
+                .filter_map(|inst| match inst {
+                    Inst::Object {
+                        io: ObjectIO::Output,
+                        obj,
+                        ..
+                    } => Some(obj.borrow().var_name().to_string()),
+                    _ => None,
+                })
+                .collect();
             ctx.var_state
                 .iter()
-                .map(|(k, v)| (k.clone(), v.ts))
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        fmt_podlang::output_max_ts(v.ts, output_vars.contains(k)),
+                    )
+                })
                 .collect()
         };
 
@@ -584,7 +632,10 @@ impl ActionHandle {
                 } = inst
                 {
                     let varname = obj.borrow().var_name().to_string();
-                    let post_dict = obj.borrow().to_dict();
+                    let post_dict = match io {
+                        ObjectIO::Output => stamped_outputs[&varname].clone(),
+                        _ => obj.borrow().to_dict(),
+                    };
                     let pre_dict = match io {
                         ObjectIO::Mutate => original
                             .as_ref()
@@ -698,15 +749,33 @@ impl ActionHandle {
                 } = inst
                 {
                     let varname = obj.borrow().var_name().to_string();
-                    let obj_dict = obj.borrow().to_dict();
-                    let (st_tx_literal, handle) = match io {
-                        ObjectIO::Output => exe_ctx.tx_builder.insert(&mut exe_ctx.bld, &obj_dict),
-                        ObjectIO::Input => exe_ctx.tx_builder.delete(&mut exe_ctx.bld, &obj_dict),
+                    let raw_obj_dict = obj.borrow().to_dict();
+                    // `obj_dict` is the post-identity dict for Output
+                    // (taken from `tx_builder.insert`'s return) so
+                    // out_array entries, `exe_ctx.outputs`, and the
+                    // pending event all reference the form that's in
+                    // the live set. Input/Mutate dicts already carry
+                    // identity from the prior tx.
+                    let (obj_dict, st_tx_literal, handle) = match io {
+                        ObjectIO::Output => {
+                            let (new_dict, st, h) =
+                                exe_ctx.tx_builder.insert(&mut exe_ctx.bld, &raw_obj_dict);
+                            (new_dict, st, h)
+                        }
+                        ObjectIO::Input => {
+                            let (st, h) =
+                                exe_ctx.tx_builder.delete(&mut exe_ctx.bld, &raw_obj_dict);
+                            (raw_obj_dict, st, h)
+                        }
                         ObjectIO::Mutate => {
                             let obj0 = original
                                 .as_ref()
                                 .expect("Mutate records a pre-mutation dict");
-                            exe_ctx.tx_builder.mutate(&mut exe_ctx.bld, &obj_dict, obj0)
+                            let (st, h) =
+                                exe_ctx
+                                    .tx_builder
+                                    .mutate(&mut exe_ctx.bld, &raw_obj_dict, obj0);
+                            (raw_obj_dict, st, h)
                         }
                     };
                     let post_ts = inst_chain_ts[i].expect("Object inst has parent_ts");
@@ -750,10 +819,12 @@ impl ActionHandle {
 
         // Wrap each pending Tx event with its anchors. Arg layout
         // (per txlib):
-        //   TxInsert(chain, prev_chain, new, type)
+        //   TxInsert(chain, prev_chain, initial, new, type)
         //   TxDelete(chain, prev_chain, old, type)
         //   TxMutate(chain, prev_chain, new, old, type)
-        // `type` is always literal (the @self_predicate ref).
+        // `type` is always literal (the @self_predicate ref);
+        // TxInsert's `initial` (slot 2) stays literal too to bind
+        // the predicate's pre-identity private wildcard.
         let mut events: Vec<EventData> = Vec::new();
         let mut event_sts: Vec<Statement> = Vec::new();
         {
@@ -782,7 +853,8 @@ impl ActionHandle {
                 let prev_chain_anchor = chain_step_anchor(pre_ts);
                 let replacements: Vec<Option<OperationArg>> = match io {
                     ObjectIO::Output => {
-                        vec![chain_anchor, prev_chain_anchor, new_anchor, None]
+                        // (chain, prev_chain, initial, new, type)
+                        vec![chain_anchor, prev_chain_anchor, None, new_anchor, None]
                     }
                     ObjectIO::Input => {
                         vec![chain_anchor, prev_chain_anchor, old_anchor, None]
@@ -1586,10 +1658,17 @@ fn compute_wildcard_needs(ctx: &ActionContext) -> (HashSet<String>, HashSet<Stri
         }
     }
     let mut current_ts: HashMap<String, usize> = object_io.keys().map(|v| (v.clone(), 0)).collect();
+    // Mirror fmt_podlang's per-Output ts bump (see
+    // `fmt_podlang::output_max_ts`): a whole-dict reference at the
+    // script-final ts on an Output stays an *intermediate*
+    // (pre-identity) ref, so we don't force the at_out wildcard.
     let max_ts: HashMap<String, usize> = ctx
         .var_state
         .iter()
-        .map(|(k, v)| (k.clone(), v.ts))
+        .map(|(k, v)| {
+            let is_output = matches!(object_io.get(k), Some(ObjectIO::Output));
+            (k.clone(), fmt_podlang::output_max_ts(v.ts, is_output))
+        })
         .collect();
     let mut needs_in: HashSet<String> = HashSet::new();
     let mut needs_out: HashSet<String> = HashSet::new();

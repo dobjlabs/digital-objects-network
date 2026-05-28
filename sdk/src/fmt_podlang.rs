@@ -48,6 +48,17 @@ fn fmt_var_at(name: &str, ts: usize, max_ts: usize) -> String {
     }
 }
 
+/// Output Objects reserve one extra ts beyond the script's last
+/// DictUpdate to hold the implicit identity-stamping step (TxInsert's
+/// `DictInsert(new, initial, "identity", initial)` proves it). The
+/// script-final ts is the pre-identity `initial` wildcard the action
+/// predicate hands to TxInsert; the bumped ts collapses to
+/// `out.<name>` (the post-identity dict that lives in the tx). Mutate
+/// doesn't bump -- TxMutate preserves identity, doesn't stamp it.
+pub(crate) const fn output_max_ts(base_ts: usize, is_output: bool) -> usize {
+    if is_output { base_ts + 1 } else { base_ts }
+}
+
 /// Slot 0 placeholder in every records-form schema (`<Action>In`,
 /// `<Action>Out`, `<Action>Chain`). Real entries start at slot 1.
 /// Works around pod2 issue #513.
@@ -343,6 +354,14 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     let alias_names: std::collections::HashSet<String> =
         sub_calls.iter().filter_map(|c| c.alias.clone()).collect();
 
+    let max_ts_for = |var: &str| -> usize {
+        let is_output = meta
+            .object_refs
+            .iter()
+            .any(|o| o.varname == var && o.io == ObjectIO::Output);
+        output_max_ts(action.var_state[var].ts, is_output)
+    };
+
     // Private wildcards: every (var, ts) except sub-action aliases,
     // chain endpoints (public chain0/chain), packed chain intermediates
     // (anchored via the `chain_steps` record), and Object pre/post-form
@@ -353,7 +372,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         if alias_names.contains(var.as_str()) {
             continue;
         }
-        let max_ts = action.var_state[var].ts;
+        let max_ts = max_ts_for(var);
         for i in 0..=max_ts {
             let skip = if var == "chain" {
                 i == 0 || i == max_ts || chain_step_at(i, max_ts).is_some()
@@ -397,7 +416,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         .vars
         .iter()
         .map(|v| {
-            let max_ts = action.var_state[v].ts;
+            let max_ts = max_ts_for(v);
             let collapsed_in = meta.collapsed_at(v, 0, max_ts) == Some(Side::In);
             let collapsed_out = meta.collapsed_at(v, max_ts, max_ts) == Some(Side::Out);
             (
@@ -521,6 +540,11 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // internally, so the guard predicate ref is passed as the last
     // arg to TxInsert / TxDelete / TxMutate (and pins both sides for
     // mutate, making the type-preservation check implicit).
+    // For Output, the script's final wildcard (`obj_str`) is the
+    // pre-identity `initial` arg; the bumped-ts rendering
+    // (`obj_with_id`, which collapses to `out.<name>`) is the
+    // post-identity `new` arg that lives in the tx and is bound to
+    // the output record.
     for o in &meta.object_refs {
         let chain = vars["chain"];
         let chain_next = chain.next();
@@ -531,10 +555,13 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 w,
                 "  tx::TxDelete({chain_next}, {chain}, {obj_str}, @self_predicate(Is{class}))"
             )?,
-            ObjectIO::Output => writeln!(
-                w,
-                "  tx::TxInsert({chain_next}, {chain}, {obj_str}, @self_predicate(Is{class}))"
-            )?,
+            ObjectIO::Output => {
+                let obj_with_id = obj_str.next();
+                writeln!(
+                    w,
+                    "  tx::TxInsert({chain_next}, {chain}, {obj_str}, {obj_with_id}, @self_predicate(Is{class}))"
+                )?;
+            }
             ObjectIO::Mutate => {
                 let mut pre = vars[o.varname.as_str()];
                 pre.ts = 0;

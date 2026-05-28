@@ -275,6 +275,24 @@ pub fn new_obj() -> Dictionary {
     Dictionary::new(map)
 }
 
+/// Field name TxInsert's DictInsert clause stamps onto every newly
+/// inserted object. Must stay in sync with `txlib.podlang`'s TxInsert
+/// body and TxMutate's `Equal(old.identity, new.identity)` clause.
+pub const IDENTITY_FIELD: &str = "identity";
+
+/// Stamp `identity = commitment(initial)` into the dict and return the
+/// materialized object. TxInsert's DictInsert clause proves the same
+/// relationship; callers that need the post-identity dict outside of
+/// `TxBuilder::insert` (e.g. tests, builders that pre-compute the
+/// finalized object) should go through this helper to stay consistent.
+pub fn with_identity(initial: &Dictionary) -> Dictionary {
+    let identity = Value::from(initial.commitment());
+    let mut new = initial.clone();
+    new.insert(&StrKey::from(IDENTITY_FIELD), &identity)
+        .unwrap();
+    new
+}
+
 // ============================================================================
 // Event tree (for replay construction in finalize)
 // ============================================================================
@@ -282,6 +300,11 @@ pub fn new_obj() -> Dictionary {
 pub(crate) enum ChainEvent {
     Insert {
         new: Dictionary,
+        /// Pre-identity dict from which `new` was derived via
+        /// `with_identity`. Threaded into replay so TxInsert's `initial`
+        /// public arg (the dict the action constructed) can be bound at
+        /// replay time.
+        initial: Dictionary,
         chain_after: Hash,
         /// The TxInsert statement emitted at record time. Replay
         /// references this directly instead of re-proving the chain
@@ -390,7 +413,7 @@ pub struct TxBuilder {
 // ============================================================================
 
 /// Fields to skip in compact display (noise for debugging).
-const DISPLAY_SKIP_FIELDS: &[&str] = &["type", "key"];
+const DISPLAY_SKIP_FIELDS: &[&str] = &["type", "key", IDENTITY_FIELD];
 
 /// Format a Dictionary as a compact summary: commitment + interesting fields.
 fn obj_summary(obj: &Dictionary) -> String {
@@ -620,25 +643,38 @@ impl TxBuilder {
         }
     }
 
-    /// Record an insertion. Emits TxInsert, updates live set.
-    /// Must be called inside an open action scope. Returns the
-    /// TxInsert statement (for composition into the action's
-    /// predicate) and a handle used to attach guard evidence via
-    /// `set_guard`.
-    pub fn insert(&mut self, ctx: &mut BuildContext, new: &Dictionary) -> (Statement, EventHandle) {
+    /// Record an insertion. Emits TxInsert, updates live set. Must be
+    /// called inside an open action scope.
+    ///
+    /// `initial` is the pre-identity object state; the builder stamps
+    /// `identity = commitment(initial)` via [`with_identity`] and the
+    /// returned `Dictionary` is the post-identity `new` (the dict that
+    /// lives in the tx). Subsequent mutate/delete must reference the
+    /// returned dict, not `initial`.
+    pub fn insert(
+        &mut self,
+        ctx: &mut BuildContext,
+        initial: &Dictionary,
+    ) -> (Dictionary, Statement, EventHandle) {
         assert!(
             !self.action_stack.is_empty(),
             "insert must be called inside an action scope",
         );
+        let new = with_identity(initial);
+
         let prev = self.chain;
         let event_hash = hash_values(&[Value::from(EMPTY_VALUE), Value::from(new.clone())]);
         self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
         self.live.insert(&Value::from(new.clone())).unwrap();
 
-        let new_type = object_type(new);
+        let new_type = object_type(&new);
         let st_dc = ctx
             .builder
             .priv_op(op!(DictContains(new, "type", new_type.clone())))
+            .unwrap();
+        let st_di = ctx
+            .builder
+            .priv_op(op!(DictInsert(new, initial, IDENTITY_FIELD, initial)))
             .unwrap();
         let st_h1 = ctx
             .builder
@@ -652,20 +688,21 @@ impl TxBuilder {
             .apply_custom_pred(
                 false,
                 "TxInsert",
-                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "type" => new_type}),
-                vec![st_dc, st_h1, st_h2],
+                map!({"chain" => self.chain, "prev_chain" => prev, "initial" => initial.clone(), "new" => new.clone(), "type" => new_type}),
+                vec![st_dc, st_di, st_h1, st_h2],
             )
             .unwrap();
         record(&mut self.stats, "TxInsert");
 
         self.push_event(ChainEvent::Insert {
             new: new.clone(),
+            initial: initial.clone(),
             chain_after: self.chain,
             tx_stmt: st.clone(),
             guard_evidence: None,
         });
         let handle = self.handle_for_last_event();
-        (st, handle)
+        (new, st, handle)
     }
 
     /// Record a mutation. Emits TxMutate, updates live set and nullifiers.
@@ -693,6 +730,18 @@ impl TxBuilder {
         let new_type = object_type(new);
         let old_type = object_type(old);
         assert_eq!(new_type, old_type, "mutate must preserve object type");
+        let new_identity = new
+            .get(&StrKey::from(IDENTITY_FIELD))
+            .expect("new dict lookup")
+            .expect("mutate target missing identity field (must come from TxBuilder::insert)");
+        let old_identity = old
+            .get(&StrKey::from(IDENTITY_FIELD))
+            .expect("old dict lookup")
+            .expect("mutate source missing identity field (must come from TxBuilder::insert)");
+        assert_eq!(
+            new_identity, old_identity,
+            "mutate must preserve object identity"
+        );
         let st_dc_new = ctx
             .builder
             .priv_op(op!(DictContains(new, "type", new_type.clone())))
@@ -700,6 +749,10 @@ impl TxBuilder {
         let st_dc_old = ctx
             .builder
             .priv_op(op!(DictContains(old, "type", new_type.clone())))
+            .unwrap();
+        let st_eq_identity = ctx
+            .builder
+            .priv_op(op!(Equal((old, IDENTITY_FIELD), (new, IDENTITY_FIELD))))
             .unwrap();
         let st_h1 = ctx
             .builder
@@ -714,7 +767,7 @@ impl TxBuilder {
                 false,
                 "TxMutate",
                 map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "old" => old.clone(), "type" => new_type}),
-                vec![st_dc_new, st_dc_old, st_h1, st_h2],
+                vec![st_dc_new, st_dc_old, st_eq_identity, st_h1, st_h2],
             )
             .unwrap();
         record(&mut self.stats, "TxMutate");
@@ -1346,7 +1399,7 @@ mod tests {
             modules: modules.clone(),
         };
 
-        let pick = make_object(
+        let pick_initial = make_object(
             is_wood_pick.clone(),
             &[("durability", Value::from(100_i64))],
         );
@@ -1354,7 +1407,7 @@ mod tests {
         let mut tx1 = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
 
         let scope = tx1.begin_action();
-        let (st_insert, h) = tx1.insert(&mut ctx, &pick);
+        let (pick, st_insert, h) = tx1.insert(&mut ctx, &pick_initial);
         let op_dur = ctx
             .builder
             .priv_op(op!(DictContains(pick, "durability", 100_i64)))
@@ -1389,7 +1442,7 @@ mod tests {
         pick_new
             .update(&StrKey::from("durability"), &Value::from(99_i64))
             .unwrap();
-        let stone = make_object(is_stone.clone(), &[]);
+        let stone_initial = make_object(is_stone.clone(), &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx0));
         let evidence = GroundingEvidence::new(&tx0.ctx, &pick).unwrap();
@@ -1434,7 +1487,7 @@ mod tests {
         };
 
         // Direct: insert stone
-        let (st_stone_insert, h) = tx2.insert(&mut ctx, &stone);
+        let (_stone, st_stone_insert, h) = tx2.insert(&mut ctx, &stone_initial);
         let st_mine = ctx
             .apply_custom_pred_simple(false, "MineStone", vec![st_use_wp, st_stone_insert])
             .unwrap();
@@ -1486,12 +1539,12 @@ mod tests {
             modules: modules.clone(),
         };
 
-        let log = make_object(is_log.clone(), &[]);
+        let log_initial = make_object(is_log.clone(), &[]);
 
         let mut tx1 = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
 
         let scope = tx1.begin_action();
-        let (st_insert, h) = tx1.insert(&mut ctx, &log);
+        let (log, st_insert, h) = tx1.insert(&mut ctx, &log_initial);
         let st_find = ctx
             .apply_custom_pred_simple(false, "FindLog", vec![st_insert])
             .unwrap();
@@ -1517,7 +1570,7 @@ mod tests {
             modules: modules.clone(),
         };
 
-        let wood = make_object(is_wood.clone(), &[]);
+        let wood_initial = make_object(is_wood.clone(), &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx1_out));
         let evidence = GroundingEvidence::new(&tx1_out.ctx, &log).unwrap();
@@ -1542,7 +1595,7 @@ mod tests {
         };
 
         // Direct: insert wood
-        let (st_ins, h) = tx2.insert(&mut ctx, &wood);
+        let (wood, st_ins, h) = tx2.insert(&mut ctx, &wood_initial);
         let st_craft_wood = ctx
             .apply_custom_pred_simple(false, "CraftWood", vec![st_del_log, st_ins])
             .unwrap();
@@ -1569,8 +1622,8 @@ mod tests {
         let builder = MultiPodBuilder::new(&params, &vd_set);
         let mut ctx = BuildContext { builder, modules };
 
-        let stick_a = make_object(is_stick.clone(), &[]);
-        let stick_b = make_object(is_stick, &[]);
+        let stick_a_initial = make_object(is_stick.clone(), &[]);
+        let stick_b_initial = make_object(is_stick, &[]);
 
         let witness = state.grounding_witness(std::slice::from_ref(&tx2_out));
         let evidence = GroundingEvidence::new(&tx2_out.ctx, &wood).unwrap();
@@ -1595,13 +1648,40 @@ mod tests {
         };
 
         // Direct: insert stick_a
-        let (st_ins_a, h_a) = tx3.insert(&mut ctx, &stick_a);
+        let (stick_a, st_ins_a, h_a) = tx3.insert(&mut ctx, &stick_a_initial);
 
         // Direct: insert stick_b
-        let (st_ins_b, h_b) = tx3.insert(&mut ctx, &stick_b);
+        let (stick_b, st_ins_b, h_b) = tx3.insert(&mut ctx, &stick_b_initial);
 
+        // Pack stick_a / stick_b's pre-identity initials into an
+        // `initials` dict so CraftSticks stays within the 8-wildcard
+        // limit; rebind each TxInsert's slot 2 (initial) onto the
+        // matching anchored key. TxInsert's arg layout is (chain,
+        // prev_chain, initial, new, type).
+        let initials = dict!({
+            "stick_a" => stick_a_initial.clone(),
+            "stick_b" => stick_b_initial.clone()
+        });
+        let st_ins_a_anchored = ctx
+            .builder
+            .priv_op(Operation::replace_value_with_entry(
+                vec![None, None, Some((&initials, "stick_a")), None, None],
+                st_ins_a,
+            ))
+            .unwrap();
+        let st_ins_b_anchored = ctx
+            .builder
+            .priv_op(Operation::replace_value_with_entry(
+                vec![None, None, Some((&initials, "stick_b")), None, None],
+                st_ins_b,
+            ))
+            .unwrap();
         let st_craft_sticks = ctx
-            .apply_custom_pred_simple(false, "CraftSticks", vec![st_del_wood, st_ins_a, st_ins_b])
+            .apply_custom_pred_simple(
+                false,
+                "CraftSticks",
+                vec![st_del_wood, st_ins_a_anchored, st_ins_b_anchored],
+            )
             .unwrap();
 
         // stick_a: IsStick branch 2 = CraftSticks(obj, other, chain_start, chain_end)
