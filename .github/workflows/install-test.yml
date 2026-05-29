@@ -1,20 +1,17 @@
 name: Install test
 
 # End-to-end install smoke test for a published release. Spins up an
-# INDEPENDENT local stack on each runner — postgres + synchronizer +
-# relayer + dobjd — pointed at Ethereum Sepolia (not the hosted services
-# at 18.217.144.33). Then exercises the full action round-trip:
+# independent local stack on each runner — postgres + synchronizer +
+# relayer + dobjd — pointed at Ethereum Sepolia.
+# Then exercises the full action round-trip:
 # `dobj start → status → actions → run FindLog → inventory → stop`.
 #
 # Triggered:
 #   - automatically at the end of the Release workflow, which calls this as
-#     a REUSABLE workflow (`uses: ./.github/workflows/install-test.yml`).
-#     A reusable workflow runs from the CALLER's ref, so this works when a
-#     tag is cut off a feature branch — no need for the file to be on the
-#     default branch (which `workflow_dispatch` would require).
-#   - manually from the Actions UI with a tag input — but ONLY once this
-#     file lands on the default branch, since `workflow_dispatch` workflows
-#     aren't registered until then. Until merge, use the reusable path above.
+#     a reusable workflow (`uses: ./.github/workflows/install-test.yml`).
+#     A reusable workflow runs from the caller's ref, so this works when a
+#     tag is cut off a feature branch.
+#   - manually from the Actions UI with a tag input
 #
 # Required repo secrets (Settings → Secrets and variables → Actions). When
 # invoked via `workflow_call` with `secrets: inherit`, the caller passes
@@ -43,8 +40,7 @@ on:
         description: "Release tag to test (e.g. v0.1.0-rc.17)"
         required: true
         type: string
-  # Manual trigger for ad-hoc runs. Only usable once this file is on the
-  # default branch (GitHub registration requirement).
+  # Manual trigger for ad-hoc runs
   workflow_dispatch:
     inputs:
       tag:
@@ -63,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each entry uses a DISTINCT funded Sepolia EOA (pk_secret). The
+        # Each entry uses a distinct funded Sepolia EOA (pk_secret). The
         # jobs run in parallel and each spins up its own relayer; a relayer
         # derives its tx nonce from `get_transaction_count(from)`, so two
         # relayers sharing one key would compute the same nonce and collide

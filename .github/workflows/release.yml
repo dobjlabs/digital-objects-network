@@ -173,8 +173,7 @@ jobs:
 
       - name: Build synchronizer
         # Server binary used by the install-test workflow to spin up a
-        # local stack per platform (instead of pointing at the hosted
-        # synchronizer at 18.217.144.33). Pulls in rocksdb — Windows needs
+        # local stack per platform. Pulls in rocksdb — Windows needs
         # the LIBCLANG_PATH step above to compile.
         run: cargo build --release --locked -p synchronizer --target ${{ matrix.target }}
 
@@ -418,16 +417,9 @@ jobs:
           body_path: release-notes.md
 
   install-test:
-    # End-to-end install test on every supported platform. Runs ONLY after
+    # End-to-end install test on every supported platform. Runs only after
     # both binary + plugin uploads land in the draft release, so the test
     # can fetch them via `gh release download`.
-    #
-    # Invoked as a REUSABLE workflow (`uses:`), NOT via `gh workflow run`.
-    # A `uses:` job runs the called workflow from THIS run's ref, so it
-    # works when a tag is cut off a feature branch — install-test.yml does
-    # NOT need to be on the default branch (which `workflow_dispatch` +
-    # `gh workflow run` would require). This is what makes branch-only
-    # testing possible: push a tag from the branch and the whole chain runs.
     needs: [dobjd, plugin]
     uses: ./.github/workflows/install-test.yml
     with:

@@ -79,8 +79,7 @@ DOBJD_PORT=7727 cargo run --release -p dobjd
 
 Released binaries are signed + notarized on macOS. The tarball is just
 the three executables (`dobjd`, `dobj`, `bitcraft-mcp-proxy`).
-Windows binaries are not codesigned yet — first run shows a SmartScreen
-warning.
+Windows binaries are not codesigned yet — first run shows a SmartScreen warning.
 
 ## Lifecycle
 
