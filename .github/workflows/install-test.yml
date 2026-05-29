@@ -1,0 +1,424 @@
+name: Install test
+
+# End-to-end install smoke test for a published release. Spins up an
+# INDEPENDENT local stack on each runner — postgres + synchronizer +
+# relayer + dobjd — pointed at Ethereum Sepolia (not the hosted services
+# at 18.217.144.33). Then exercises the full action round-trip:
+# `dobj start → status → actions → run FindLog → inventory → stop`.
+#
+# Triggered:
+#   - automatically at the end of the Release workflow (its
+#     `trigger-install-test` job calls `gh workflow run` with the tag)
+#   - manually from the Actions UI with a tag input
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   SEPOLIA_RPC_URL      — JSON-RPC endpoint (public is fine but
+#                          rate-limited; Alchemy/Infura recommended for
+#                          parallel matrix jobs hitting it simultaneously)
+#   SEPOLIA_BEACON_URL   — Beacon API endpoint with blob-sidecar support
+#                          (publicnode, Quicknode, Chainstack, …)
+#   SEPOLIA_TO_ADDRESS   — destination EOA for the relayer's blob txs
+#   SEPOLIA_PRIVATE_KEY  — funded Sepolia EOA the relayer signs with.
+#                          Drained over time — refill from a faucet when
+#                          jobs start failing with "insufficient funds".
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to test (e.g. v0.1.0-rc.17)"
+        required: true
+        type: string
+
+env:
+  # Sepolia chain config — shared by synchronizer + relayer across every
+  # matrix entry. Each runner reads from its own loopback for the local
+  # services; only the chain itself is shared.
+  RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+  BEACON_URL: ${{ secrets.SEPOLIA_BEACON_URL }}
+  TO_ADDRESS: ${{ secrets.SEPOLIA_TO_ADDRESS }}
+  PRIVATE_KEY: ${{ secrets.SEPOLIA_PRIVATE_KEY }}
+
+jobs:
+  smoke:
+    # FindLog round-trips through Sepolia (relayer submits a blob, slot lands
+    # in ~12s, synchronizer observes and grounds it, dobjd polls until
+    # grounded). Realistic budget is 3–8 minutes; 20 is generous so we
+    # fail fast on real bugs but tolerate a slow slot.
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native arm64 macOS.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            install_rosetta: false
+          # Intel macOS binary running on the arm64 runner via Rosetta.
+          # Free Intel macOS runners were deprecated end of 2025.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            install_rosetta: true
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            install_rosetta: false
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            install_rosetta: false
+
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: read  # for `gh release download`
+
+    env:
+      TAG: ${{ inputs.tag }}
+      TARGET: ${{ matrix.target }}
+
+    steps:
+      - name: Install Rosetta 2 (Intel macOS path)
+        if: matrix.install_rosetta
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+
+      # =====================================================================
+      # PostgreSQL — bring up a local instance with two databases.
+      # =====================================================================
+
+      - name: Start PostgreSQL (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo systemctl start postgresql
+          # Default Ubuntu install uses peer auth on Unix sockets — fine
+          # for `sudo -u postgres` but blocks our processes (running as
+          # `runner`) from connecting. Add a TCP trust line for loopback.
+          PG_HBA=$(sudo -u postgres psql -t -c "SHOW hba_file" | xargs)
+          echo "host all all 127.0.0.1/32 trust" | sudo tee -a "$PG_HBA"
+          echo "host all all ::1/128       trust" | sudo tee -a "$PG_HBA"
+          sudo systemctl restart postgresql
+          for i in $(seq 1 30); do
+            if pg_isready -h 127.0.0.1 -p 5432 -U postgres >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          createdb -h 127.0.0.1 -U postgres synchronizer
+          createdb -h 127.0.0.1 -U postgres relayer
+
+      - name: Start PostgreSQL (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install postgresql@14
+          brew services start postgresql@14
+          # Wait for the server to come up before issuing any psql commands.
+          for i in $(seq 1 30); do
+            if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          # Homebrew postgres doesn't create a `postgres` superuser by
+          # default — it uses the OS user. Create one so the synchronizer
+          # and relayer can connect with the same DSN as on Linux/Windows.
+          createuser -s postgres 2>/dev/null || true
+          createdb -h 127.0.0.1 -U postgres synchronizer
+          createdb -h 127.0.0.1 -U postgres relayer
+
+      - name: Start PostgreSQL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # windows-2022 ships PostgreSQL preinstalled (service stopped).
+          # Service name varies by minor version: postgresql-x64-14, -16, …
+          $svc = Get-Service -Name 'postgresql-x64-*' -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $svc) { throw "postgresql service not found on this runner" }
+          Start-Service $svc.Name
+
+          # The runner-preinstalled instance uses `root` as the default
+          # postgres-user password. PGBIN points at the install's bin/.
+          $env:PGPASSWORD = "root"
+          for ($i = 0; $i -lt 30; $i++) {
+              & "$env:PGBIN\pg_isready.exe" -h 127.0.0.1 -p 5432 -U postgres | Out-Null
+              if ($LASTEXITCODE -eq 0) { break }
+              Start-Sleep -Seconds 1
+          }
+          & "$env:PGBIN\createdb.exe" -h 127.0.0.1 -U postgres synchronizer
+          if ($LASTEXITCODE -ne 0) { throw "createdb synchronizer failed" }
+          & "$env:PGBIN\createdb.exe" -h 127.0.0.1 -U postgres relayer
+          if ($LASTEXITCODE -ne 0) { throw "createdb relayer failed" }
+
+      # =====================================================================
+      # Download artifacts from the draft / published release.
+      # =====================================================================
+
+      - name: Download release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "dobjd-$TARGET.tar.gz" \
+            --pattern "dobj-$TARGET.tar.gz" \
+            --pattern "synchronizer-$TARGET.tar.gz" \
+            --pattern "relayer-$TARGET.tar.gz" \
+            --pattern "craft-basics*.pexe" \
+            --dir artifacts
+          ls -la artifacts
+
+      # =====================================================================
+      # Stage: extract dobjd to ~/.dobj/, servers to a separate dir.
+      # =====================================================================
+
+      - name: Stage install layout (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.dobj/bin ~/.dobj/actions
+          tar -xzf "artifacts/dobjd-$TARGET.tar.gz" -C ~/.dobj/bin
+          tar -xzf "artifacts/dobj-$TARGET.tar.gz"  -C ~/.dobj/bin
+          chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj ~/.dobj/bin/bitcraft-mcp-proxy
+          PEXE=$(find artifacts -maxdepth 1 -name 'craft-basics*.pexe' | head -1)
+          cp "$PEXE" ~/.dobj/actions/craft-basics.pexe
+
+          # Server binaries live OUTSIDE ~/.dobj — they're CI scaffolding,
+          # not part of the end-user install layout we're testing.
+          mkdir -p "$GITHUB_WORKSPACE/server-bin"
+          tar -xzf "artifacts/synchronizer-$TARGET.tar.gz" -C "$GITHUB_WORKSPACE/server-bin"
+          tar -xzf "artifacts/relayer-$TARGET.tar.gz"      -C "$GITHUB_WORKSPACE/server-bin"
+          chmod +x "$GITHUB_WORKSPACE/server-bin/synchronizer" \
+                   "$GITHUB_WORKSPACE/server-bin/relayer"
+
+          # dobjd talks to the local stack on loopback. The synchronizer
+          # listens on :3000, relayer on :3200 (their defaults).
+          cat > ~/.dobj/settings.json <<'EOF'
+          {
+            "synchronizerApiUrl": "http://127.0.0.1:3000",
+            "relayerApiUrl": "http://127.0.0.1:3200"
+          }
+          EOF
+
+      - name: Stage install layout (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $DOBJ = "$env:USERPROFILE\.dobj"
+          New-Item -ItemType Directory -Force -Path "$DOBJ\bin", "$DOBJ\actions" | Out-Null
+          tar -xzf "artifacts\dobjd-$env:TARGET.tar.gz" -C "$DOBJ\bin"
+          tar -xzf "artifacts\dobj-$env:TARGET.tar.gz"  -C "$DOBJ\bin"
+          $pexe = Get-ChildItem artifacts -Filter 'craft-basics*.pexe' | Select-Object -First 1
+          Copy-Item $pexe.FullName -Destination "$DOBJ\actions\craft-basics.pexe"
+
+          $SERVER = "$env:GITHUB_WORKSPACE\server-bin"
+          New-Item -ItemType Directory -Force -Path $SERVER | Out-Null
+          tar -xzf "artifacts\synchronizer-$env:TARGET.tar.gz" -C $SERVER
+          tar -xzf "artifacts\relayer-$env:TARGET.tar.gz"      -C $SERVER
+
+          @'
+          {
+            "synchronizerApiUrl": "http://127.0.0.1:3000",
+            "relayerApiUrl": "http://127.0.0.1:3200"
+          }
+          '@ | Set-Content -Path "$DOBJ\settings.json"
+
+      # =====================================================================
+      # Resolve a recent Sepolia slot so the synchronizer doesn't waste
+      # CI minutes catching up from genesis. 5 slots back ≈ 60s buffer
+      # so we're guaranteed the relayer's submission lands AFTER our
+      # start slot.
+      # =====================================================================
+
+      - name: Resolve recent Sepolia head slot (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          HEAD=$(curl -fsSL "$BEACON_URL/eth/v1/beacon/headers/head" \
+            | python3 -c "import sys, json; print(json.load(sys.stdin)['data']['header']['message']['slot'])")
+          START=$((HEAD - 5))
+          echo "synchronizer start slot: $START (head $HEAD)"
+          echo "INITIAL_START_SLOT=$START" >> "$GITHUB_ENV"
+
+      - name: Resolve recent Sepolia head slot (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $head = (Invoke-RestMethod -Uri "$env:BEACON_URL/eth/v1/beacon/headers/head").data.header.message.slot
+          $start = [int]$head - 5
+          Write-Host "synchronizer start slot: $start (head $head)"
+          # -Encoding ascii avoids any BOM that would break the GITHUB_ENV parser.
+          "INITIAL_START_SLOT=$start" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+
+      # =====================================================================
+      # Start the local stack. Both binaries read config from process env
+      # (dotenvy falls through when there's no .env file in cwd).
+      # =====================================================================
+
+      - name: Start synchronizer + relayer (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+
+          INITIAL_START_SLOT="$INITIAL_START_SLOT" \
+          RPC_URL="$RPC_URL" \
+          BEACON_URL="$BEACON_URL" \
+          TO_ADDRESS="$TO_ADDRESS" \
+          SYNC_METADATA_DB_URL="postgres://postgres@127.0.0.1:5432/synchronizer" \
+          APP_STATE_DB_PATH="$GITHUB_WORKSPACE/synchronizer-db" \
+            nohup "$GITHUB_WORKSPACE/server-bin/synchronizer" \
+              > logs/synchronizer.log 2>&1 &
+          echo "synchronizer pid: $!"
+
+          RPC_URL="$RPC_URL" \
+          TO_ADDRESS="$TO_ADDRESS" \
+          PRIVATE_KEY="$PRIVATE_KEY" \
+          DB_URL="postgres://postgres@127.0.0.1:5432/relayer" \
+            nohup "$GITHUB_WORKSPACE/server-bin/relayer" \
+              > logs/relayer.log 2>&1 &
+          echo "relayer pid: $!"
+
+          # Wait for both HTTP listeners. /healthz on each returns 200 once
+          # the server is bound + initialized.
+          for endpoint in http://127.0.0.1:3000/healthz http://127.0.0.1:3200/healthz; do
+            ok=0
+            for i in $(seq 1 90); do
+              if curl -fsSL --max-time 2 "$endpoint" >/dev/null 2>&1; then
+                echo "$endpoint ready"
+                ok=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$ok" = 0 ]; then
+              echo "::error::$endpoint never became ready in 90s"
+              exit 1
+            fi
+          done
+
+      - name: Start synchronizer + relayer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path logs | Out-Null
+
+          # Synchronizer: rocksdb at APP_STATE_DB_PATH, postgres metadata DB.
+          $env:SYNC_METADATA_DB_URL = "postgres://postgres:root@127.0.0.1:5432/synchronizer"
+          $env:APP_STATE_DB_PATH    = "$env:GITHUB_WORKSPACE\synchronizer-db"
+          Start-Process -FilePath "$env:GITHUB_WORKSPACE\server-bin\synchronizer.exe" `
+            -RedirectStandardOutput "logs\synchronizer.log" `
+            -RedirectStandardError  "logs\synchronizer.err" `
+            -NoNewWindow
+
+          # Relayer: postgres job DB.
+          $env:DB_URL = "postgres://postgres:root@127.0.0.1:5432/relayer"
+          Start-Process -FilePath "$env:GITHUB_WORKSPACE\server-bin\relayer.exe" `
+            -RedirectStandardOutput "logs\relayer.log" `
+            -RedirectStandardError  "logs\relayer.err" `
+            -NoNewWindow
+
+          foreach ($url in @("http://127.0.0.1:3000/healthz", "http://127.0.0.1:3200/healthz")) {
+              $ok = $false
+              for ($i = 0; $i -lt 90; $i++) {
+                  try {
+                      Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 2 | Out-Null
+                      Write-Host "$url ready"
+                      $ok = $true
+                      break
+                  } catch {
+                      Start-Sleep -Seconds 1
+                  }
+              }
+              if (-not $ok) { throw "$url never became ready in 90s" }
+          }
+
+      # =====================================================================
+      # The actual smoke test — same shape as before, against the local
+      # stack instead of the hosted services.
+      # =====================================================================
+
+      - name: Smoke test (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          DOBJ=~/.dobj/bin/dobj
+
+          $DOBJ start
+          $DOBJ status
+          $DOBJ actions
+          # FindLog has no inputs (proves a short VDF and produces a Log).
+          # Success means: local proof engine ran, relayer submitted to
+          # Sepolia, blob landed, synchronizer observed + grounded the tx.
+          $DOBJ run craft-basics::FindLog
+          INV=$($DOBJ inventory)
+          echo "$INV"
+          echo "$INV" | grep -qi 'log\|craft-basics' \
+            || { echo "::error::inventory empty after FindLog run"; exit 1; }
+          $DOBJ stop
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $DOBJ = "$env:USERPROFILE\.dobj\bin\dobj.exe"
+
+          & $DOBJ start
+          if ($LASTEXITCODE -ne 0) { throw "dobj start failed ($LASTEXITCODE)" }
+          & $DOBJ status
+          if ($LASTEXITCODE -ne 0) { throw "dobj status failed ($LASTEXITCODE)" }
+          & $DOBJ actions
+          if ($LASTEXITCODE -ne 0) { throw "dobj actions failed ($LASTEXITCODE)" }
+          & $DOBJ run craft-basics::FindLog
+          if ($LASTEXITCODE -ne 0) { throw "dobj run FindLog failed ($LASTEXITCODE)" }
+
+          $inv = (& $DOBJ inventory) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "dobj inventory failed ($LASTEXITCODE)" }
+          Write-Host $inv
+          if ($inv -notmatch '(?i)log|craft-basics') {
+              throw "inventory empty after FindLog run"
+          }
+
+          # Windows `stop` is a hard kill via TerminateProcess.
+          & $DOBJ stop
+          if ($LASTEXITCODE -ne 0) { throw "dobj stop failed ($LASTEXITCODE)" }
+
+      # =====================================================================
+      # On any failure, dump every log we have so debugging the failed run
+      # doesn't require an SSH-into-runner round trip.
+      # =====================================================================
+
+      - name: Show logs on failure (Unix)
+        if: failure() && runner.os != 'Windows'
+        shell: bash
+        run: |
+          for name in synchronizer relayer; do
+            echo "--- logs/$name.log (tail 300) ---"
+            tail -300 "logs/$name.log" 2>/dev/null || echo "(no log)"
+          done
+          echo "--- ~/.dobj/dobjd.log (tail 300) ---"
+          tail -300 ~/.dobj/dobjd.log 2>/dev/null || echo "(no log)"
+
+      - name: Show logs on failure (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($name in @("synchronizer", "relayer")) {
+              foreach ($ext in @("log", "err")) {
+                  $path = "logs\$name.$ext"
+                  if (Test-Path $path) {
+                      Write-Host "--- $path (tail 300) ---"
+                      Get-Content $path -Tail 300
+                  }
+              }
+          }
+          $dobjd = "$env:USERPROFILE\.dobj\dobjd.log"
+          if (Test-Path $dobjd) {
+              Write-Host "--- dobjd.log (tail 300) ---"
+              Get-Content $dobjd -Tail 300
+          }

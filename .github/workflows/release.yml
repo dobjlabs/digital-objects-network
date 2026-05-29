@@ -182,6 +182,16 @@ jobs:
           # shellcheck disable=SC2012
           ls -la /usr/local/opt/gcc@13/lib/gcc/13 | head -30
 
+      - name: Setup LLVM for rocksdb bindgen (Windows)
+        # rocksdb's build.rs runs bindgen against the C++ headers; bindgen
+        # needs `LIBCLANG_PATH` on Windows because it can't auto-discover
+        # libclang.dll. windows-2022 runners ship LLVM at this path. Only
+        # the synchronizer binary pulls in rocksdb — dobjd doesn't —
+        # but the env var is harmless when no crate uses bindgen.
+        if: runner.os == 'Windows'
+        run: |
+          echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+
       - name: Build dobjd
         # DEFAULT_*_URL come from the workflow-level env block — driver/src/
         # settings.rs reads them via option_env! at compile time and bakes
@@ -198,6 +208,18 @@ jobs:
         # the daemon can wire it into Claude Desktop without also needing
         # the dobj CLI.
         run: cargo build --release --locked -p craft-mcp --bin bitcraft-mcp-proxy --features proxy --target ${{ matrix.target }}
+
+      - name: Build synchronizer
+        # Server binary used by the install-test workflow to spin up a
+        # local stack per platform (instead of pointing at the hosted
+        # synchronizer at 18.217.144.33). Pulls in rocksdb — Windows needs
+        # the LIBCLANG_PATH step above to compile.
+        run: cargo build --release --locked -p synchronizer --target ${{ matrix.target }}
+
+      - name: Build relayer
+        # Server binary used by install-test alongside the synchronizer.
+        # No rocksdb (sqlx + alloy only), so this builds clean everywhere.
+        run: cargo build --release --locked -p relayer --target ${{ matrix.target }}
 
       - name: Stage tarball directories
         run: |
@@ -296,6 +318,24 @@ jobs:
             echo "DOBJD_LIBS=$DOBJD_LIBS"
             echo "DOBJ_STAGE=$DOBJ_STAGE"
           } >> "$GITHUB_ENV"
+
+      - name: Stage server binaries (synchronizer + relayer)
+        # Server binaries are kept in separate tarballs so end users
+        # downloading dobjd never pay for them — only the install-test
+        # workflow fetches them when spinning up a local stack.
+        run: |
+          set -euo pipefail
+          OUT="target/${{ matrix.target }}/release"
+          SYNCHRONIZER_STAGE="$GITHUB_WORKSPACE/staging/synchronizer"
+          RELAYER_STAGE="$GITHUB_WORKSPACE/staging/relayer"
+          mkdir -p "$SYNCHRONIZER_STAGE" "$RELAYER_STAGE"
+          cp "$OUT/synchronizer${{ matrix.exe_suffix }}" "$SYNCHRONIZER_STAGE/"
+          cp "$OUT/relayer${{ matrix.exe_suffix }}"      "$RELAYER_STAGE/"
+          {
+            echo "SYNCHRONIZER_STAGE=$SYNCHRONIZER_STAGE"
+            echo "RELAYER_STAGE=$RELAYER_STAGE"
+          } >> "$GITHUB_ENV"
+          ls -la "$SYNCHRONIZER_STAGE" "$RELAYER_STAGE"
 
       # ---------- macOS codesign + notarize -----------------------------------
 
@@ -476,12 +516,21 @@ jobs:
           codesign --force --sign "$IDENTITY" \
             --options runtime --timestamp "$DOBJ_STAGE/dobj"
 
+          # Server binaries (used by install-test only) — sign them too
+          # so notarization below doesn't reject the bundle.
+          codesign --force --sign "$IDENTITY" \
+            --options runtime --timestamp "$SYNCHRONIZER_STAGE/synchronizer"
+          codesign --force --sign "$IDENTITY" \
+            --options runtime --timestamp "$RELAYER_STAGE/relayer"
+
           # Verify each one. `codesign --verify` exits non-zero if anything's
           # off — we want the workflow to fail loudly here rather than ship
           # broken signatures.
           codesign --verify --verbose=2 "$DOBJD_STAGE/dobjd"
           codesign --verify --verbose=2 "$DOBJD_STAGE/bitcraft-mcp-proxy"
           codesign --verify --verbose=2 "$DOBJ_STAGE/dobj"
+          codesign --verify --verbose=2 "$SYNCHRONIZER_STAGE/synchronizer"
+          codesign --verify --verbose=2 "$RELAYER_STAGE/relayer"
           for f in "$DOBJD_LIBS"/*.dylib; do
             [ -L "$f" ] && continue
             codesign --verify --verbose=2 "$f"
@@ -514,8 +563,10 @@ jobs:
       - name: Stage tarballs
         run: |
           set -euo pipefail
-          tar -czf "dobjd-${{ matrix.target }}.tar.gz" -C "$DOBJD_STAGE" .
-          tar -czf "dobj-${{ matrix.target }}.tar.gz"  -C "$DOBJ_STAGE"  .
+          tar -czf "dobjd-${{ matrix.target }}.tar.gz"        -C "$DOBJD_STAGE"        .
+          tar -czf "dobj-${{ matrix.target }}.tar.gz"         -C "$DOBJ_STAGE"         .
+          tar -czf "synchronizer-${{ matrix.target }}.tar.gz" -C "$SYNCHRONIZER_STAGE" .
+          tar -czf "relayer-${{ matrix.target }}.tar.gz"      -C "$RELAYER_STAGE"      .
 
       - name: Render release notes
         # Substitute DEFAULT_*_URL into the template so the body shown on
@@ -536,6 +587,8 @@ jobs:
           files: |
             dobjd-${{ matrix.target }}.tar.gz
             dobj-${{ matrix.target }}.tar.gz
+            synchronizer-${{ matrix.target }}.tar.gz
+            relayer-${{ matrix.target }}.tar.gz
           tag_name: ${{ env.RELEASE_TAG }}
           draft: true
           fail_on_unmatched_files: true
@@ -586,3 +639,26 @@ jobs:
           draft: true
           fail_on_unmatched_files: true
           body_path: release-notes.md
+
+  trigger-install-test:
+    # End-to-end install test on every supported platform. Runs ONLY after
+    # both binary + plugin uploads land in the draft release, so the
+    # install-test workflow can fetch them via `gh release download`.
+    #
+    # Decoupled into a sibling workflow (install-test.yml) so it can also
+    # be fired manually against any tag for ad-hoc verification.
+    needs: [dobjd, plugin]
+    runs-on: ubuntu-22.04
+    # `gh workflow run` writes to the Actions API — needs the elevated
+    # permission. Job-level so it doesn't widen the rest of this workflow.
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch install-test workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run install-test.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --field tag="$RELEASE_TAG"
+          echo "dispatched install-test for $RELEASE_TAG"
