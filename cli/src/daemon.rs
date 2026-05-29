@@ -39,7 +39,15 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::client::DobjdClient;
 
-const READY_TIMEOUT: Duration = Duration::from_secs(60);
+// First-ever start compiles the pod2/plonky2 circuits and writes them to the
+// disk cache before the HTTP listener binds — a one-time cost that's run on
+// every fresh machine (and every CI runner, which always starts cold). On a
+// modest/Windows box this comfortably exceeds a minute, so the gate has to be
+// generous; subsequent starts hit the cache and come up in seconds. The wait
+// loop early-exits the instant the process dies, so a genuinely-crashed dobjd
+// still fails fast — this ceiling only applies while it's alive but not yet
+// serving (i.e. still building circuits).
+const READY_TIMEOUT: Duration = Duration::from_secs(300);
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -243,8 +251,9 @@ async fn http_alive(client: &DobjdClient) -> bool {
 
 /// Block until the HTTP API responds, the process dies, or the timeout
 /// elapses. Prints a dot every couple seconds so the user knows we're
-/// still working — cold start can take 15-30s while plugins compile and
-/// RocksDB initializes.
+/// still working — a first-ever start builds the pod2/plonky2 circuits and
+/// can take a few minutes on a cold machine (see `READY_TIMEOUT`); cached
+/// starts are seconds.
 async fn wait_until_ready(client: &DobjdClient, pid: i32, timeout: Duration) -> Result<()> {
     use std::io::Write as _;
 
