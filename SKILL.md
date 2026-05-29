@@ -74,7 +74,7 @@ New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.dobj\bin", "$env:US
 **macOS / Linux:**
 
 ```bash
-RELEASE=https://bitcraft.s3.us-east-2.amazonaws.com/v0.1.0-rc.17
+RELEASE=https://bitcraft.s3.us-east-2.amazonaws.com/v0.1.0-rc.30
 curl -fsSL "$RELEASE/dobjd-$TARGET.tar.gz" | tar -xz -C ~/.dobj/bin
 curl -fsSL "$RELEASE/dobj-$TARGET.tar.gz"  | tar -xz -C ~/.dobj/bin
 chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj
@@ -85,7 +85,7 @@ chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj
 ```powershell
 # Use curl.exe explicitly — bare `curl` in PowerShell is an alias for
 # Invoke-WebRequest with different flags.
-$RELEASE = "https://bitcraft.s3.us-east-2.amazonaws.com/v0.1.0-rc.17"
+$RELEASE = "https://bitcraft.s3.us-east-2.amazonaws.com/v0.1.0-rc.30"
 $DOBJ = "$env:USERPROFILE\.dobj"
 foreach ($name in @("dobjd", "dobj")) {
     $tmp = "$DOBJ\$name-$TARGET.tar.gz"

@@ -37,14 +37,14 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: "Release tag to test (e.g. v0.1.0-rc.17)"
+        description: "Release tag to test (e.g. v0.1.0-rc.30)"
         required: true
         type: string
   # Manual trigger for ad-hoc runs
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to test (e.g. v0.1.0-rc.17)"
+        description: "Release tag to test (e.g. v0.1.0-rc.30)"
         required: true
         type: string
 

@@ -14,7 +14,8 @@ After this you'll have:
 
 Only three artifacts are needed. The `synchronizer-*` and `relayer-*` tarballs
 in the release are CI-only — a normal install talks to the hosted synchronizer
-+ relayer, whose URLs are baked into `dobjd` at build time.
+
+- relayer, whose URLs are baked into `dobjd` at build time.
 
 ## Prerequisites
 
@@ -74,7 +75,7 @@ EOF
 
 ```powershell
 # 1. Pick the release tag (x86_64 is the only Windows target built)
-$TAG    = "v0.1.0-rc.29"               # substitute the release you want
+$TAG    = "v0.1.0-rc.30"               # substitute the release you want
 $TARGET = "x86_64-pc-windows-msvc"
 $DOBJ   = "$env:USERPROFILE\.dobj"
 
@@ -115,12 +116,12 @@ anyway**.
 
 ## Managing the daemon
 
-| Command | Effect |
-| --- | --- |
-| `dobj start` | launch in the background (idempotent) |
-| `dobj status` | pid + HTTP healthcheck |
-| `dobj logs` / `dobj logs -f` | last 100 log lines / follow |
-| `dobj stop` | shut down (SIGTERM→SIGKILL on Unix; hard kill on Windows) |
+| Command                      | Effect                                                    |
+| ---------------------------- | --------------------------------------------------------- |
+| `dobj start`                 | launch in the background (idempotent)                     |
+| `dobj status`                | pid + HTTP healthcheck                                    |
+| `dobj logs` / `dobj logs -f` | last 100 log lines / follow                               |
+| `dobj stop`                  | shut down (SIGTERM→SIGKILL on Unix; hard kill on Windows) |
 
 Prefix with `~/.dobj/bin/` (or `$DOBJ\bin\dobj.exe` on Windows), or add the
 `bin` dir to your `PATH`. Logs live at `~/.dobj/dobjd.log`.
@@ -139,7 +140,7 @@ not register it with any agent — do that separately:
 
 ## Notes
 
-- The example tag above (`v0.1.0-rc.29`) is illustrative — substitute the
+- The example tag above (`v0.1.0-rc.30`) is illustrative — substitute the
   release you want. `gh release list --repo dobjlabs/zk-craft` shows what's
   available.
 - `gh release download` is used because the repo is private. If you publish
