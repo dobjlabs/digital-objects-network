@@ -2,8 +2,7 @@
 //!
 //! Lifted out of the `relayer` crate so consumers (driver, dobjd, tests)
 //! can deserialize relayer responses without pulling in relayer's
-//! server-side deps (sqlx-postgres, alloy, axum). The relayer itself
-//! re-exports these from `relayer::api_types` for back-compat.
+//! server-side deps (sqlx-postgres, alloy, axum).
 
 use serde::{Deserialize, Serialize};
 

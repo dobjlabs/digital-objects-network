@@ -127,12 +127,16 @@ EOF
 **Windows:**
 
 ```powershell
-@'
+# Write UTF-8 WITHOUT a BOM. Windows PowerShell 5.1's `Set-Content -Encoding utf8`
+# prepends a BOM that dobjd's JSON parser rejects ("expected value at line 1");
+# .NET's WriteAllText is BOM-less on both PowerShell 5.1 and 7.
+$settings = @'
 {
   "synchronizerApiUrl": "http://18.217.144.33:3000",
   "relayerApiUrl": "http://18.217.144.33:3200"
 }
-'@ | Set-Content -Path "$DOBJ\settings.json" -Encoding utf8
+'@
+[System.IO.File]::WriteAllText("$DOBJ\settings.json", $settings)
 ```
 
 ### 6. Start `dobjd` in the background
@@ -227,7 +231,7 @@ needed). Claude Desktop reads `%APPDATA%\Claude\claude_desktop_config.json`:
 ```powershell
 $config = "$env:APPDATA\Claude\claude_desktop_config.json"
 New-Item -ItemType Directory -Force -Path (Split-Path $config -Parent) | Out-Null
-if (-not (Test-Path $config)) { '{}' | Set-Content -Path $config -Encoding utf8 }
+if (-not (Test-Path $config)) { [System.IO.File]::WriteAllText($config, '{}') }
 
 $json = Get-Content $config -Raw | ConvertFrom-Json
 if (-not $json.PSObject.Properties.Match('mcpServers').Count) {
@@ -237,7 +241,9 @@ $json.mcpServers | Add-Member -NotePropertyName bitcraft -NotePropertyValue ([ps
     command = "$env:USERPROFILE\.dobj\bin\bitcraft-mcp-proxy.exe"
     args    = @("--port", "7718")
 }) -Force
-$json | ConvertTo-Json -Depth 10 | Set-Content -Path $config -Encoding utf8
+# BOM-less UTF-8 (see settings.json note above) so Claude Desktop's JSON parser
+# doesn't choke on a leading BOM and silently load zero MCP servers.
+[System.IO.File]::WriteAllText($config, ($json | ConvertTo-Json -Depth 10))
 ```
 
 Or hand-edit the config and merge with existing `mcpServers`:
