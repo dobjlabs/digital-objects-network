@@ -51,18 +51,6 @@ on:
         description: "Release tag to test (e.g. v0.1.0-rc.17)"
         required: true
         type: string
-  # TEMPORARY (remove before merging to the default branch): a manual,
-  # branch-only trigger that does NOT re-run release.yml. `workflow_dispatch`
-  # can't fire from a feature branch until this file is on the default
-  # branch, but a `push` tag trigger runs from the pushed ref no matter
-  # what. release.yml only fires on `v*` tags, so an `install-test-*` tag
-  # triggers THIS workflow and nothing else. The release to download comes
-  # from the repo variable INSTALL_TEST_TAG (push events carry no inputs).
-  #   gh variable set INSTALL_TEST_TAG --body v0.1.0-rc.18
-  #   git tag install-test-1 && git push origin install-test-1
-  push:
-    tags:
-      - "install-test-*"
 
 jobs:
   smoke:
@@ -112,11 +100,8 @@ jobs:
       contents: write
 
     env:
-      # workflow_call / workflow_dispatch supply `inputs.tag`. The temporary
-      # push-tag trigger carries no inputs, so it falls back to the repo
-      # variable INSTALL_TEST_TAG. Drop the `|| vars...` half when the push
-      # trigger is removed.
-      TAG: ${{ inputs.tag || vars.INSTALL_TEST_TAG }}
+      # Supplied by workflow_call (from release.yml) or workflow_dispatch.
+      TAG: ${{ inputs.tag }}
       TARGET: ${{ matrix.target }}
       # Sepolia chain config — shared by synchronizer + relayer across every
       # matrix entry; each runner still talks to its own loopback for the
