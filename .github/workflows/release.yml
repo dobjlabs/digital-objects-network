@@ -10,6 +10,11 @@ name: Release
 # is free of malware" Gatekeeper dialog. Both Mac targets build on the
 # `macos-latest` (Apple Silicon) runner; the x86_64 build is cross-compiled
 # because GitHub's free `macos-13` Intel runners were deprecated end of 2025.
+#
+# Windows binaries are NOT codesigned — we don't have a Windows codesigning
+# certificate yet. First-run users on Windows will see a SmartScreen
+# warning ("Windows protected your PC… Run anyway"). Add an Authenticode
+# cert + signtool step here when one's available.
 
 on:
   push:
@@ -87,9 +92,11 @@ jobs:
           # path to ship Intel binaries without paying for a runner.
           - os: macos-latest
             target: aarch64-apple-darwin
+            exe_suffix: ""
             scip_glob: libscip*.dylib
           - os: macos-latest
             target: x86_64-apple-darwin
+            exe_suffix: ""
             scip_glob: libscip*.dylib
           # Pin Linux runner to 22.04 (not -latest / 24.04) intentionally.
           # Linking against an older glibc widens the set of distros that
@@ -97,7 +104,19 @@ jobs:
           # required minimum glibc on end-user machines.
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            exe_suffix: ""
             scip_glob: "libscip.so*"
+          # Native Windows x86_64. Pinned to `windows-2022` to match the
+          # Linux pin's intent: insulate the build from runner-image bumps
+          # the user hasn't opted into. Git Bash ships with the runner so
+          # the workflow's default `shell: bash` works here too. No SCIP
+          # bundling — `chain` synchronizer types route via pod2 (pure
+          # Rust), not rocksdb, so the Windows tarball is just the three
+          # executables and an empty `.libs/`.
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            exe_suffix: ".exe"
+            scip_glob: ""
 
     runs-on: ${{ matrix.os }}
 
@@ -202,9 +221,11 @@ jobs:
           DOBJ_STAGE="$GITHUB_WORKSPACE/staging/dobj"
           mkdir -p "$DOBJD_STAGE" "$DOBJD_LIBS" "$DOBJ_STAGE"
 
-          cp "$OUT/dobjd"               "$DOBJD_STAGE/"
-          cp "$OUT/bitcraft-mcp-proxy"  "$DOBJD_STAGE/"
-          cp "$OUT/dobj"                "$DOBJ_STAGE/"
+          # ${{ matrix.exe_suffix }} is `.exe` on Windows, empty everywhere
+          # else, so a single set of cp lines works across all targets.
+          cp "$OUT/dobjd${{ matrix.exe_suffix }}"              "$DOBJD_STAGE/"
+          cp "$OUT/bitcraft-mcp-proxy${{ matrix.exe_suffix }}" "$DOBJD_STAGE/"
+          cp "$OUT/dobj${{ matrix.exe_suffix }}"               "$DOBJ_STAGE/"
 
           # ---- Diagnostics ---------------------------------------------------
           # If anything's off, the logs show the actual layout cargo produced.
@@ -215,8 +236,13 @@ jobs:
           find target -name 'libscip*' 2>/dev/null | head -20 || true
           echo "--- dobjd dynamic deps ---"
           case "${{ matrix.target }}" in
-            *-apple-darwin) otool -L "$DOBJD_STAGE/dobjd" || true ;;
-            *-linux-*)      ldd        "$DOBJD_STAGE/dobjd" || true ;;
+            *-apple-darwin)  otool -L "$DOBJD_STAGE/dobjd" || true ;;
+            *-linux-*)       ldd        "$DOBJD_STAGE/dobjd" || true ;;
+            # Windows: dumpbin lives in MSVC Build Tools (preinstalled on
+            # the runner) but resolving it from Git Bash is awkward and the
+            # info is rarely useful — Windows-Rust binaries are typically
+            # statically linked plus the system CRT. Skip the diagnostic.
+            *-pc-windows-*)  echo "(skipping deps diagnostic on windows)" ;;
           esac
 
           # ---- Locate scip_install/lib --------------------------------------
@@ -257,6 +283,10 @@ jobs:
                 exit 1
               fi
               ;;
+            # Windows: no SCIP bundling path exists yet — chain types route
+            # through pod2 (pure Rust). If SCIP ever does ship on Windows
+            # this is where the dumpbin-based check would go.
+            *-pc-windows-*) ;;
           esac
 
           ls -la "$DOBJD_STAGE" "$DOBJD_LIBS" "$DOBJ_STAGE"
