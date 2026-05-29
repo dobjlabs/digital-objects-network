@@ -17,8 +17,21 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 reqwest-eventsource = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 futures-util = "0.3"
-libc = "0.2"
 dirs = "6"
 urlencoding = "2"
 uuid = { version = "1.18.1", features = ["v4"] }
 wire-types = { workspace = true }
+
+# POSIX signal + setsid used by the daemon subcommands. Unix-only —
+# Windows uses the windows-sys equivalents below.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# OpenProcess / TerminateProcess for the Windows daemon path. The
+# detached-spawn flags (DETACHED_PROCESS, CREATE_NEW_PROCESS_GROUP) also
+# come from Win32_System_Threading.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }

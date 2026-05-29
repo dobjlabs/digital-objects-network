@@ -415,7 +415,7 @@ impl Driver {
             &payload_bytes,
             Some(format!("driver:{}", input.action)),
         ) {
-            Ok(resp) if resp.status == relayer::api_types::JobStatus::Failed => {
+            Ok(resp) if resp.status == wire_types::relayer::JobStatus::Failed => {
                 return Err(anyhow!("relayer rejected job {} immediately", resp.job_id));
             }
             Ok(resp) => resp,

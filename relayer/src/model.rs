@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub use relayer::api_types::JobStatus;
+pub use wire_types::relayer::JobStatus;
 
 /// Durable relay job record stored in `relay_jobs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]

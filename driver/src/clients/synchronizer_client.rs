@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Result, anyhow};
 use pod2::middleware::Hash;
 use serde::de::DeserializeOwned;
-use synchronizer::api_types::{
+use wire_types::synchronizer::{
     GroundingWitnessRequest, GroundingWitnessResponse, MembershipRequest, MembershipResponse,
     StateHeadResponse, TxStatusResponse,
 };

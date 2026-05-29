@@ -4,7 +4,19 @@
 //! parameter, SSE event, CLI arg) belongs here — but only if it has no
 //! logic that depends on ZK proofs or chain state. Keeping this crate
 //! dependency-light is the entire point: `cli` and `mcp` should be able
-//! to use it without compiling pod2/plonky2/rocksdb.
+//! to use it without compiling pod2/plonky2/rocksdb/sqlx.
+//!
+//! ## Submodules
+//!
+//! - [`relayer`] — DTOs for the relayer's HTTP API. No heavy deps.
+//! - [`synchronizer`] — DTOs for the synchronizer's HTTP API. The bulk
+//!   are pure serde; the proof-bearing types (`SourceTxProofResponse`,
+//!   `GroundingWitnessResponse`) live behind the `chain` feature because
+//!   they embed a pod2 `MerkleProof`. Server crates and the driver enable
+//!   the feature; `cli` and `mcp` don't.
+
+pub mod relayer;
+pub mod synchronizer;
 
 use std::collections::HashMap;
 use std::fmt;

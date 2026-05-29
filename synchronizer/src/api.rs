@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
 };
 use pod2::{backends::plonky2::primitives::merkletree::MerkleProof, middleware::Hash};
-use synchronizer::api_types::{
+use wire_types::synchronizer::{
     GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, MembershipRequest,
     MembershipResponse, NullifierContainsEntry, NullifierContainsRequest,
     NullifierContainsResponse, SourceTxProofResponse, StateHeadResponse, SyncProgressResponse,

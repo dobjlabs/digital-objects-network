@@ -1969,6 +1969,7 @@ dependencies = [
  "tokio",
  "urlencoding",
  "uuid",
+ "windows-sys 0.59.0",
  "wire-types",
 ]
 
@@ -2764,12 +2765,10 @@ dependencies = [
  "pod2",
  "pod2utils",
  "rand 0.9.2",
- "relayer",
  "reqwest 0.12.28",
  "sdk",
  "serde",
  "serde_json",
- "synchronizer",
  "tempfile",
  "thiserror 2.0.18",
  "toml 1.1.2+spec-1.1.0",
@@ -6608,6 +6607,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "wire-types",
 ]
 
 [[package]]
@@ -8076,6 +8076,7 @@ dependencies = [
  "tracing-subscriber",
  "txlib",
  "url",
+ "wire-types",
 ]
 
 [[package]]
@@ -10237,6 +10238,7 @@ dependencies = [
 name = "wire-types"
 version = "0.1.0"
 dependencies = [
+ "pod2",
  "schemars 1.2.1",
  "serde",
  "serde_json",

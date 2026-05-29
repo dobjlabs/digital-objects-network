@@ -199,13 +199,13 @@ impl RelayerClient for MockRelayer {
         _relayer_api_url: &str,
         _payload_bytes: &[u8],
         _client_ref: Option<String>,
-    ) -> Result<relayer::api_types::SubmitProofResponse> {
+    ) -> Result<wire_types::relayer::SubmitProofResponse> {
         if self.fail_submit {
             return Err(anyhow!("relayer submit failed"));
         }
-        Ok(relayer::api_types::SubmitProofResponse {
+        Ok(wire_types::relayer::SubmitProofResponse {
             job_id: "job-1".to_string(),
-            status: relayer::api_types::JobStatus::Queued,
+            status: wire_types::relayer::JobStatus::Queued,
             tx_final: "0x0".to_string(),
             state_root_hash: "0x0".to_string(),
             attempt_count: 0,

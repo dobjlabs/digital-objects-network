@@ -1,5 +1,21 @@
-use pod2::backends::plonky2::primitives::merkletree::MerkleProof;
+//! Synchronizer HTTP API DTOs.
+//!
+//! Lifted out of the `synchronizer` crate so consumers (driver, dobjd,
+//! tests) can deserialize synchronizer responses without pulling in
+//! synchronizer's server-side deps (rocksdb, sqlx-postgres, alloy, axum).
+//! That's the entire point — `rocksdb` requires a C++ toolchain and is
+//! the dominant Windows-build headache; keeping it on the server side
+//! lets `dobjd` build clean on Windows.
+//!
+//! Most types here are pure serde DTOs. The two proof-bearing types
+//! ([`SourceTxProofResponse`] and [`GroundingWitnessResponse`]) embed a
+//! pod2 `MerkleProof`, so they live behind the `chain` feature. Server
+//! code and the driver enable the feature; `cli` and `mcp` don't.
+
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "chain")]
+use pod2::backends::plonky2::primitives::merkletree::MerkleProof;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Liveness response for the synchronizer HTTP server.
@@ -133,9 +149,12 @@ pub struct GroundingWitnessRequest {
     pub source_tx_hashes: Vec<String>,
 }
 
+#[cfg(feature = "chain")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 /// Membership proof response for one source transaction.
+///
+/// `chain`-feature only — embeds a pod2 `MerkleProof`.
 pub struct SourceTxProofResponse {
     /// Source transaction hash the client asked about.
     pub tx_hash: String,
@@ -145,9 +164,12 @@ pub struct SourceTxProofResponse {
     pub proof: MerkleProof,
 }
 
+#[cfg(feature = "chain")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 /// txlib witness response anchored to one canonical state root.
+///
+/// `chain`-feature only — embeds a `Vec<SourceTxProofResponse>`.
 pub struct GroundingWitnessResponse {
     /// Hash of the compact `txlib::StateRoot` built from the canonical roots.
     pub state_root_hash: String,

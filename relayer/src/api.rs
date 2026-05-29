@@ -9,7 +9,7 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
-use relayer::api_types::{
+use wire_types::relayer::{
     HealthResponse, JobStatusResponse, SubmitProofRequest, SubmitProofResponse,
 };
 use tokio::sync::watch;
