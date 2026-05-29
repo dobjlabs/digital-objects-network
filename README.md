@@ -52,7 +52,9 @@ bundled `craft-basics` plugin into `~/.dobj/`, configures the hosted
 synchronizer + relayer URLs, starts the daemon, and registers MCP with
 the agent. End-to-end install is a couple of minutes.
 
-Manual install instructions and the underlying script are in
+Prefer to install by hand (macOS / Linux / Windows)? See
+[INSTALL.md](INSTALL.md) for step-by-step manual instructions that pull
+the prebuilt binaries from a release. The underlying skill script is in
 [SKILL.md](SKILL.md).
 
 ## Develop (from source)
