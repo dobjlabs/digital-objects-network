@@ -5,9 +5,9 @@ name: Release
 # and the bundled `craft-basics` plugin. Triggered on `v*` tags or via the
 # Actions UI with a tag name.
 #
-# On macOS, every native binary and dylib is codesigned + notarized so users
-# get an online verification on first run instead of the "could not verify
-# is free of malware" Gatekeeper dialog. Both Mac targets build on the
+# On macOS, every native binary is codesigned + notarized so users get an
+# online verification on first run instead of the "could not verify is free
+# of malware" Gatekeeper dialog. Both Mac targets build on the
 # `macos-latest` (Apple Silicon) runner; the x86_64 build is cross-compiled
 # because GitHub's free `macos-13` Intel runners were deprecated end of 2025.
 #
@@ -15,6 +15,13 @@ name: Release
 # certificate yet. First-run users on Windows will see a SmartScreen
 # warning ("Windows protected your PC… Run anyway"). Add an Authenticode
 # cert + signtool step here when one's available.
+#
+# This workflow does NOT bundle libscip or its GCC runtime deps. The pod2
+# rev pinned in Cargo.toml has `default-features = false` and our enabled
+# features (`backend_plonky2`, `disk_cache`, `zk`) don't pull in pod2's
+# `milp` feature → no `good_lp` with `scip_bundled` → no scip-sys. If you
+# ever flip `milp` on, the release will fail at link time on every platform
+# (no rpath / DLL plumbing here anymore)
 
 on:
   push:
@@ -93,11 +100,9 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             exe_suffix: ""
-            scip_glob: libscip*.dylib
           - os: macos-latest
             target: x86_64-apple-darwin
             exe_suffix: ""
-            scip_glob: libscip*.dylib
           # Pin Linux runner to 22.04 (not -latest / 24.04) intentionally.
           # Linking against an older glibc widens the set of distros that
           # can run our prebuilt binary; bumping the runner bumps the
@@ -105,18 +110,13 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             exe_suffix: ""
-            scip_glob: "libscip.so*"
           # Native Windows x86_64. Pinned to `windows-2022` to match the
           # Linux pin's intent: insulate the build from runner-image bumps
           # the user hasn't opted into. Git Bash ships with the runner so
-          # the workflow's default `shell: bash` works here too. No SCIP
-          # bundling — `chain` synchronizer types route via pod2 (pure
-          # Rust), not rocksdb, so the Windows tarball is just the three
-          # executables and an empty `.libs/`.
+          # the workflow's default `shell: bash` works here too.
           - os: windows-2022
             target: x86_64-pc-windows-msvc
             exe_suffix: ".exe"
-            scip_glob: ""
 
     runs-on: ${{ matrix.os }}
 
@@ -143,44 +143,6 @@ jobs:
           target: ${{ matrix.target }}
           cache-shared-key: dobjd-${{ matrix.target }}
           cache-workspace-crates: true
-
-      - name: Install x86_64 Homebrew + gcc@13 (cross-compile prerequisite)
-        # Cross-compiling SCIP from an arm64 runner to x86_64 needs x86_64
-        # GCC to link Fortran libraries against. Without this, scip-sys's
-        # cmake step writes /usr/local/opt/gcc@13/... paths into libscip's
-        # install_names but the actual libs aren't on disk, so we can't
-        # bundle them and the resulting tarball is broken at runtime.
-        #
-        # Installing x86_64 Homebrew under Rosetta gives us a real
-        # /usr/local/opt/gcc@13 with x86_64 libs that match the paths
-        # cmake would write, so the build links cleanly and the bundle
-        # has the right binaries.
-        if: matrix.target == 'x86_64-apple-darwin'
-        run: |
-          set -euo pipefail
-
-          # Make sure Rosetta 2 is installed so we can run x86_64 binaries.
-          # `softwareupdate --install-rosetta` is idempotent.
-          sudo softwareupdate --install-rosetta --agree-to-license
-
-          # Install x86_64 Homebrew at /usr/local (the canonical Intel
-          # Homebrew prefix) under Rosetta. NONINTERACTIVE=1 skips the
-          # confirmation prompt.
-          if [ ! -x /usr/local/bin/brew ]; then
-            echo "installing x86_64 Homebrew under Rosetta"
-            NONINTERACTIVE=1 arch -x86_64 /bin/bash -c \
-              "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          fi
-
-          # gcc@13 specifically — that's the formula scip-sys's cmake links
-          # against (per the install_name paths in libscip). Bottles are
-          # pre-compiled, so this is a download not a build.
-          arch -x86_64 /usr/local/bin/brew install gcc@13
-
-          echo "--- /usr/local/opt/gcc@13/lib/gcc/13 ---"
-          # Pure diagnostic display — `ls -la` is intentional and not parsed.
-          # shellcheck disable=SC2012
-          ls -la /usr/local/opt/gcc@13/lib/gcc/13 | head -30
 
       - name: Setup LLVM for rocksdb bindgen (Windows)
         # rocksdb's build.rs runs bindgen against the C++ headers; bindgen
@@ -230,18 +192,12 @@ jobs:
           # (codesign, notarize, tar) can find them by env var.
           #
           # Final layout inside dobjd-{target}.tar.gz:
-          #   dobjd
-          #   bitcraft-mcp-proxy
-          #   .libs/{libscip*, libgfortran*, libquadmath*, libgcc_s*}
+          #   dobjd[.exe]
+          #   bitcraft-mcp-proxy[.exe]
           #
-          # The `.libs/` subdir keeps `~/.dobj/bin/` clean — only the three
-          # user-facing executables show up in `ls`. dobjd's RPATH is baked
-          # to `@loader_path/.libs` (mac) / `$ORIGIN/.libs` (linux) so the
-          # libs resolve at runtime without env vars.
           DOBJD_STAGE="$GITHUB_WORKSPACE/staging/dobjd"
-          DOBJD_LIBS="$DOBJD_STAGE/.libs"
           DOBJ_STAGE="$GITHUB_WORKSPACE/staging/dobj"
-          mkdir -p "$DOBJD_STAGE" "$DOBJD_LIBS" "$DOBJ_STAGE"
+          mkdir -p "$DOBJD_STAGE" "$DOBJ_STAGE"
 
           # ${{ matrix.exe_suffix }} is `.exe` on Windows, empty everywhere
           # else, so a single set of cp lines works across all targets.
@@ -249,73 +205,21 @@ jobs:
           cp "$OUT/bitcraft-mcp-proxy${{ matrix.exe_suffix }}" "$DOBJD_STAGE/"
           cp "$OUT/dobj${{ matrix.exe_suffix }}"               "$DOBJ_STAGE/"
 
-          # ---- Diagnostics ---------------------------------------------------
-          # If anything's off, the logs show the actual layout cargo produced.
-
-          echo "--- scip-sys build directories anywhere in target/ ---"
-          find target -type d -name 'scip-sys-*' 2>/dev/null | head -20 || true
-          echo "--- libscip files anywhere in target/ ---"
-          find target -name 'libscip*' 2>/dev/null | head -20 || true
+          # Diagnostic dump of dobjd's dynamic deps. If anyone ever bumps
+          # the dep graph in a way that pulls in a C library (rocksdb,
+          # scip-sys, openssl-sys, …) this log will surface the runtime
+          # link before users hit it.
           echo "--- dobjd dynamic deps ---"
           case "${{ matrix.target }}" in
             *-apple-darwin)  otool -L "$DOBJD_STAGE/dobjd" || true ;;
             *-linux-*)       ldd        "$DOBJD_STAGE/dobjd" || true ;;
-            # Windows: dumpbin lives in MSVC Build Tools (preinstalled on
-            # the runner) but resolving it from Git Bash is awkward and the
-            # info is rarely useful — Windows-Rust binaries are typically
-            # statically linked plus the system CRT. Skip the diagnostic.
-            *-pc-windows-*)  echo "(skipping deps diagnostic on windows)" ;;
+            *-pc-windows-*)  echo "(deps diagnostic skipped on windows: dumpbin lives in MSVC Build Tools and is awkward from Git Bash; rustls + bundled-CRT keeps Windows binaries dep-free anyway)" ;;
           esac
 
-          # ---- Locate scip_install/lib --------------------------------------
-          # Search the whole target/ tree (not just $OUT/build) — cargo with
-          # --target {triple} sometimes places build outputs in a different
-          # subdir than expected, especially when host == target.
-          #
-          # Multiple scip-sys-* build hashes can coexist (one per Cargo.lock
-          # state), but they all install the same SCIP version, so the first
-          # match is fine — no need to pick the freshest.
-          SCIP_DIR=$(find target -type d -path '*scip-sys-*/out/scip_install/lib' 2>/dev/null \
-                     | head -1)
-
-          if [ -n "$SCIP_DIR" ] && [ -d "$SCIP_DIR" ]; then
-            echo "scip dir: $SCIP_DIR"
-            cp -P "$SCIP_DIR"/${{ matrix.scip_glob }} "$DOBJD_LIBS/" 2>/dev/null || true
-          else
-            # No scip_install/lib found. This is fine if dobjd statically
-            # linked SCIP — the binary is self-contained in that case. If it
-            # didn't, the dynamic-deps log above will show libscip and the
-            # binary will fail to run; treat that as a CI failure below.
-            echo "::warning::no scip_install/lib found in target/; assuming static linkage"
-          fi
-
-          # ---- Sanity check: dobjd must not have unresolved libscip refs ----
-          case "${{ matrix.target }}" in
-            *-apple-darwin)
-              if otool -L "$DOBJD_STAGE/dobjd" | grep -q 'libscip' \
-                 && ! ls "$DOBJD_LIBS"/libscip*.dylib >/dev/null 2>&1; then
-                echo "::error::dobjd dynamic-links libscip but no dylib was bundled in .libs/"
-                exit 1
-              fi
-              ;;
-            *-linux-*)
-              if ldd "$DOBJD_STAGE/dobjd" | grep -q 'libscip' \
-                 && ! ls "$DOBJD_LIBS"/libscip.so* >/dev/null 2>&1; then
-                echo "::error::dobjd dynamic-links libscip but no .so was bundled in .libs/"
-                exit 1
-              fi
-              ;;
-            # Windows: no SCIP bundling path exists yet — chain types route
-            # through pod2 (pure Rust). If SCIP ever does ship on Windows
-            # this is where the dumpbin-based check would go.
-            *-pc-windows-*) ;;
-          esac
-
-          ls -la "$DOBJD_STAGE" "$DOBJD_LIBS" "$DOBJ_STAGE"
+          ls -la "$DOBJD_STAGE" "$DOBJ_STAGE"
 
           {
             echo "DOBJD_STAGE=$DOBJD_STAGE"
-            echo "DOBJD_LIBS=$DOBJD_LIBS"
             echo "DOBJ_STAGE=$DOBJ_STAGE"
           } >> "$GITHUB_ENV"
 
@@ -379,136 +283,13 @@ jobs:
             echo "APPLE_API_KEY_PATH=$APPLE_API_KEY_PATH"
           } >> "$GITHUB_ENV"
 
-      - name: Bundle macOS GCC runtime deps
-        if: runner.os == 'macOS'
-        run: |
-          set -euo pipefail
-
-          # libscip on macOS dynamically links to GCC's libgfortran, which in
-          # turn pulls in libquadmath and libgcc_s. Apple's hardened runtime
-          # (which we enable via `--options runtime` for notarization) refuses
-          # to load any dylib not signed by our team, so we must:
-          #
-          # 1. Copy libgfortran/libquadmath/libgcc_s next to libscip
-          # 2. Rewrite their install_names to @rpath so they resolve via the
-          #    same `@loader_path` that libscip uses
-          # 3. Re-sign them with our team identity (later step)
-
-          # Bundle GCC runtime libs (libgfortran/libquadmath/libgcc_s, plus
-          # whatever the install_name walk pulls in transitively, e.g.
-          # libstdc++) for the target architecture.
-          #
-          # arm64 build: native, libs from /opt/homebrew (latest gcc).
-          # x86_64 build: cross-compile, libs from x86_64 Homebrew at
-          # /usr/local/opt/gcc@13 (installed via Rosetta in an earlier step).
-          # Picking gcc@13 specifically matches the install_names baked
-          # into the cross-compiled libscip.
-          GCC_RUNTIME_NAMES=(libgfortran.5.dylib libquadmath.0.dylib libgcc_s.1.1.dylib)
-          case "${{ matrix.target }}" in
-            aarch64-apple-darwin)
-              GCC_ROOTS=(/opt/homebrew/opt/gcc/lib/gcc/current)
-              ;;
-            x86_64-apple-darwin)
-              GCC_ROOTS=(/usr/local/opt/gcc@13/lib/gcc/13)
-              ;;
-            *)
-              GCC_ROOTS=()
-              ;;
-          esac
-
-          for root in "${GCC_ROOTS[@]}"; do
-            [ -d "$root" ] || continue
-            for name in "${GCC_RUNTIME_NAMES[@]}"; do
-              src="$root/$name"
-              [ -e "$src" ] || continue
-              cp -P "$src" "$DOBJD_LIBS/$name"
-              chmod u+w "$DOBJD_LIBS/$name"
-            done
-          done
-
-          # Walk every dylib transitively, rewriting:
-          #   - its own LC_ID_DYLIB to @rpath/<basename>
-          #   - any dependency under /opt/homebrew or /usr/local to
-          #     @rpath/<basename>, copying the dep into .libs/ if it isn't
-          #     already there *and the source file actually exists* (some
-          #     Homebrew bottles bake stale absolute paths into install_names
-          #     that resolve nowhere — leave those references unchanged
-          #     rather than aborting the build).
-          declare -A SEEN
-          QUEUE=()
-          for f in "$DOBJD_LIBS"/*.dylib; do
-            [ -L "$f" ] && continue
-            QUEUE+=("$f")
-          done
-
-          while [ ${#QUEUE[@]} -gt 0 ]; do
-            lib="${QUEUE[0]}"
-            QUEUE=("${QUEUE[@]:1}")
-            [ -n "${SEEN[$lib]:-}" ] && continue
-            SEEN[$lib]=1
-
-            base=$(basename "$lib")
-            install_name_tool -id "@rpath/$base" "$lib"
-
-            while read -r dep; do
-              case "$dep" in
-                /opt/homebrew/*|/usr/local/*)
-                  dep_name=$(basename "$dep")
-                  dep_dest="$DOBJD_LIBS/$dep_name"
-                  if [ ! -e "$dep_dest" ]; then
-                    if [ ! -e "$dep" ]; then
-                      echo "::warning::skipping missing dep $dep (referenced by $base)"
-                      continue
-                    fi
-                    cp -P "$dep" "$dep_dest"
-                    chmod u+w "$dep_dest"
-                    QUEUE+=("$dep_dest")
-                  fi
-                  install_name_tool -change "$dep" "@rpath/$dep_name" "$lib"
-                  ;;
-              esac
-            done < <(otool -L "$lib" | tail -n +2 | awk '{print $1}')
-          done
-
-          # Sanity check: every /opt/homebrew/* or /usr/local/* dep
-          # libscip references should have been rewritten to @rpath/<name>
-          # by the walk above, and the corresponding lib should exist in
-          # .libs/. If any absolute Homebrew path remains in libscip's deps
-          # we'd ship a broken bundle.
-          for lib in "$DOBJD_LIBS"/libscip*.dylib; do
-            [ -L "$lib" ] && continue
-            if otool -L "$lib" | tail -n +2 | awk '{print $1}' \
-               | grep -E '^(/opt/homebrew|/usr/local)/'; then
-              echo "::error::libscip still has absolute Homebrew references after install_name rewrite"
-              echo "::error::expected the GCC runtime libs to be present at the paths above"
-              otool -L "$lib"
-              exit 1
-            fi
-          done
-
-          echo "--- final bundle ---"
-          ls -la "$DOBJD_STAGE" "$DOBJD_LIBS"
-          for f in "$DOBJD_LIBS"/*.dylib; do
-            [ -L "$f" ] && continue
-            echo "--- $(basename "$f") deps ---"
-            otool -L "$f" | tail -n +2
-          done
-
       - name: Codesign macOS binaries
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           IDENTITY="${MACOS_SIGNING_IDENTITY}"
 
-          # Sign every dylib in .libs/ (libscip + GCC runtime deps + any
-          # transitives we pulled in). Sign dylibs before binaries because
-          # dobjd's signature includes hashes of its load-time deps.
-          for f in "$DOBJD_LIBS"/*.dylib; do
-            [ -L "$f" ] && continue
-            codesign --force --sign "$IDENTITY" \
-              --options runtime --timestamp "$f"
-          done
-
+          # User-facing binaries.
           codesign --force --sign "$IDENTITY" \
             --options runtime --timestamp "$DOBJD_STAGE/dobjd"
           codesign --force --sign "$IDENTITY" \
@@ -531,10 +312,6 @@ jobs:
           codesign --verify --verbose=2 "$DOBJ_STAGE/dobj"
           codesign --verify --verbose=2 "$SYNCHRONIZER_STAGE/synchronizer"
           codesign --verify --verbose=2 "$RELAYER_STAGE/relayer"
-          for f in "$DOBJD_LIBS"/*.dylib; do
-            [ -L "$f" ] && continue
-            codesign --verify --verbose=2 "$f"
-          done
 
       - name: Notarize macOS binaries
         if: runner.os == 'macOS'
