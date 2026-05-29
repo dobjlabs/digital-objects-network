@@ -8,8 +8,8 @@
 //! to the action; the IsX OR is over those bridge predicates.
 
 use crate::{
-    ActionContext, ActionObjectRef, ClassMeta, Dependency, Inst, Intro, Loader, ObjectIO, Ref,
-    VarOrValue,
+    ActionContext, ActionMeta, ActionObjectRef, ClassMeta, Dependency, Inst, Intro, Loader,
+    ObjectIO, Ref, VarOrValue,
 };
 use std::collections::HashMap;
 use std::fmt;
@@ -49,12 +49,9 @@ fn fmt_var_at(name: &str, ts: usize, max_ts: usize) -> String {
 }
 
 /// Output Objects reserve one extra ts beyond the script's last
-/// DictUpdate to hold the implicit identity-stamping step (TxInsert's
-/// `DictInsert(new, initial, "identity", initial)` proves it). The
-/// script-final ts is the pre-identity `initial` wildcard the action
-/// predicate hands to TxInsert; the bumped ts collapses to
-/// `out.<name>` (the post-identity dict that lives in the tx). Mutate
-/// doesn't bump -- TxMutate preserves identity, doesn't stamp it.
+/// DictUpdate to account for the update performed when TxInsert adds
+/// the `identity` entry to the object. This is always the final update
+/// to the object's state before output.
 pub(crate) const fn output_max_ts(base_ts: usize, is_output: bool) -> usize {
     if is_output { base_ts + 1 } else { base_ts }
 }
@@ -97,13 +94,10 @@ pub(crate) fn chain_step_at(ts: usize, chain_max_ts: usize) -> Option<usize> {
 struct VarNameFmt<'a> {
     name: &'a str,
     ts: usize,
-    max_ts: usize,
-    /// Object Ref's pre-form collapses to `in.<name>`. False for
-    /// non-Object vars and Output-only Objects.
-    collapsed_in: bool,
-    /// Object Ref's post-form collapses to `out.<name>`. False for
-    /// non-Object vars and Input-only Objects.
-    collapsed_out: bool,
+    /// The owning action's metadata: the single source for this var's
+    /// max ts and which record namespace (if any) it collapses to at a
+    /// given ts. See `collapses_at`.
+    meta: &'a ActionMeta,
 }
 
 impl<'a> VarNameFmt<'a> {
@@ -118,32 +112,45 @@ impl<'a> VarNameFmt<'a> {
     }
 }
 
-impl<'a> fmt::Display for VarNameFmt<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // For a Mutate Object at ts=0=max (no updates), `in` wins.
-        if self.collapsed_in && self.ts == 0 {
-            return write!(f, "in.{}", self.name);
-        }
-        if self.collapsed_out && self.ts == self.max_ts {
-            return write!(f, "out.{}", self.name);
-        }
-        if self.name == "chain"
-            && let Some(slot) = chain_step_at(self.ts, self.max_ts)
-        {
-            return write!(f, "chain_steps.step_{}", slot - 1);
-        }
-        write!(f, "{}", fmt_var_at(self.name, self.ts, self.max_ts))
+impl<'a> VarNameFmt<'a> {
+    /// The record namespace this var pins at its current `ts`, or
+    /// `None` to render as a bare wildcard. Delegates to
+    /// `ActionMeta::collapsed_at`, which owns the in/out/initials
+    /// resolution (and its precedence).
+    fn collapses_at(&self) -> Option<Collapse> {
+        self.meta.collapsed_at(self.name, self.ts)
     }
 }
 
-/// One of the two record args in an action's signature
-/// `Action(in <Action>In, out <Action>Out, ...)`. Each Object inst
-/// contributes one entry to one (Input/Output) or both (Mutate) of
-/// these records.
+impl<'a> fmt::Display for VarNameFmt<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(ns) = self.collapses_at() {
+            return write!(f, "{}.{}", ns.arg_name(), self.name);
+        }
+        let max_ts = self.meta.max_ts(self.name);
+        if self.name == "chain"
+            && let Some(slot) = chain_step_at(self.ts, max_ts)
+        {
+            return write!(f, "chain_steps.step_{}", slot - 1);
+        }
+        write!(f, "{}", fmt_var_at(self.name, self.ts, max_ts))
+    }
+}
+
+/// Which public record an Object inst belongs to: `in <Action>In`
+/// and `out <Action>Out` each carry one entry per Object inst on that
+/// side (Mutate contributes to both).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Side {
     In,
     Out,
+}
+
+/// The record namespace a collapsed Object state dict belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Collapse {
+    Side(Side),
+    Initials,
 }
 
 impl Side {
@@ -157,6 +164,27 @@ impl Side {
         match self {
             Side::In => "In",
             Side::Out => "Out",
+        }
+    }
+}
+
+impl From<Side> for Collapse {
+    fn from(side: Side) -> Self {
+        Collapse::Side(side)
+    }
+}
+
+impl Collapse {
+    pub(crate) fn arg_name(self) -> &'static str {
+        match self {
+            Collapse::Side(side) => side.arg_name(),
+            Collapse::Initials => "initials",
+        }
+    }
+    fn schema_suffix(self) -> &'static str {
+        match self {
+            Collapse::Side(side) => side.schema_suffix(),
+            Collapse::Initials => "Initials",
         }
     }
 }
@@ -193,9 +221,9 @@ pub(crate) fn dispatch_side(io: &ObjectIO) -> Side {
     }
 }
 
-/// Schema name for a (action, side) pair, e.g. `LogToWoodIn`.
-fn schema_name(action_name: &str, side: Side) -> String {
-    format!("{action_name}{}", side.schema_suffix())
+/// Schema name for a (action, namespace) pair, e.g. `LogToWoodIn`.
+fn schema_name(action_name: &str, ns: impl Into<Collapse>) -> String {
+    format!("{action_name}{}", ns.into().schema_suffix())
 }
 
 /// Emit `record <Action><Side> = (<entries>)` lines for any non-empty
@@ -238,6 +266,14 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
                 "record {} = ({})",
                 chain_schema_name(&meta.name),
                 render(&steps),
+            )?;
+        }
+        if let Some(initials) = &meta.initials_entries {
+            writeln!(
+                w,
+                "record {} = ({})",
+                schema_name(&meta.name, Collapse::Initials),
+                render(initials),
             )?;
         }
     }
@@ -354,30 +390,23 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     let alias_names: std::collections::HashSet<String> =
         sub_calls.iter().filter_map(|c| c.alias.clone()).collect();
 
-    let max_ts_for = |var: &str| -> usize {
-        let is_output = meta
-            .object_refs
-            .iter()
-            .any(|o| o.varname == var && o.io == ObjectIO::Output);
-        output_max_ts(action.var_state[var].ts, is_output)
-    };
-
     // Private wildcards: every (var, ts) except sub-action aliases,
     // chain endpoints (public chain0/chain), packed chain intermediates
-    // (anchored via the `chain_steps` record), and Object pre/post-form
-    // ts on collapsed sides. Unpacked chain intermediates appear as
-    // scalar `chain1, chain2, ...` privates.
+    // (anchored via the `chain_steps` record), Object pre/post-form
+    // ts on collapsed sides, and Output Objects' script-final ts when
+    // packed into the `initials` record. Unpacked chain intermediates
+    // appear as scalar `chain1, chain2, ...` privates.
     let mut private_vars: Vec<String> = Vec::new();
     for var in &action.vars {
         if alias_names.contains(var.as_str()) {
             continue;
         }
-        let max_ts = max_ts_for(var);
+        let max_ts = meta.max_ts(var);
         for i in 0..=max_ts {
             let skip = if var == "chain" {
                 i == 0 || i == max_ts || chain_step_at(i, max_ts).is_some()
             } else {
-                meta.collapsed_at(var, i, max_ts).is_some()
+                meta.collapsed_at(var, i).is_some()
             };
             if skip {
                 continue;
@@ -398,6 +427,14 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     if chain_packed(meta.chain_max_ts) {
         private_vars.push(format!("chain_steps {}", chain_schema_name(&action.name)));
     }
+    // Append the initials record typed private when packed.
+    if meta.initials_entries.is_some() {
+        private_vars.push(format!(
+            "{} {}",
+            Collapse::Initials.arg_name(),
+            schema_name(&action.name, Collapse::Initials),
+        ));
+    }
     if !private_vars.is_empty() {
         write!(w, ", private: ")?;
         for (i, v) in private_vars.iter().enumerate() {
@@ -409,24 +446,20 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     }
     writeln!(w, ") = AND(")?;
 
-    // Per-var rendering state for body emission. Object vars carry
-    // the per-side collapse flags so `VarNameFmt` can pick
-    // `in.<name>` / `out.<name>` over the bare name when collapsed.
+    // Per-var rendering state for body emission. Each var holds a
+    // back-reference to `meta` so `VarNameFmt::collapses_at` can
+    // resolve whether it renders as `in.<name>` / `out.<name>` /
+    // `initials.<name>` at a given ts.
     let mut vars: HashMap<&str, VarNameFmt> = action
         .vars
         .iter()
         .map(|v| {
-            let max_ts = max_ts_for(v);
-            let collapsed_in = meta.collapsed_at(v, 0, max_ts) == Some(Side::In);
-            let collapsed_out = meta.collapsed_at(v, max_ts, max_ts) == Some(Side::Out);
             (
                 v.as_str(),
                 VarNameFmt {
                     name: v,
                     ts: 0,
-                    max_ts,
-                    collapsed_in,
-                    collapsed_out,
+                    meta,
                 },
             )
         })
@@ -540,11 +573,14 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // internally, so the guard predicate ref is passed as the last
     // arg to TxInsert / TxDelete / TxMutate (and pins both sides for
     // mutate, making the type-preservation check implicit).
-    // For Output, the script's final wildcard (`obj_str`) is the
-    // pre-identity `initial` arg; the bumped-ts rendering
-    // (`obj_with_id`, which collapses to `out.<name>`) is the
-    // post-identity `new` arg that lives in the tx and is bound to
-    // the output record.
+    // For Output, TxInsert produces a final state with an "identity"
+    // entry, so it takes the object in two forms. `obj_str` (the
+    // script's final wildcard) is the pre-identity `initial` dict the
+    // script built; `obj_with_id` (the same wildcard one ts later, the
+    // extra ts that `output_max_ts` reserves) is the post-identity `new`
+    // dict TxInsert produces. The post-identity form is the object's
+    // output state: it is what the transaction inserts, and it collapses
+    // to `out.<name>` to bind the `<Action>Out` record entry.
     for o in &meta.object_refs {
         let chain = vars["chain"];
         let chain_next = chain.next();
