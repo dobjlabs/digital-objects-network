@@ -468,7 +468,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // ---- ArrayContains clauses for each Object's pre/post-form on
     // sides that need a wildcard; collapsed sides drop the clause.
     for o in &meta.object_refs {
-        let max_ts = action.var_state[&o.varname].ts;
+        let max_ts = meta.max_ts(&o.varname);
         if meta
             .in_entry(&o.varname)
             .is_some_and(|(_, e)| e.needs_wildcard)

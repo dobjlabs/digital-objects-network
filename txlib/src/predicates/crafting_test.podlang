@@ -27,7 +27,7 @@ DeleteStick(stick, chain_start, chain_end) = AND(
 // ========================================================
 
 // FindLog: creates a log from nothing (simplified: no VDF).
-// `log` is the post-identity dict that lives in the tx; `log0` is
+// `log` is the post-identity dict the tx records; `log0` is
 // the pre-identity dict the action constructed, exposed as TxInsert's
 // public `initial` arg so identity = commitment(log0) is verifiable
 // against script-level DictUpdate/DictInsert chains.

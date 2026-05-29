@@ -648,9 +648,9 @@ impl TxBuilder {
     ///
     /// `initial` is the pre-identity object state; the builder stamps
     /// `identity = commitment(initial)` via [`with_identity`] and the
-    /// returned `Dictionary` is the post-identity `new` (the dict that
-    /// lives in the tx). Subsequent mutate/delete must reference the
-    /// returned dict, not `initial`.
+    /// returned `Dictionary` is the post-identity `new` that the tx
+    /// records. Subsequent mutate/delete must reference the returned
+    /// dict, not `initial`.
     pub fn insert(
         &mut self,
         ctx: &mut BuildContext,

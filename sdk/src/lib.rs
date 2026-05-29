@@ -542,12 +542,10 @@ impl ActionHandle {
         // dispatch side's array (Mutate contributes to both). Slot 0
         // is `_pad`; real entries start at slot 1 (see PAD_ENTRY).
         //
-        // For Output objects the script's view is pre-identity, but
-        // TxInsert stamps `new.identity = commitment(initial)` and
-        // the predicate references the stamped form via the `out`
-        // record. We cache the stamped dict once here so the
-        // out_array entry, the array_contains anchor below, and the
-        // post-event obj_dict downstream all see the same value.
+        // For Outputs, cache the identity-stamped dict once here so the
+        // three consumers that need the post-identity form -- the
+        // out_array entry, the ArrayContains anchor below, and the
+        // downstream obj_dict -- all use the same value.
         let exe_rc = self.0.borrow().exe_ctx.clone().expect("exe phase");
         let meta = module.action_by_name(&action);
         // Output dicts: `stamped_outputs` (keyed by varname) backs
@@ -612,19 +610,16 @@ impl ActionHandle {
         let in_array = Array::new(in_dicts);
         let out_array = Array::new(out_dicts);
 
-        // Build the `<Action>Initials` record value (pre-identity
-        // Output dicts), if required. Slot 0 is `_pad`; subsequent
-        // slots are `raw_outputs` in declaration order, matching
-        // `meta.initials_entries`.
+        // Build the `<Action>Initials` record value (the pre-identity Output
+        // dicts) when the action has one. Slot 0 is the `_pad` (see PAD_ENTRY).
         let initials_array: Option<Array> = has_initials.then(|| {
             let mut values: Vec<Value> = vec![Value::from(0_i64)];
             values.extend(raw_outputs.iter().cloned().map(Value::from));
             Array::new(values)
         });
 
-        // Anchor an Output's pre-identity slot in the `<Action>Initials`
-        // record. Returns `None` for non-Output vars and for actions
-        // that don't have initials.
+        // Resolve an Output's pre-identity dict to its slot in the
+        // `<Action>Initials` record.
         let initials_anchor = |obj_name: &str| -> Option<OperationArg> {
             let slot = meta.initials_slot(obj_name)?;
             Some((initials_array.as_ref()?, slot as i64).into())
@@ -669,8 +664,7 @@ impl ActionHandle {
                             .as_ref()
                             .expect("Mutate records a pre-mutation dict")
                             .clone(),
-                        ObjectIO::Input => post_dict.clone(),
-                        ObjectIO::Output => post_dict.clone(),
+                        _ => post_dict.clone(),
                     };
                     if let Some((idx, e)) = meta.in_entry(&varname)
                         && e.needs_wildcard
@@ -783,9 +777,7 @@ impl ActionHandle {
                     // the raw dictionary.
                     let (obj_dict, st_tx_literal, handle) = match io {
                         ObjectIO::Output => {
-                            let (new_dict, st, h) =
-                                exe_ctx.tx_builder.insert(&mut exe_ctx.bld, &raw_obj_dict);
-                            (new_dict, st, h)
+                            exe_ctx.tx_builder.insert(&mut exe_ctx.bld, &raw_obj_dict)
                         }
                         ObjectIO::Input => {
                             let (st, h) =

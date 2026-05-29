@@ -49,7 +49,7 @@
 // `new.identity = commitment(initial)`: `initial` is the
 // pre-identity object dict the action constructed (script-driven
 // DictUpdates land on `initial`), and `new` is the materialized
-// post-identity dict that lives in the tx's `live` set. Exposing
+// post-identity dict the tx records in its `live` set. Exposing
 // `initial` as a public arg lets the calling action predicate
 // share its body wildcard with both the script's DictUpdate chain
 // and TxInsert's identity-derivation clause.
