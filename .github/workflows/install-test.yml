@@ -25,9 +25,14 @@ name: Install test
 #   SEPOLIA_BEACON_URL   — Beacon API endpoint with blob-sidecar support
 #                          (publicnode, Quicknode, Chainstack, …)
 #   SEPOLIA_TO_ADDRESS   — destination EOA for the relayer's blob txs
-#   SEPOLIA_PRIVATE_KEY  — funded Sepolia EOA the relayer signs with.
-#                          Drained over time — refill from a faucet when
-#                          jobs start failing with "insufficient funds".
+#   SEPOLIA_PRIVATE_KEY_1..4 — FOUR distinct funded Sepolia EOAs, one per
+#                          matrix entry. They must be different keys: the
+#                          jobs run in parallel and relayers sharing an
+#                          address would collide on tx nonce (see the matrix
+#                          comment). Each is drained over time — refill from
+#                          a faucet when a job fails with "insufficient
+#                          funds". Map: KEY_1 macOS-arm64, KEY_2 macOS-x86,
+#                          KEY_3 linux, KEY_4 windows.
 
 on:
   # Called by release.yml after the build jobs land artifacts in the draft
@@ -70,22 +75,32 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Each entry uses a DISTINCT funded Sepolia EOA (pk_secret). The
+        # jobs run in parallel and each spins up its own relayer; a relayer
+        # derives its tx nonce from `get_transaction_count(from)`, so two
+        # relayers sharing one key would compute the same nonce and collide
+        # ("nonce too low" / "replacement underpriced"), and only one job's
+        # FindLog would ever land. One key per job side-steps that.
         include:
           # Native arm64 macOS.
           - os: macos-latest
             target: aarch64-apple-darwin
             install_rosetta: false
+            pk_secret: SEPOLIA_PRIVATE_KEY_1
           # Intel macOS binary running on the arm64 runner via Rosetta.
           # Free Intel macOS runners were deprecated end of 2025.
           - os: macos-latest
             target: x86_64-apple-darwin
             install_rosetta: true
+            pk_secret: SEPOLIA_PRIVATE_KEY_2
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             install_rosetta: false
+            pk_secret: SEPOLIA_PRIVATE_KEY_3
           - os: windows-2022
             target: x86_64-pc-windows-msvc
             install_rosetta: false
+            pk_secret: SEPOLIA_PRIVATE_KEY_4
 
     runs-on: ${{ matrix.os }}
 
@@ -110,7 +125,9 @@ jobs:
       RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
       BEACON_URL: ${{ secrets.SEPOLIA_BEACON_URL }}
       TO_ADDRESS: ${{ secrets.SEPOLIA_TO_ADDRESS }}
-      PRIVATE_KEY: ${{ secrets.SEPOLIA_PRIVATE_KEY }}
+      # Per-matrix key (see the matrix comment) — dynamic secrets indexing
+      # by the name carried in `matrix.pk_secret`.
+      PRIVATE_KEY: ${{ secrets[matrix.pk_secret] }}
 
     steps:
       - name: Install Rosetta 2 (Intel macOS path)
