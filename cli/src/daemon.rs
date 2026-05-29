@@ -354,9 +354,7 @@ pub async fn start(client: &DobjdClient) -> Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::{
-            CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
-        };
+        use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
         // DETACHED_PROCESS: child gets no inherited console, so closing
         // our terminal doesn't propagate. CREATE_NEW_PROCESS_GROUP: child
         // is in its own process group, immune to Ctrl+C/Break routed to

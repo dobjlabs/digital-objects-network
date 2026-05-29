@@ -9,12 +9,12 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
-use wire_types::relayer::{
-    HealthResponse, JobStatusResponse, SubmitProofRequest, SubmitProofResponse,
-};
 use tokio::sync::watch;
 use tracing::{debug, error, info};
 use uuid::Uuid;
+use wire_types::relayer::{
+    HealthResponse, JobStatusResponse, SubmitProofRequest, SubmitProofResponse,
+};
 
 use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, encode_hash_hex, proof::BlobParser};
 

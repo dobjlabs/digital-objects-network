@@ -6,11 +6,11 @@ use std::{
 use anyhow::{Result, anyhow};
 use pod2::middleware::Hash;
 use serde::de::DeserializeOwned;
+use txlib::{GroundingWitness, StateRoot};
 use wire_types::synchronizer::{
     GroundingWitnessRequest, GroundingWitnessResponse, MembershipRequest, MembershipResponse,
     StateHeadResponse, TxStatusResponse,
 };
-use txlib::{GroundingWitness, StateRoot};
 
 use common::{decode_hash_hex, encode_hash_hex};
 
