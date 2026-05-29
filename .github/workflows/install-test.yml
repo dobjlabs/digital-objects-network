@@ -365,45 +365,13 @@ jobs:
             fi
           done
 
-      - name: Start synchronizer + relayer (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path logs | Out-Null
-
-          # Synchronizer: rocksdb at APP_STATE_DB_PATH, postgres metadata DB.
-          $env:SYNC_METADATA_DB_URL = "postgres://postgres:root@127.0.0.1:5432/synchronizer"
-          $env:APP_STATE_DB_PATH    = "$env:GITHUB_WORKSPACE\synchronizer-db"
-          $env:RPC_RETRIES          = "10"
-          $env:RPC_RETRY_MS         = "4000"
-          Start-Process -FilePath "$env:GITHUB_WORKSPACE\server-bin\synchronizer.exe" `
-            -RedirectStandardOutput "logs\synchronizer.log" `
-            -RedirectStandardError  "logs\synchronizer.err" `
-            -NoNewWindow
-
-          # Relayer: postgres job DB.
-          $env:DB_URL = "postgres://postgres:root@127.0.0.1:5432/relayer"
-          $env:FEE_BUMP_AFTER_SECS     = "60"
-          $env:FEE_BUMP_MULTIPLIER_PCT = "100"
-          Start-Process -FilePath "$env:GITHUB_WORKSPACE\server-bin\relayer.exe" `
-            -RedirectStandardOutput "logs\relayer.log" `
-            -RedirectStandardError  "logs\relayer.err" `
-            -NoNewWindow
-
-          foreach ($url in @("http://127.0.0.1:3000/healthz", "http://127.0.0.1:3200/healthz")) {
-              $ok = $false
-              for ($i = 0; $i -lt 90; $i++) {
-                  try {
-                      Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 2 | Out-Null
-                      Write-Host "$url ready"
-                      $ok = $true
-                      break
-                  } catch {
-                      Start-Sleep -Seconds 1
-                  }
-              }
-              if (-not $ok) { throw "$url never became ready in 90s" }
-          }
+      # NOTE: there is no separate Windows "start servers" step. GitHub's
+      # Windows runner reaps a step's child processes when the step ends, so
+      # servers launched in their own step would be dead by the time the
+      # smoke test's `dobj run` reaches the commit phase (which is the first
+      # time dobjd contacts the synchronizer). The Windows step below
+      # launches them and runs the smoke test together. Unix keeps separate
+      # steps because `nohup &` detaches and survives step boundaries.
 
       # =====================================================================
       # The actual smoke test — same shape as before, against the local
@@ -430,31 +398,80 @@ jobs:
             || { echo "::error::inventory empty after FindLog run"; exit 1; }
           $DOBJ stop
 
-      - name: Smoke test (Windows)
+      - name: Start stack + smoke test (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $DOBJ = "$env:USERPROFILE\.dobj\bin\dobj.exe"
+          New-Item -ItemType Directory -Force -Path logs | Out-Null
 
-          & $DOBJ start
-          if ($LASTEXITCODE -ne 0) { throw "dobj start failed ($LASTEXITCODE)" }
-          & $DOBJ status
-          if ($LASTEXITCODE -ne 0) { throw "dobj status failed ($LASTEXITCODE)" }
-          & $DOBJ actions
-          if ($LASTEXITCODE -ne 0) { throw "dobj actions failed ($LASTEXITCODE)" }
-          & $DOBJ run craft-basics::FindLog
-          if ($LASTEXITCODE -ne 0) { throw "dobj run FindLog failed ($LASTEXITCODE)" }
+          # Launch the servers HERE (see the note above) so they stay alive
+          # through `dobj run`. RPC_URL/BEACON_URL/TO_ADDRESS/PRIVATE_KEY are
+          # job-level env; INITIAL_START_SLOT is inherited from the resolve
+          # step via GITHUB_ENV. Both Start-Process children inherit all of
+          # those plus the per-server vars set inline below.
+          $env:SYNC_METADATA_DB_URL = "postgres://postgres:root@127.0.0.1:5432/synchronizer"
+          $env:APP_STATE_DB_PATH    = "$env:GITHUB_WORKSPACE\synchronizer-db"
+          $env:RPC_RETRIES          = "10"
+          $env:RPC_RETRY_MS         = "4000"
+          Start-Process -FilePath "$env:GITHUB_WORKSPACE\server-bin\synchronizer.exe" `
+            -RedirectStandardOutput "logs\synchronizer.log" `
+            -RedirectStandardError  "logs\synchronizer.err" -NoNewWindow
 
-          $inv = (& $DOBJ inventory) -join "`n"
-          if ($LASTEXITCODE -ne 0) { throw "dobj inventory failed ($LASTEXITCODE)" }
-          Write-Host $inv
-          if ($inv -notmatch '(?i)log|craft-basics') {
-              throw "inventory empty after FindLog run"
+          $env:DB_URL = "postgres://postgres:root@127.0.0.1:5432/relayer"
+          $env:FEE_BUMP_AFTER_SECS     = "60"
+          $env:FEE_BUMP_MULTIPLIER_PCT = "100"
+          Start-Process -FilePath "$env:GITHUB_WORKSPACE\server-bin\relayer.exe" `
+            -RedirectStandardOutput "logs\relayer.log" `
+            -RedirectStandardError  "logs\relayer.err" -NoNewWindow
+
+          try {
+              foreach ($url in @("http://127.0.0.1:3000/healthz", "http://127.0.0.1:3200/healthz")) {
+                  $ok = $false
+                  for ($i = 0; $i -lt 90; $i++) {
+                      try { Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 2 | Out-Null; $ok = $true; break }
+                      catch { Start-Sleep -Seconds 1 }
+                  }
+                  if (-not $ok) { throw "$url never became ready in 90s" }
+                  Write-Host "$url ready"
+              }
+
+              $DOBJ = "$env:USERPROFILE\.dobj\bin\dobj.exe"
+              & $DOBJ start
+              if ($LASTEXITCODE -ne 0) { throw "dobj start failed ($LASTEXITCODE)" }
+              & $DOBJ status
+              if ($LASTEXITCODE -ne 0) { throw "dobj status failed ($LASTEXITCODE)" }
+              & $DOBJ actions
+              if ($LASTEXITCODE -ne 0) { throw "dobj actions failed ($LASTEXITCODE)" }
+              & $DOBJ run craft-basics::FindLog
+              if ($LASTEXITCODE -ne 0) { throw "dobj run FindLog failed ($LASTEXITCODE)" }
+
+              $inv = (& $DOBJ inventory) -join "`n"
+              if ($LASTEXITCODE -ne 0) { throw "dobj inventory failed ($LASTEXITCODE)" }
+              Write-Host $inv
+              if ($inv -notmatch '(?i)log|craft-basics') {
+                  throw "inventory empty after FindLog run"
+              }
+
+              # Windows `stop` is a hard kill via TerminateProcess.
+              & $DOBJ stop
+              if ($LASTEXITCODE -ne 0) { throw "dobj stop failed ($LASTEXITCODE)" }
           }
-
-          # Windows `stop` is a hard kill via TerminateProcess.
-          & $DOBJ stop
-          if ($LASTEXITCODE -ne 0) { throw "dobj stop failed ($LASTEXITCODE)" }
+          finally {
+              # Surface every log in THIS step, pass or fail — the servers are
+              # still alive here (before the step-end reap), so their output
+              # is fully flushed. Replaces the separate Windows log step.
+              foreach ($name in @("synchronizer", "relayer")) {
+                  foreach ($ext in @("log", "err")) {
+                      $p = "logs\$name.$ext"
+                      if ((Test-Path $p) -and (Get-Item $p).Length -gt 0) {
+                          Write-Host "--- $p ---"
+                          Get-Content $p -Tail 200
+                      }
+                  }
+              }
+              $dobjd = "$env:USERPROFILE\.dobj\dobjd.log"
+              if (Test-Path $dobjd) { Write-Host "--- dobjd.log ---"; Get-Content $dobjd -Tail 200 }
+          }
 
       # =====================================================================
       # On any failure, dump every log we have so debugging the failed run
@@ -472,21 +489,5 @@ jobs:
           echo "--- ~/.dobj/dobjd.log (tail 300) ---"
           tail -300 ~/.dobj/dobjd.log 2>/dev/null || echo "(no log)"
 
-      - name: Show logs on failure (Windows)
-        if: failure() && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          foreach ($name in @("synchronizer", "relayer")) {
-              foreach ($ext in @("log", "err")) {
-                  $path = "logs\$name.$ext"
-                  if (Test-Path $path) {
-                      Write-Host "--- $path (tail 300) ---"
-                      Get-Content $path -Tail 300
-                  }
-              }
-          }
-          $dobjd = "$env:USERPROFILE\.dobj\dobjd.log"
-          if (Test-Path $dobjd) {
-              Write-Host "--- dobjd.log (tail 300) ---"
-              Get-Content $dobjd -Tail 300
-          }
+      # (No separate Windows log step: the merged "Start stack + smoke test
+      # (Windows)" step dumps all logs in its `finally` block, pass or fail.)
