@@ -127,12 +127,15 @@ jobs:
         run: |
           set -euo pipefail
           sudo systemctl start postgresql
-          # Default Ubuntu install uses peer auth on Unix sockets — fine
-          # for `sudo -u postgres` but blocks our processes (running as
-          # `runner`) from connecting. Add a TCP trust line for loopback.
-          PG_HBA=$(sudo -u postgres psql -t -c "SHOW hba_file" | xargs)
-          echo "host all all 127.0.0.1/32 trust" | sudo tee -a "$PG_HBA"
-          echo "host all all ::1/128       trust" | sudo tee -a "$PG_HBA"
+          # pg_hba.conf is FIRST-MATCH-WINS. Ubuntu's default TCP rules use
+          # scram-sha-256/md5 and sit above anything we append, so an
+          # appended `trust` line is never reached and clients get prompted
+          # for a password (the "spams password" failure). Rewrite the
+          # existing auth methods to `trust` instead — safe for a throwaway
+          # CI cluster bound to loopback. `-tA` = tuples-only + unaligned so
+          # the path comes back clean (no surrounding whitespace).
+          PG_HBA=$(sudo -u postgres psql -tA -c "SHOW hba_file")
+          sudo sed -i 's/\(scram-sha-256\|md5\)/trust/g' "$PG_HBA"
           sudo systemctl restart postgresql
           for i in $(seq 1 30); do
             if pg_isready -h 127.0.0.1 -p 5432 -U postgres >/dev/null 2>&1; then break; fi
@@ -164,12 +167,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # windows-2022 ships PostgreSQL preinstalled (service stopped).
-          # Service name varies by minor version: postgresql-x64-14, -16, …
+          # windows-2022 ships PostgreSQL preinstalled. Service name varies
+          # by minor version: postgresql-x64-14, -16, …
           $svc = Get-Service -Name 'postgresql-x64-*' -ErrorAction SilentlyContinue |
                  Select-Object -First 1
           if (-not $svc) { throw "postgresql service not found on this runner" }
-          Start-Service $svc.Name
+          # The service ships DISABLED on the runner — Start-Service alone
+          # throws "Cannot start service ... cannot be started". Flip the
+          # startup type to Manual first, then start it.
+          Set-Service -Name $svc.Name -StartupType Manual
+          Start-Service -Name $svc.Name
 
           # The runner-preinstalled instance uses `root` as the default
           # postgres-user password. PGBIN points at the install's bin/.
@@ -305,6 +312,8 @@ jobs:
           RPC_URL="$RPC_URL" \
           BEACON_URL="$BEACON_URL" \
           TO_ADDRESS="$TO_ADDRESS" \
+          RPC_RETRIES=10 \
+          RPC_RETRY_MS=4000 \
           SYNC_METADATA_DB_URL="postgres://postgres@127.0.0.1:5432/synchronizer" \
           APP_STATE_DB_PATH="$GITHUB_WORKSPACE/synchronizer-db" \
             nohup "$GITHUB_WORKSPACE/server-bin/synchronizer" \
@@ -314,6 +323,8 @@ jobs:
           RPC_URL="$RPC_URL" \
           TO_ADDRESS="$TO_ADDRESS" \
           PRIVATE_KEY="$PRIVATE_KEY" \
+          FEE_BUMP_AFTER_SECS=60 \
+          FEE_BUMP_MULTIPLIER_PCT=100 \
           DB_URL="postgres://postgres@127.0.0.1:5432/relayer" \
             nohup "$GITHUB_WORKSPACE/server-bin/relayer" \
               > logs/relayer.log 2>&1 &
@@ -346,6 +357,8 @@ jobs:
           # Synchronizer: rocksdb at APP_STATE_DB_PATH, postgres metadata DB.
           $env:SYNC_METADATA_DB_URL = "postgres://postgres:root@127.0.0.1:5432/synchronizer"
           $env:APP_STATE_DB_PATH    = "$env:GITHUB_WORKSPACE\synchronizer-db"
+          $env:RPC_RETRIES          = "10"
+          $env:RPC_RETRY_MS         = "4000"
           Start-Process -FilePath "$env:GITHUB_WORKSPACE\server-bin\synchronizer.exe" `
             -RedirectStandardOutput "logs\synchronizer.log" `
             -RedirectStandardError  "logs\synchronizer.err" `
@@ -353,6 +366,8 @@ jobs:
 
           # Relayer: postgres job DB.
           $env:DB_URL = "postgres://postgres:root@127.0.0.1:5432/relayer"
+          $env:FEE_BUMP_AFTER_SECS     = "60"
+          $env:FEE_BUMP_MULTIPLIER_PCT = "100"
           Start-Process -FilePath "$env:GITHUB_WORKSPACE\server-bin\relayer.exe" `
             -RedirectStandardOutput "logs\relayer.log" `
             -RedirectStandardError  "logs\relayer.err" `
