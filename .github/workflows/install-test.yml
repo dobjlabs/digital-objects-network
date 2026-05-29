@@ -7,11 +7,18 @@ name: Install test
 # `dobj start → status → actions → run FindLog → inventory → stop`.
 #
 # Triggered:
-#   - automatically at the end of the Release workflow (its
-#     `trigger-install-test` job calls `gh workflow run` with the tag)
-#   - manually from the Actions UI with a tag input
+#   - automatically at the end of the Release workflow, which calls this as
+#     a REUSABLE workflow (`uses: ./.github/workflows/install-test.yml`).
+#     A reusable workflow runs from the CALLER's ref, so this works when a
+#     tag is cut off a feature branch — no need for the file to be on the
+#     default branch (which `workflow_dispatch` would require).
+#   - manually from the Actions UI with a tag input — but ONLY once this
+#     file lands on the default branch, since `workflow_dispatch` workflows
+#     aren't registered until then. Until merge, use the reusable path above.
 #
-# Required repo secrets (Settings → Secrets and variables → Actions):
+# Required repo secrets (Settings → Secrets and variables → Actions). When
+# invoked via `workflow_call` with `secrets: inherit`, the caller passes
+# these down automatically — no need to redeclare them here:
 #   SEPOLIA_RPC_URL      — JSON-RPC endpoint (public is fine but
 #                          rate-limited; Alchemy/Infura recommended for
 #                          parallel matrix jobs hitting it simultaneously)
@@ -23,21 +30,34 @@ name: Install test
 #                          jobs start failing with "insufficient funds".
 
 on:
+  # Called by release.yml after the build jobs land artifacts in the draft
+  # release. Runs from the caller's ref (the released tag).
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to test (e.g. v0.1.0-rc.17)"
+        required: true
+        type: string
+  # Manual trigger for ad-hoc runs. Only usable once this file is on the
+  # default branch (GitHub registration requirement).
   workflow_dispatch:
     inputs:
       tag:
         description: "Release tag to test (e.g. v0.1.0-rc.17)"
         required: true
         type: string
-
-env:
-  # Sepolia chain config — shared by synchronizer + relayer across every
-  # matrix entry. Each runner reads from its own loopback for the local
-  # services; only the chain itself is shared.
-  RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
-  BEACON_URL: ${{ secrets.SEPOLIA_BEACON_URL }}
-  TO_ADDRESS: ${{ secrets.SEPOLIA_TO_ADDRESS }}
-  PRIVATE_KEY: ${{ secrets.SEPOLIA_PRIVATE_KEY }}
+  # TEMPORARY (remove before merging to the default branch): a manual,
+  # branch-only trigger that does NOT re-run release.yml. `workflow_dispatch`
+  # can't fire from a feature branch until this file is on the default
+  # branch, but a `push` tag trigger runs from the pushed ref no matter
+  # what. release.yml only fires on `v*` tags, so an `install-test-*` tag
+  # triggers THIS workflow and nothing else. The release to download comes
+  # from the repo variable INSTALL_TEST_TAG (push events carry no inputs).
+  #   gh variable set INSTALL_TEST_TAG --body v0.1.0-rc.18
+  #   git tag install-test-1 && git push origin install-test-1
+  push:
+    tags:
+      - "install-test-*"
 
 jobs:
   smoke:
@@ -70,11 +90,27 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     permissions:
-      contents: read  # for `gh release download`
+      # `gh release download` here targets the DRAFT release created by
+      # release.yml. Draft releases are invisible to read-only tokens, so
+      # this needs write — `contents: read` 404s on a draft. Tighten to
+      # `read` only once releases are published before the test runs.
+      contents: write
 
     env:
-      TAG: ${{ inputs.tag }}
+      # workflow_call / workflow_dispatch supply `inputs.tag`. The temporary
+      # push-tag trigger carries no inputs, so it falls back to the repo
+      # variable INSTALL_TEST_TAG. Drop the `|| vars...` half when the push
+      # trigger is removed.
+      TAG: ${{ inputs.tag || vars.INSTALL_TEST_TAG }}
       TARGET: ${{ matrix.target }}
+      # Sepolia chain config — shared by synchronizer + relayer across every
+      # matrix entry; each runner still talks to its own loopback for the
+      # local services. Declared at job (not workflow) level because the
+      # `secrets` context isn't available in a workflow-level `env` block.
+      RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+      BEACON_URL: ${{ secrets.SEPOLIA_BEACON_URL }}
+      TO_ADDRESS: ${{ secrets.SEPOLIA_TO_ADDRESS }}
+      PRIVATE_KEY: ${{ secrets.SEPOLIA_PRIVATE_KEY }}
 
     steps:
       - name: Install Rosetta 2 (Intel macOS path)

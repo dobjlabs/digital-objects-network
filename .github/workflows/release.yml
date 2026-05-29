@@ -417,25 +417,22 @@ jobs:
           fail_on_unmatched_files: true
           body_path: release-notes.md
 
-  trigger-install-test:
+  install-test:
     # End-to-end install test on every supported platform. Runs ONLY after
-    # both binary + plugin uploads land in the draft release, so the
-    # install-test workflow can fetch them via `gh release download`.
+    # both binary + plugin uploads land in the draft release, so the test
+    # can fetch them via `gh release download`.
     #
-    # Decoupled into a sibling workflow (install-test.yml) so it can also
-    # be fired manually against any tag for ad-hoc verification.
+    # Invoked as a REUSABLE workflow (`uses:`), NOT via `gh workflow run`.
+    # A `uses:` job runs the called workflow from THIS run's ref, so it
+    # works when a tag is cut off a feature branch — install-test.yml does
+    # NOT need to be on the default branch (which `workflow_dispatch` +
+    # `gh workflow run` would require). This is what makes branch-only
+    # testing possible: push a tag from the branch and the whole chain runs.
     needs: [dobjd, plugin]
-    runs-on: ubuntu-22.04
-    # `gh workflow run` writes to the Actions API — needs the elevated
-    # permission. Job-level so it doesn't widen the rest of this workflow.
-    permissions:
-      actions: write
-    steps:
-      - name: Dispatch install-test workflow
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh workflow run install-test.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --field tag="$RELEASE_TAG"
-          echo "dispatched install-test for $RELEASE_TAG"
+    uses: ./.github/workflows/install-test.yml
+    with:
+      # Same expression as the RELEASE_TAG env var — inlined because the
+      # `env` context isn't available in a reusable-workflow `with:` block.
+      tag: ${{ inputs.tag_name || github.ref_name }}
+    # Forward SEPOLIA_* (and GITHUB_TOKEN) to the called workflow.
+    secrets: inherit
