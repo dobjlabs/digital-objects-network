@@ -106,39 +106,39 @@ fn TouchReactionChamber(action) {
 // ── mines (PoW) ──────────────────────────────────────────────────────────────
 
 fn MineIron(action) {
-    var iron = action.output("Iron");
+    var iron = action.output("Iron", []);
     pow_proof(action, iron, 1000);
 }
 
 fn MineCopper(action) {
-    var copper = action.output("Copper");
+    var copper = action.output("Copper", []);
     pow_proof(action, copper, 500);
 }
 
 fn MineOil(action) {
-    var oil = action.output("Oil");
+    var oil = action.output("Oil", []);
     pow_proof(action, oil, 3000);
 }
 
 fn MineSulfur(action) {
-    var sulfur = action.output("Sulfur");
+    var sulfur = action.output("Sulfur", []);
     vdf_proof(action, sulfur, 2);
 }
 
 // ── farms (VDF) ──────────────────────────────────────────────────────────────
 
 fn FarmWater(action) {
-    var water = action.output("Water");
+    var water = action.output("Water", []);
     vdf_proof(action, water, 2);
 }
 
 fn FarmCane(action) {
-    var cane = action.output("Cane");
+    var cane = action.output("Cane", []);
     vdf_proof(action, cane, 2);
 }
 
 fn FarmHemp(action) {
-    var hemp = action.output("Hemp");
+    var hemp = action.output("Hemp", []);
     vdf_proof(action, hemp, 2);
 }
 
@@ -146,69 +146,69 @@ fn FarmHemp(action) {
 
 fn CraftIngot(action) {
     var iron = action.input("Iron");
-    var ingot = action.output("Ingot");
+    var ingot = action.output("Ingot", []);
     vdf_proof(action, ingot, 11);
 }
 
 fn CraftIngotFlux(action) {
     var iron = action.input("Iron");
     var flux = action.input("Flux");
-    var ingot_a = action.output("Ingot");
-    var ingot_b = action.output("Ingot");
+    var ingot_a = action.output("Ingot", []);
+    var ingot_b = action.output("Ingot", []);
     vdf_proof(action, ingot_a, 5);
 }
 
 fn CraftIngotDrilled(action) {
     var tool = action.subaction("UseDrillBit");
     var iron = action.input("Iron");
-    var ingot_a = action.output("Ingot");
-    var ingot_b = action.output("Ingot");
+    var ingot_a = action.output("Ingot", []);
+    var ingot_b = action.output("Ingot", []);
     vdf_proof(action, ingot_a, 9);
 }
 
 fn CraftPlate(action) {
     var copper = action.input("Copper");
-    var plate = action.output("Plate");
+    var plate = action.output("Plate", []);
     vdf_proof(action, plate, 11);
 }
 
 fn CraftPulp(action) {
     var cane = action.input("Cane");
-    var pulp_a = action.output("Pulp");
-    var pulp_b = action.output("Pulp");
-    var pulp_c = action.output("Pulp");
+    var pulp_a = action.output("Pulp", []);
+    var pulp_b = action.output("Pulp", []);
+    var pulp_c = action.output("Pulp", []);
     vdf_proof(action, pulp_a, 5);
 }
 
 fn CraftFiber(action) {
     var hemp = action.input("Hemp");
-    var fiber_a = action.output("Fiber");
-    var fiber_b = action.output("Fiber");
-    var fiber_c = action.output("Fiber");
+    var fiber_a = action.output("Fiber", []);
+    var fiber_b = action.output("Fiber", []);
+    var fiber_c = action.output("Fiber", []);
     vdf_proof(action, fiber_a, 6);
 }
 
 fn CraftAcid(action) {
     var sulfur = action.input("Sulfur");
     var water = action.input("Water");
-    var acid_a = action.output("Acid");
-    var acid_b = action.output("Acid");
+    var acid_a = action.output("Acid", []);
+    var acid_b = action.output("Acid", []);
     pow_proof(action, acid_a, 100000);
 }
 
 fn CraftAcidFlash(action) {
     var sulfur = action.input("Sulfur");
     var water = action.input("Water");
-    var acid = action.output("Acid");
+    var acid = action.output("Acid", []);
     pow_proof(action, acid, 50000);
 }
 
 fn CraftAcidCrude(action) {
     var sulfur = action.input("Sulfur");
     var water = action.input("Water");
-    var acid_a = action.output("Acid");
-    var acid_b = action.output("Acid");
-    var acid_c = action.output("Acid");
+    var acid_a = action.output("Acid", []);
+    var acid_b = action.output("Acid", []);
+    var acid_c = action.output("Acid", []);
     pow_proof(action, acid_a, 60000);
     vdf_proof(action, acid_a, 16);
 }
@@ -216,11 +216,11 @@ fn CraftAcidCrude(action) {
 fn CraftRefinery(action) {
     var oil = action.input("Oil");
     var water = action.input("Water");
-    var tar_a = action.output("Tar");
-    var tar_b = action.output("Tar");
-    var tar_c = action.output("Tar");
-    var fuel = action.output("Fuel");
-    var gas = action.output("Gas");
+    var tar_a = action.output("Tar", []);
+    var tar_b = action.output("Tar", []);
+    var tar_c = action.output("Tar", []);
+    var fuel = action.output("Fuel", []);
+    var gas = action.output("Gas", []);
     pow_proof(action, tar_a, 48000);
     vdf_proof(action, tar_a, 14);
 }
@@ -228,11 +228,11 @@ fn CraftRefinery(action) {
 fn CraftRefineryFlash(action) {
     var oil = action.input("Oil");
     var water = action.input("Water");
-    var tar_a = action.output("Tar");
-    var tar_b = action.output("Tar");
-    var tar_c = action.output("Tar");
-    var fuel = action.output("Fuel");
-    var gas = action.output("Gas");
+    var tar_a = action.output("Tar", []);
+    var tar_b = action.output("Tar", []);
+    var tar_c = action.output("Tar", []);
+    var fuel = action.output("Fuel", []);
+    var gas = action.output("Gas", []);
     pow_proof(action, tar_a, 60000);
 }
 
@@ -240,12 +240,12 @@ fn CraftRefineryCrude(action) {
     var oil_a = action.input("Oil");
     var oil_b = action.input("Oil");
     var water = action.input("Water");
-    var tar_a = action.output("Tar");
-    var tar_b = action.output("Tar");
-    var tar_c = action.output("Tar");
-    var fuel = action.output("Fuel");
-    var gas = action.output("Gas");
-    var oil_recovered = action.output("Oil");
+    var tar_a = action.output("Tar", []);
+    var tar_b = action.output("Tar", []);
+    var tar_c = action.output("Tar", []);
+    var fuel = action.output("Fuel", []);
+    var gas = action.output("Gas", []);
+    var oil_recovered = action.output("Oil", []);
     pow_proof(action, tar_a, 60000);
     vdf_proof(action, tar_a, 22);
 }
@@ -254,16 +254,16 @@ fn CraftRefineryCracked(action) {
     var cu = action.subaction("TouchCrackingUnit");
     var oil = action.input("Oil");
     var water = action.input("Water");
-    var tar_a = action.output("Tar");
-    var tar_b = action.output("Tar");
-    var tar_c = action.output("Tar");
-    var tar_d = action.output("Tar");
-    var tar_e = action.output("Tar");
-    var fuel_a = action.output("Fuel");
-    var fuel_b = action.output("Fuel");
-    var fuel_c = action.output("Fuel");
-    var gas_a = action.output("Gas");
-    var gas_b = action.output("Gas");
+    var tar_a = action.output("Tar", []);
+    var tar_b = action.output("Tar", []);
+    var tar_c = action.output("Tar", []);
+    var tar_d = action.output("Tar", []);
+    var tar_e = action.output("Tar", []);
+    var fuel_a = action.output("Fuel", []);
+    var fuel_b = action.output("Fuel", []);
+    var fuel_c = action.output("Fuel", []);
+    var gas_a = action.output("Gas", []);
+    var gas_b = action.output("Gas", []);
     pow_proof(action, tar_a, 48000);
     vdf_proof(action, tar_a, 14);
 }
@@ -272,8 +272,8 @@ fn CraftFlux(action) {
     var slag_a = action.input("Slag");
     var slag_b = action.input("Slag");
     var water = action.input("Water");
-    var flux_a = action.output("Flux");
-    var flux_b = action.output("Flux");
+    var flux_a = action.output("Flux", []);
+    var flux_b = action.output("Flux", []);
     vdf_proof(action, flux_a, 3);
 }
 
@@ -283,8 +283,8 @@ fn CraftSteel(action) {
     var ingot_a = action.input("Ingot");
     var ingot_b = action.input("Ingot");
     var ingot_c = action.input("Ingot");
-    var steel_a = action.output("Steel");
-    var steel_b = action.output("Steel");
+    var steel_a = action.output("Steel", []);
+    var steel_b = action.output("Steel", []);
     vdf_proof(action, steel_a, 24);
 }
 
@@ -293,9 +293,9 @@ fn CraftSteelBlast(action) {
     var ingot_a = action.input("Ingot");
     var ingot_b = action.input("Ingot");
     var ingot_c = action.input("Ingot");
-    var steel_a = action.output("Steel");
-    var steel_b = action.output("Steel");
-    var slag = action.output("Slag");
+    var steel_a = action.output("Steel", []);
+    var steel_b = action.output("Steel", []);
+    var slag = action.output("Slag", []);
     vdf_proof(action, steel_a, 14);
 }
 
@@ -303,8 +303,8 @@ fn CraftMold(action) {
     var slag_a = action.input("Slag");
     var slag_b = action.input("Slag");
     var tar = action.input("Tar");
-    var mold_a = action.output("Mold");
-    var mold_b = action.output("Mold");
+    var mold_a = action.output("Mold", []);
+    var mold_b = action.output("Mold", []);
     vdf_proof(action, mold_a, 4);
 }
 
@@ -312,26 +312,26 @@ fn CraftGearCast(action) {
     var bf = action.subaction("TouchBlastFurnace");
     var steel = action.input("Steel");
     var mold = action.input("Mold");
-    var gear_a = action.output("Gear");
-    var gear_b = action.output("Gear");
-    var gear_c = action.output("Gear");
-    var gear_d = action.output("Gear");
-    var gear_e = action.output("Gear");
+    var gear_a = action.output("Gear", []);
+    var gear_b = action.output("Gear", []);
+    var gear_c = action.output("Gear", []);
+    var gear_d = action.output("Gear", []);
+    var gear_e = action.output("Gear", []);
     vdf_proof(action, gear_a, 6);
 }
 
 fn CraftWire(action) {
     var plate = action.input("Plate");
-    var wire_a = action.output("Wire");
-    var wire_b = action.output("Wire");
-    var wire_c = action.output("Wire");
+    var wire_a = action.output("Wire", []);
+    var wire_b = action.output("Wire", []);
+    var wire_c = action.output("Wire", []);
     vdf_proof(action, wire_a, 5);
 }
 
 fn CraftCloth(action) {
     var fiber_a = action.input("Fiber");
     var fiber_b = action.input("Fiber");
-    var cloth = action.output("Cloth");
+    var cloth = action.output("Cloth", []);
     vdf_proof(action, cloth, 10);
 }
 
@@ -340,31 +340,31 @@ fn CraftBoard(action) {
     var pulp_b = action.input("Pulp");
     var pulp_c = action.input("Pulp");
     var water = action.input("Water");
-    var board_a = action.output("Board");
-    var board_b = action.output("Board");
-    var lye = action.output("Lye");
+    var board_a = action.output("Board", []);
+    var board_b = action.output("Board", []);
+    var lye = action.output("Lye", []);
     vdf_proof(action, board_a, 15);
 }
 
 fn CraftWax(action) {
     var tar_a = action.input("Tar");
     var tar_b = action.input("Tar");
-    var wax = action.output("Wax");
+    var wax = action.output("Wax", []);
     vdf_proof(action, wax, 8);
 }
 
 fn CraftGrease(action) {
     var tar_a = action.input("Tar");
     var tar_b = action.input("Tar");
-    var grease = action.output("Grease");
+    var grease = action.output("Grease", []);
     vdf_proof(action, grease, 13);
 }
 
 fn CraftSolvent(action) {
     var fuel = action.input("Fuel");
     var acid = action.input("Acid");
-    var solvent_a = action.output("Solvent");
-    var solvent_b = action.output("Solvent");
+    var solvent_a = action.output("Solvent", []);
+    var solvent_b = action.output("Solvent", []);
     pow_proof(action, solvent_a, 76000);
 }
 
@@ -373,8 +373,8 @@ fn CraftSolventLye(action) {
     var lye_b = action.input("Lye");
     var fuel = action.input("Fuel");
     var water = action.input("Water");
-    var solvent_a = action.output("Solvent");
-    var solvent_b = action.output("Solvent");
+    var solvent_a = action.output("Solvent", []);
+    var solvent_b = action.output("Solvent", []);
     vdf_proof(action, solvent_a, 13);
 }
 
@@ -382,8 +382,8 @@ fn CraftCoating(action) {
     var fuel_a = action.input("Fuel");
     var fuel_b = action.input("Fuel");
     var wax = action.input("Wax");
-    var coating_a = action.output("Coating");
-    var coating_b = action.output("Coating");
+    var coating_a = action.output("Coating", []);
+    var coating_b = action.output("Coating", []);
     vdf_proof(action, coating_a, 5);
 }
 
@@ -391,7 +391,7 @@ fn CraftRubber(action) {
     var gas_a = action.input("Gas");
     var gas_b = action.input("Gas");
     var gas_c = action.input("Gas");
-    var rubber = action.output("Rubber");
+    var rubber = action.output("Rubber", []);
     pow_proof(action, rubber, 96000);
 }
 
@@ -399,7 +399,7 @@ fn CraftRubberFlash(action) {
     var gas_a = action.input("Gas");
     var gas_b = action.input("Gas");
     var gas_c = action.input("Gas");
-    var rubber = action.output("Rubber");
+    var rubber = action.output("Rubber", []);
     pow_proof(action, rubber, 48000);
 }
 
@@ -407,8 +407,8 @@ fn CraftRubberCrude(action) {
     var gas_a = action.input("Gas");
     var gas_b = action.input("Gas");
     var gas_c = action.input("Gas");
-    var rubber = action.output("Rubber");
-    var gas_recovered = action.output("Gas");
+    var rubber = action.output("Rubber", []);
+    var gas_recovered = action.output("Gas", []);
     pow_proof(action, rubber, 60000);
     vdf_proof(action, rubber, 16);
 }
@@ -416,8 +416,8 @@ fn CraftRubberCrude(action) {
 fn CraftExtract(action) {
     var acid_a = action.input("Acid");
     var acid_b = action.input("Acid");
-    var extract = action.output("Extract");
-    var sludge = action.output("Sludge");
+    var extract = action.output("Extract", []);
+    var sludge = action.output("Sludge", []);
     pow_proof(action, extract, 120000);
 }
 
@@ -425,9 +425,9 @@ fn CraftExtractCtrl(action) {
     var rc = action.subaction("TouchReactionChamber");
     var acid_a = action.input("Acid");
     var acid_b = action.input("Acid");
-    var extract = action.output("Extract");
-    var sludge_a = action.output("Sludge");
-    var sludge_b = action.output("Sludge");
+    var extract = action.output("Extract", []);
+    var sludge_a = action.output("Sludge", []);
+    var sludge_b = action.output("Sludge", []);
     pow_proof(action, extract, 25000);
     vdf_proof(action, extract, 12);
 }
@@ -437,7 +437,7 @@ fn CraftCatalyst(action) {
     var sludge_b = action.input("Sludge");
     var sludge_c = action.input("Sludge");
     var wire = action.input("Wire");
-    var catalyst = action.output("Catalyst");
+    var catalyst = action.output("Catalyst", []);
     vdf_proof(action, catalyst, 2);
 }
 
@@ -446,24 +446,23 @@ fn CraftBinder(action) {
     var sludge_b = action.input("Sludge");
     var sludge_c = action.input("Sludge");
     var solvent = action.input("Solvent");
-    var binder = action.output("Binder");
+    var binder = action.output("Binder", []);
     vdf_proof(action, binder, 4);
 }
 
 fn CraftGear(action) {
     var steel_a = action.input("Steel");
     var steel_b = action.input("Steel");
-    var gear_a = action.output("Gear");
-    var gear_b = action.output("Gear");
-    var gear_c = action.output("Gear");
+    var gear_a = action.output("Gear", []);
+    var gear_b = action.output("Gear", []);
+    var gear_c = action.output("Gear", []);
     vdf_proof(action, gear_a, 7);
 }
 
 fn CraftDrillBit(action) {
     var iron = action.input("Iron");
     var gear = action.input("Gear");
-    var bit = action.output("DrillBit");
-    bit.set([
+    var bit = action.output("DrillBit", [
         ["durability", 5]
     ]);
     vdf_proof(action, bit, 4);
@@ -473,8 +472,7 @@ fn CraftSolderingIron(action) {
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var acid = action.input("Acid");
-    var iron = action.output("SolderingIron");
-    iron.set([
+    var iron = action.output("SolderingIron", [
         ["durability", 5]
     ]);
     vdf_proof(action, iron, 3);
@@ -484,8 +482,7 @@ fn CraftPressureValve(action) {
     var oil_a = action.input("Oil");
     var oil_b = action.input("Oil");
     var gear = action.input("Gear");
-    var valve = action.output("PressureValve");
-    valve.set([
+    var valve = action.output("PressureValve", [
         ["durability", 3]
     ]);
     vdf_proof(action, valve, 4);
@@ -495,7 +492,7 @@ fn CraftCoil(action) {
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var wire_c = action.input("Wire");
-    var coil = action.output("Coil");
+    var coil = action.output("Coil", []);
     vdf_proof(action, coil, 12);
 }
 
@@ -511,8 +508,7 @@ fn CraftMachineI(action) {
     var gear_c = action.input("Gear");
     var coil_a = action.input("Coil");
     var coil_b = action.input("Coil");
-    var machine = action.output("MachineI");
-    machine.set([
+    var machine = action.output("MachineI", [
         ["level", 1]
     ]);
     pow_proof(action, machine, 44000);
@@ -529,7 +525,7 @@ fn CraftBlastFurnace(action) {
     var coil = action.input("Coil");
     var acid_a = action.input("Acid");
     var acid_b = action.input("Acid");
-    var bf = action.output("BlastFurnace");
+    var bf = action.output("BlastFurnace", []);
     pow_proof(action, bf, 40000);
     vdf_proof(action, bf, 16);
 }
@@ -545,7 +541,7 @@ fn CraftCircuitFab(action) {
     var steel_c = action.input("Steel");
     var grease_a = action.input("Grease");
     var grease_b = action.input("Grease");
-    var fab = action.output("CircuitFab");
+    var fab = action.output("CircuitFab", []);
     pow_proof(action, fab, 60000);
     vdf_proof(action, fab, 18);
 }
@@ -562,7 +558,7 @@ fn CraftCrackingUnit(action) {
     var grease_a = action.input("Grease");
     var grease_b = action.input("Grease");
     var grease_c = action.input("Grease");
-    var unit = action.output("CrackingUnit");
+    var unit = action.output("CrackingUnit", []);
     pow_proof(action, unit, 60000);
     vdf_proof(action, unit, 16);
 }
@@ -573,8 +569,7 @@ fn CraftMachineII(action) {
     var circuit_b = action.input("Circuit");
     var bearing_a = action.input("Bearing");
     var bearing_b = action.input("Bearing");
-    var machine = action.output("MachineII");
-    machine.set([
+    var machine = action.output("MachineII", [
         ["level", 2]
     ]);
     pow_proof(action, machine, 76000);
@@ -587,7 +582,7 @@ fn CraftReactionChamber(action) {
     var circuit_b = action.input("Circuit");
     var grease_a = action.input("Grease");
     var grease_b = action.input("Grease");
-    var chamber = action.output("ReactionChamber");
+    var chamber = action.output("ReactionChamber", []);
     pow_proof(action, chamber, 70000);
     vdf_proof(action, chamber, 20);
 }
@@ -599,8 +594,8 @@ fn CraftBearing(action) {
     var steel = action.input("Steel");
     var grease_a = action.input("Grease");
     var grease_b = action.input("Grease");
-    var bearing_a = action.output("Bearing");
-    var bearing_b = action.output("Bearing");
+    var bearing_a = action.output("Bearing", []);
+    var bearing_b = action.output("Bearing", []);
     vdf_proof(action, bearing_a, 8);
 }
 
@@ -609,7 +604,7 @@ fn CraftCircuit(action) {
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var steel = action.input("Steel");
-    var circuit = action.output("Circuit");
+    var circuit = action.output("Circuit", []);
     pow_proof(action, circuit, 84000);
     vdf_proof(action, circuit, 25);
 }
@@ -620,7 +615,7 @@ fn CraftCircuitSoldered(action) {
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var steel = action.input("Steel");
-    var circuit = action.output("Circuit");
+    var circuit = action.output("Circuit", []);
     vdf_proof(action, circuit, 25);
 }
 
@@ -632,8 +627,8 @@ fn CraftCircuitFabbed(action) {
     var wire_c = action.input("Wire");
     var wire_d = action.input("Wire");
     var steel = action.input("Steel");
-    var circuit_a = action.output("Circuit");
-    var circuit_b = action.output("Circuit");
+    var circuit_a = action.output("Circuit", []);
+    var circuit_b = action.output("Circuit", []);
     vdf_proof(action, circuit_a, 20);
 }
 
@@ -642,7 +637,7 @@ fn CraftCircuitFlash(action) {
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var steel = action.input("Steel");
-    var circuit = action.output("Circuit");
+    var circuit = action.output("Circuit", []);
     pow_proof(action, circuit, 110000);
 }
 
@@ -651,8 +646,8 @@ fn CraftCircuitCrude(action) {
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var steel = action.input("Steel");
-    var circuit = action.output("Circuit");
-    var wire_recovered = action.output("Wire");
+    var circuit = action.output("Circuit", []);
+    var wire_recovered = action.output("Wire", []);
     pow_proof(action, circuit, 50000);
     vdf_proof(action, circuit, 38);
 }
@@ -663,7 +658,7 @@ fn CraftCanvas(action) {
     var cloth_b = action.input("Cloth");
     var fiber = action.input("Fiber");
     var wax = action.input("Wax");
-    var canvas = action.output("Canvas");
+    var canvas = action.output("Canvas", []);
     vdf_proof(action, canvas, 20);
 }
 
@@ -673,7 +668,7 @@ fn CraftCanvasLye(action) {
     var cloth_b = action.input("Cloth");
     var fiber = action.input("Fiber");
     var lye = action.input("Lye");
-    var canvas = action.output("Canvas");
+    var canvas = action.output("Canvas", []);
     vdf_proof(action, canvas, 11);
 }
 
@@ -683,7 +678,7 @@ fn CraftCanvasFlash(action) {
     var cloth_b = action.input("Cloth");
     var fiber = action.input("Fiber");
     var wax = action.input("Wax");
-    var canvas = action.output("Canvas");
+    var canvas = action.output("Canvas", []);
     pow_proof(action, canvas, 75000);
 }
 
@@ -693,8 +688,8 @@ fn CraftCanvasCrude(action) {
     var cloth_b = action.input("Cloth");
     var fiber = action.input("Fiber");
     var wax = action.input("Wax");
-    var canvas = action.output("Canvas");
-    var cloth_recovered = action.output("Cloth");
+    var canvas = action.output("Canvas", []);
+    var cloth_recovered = action.output("Cloth", []);
     pow_proof(action, canvas, 30000);
     vdf_proof(action, canvas, 24);
 }
@@ -703,8 +698,8 @@ fn CraftPanel(action) {
     var m1 = action.subaction("TouchMachineI");
     var board = action.input("Board");
     var extract = action.input("Extract");
-    var panel_a = action.output("Panel");
-    var panel_b = action.output("Panel");
+    var panel_a = action.output("Panel", []);
+    var panel_b = action.output("Panel", []);
 }
 
 fn CraftPistons(action) {
@@ -714,7 +709,7 @@ fn CraftPistons(action) {
     var coil_a = action.input("Coil");
     var coil_b = action.input("Coil");
     var grease = action.input("Grease");
-    var pistons = action.output("Pistons");
+    var pistons = action.output("Pistons", []);
     pow_proof(action, pistons, 62000);
     vdf_proof(action, pistons, 22);
 }
@@ -724,7 +719,7 @@ fn CraftResin(action) {
     var grease = action.input("Grease");
     var solvent = action.input("Solvent");
     var rubber = action.input("Rubber");
-    var resin = action.output("Resin");
+    var resin = action.output("Resin", []);
     pow_proof(action, resin, 132000);
     vdf_proof(action, resin, 40);
 }
@@ -735,7 +730,7 @@ fn CraftResinPressurized(action) {
     var grease = action.input("Grease");
     var solvent = action.input("Solvent");
     var rubber = action.input("Rubber");
-    var resin = action.output("Resin");
+    var resin = action.output("Resin", []);
     vdf_proof(action, resin, 40);
 }
 
@@ -746,8 +741,8 @@ fn CraftResinStable(action) {
     var solvent = action.input("Solvent");
     var rubber = action.input("Rubber");
     var binder = action.input("Binder");
-    var resin_a = action.output("Resin");
-    var resin_b = action.output("Resin");
+    var resin_a = action.output("Resin", []);
+    var resin_b = action.output("Resin", []);
     vdf_proof(action, resin_a, 46);
 }
 
@@ -756,7 +751,7 @@ fn CraftResinFlash(action) {
     var grease = action.input("Grease");
     var solvent = action.input("Solvent");
     var rubber = action.input("Rubber");
-    var resin = action.output("Resin");
+    var resin = action.output("Resin", []);
     pow_proof(action, resin, 165000);
 }
 
@@ -765,8 +760,8 @@ fn CraftResinCrude(action) {
     var grease = action.input("Grease");
     var solvent = action.input("Solvent");
     var rubber = action.input("Rubber");
-    var resin = action.output("Resin");
-    var grease_recovered = action.output("Grease");
+    var resin = action.output("Resin", []);
+    var grease_recovered = action.output("Grease", []);
     pow_proof(action, resin, 110000);
     vdf_proof(action, resin, 60);
 }
@@ -781,7 +776,7 @@ fn CraftEngine(action) {
     var circuit_a = action.input("Circuit");
     var circuit_b = action.input("Circuit");
     var canvas = action.input("Canvas");
-    var engine = action.output("Engine");
+    var engine = action.output("Engine", []);
     pow_proof(action, engine, 68000);
     vdf_proof(action, engine, 20);
 }
@@ -796,7 +791,7 @@ fn CraftEngineTuned(action) {
     var circuit_b = action.input("Circuit");
     var canvas = action.input("Canvas");
     var catalyst = action.input("Catalyst");
-    var engine = action.output("Engine");
+    var engine = action.output("Engine", []);
     vdf_proof(action, engine, 16);
 }
 
@@ -812,7 +807,7 @@ fn CraftCasing(action) {
     var coil = action.input("Coil");
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
-    var casing = action.output("Casing");
+    var casing = action.output("Casing", []);
     vdf_proof(action, casing, 50);
 }
 
@@ -829,7 +824,7 @@ fn CraftCasingCoated(action) {
     var wire_a = action.input("Wire");
     var wire_b = action.input("Wire");
     var coating = action.input("Coating");
-    var casing = action.output("Casing");
+    var casing = action.output("Casing", []);
     vdf_proof(action, casing, 36);
 }
 
@@ -842,7 +837,7 @@ fn CraftPayload(action) {
     var canvas = action.input("Canvas");
     var wire = action.input("Wire");
     var grease = action.input("Grease");
-    var payload = action.output("Payload");
+    var payload = action.output("Payload", []);
     pow_proof(action, payload, 64000);
     vdf_proof(action, payload, 19);
 }
@@ -856,7 +851,7 @@ fn CraftRocket(action) {
     var payload = action.input("Payload");
     var resin_a = action.input("Resin");
     var resin_b = action.input("Resin");
-    var rocket = action.output("Rocket");
+    var rocket = action.output("Rocket", []);
     pow_proof(action, rocket, 252000);
     vdf_proof(action, rocket, 76);
 }
@@ -870,6 +865,6 @@ fn CraftRocketCat(action) {
     var resin_a = action.input("Resin");
     var resin_b = action.input("Resin");
     var catalyst = action.input("Catalyst");
-    var rocket = action.output("Rocket");
+    var rocket = action.output("Rocket", []);
     vdf_proof(action, rocket, 70);
 }
