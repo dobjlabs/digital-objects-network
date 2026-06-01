@@ -45,19 +45,30 @@
 
 // Insert: chain = H(prev, H(0, new)). The `type` arg pins the
 // inserted object's type field so ReplayInsert can dispatch the
-// guard without re-extracting it.
-TxInsert(chain, prev_chain, new, type, private: event_hash) = AND(
+// guard without re-extracting it. The DictInsert clause stamps
+// `new.identity = commitment(initial)`: `initial` is the
+// pre-identity object dict the action constructed (script-driven
+// DictUpdates land on `initial`), and `new` is the materialized
+// post-identity dict the tx records in its `live` set. Exposing
+// `initial` as a public arg lets the calling action predicate
+// share its body wildcard with both the script's DictUpdate chain
+// and TxInsert's identity-derivation clause.
+TxInsert(chain, prev_chain, initial, new, type, private: event_hash) = AND(
   DictContains(new, "type", type)
+  DictInsert(new, initial, "identity", initial)
   HashOf(event_hash, 0, new)
   HashOf(chain, prev_chain, event_hash)
 )
 
 // Mutate: chain = H(prev, H(old, new)). The shared `type` arg pins
 // both old and new to the same type, enforcing type preservation
-// implicitly (no separate Equal needed).
+// implicitly (no separate Equal needed). The Equal clause pins
+// old.identity == new.identity so the stable per-instance identifier
+// set by TxInsert survives every mutation.
 TxMutate(chain, prev_chain, new, old, type, private: event_hash) = AND(
   DictContains(new, "type", type)
   DictContains(old, "type", type)
+  Equal(old.identity, new.identity)
   HashOf(event_hash, old, new)
   HashOf(chain, prev_chain, event_hash)
 )
@@ -126,7 +137,7 @@ ReplayContents(before_tx, after_tx, before_chain, after_chain) = OR(
 // wrapping per-event predicate.
 ReplayContentsStepInsert(before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain, ins, guard) = AND(
-  TxInsert(mid_chain, before_chain, ins.new, guard)
+  TxInsert(mid_chain, before_chain, ins.initial, ins.new, guard)
   SetInsert(ins.new_live, before_tx.live, ins.new)
   DictUpdate(mid_tx, before_tx, "live", ins.new_live)
   guard(ins.new, before_tx.chain_start, before_tx.chain_end)
@@ -227,8 +238,8 @@ ReplayActionsStep(before_tx, after_tx, before_chain, after_chain,
 // inside a `ReplayAction`-materialized `inner_tx`. Skipping that
 // materialization is what saves the three intermediate statements.
 ReplayActionInsert(before_tx, after_tx, before_chain, after_chain,
-    private: new, new_live, guard) = AND(
-  TxInsert(after_chain, before_chain, new, guard)
+    private: new, new_live, guard, initial) = AND(
+  TxInsert(after_chain, before_chain, initial, new, guard)
   SetInsert(new_live, before_tx.live, new)
   DictUpdate(after_tx, before_tx, "live", new_live)
   guard(new, before_chain, after_chain)
@@ -243,8 +254,8 @@ ReplayActionInsert(before_tx, after_tx, before_chain, after_chain,
 // HashOf equations lets the prover reuse the record-time statement
 // that it already built for the application's action predicate.
 ReplayInsert(before_tx, after_tx, before_chain, after_chain,
-    private: new, new_live, guard) = AND(
-  TxInsert(after_chain, before_chain, new, guard)
+    private: new, new_live, guard, initial) = AND(
+  TxInsert(after_chain, before_chain, initial, new, guard)
   SetInsert(new_live, before_tx.live, new)
   DictUpdate(after_tx, before_tx, "live", new_live)
   guard(new, before_tx.chain_start, before_tx.chain_end)
