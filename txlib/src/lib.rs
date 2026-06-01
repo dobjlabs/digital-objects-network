@@ -672,9 +672,10 @@ impl TxBuilder {
             .builder
             .priv_op(op!(DictContains(new, "type", new_type.clone())))
             .unwrap();
+        let identity = Value::from(initial.commitment());
         let st_di = ctx
             .builder
-            .priv_op(op!(DictInsert(new, initial, IDENTITY_FIELD, initial)))
+            .priv_op(op!(DictInsert(new, initial, IDENTITY_FIELD, identity)))
             .unwrap();
         let st_h1 = ctx
             .builder
