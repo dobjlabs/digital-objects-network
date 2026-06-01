@@ -471,7 +471,12 @@ impl ActionHandle {
             "key" => exe_ctx.rand_value()
         })
     }
-    fn obj_io(self, io: ObjectIO, class: String, kvs: Vec<(String, Ref)>) -> RuntimeResult<ArgHandle> {
+    fn obj_io(
+        self,
+        io: ObjectIO,
+        class: String,
+        kvs: Vec<(String, Ref)>,
+    ) -> RuntimeResult<ArgHandle> {
         if let Err(msg) = validate_class_name(&class) {
             return Err(msg.into());
         }
@@ -484,8 +489,7 @@ impl ActionHandle {
             let mut arg = arg.borrow_mut();
             match io {
                 ObjectIO::Output => {
-                    arg
-                        .set_value(Value::from(Self::new_obj(&exe_ctx, &class)));
+                    arg.set_value(Value::from(Self::new_obj(&exe_ctx, &class)));
                     for (key, value) in &kvs {
                         let value = value.borrow().as_value().clone();
                         arg.mut_dict(|obj| {
@@ -928,7 +932,13 @@ impl ActionHandle {
             let ctx = self.0.borrow();
             for (i, inst) in ctx.insts.iter().enumerate() {
                 match inst {
-                    Inst::Object { io: ObjectIO::Output, obj, kvs, final_dict, .. } => {
+                    Inst::Object {
+                        io: ObjectIO::Output,
+                        obj,
+                        kvs,
+                        final_dict,
+                        ..
+                    } => {
                         let dict = final_dict.clone().expect("Set final_dict captured at Rhai");
                         let ts = *current_ts.get(obj.borrow().var_name()).unwrap_or(&0);
                         let dict_arg = anchor_or_literal(obj.borrow().var_name(), &dict, ts);
@@ -1021,7 +1031,7 @@ impl ActionHandle {
                             *t = ts_after;
                         }
                     }
-                    _ => {},
+                    _ => {}
                 }
             }
         }
@@ -1751,7 +1761,11 @@ fn compute_wildcard_needs(
 
     for inst in &ctx.insts {
         match inst {
-            Inst::Object { io: ObjectIO::Output, kvs, .. } => {
+            Inst::Object {
+                io: ObjectIO::Output,
+                kvs,
+                ..
+            } => {
                 for (_k, v) in kvs {
                     check(
                         v,
@@ -1801,7 +1815,7 @@ fn compute_wildcard_needs(
                     );
                 }
             }
-            _ => {},
+            _ => {}
         }
     }
 

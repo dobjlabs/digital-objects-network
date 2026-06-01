@@ -499,7 +499,12 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     let mut sub_call_idx: usize = 0;
     for inst in &action.insts {
         match inst {
-            Inst::Object { io: ObjectIO::Output, obj, kvs, .. } => {
+            Inst::Object {
+                io: ObjectIO::Output,
+                obj,
+                kvs,
+                ..
+            } => {
                 let obj_str = vars[obj.borrow().var_name()];
                 for (key, value) in kvs {
                     let value = ArgFmt {
@@ -564,7 +569,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 writeln!(w, "  {sub_name}({})", args.join(", "))?;
                 vars.get_mut("chain").expect("chain exists").inc();
             }
-            _ => {},
+            _ => {}
         }
     }
 
