@@ -245,7 +245,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "4b73f3a8fa7f2bed3032bedfacd11c9909af751067b7bc4cdb5a92b7389a6168"
+        module_hash = "8d3754249fb1122eb5baf2127a63856ea7d67e70df9d1258cd67b1dd335d8500"
 
         [[classes]]
         name = "Log"
@@ -312,11 +312,12 @@ fn test_records_form_just_output() {
         .unwrap();
 
     let expected = r#"record JustOutputOut = (_pad, x)
+record JustOutputInitials = (_pad, x)
 
 // Actions
 
-JustOutput(out JustOutputOut, chain0, chain) = AND(
-  tx::TxInsert(chain, chain0, out.x, @self_predicate(IsFoo))
+JustOutput(out JustOutputOut, chain0, chain, private: initials JustOutputInitials) = AND(
+  tx::TxInsert(chain, chain0, initials.x, out.x, @self_predicate(IsFoo))
 )
 
 // Bridges
@@ -363,13 +364,14 @@ fn test_records_form_input_output_update() {
 
     let expected = r#"record LogToWoodIn = (_pad, log)
 record LogToWoodOut = (_pad, wood)
+record LogToWoodInitials = (_pad, wood)
 
 // Actions
 
-LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, wood0, key) = AND(
-  DictUpdate(out.wood, wood0, "key", key)
+LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, wood0, key, initials LogToWoodInitials) = AND(
+  DictUpdate(initials.wood, wood0, "key", key)
   tx::TxDelete(chain1, chain0, in.log, @self_predicate(IsLog))
-  tx::TxInsert(chain, chain1, out.wood, @self_predicate(IsWood))
+  tx::TxInsert(chain, chain1, initials.wood, out.wood, @self_predicate(IsWood))
 )
 
 // Bridges
@@ -432,9 +434,9 @@ fn test_records_form_subaction() {
     // Parent action signature + sub-action call body. `bar`'s
     // out-side collapses (no sub-field reads, no Intro use) so the
     // wildcard is dropped and body refs render as `out.bar`.
-    let expected_parent = r#"MineBar(out MineBarOut, chain0, chain, private: chain1, _UseFoo_in_0 UseFooIn, _UseFoo_out_0 UseFooOut) = AND(
+    let expected_parent = r#"MineBar(out MineBarOut, chain0, chain, private: chain1, _UseFoo_in_0 UseFooIn, _UseFoo_out_0 UseFooOut, initials MineBarInitials) = AND(
   UseFoo(_UseFoo_in_0, _UseFoo_out_0, chain0, chain1)
-  tx::TxInsert(chain, chain1, out.bar, @self_predicate(IsBar))
+  tx::TxInsert(chain, chain1, initials.bar, out.bar, @self_predicate(IsBar))
 )
 "#;
     assert!(
