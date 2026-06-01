@@ -134,13 +134,6 @@ enum Inst {
         /// Post-update Object dict snapshot. Some at Execute, None at Load.
         new_dict: Option<Dictionary>,
     },
-    // Set {
-    //     obj: String,
-    //     kvs: Vec<(String, Ref)>,
-    //     /// Post-set Object dict snapshot (after all kvs inserted).
-    //     /// Some at Execute, None at Load.
-    //     final_dict: Option<Dictionary>,
-    // },
     Statement {
         pred: NativePredicate,
         args: Vec<Ref>,
@@ -2456,7 +2449,6 @@ fn new_engine() -> Engine {
         .register_fn("pow_obj_grind", ActionHandle::pow_obj_grind)
         .register_fn("top_limb_u256", ActionHandle::top_limb_u256)
         .register_type_with_name::<ArgHandle>("ArgContext")
-        // .register_fn("set", ArgHandle::set)
         .register_fn("get", ArgHandle::get)
         .register_fn("update", ArgHandle::update)
         .register_fn(
