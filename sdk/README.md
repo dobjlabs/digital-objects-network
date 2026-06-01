@@ -159,50 +159,53 @@ The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
 The example in the test `test_sdk_1` produces the following podlang code:
 
 ```
-use module 0xb1a79d9f0953e49fdcf43697c3c61aa5b59b2b88f5a5dcde8b8c76942dfdd4f4 as tx
-use intro Vdf(count, input, output) from 0xb77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06
-use intro LtEqU256(lhs, rhs) from 0x2e79114ee823f4783ab5b6eb93b49abba87fb69b4d14de4cf1d78648ade73529
+use module 0x1127dce1866ccc4bb6a32782dec35754451ae33ac72e8daaa7e8454be8ac813d as tx
+use intro Vdf(count, input, output) from 0x92586a223c74ba4083d5c5d5b10f9c0a227b91fb2baa2272ffb99faca7adb993
+use intro LtEqU256(lhs, rhs) from 0xd80d0ac8d9d02dc8e9fa3344936a8c9594b915b10a88a4981ceecc462ed03724
 
 record FindLogOut = (_pad, log)
+record FindLogInitials = (_pad, log)
 record CraftWoodIn = (_pad, log)
 record CraftWoodOut = (_pad, wood)
 record CraftSticksIn = (_pad, wood)
 record CraftSticksOut = (_pad, stick_a, stick_b)
 record CraftSticksChain = (_pad, step_0, step_1)
+record CraftSticksInitials = (_pad, stick_a, stick_b)
 record CraftWoodPickIn = (_pad, wood, stick)
 record CraftWoodPickOut = (_pad, pick)
 record CraftWoodPickChain = (_pad, step_0, step_1)
+record CraftWoodPickInitials = (_pad, pick)
 record UseWoodPickIn = (_pad, wood_pick)
 record UseWoodPickOut = (_pad, wood_pick)
 record MineStoneWithWoodPickOut = (_pad, stone)
+record MineStoneWithWoodPickInitials = (_pad, stone)
 
 // Actions
 
-FindLog(out FindLogOut, chain0, chain, private: log0, work) = AND(
+FindLog(out FindLogOut, chain0, chain, private: log0, work, initials FindLogInitials) = AND(
   Vdf(3, log0, work)
-  DictUpdate(out.log, log0, "work", work)
-  tx::TxInsert(chain, chain0, out.log, @self_predicate(IsLog))
+  DictUpdate(initials.log, log0, "work", work)
+  tx::TxInsert(chain, chain0, initials.log, out.log, @self_predicate(IsLog))
 )
 
-CraftWood(in CraftWoodIn, out CraftWoodOut, chain0, chain, private: chain1, wood0, wood, key) = AND(
-  ArrayContains(out, CraftWoodOut::wood, wood)
-  DictUpdate(wood, wood0, "key", key)
-  LtEqU256(wood, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))
+CraftWood(in CraftWoodIn, out CraftWoodOut, chain0, chain, private: chain1, wood0, wood1, key) = AND(
+  DictUpdate(wood1, wood0, "key", key)
+  LtEqU256(wood1, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))
   tx::TxDelete(chain1, chain0, in.log, @self_predicate(IsLog))
-  tx::TxInsert(chain, chain1, wood, @self_predicate(IsWood))
+  tx::TxInsert(chain, chain1, wood1, out.wood, @self_predicate(IsWood))
 )
 
-CraftSticks(in CraftSticksIn, out CraftSticksOut, chain0, chain, private: chain_steps CraftSticksChain) = AND(
+CraftSticks(in CraftSticksIn, out CraftSticksOut, chain0, chain, private: chain_steps CraftSticksChain, initials CraftSticksInitials) = AND(
   tx::TxDelete(chain_steps.step_0, chain0, in.wood, @self_predicate(IsWood))
-  tx::TxInsert(chain_steps.step_1, chain_steps.step_0, out.stick_a, @self_predicate(IsStick))
-  tx::TxInsert(chain, chain_steps.step_1, out.stick_b, @self_predicate(IsStick))
+  tx::TxInsert(chain_steps.step_1, chain_steps.step_0, initials.stick_a, out.stick_a, @self_predicate(IsStick))
+  tx::TxInsert(chain, chain_steps.step_1, initials.stick_b, out.stick_b, @self_predicate(IsStick))
 )
 
-CraftWoodPick(in CraftWoodPickIn, out CraftWoodPickOut, chain0, chain, private: chain_steps CraftWoodPickChain) = AND(
-  DictContains(out.pick, "durability", 100)
+CraftWoodPick(in CraftWoodPickIn, out CraftWoodPickOut, chain0, chain, private: chain_steps CraftWoodPickChain, initials CraftWoodPickInitials) = AND(
+  DictContains(initials.pick, "durability", 100)
   tx::TxDelete(chain_steps.step_0, chain0, in.wood, @self_predicate(IsWood))
   tx::TxDelete(chain_steps.step_1, chain_steps.step_0, in.stick, @self_predicate(IsStick))
-  tx::TxInsert(chain, chain_steps.step_1, out.pick, @self_predicate(IsWoodPick))
+  tx::TxInsert(chain, chain_steps.step_1, initials.pick, out.pick, @self_predicate(IsWoodPick))
 )
 
 UseWoodPick(in UseWoodPickIn, out UseWoodPickOut, chain0, chain, private: wood_pick0, wood_pick1, wood_pick2, durability, key, work) = AND(
@@ -216,9 +219,9 @@ UseWoodPick(in UseWoodPickIn, out UseWoodPickOut, chain0, chain, private: wood_p
   tx::TxMutate(chain, chain0, out.wood_pick, wood_pick0, @self_predicate(IsWoodPick))
 )
 
-MineStoneWithWoodPick(out MineStoneWithWoodPickOut, chain0, chain, private: chain1, _UseWoodPick_in_0 UseWoodPickIn, _UseWoodPick_out_0 UseWoodPickOut) = AND(
+MineStoneWithWoodPick(out MineStoneWithWoodPickOut, chain0, chain, private: chain1, _UseWoodPick_in_0 UseWoodPickIn, _UseWoodPick_out_0 UseWoodPickOut, initials MineStoneWithWoodPickInitials) = AND(
   UseWoodPick(_UseWoodPick_in_0, _UseWoodPick_out_0, chain0, chain1)
-  tx::TxInsert(chain, chain1, out.stone, @self_predicate(IsStone))
+  tx::TxInsert(chain, chain1, initials.stone, out.stone, @self_predicate(IsStone))
 )
 
 // Bridges

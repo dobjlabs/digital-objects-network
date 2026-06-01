@@ -279,6 +279,7 @@ impl<'a> Replayer<'a> {
         let (st_step, tag, final_chain, final_live, final_nulls) = match first {
             ChainEvent::Insert {
                 new,
+                initial,
                 chain_after,
                 tx_stmt,
                 guard_evidence,
@@ -292,6 +293,7 @@ impl<'a> Replayer<'a> {
                 let (st_rest, final_chain, final_live, final_nulls) =
                     self.build_replay_contents(rest, *chain_after, frame.with_live(&new_live));
                 let st = self.build_replay_step_insert(
+                    initial,
                     new,
                     frame,
                     &new_live,
@@ -539,6 +541,8 @@ impl<'a> Replayer<'a> {
         tx_stmt: Statement,
         guard_evidence: Statement,
     ) -> (Statement, Set) {
+        // ReplayInsert's `initial` private wildcard is bound by the
+        // TxInsert sub-statement we pass in; no standalone op needed.
         let btx = frame.to_tx_dict();
         let mut new_live = frame.live.clone();
         new_live.insert(&Value::from(new.clone())).unwrap();
@@ -576,14 +580,17 @@ impl<'a> Replayer<'a> {
 
     /// Build a `ReplayContentsStepInsert` statement: the inlined body
     /// of `ReplayInsert` plus the recursive `ReplayContents` tail. The
-    /// `new` object and the resulting `new_live` set are packed into a
-    /// tiny `ins` dict so they share a single wildcard slot (keeps the
-    /// predicate at 8 wildcards). Body sub-statements anchor to
-    /// `ins.new` / `ins.new_live` instead of using bare wildcards.
+    /// `new` object, the resulting `new_live` set, and the
+    /// pre-identity `initial` are packed into a tiny `ins` dict so
+    /// they share a single wildcard slot (keeps the predicate at 8
+    /// wildcards). Body sub-statements anchor to `ins.new` /
+    /// `ins.new_live` / `ins.initial` instead of using bare wildcards.
     /// `new_live` is `live + {new}`, supplied by the caller (which already
     /// needs it for the recursive tail).
+    #[allow(clippy::too_many_arguments)]
     fn build_replay_step_insert(
         &mut self,
+        initial: &Dictionary,
         new: &Dictionary,
         frame: ReplayFrame<'_>,
         new_live: &Set,
@@ -595,15 +602,23 @@ impl<'a> Replayer<'a> {
         let atx = tx_with(&btx, "live", Value::from(new_live.clone()));
         let ins = dict!({
             "new" => new.clone(),
-            "new_live" => new_live.clone()
+            "new_live" => new_live.clone(),
+            "initial" => initial.clone()
         });
 
-        // Re-anchor TxInsert's `new` slot (slot 2) from literal to ins.new.
+        // Re-anchor TxInsert's `initial` slot (slot 2) and `new`
+        // slot (slot 3) from literals to `ins.initial` / `ins.new`.
         let tx_stmt_wrapped = self
             .ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![None, None, Some((&ins, "new")), None],
+                vec![
+                    None,
+                    None,
+                    Some((&ins, "initial")),
+                    Some((&ins, "new")),
+                    None,
+                ],
                 tx_stmt,
             ))
             .unwrap();
