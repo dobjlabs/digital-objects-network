@@ -233,16 +233,16 @@ pub(crate) fn save_results(
     let mut output_files = Vec::new();
     for (index, output) in action.total_outputs.iter().enumerate() {
         let spendable = spendable_outputs.obj(index);
-        let object_id = format!("{:#}", spendable.obj.commitment());
+        let content_hash = format!("{:#}", spendable.obj.commitment());
         let file_name = format!(
             "{}_{}.{DOBJ_EXTENSION}",
             output.class.file_prefix(),
-            object_id.to_ascii_lowercase()
+            content_hash.to_ascii_lowercase()
         );
         output_files.push(file_name.clone());
 
         let live_record = StoredObjectRecord {
-            content_hash: object_id,
+            content_hash,
             class: output.class.clone(),
             status: ObjectStatus::Unknown,
             tx_hash: None,

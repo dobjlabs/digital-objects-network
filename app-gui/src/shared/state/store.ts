@@ -53,12 +53,12 @@ interface ProofState {
 
 export type ContextSelection =
   | { kind: "none" }
-  | { kind: "object"; objectId: string }
+  | { kind: "object"; contentHash: string }
   | { kind: "action"; action: QualifiedNamePayload };
 
 export interface AppState {
   contextSelection: ContextSelection;
-  activeObjectId: string | null;
+  activeObjectContentHash: string | null;
   activeAction: QualifiedNamePayload | null;
   showNullifiedItems: boolean;
   inventory: InventoryObject[];
@@ -66,7 +66,7 @@ export interface AppState {
   proof: ProofState;
   hydrateData: () => Promise<void>;
   importObject: (dobj: string) => Promise<void>;
-  selectObject: (objectId: string) => void;
+  selectObject: (contentHash: string) => void;
   selectAction: (action: QualifiedNamePayload) => void;
   clearSelection: () => void;
   toggleNullified: () => void;
@@ -90,10 +90,13 @@ export interface AppState {
 
 const initialAppState: Pick<
   AppState,
-  "contextSelection" | "activeObjectId" | "activeAction" | "showNullifiedItems"
+  | "contextSelection"
+  | "activeObjectContentHash"
+  | "activeAction"
+  | "showNullifiedItems"
 > = {
   contextSelection: { kind: "none" },
-  activeObjectId: null,
+  activeObjectContentHash: null,
   activeAction: null,
   showNullifiedItems: false,
 };
@@ -136,25 +139,25 @@ export const useStore = create<AppState>((set, get) => ({
     await importObjectApi(dobj);
     await get().hydrateData();
   },
-  selectObject: (objectId) =>
+  selectObject: (contentHash) =>
     set((prev) => {
       if (
-        prev.activeObjectId === objectId &&
+        prev.activeObjectContentHash === contentHash &&
         prev.activeAction === null &&
         prev.contextSelection.kind === "object" &&
-        prev.contextSelection.objectId === objectId
+        prev.contextSelection.contentHash === contentHash
       ) {
         return {
           ...prev,
-          activeObjectId: null,
+          activeObjectContentHash: null,
           contextSelection: { kind: "none" },
         };
       }
       return {
         ...prev,
-        activeObjectId: objectId,
+        activeObjectContentHash: contentHash,
         activeAction: null,
-        contextSelection: { kind: "object", objectId },
+        contextSelection: { kind: "object", contentHash },
       };
     }),
   selectAction: (action) =>
@@ -162,7 +165,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (
         prev.activeAction !== null &&
         qualifiedEq(prev.activeAction, action) &&
-        prev.activeObjectId === null &&
+        prev.activeObjectContentHash === null &&
         prev.contextSelection.kind === "action" &&
         qualifiedEq(prev.contextSelection.action, action)
       ) {
@@ -174,7 +177,7 @@ export const useStore = create<AppState>((set, get) => ({
       }
       return {
         ...prev,
-        activeObjectId: null,
+        activeObjectContentHash: null,
         activeAction: action,
         contextSelection: { kind: "action", action },
       };
@@ -182,7 +185,7 @@ export const useStore = create<AppState>((set, get) => ({
   clearSelection: () =>
     set((prev) => ({
       ...prev,
-      activeObjectId: null,
+      activeObjectContentHash: null,
       activeAction: null,
       contextSelection: { kind: "none" },
     })),

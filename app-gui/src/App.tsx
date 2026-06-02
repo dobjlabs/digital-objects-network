@@ -29,7 +29,9 @@ function App() {
   const [initialHydrationPending, setInitialHydrationPending] = useState(true);
   const inventory = useStore((state) => state.inventory);
   const actions = useStore((state) => state.actions);
-  const activeObjectId = useStore((state) => state.activeObjectId);
+  const activeObjectContentHash = useStore(
+    (state) => state.activeObjectContentHash,
+  );
   const activeAction = useStore((state) => state.activeAction);
   const contextSelection = useStore((state) => state.contextSelection);
   const showNullifiedItems = useStore((state) => state.showNullifiedItems);
@@ -54,7 +56,9 @@ function App() {
       state.proof.status === "summary",
   );
   const selectedObject =
-    inventory.find((object) => object.id === activeObjectId) ?? null;
+    inventory.find(
+      (object) => object.contentHash === activeObjectContentHash,
+    ) ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -248,7 +252,7 @@ function App() {
           <InventoryPanel
             inventory={inventory}
             objectsDirPath={objectsDirPath}
-            activeObjectId={activeObjectId}
+            activeObjectContentHash={activeObjectContentHash}
             showNullifiedItems={showNullifiedItems}
             onSelectObject={selectObject}
             onToggleNullified={toggleNullified}

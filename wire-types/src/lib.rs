@@ -253,7 +253,7 @@ pub struct ClassSummary {
 #[serde(rename_all = "camelCase")]
 pub struct CheckActionCandidate {
     pub class: QualifiedName,
-    pub object_id: String,
+    pub content_hash: String,
     pub file_name: String,
 }
 

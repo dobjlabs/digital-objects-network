@@ -290,7 +290,7 @@ impl Driver {
 
         let mut available = Vec::new();
         let mut missing_inputs = Vec::new();
-        let mut used_ids = HashSet::new();
+        let mut used_content_hashes = HashSet::new();
 
         // Apply the same cryptographic check that `resolve_inputs` runs at
         // execute time: a candidate must match by qualified class AND its
@@ -302,17 +302,17 @@ impl Driver {
             let expected_hash = decode_hash_hex(required.hash.as_str()).ok();
             let candidate = live_objects.iter().find(|entry| {
                 entry.record.class == required.class
-                    && !used_ids.contains(&entry.record.content_hash)
+                    && !used_content_hashes.contains(&entry.record.content_hash)
                     && matches!(
                         (expected_hash, obj_type_hash(&entry.record.obj)),
                         (Some(expected), Some(actual)) if expected == actual
                     )
             });
             if let Some(entry) = candidate {
-                used_ids.insert(entry.record.content_hash.clone());
+                used_content_hashes.insert(entry.record.content_hash.clone());
                 available.push(CheckActionCandidate {
                     class: required.class.clone(),
-                    object_id: entry.record.content_hash.clone(),
+                    content_hash: entry.record.content_hash.clone(),
                     file_name: entry.file_name.clone(),
                 });
             } else {

@@ -90,9 +90,9 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
         .unwrap();
     let source_tx = outputs.tx.clone();
     let spendable = outputs.obj(0);
-    let id = format!("{:#}", spendable.obj.commitment());
+    let content_hash = format!("{:#}", spendable.obj.commitment());
     let record = ObjectRecord {
-        content_hash: id,
+        content_hash,
         class: craft_basics("Log"),
         status: ObjectStatus::Live,
         tx_hash: None,
