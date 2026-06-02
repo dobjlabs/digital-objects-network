@@ -234,6 +234,24 @@ impl CraftOps for MockCraftOps {
         })
     }
 
+    fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectDetail> {
+        if path.trim().is_empty() {
+            bail!("empty .dobj path");
+        }
+        Ok(ObjectDetail {
+            id: "0ximported0000000000".to_string(),
+            file_name: "craft-basics__log_0ximported.dobj".to_string(),
+            class: qname("Log"),
+            class_hash: format!("0x{}", "0".repeat(64)),
+            status: ObjectStatus::Live,
+            tx_hash: Some("0xmocktximported".to_string()),
+            fields: HashMap::from([(
+                "blueprint".to_string(),
+                serde_json::Value::String("Log".to_string()),
+            )]),
+        })
+    }
+
     fn read_settings(&self) -> anyhow::Result<DriverSettings> {
         Ok(DriverSettings {
             synchronizer_api_url: "http://127.0.0.1:3000".to_string(),

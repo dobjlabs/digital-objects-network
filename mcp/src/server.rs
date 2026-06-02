@@ -67,6 +67,17 @@ pub struct CheckFeasibilityParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ImportObjectFileParams {
+    /// Local filesystem path (on the machine running dobjd) to an external
+    /// `.dobj` file — one not produced by this driver (e.g. a download, or a
+    /// file from outside `~/.dobj/`). dobjd reads the file, validates it
+    /// (class identity + on-chain grounding), and files it under a canonical
+    /// name derived from its commitment. If you only have the object's JSON
+    /// inline, write it to a temp file first and pass that path.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadDocParams {
     /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "txlib.podlang", "time.podlang"
     pub name: String,
@@ -179,6 +190,19 @@ impl<T: CraftOps> CraftMcpService<T> {
     ) -> Result<Json<FeasibilityReport>, String> {
         self.ops
             .check_feasibility(&params.action)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Import an external .dobj object — one not produced by this driver — into local inventory. Pass `path`, a local filesystem path (on the machine running dobjd) to the .dobj file; dobjd reads it. If you only have the object's JSON inline, write it to a temp file first and pass that path. Validates the object's class identity and on-chain grounding, files it under a canonical name, and returns its summary (status is `live` if grounded, otherwise `unknown`). Errors if the object is already in inventory or already spent on-chain."
+    )]
+    fn import_object_file(
+        &self,
+        Parameters(params): Parameters<ImportObjectFileParams>,
+    ) -> Result<Json<ObjectDetail>, String> {
+        self.ops
+            .import_object_file(&params.path)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -359,7 +383,8 @@ mod tests {
         assert!(tools.contains(&"read_settings".to_string()));
         assert!(tools.contains(&"write_settings".to_string()));
         assert!(tools.contains(&"get_objects_dir".to_string()));
-        assert_eq!(tools.len(), 13);
+        assert!(tools.contains(&"import_object_file".to_string()));
+        assert_eq!(tools.len(), 14);
     }
 
     #[test]

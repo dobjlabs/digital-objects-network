@@ -182,6 +182,20 @@ pub struct InventoryObject {
     pub fields: HashMap<String, serde_json::Value>,
 }
 
+/// `POST /objects/import` body — the raw JSON contents of an external `.dobj`
+/// file, one not produced by this driver (e.g. from outside `~/.dobj/`). The driver
+/// validates the object's class identity and on-chain grounding, then files
+/// it into local inventory under a canonical name derived from its
+/// commitment. Consumers handle their own file I/O and pass the bytes as a
+/// string. The import result is a plain [`ObjectSummary`] whose `status`
+/// reflects grounding (`live` if the source tx is canonical, else `unknown`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ImportObjectRequest {
+    pub dobj: String,
+}
+
 // ===========================================================================
 // Catalog
 // ===========================================================================

@@ -1,4 +1,6 @@
-use anyhow::{Result, anyhow};
+use std::path::PathBuf;
+
+use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde_json::Value;
@@ -6,9 +8,9 @@ use tokio::sync::oneshot;
 
 use crate::client::DobjdClient;
 use wire_types::{
-    ActionSummary, CheckActionReport, ClassRef, ClassSummary, DriverSettings, InventoryObject,
-    ObjectSummary, ObjectsDirInfo, QualifiedName, RunActionInput, RunActionRequest,
-    RunActionResult,
+    ActionSummary, CheckActionReport, ClassRef, ClassSummary, DriverSettings, ImportObjectRequest,
+    InventoryObject, ObjectSummary, ObjectsDirInfo, QualifiedName, RunActionInput,
+    RunActionRequest, RunActionResult,
 };
 
 const TARGET_RUN_ACTION_PROGRESS: &str = "run-action-progress";
@@ -112,6 +114,32 @@ pub async fn state_root(client: &DobjdClient) -> Result<()> {
 pub async fn objects_dir(client: &DobjdClient) -> Result<()> {
     let dir: ObjectsDirInfo = client.get_json("/objects/dir").await?;
     println!("{}", dir.path);
+    Ok(())
+}
+
+pub async fn import(client: &DobjdClient, path: PathBuf, json: bool) -> Result<()> {
+    let dobj =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let obj: ObjectSummary = client
+        .post_json("/objects/import", &ImportObjectRequest { dobj })
+        .await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": obj.id, "fileName": obj.file_name, "class": obj.class,
+                "status": obj.status, "txHash": obj.tx_hash,
+            }))?
+        );
+        return Ok(());
+    }
+    println!(
+        "imported {} {} [{}]",
+        obj.class,
+        short_hex(&obj.id),
+        obj.status
+    );
+    println!("file:   {}", obj.file_name);
     Ok(())
 }
 

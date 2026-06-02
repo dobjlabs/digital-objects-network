@@ -42,6 +42,7 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/actions`                  | `list_actions`                                        |
 | `GET`  | `/state-root`               | `get_state_root`                                      |
 | `GET`  | `/objects/dir`              | `paths().objects_dir`                                 |
+| `POST` | `/objects/import`           | `import_object` (body: `{ "dobj": "<json>" }`)        |
 | `GET`  | `/objects/{file_name}`      | `read_object(&Path)` (basename in `~/.dobj/objects/`) |
 | `GET`  | `/classes`                  | `list_classes`                                        |
 | `GET`  | `/classes/{name}`           | `get_class`                                           |

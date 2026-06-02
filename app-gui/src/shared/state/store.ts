@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import {
+  importObject as importObjectApi,
   loadActions,
   loadInventory,
   runAction,
@@ -64,6 +65,7 @@ export interface AppState {
   actions: Action[];
   proof: ProofState;
   hydrateData: () => Promise<void>;
+  importObject: (dobj: string) => Promise<void>;
   selectObject: (objectId: string) => void;
   selectAction: (action: QualifiedNamePayload) => void;
   clearSelection: () => void;
@@ -126,6 +128,13 @@ export const useStore = create<AppState>((set, get) => ({
       loadActions(),
     ]);
     set((prev) => ({ ...prev, inventory, actions }));
+  },
+  importObject: async (dobj) => {
+    // The driver validates + files the object; refetch so the new row shows
+    // up with its class emoji/description folded in (import returns the bare
+    // summary). Errors propagate to the caller to surface in the UI.
+    await importObjectApi(dobj);
+    await get().hydrateData();
   },
   selectObject: (objectId) =>
     set((prev) => {

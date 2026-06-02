@@ -4,6 +4,8 @@
 //! desktop GUI, the website, and the MCP transport. Run `dobjd` first; this
 //! CLI talks to it.
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -74,6 +76,12 @@ enum Cmd {
     StateRoot,
     /// Print the local objects directory path (`~/.dobj/objects/`).
     ObjectsDir,
+    /// Import an external `.dobj` file into inventory.
+    Import {
+        /// Path to the `.dobj` file to import. Its contents are read and sent
+        /// to dobjd, which files the object under a canonical name.
+        path: PathBuf,
+    },
     /// Read or write driver settings (synchronizer / relayer URLs).
     #[command(subcommand)]
     Settings(SettingsCmd),
@@ -146,6 +154,7 @@ async fn main() -> Result<()> {
         }
         Cmd::StateRoot => commands::state_root(&client).await,
         Cmd::ObjectsDir => commands::objects_dir(&client).await,
+        Cmd::Import { path } => commands::import(&client, path, cli.json).await,
         Cmd::Settings(SettingsCmd::Get) => commands::settings_get(&client, cli.json).await,
         Cmd::Settings(SettingsCmd::Set {
             synchronizer,

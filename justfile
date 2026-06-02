@@ -112,3 +112,8 @@ install-plugins:
 #   just pexe inspect plan --action CraftWood plugins/craft-basics
 pexe *ARGS:
     cargo run -p pexe --release -- {{ARGS}}
+
+# Run the dobj `cli` CLI with arbitrary args. Example:
+#   just cli inspect-action craft-basics::FindLog
+cli *ARGS:
+    cargo run -p cli --release -- {{ARGS}}
