@@ -1,4 +1,9 @@
-use anyhow::anyhow;
+//! Relayer HTTP API DTOs.
+//!
+//! Lifted out of the `relayer` crate so consumers (driver, dobjd, tests)
+//! can deserialize relayer responses without pulling in relayer's
+//! server-side deps (sqlx-postgres, alloy, axum).
+
 use serde::{Deserialize, Serialize};
 
 /// Persistent relay lifecycle states.
@@ -36,14 +41,17 @@ impl JobStatus {
         matches!(self, JobStatus::Confirmed | JobStatus::Failed)
     }
 
-    pub fn from_db_str(value: &str) -> anyhow::Result<Self> {
+    /// Parse a relayer-DB string representation. Lives here (not in the
+    /// relayer crate) so the driver can also map DB-style strings if it
+    /// ever needs to — e.g. when ingesting cached relayer state.
+    pub fn from_db_str(value: &str) -> Result<Self, String> {
         match value {
             "queued" => Ok(JobStatus::Queued),
             "sending" => Ok(JobStatus::Sending),
             "submitted" => Ok(JobStatus::Submitted),
             "confirmed" => Ok(JobStatus::Confirmed),
             "failed" => Ok(JobStatus::Failed),
-            _ => Err(anyhow!("invalid job status: {value}")),
+            other => Err(format!("invalid job status: {other}")),
         }
     }
 }

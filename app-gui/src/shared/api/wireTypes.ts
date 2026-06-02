@@ -27,6 +27,25 @@ export interface InventoryObjectPayload {
   fields: Record<string, unknown>;
 }
 
+/** The `ObjectSummary` wire shape returned by `/objects/{name}` and
+ * `/objects/import` — like `InventoryObjectPayload` but without the
+ * folded-in class emoji/description. */
+export interface ObjectSummaryPayload {
+  id: string;
+  fileName: string;
+  class: QualifiedNamePayload;
+  classHash: string;
+  status: ObjectStatus;
+  txHash: string | null;
+  fields: Record<string, unknown>;
+}
+
+/** `POST /objects/import` request body — the raw JSON contents of an external
+ * `.dobj` file, one not produced by this driver (e.g. from outside `~/.dobj/`). */
+export interface ImportObjectRequest {
+  dobj: string;
+}
+
 export interface ClassRefPayload {
   class: QualifiedNamePayload;
   /** Hex-encoded `Is{class}` predicate hash. */

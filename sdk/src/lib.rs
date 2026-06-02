@@ -20,7 +20,7 @@ use pod2::{
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
-use txlib::{EventHandle, GroundingEvidence, GroundingWitness, Tx, TxBuilder};
+use txlib::{EventHandle, GroundingEvidence, GroundingWitness, Tx, TxBuilder, with_identity};
 use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 
 mod error;
@@ -53,7 +53,7 @@ enum Intro {
     LtEqU256, // (lhs, rhs)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectIO {
     Input,
     Mutate,
@@ -408,6 +408,33 @@ impl ActionContext {
         state.ts += 1;
         Ok(())
     }
+    /// Per-var max ts, including the extra ts an Output reserves for
+    /// the identity-stamp bump (`fmt_podlang::output_max_ts`). This is
+    /// the single source for in/out/initials slot positions, consumed
+    /// by `compute_wildcard_needs`, `ActionMeta`, and `fmt_podlang`.
+    fn max_ts_per_var(&self) -> HashMap<String, usize> {
+        let output_vars: HashSet<String> = self
+            .insts
+            .iter()
+            .filter_map(|inst| match inst {
+                Inst::Object {
+                    io: ObjectIO::Output,
+                    obj,
+                    ..
+                } => Some(obj.borrow().var_name().to_string()),
+                _ => None,
+            })
+            .collect();
+        self.var_state
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    fmt_podlang::output_max_ts(v.ts, output_vars.contains(k)),
+                )
+            })
+            .collect()
+    }
     fn assert_unsafe(&self, unsafe_block: bool) -> RuntimeResult<()> {
         if self.unsafe_block != unsafe_block {
             if self.unsafe_block {
@@ -514,8 +541,42 @@ impl ActionHandle {
         // Object insts. Each Object contributes one entry to its
         // dispatch side's array (Mutate contributes to both). Slot 0
         // is `_pad`; real entries start at slot 1 (see PAD_ENTRY).
+        //
+        // For Outputs, cache the identity-stamped dict once here so the
+        // three consumers that need the post-identity form -- the
+        // out_array entry, the ArrayContains anchor below, and the
+        // downstream obj_dict -- all use the same value.
         let exe_rc = self.0.borrow().exe_ctx.clone().expect("exe phase");
         let meta = module.action_by_name(&action);
+        // Output dicts: `stamped_outputs` (keyed by varname) backs
+        // `out_array` and the array_contains anchors; `raw_outputs`
+        // (declaration-ordered, matching `meta.initials_entries`) backs
+        // the `<Action>Initials` array. `raw_outputs` is only built
+        // when this action performs TxInserts and thus requires an
+        // `initials` record.
+        let has_initials = meta.initials_entries.is_some();
+        let (raw_outputs, stamped_outputs): (Vec<Dictionary>, HashMap<String, Dictionary>) = {
+            let ctx = self.0.borrow();
+            let mut raw: Vec<Dictionary> = Vec::new();
+            let mut stamped: HashMap<String, Dictionary> = HashMap::new();
+            for inst in &ctx.insts {
+                if let Inst::Object {
+                    io: ObjectIO::Output,
+                    obj,
+                    ..
+                } = inst
+                {
+                    let obj = obj.borrow();
+                    let varname = obj.var_name().to_string();
+                    let raw_dict = obj.to_dict();
+                    stamped.insert(varname, with_identity(&raw_dict));
+                    if has_initials {
+                        raw.push(raw_dict);
+                    }
+                }
+            }
+            (raw, stamped)
+        };
         let mut in_dicts: Vec<Value> = vec![Value::from(0_i64)];
         let mut out_dicts: Vec<Value> = vec![Value::from(0_i64)];
         {
@@ -525,13 +586,14 @@ impl ActionHandle {
                     io, obj, original, ..
                 } = inst
                 {
+                    let varname = obj.borrow().var_name().to_string();
                     let post_dict = obj.borrow().to_dict();
                     match io {
                         ObjectIO::Input => {
                             in_dicts.push(Value::from(post_dict));
                         }
                         ObjectIO::Output => {
-                            out_dicts.push(Value::from(post_dict));
+                            out_dicts.push(Value::from(stamped_outputs[&varname].clone()));
                         }
                         ObjectIO::Mutate => {
                             let pre_dict = original
@@ -548,24 +610,33 @@ impl ActionHandle {
         let in_array = Array::new(in_dicts);
         let out_array = Array::new(out_dicts);
 
-        let max_ts: HashMap<String, usize> = {
-            let ctx = self.0.borrow();
-            ctx.var_state
-                .iter()
-                .map(|(k, v)| (k.clone(), v.ts))
-                .collect()
+        // Build the `<Action>Initials` record value (the pre-identity Output
+        // dicts) when the action has one. Slot 0 is the `_pad` (see PAD_ENTRY).
+        let initials_array: Option<Array> = has_initials.then(|| {
+            let mut values: Vec<Value> = vec![Value::from(0_i64)];
+            values.extend(raw_outputs.iter().cloned().map(Value::from));
+            Array::new(values)
+        });
+
+        // Resolve an Output's pre-identity dict to its slot in the
+        // `<Action>Initials` record.
+        let initials_anchor = |obj_name: &str| -> Option<OperationArg> {
+            let slot = meta.initials_slot(obj_name)?;
+            Some((initials_array.as_ref()?, slot as i64).into())
         };
 
         // Returns an anchored op-arg when the Object's side at this ts
         // is collapsed; else a literal op-arg for the dict.
         let anchor_or_literal = |obj_name: &str, dict: &Dictionary, ts: usize| -> OperationArg {
-            let mts = *max_ts.get(obj_name).unwrap_or(&0);
-            match meta.collapsed_at(obj_name, ts, mts) {
-                Some(fmt_podlang::Side::In) => {
+            match meta.collapsed_at(obj_name, ts) {
+                Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::In)) => {
                     (&in_array, meta.in_entry(obj_name).unwrap().0 as i64).into()
                 }
-                Some(fmt_podlang::Side::Out) => {
+                Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::Out)) => {
                     (&out_array, meta.out_entry(obj_name).unwrap().0 as i64).into()
+                }
+                Some(fmt_podlang::Collapse::Initials) => {
+                    initials_anchor(obj_name).expect("collapsed_at promised an initials slot")
                 }
                 None => OperationArg::Literal(Value::from(dict.clone())),
             }
@@ -584,14 +655,16 @@ impl ActionHandle {
                 } = inst
                 {
                     let varname = obj.borrow().var_name().to_string();
-                    let post_dict = obj.borrow().to_dict();
+                    let post_dict = match io {
+                        ObjectIO::Output => stamped_outputs[&varname].clone(),
+                        _ => obj.borrow().to_dict(),
+                    };
                     let pre_dict = match io {
                         ObjectIO::Mutate => original
                             .as_ref()
                             .expect("Mutate records a pre-mutation dict")
                             .clone(),
-                        ObjectIO::Input => post_dict.clone(),
-                        ObjectIO::Output => post_dict.clone(),
+                        _ => post_dict.clone(),
                     };
                     if let Some((idx, e)) = meta.in_entry(&varname)
                         && e.needs_wildcard
@@ -698,15 +771,28 @@ impl ActionHandle {
                 } = inst
                 {
                     let varname = obj.borrow().var_name().to_string();
-                    let obj_dict = obj.borrow().to_dict();
-                    let (st_tx_literal, handle) = match io {
-                        ObjectIO::Output => exe_ctx.tx_builder.insert(&mut exe_ctx.bld, &obj_dict),
-                        ObjectIO::Input => exe_ctx.tx_builder.delete(&mut exe_ctx.bld, &obj_dict),
+                    let raw_obj_dict = obj.borrow().to_dict();
+                    // tx_builder.insert returns a new dictionary with
+                    // an added identity entry, other cases stick with
+                    // the raw dictionary.
+                    let (obj_dict, st_tx_literal, handle) = match io {
+                        ObjectIO::Output => {
+                            exe_ctx.tx_builder.insert(&mut exe_ctx.bld, &raw_obj_dict)
+                        }
+                        ObjectIO::Input => {
+                            let (st, h) =
+                                exe_ctx.tx_builder.delete(&mut exe_ctx.bld, &raw_obj_dict);
+                            (raw_obj_dict, st, h)
+                        }
                         ObjectIO::Mutate => {
                             let obj0 = original
                                 .as_ref()
                                 .expect("Mutate records a pre-mutation dict");
-                            exe_ctx.tx_builder.mutate(&mut exe_ctx.bld, &obj_dict, obj0)
+                            let (st, h) =
+                                exe_ctx
+                                    .tx_builder
+                                    .mutate(&mut exe_ctx.bld, &raw_obj_dict, obj0);
+                            (raw_obj_dict, st, h)
                         }
                     };
                     let post_ts = inst_chain_ts[i].expect("Object inst has parent_ts");
@@ -748,12 +834,9 @@ impl ActionHandle {
             Some((chain_steps_array.as_ref()?, slot as i64).into())
         };
 
-        // Wrap each pending Tx event with its anchors. Arg layout
-        // (per txlib):
-        //   TxInsert(chain, prev_chain, new, type)
-        //   TxDelete(chain, prev_chain, old, type)
-        //   TxMutate(chain, prev_chain, new, old, type)
-        // `type` is always literal (the @self_predicate ref).
+        // Each pending Tx event is first proved with literal args. We then use
+        // ReplaceValueWithEntry to replace those literal args with entries from
+        // the `chain_steps`, `in`, `out`, and `initials` records as appropriate.
         let mut events: Vec<EventData> = Vec::new();
         let mut event_sts: Vec<Statement> = Vec::new();
         {
@@ -782,7 +865,14 @@ impl ActionHandle {
                 let prev_chain_anchor = chain_step_anchor(pre_ts);
                 let replacements: Vec<Option<OperationArg>> = match io {
                     ObjectIO::Output => {
-                        vec![chain_anchor, prev_chain_anchor, new_anchor, None]
+                        let initial_anchor = initials_anchor(varname);
+                        vec![
+                            chain_anchor,
+                            prev_chain_anchor,
+                            initial_anchor,
+                            new_anchor,
+                            None,
+                        ]
                     }
                     ObjectIO::Input => {
                         vec![chain_anchor, prev_chain_anchor, old_anchor, None]
@@ -1437,10 +1527,20 @@ pub struct ActionMeta {
     total_outputs: Vec<ActionObjectRef>,
     pub(crate) in_entries: Vec<EntryShape>,
     pub(crate) out_entries: Vec<EntryShape>,
+    /// The Output varnames that get a slot in the `<Action>Initials`
+    /// record, in declaration order (the order of their slots). `None`
+    /// when there is no such record: an Intro that consumes an output's
+    /// pre-identity dict whole forces that dict to stay a literal
+    /// wildcard, since Intro args can't be anchored.
+    pub(crate) initials_entries: Option<Vec<String>>,
     /// `var_state["chain"].ts` for this action — i.e. the count of
     /// txlib events recorded by this action (Object insts + sub-action
     /// calls). Drives whether the chain is packed into `<Action>Chain`.
     pub(crate) chain_max_ts: usize,
+    /// Per-var max ts, with the Output identity-stamp bump applied. The
+    /// cached result of `ActionContext::max_ts_per_var`, so `collapsed_at`
+    /// need not recompute it or take it as an argument.
+    var_max_ts: HashMap<String, usize>,
 }
 
 impl ActionMeta {
@@ -1480,6 +1580,16 @@ impl ActionMeta {
             .map(|(p, e)| (p + 1, e))
     }
 
+    /// 1-based slot for `varname` in the `<Action>Initials` record
+    /// (slot 0 is `_pad`), if such a record exists for this action.
+    pub(crate) fn initials_slot(&self, varname: &str) -> Option<usize> {
+        self.initials_entries
+            .as_ref()?
+            .iter()
+            .position(|name| name == varname)
+            .map(|p| p + 1)
+    }
+
     pub(crate) fn out_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
         self.out_entries
             .iter()
@@ -1488,29 +1598,38 @@ impl ActionMeta {
             .map(|(p, e)| (p + 1, e))
     }
 
-    /// Side the Object Ref pins at this ts, when the matching side is
-    /// collapsed. Callers render/anchor as `<side>.<entry>` on a
-    /// `Some(side)` answer; on `None` the Ref falls back to a scalar
-    /// wildcard (or whatever else).
-    pub(crate) fn collapsed_at(
-        &self,
-        varname: &str,
-        ts: usize,
-        max_ts: usize,
-    ) -> Option<fmt_podlang::Side> {
+    pub(crate) fn max_ts(&self, varname: &str) -> usize {
+        *self
+            .var_max_ts
+            .get(varname)
+            .expect("varname is a var of this action")
+    }
+
+    /// At a given ts, an object's state might be "collapsed" into a
+    /// record (in, out, or initials) rather than held in its own
+    /// wildcard. Returns which record, or None if it is not collapsed
+    /// at this ts.
+    pub(crate) fn collapsed_at(&self, varname: &str, ts: usize) -> Option<fmt_podlang::Collapse> {
+        let max_ts = self.max_ts(varname);
         if ts == 0
             && self
                 .in_entry(varname)
                 .is_some_and(|(_, e)| !e.needs_wildcard)
         {
-            return Some(fmt_podlang::Side::In);
+            return Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::In));
         }
         if ts == max_ts
             && self
                 .out_entry(varname)
                 .is_some_and(|(_, e)| !e.needs_wildcard)
         {
-            return Some(fmt_podlang::Side::Out);
+            return Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::Out));
+        }
+        // If we have an "initials" record for this var, and we are at
+        // the penultimate ts, then the var must be collapsed into
+        // initials, for passing to TxInsert.
+        if ts + 1 == max_ts && self.initials_slot(varname).is_some() {
+            return Some(fmt_podlang::Collapse::Initials);
         }
         None
     }
@@ -1523,6 +1642,7 @@ impl ActionMeta {
         let mut meta = Self {
             name: ctx.name.clone(),
             chain_max_ts: ctx.var_state.get("chain").map(|s| s.ts).unwrap_or(0),
+            var_max_ts: ctx.max_ts_per_var(),
             ..Self::default()
         };
         for inst in &ctx.insts {
@@ -1552,7 +1672,7 @@ impl ActionMeta {
                 _ => {}
             }
         }
-        let (needs_in, needs_out) = compute_wildcard_needs(ctx);
+        let (needs_in, needs_out, blocks_initials_pack) = compute_wildcard_needs(ctx);
         for r in &meta.object_refs {
             if r.io.consumes() {
                 meta.in_entries.push(EntryShape {
@@ -1567,18 +1687,34 @@ impl ActionMeta {
                 });
             }
         }
+        // Give the action an initials record iff it has Output objects and none
+        // is blocked from anchoring (blocks_initials_pack, from
+        // compute_wildcard_needs); otherwise leave it None.
+        let output_names: Vec<String> = meta
+            .object_refs
+            .iter()
+            .filter(|r| r.io == ObjectIO::Output)
+            .map(|r| r.varname.clone())
+            .collect();
+        let any_blocked = output_names
+            .iter()
+            .any(|name| blocks_initials_pack.contains(name));
+        meta.initials_entries = (!output_names.is_empty() && !any_blocked).then_some(output_names);
         Ok(meta)
     }
 }
 
-/// Walk an action's Insts and determine, for each direct Object,
-/// whether its `in` entry and/or `out` entry needs a wildcard. Returns
-/// (needs_in, needs_out) as sets of Object var names.
-///
-/// An Object's pre-form sits at ts=0 (Input/Mutate); its post-form sits
-/// at ts=max (Output/Mutate). Refs at intermediate ts already use
-/// their own wildcard and don't influence either decision.
-fn compute_wildcard_needs(ctx: &ActionContext) -> (HashSet<String>, HashSet<String>) {
+/// An Object's in/out/initials form normally collapses into the matching
+/// record and needs no wildcard of its own. A body reference can defeat
+/// that, keeping the form as an explicit wildcard instead; this walks the
+/// body and returns the Objects forced open on each side: `needs_in`,
+/// `needs_out`, and `blocks_initials_pack` (an Output's pre-identity form,
+/// reachable only by an Intro, so forcing it open also disables initials
+/// packing for the action). The per-reference rules are in the `check`
+/// closure below.
+fn compute_wildcard_needs(
+    ctx: &ActionContext,
+) -> (HashSet<String>, HashSet<String>, HashSet<String>) {
     let mut object_io: HashMap<String, ObjectIO> = HashMap::new();
     for inst in &ctx.insts {
         if let Inst::Object { io, obj, .. } = inst {
@@ -1586,13 +1722,10 @@ fn compute_wildcard_needs(ctx: &ActionContext) -> (HashSet<String>, HashSet<Stri
         }
     }
     let mut current_ts: HashMap<String, usize> = object_io.keys().map(|v| (v.clone(), 0)).collect();
-    let max_ts: HashMap<String, usize> = ctx
-        .var_state
-        .iter()
-        .map(|(k, v)| (k.clone(), v.ts))
-        .collect();
+    let max_ts = ctx.max_ts_per_var();
     let mut needs_in: HashSet<String> = HashSet::new();
     let mut needs_out: HashSet<String> = HashSet::new();
+    let mut blocks_initials_pack: HashSet<String> = HashSet::new();
 
     // Force the wildcard on whichever side(s) the Object Ref pins.
     // Sub-field anchored refs (`var.key.is_some()`) always count
@@ -1605,7 +1738,8 @@ fn compute_wildcard_needs(ctx: &ActionContext) -> (HashSet<String>, HashSet<Stri
                  whole_dict_pins: bool,
                  cur: &HashMap<String, usize>,
                  needs_in: &mut HashSet<String>,
-                 needs_out: &mut HashSet<String>| {
+                 needs_out: &mut HashSet<String>,
+                 blocks_initials_pack: &mut HashSet<String>| {
         let arg = arg.borrow();
         let VarOrValue::Var(var) = &*arg else {
             return;
@@ -1620,11 +1754,16 @@ fn compute_wildcard_needs(ctx: &ActionContext) -> (HashSet<String>, HashSet<Stri
         let mts = *max_ts.get(&var.name).unwrap_or(&0);
         let at_in = matches!(io, ObjectIO::Input | ObjectIO::Mutate) && ts == 0;
         let at_out = matches!(io, ObjectIO::Output | ObjectIO::Mutate) && ts == mts;
+        let at_initials =
+            matches!(io, ObjectIO::Output) && var.key.is_none() && whole_dict_pins && ts + 1 == mts;
         if at_in {
             needs_in.insert(var.name.clone());
         }
         if at_out {
             needs_out.insert(var.name.clone());
+        }
+        if at_initials {
+            blocks_initials_pack.insert(var.name.clone());
         }
     };
 
@@ -1632,30 +1771,58 @@ fn compute_wildcard_needs(ctx: &ActionContext) -> (HashSet<String>, HashSet<Stri
         match inst {
             Inst::Object { .. } | Inst::SubAction { .. } => {}
             Inst::Update { obj, value, .. } => {
-                check(value, false, &current_ts, &mut needs_in, &mut needs_out);
+                check(
+                    value,
+                    false,
+                    &current_ts,
+                    &mut needs_in,
+                    &mut needs_out,
+                    &mut blocks_initials_pack,
+                );
                 if let Some(ts) = current_ts.get_mut(obj) {
                     *ts += 1;
                 }
             }
             Inst::Set { kvs, .. } => {
                 for (_k, v) in kvs {
-                    check(v, false, &current_ts, &mut needs_in, &mut needs_out);
+                    check(
+                        v,
+                        false,
+                        &current_ts,
+                        &mut needs_in,
+                        &mut needs_out,
+                        &mut blocks_initials_pack,
+                    );
                 }
             }
             Inst::Statement { args, .. } => {
                 for arg in args {
-                    check(arg, false, &current_ts, &mut needs_in, &mut needs_out);
+                    check(
+                        arg,
+                        false,
+                        &current_ts,
+                        &mut needs_in,
+                        &mut needs_out,
+                        &mut blocks_initials_pack,
+                    );
                 }
             }
             Inst::Intro { args, .. } => {
                 for arg in args {
-                    check(arg, true, &current_ts, &mut needs_in, &mut needs_out);
+                    check(
+                        arg,
+                        true,
+                        &current_ts,
+                        &mut needs_in,
+                        &mut needs_out,
+                        &mut blocks_initials_pack,
+                    );
                 }
             }
         }
     }
 
-    (needs_in, needs_out)
+    (needs_in, needs_out, blocks_initials_pack)
 }
 
 /// Collected metadata that declares a Class

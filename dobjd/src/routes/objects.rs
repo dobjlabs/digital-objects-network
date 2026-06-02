@@ -4,7 +4,7 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use wire_types::{ObjectSummary, ObjectsDirInfo};
+use wire_types::{ImportObjectRequest, ObjectSummary, ObjectsDirInfo};
 
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -30,5 +30,21 @@ pub async fn inspect_object(
         tokio::task::spawn_blocking(move || driver.read_object(&PathBuf::from(&file_name)))
             .await
             .map_err(|err| anyhow::anyhow!("inspect_object task panicked: {err}"))??;
+    Ok(Json(summary))
+}
+
+/// `POST /objects/import` — adopt an external `.dobj` (one not produced by
+/// this driver, e.g. from outside `~/.dobj/`) into local inventory. Body is `{ "dobj": "<json>" }`;
+/// the driver validates class identity + on-chain grounding and files it
+/// under a canonical name. Returns the filed object's summary. 409 if the
+/// object is already held or already spent on-chain.
+pub async fn import_object(
+    State(state): State<AppState>,
+    Json(req): Json<ImportObjectRequest>,
+) -> ApiResult<Json<ObjectSummary>> {
+    let driver = state.driver.clone();
+    let summary = tokio::task::spawn_blocking(move || driver.import_object(&req.dobj))
+        .await
+        .map_err(|err| anyhow::anyhow!("import_object task panicked: {err}"))??;
     Ok(Json(summary))
 }

@@ -29,6 +29,7 @@ Two flavors of commands.
 | `feasibility <plugin::action>`                  | `GET /actions/{id}/feasibility`                                            |
 | `state-root`                                    | `GET /state-root`                                                          |
 | `objects-dir`                                   | `GET /objects/dir`                                                         |
+| `import <path>`                                 | `POST /objects/import` (reads the `.dobj` file locally, sends contents)    |
 | `settings get`                                  | `GET /settings`                                                            |
 | `settings set --synchronizer URL --relayer URL` | `PUT /settings` (omitted flags left unchanged)                             |
 | `run <action> [paths...]`                       | `POST /actions/run` + filters `/events` for matching `run-action-progress` |
@@ -80,8 +81,7 @@ dobj inventory
 ```
 
 The release workflow ships `dobj-{target}.tar.gz` per platform — just
-the binary, no shared lib bundling needed (it's a pure HTTP client with
-no SCIP dependency).
+the binary, no shared lib bundling needed (it's a pure HTTP client).
 
 ## End-to-end example
 

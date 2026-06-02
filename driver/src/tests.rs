@@ -134,6 +134,9 @@ impl PayloadBuilder for MockPayloadBuilder {
 struct MockSynchronizer {
     fail_wait: bool,
     state: TestState,
+    membership_grounded: HashSet<Hash>,
+    membership_nullifiers: HashSet<Hash>,
+    fail_membership: bool,
 }
 
 impl SynchronizerClient for MockSynchronizer {
@@ -165,9 +168,12 @@ impl SynchronizerClient for MockSynchronizer {
         _tx_hashes: &[Hash],
         _nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership> {
+        if self.fail_membership {
+            return Err(anyhow!("synchronizer unreachable"));
+        }
         Ok(SynchronizerMembership {
-            grounded_txs: HashSet::new(),
-            on_chain_nullifiers: HashSet::new(),
+            grounded_txs: self.membership_grounded.clone(),
+            on_chain_nullifiers: self.membership_nullifiers.clone(),
         })
     }
 
@@ -199,13 +205,13 @@ impl RelayerClient for MockRelayer {
         _relayer_api_url: &str,
         _payload_bytes: &[u8],
         _client_ref: Option<String>,
-    ) -> Result<relayer::api_types::SubmitProofResponse> {
+    ) -> Result<wire_types::relayer::SubmitProofResponse> {
         if self.fail_submit {
             return Err(anyhow!("relayer submit failed"));
         }
-        Ok(relayer::api_types::SubmitProofResponse {
+        Ok(wire_types::relayer::SubmitProofResponse {
             job_id: "job-1".to_string(),
-            status: relayer::api_types::JobStatus::Queued,
+            status: wire_types::relayer::JobStatus::Queued,
             tx_final: "0x0".to_string(),
             state_root_hash: "0x0".to_string(),
             attempt_count: 0,
@@ -381,4 +387,138 @@ fn test_execute_keeps_files_after_relayer_accepts() {
         .find(|e| e.file_name != "log_1.dobj")
         .unwrap();
     assert_eq!(output.record.status, ObjectStatus::Unknown);
+}
+
+// ---------------------------------------------------------------------------
+// import_object
+// ---------------------------------------------------------------------------
+
+/// Build a real Log object and return its serialized `.dobj` JSON plus the
+/// source-tx hash and nullifier, so a test can configure `MockSynchronizer`
+/// membership to drive `import_object` down each path.
+fn make_importable_log() -> (String, Hash, Hash) {
+    ensure_extra_pod_deserializers_registered();
+    let catalog = make_catalog();
+    let outputs = catalog
+        .execute_action(craft_basics("FindLog"), dummy_grounding_witness(), vec![])
+        .unwrap();
+    let spendable = outputs.obj(0);
+    let id = format!("{:#}", spendable.obj.commitment());
+    let nullifier = txlib::object_nullifier_hash(&spendable.obj).unwrap();
+    let record = ObjectRecord {
+        id,
+        class: craft_basics("Log"),
+        status: ObjectStatus::Live,
+        tx_hash: None,
+        obj: spendable.obj,
+        evidence: spendable.evidence,
+    };
+    let source_tx = record.evidence.tx_final;
+    let json = serde_json::to_string(&record).unwrap();
+    (json, source_tx, nullifier)
+}
+
+fn import_driver(
+    grounded: HashSet<Hash>,
+    nullifiers: HashSet<Hash>,
+    fail_membership: bool,
+) -> Driver {
+    let paths = temp_paths();
+    ensure_store_dirs(&paths).unwrap();
+    let deps = DriverDeps {
+        catalog: Arc::new(make_catalog()),
+        synchronizer: Arc::new(MockSynchronizer {
+            membership_grounded: grounded,
+            membership_nullifiers: nullifiers,
+            fail_membership,
+            ..MockSynchronizer::default()
+        }),
+        relayer: Arc::new(MockRelayer::default()),
+        payload_builder: Arc::new(MockPayloadBuilder),
+    };
+    Driver::open(paths, deps).unwrap()
+}
+
+#[test]
+fn test_import_grounded_object_is_live() {
+    let (json, source_tx, _nullifier) = make_importable_log();
+    let driver = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+    let summary = driver.import_object(&json).unwrap();
+    assert_eq!(summary.class, craft_basics("Log"));
+    assert_eq!(summary.status, ObjectStatus::Live);
+    assert!(summary.file_name.starts_with("craft-basics__log_"));
+}
+
+#[test]
+fn test_import_ungrounded_object_is_unknown() {
+    let (json, _source_tx, _nullifier) = make_importable_log();
+    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let summary = driver.import_object(&json).unwrap();
+    assert_eq!(summary.status, ObjectStatus::Unknown);
+}
+
+#[test]
+fn test_import_spent_object_is_rejected() {
+    let (json, source_tx, nullifier) = make_importable_log();
+    let driver = import_driver(
+        HashSet::from([source_tx]),
+        HashSet::from([nullifier]),
+        false,
+    );
+    let err = driver.import_object(&json).unwrap_err();
+    assert!(
+        err.to_string().contains("spent"),
+        "expected already-spent error, got: {err}"
+    );
+}
+
+#[test]
+fn test_import_duplicate_is_rejected() {
+    let (json, source_tx, _nullifier) = make_importable_log();
+    let driver = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+    driver.import_object(&json).unwrap();
+    let err = driver.import_object(&json).unwrap_err();
+    assert!(
+        err.to_string().contains("already in inventory"),
+        "expected duplicate error, got: {err}"
+    );
+}
+
+#[test]
+fn test_import_sync_unreachable_falls_back_to_unknown() {
+    let (json, _source_tx, _nullifier) = make_importable_log();
+    let driver = import_driver(HashSet::new(), HashSet::new(), true);
+    let summary = driver.import_object(&json).unwrap();
+    assert_eq!(summary.status, ObjectStatus::Unknown);
+}
+
+#[test]
+fn test_import_unknown_class_is_rejected() {
+    let (json, _source_tx, _nullifier) = make_importable_log();
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    value["class"]["name"] = serde_json::Value::String("Diamond".to_string());
+    let tampered = serde_json::to_string(&value).unwrap();
+    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let err = driver.import_object(&tampered).unwrap_err();
+    assert!(
+        err.to_string().contains("unknown class"),
+        "expected unknown-class error, got: {err}"
+    );
+}
+
+#[test]
+fn test_import_class_hash_mismatch_is_rejected() {
+    // Forge a real Log's class to craft-basics::Wood: the qualified name is a
+    // known class, but the pod's `type` hash is IsLog, so the cryptographic
+    // hash check must fire — the same guarantee execute relies on.
+    let (json, _source_tx, _nullifier) = make_importable_log();
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    value["class"]["name"] = serde_json::Value::String("Wood".to_string());
+    let tampered = serde_json::to_string(&value).unwrap();
+    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let err = driver.import_object(&tampered).unwrap_err();
+    assert!(
+        err.to_string().contains("class hash mismatch"),
+        "expected hash-mismatch error, got: {err}"
+    );
 }

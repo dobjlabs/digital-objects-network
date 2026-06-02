@@ -30,7 +30,7 @@ app-gui/
 
 Frontend panels (`src/features/`):
 
-- `InventoryPanel` — local live/nullified objects, drag source
+- `InventoryPanel` — local live/nullified objects, drag source, `+ Import .dobj` button
 - `ActionGrid` — action catalog + search/filter
 - `ContextPanel` — selected object/action details, input binding, run button
 - `ProofRunnerPanel` — proof-run status, CPU stats, global state root
@@ -52,6 +52,7 @@ provides things the browser fundamentally can't do.
 | `getGlobalStateRoot`                 | `GET /state-root`                          |
 | `getObjectsDir`                      | `GET /objects/dir`                         |
 | `getAppSettings` / `saveAppSettings` | `GET` / `PUT /settings`                    |
+| `importObject`                       | `POST /objects/import`                     |
 | `runAction`                          | `POST /actions/run`                        |
 | `listenRunActionProgress`            | `GET /events` (SSE, `run-action-progress`) |
 

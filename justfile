@@ -39,6 +39,19 @@ dobjd:
 dev: ensure-plugins ensure-commands ensure-mcp
     mprocs --config mprocs.yaml
 
+# Like `just dev`, but without spawning the local synchronizer + relayer —
+# point dobjd at the hosted public endpoints instead. Faster spin-up when
+# you don't need to fork the chain locally and don't want a local Postgres.
+# Uses the standard 7717 default (same as `just dev`).
+dev-remote: ensure-remote-settings ensure-plugins ensure-mcp
+    mprocs --config mprocs.remote.yaml
+
+# Idempotently point ~/.dobj/settings.json at the hosted synchronizer + relayer
+ensure-remote-settings:
+    @mkdir -p ~/.dobj
+    @printf '{"synchronizerApiUrl":"http://18.217.144.33:3000","relayerApiUrl":"http://18.217.144.33:3200"}\n' > ~/.dobj/settings.json
+    @echo "~/.dobj/settings.json → hosted sync + relayer"
+
 # Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
 # `just dev` so a fresh clone (or a `just reset`-ed dev env) boots cleanly.
 ensure-plugins:
@@ -139,3 +152,8 @@ install-commands:
     for dir in commands/*/; do
         install_dir "$dir"
     done
+
+# Run the dobj `cli` CLI with arbitrary args. Example:
+#   just cli inspect-action craft-basics::FindLog
+cli *ARGS:
+    cargo run -p cli --release -- {{ARGS}}

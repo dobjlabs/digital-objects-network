@@ -310,7 +310,9 @@ impl Db {
 /// Decode a SQL row into `RelayJob` with explicit integer range checks.
 fn row_to_job(row: sqlx::postgres::PgRow) -> Result<RelayJob> {
     let status_raw: &str = row.get("status");
-    let status = JobStatus::from_db_str(status_raw)?;
+    // wire-types' `from_db_str` returns `Result<_, String>` to stay
+    // anyhow-free; map into `anyhow::Error` here at the server-side boundary.
+    let status = JobStatus::from_db_str(status_raw).map_err(anyhow::Error::msg)?;
 
     let attempt_count_i32: i32 = row.get("attempt_count");
     let attempt_count: u32 = attempt_count_i32

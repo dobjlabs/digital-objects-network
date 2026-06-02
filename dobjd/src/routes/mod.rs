@@ -31,6 +31,7 @@ pub fn router(app_state: AppState) -> Router {
         .route("/inventory", get(inventory::load_inventory))
         .route("/state-root", get(state::get_state_root))
         .route("/objects/dir", get(objects::get_objects_dir))
+        .route("/objects/import", post(objects::import_object))
         .route("/objects/{file_name}", get(objects::inspect_object))
         .route("/classes", get(classes::list_classes))
         .route("/classes/{name}", get(classes::inspect_class))

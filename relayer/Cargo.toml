@@ -18,6 +18,7 @@ base64 = "0.22.1"
 uuid = { version = "1.18.1", features = ["v4", "serde"] }
 async-trait = "0.1.89"
 common = { path = "../common" }
+wire-types = { workspace = true }
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres"] }
 url = { version = "2.3.1" }
 

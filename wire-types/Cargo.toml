@@ -12,7 +12,14 @@ edition = "2024"
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { version = "1", optional = true }
+# `chain` feature only — embeds a pod2 MerkleProof in two synchronizer
+# response types. Server code and the driver enable this; cli/mcp don't.
+pod2 = { workspace = true, optional = true }
 
 [features]
 default = []
 schemars = ["dep:schemars"]
+# Opt-in extension that adds proof-bearing synchronizer response types
+# (SourceTxProofResponse, GroundingWitnessResponse). Pulls pod2 — heavy
+# Rust dep, but cross-platform (no C deps), unlike synchronizer's rocksdb.
+chain = ["dep:pod2"]

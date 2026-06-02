@@ -24,6 +24,7 @@ import type {
   CpuSample,
   InventoryObjectPayload,
   ObjectRecordPayload,
+  ObjectSummaryPayload,
   RunActionInput,
   RunActionProgress,
   RunActionResult,
@@ -35,6 +36,7 @@ export type {
   CpuSample,
   InventoryObjectPayload,
   ObjectRecordPayload,
+  ObjectSummaryPayload,
   QualifiedNamePayload,
   RunActionInput,
   RunActionProgress,
@@ -124,6 +126,20 @@ export function runAction(input: RunActionInput): Promise<RunActionResult> {
     // read timeout. SSE progress events are how we detect hangs here.
     timeoutMs: null,
   }).then(httpJson<RunActionResult>);
+}
+
+// Import an external `.dobj` (one not produced by this driver). The body
+// is the raw file contents as a string; the driver validates + files it and
+// returns the object summary. 409 if it's already held or already spent.
+export function importObject(dobj: string): Promise<ObjectSummaryPayload> {
+  return dobjdFetch("/objects/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dobj }),
+    // Import does one synchronizer round-trip; allow more than the default
+    // read timeout, but not unbounded like /actions/run.
+    timeoutMs: 30_000,
+  }).then(httpJson<ObjectSummaryPayload>);
 }
 
 export function getObjectsDir(): Promise<string> {

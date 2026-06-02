@@ -4,7 +4,19 @@
 //! parameter, SSE event, CLI arg) belongs here — but only if it has no
 //! logic that depends on ZK proofs or chain state. Keeping this crate
 //! dependency-light is the entire point: `cli` and `mcp` should be able
-//! to use it without compiling pod2/plonky2/rocksdb.
+//! to use it without compiling pod2/plonky2/rocksdb/sqlx.
+//!
+//! ## Submodules
+//!
+//! - [`relayer`] — DTOs for the relayer's HTTP API. No heavy deps.
+//! - [`synchronizer`] — DTOs for the synchronizer's HTTP API. The bulk
+//!   are pure serde; the proof-bearing types (`SourceTxProofResponse`,
+//!   `GroundingWitnessResponse`) live behind the `chain` feature because
+//!   they embed a pod2 `MerkleProof`. Server crates and the driver enable
+//!   the feature; `cli` and `mcp` don't.
+
+pub mod relayer;
+pub mod synchronizer;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -180,6 +192,20 @@ pub struct InventoryObject {
     /// Application-layer fields (e.g. `durability`, `key`, `work`).
     /// Same shape as [`ObjectSummary::fields`].
     pub fields: HashMap<String, serde_json::Value>,
+}
+
+/// `POST /objects/import` body — the raw JSON contents of an external `.dobj`
+/// file, one not produced by this driver (e.g. from outside `~/.dobj/`). The driver
+/// validates the object's class identity and on-chain grounding, then files
+/// it into local inventory under a canonical name derived from its
+/// commitment. Consumers handle their own file I/O and pass the bytes as a
+/// string. The import result is a plain [`ObjectSummary`] whose `status`
+/// reflects grounding (`live` if the source tx is canonical, else `unknown`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ImportObjectRequest {
+    pub dobj: String,
 }
 
 // ===========================================================================

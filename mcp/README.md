@@ -63,6 +63,7 @@ production implementation lives in
 | `list_classes`                     | All object classes with live counts and related actions       |
 | `get_state_root`                   | Current global state root from the synchronizer               |
 | `inspect_object`                   | Full object detail: fields, class, liveness, predicate        |
+| `import_object_file`               | Adopt an external `.dobj` from a local path into inventory    |
 | `inspect_class`                    | Class predicate definition and related actions                |
 | `run_action`                       | Execute a crafting action (blocks for proof generation)       |
 | `check_feasibility`                | Whether an action can run with current inventory              |

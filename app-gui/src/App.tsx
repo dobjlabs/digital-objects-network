@@ -34,6 +34,7 @@ function App() {
   const contextSelection = useStore((state) => state.contextSelection);
   const showNullifiedItems = useStore((state) => state.showNullifiedItems);
   const hydrateData = useStore((state) => state.hydrateData);
+  const importObject = useStore((state) => state.importObject);
   const selectObject = useStore((state) => state.selectObject);
   const selectAction = useStore((state) => state.selectAction);
   const clearSelection = useStore((state) => state.clearSelection);
@@ -252,6 +253,7 @@ function App() {
             onSelectObject={selectObject}
             onToggleNullified={toggleNullified}
             onOpenObjectsDir={handleOpenObjectsDir}
+            onImportObject={importObject}
           />
 
           <div className="main-column">
