@@ -346,7 +346,7 @@ impl Driver {
     ///
     /// Validation:
     /// - the `class` must be one this driver's catalog knows, and the object's
-    ///   on-chain `obj["type"]` predicate hash must equal that class's hash
+    ///   committed `obj["type"]` predicate hash must equal that class's hash
     ///   (the same belt-and-suspenders check `execute` runs on its inputs);
     /// - the object must not already be in inventory (live or nullified);
     /// - the object's nullifier must not already be spent on-chain.
@@ -360,7 +360,7 @@ impl Driver {
             DriverError::InvalidInput(format!("could not parse .dobj contents: {err}"))
         })?;
 
-        // 1. Class must be known, and the pod's on-chain `type` hash must
+        // 1. Class must be known, and the pod's committed `type` hash must
         //    match the catalog's class hash. A mismatch on either is fatal —
         //    the second check catches a `class` label that drifted from the
         //    object's actual pod-level identity.
