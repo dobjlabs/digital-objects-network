@@ -6,8 +6,8 @@ This document walks through the lifecycle of a Digital Object from creation to c
 
 When an action creates a new object, it:
 
-1. Builds a fresh dictionary with the object's fields (e.g. `{key: 0xabc, durability: 100}` for a WoodPick).
-2. Generates a ZK proof that this dictionary satisfies the class predicate (e.g. `IsWood(state) = AND(CraftWood(state, log))`). The proof includes verification that the input `log` was itself valid.
+1. Builds a fresh dictionary with the object's fields (e.g. `{key: 0xabc, durability: 5}` for a DrillBit).
+2. Generates a ZK proof that this dictionary satisfies the class predicate (e.g. `IsIngot(state) = AND(CraftIngot(state, iron))`). The proof includes verification that the input `iron` was itself valid.
 3. Records the new object in a transaction via `TxInserted`, adding it to the transaction's live set.
 4. The object appears in inventory as `live: true` with its fields visible.
 
@@ -24,7 +24,7 @@ When you inspect a live object, you see:
 
 ## 3. Mutation
 
-Some actions mutate objects rather than consuming them (e.g. using a pickaxe decrements its durability). A mutation:
+Some actions mutate objects rather than consuming them (e.g. using a DrillBit decrements its durability, touching a MachineII proves possession without spending it). A mutation:
 
 1. Proves the current state is valid.
 2. Modifies fields (e.g. `DictUpdate(new, old, "durability", new_value)`).
@@ -36,7 +36,7 @@ The old object ID and the new object ID are different (the ID is a hash of the s
 
 ## 4. Consumption
 
-When an object is consumed as input to an action (e.g. a Log consumed by CraftWood):
+When an object is consumed as input to an action (e.g. an Iron consumed by CraftIngot):
 
 1. The action proves the input is valid.
 2. A nullifier is published for the input object.

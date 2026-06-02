@@ -2,8 +2,17 @@ name: Release
 
 # Single workflow producing every bitcraft release artifact: the daemon
 # (`dobjd`), CLI (`dobj`), Claude Desktop stdio bridge (`bitcraft-mcp-proxy`),
-# and the bundled `craft-basics` plugin. Triggered on `v*` tags or via the
-# Actions UI with a tag name.
+# and one bundled plugin. Triggered on `v*` tags or via the Actions UI with
+# a tag name.
+#
+# Which plugin under `plugins/` ships is controlled by the `EPISODE` env var
+# at the top of this file (default: `episode-1`). To release a DIFFERENT
+# plugin on a tag push, edit that one value. To release a different plugin
+# from a one-off manual run without touching the file, dispatch the workflow
+# via the Actions UI and set the `episode` input — that overrides the
+# default for that run only. The `plugin` job uses `$EPISODE` everywhere
+# (build path, artifact glob, error messages, release-notes body), so no
+# other code needs to move.
 #
 # On macOS, every native binary and dylib is codesigned + notarized so users
 # get an online verification on first run instead of the "could not verify
@@ -21,6 +30,10 @@ on:
         description: "Release tag to publish (e.g. v0.1.0)"
         required: true
         type: string
+      episode:
+        description: "Plugin under plugins/ to bundle in this release (leave blank for default)"
+        required: false
+        type: string
 
 # Single sources of truth — every job and the release-notes template draws
 # from here so a value change is one edit.
@@ -28,6 +41,12 @@ env:
   # `inputs.tag_name` is required:true on workflow_dispatch and empty on
   # push:tags, so the `||` falls through to the tag ref cleanly.
   RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
+  # Which plugin's `.pexe` is bundled in the release. Override per-run via
+  # `workflow_dispatch.inputs.episode`; tag pushes use the default below.
+  # The `plugin` job builds `plugins/$EPISODE/` and ships the resulting
+  # `<EPISODE>.pexe` artifact. Other directories under `plugins/` are not
+  # built or uploaded.
+  EPISODE: ${{ inputs.episode || 'episode-1' }}
   # Hosted defaults baked into dobjd at compile time (see
   # driver/src/settings.rs::default_settings) AND surfaced in the release
   # notes via envsubst. Change here, both move together.
@@ -523,16 +542,27 @@ jobs:
           # toolchain version comes from rust-toolchain.toml.
           cache-shared-key: plugin
 
-      - name: Build craft-basics.pexe
-        run: cargo run --release --locked -p pexe -- build plugins/craft-basics
+      - name: Validate plugin directory exists
+        # Catch typos in EPISODE before kicking off the (slow) Rust build.
+        run: |
+          set -euo pipefail
+          if [ ! -d "plugins/$EPISODE" ]; then
+            echo "::error::plugins/$EPISODE/ does not exist. Available plugins:"
+            ls -1 plugins/ | sed 's/^/  /' >&2
+            exit 1
+          fi
+          echo "shipping plugin: $EPISODE"
+
+      - name: Build ${{ env.EPISODE }}.pexe
+        run: cargo run --release --locked -p pexe -- build "plugins/$EPISODE"
 
       - name: Locate artifact
         id: find
         run: |
           set -euo pipefail
-          PEXE=$(find target -path '*pexe*' -name 'craft-basics*.pexe' | head -1)
+          PEXE=$(find target -path '*pexe*' -name "${EPISODE}*.pexe" | head -1)
           if [ -z "$PEXE" ]; then
-            echo "::error::craft-basics.pexe not produced"
+            echo "::error::${EPISODE}.pexe not produced"
             exit 1
           fi
           echo "pexe=$PEXE" >> "$GITHUB_OUTPUT"
@@ -544,6 +574,78 @@ jobs:
           # envsubst's first arg is a whitelist of `$VAR` names to substitute
           # — single quotes are intentional (shellcheck SC2016 warns by
           # default but it's wrong here, the names must NOT expand in shell).
+          # The `$EPISODE` slot is what makes "switching the released plugin"
+          # propagate to the release notes' artifact list without editing
+          # the template.
+          # shellcheck disable=SC2016
+          envsubst '$DEFAULT_SYNCHRONIZER_API_URL $DEFAULT_RELAYER_API_URL $EPISODE' \
+            < .github/release-notes.md.tpl > release-notes.md
+
+      - name: Upload to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.find.outputs.pexe }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          draft: true
+          fail_on_unmatched_files: true
+          body_path: release-notes.md
+
+  commands:
+    # Packages every `commands/<name>/` subdirectory as `bitcraft-<name>/`
+    # inside `bitcraft-commands.tar.gz`. The install SKILL.md fetches this
+    # tarball and extracts into `~/.claude/skills/`, so the agent skills (one
+    # SKILL.md per command, plus any sibling files like preview/index.html)
+    # ship alongside the daemon + plugin.
+    #
+    # No Rust needed — pure file packaging.
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage bitcraft-commands.tar.gz
+        run: |
+          set -euo pipefail
+          PACK="$RUNNER_TEMP/commands"
+          mkdir -p "$PACK"
+
+          # Mirror the on-disk layout `~/.claude/skills/` expects: each
+          # `commands/<name>/` becomes `bitcraft-<name>/` in the tarball.
+          # Copies SKILL.md plus every sibling file (e.g. preview/index.html,
+          # help/format_help.py, create-command/references/*).
+          if [ ! -d commands ]; then
+            echo "::error::commands/ directory not found at repo root"
+            exit 1
+          fi
+          for dir in commands/*/; do
+            name=$(basename "$dir")
+            target="$PACK/bitcraft-$name"
+            mkdir -p "$target"
+            cp -R "$dir". "$target/"
+          done
+
+          # Sanity check: every command has a SKILL.md.
+          for d in "$PACK"/bitcraft-*/; do
+            if [ ! -f "$d/SKILL.md" ]; then
+              echo "::error::missing SKILL.md in $d"
+              exit 1
+            fi
+          done
+
+          echo "--- staged commands ---"
+          ls -la "$PACK"
+          for d in "$PACK"/bitcraft-*/; do
+            echo "--- $d ---"
+            ls -la "$d"
+          done
+
+          tar -czf "bitcraft-commands.tar.gz" -C "$PACK" .
+          echo "--- tarball contents ---"
+          tar -tzf bitcraft-commands.tar.gz | head -40
+
+      - name: Render release notes
+        run: |
+          set -euo pipefail
           # shellcheck disable=SC2016
           envsubst '$DEFAULT_SYNCHRONIZER_API_URL $DEFAULT_RELAYER_API_URL' \
             < .github/release-notes.md.tpl > release-notes.md
@@ -551,7 +653,7 @@ jobs:
       - name: Upload to draft release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.find.outputs.pexe }}
+          files: bitcraft-commands.tar.gz
           tag_name: ${{ env.RELEASE_TAG }}
           draft: true
           fail_on_unmatched_files: true

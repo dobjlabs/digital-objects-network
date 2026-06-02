@@ -36,7 +36,7 @@ dobjd:
 # shell — all backed by one dobjd process. Open http://localhost:1420 in a
 # browser to use the website client; the desktop window opens automatically.
 # https://github.com/pvolok/mprocs
-dev: ensure-plugins ensure-mcp
+dev: ensure-plugins ensure-commands ensure-mcp
     mprocs --config mprocs.yaml
 
 # Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
@@ -63,10 +63,23 @@ ensure-mcp:
     claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp \
         && echo "registered: bitcraft MCP (project scope, http://127.0.0.1:7718/mcp)"
 
-# Wipe local state (RocksDB + local Postgres DBs + objects)
+# Install bitcraft meta commands into ~/.claude/skills/ if none are present
+# yet (fresh clone, or post-`just reset`). Re-run `just install-commands`
+# manually after editing a SKILL.md in commands/.
+ensure-commands:
+    @mkdir -p ~/.claude/skills
+    @if [ -z "$(find ~/.claude/skills -maxdepth 1 -type d -name 'bitcraft-*' -print -quit)" ]; then \
+        echo "No bitcraft commands installed — installing from commands/..."; \
+        just install-commands; \
+    fi
+
+# Wipe local state: RocksDB, local Postgres DBs, objects, installed bitcraft
+# commands, and the bitcraft-preview entry in ~/.claude/launch.json.
 reset:
     @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
+    rm -rf ~/.claude/skills/bitcraft-*
+    @python3 commands/start/ensure_launch.py --remove && echo "removed: bitcraft-preview from ~/.claude/launch.json"
     @command -v claude >/dev/null 2>&1 && claude mcp remove bitcraft 2>/dev/null && echo "removed: bitcraft MCP registration" || true
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
@@ -99,3 +112,30 @@ install-plugins:
 #   just pexe inspect plan --action CraftWood plugins/craft-basics
 pexe *ARGS:
     cargo run -p pexe --release -- {{ARGS}}
+
+# Install bitcraft meta commands into ~/.claude/skills/bitcraft-*/. Copies
+# each commands/<name>/ directory (SKILL.md + any sibling files like index.html
+# or helper scripts) to ~/.claude/skills/bitcraft-<name>/.
+#
+# Wipes each target directory before copy, so renaming a sibling file in
+# commands/<name>/ is reflected. ONLY wipes the names we're about to reinstall
+# — user-authored commands (written by `create-command` to ~/.claude/skills/
+# bitcraft-<name>/) survive `just install-commands` because they don't appear
+# in commands/.
+install-commands:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p ~/.claude/skills
+    install_dir() {
+        local dir="$1"
+        local name
+        name=$(basename "$dir")
+        local target="$HOME/.claude/skills/bitcraft-$name"
+        rm -rf "$target"
+        mkdir -p "$target"
+        cp -R "$dir"* "$target/"
+        echo "installed: bitcraft-$name"
+    }
+    for dir in commands/*/; do
+        install_dir "$dir"
+    done

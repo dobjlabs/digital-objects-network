@@ -4,9 +4,10 @@ Paste this to Claude Code, Cursor, or any MCP-aware agent:
 
 > Read https://raw.githubusercontent.com/dobjlabs/zk-craft/main/SKILL.md and set up bitcraft.
 
-The skill installs `dobjd`, `dobj`, `bitcraft-mcp-proxy`, and the
-`craft-basics` plugin into `~/.dobj/` and registers MCP with the
-agent so you can drive bitcraft directly.
+The skill installs `dobjd`, `dobj`, `bitcraft-mcp-proxy`, the
+`${EPISODE}` plugin into `~/.dobj/`, and the bitcraft command
+skills into `~/.claude/skills/bitcraft-*/`. Then it registers MCP
+with the agent so you can drive bitcraft directly.
 
 ## Manual install
 
@@ -18,8 +19,14 @@ See [SKILL.md](https://github.com/dobjlabs/zk-craft/blob/main/SKILL.md) for the 
   MCP on `:7718`). Bundles `bitcraft-mcp-proxy` + `libscip` + GCC
   runtime libs in `.libs/`.
 - **`dobj-{target}.tar.gz`** — terminal CLI for the daemon.
-- **`craft-basics.pexe`** — the bundled crafting plugin (Log,
-  Wood, Stone, sticks, picks…).
+- **`${EPISODE}.pexe`** — the bundled crafting plugin
+  (classes, actions, and recipe predicates this release ships with).
+  Inspect with `dobj actions` / `dobj classes` after installing.
+- **`bitcraft-commands.tar.gz`** — the framework-level command
+  skills (`help`, `consult-docs`, `create-command`, plus internal
+  `start` / `preview`) installed into `~/.claude/skills/bitcraft-*/`.
+  Gameplay commands are authored by the user via `create-command`
+  — none ship in the release.
 
 Targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
 `x86_64-unknown-linux-gnu`.

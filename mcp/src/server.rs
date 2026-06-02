@@ -294,7 +294,7 @@ impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
                 .enable_resources()
                 .build(),
         )
-        .with_instructions(INSTRUCTIONS)
+        .with_instructions(INSTRUCTIONS.to_string())
     }
 
     fn list_resources(
@@ -368,7 +368,10 @@ mod tests {
         let info = service.get_info();
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
-        assert!(info.instructions.unwrap().contains("bitcraft MCP Server"));
+        let instructions = info.instructions.unwrap();
+        assert!(instructions.contains("> bitcraft"));
+        assert!(instructions.contains("Two input cases"));
+        assert!(instructions.contains("no such bitcraft command"));
     }
 
     #[test]
