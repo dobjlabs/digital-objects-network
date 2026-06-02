@@ -14,7 +14,7 @@ use pod2::middleware::{
 };
 use pod2utils::{dict, rand_raw_value, set};
 use sdk::{SdkModule, SpendableObject};
-use txlib::{GroundingEvidence, GroundingWitness, StateRoot};
+use txlib::{GroundingEvidence, GroundingWitness, StateRoot, with_identity};
 
 use crate::inspect::derive_class_signature;
 
@@ -84,7 +84,11 @@ fn mint_with_signature(
         d.insert(&StrKey::from(field_name.as_str()), &value)
             .map_err(|err| anyhow!("inserting {field_name}: {err}"))?;
     }
-    Ok(d)
+    // A real chain object carries `identity = commitment(initial)`, stamped
+    // by TxInsert when it was first minted. Synthetic inputs stand in for
+    // chain objects, so they need the same field or a later mutate (which
+    // pins old.identity == new.identity) panics on the missing entry.
+    Ok(with_identity(&d))
 }
 
 /// Result of fabricating a synthetic chain state that grounds a set of
@@ -182,6 +186,28 @@ mod tests {
         let class_hash = module.class_hash("Log").unwrap();
         let typ = log.get(&StrKey::from("type")).unwrap().unwrap();
         assert_eq!(typ.raw(), Value::from(class_hash).raw());
+    }
+
+    /// Plan every manifest action against freshly minted inputs. This is
+    /// the guard against fixture drift: mint -> ground -> plan drives the
+    /// same `TxBuilder` path (insert, delete, mutate) that real chain
+    /// objects take, so a synthetic object whose shape no longer matches a
+    /// real post-insert object fails here. The mutate actions (UseWoodPick,
+    /// UseStonePick) are the ones that pin `old.identity == new.identity`,
+    /// so a missing identity stamp surfaces as a panic on those.
+    #[test]
+    fn every_action_plans_with_synthetic_inputs() {
+        let module = load_craft_basics();
+        for action in module.actions() {
+            let input_classes: Vec<String> =
+                action.total_inputs().map(|r| r.class.clone()).collect();
+            let minted = mint_classes(&module, &input_classes).unwrap();
+            let state = build_synthetic_state(&minted).unwrap();
+            let executor = module.executor(true, state.grounding_witness.clone());
+            executor
+                .plan_action(&action.name, state.spendable)
+                .unwrap_or_else(|err| panic!("planning {} failed: {err}", action.name));
+        }
     }
 
     #[test]
