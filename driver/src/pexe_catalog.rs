@@ -21,13 +21,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use common::decode_hash_hex;
 use pod2::middleware::Hash;
-use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
+use sdk::{manifest::Manifest, Sdk, SpendableObject, SpendableObjects};
 use txlib::GroundingWitness;
 
-use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
+use crate::catalog::{extract_predicate, ActionCatalog, CatalogClass};
 use wire_types::{ActionSummary, ClassRef, QualifiedName};
 
 struct Plugin {
@@ -527,16 +527,18 @@ mod tests {
 
     const ALPHA_SCRIPT: &str = r#"
 fn MakeFoo(action) {
-    var foo = action.output("Foo");
-    foo.set([["durability", 100]]);
+    var foo = action.output("Foo", [
+        ["durability", 100]
+    ]);
     var key = action.random();
     foo.update("key", key);
 }
 
 fn ConsumeFoo(action) {
     var foo = action.input("Foo");
-    var bar = action.output("Bar");
-    bar.set([["durability", 100]]);
+    var bar = action.output("Bar", [
+        ["durability", 100]
+    ]);
     var key = action.random();
     bar.update("key", key);
 }
@@ -544,16 +546,18 @@ fn ConsumeFoo(action) {
 
     const BETA_SCRIPT: &str = r#"
 fn MakeFoo(action) {
-    var foo = action.output("Foo");
-    foo.set([["durability", 200]]);
+    var foo = action.output("Foo", [
+        ["durability", 200]
+    ]);
     var key = action.random();
     foo.update("key", key);
 }
 
 fn ConsumeFoo(action) {
     var foo = action.input("Foo");
-    var bar = action.output("Bar");
-    bar.set([["durability", 200]]);
+    var bar = action.output("Bar", [
+        ["durability", 200]
+    ]);
     var key = action.random();
     bar.update("key", key);
 }
