@@ -162,7 +162,7 @@ pub(crate) fn resolve_inputs(
             return Err(anyhow!(
                 "input object is not live (status: {:?}): {}",
                 entry.record.status,
-                entry.record.id
+                entry.record.content_hash
             ));
         }
         // Belt-and-suspenders: compare both the qualified class stored on
@@ -172,7 +172,7 @@ pub(crate) fn resolve_inputs(
         if entry.record.class != required.class {
             return Err(anyhow!(
                 "input class mismatch for {}: expected {}, got {}",
-                entry.record.id,
+                entry.record.content_hash,
                 required.class,
                 entry.record.class
             ));
@@ -180,13 +180,13 @@ pub(crate) fn resolve_inputs(
         let actual_class_hash = obj_type_hash(&entry.record.obj).ok_or_else(|| {
             anyhow!(
                 "input object {} has no readable 'type' field",
-                entry.record.id
+                entry.record.content_hash
             )
         })?;
         if actual_class_hash != expected_class_hash {
             return Err(anyhow!(
                 "input class hash mismatch for {}: pod 'type' = {:#}, action expects {}",
-                entry.record.id,
+                entry.record.content_hash,
                 actual_class_hash,
                 required.hash,
             ));
@@ -242,7 +242,7 @@ pub(crate) fn save_results(
         output_files.push(file_name.clone());
 
         let live_record = StoredObjectRecord {
-            id: object_id,
+            content_hash: object_id,
             class: output.class.clone(),
             status: ObjectStatus::Unknown,
             tx_hash: None,

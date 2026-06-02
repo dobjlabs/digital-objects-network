@@ -48,7 +48,7 @@ pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
                 &inventory
                     .iter()
                     .map(|o| serde_json::json!({
-                        "id": o.id, "fileName": o.file_name, "class": o.class,
+                        "id": o.content_hash, "fileName": o.file_name, "class": o.class,
                         "status": o.status, "txHash": o.tx_hash,
                     }))
                     .collect::<Vec<_>>()
@@ -67,7 +67,7 @@ pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
             obj.status,
             obj.emoji,
             obj.class,
-            short_hex(&obj.id),
+            short_hex(&obj.content_hash),
         );
     }
     Ok(())
@@ -306,14 +306,14 @@ pub async fn inspect_object(client: &DobjdClient, file_name: String, json: bool)
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "id": obj.id, "fileName": obj.file_name, "class": obj.class,
+                "id": obj.content_hash, "fileName": obj.file_name, "class": obj.class,
                 "status": obj.status, "txHash": obj.tx_hash,
                 "fields": obj.fields,
             }))?
         );
         return Ok(());
     }
-    println!("id:        {}", obj.id);
+    println!("id:        {}", obj.content_hash);
     println!("class:     {}", obj.class);
     println!("status:    {}", obj.status);
     println!("file:      {}", obj.file_name);

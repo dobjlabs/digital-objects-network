@@ -113,7 +113,7 @@ impl CraftOps for MockCraftOps {
         // ObjectDetail is now an alias for wire_types::ObjectSummary —
         // the basic summary shape (no embedded predicate source).
         Ok(ObjectDetail {
-            id: obj.id.clone(),
+            content_hash: obj.content_hash.clone(),
             file_name: obj.file_name.clone(),
             class: obj.class.clone(),
             class_hash: obj.class_hash.clone(),
@@ -218,7 +218,7 @@ impl CraftOps for MockCraftOps {
             {
                 available.push(FeasibilityInput {
                     class: obj.class.clone(),
-                    object_id: obj.id.clone(),
+                    object_id: obj.content_hash.clone(),
                     file_name: obj.file_name.clone(),
                 });
             } else {
@@ -283,7 +283,7 @@ fn make_obj(
         fields.insert(k.to_string(), v);
     }
     InventoryObject {
-        id: id.to_string(),
+        content_hash: id.to_string(),
         file_name: file_name.to_string(),
         class: qname(class_name),
         class_hash: format!("0x{}", "0".repeat(64)),

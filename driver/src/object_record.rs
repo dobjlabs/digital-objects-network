@@ -9,7 +9,7 @@ use wire_types::{ObjectStatus, QualifiedName};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectRecord {
-    pub id: String,
+    pub content_hash: String,
     /// The class this object belongs to. Plugin-scoped so two plugins with
     /// the same bare class name stay distinguishable.
     pub class: QualifiedName,

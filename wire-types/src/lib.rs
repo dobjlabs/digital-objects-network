@@ -165,7 +165,7 @@ impl fmt::Display for ObjectStatus {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectSummary {
-    pub id: String,
+    pub content_hash: String,
     pub file_name: String,
     pub class: QualifiedName,
     pub class_hash: String,
@@ -181,7 +181,7 @@ pub struct ObjectSummary {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryObject {
-    pub id: String,
+    pub content_hash: String,
     pub file_name: String,
     pub class: QualifiedName,
     pub class_hash: String,

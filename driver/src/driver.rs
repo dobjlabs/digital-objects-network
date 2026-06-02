@@ -302,17 +302,17 @@ impl Driver {
             let expected_hash = decode_hash_hex(required.hash.as_str()).ok();
             let candidate = live_objects.iter().find(|entry| {
                 entry.record.class == required.class
-                    && !used_ids.contains(&entry.record.id)
+                    && !used_ids.contains(&entry.record.content_hash)
                     && matches!(
                         (expected_hash, obj_type_hash(&entry.record.obj)),
                         (Some(expected), Some(actual)) if expected == actual
                     )
             });
             if let Some(entry) = candidate {
-                used_ids.insert(entry.record.id.clone());
+                used_ids.insert(entry.record.content_hash.clone());
                 available.push(CheckActionCandidate {
                     class: required.class.clone(),
-                    object_id: entry.record.id.clone(),
+                    object_id: entry.record.content_hash.clone(),
                     file_name: entry.file_name.clone(),
                 });
             } else {
@@ -664,7 +664,7 @@ impl Driver {
             .map(|c| c.hash)
             .unwrap_or_default();
         ObjectSummary {
-            id: entry.record.id.clone(),
+            content_hash: entry.record.content_hash.clone(),
             file_name: entry.file_name.clone(),
             class: entry.record.class.clone(),
             class_hash,
