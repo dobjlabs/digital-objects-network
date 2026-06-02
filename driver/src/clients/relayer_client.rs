@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES;
-use relayer::api_types::{JobStatus, JobStatusResponse, SubmitProofRequest, SubmitProofResponse};
+use wire_types::relayer::{JobStatus, JobStatusResponse, SubmitProofRequest, SubmitProofResponse};
 
 pub const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
 pub const RELAYER_POLL_INTERVAL_MS: u64 = 1500;

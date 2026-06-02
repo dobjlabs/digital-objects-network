@@ -81,8 +81,7 @@ dobj inventory
 ```
 
 The release workflow ships `dobj-{target}.tar.gz` per platform — just
-the binary, no shared lib bundling needed (it's a pure HTTP client with
-no SCIP dependency).
+the binary, no shared lib bundling needed (it's a pure HTTP client).
 
 ## End-to-end example
 

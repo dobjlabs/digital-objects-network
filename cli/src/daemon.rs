@@ -17,8 +17,16 @@
 //! same effect as `nohup`. stdin is `/dev/null`; stdout/stderr go to the
 //! log file. This is the same shape `redis-server` uses for `daemonize yes`.
 //!
-//! Windows isn't supported here. Add a `cfg(windows)` branch using
-//! `CREATE_NEW_PROCESS_GROUP` + detached flags if needed.
+//! On Windows we spawn with `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`
+//! creation flags. DETACHED_PROCESS prevents the child from inheriting our
+//! console (so closing the parent terminal won't take dobjd down with it);
+//! CREATE_NEW_PROCESS_GROUP isolates the child from Ctrl+C/Break events
+//! routed to our group. stdio handles still attach to the log file the same
+//! way — DETACHED_PROCESS only suppresses console inheritance, not file
+//! handles. Note: Windows has no equivalent of SIGTERM's "ask politely"
+//! semantics, so `dobj stop` reaches straight for `TerminateProcess` (hard
+//! kill). The graceful timeout still runs but in practice exits on the first
+//! poll iteration since TerminateProcess is synchronous.
 
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
@@ -31,7 +39,15 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::client::DobjdClient;
 
-const READY_TIMEOUT: Duration = Duration::from_secs(60);
+// First-ever start compiles the pod2/plonky2 circuits and writes them to the
+// disk cache before the HTTP listener binds — a one-time cost that's run on
+// every fresh machine (and every CI runner, which always starts cold). On a
+// modest/Windows box this comfortably exceeds a minute, so the gate has to be
+// generous; subsequent starts hit the cache and come up in seconds. The wait
+// loop early-exits the instant the process dies, so a genuinely-crashed dobjd
+// still fails fast — this ceiling only applies while it's alive but not yet
+// serving (i.e. still building circuits).
+const READY_TIMEOUT: Duration = Duration::from_secs(300);
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -61,26 +77,30 @@ impl DaemonPaths {
 ///
 /// Resolution order:
 /// 1. `$DOBJD_BIN` env var (explicit override)
-/// 2. `~/.dobj/bin/dobjd` (where SKILL.md installs it)
-/// 3. `dobjd` next to the running `dobj` binary (works for `cargo install`)
-/// 4. Bare `dobjd` — let `Command::new` resolve via `$PATH`
+/// 2. `~/.dobj/bin/dobjd[.exe]` (where SKILL.md installs it)
+/// 3. `dobjd[.exe]` next to the running `dobj` binary (works for `cargo install`)
+/// 4. Bare `dobjd[.exe]` — let `Command::new` resolve via `$PATH`
+///
+/// `EXE_SUFFIX` resolves to `".exe"` on Windows and `""` on Unix, so a
+/// single string drives both platforms.
 fn find_dobjd_binary(paths: &DaemonPaths) -> OsString {
     if let Some(explicit) = std::env::var_os("DOBJD_BIN") {
         return explicit;
     }
-    let in_dobj_home = paths.home.join("bin").join("dobjd");
+    let exe_name = format!("dobjd{}", std::env::consts::EXE_SUFFIX);
+    let in_dobj_home = paths.home.join("bin").join(&exe_name);
     if in_dobj_home.exists() {
         return in_dobj_home.into_os_string();
     }
     if let Ok(self_exe) = std::env::current_exe()
         && let Some(dir) = self_exe.parent()
     {
-        let sibling = dir.join("dobjd");
+        let sibling = dir.join(&exe_name);
         if sibling.exists() {
             return sibling.into_os_string();
         }
     }
-    OsString::from("dobjd")
+    OsString::from(exe_name)
 }
 
 /// Read a pid from `pid_file`, returning `None` if the file is missing or
@@ -90,19 +110,103 @@ fn read_pidfile(pid_file: &Path) -> Option<i32> {
     contents.trim().parse::<i32>().ok()
 }
 
-/// Is a process with `pid` alive? Sends signal 0 — POSIX-defined to do no
-/// work, just check existence + permissions.
+/// Is a process with `pid` alive?
+///
+/// Unix: sends signal 0 — POSIX-defined to do no work, just check existence
+/// + permissions.
+///
+/// Windows: tries to open the process handle with the minimum-rights flag
+/// (`PROCESS_QUERY_LIMITED_INFORMATION`). A null handle means the pid is
+/// dead or inaccessible; for pids we ourselves spawned, permission isn't
+/// the issue, so non-null ≈ alive.
 fn process_alive(pid: i32) -> bool {
-    // Safety: kill(pid, 0) is signal-free; only checks the target process.
-    unsafe { libc::kill(pid, 0) == 0 }
+    #[cfg(unix)]
+    {
+        // Safety: kill(pid, 0) is signal-free; only checks the target process.
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // Safety: OpenProcess returns a null handle on failure (which we
+        // treat as "not alive"); on success we close the handle immediately
+        // so it can't leak.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+            if handle.is_null() {
+                false
+            } else {
+                CloseHandle(handle);
+                true
+            }
+        }
+    }
 }
 
-fn signal(pid: i32, sig: libc::c_int) -> Result<()> {
-    let rc = unsafe { libc::kill(pid, sig) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error()).with_context(|| format!("kill({pid}, {sig}) failed"))
+/// Ask `pid` to exit gracefully.
+///
+/// Unix: SIGTERM. Caller polls `process_alive` until either the process
+/// exits or the STOP_TIMEOUT elapses, then escalates to `terminate_force`.
+///
+/// Windows: no graceful equivalent exists, so this is just a hard kill via
+/// `TerminateProcess`. The caller's polling loop still runs but exits on
+/// iteration 1 because TerminateProcess is synchronous.
+fn terminate_graceful(pid: i32) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let rc = unsafe { libc::kill(pid, libc::SIGTERM) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+                .with_context(|| format!("kill({pid}, SIGTERM) failed"))
+        }
+    }
+    #[cfg(windows)]
+    {
+        terminate_force(pid)
+    }
+}
+
+/// Force-terminate `pid`. Unix: SIGKILL. Windows: `TerminateProcess`.
+fn terminate_force(pid: i32) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let rc = unsafe { libc::kill(pid, libc::SIGKILL) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+                .with_context(|| format!("kill({pid}, SIGKILL) failed"))
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_TERMINATE, TerminateProcess,
+        };
+        // Safety: OpenProcess + TerminateProcess + CloseHandle is the
+        // standard 3-step Win32 pattern; we close on every exit path so the
+        // handle can't leak.
+        unsafe {
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid as u32);
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error())
+                    .with_context(|| format!("OpenProcess({pid}) failed"));
+            }
+            let rc = TerminateProcess(handle, 1);
+            CloseHandle(handle);
+            if rc == 0 {
+                Err(std::io::Error::last_os_error())
+                    .with_context(|| format!("TerminateProcess({pid}) failed"))
+            } else {
+                Ok(())
+            }
+        }
     }
 }
 
@@ -147,8 +251,9 @@ async fn http_alive(client: &DobjdClient) -> bool {
 
 /// Block until the HTTP API responds, the process dies, or the timeout
 /// elapses. Prints a dot every couple seconds so the user knows we're
-/// still working — cold start can take 15-30s while plugins compile and
-/// RocksDB initializes.
+/// still working — a first-ever start builds the pod2/plonky2 circuits and
+/// can take a few minutes on a cold machine (see `READY_TIMEOUT`); cached
+/// starts are seconds.
 async fn wait_until_ready(client: &DobjdClient, pid: i32, timeout: Duration) -> Result<()> {
     use std::io::Write as _;
 
@@ -246,6 +351,16 @@ pub async fn start(client: &DobjdClient) -> Result<()> {
             Ok(())
         });
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
+        // DETACHED_PROCESS: child gets no inherited console, so closing
+        // our terminal doesn't propagate. CREATE_NEW_PROCESS_GROUP: child
+        // is in its own process group, immune to Ctrl+C/Break routed to
+        // ours. Stdio file handles still pass through normally.
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
 
     let child = cmd.spawn().with_context(|| {
         format!(
@@ -286,8 +401,10 @@ pub async fn stop() -> Result<()> {
         return Ok(());
     }
 
-    // Polite first: SIGTERM and wait.
-    signal(pid, libc::SIGTERM).with_context(|| format!("failed to SIGTERM pid {pid}"))?;
+    // Polite first: SIGTERM (Unix) / TerminateProcess (Windows). On Windows
+    // there's no graceful equivalent so this is already the hard kill — the
+    // poll loop below exits on iteration 1.
+    terminate_graceful(pid).with_context(|| format!("failed to terminate pid {pid}"))?;
     let deadline = Instant::now() + STOP_TIMEOUT;
     while Instant::now() < deadline {
         if !process_alive(pid) {
@@ -298,9 +415,10 @@ pub async fn stop() -> Result<()> {
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 
-    // Didn't exit in time — force.
-    eprintln!("dobjd did not exit after SIGTERM; sending SIGKILL");
-    signal(pid, libc::SIGKILL).with_context(|| format!("failed to SIGKILL pid {pid}"))?;
+    // Didn't exit in time — force. Unreachable on Windows in practice
+    // (TerminateProcess already happened above) but harmless.
+    eprintln!("dobjd did not exit after stop signal; forcing kill");
+    terminate_force(pid).with_context(|| format!("failed to force-kill pid {pid}"))?;
     let _ = fs::remove_file(&paths.pid_file);
     println!("dobjd killed");
     Ok(())

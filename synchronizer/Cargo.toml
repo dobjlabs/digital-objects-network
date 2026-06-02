@@ -29,6 +29,10 @@ plonky2 = { workspace = true }
 common = { path = "../common" }
 txlib = { path = "../txlib" }
 pod2utils = { path = "../pod2utils" }
+# `chain` feature pulls in pod2 so `SourceTxProofResponse` /
+# `GroundingWitnessResponse` (both server-side and re-exported here)
+# carry their `MerkleProof` field.
+wire-types = { workspace = true, features = ["chain"] }
 tempfile = "3"
 
 [dev-dependencies]

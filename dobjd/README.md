@@ -78,13 +78,9 @@ just dobjd
 DOBJD_PORT=7727 cargo run --release -p dobjd
 ```
 
-Released binaries are signed + notarized on macOS and bundle
-`libscip*.dylib` plus the GCC runtime libs (`libgfortran`,
-`libquadmath`, `libgcc_s`) in a hidden `.libs/` subdir next to the
-executable. The RPATH baked in by [build.rs](build.rs) resolves them at
-runtime with no env vars. See
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) for
-the packaging pipeline.
+Released binaries are signed + notarized on macOS. The tarball is just
+the three executables (`dobjd`, `dobj`, `bitcraft-mcp-proxy`).
+Windows binaries are not codesigned yet — first run shows a SmartScreen warning.
 
 ## Lifecycle
 

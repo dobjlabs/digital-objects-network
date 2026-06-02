@@ -8,14 +8,14 @@ use axum::{
     Json, Router,
 };
 use pod2::{backends::plonky2::primitives::merkletree::MerkleProof, middleware::Hash};
-use synchronizer::api_types::{
+use tokio::sync::watch;
+use tracing::info;
+use wire_types::synchronizer::{
     GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, MembershipRequest,
     MembershipResponse, NullifierContainsEntry, NullifierContainsRequest,
     NullifierContainsResponse, SourceTxProofResponse, StateHeadResponse, SyncProgressResponse,
     TxContainsEntry, TxContainsRequest, TxContainsResponse, TxStatusResponse,
 };
-use tokio::sync::watch;
-use tracing::info;
 
 use crate::{
     app_db::AppDb,
