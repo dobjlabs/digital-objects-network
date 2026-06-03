@@ -90,9 +90,9 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
         .unwrap();
     let source_tx = outputs.tx.clone();
     let spendable = outputs.obj(0);
-    let id = format!("{:#}", spendable.obj.commitment());
+    let content_hash = format!("{:#}", spendable.obj.commitment());
     let record = ObjectRecord {
-        id,
+        content_hash,
         class: craft_basics("Log"),
         status: ObjectStatus::Live,
         tx_hash: None,
@@ -403,10 +403,10 @@ fn make_importable_log() -> (String, Hash, Hash) {
         .execute_action(craft_basics("FindLog"), dummy_grounding_witness(), vec![])
         .unwrap();
     let spendable = outputs.obj(0);
-    let id = format!("{:#}", spendable.obj.commitment());
+    let content_hash = format!("{:#}", spendable.obj.commitment());
     let nullifier = txlib::object_nullifier_hash(&spendable.obj).unwrap();
     let record = ObjectRecord {
-        id,
+        content_hash,
         class: craft_basics("Log"),
         status: ObjectStatus::Live,
         tx_hash: None,

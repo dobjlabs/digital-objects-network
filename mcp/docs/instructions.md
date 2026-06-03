@@ -44,7 +44,7 @@ grounded in a recent GSR (within ~300 blocks / ~1 hour). The
 - `list_inventory` — every object the user holds, with class + liveness
 - `list_actions` — every available crafting action with its required inputs
 - `list_classes` — every known object class with live counts and producing/consuming actions
-- `inspect_object(object_id)` — full detail on one object: fields, status, predicate source
+- `inspect_object(file_name)` — full detail on one object: fields, status, predicate source
 - `inspect_class(class_name)` — predicate definition + which actions produce/consume the class
 - `check_feasibility(action_id)` — does the user's inventory have what this action needs?
 - `get_state_root` — current canonical GSR from the synchronizer

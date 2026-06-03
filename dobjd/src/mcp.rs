@@ -47,7 +47,7 @@ impl CraftOps for DobjdCraftOps {
             .map(|object| {
                 let class_info = classes.get(&object.class);
                 mcp::InventoryObject {
-                    id: object.id,
+                    content_hash: object.content_hash,
                     file_name: object.file_name,
                     class: object.class.clone(),
                     class_hash: object.class_hash,

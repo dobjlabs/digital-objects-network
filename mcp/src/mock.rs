@@ -113,7 +113,7 @@ impl CraftOps for MockCraftOps {
         // ObjectDetail is now an alias for wire_types::ObjectSummary —
         // the basic summary shape (no embedded predicate source).
         Ok(ObjectDetail {
-            id: obj.id.clone(),
+            content_hash: obj.content_hash.clone(),
             file_name: obj.file_name.clone(),
             class: obj.class.clone(),
             class_hash: obj.class_hash.clone(),
@@ -218,7 +218,7 @@ impl CraftOps for MockCraftOps {
             {
                 available.push(FeasibilityInput {
                     class: obj.class.clone(),
-                    object_id: obj.id.clone(),
+                    content_hash: obj.content_hash.clone(),
                     file_name: obj.file_name.clone(),
                 });
             } else {
@@ -239,7 +239,7 @@ impl CraftOps for MockCraftOps {
             bail!("empty .dobj path");
         }
         Ok(ObjectDetail {
-            id: "0ximported0000000000".to_string(),
+            content_hash: "0ximported0000000000".to_string(),
             file_name: "craft-basics__log_0ximported.dobj".to_string(),
             class: qname("Log"),
             class_hash: format!("0x{}", "0".repeat(64)),
@@ -270,20 +270,22 @@ impl CraftOps for MockCraftOps {
 }
 
 fn make_obj(
-    id: &str,
+    content_hash: &str,
     class_name: &str,
     file_name: &str,
     tx_hash: &str,
     status: ObjectStatus,
     extra: Vec<(&str, serde_json::Value)>,
 ) -> InventoryObject {
-    let mut fields =
-        HashMap::from([("key".to_string(), serde_json::Value::String(id.to_string()))]);
+    let mut fields = HashMap::from([(
+        "key".to_string(),
+        serde_json::Value::String(content_hash.to_string()),
+    )]);
     for (k, v) in extra {
         fields.insert(k.to_string(), v);
     }
     InventoryObject {
-        id: id.to_string(),
+        content_hash: content_hash.to_string(),
         file_name: file_name.to_string(),
         class: qname(class_name),
         class_hash: format!("0x{}", "0".repeat(64)),

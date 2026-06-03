@@ -290,7 +290,7 @@ impl Driver {
 
         let mut available = Vec::new();
         let mut missing_inputs = Vec::new();
-        let mut used_ids = HashSet::new();
+        let mut used_content_hashes = HashSet::new();
 
         // Apply the same cryptographic check that `resolve_inputs` runs at
         // execute time: a candidate must match by qualified class AND its
@@ -302,17 +302,17 @@ impl Driver {
             let expected_hash = decode_hash_hex(required.hash.as_str()).ok();
             let candidate = live_objects.iter().find(|entry| {
                 entry.record.class == required.class
-                    && !used_ids.contains(&entry.record.id)
+                    && !used_content_hashes.contains(&entry.record.content_hash)
                     && matches!(
                         (expected_hash, obj_type_hash(&entry.record.obj)),
                         (Some(expected), Some(actual)) if expected == actual
                     )
             });
             if let Some(entry) = candidate {
-                used_ids.insert(entry.record.id.clone());
+                used_content_hashes.insert(entry.record.content_hash.clone());
                 available.push(CheckActionCandidate {
                     class: required.class.clone(),
-                    object_id: entry.record.id.clone(),
+                    content_hash: entry.record.content_hash.clone(),
                     file_name: entry.file_name.clone(),
                 });
             } else {
@@ -386,22 +386,23 @@ impl Driver {
             .into());
         }
 
-        // 2. Recompute id + file name from the commitment; never trust the
-        //    sender's. The id is self-certifying — it IS the commitment.
-        let object_id = format!("{:#}", record.obj.commitment());
+        // 2. Recompute content hash + file name from the commitment; never
+        //    trust the sender's. The content hash is self-certifying -- it IS
+        //    the commitment.
+        let content_hash = format!("{:#}", record.obj.commitment());
         let file_name = format!(
             "{}_{}.{}",
             record.class.file_prefix(),
-            object_id.to_ascii_lowercase(),
+            content_hash.to_ascii_lowercase(),
             crate::paths::DOBJ_EXTENSION
         );
-        record.id = object_id.clone();
+        record.content_hash = content_hash.clone();
 
         // 3. Reject if we already hold this object (live or nullified).
         let entries = load_object_files(&self.paths)?;
         if entries
             .iter()
-            .any(|entry| entry.record.id == object_id || entry.file_name == file_name)
+            .any(|entry| entry.record.content_hash == content_hash || entry.file_name == file_name)
         {
             return Err(
                 DriverError::Conflict(format!("object already in inventory: {file_name}")).into(),
@@ -664,7 +665,7 @@ impl Driver {
             .map(|c| c.hash)
             .unwrap_or_default();
         ObjectSummary {
-            id: entry.record.id.clone(),
+            content_hash: entry.record.content_hash.clone(),
             file_name: entry.file_name.clone(),
             class: entry.record.class.clone(),
             class_hash,

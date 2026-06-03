@@ -48,7 +48,7 @@ pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
                 &inventory
                     .iter()
                     .map(|o| serde_json::json!({
-                        "id": o.id, "fileName": o.file_name, "class": o.class,
+                        "contentHash": o.content_hash, "fileName": o.file_name, "class": o.class,
                         "status": o.status, "txHash": o.tx_hash,
                     }))
                     .collect::<Vec<_>>()
@@ -63,11 +63,11 @@ pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
     }
     for obj in &inventory {
         println!(
-            "[{:<10}] {} {:<28} id={}",
+            "[{:<10}] {} {:<28} content_hash={}",
             obj.status,
             obj.emoji,
             obj.class,
-            short_hex(&obj.id),
+            short_hex(&obj.content_hash),
         );
     }
     Ok(())
@@ -127,7 +127,7 @@ pub async fn import(client: &DobjdClient, path: PathBuf, json: bool) -> Result<(
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "id": obj.id, "fileName": obj.file_name, "class": obj.class,
+                "contentHash": obj.content_hash, "fileName": obj.file_name, "class": obj.class,
                 "status": obj.status, "txHash": obj.tx_hash,
             }))?
         );
@@ -136,7 +136,7 @@ pub async fn import(client: &DobjdClient, path: PathBuf, json: bool) -> Result<(
     println!(
         "imported {} {} [{}]",
         obj.class,
-        short_hex(&obj.id),
+        short_hex(&obj.content_hash),
         obj.status
     );
     println!("file:   {}", obj.file_name);
@@ -306,19 +306,19 @@ pub async fn inspect_object(client: &DobjdClient, file_name: String, json: bool)
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "id": obj.id, "fileName": obj.file_name, "class": obj.class,
+                "contentHash": obj.content_hash, "fileName": obj.file_name, "class": obj.class,
                 "status": obj.status, "txHash": obj.tx_hash,
                 "fields": obj.fields,
             }))?
         );
         return Ok(());
     }
-    println!("id:        {}", obj.id);
-    println!("class:     {}", obj.class);
-    println!("status:    {}", obj.status);
-    println!("file:      {}", obj.file_name);
+    println!("{:<13} {}", "content hash:", obj.content_hash);
+    println!("{:<13} {}", "class:", obj.class);
+    println!("{:<13} {}", "status:", obj.status);
+    println!("{:<13} {}", "file:", obj.file_name);
     if let Some(tx) = obj.tx_hash {
-        println!("tx hash:   {tx}");
+        println!("{:<13} {}", "tx hash:", tx);
     }
     println!("fields:");
     println!("{}", serde_json::to_string_pretty(&obj.fields)?);
@@ -434,7 +434,7 @@ pub async fn feasibility(client: &DobjdClient, action_id: String, json: bool) ->
                 "action": report.action,
                 "feasible": report.feasible,
                 "availableInputs": report.available_inputs.iter().map(|c| serde_json::json!({
-                    "class": c.class, "objectId": c.object_id, "fileName": c.file_name,
+                    "class": c.class, "contentHash": c.content_hash, "fileName": c.file_name,
                 })).collect::<Vec<_>>(),
                 "missingInputs": report.missing_inputs.iter().map(|r| &r.class).collect::<Vec<_>>(),
             }))?
@@ -449,7 +449,7 @@ pub async fn feasibility(client: &DobjdClient, action_id: String, json: bool) ->
             println!(
                 "  • {} {} ({})",
                 c.class,
-                short_hex(&c.object_id),
+                short_hex(&c.content_hash),
                 c.file_name
             );
         }

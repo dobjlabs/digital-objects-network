@@ -13,9 +13,9 @@ import {
 interface InventoryPanelProps {
   inventory: InventoryObject[];
   objectsDirPath: string;
-  activeObjectId: string | null;
+  activeObjectContentHash: string | null;
   showNullifiedItems: boolean;
-  onSelectObject: (objectId: string) => void;
+  onSelectObject: (contentHash: string) => void;
   onToggleNullified: () => void;
   onOpenObjectsDir: () => void;
   onImportObject: (dobj: string) => Promise<void>;
@@ -24,7 +24,7 @@ interface InventoryPanelProps {
 export function InventoryPanel({
   inventory,
   objectsDirPath,
-  activeObjectId,
+  activeObjectContentHash,
   showNullifiedItems,
   onSelectObject,
   onToggleNullified,
@@ -87,9 +87,9 @@ export function InventoryPanel({
     isDraggingRef.current = false;
   };
 
-  const handleClickObject = (objectId: string) => {
+  const handleClickObject = (contentHash: string) => {
     if (isDraggingRef.current) return;
-    onSelectObject(objectId);
+    onSelectObject(contentHash);
   };
 
   const activeObjects = inventory.filter((object) => !isNullifiedObject(object));
@@ -98,15 +98,15 @@ export function InventoryPanel({
   const renderInventoryObject = (object: InventoryObject) => {
     const displayName = pluginScopedLabel(object.class);
     const hashLineRaw = object.status === "live"
-      ? object.id
+      ? object.contentHash
       : object.status;
     const hashLine = truncateDisplayHash(hashLineRaw);
     return (
       <button
-        key={object.id}
+        key={object.contentHash}
         type="button"
-        className={`inventory-item ${activeObjectId === object.id ? "active" : ""}`}
-        onClick={() => handleClickObject(object.id)}
+        className={`inventory-item ${activeObjectContentHash === object.contentHash ? "active" : ""}`}
+        onClick={() => handleClickObject(object.contentHash)}
         draggable={isUsable(object)}
         onDragStart={(event) => handleDragStart(event, object)}
         onDragEnd={handleDragEnd}

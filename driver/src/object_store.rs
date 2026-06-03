@@ -222,7 +222,7 @@ mod tests {
             .unwrap();
         let spendable = outputs.obj(0);
         ObjectRecord {
-            id: format!("{:#}", spendable.obj.commitment()),
+            content_hash: format!("{:#}", spendable.obj.commitment()),
             class: wire_types::QualifiedName::new("craft-basics", "Log"),
             status: ObjectStatus::Live,
             tx_hash: None,
@@ -239,7 +239,7 @@ mod tests {
         let loaded = load_object_files(&paths).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].file_name, "log_test.dobj");
-        assert_eq!(loaded[0].record.id, record.id);
+        assert_eq!(loaded[0].record.content_hash, record.content_hash);
     }
 
     #[test]
@@ -248,7 +248,7 @@ mod tests {
         let record = make_record();
         write_object_file(&paths, &record, "log_test.dobj").unwrap();
         let loaded = parse_object_record_file(&paths.objects_dir.join("log_test.dobj")).unwrap();
-        assert_eq!(loaded.id, record.id);
+        assert_eq!(loaded.content_hash, record.content_hash);
     }
 
     #[test]

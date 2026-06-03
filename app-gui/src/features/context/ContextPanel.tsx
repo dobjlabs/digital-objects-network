@@ -57,7 +57,7 @@ export function ContextPanel({
   const previousProofStatusRef = useRef(proofStatus);
   const selectionKey =
     selection.kind === "object"
-      ? `object:${selection.objectId}`
+      ? `object:${selection.contentHash}`
       : selection.kind === "action"
         ? `action:${qualifiedId(selection.action)}`
         : "none";
@@ -499,13 +499,14 @@ export function ContextPanel({
 
   if (selection.kind === "object") {
     const object = inventory.find(
-      (candidate) => candidate.id === selection.objectId,
+      (candidate) => candidate.contentHash === selection.contentHash,
     );
     if (!object)
       return <section className="context-panel">Object not found.</section>;
 
     const titleName = pluginScopedLabel(object.class);
-    const liveValueRaw = object.status === "live" ? object.id : object.status;
+    const liveValueRaw =
+      object.status === "live" ? object.contentHash : object.status;
     const liveValue = truncateDisplayHash(liveValueRaw);
 
     return (

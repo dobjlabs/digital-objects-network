@@ -15,7 +15,7 @@ export interface QualifiedNamePayload {
 }
 
 export interface InventoryObjectPayload {
-  id: string;
+  contentHash: string;
   fileName: string;
   class: QualifiedNamePayload;
   classHash: string;
@@ -31,7 +31,7 @@ export interface InventoryObjectPayload {
  * `/objects/import` — like `InventoryObjectPayload` but without the
  * folded-in class emoji/description. */
 export interface ObjectSummaryPayload {
-  id: string;
+  contentHash: string;
   fileName: string;
   class: QualifiedNamePayload;
   classHash: string;
@@ -75,7 +75,7 @@ export interface RunActionResult {
 }
 
 export interface ObjectRecordPayload {
-  id: string;
+  contentHash: string;
   class: QualifiedNamePayload;
   status: ObjectStatus;
   txHash: string | null;
