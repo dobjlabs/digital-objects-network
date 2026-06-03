@@ -14,7 +14,7 @@
      affected object's type guard to authorize the event.
 
   3. InputsGrounded -- proves each input object is present in the
-     global live set carried by the state root.
+     global created set carried by the state root.
 
   4. TxFinalized -- the public entry point. Ties input grounding,
      chain seeding, and full replay together. Exposes
