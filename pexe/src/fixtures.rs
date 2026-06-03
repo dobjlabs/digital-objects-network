@@ -188,13 +188,8 @@ mod tests {
         assert_eq!(typ.raw(), Value::from(class_hash).raw());
     }
 
-    /// Plan every manifest action against freshly minted inputs. This is
-    /// the guard against fixture drift: mint -> ground -> plan drives the
-    /// same `TxBuilder` path (insert, delete, mutate) that real chain
-    /// objects take, so a synthetic object whose shape no longer matches a
-    /// real post-insert object fails here. The mutate actions (UseWoodPick,
-    /// UseStonePick) are the ones that pin `old.identity == new.identity`,
-    /// so a missing identity stamp surfaces as a panic on those.
+    /// Plan every manifest action against freshly minted inputs, ensuring
+    /// that the synthetic objects are valid and preventing drift.
     #[test]
     fn every_action_plans_with_synthetic_inputs() {
         let module = load_craft_basics();
