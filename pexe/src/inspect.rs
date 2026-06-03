@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use pod2::lang::PrettyPrint;
 use pod2::middleware::{
     CustomPredicateBatch, Hash, NativePredicate, Predicate, PredicateOrWildcard, StatementTmpl,
@@ -15,7 +15,7 @@ use pod2::middleware::{
 };
 use sdk::{Dependency, Sdk, SdkModule, manifest::Manifest};
 
-use crate::{PluginSource, unpack};
+use crate::{PluginSource, read_pexe_file, unpack};
 
 /// txlib's compiled predicate module. Building it isn't free, so we
 /// share one instance between the two event-hash statics below.
@@ -43,8 +43,7 @@ fn load_target(path: &Path) -> Result<(Manifest, String)> {
         let manifest = source.parse_manifest()?;
         Ok((manifest, source.script))
     } else {
-        let bytes =
-            std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+        let bytes = read_pexe_file(path)?;
         unpack(&bytes)
     }
 }
