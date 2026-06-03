@@ -1,18 +1,17 @@
 # syntax=docker/dockerfile:1
 
-# Builds the two headless server binaries into separate, minimal images.
-# One shared builder compiles both (they share almost the entire dependency
-# graph), then two runtime targets each carry a single binary:
+# Builds the two headless server binaries into separate, minimal images that
+# share one cooked dependency layer. Build either one independently:
 #
 #   docker build --target synchronizer -t zkcraft/synchronizer .
 #   docker build --target relayer      -t zkcraft/relayer .
 #
-# The second build reuses the first's cached builder layers.
+# --target synchronizer compiles only the synchronizer binary (and vice versa);
+# the expensive dependency compile is cooked once and reused by both.
 
-# ---- chef: pinned toolchain + cargo-chef, shared by planner and builder ----
-# Debian trixie matches the validated deploy target (deploy/ec2 is Debian 13),
-# so glibc and libssl versions line up between this builder and the runtime
-# stages below.
+# ---- chef: pinned toolchain + cargo-chef, shared by every build stage ----
+# Build and run on the same Debian release so the binary's glibc, libssl, and
+# other shared libraries match between the builder and the runtime stages.
 FROM debian:trixie-slim AS chef
 ENV CARGO_HOME=/usr/local/cargo \
     RUSTUP_HOME=/usr/local/rustup \
@@ -27,8 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       curl ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 # Install the exact channel from rust-toolchain.toml here so it is a cached
-# layer and the version is explicit, rather than auto-installed on first cargo
-# run. Keep this ARG in sync with rust-toolchain.toml.
+# layer and the version is explicit. Keep this ARG in sync with that file.
 ARG RUST_TOOLCHAIN=nightly-2026-01-25
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --no-modify-path --default-toolchain "$RUST_TOOLCHAIN" --profile minimal \
@@ -41,28 +39,36 @@ FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
-# ---- builder: cook dependencies (cached), then build both binaries ----
-FROM chef AS builder
+# ---- cook: compile the shared dependency graph once ----
+# pod2 + plonky2 + rocksdb + alloy dominate build time. Cooking them here makes
+# a cached layer both services reuse, which only changes when a dependency
+# changes. The -p scope also keeps the Tauri desktop crate (app-gui/src-tauri,
+# which needs GTK/WebKit) out of the build entirely.
+FROM chef AS cook
 COPY --from=planner /app/recipe.json recipe.json
-# Cook only the two server crates' dependency graphs. The -p scope keeps the
-# Tauri crate (app-gui/src-tauri, which needs GTK/WebKit system libs) out of
-# the build entirely. This layer is cached until a dependency actually changes.
 RUN cargo chef cook --release --recipe-path recipe.json \
       -p synchronizer -p relayer
+
+# ---- per-service builds: each target compiles only its own binary ----
+# Each logs the binary's dynamic deps so a dependency bump that pulls in a new
+# C library is caught here and not at runtime.
+FROM cook AS build-synchronizer
 COPY . .
-RUN cargo build --release --locked -p synchronizer -p relayer
-# Surface each binary's dynamic deps in the build log, so a future dependency
-# bump that pulls in a new C library is caught here and not at runtime.
-RUN echo "--- synchronizer ldd ---" && ldd target/release/synchronizer || true \
- && echo "--- relayer ldd ---"      && ldd target/release/relayer      || true
+RUN cargo build --release --locked -p synchronizer
+RUN echo "--- synchronizer ldd ---" && ldd target/release/synchronizer || true
+
+FROM cook AS build-relayer
+COPY . .
+RUN cargo build --release --locked -p relayer
+RUN echo "--- relayer ldd ---" && ldd target/release/relayer || true
 
 # ---- runtime base: shared minimal runtime, non-root user ----
+# Runtime libraries both binaries dynamically link, confirmed via the ldd output
+# above: TLS (libssl3 provides libssl + libcrypto), zlib and zstd (rocksdb and
+# others), and libgcc. ca-certificates verifies TLS to the Ethereum endpoints
+# and Postgres. All of these package names exist on amd64 and arm64.
 FROM debian:trixie-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
-# Runtime libraries both binaries dynamically link, confirmed via the builder's
-# ldd output: TLS (libssl3 provides libssl + libcrypto), zlib and zstd (rocksdb
-# and others), and libgcc. ca-certificates verifies TLS to the Ethereum
-# endpoints and Postgres. All of these package names exist on amd64 and arm64.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates libssl3 libgcc-s1 zlib1g libzstd1 \
     && rm -rf /var/lib/apt/lists/* \
@@ -71,17 +77,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ---- synchronizer image ----
 FROM runtime AS synchronizer
 # Only the synchronizer links the C++ runtime: rocksdb is statically linked into
-# the binary but pulls in libstdc++ (confirmed via the builder's ldd output; the
-# relayer has no C++ dependency). libgcc, zlib, and zstd come from the base.
+# the binary but pulls in libstdc++ (the relayer has no C++ dependency).
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/synchronizer /usr/local/bin/synchronizer
+COPY --from=build-synchronizer /app/target/release/synchronizer /usr/local/bin/synchronizer
 RUN mkdir -p /var/lib/zkcraft && chown -R zkcraft:zkcraft /var/lib/zkcraft
-# Bind all interfaces: inside the container network namespace the orchestrator
-# or reverse proxy controls public exposure. RocksDB lives on a path meant to
-# be a mounted volume (it is a rebuildable cache, but a volume avoids slow cold
-# re-sync on restart).
+# Bind all interfaces: inside the container the orchestrator or reverse proxy
+# controls public exposure. RocksDB lives on a path meant to be a mounted volume
+# (it is a rebuildable cache, but a volume avoids slow cold re-sync on restart).
 ENV HTTP_BIND=0.0.0.0:3000 \
     APP_STATE_DB_PATH=/var/lib/zkcraft/synchronizer-db
 VOLUME ["/var/lib/zkcraft"]
@@ -91,7 +95,7 @@ ENTRYPOINT ["/usr/local/bin/synchronizer"]
 
 # ---- relayer image ----
 FROM runtime AS relayer
-COPY --from=builder /app/target/release/relayer /usr/local/bin/relayer
+COPY --from=build-relayer /app/target/release/relayer /usr/local/bin/relayer
 # No local state: all relayer state is in Postgres, so no volume.
 ENV HTTP_BIND=0.0.0.0:3200
 USER zkcraft
