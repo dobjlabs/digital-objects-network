@@ -403,10 +403,10 @@ fn make_importable_log() -> (String, Hash, Hash) {
         .execute_action(craft_basics("FindLog"), dummy_grounding_witness(), vec![])
         .unwrap();
     let spendable = outputs.obj(0);
-    let id = format!("{:#}", spendable.obj.commitment());
+    let content_hash = format!("{:#}", spendable.obj.commitment());
     let nullifier = txlib::object_nullifier_hash(&spendable.obj).unwrap();
     let record = ObjectRecord {
-        id,
+        content_hash,
         class: craft_basics("Log"),
         status: ObjectStatus::Live,
         tx_hash: None,

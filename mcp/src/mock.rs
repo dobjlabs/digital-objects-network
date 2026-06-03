@@ -239,7 +239,7 @@ impl CraftOps for MockCraftOps {
             bail!("empty .dobj path");
         }
         Ok(ObjectDetail {
-            id: "0ximported0000000000".to_string(),
+            content_hash: "0ximported0000000000".to_string(),
             file_name: "craft-basics__log_0ximported.dobj".to_string(),
             class: qname("Log"),
             class_hash: format!("0x{}", "0".repeat(64)),

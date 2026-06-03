@@ -386,22 +386,23 @@ impl Driver {
             .into());
         }
 
-        // 2. Recompute id + file name from the commitment; never trust the
-        //    sender's. The id is self-certifying — it IS the commitment.
-        let object_id = format!("{:#}", record.obj.commitment());
+        // 2. Recompute content hash + file name from the commitment; never
+        //    trust the sender's. The content hash is self-certifying -- it IS
+        //    the commitment.
+        let content_hash = format!("{:#}", record.obj.commitment());
         let file_name = format!(
             "{}_{}.{}",
             record.class.file_prefix(),
-            object_id.to_ascii_lowercase(),
+            content_hash.to_ascii_lowercase(),
             crate::paths::DOBJ_EXTENSION
         );
-        record.id = object_id.clone();
+        record.content_hash = content_hash.clone();
 
         // 3. Reject if we already hold this object (live or nullified).
         let entries = load_object_files(&self.paths)?;
         if entries
             .iter()
-            .any(|entry| entry.record.id == object_id || entry.file_name == file_name)
+            .any(|entry| entry.record.content_hash == content_hash || entry.file_name == file_name)
         {
             return Err(
                 DriverError::Conflict(format!("object already in inventory: {file_name}")).into(),

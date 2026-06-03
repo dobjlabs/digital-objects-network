@@ -127,7 +127,7 @@ pub async fn import(client: &DobjdClient, path: PathBuf, json: bool) -> Result<(
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "id": obj.id, "fileName": obj.file_name, "class": obj.class,
+                "contentHash": obj.content_hash, "fileName": obj.file_name, "class": obj.class,
                 "status": obj.status, "txHash": obj.tx_hash,
             }))?
         );
@@ -136,7 +136,7 @@ pub async fn import(client: &DobjdClient, path: PathBuf, json: bool) -> Result<(
     println!(
         "imported {} {} [{}]",
         obj.class,
-        short_hex(&obj.id),
+        short_hex(&obj.content_hash),
         obj.status
     );
     println!("file:   {}", obj.file_name);
