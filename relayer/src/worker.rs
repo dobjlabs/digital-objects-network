@@ -692,9 +692,21 @@ mod tests {
         Ok(())
     }
 
+    async fn create_db(admin_url: &str, db_name: &str) -> Result<()> {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(admin_url)
+            .await?;
+        let escaped = db_name.replace('"', "\"\"");
+        pool.execute(format!("CREATE DATABASE \"{escaped}\"").as_str())
+            .await?;
+        Ok(())
+    }
+
     async fn setup_db() -> Result<(Db, String, String)> {
         let (admin_url, db_url, db_name) = test_urls();
         drop_db(&admin_url, &db_name).await?;
+        create_db(&admin_url, &db_name).await?;
         let db = Db::connect(&db_url).await?;
         Ok((db, admin_url, db_name))
     }

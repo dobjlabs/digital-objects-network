@@ -345,11 +345,25 @@ mod tests {
         Ok(())
     }
 
+    async fn create_db(admin_url: &str, db_name: &str) -> anyhow::Result<()> {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(admin_url)
+            .await?;
+        let escaped = db_name.replace('"', "\"\"");
+        pool.execute(format!("CREATE DATABASE \"{escaped}\"").as_str())
+            .await?;
+        Ok(())
+    }
+
     async fn test_app(mode: ParseMode) -> (Router, String, String) {
         let (admin_url, db_url, db_name) = test_urls();
         drop_db(&admin_url, &db_name)
             .await
             .expect("drop test db before run");
+        create_db(&admin_url, &db_name)
+            .await
+            .expect("create test db before run");
         let db = Arc::new(Db::connect(&db_url).await.expect("connect test db"));
         let state = AppState {
             db,

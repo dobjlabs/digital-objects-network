@@ -153,8 +153,8 @@ just reset
 
 Clears local RocksDB, local object files (`~/.dobj/objects/`), local
 plugin installs (`~/.dobj/actions/`), and the local Postgres databases
-used by the synchronizer and relayer. The next `just dev` re-installs
-plugins automatically.
+used by the synchronizer and relayer. The next `just dev` re-creates the
+databases (via `just ensure-db`) and re-installs plugins automatically.
 
 If you're not using the default local `postgres` role/admin database,
 either adjust the `just reset` command or drop the `synchronizer` and
