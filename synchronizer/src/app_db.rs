@@ -27,6 +27,13 @@ fn value_key(raw: RawValue) -> Vec<u8> {
     k
 }
 
+fn created_index_key(commitment: Hash) -> Vec<u8> {
+    let mut k = Vec::with_capacity(35);
+    k.extend_from_slice(b"ci/");
+    k.extend_from_slice(&hash_to_db_bytes(commitment));
+    k
+}
+
 #[derive(Clone)]
 pub struct AppDb {
     db: Arc<TransactionDB>,
@@ -51,8 +58,8 @@ impl AppDb {
         })
     }
 
-    pub fn open_transactions(&self, root: Hash) -> Result<Set> {
-        Ok(Set::from_db(root, self.db_box())?)
+    pub fn open_created(&self, root: Hash) -> Result<Array> {
+        Ok(Array::from_db(root, self.db_box())?)
     }
 
     pub fn open_nullifiers(&self, root: Hash) -> Result<Set> {
@@ -63,22 +70,64 @@ impl AppDb {
         Ok(Array::from_db(root, self.db_box())?)
     }
 
-    pub fn prove_tx(&self, roots: &CanonicalRoots, tx_hash: Hash) -> Result<(bool, MerkleProof)> {
-        let txs = self.open_transactions(roots.transactions)?;
-        let value = Value::from(tx_hash);
-        match txs.prove(&value) {
-            Ok(proof) => Ok((true, proof)),
-            Err(_) => Ok((false, txs.prove_nonexistence(&value)?)),
+    /// Record an object commitment's position in the created `Array`.
+    ///
+    /// The cache is a plain `commitment -> index` map: not Merkleized, not part
+    /// of any committed root. It is only ever read as a hint -- every membership
+    /// or proof query cross-checks the index against the `Array` at the queried
+    /// root, so a stale entry (e.g. one left behind by an abandoned reorg branch)
+    /// resolves to "absent" rather than a wrong answer.
+    pub fn created_index_put(&self, commitment: Hash, index: i64) -> Result<()> {
+        self.db
+            .put(created_index_key(commitment), index.to_le_bytes())
+            .map_err(|err| anyhow!("rocksdb created-index put failed: {err}"))
+    }
+
+    pub fn created_index_get(&self, commitment: Hash) -> Result<Option<i64>> {
+        match self.db.get(created_index_key(commitment))? {
+            None => Ok(None),
+            Some(bytes) => {
+                let limbs: [u8; 8] = bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| anyhow!("invalid created-index entry length"))?;
+                Ok(Some(i64::from_le_bytes(limbs)))
+            }
         }
     }
 
-    pub fn tx_exists_batch(&self, roots: &CanonicalRoots, tx_hashes: &[Hash]) -> Result<Vec<bool>> {
-        let txs = self.open_transactions(roots.transactions)?;
-        tx_hashes
+    /// `(index, membership proof)` for one object commitment against the created
+    /// `Array` at `roots.created`, or `(false, None)` when it is not present
+    /// there. The cache supplies the candidate index; proving it against the
+    /// array is what authenticates membership (and rejects stale cache hits).
+    pub fn prove_created(
+        &self,
+        roots: &CanonicalRoots,
+        obj_commitment: Hash,
+    ) -> Result<(bool, Option<(i64, MerkleProof)>)> {
+        let Some(index) = self.created_index_get(obj_commitment)? else {
+            return Ok((false, None));
+        };
+        let created = self.open_created(roots.created)?;
+        match created.prove(index as usize) {
+            Ok((value, proof)) if value == Value::from(obj_commitment) => {
+                Ok((true, Some((index, proof))))
+            }
+            _ => Ok((false, None)),
+        }
+    }
+
+    pub fn created_exists_batch(
+        &self,
+        roots: &CanonicalRoots,
+        obj_commitments: &[Hash],
+    ) -> Result<Vec<bool>> {
+        let created = self.open_created(roots.created)?;
+        obj_commitments
             .iter()
-            .map(|hash| {
-                txs.contains(&Value::from(*hash))
-                    .map_err(|err| anyhow!("{err}"))
+            .map(|commitment| match self.created_index_get(*commitment)? {
+                None => Ok(false),
+                Some(index) => Ok(created.get(index as usize)? == Some(Value::from(*commitment))),
             })
             .collect()
     }
@@ -207,22 +256,42 @@ mod tests {
     }
 
     #[test]
-    fn test_persistent_tx_membership() {
+    fn test_persistent_created_membership() {
         let (app_db, _dir) = open_test_db();
-        let mut txs = app_db.open_transactions(EMPTY_HASH).unwrap();
-        let tx_hash = test_hash(9);
-        txs.insert(&Value::from(tx_hash)).unwrap();
+        let mut created = app_db.open_created(EMPTY_HASH).unwrap();
+        let obj_commitment = test_hash(9);
+        // The created set is 1-indexed (slot 0 is reserved empty).
+        created.insert(1, Value::from(obj_commitment)).unwrap();
+        app_db.created_index_put(obj_commitment, 1).unwrap();
 
         let roots = CanonicalRoots {
-            transactions: txs.commitment(),
+            created: created.commitment(),
             ..CanonicalRoots::empty()
         };
 
         assert_eq!(
-            app_db.tx_exists_batch(&roots, &[tx_hash]).unwrap(),
+            app_db
+                .created_exists_batch(&roots, &[obj_commitment])
+                .unwrap(),
             vec![true]
         );
-        let (present, _proof) = app_db.prove_tx(&roots, tx_hash).unwrap();
+        let (present, witness) = app_db.prove_created(&roots, obj_commitment).unwrap();
         assert!(present);
+        assert_eq!(witness.map(|(index, _proof)| index), Some(1));
+
+        // A commitment never recorded in the cache is absent, and a cache hit
+        // that the array root does not actually contain resolves to absent too.
+        let absent = test_hash(7);
+        assert_eq!(
+            app_db.created_exists_batch(&roots, &[absent]).unwrap(),
+            vec![false]
+        );
+        let empty_roots = CanonicalRoots::empty();
+        assert_eq!(
+            app_db
+                .created_exists_batch(&empty_roots, &[obj_commitment])
+                .unwrap(),
+            vec![false]
+        );
     }
 }

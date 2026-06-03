@@ -31,7 +31,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
-    frontend::{Operation, OperationArg},
+    frontend::Operation,
     middleware::{
         EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
         containers::{Array, Dictionary, Set},
@@ -49,13 +49,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 ///
 /// Holds only the Merkle roots needed to recompute the canonical global state
 /// root hash and to verify synchronizer-supplied membership proofs. Full
-/// containers are not carried -- callers prove source-tx inclusion with
-/// per-input Merkle proofs packaged in a [`GroundingWitness`].
+/// containers are not carried -- callers prove each input's liveness with a
+/// per-object Merkle proof packaged in a [`GroundingWitness`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateRoot {
     pub block_number: i64,
-    pub transactions_root: Hash,
+    /// Root of the global created-object set: the commitment of every object
+    /// state ever created. Grounding proves an input is a member here.
+    pub created_root: Hash,
     pub nullifiers_root: Hash,
     pub gsrs_root: Hash,
 }
@@ -63,13 +65,13 @@ pub struct StateRoot {
 impl StateRoot {
     pub fn new(
         block_number: i64,
-        transactions_root: Hash,
+        created_root: Hash,
         nullifiers_root: Hash,
         gsrs_root: Hash,
     ) -> Self {
         Self {
             block_number,
-            transactions_root,
+            created_root,
             nullifiers_root,
             gsrs_root,
         }
@@ -78,12 +80,12 @@ impl StateRoot {
     /// Padded-array view used as the canonical state root record. Slot
     /// layout matches the `record StateRoot` declaration in txlib.podlang.
     /// Predicates access fields via anchored-key syntax (e.g.
-    /// `state_root.transactions`).
+    /// `state_root.created`).
     pub fn array(&self) -> Array {
         Array::new(vec![
             Value::from(0_i64),
             Value::from(self.block_number),
-            Value::from(self.transactions_root),
+            Value::from(self.created_root),
             Value::from(self.nullifiers_root),
             Value::from(self.gsrs_root),
         ])
@@ -98,28 +100,32 @@ impl StateRoot {
 /// Slot indices for the `StateRoot` record. Slot 0 is `_pad` (works
 /// around pod2 issue #513); real fields start at slot 1.
 pub const STATE_ROOT_BLOCK_NUMBER_SLOT: usize = 1;
-pub const STATE_ROOT_TRANSACTIONS_SLOT: usize = 2;
+pub const STATE_ROOT_CREATED_SLOT: usize = 2;
 pub const STATE_ROOT_NULLIFIERS_SLOT: usize = 3;
 pub const STATE_ROOT_GSRS_SLOT: usize = 4;
 
 /// Proof-bearing grounding data required to build a new transaction.
 ///
 /// Callers use `state_root` as the committed global context and
-/// `source_tx_proofs` to prove that each consumed source transaction is
-/// present in `state_root.transactions_root`.
+/// `created_proofs` to prove that each consumed input object is present in
+/// `state_root.created_root` (the global created-object set). Proofs are keyed
+/// by object commitment (`Dictionary::commitment()`) and carry the object's
+/// array index, since grounding is `ArrayContains(created, index, obj)`. They
+/// are fetched fresh at consume time because the created set grows: a proof is
+/// only valid against the state root it was drawn from.
 #[derive(Clone, Debug)]
 pub struct GroundingWitness {
     pub state_root: StateRoot,
-    /// Merkle proofs for source transaction inclusion keyed by source tx
-    /// commitment (`Tx::dict().commitment()`).
-    pub source_tx_proofs: HashMap<Hash, MerkleProof>,
+    /// Per-object `(index, Merkle proof)` for membership in the global created
+    /// set, keyed by object commitment (`Dictionary::commitment()`).
+    pub created_proofs: HashMap<Hash, (i64, MerkleProof)>,
 }
 
 impl GroundingWitness {
-    pub fn new(state_root: StateRoot, source_tx_proofs: HashMap<Hash, MerkleProof>) -> Self {
+    pub fn new(state_root: StateRoot, created_proofs: HashMap<Hash, (i64, MerkleProof)>) -> Self {
         Self {
             state_root,
-            source_tx_proofs,
+            created_proofs,
         }
     }
 }
@@ -130,18 +136,33 @@ impl GroundingWitness {
 pub struct Tx {
     pub live: Set,
     pub nullifiers: Set,
-    /// The after_tx dictionary. Its commitment is tx_final (stored in
-    /// the state root's transactions set). Contains live, nullifiers,
-    /// chain_start, chain_end.
+    /// The after_tx dictionary. Its commitment is tx_final (the value the
+    /// relayer publishes). Contains live, nullifiers, chain_start, chain_end.
     pub ctx: Dictionary,
     pub state_root: Arc<StateRoot>,
 }
 
 impl Tx {
-    /// The transaction's committed dictionary. Its commitment is what
-    /// gets stored in the state root's transactions set.
+    /// The transaction's committed dictionary. Its commitment is tx_final,
+    /// the value the relayer publishes for this transaction.
     pub fn dict(&self) -> Dictionary {
         self.ctx.clone()
+    }
+
+    /// Commitments of the objects this tx leaves live.
+    pub fn live_commitments(&self) -> anyhow::Result<Vec<Hash>> {
+        self.live
+            .iter()
+            .map(|entry| Ok(Hash(entry?.raw().0)))
+            .collect()
+    }
+
+    /// The nullifiers this tx emits.
+    pub fn nullifier_hashes(&self) -> anyhow::Result<Vec<Hash>> {
+        self.nullifiers
+            .iter()
+            .map(|entry| Ok(Hash(entry?.raw().0)))
+            .collect()
     }
 }
 
@@ -180,51 +201,6 @@ impl<'de> Deserialize<'de> for Tx {
             nullifiers: payload.nullifiers,
             ctx: payload.ctx,
             state_root: Arc::new(payload.state_root),
-        })
-    }
-}
-
-/// Per-object membership evidence: the source transaction's commitment,
-/// the live-set commitment, and Merkle proofs that anchor the object
-/// inside that source transaction's live set. Produced at mint time by
-/// the source transaction's prover and packaged alongside each output
-/// object; consumed at proof time by [`TxBuilder`] when the object is
-/// spent.
-///
-/// State-root anchoring (proving the source tx is in `transactions_root`)
-/// is supplied separately at consume time by the synchronizer via
-/// [`GroundingWitness`]; it cannot be pre-computed at mint time because
-/// the source tx is not yet anchored.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GroundingEvidence {
-    /// Source transaction commitment (== `source_tx.ctx.commitment()`).
-    pub tx_final: Hash,
-    /// Commitment of the source transaction's live set.
-    pub live_root: Hash,
-    /// Merkle proof for `DictContains(source_tx_ctx, "live", live_root)`.
-    pub live_in_tx_proof: MerkleProof,
-    /// Merkle proof for `SetContains(live, obj)`.
-    pub obj_in_live_proof: MerkleProof,
-}
-
-impl GroundingEvidence {
-    /// Construct from the source transaction's `ctx` dict (which carries
-    /// the `live` set under the `"live"` key) plus the produced object
-    /// whose membership we attest.
-    pub fn new(ctx: &Dictionary, obj: &Dictionary) -> anyhow::Result<Self> {
-        let tx_final = ctx.commitment();
-        let (live_value, live_in_tx_proof) = ctx.prove(&StrKey::from("live"))?;
-        let live = live_value
-            .as_set()
-            .ok_or_else(|| anyhow::anyhow!("ctx.live is not a Set"))?;
-        let live_root = live.commitment();
-        let obj_in_live_proof = live.prove(&Value::from(obj.clone()))?;
-        Ok(Self {
-            tx_final,
-            live_root,
-            live_in_tx_proof,
-            obj_in_live_proof,
         })
     }
 }
@@ -521,7 +497,7 @@ impl TxBuilder {
     /// Seeds `chain_start = H(inputs, 0)`.
     pub fn new(
         ctx: &mut BuildContext,
-        inputs: &[(Dictionary, GroundingEvidence)],
+        inputs: &[Dictionary],
         grounding: Arc<GroundingWitness>,
     ) -> Self {
         let (st_inputs_grounded, inputs_set, stats) =
@@ -864,13 +840,28 @@ impl TxBuilder {
             frame,
         );
 
-        // TxFinalized -- rebind inputs_grounded and chain_start hash
-        // to reference before_tx.live instead of a literal inputs set.
+        // Tie grounding to the public state root: rebind the InputsGrounded
+        // statement's `inputs` to `before_tx.live` (the in-tx working set) and
+        // its created set to `state_root.created`. The latter is the single
+        // state-root array access anchoring the whole grounding tree. Two calls
+        // rather than one because the entries are different anchored-key types:
+        // a dict key and an array index.
         let st_inputs_rebound = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
                 vec![Some((&before_tx, "live")), None],
                 self.st_inputs_grounded.clone(),
+            ))
+            .unwrap();
+        let state_root_arr = self.state_root.array();
+        let st_inputs_rebound = ctx
+            .builder
+            .priv_op(Operation::replace_value_with_entry(
+                vec![
+                    None,
+                    Some((&state_root_arr, STATE_ROOT_CREATED_SLOT as i64)),
+                ],
+                st_inputs_rebound,
             ))
             .unwrap();
         let st_hash = ctx
@@ -910,10 +901,23 @@ impl TxBuilder {
                 st_dict_insert_lit,
             ))
             .unwrap();
+        // Surface the final nullifier and live sets as public args.
         let st_dc_null_after = ctx
             .builder
             .priv_op(op!(DictContains(after_tx, "nullifiers", self.nullifiers)))
             .unwrap();
+        let st_dc_live_after = ctx
+            .builder
+            .priv_op(op!(DictContains(after_tx, "live", self.live)))
+            .unwrap();
+        let st_bindings = ctx
+            .apply_custom_pred_simple(
+                false,
+                "TxFinalBindings",
+                vec![st_dc_null_after, st_dc_live_after],
+            )
+            .unwrap();
+        record(&mut stats, "TxFinalBindings");
         let st = ctx
             .apply_custom_pred_simple(
                 false,
@@ -922,7 +926,7 @@ impl TxBuilder {
                     st_inputs_rebound,
                     st_hash_rebound,
                     st_dict_insert,
-                    st_dc_null_after,
+                    st_bindings,
                     st_replay,
                 ],
             )
@@ -952,19 +956,21 @@ impl TxBuilder {
 
     fn build_inputs_grounded(
         ctx: &mut BuildContext,
-        inputs: &[(Dictionary, GroundingEvidence)],
+        inputs: &[Dictionary],
         grounding: &GroundingWitness,
     ) -> (Statement, Set, TxStats) {
         let mut stats = TxStats::new();
-        let state_root_arr = grounding.state_root.array();
+        // Ground against the created-set commitment as a plain value; TxFinalized
+        // is what ties it back to `state_root.created`.
+        let created_root = grounding.state_root.created_root;
+        let created_value = Value::from(created_root);
 
         if inputs.is_empty() {
-            // Base case: empty inputs. state_root is unconstrained here.
+            // Base case: empty inputs. `created` is unconstrained here.
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root = state_root_arr) = (
+                InputsGrounded(created = created_value) = (
                     Equal(set!(), set!()),
-                    Statement::None,
                     Statement::None,
                     Statement::None,
                     Statement::None
@@ -975,191 +981,90 @@ impl TxBuilder {
             return (st, set!(), stats);
         }
 
-        // One ArrayContains witness for `state_root.transactions`, reused
-        // as the anchored-key arg for every per-input SetContains below.
-        let (_, txns_proof) = state_root_arr
-            .prove(STATE_ROOT_TRANSACTIONS_SLOT)
-            .expect("state_root array has transactions slot");
-        let st_state_root_transactions = ctx
-            .builder
-            .priv_op(Operation(
-                OperationType::Native(NativeOperation::ArrayContainsFromEntries),
-                vec![
-                    Value::from(state_root_arr.commitment()).into(),
-                    Value::from(STATE_ROOT_TRANSACTIONS_SLOT as i64).into(),
-                    Value::from(grounding.state_root.transactions_root).into(),
-                ],
-                OperationAux::MerkleProof(txns_proof),
-            ))
-            .unwrap();
-
         let extend_set = |set: &Set, obj: &Dictionary| -> Set {
             let mut new_set = set.clone();
             new_set.insert(&Value::from(obj.clone())).unwrap();
             new_set
         };
 
-        let prove_input = |ctx: &mut BuildContext,
-                           evidence: &GroundingEvidence,
-                           obj: &Dictionary|
-         -> (Statement, Statement) {
-            let st_tx_in_transactions = prove_source_tx_membership(
-                ctx,
-                &st_state_root_transactions,
-                grounding,
-                evidence.tx_final,
-            );
-            let st_set_contains_live = prove_obj_in_source_tx_live(ctx, evidence, obj);
-            (st_tx_in_transactions, st_set_contains_live)
+        let prove_input = |ctx: &mut BuildContext, obj: &Dictionary| {
+            prove_obj_in_created(ctx, created_root, grounding, obj)
         };
 
-        if inputs.len() == 1 {
-            let (obj, evidence) = &inputs[0];
+        // Bottom of the recursion: Single for odd N, Pair (both inputs inline)
+        // for even N. Then peel two inputs per InputsGroundedRecursive level.
+        let (mut st, mut prev_set, mut consumed) = if inputs.len() % 2 == 1 {
+            let obj = &inputs[0];
             let inputs_set = extend_set(&set!(), obj);
-            let (st_tx_in_sr, st_set_contains_live) = prove_input(ctx, evidence, obj);
+            let st_live = prove_input(ctx, obj);
             let st_single = st_custom!(
                 ctx,
-                InputsGroundedSingle() = (
-                    st_tx_in_sr,
-                    st_set_contains_live,
-                    SetInsert(inputs_set, set!(), obj)
-                )
+                InputsGroundedSingle() = (st_live, SetInsert(inputs_set, set!(), obj))
             )
             .unwrap();
             record(&mut stats, "InputsGroundedSingle");
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root = state_root_arr) = (
-                    Statement::None,
-                    st_single,
-                    Statement::None,
-                    Statement::None,
-                    Statement::None
-                )
+                InputsGrounded(created = created_value) =
+                    (Statement::None, st_single, Statement::None, Statement::None)
             )
             .unwrap();
             record(&mut stats, "InputsGrounded");
-            return (st, inputs_set, stats);
-        }
-
-        // For 2+ inputs: bottom out at InputsGroundedPair (N=2) or
-        // InputsGroundedTriple (N>=3), then peel any remaining inputs via
-        // InputsGroundedRecursive.
-
-        let (first_obj, first_evidence) = &inputs[0];
-        let (second_obj, second_evidence) = &inputs[1];
-
-        let set_first = extend_set(&set!(), first_obj);
-        let (st_first_tx_in_sr, st_first_set_contains_live) =
-            prove_input(ctx, first_evidence, first_obj);
-        let st_igsv = st_custom!(
-            ctx,
-            InputsGroundedSingleVar() = (
-                st_first_tx_in_sr,
-                st_first_set_contains_live,
-                SetInsert(set_first, set!(), first_obj)
-            )
-        )
-        .unwrap();
-        record(&mut stats, "InputsGroundedSingleVar");
-
-        let inputs_pair = extend_set(&set_first, second_obj);
-        let (st_second_tx_in_sr, st_second_set_contains_live) =
-            prove_input(ctx, second_evidence, second_obj);
-
-        if inputs.len() == 2 {
+            (st, inputs_set, 1usize)
+        } else {
+            let first = &inputs[0];
+            let second = &inputs[1];
+            let set_first = extend_set(&set!(), first);
+            let inputs_pair = extend_set(&set_first, second);
+            let st_first = prove_input(ctx, first);
+            let st_second = prove_input(ctx, second);
             let st_pair = st_custom!(
                 ctx,
                 InputsGroundedPair() = (
-                    st_igsv,
-                    st_second_tx_in_sr,
-                    st_second_set_contains_live,
-                    SetInsert(inputs_pair, set_first, second_obj)
+                    st_first,
+                    SetInsert(set_first, set!(), first),
+                    st_second,
+                    SetInsert(inputs_pair, set_first, second)
                 )
             )
             .unwrap();
             record(&mut stats, "InputsGroundedPair");
             let st = st_custom!(
                 ctx,
-                InputsGrounded(state_root = state_root_arr) = (
-                    Statement::None,
-                    Statement::None,
-                    st_pair,
-                    Statement::None,
-                    Statement::None
-                )
+                InputsGrounded(created = created_value) =
+                    (Statement::None, Statement::None, st_pair, Statement::None)
             )
             .unwrap();
             record(&mut stats, "InputsGrounded");
-            return (st, inputs_pair, stats);
-        }
+            (st, inputs_pair, 2usize)
+        };
 
-        let st_igpv = st_custom!(
-            ctx,
-            InputsGroundedPairVar() = (
-                st_igsv,
-                st_second_tx_in_sr,
-                st_second_set_contains_live,
-                SetInsert(inputs_pair, set_first, second_obj)
-            )
-        )
-        .unwrap();
-        record(&mut stats, "InputsGroundedPairVar");
-
-        let (third_obj, third_evidence) = &inputs[2];
-        let inputs_triple = extend_set(&inputs_pair, third_obj);
-        let (st_third_tx_in_sr, st_third_set_contains_live) =
-            prove_input(ctx, third_evidence, third_obj);
-        let st_triple = st_custom!(
-            ctx,
-            InputsGroundedTriple() = (
-                st_igpv,
-                st_third_tx_in_sr,
-                st_third_set_contains_live,
-                SetInsert(inputs_triple, inputs_pair, third_obj)
-            )
-        )
-        .unwrap();
-        record(&mut stats, "InputsGroundedTriple");
-
-        let mut st = st_custom!(
-            ctx,
-            InputsGrounded(state_root = state_root_arr) = (
-                Statement::None,
-                Statement::None,
-                Statement::None,
-                st_triple,
-                Statement::None
-            )
-        )
-        .unwrap();
-        record(&mut stats, "InputsGrounded");
-        let mut prev_set = inputs_triple;
-
-        for (obj, evidence) in &inputs[3..] {
-            let next_set = extend_set(&prev_set, obj);
-            let (st_tx_in_sr, st_set_contains_live) = prove_input(ctx, evidence, obj);
+        // Peel two inputs per recursion level.
+        while consumed < inputs.len() {
+            let first = &inputs[consumed];
+            let second = &inputs[consumed + 1];
+            let mid = extend_set(&prev_set, first);
+            let next_set = extend_set(&mid, second);
+            let st_first = prove_input(ctx, first);
+            let st_second = prove_input(ctx, second);
             let st_rec = st_custom!(
                 ctx,
                 InputsGroundedRecursive() = (
-                    st_tx_in_sr,
-                    st_set_contains_live,
-                    SetInsert(next_set, prev_set, obj),
+                    st_first,
+                    SetInsert(mid, prev_set, first),
+                    st_second,
+                    SetInsert(next_set, mid, second),
                     st
                 )
             )
             .unwrap();
             record(&mut stats, "InputsGroundedRecursive");
             prev_set = next_set;
+            consumed += 2;
             st = st_custom!(
                 ctx,
-                InputsGrounded() = (
-                    Statement::None,
-                    Statement::None,
-                    Statement::None,
-                    Statement::None,
-                    st_rec
-                )
+                InputsGrounded(created = created_value) =
+                    (Statement::None, Statement::None, Statement::None, st_rec)
             )
             .unwrap();
             record(&mut stats, "InputsGrounded");
@@ -1168,67 +1073,33 @@ impl TxBuilder {
     }
 }
 
-/// Prove `SetContains(state_root.transactions, tx_hash)`. The supplied
-/// statement must already witness `state_root["transactions"]` so we can
-/// use it for the anchored key.
-fn prove_source_tx_membership(
+/// Prove `ArrayContains(created, index, obj)` for one input object against the
+/// global created-set commitment `created_root`, passed as a plain literal.
+///
+/// The created set stores object commitments at sequential indices, but
+/// `Value::from(obj)` hashes to that same commitment, so the per-object proof
+/// lines up against the full object dict here. The index comes from the
+/// grounding witness.
+fn prove_obj_in_created(
     ctx: &mut BuildContext,
-    st_state_root_transactions: &Statement,
+    created_root: Hash,
     grounding: &GroundingWitness,
-    tx_hash: Hash,
-) -> Statement {
-    let proof = grounding
-        .source_tx_proofs
-        .get(&tx_hash)
-        .cloned()
-        .expect("missing source tx proof in grounding witness");
-    ctx.builder
-        .priv_op(Operation(
-            OperationType::Native(NativeOperation::SetContainsFromEntries),
-            vec![
-                OperationArg::Statement(st_state_root_transactions.clone()),
-                Value::from(tx_hash).into(),
-            ],
-            OperationAux::MerkleProof(proof),
-        ))
-        .unwrap()
-}
-
-/// Build `SetContains(source_tx.live, obj)` from a [`GroundingEvidence`].
-///
-/// Discharges two Merkle proofs:
-///   * `DictContains(source_tx_ctx, "live", live_root)` via `live_in_tx_proof`.
-///   * `SetContains(live_root, obj)` via `obj_in_live_proof`.
-///
-/// The DictContains statement is fed as the first arg of the SetContains
-/// op as `OperationArg::Statement(...)`. Pod2 then promotes that arg to
-/// `ValueRef::Key(AnchoredKey(tx_final, "live"))`, which is the form the
-/// `source_tx.live` template arg requires.
-fn prove_obj_in_source_tx_live(
-    ctx: &mut BuildContext,
-    evidence: &GroundingEvidence,
     obj: &Dictionary,
 ) -> Statement {
-    let st_dict_contains = ctx
-        .builder
-        .priv_op(Operation(
-            OperationType::Native(NativeOperation::DictContainsFromEntries),
-            vec![
-                Value::from(evidence.tx_final).into(),
-                Value::from("live").into(),
-                Value::from(evidence.live_root).into(),
-            ],
-            OperationAux::MerkleProof(evidence.live_in_tx_proof.clone()),
-        ))
-        .unwrap();
+    let (index, proof) = grounding
+        .created_proofs
+        .get(&obj.commitment())
+        .cloned()
+        .expect("missing created-set proof in grounding witness");
     ctx.builder
         .priv_op(Operation(
-            OperationType::Native(NativeOperation::SetContainsFromEntries),
+            OperationType::Native(NativeOperation::ArrayContainsFromEntries),
             vec![
-                OperationArg::Statement(st_dict_contains),
+                Value::from(created_root).into(),
+                Value::from(index).into(),
                 Value::from(obj.clone()).into(),
             ],
-            OperationAux::MerkleProof(evidence.obj_in_live_proof.clone()),
+            OperationAux::MerkleProof(proof),
         ))
         .unwrap()
 }
@@ -1249,13 +1120,14 @@ mod tests {
 
     use super::*;
 
-    /// Running test state that mirrors what the synchronizer tracks. Keeps
-    /// full transactions/nullifier sets on the prover side so it can hand
-    /// out real Merkle proofs; exposes the canonical commitments-only
-    /// `StateRoot` to callers.
+    /// Running grounding state for the tests: keeps the full created-object set
+    /// (as an array, plus a reverse index for proofs) and the nullifier set so
+    /// it can hand out real Merkle proofs, while exposing only the
+    /// commitments-only `StateRoot`. The created set is grow-only.
     struct TestState {
         block_number: i64,
-        transactions: Set,
+        created: Array,
+        created_index: HashMap<Hash, i64>,
         nullifiers: Set,
         gsrs: Array,
     }
@@ -1264,7 +1136,8 @@ mod tests {
         fn empty(block_number: i64) -> Self {
             Self {
                 block_number,
-                transactions: set!(),
+                created: Array::new(Vec::new()),
+                created_index: HashMap::new(),
                 nullifiers: set!(),
                 gsrs: Array::new(Vec::new()),
             }
@@ -1273,35 +1146,46 @@ mod tests {
         fn state_root(&self) -> StateRoot {
             StateRoot::new(
                 self.block_number,
-                self.transactions.commitment(),
+                self.created.commitment(),
                 self.nullifiers.commitment(),
                 self.gsrs.commitment(),
             )
         }
 
         fn apply_tx(&mut self, tx: &Tx) {
-            self.transactions
-                .insert(&Value::from(tx.ctx.clone()))
-                .unwrap();
+            for obj in tx.live.iter() {
+                let obj = obj.expect("tx live entry should decode");
+                let commitment = Hash(obj.raw().0);
+                // 1-indexed: slot 0 stays empty so nothing grounds at index 0.
+                let index = self.created_index.len() as i64 + 1;
+                self.created.insert(index as usize, obj).unwrap();
+                self.created_index.insert(commitment, index);
+            }
             for nullifier in tx.nullifiers.iter() {
                 let nullifier = nullifier.expect("tx nullifier should decode");
                 self.nullifiers.insert(&nullifier).unwrap();
             }
         }
 
-        fn grounding_witness(&self, source_txs: &[Tx]) -> Arc<GroundingWitness> {
-            let source_tx_proofs = source_txs
+        /// Build a grounding witness for the given input objects: one created-set
+        /// `(index, membership proof)` per object, keyed by commitment.
+        fn grounding_witness(&self, inputs: &[Dictionary]) -> Arc<GroundingWitness> {
+            let created_proofs = inputs
                 .iter()
-                .map(|tx| {
-                    let commitment = tx.ctx.commitment();
-                    let proof = self
-                        .transactions
-                        .prove(&Value::from(commitment))
-                        .expect("source tx should be provable from test state");
-                    (commitment, proof)
+                .map(|obj| {
+                    let commitment = obj.commitment();
+                    let index = *self
+                        .created_index
+                        .get(&commitment)
+                        .expect("input object should be present in created set");
+                    let (_value, proof) = self
+                        .created
+                        .prove(index as usize)
+                        .expect("input object should be provable from created set");
+                    (commitment, (index, proof))
                 })
                 .collect();
-            Arc::new(GroundingWitness::new(self.state_root(), source_tx_proofs))
+            Arc::new(GroundingWitness::new(self.state_root(), created_proofs))
         }
     }
 
@@ -1358,7 +1242,7 @@ mod tests {
         let encoded = serde_json::to_value(&original).unwrap();
         assert_eq!(encoded["blockNumber"], serde_json::json!(9));
         assert_eq!(
-            encoded["transactionsRoot"],
+            encoded["createdRoot"],
             serde_json::json!(hex::encode([1_u8; 32]))
         );
         assert_eq!(
@@ -1445,9 +1329,8 @@ mod tests {
             .unwrap();
         let stone_initial = make_object(is_stone.clone(), &[]);
 
-        let witness = state.grounding_witness(std::slice::from_ref(&tx0));
-        let evidence = GroundingEvidence::new(&tx0.ctx, &pick).unwrap();
-        let inputs = vec![(pick.clone(), evidence)];
+        let inputs = vec![pick.clone()];
+        let witness = state.grounding_witness(&inputs);
         let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
 
         let scope_outer = tx2.begin_action();
@@ -1573,9 +1456,8 @@ mod tests {
 
         let wood_initial = make_object(is_wood.clone(), &[]);
 
-        let witness = state.grounding_witness(std::slice::from_ref(&tx1_out));
-        let evidence = GroundingEvidence::new(&tx1_out.ctx, &log).unwrap();
-        let inputs = vec![(log.clone(), evidence)];
+        let inputs = vec![log.clone()];
+        let witness = state.grounding_witness(&inputs);
         let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
 
         let scope_outer = tx2.begin_action();
@@ -1626,9 +1508,8 @@ mod tests {
         let stick_a_initial = make_object(is_stick.clone(), &[]);
         let stick_b_initial = make_object(is_stick, &[]);
 
-        let witness = state.grounding_witness(std::slice::from_ref(&tx2_out));
-        let evidence = GroundingEvidence::new(&tx2_out.ctx, &wood).unwrap();
-        let inputs = vec![(wood.clone(), evidence)];
+        let inputs = vec![wood.clone()];
+        let witness = state.grounding_witness(&inputs);
         let mut tx3 = TxBuilder::new(&mut ctx, &inputs, witness);
 
         let scope_outer = tx3.begin_action();
@@ -1723,5 +1604,87 @@ mod tests {
                 .contains(&Value::from(compute_nullifier(&wood)))
                 .unwrap()
         );
+    }
+
+    /// Grounding three inputs exercises InputsGroundedRecursive (peel two per
+    /// level) bottoming out at InputsGroundedSingle -- the N>=3 path that the
+    /// one- and two-input tests never reach.
+    #[test]
+    fn test_grounds_three_inputs() {
+        let txlib = Arc::new(crate::predicates::module());
+        let craft = Arc::new(crate::predicates::crafting_test_module());
+        let modules = vec![txlib.clone(), craft.clone()];
+
+        let is_log =
+            Value::from(Predicate::Custom(craft.predicate_ref_by_name("IsLog").unwrap()).hash());
+
+        let mut state = TestState::empty(0);
+        let params = Params::default();
+        let vd_set = VDSet::new(&[]);
+
+        // Spawn three logs (one FindLog tx each) and fold them into the live
+        // set so the burn tx below can ground all three.
+        let mut logs = Vec::new();
+        for _ in 0..3 {
+            let builder = MultiPodBuilder::new(&params, &vd_set);
+            let mut ctx = BuildContext {
+                builder,
+                modules: modules.clone(),
+            };
+            let log_initial = make_object(is_log.clone(), &[]);
+            let mut tx = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
+            let scope = tx.begin_action();
+            let (log, st_insert, h) = tx.insert(&mut ctx, &log_initial);
+            let st_find = ctx
+                .apply_custom_pred_simple(false, "FindLog", vec![st_insert])
+                .unwrap();
+            let st_guard = ctx
+                .apply_custom_pred_simple(false, "IsLog", vec![st_find, Statement::None])
+                .unwrap();
+            tx.set_guard(h, st_guard);
+            tx.end_action(scope);
+            let (st, tx_out, _stats) = tx.finalize(&mut ctx);
+            ctx.builder.reveal(&st).unwrap();
+            solve_and_verify(ctx.builder);
+            state.apply_tx(&tx_out);
+            logs.push(log);
+        }
+
+        // Burn all three logs in one tx: TxBuilder::new grounds three inputs,
+        // driving InputsGrounded -> Recursive -> InputsGrounded -> Single.
+        let builder = MultiPodBuilder::new(&params, &vd_set);
+        let mut ctx = BuildContext { builder, modules };
+
+        let inputs = logs.clone();
+        let witness = state.grounding_witness(&inputs);
+        let mut burn = TxBuilder::new(&mut ctx, &inputs, witness);
+
+        for log in &logs {
+            let scope = burn.begin_action();
+            let (st_del, h) = burn.delete(&mut ctx, log);
+            let st_action = ctx
+                .apply_custom_pred_simple(false, "DeleteLog", vec![st_del])
+                .unwrap();
+            let st_guard = ctx
+                .apply_custom_pred_simple(false, "IsLog", vec![Statement::None, st_action])
+                .unwrap();
+            burn.set_guard(h, st_guard);
+            burn.end_action(scope);
+        }
+
+        eprintln!("{burn}");
+        let (st, burn_out, stats) = burn.finalize(&mut ctx);
+        print_stats(&stats);
+        ctx.builder.reveal(&st).unwrap();
+        solve_and_verify(ctx.builder);
+
+        for log in &logs {
+            assert!(
+                burn_out
+                    .nullifiers
+                    .contains(&Value::from(compute_nullifier(log)))
+                    .unwrap()
+            );
+        }
     }
 }

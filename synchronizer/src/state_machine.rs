@@ -21,12 +21,13 @@ pub const MAX_GSR_AGE_BLOCKS: i64 = 300;
 /// Ephemeral mutable view used while deriving one slot.
 ///
 /// This view opens the persistent POD2 containers used during slot derivation so validation can
-/// query and mutate transactions, nullifiers, and GSR history for one slot.
+/// query and mutate the created-object set, nullifiers, and GSR history for one slot.
 struct WorkingState {
     /// Mutable non-root metadata accumulated while deriving the slot.
     metadata: HeadMetadata,
-    /// Persistent transactions set opened from `head.roots.transactions`.
-    transactions: Set,
+    /// Persistent global created-object set (a pod2 `Array`) opened from
+    /// `head.roots.created`.
+    created: Array,
     /// Persistent nullifiers set opened from `head.roots.nullifiers`.
     nullifiers: Set,
     /// Persistent full GSR history array opened from `head.roots.gsr_history`.
@@ -66,12 +67,16 @@ impl StateMachine {
     /// 1. Parse and verify the blob as a `TxFinalized` payload via `proof_parser`
     /// 2. Check that `payload.state_root_hash` exists in the recent canonical GSR cache
     /// 3. Enforce the maximum grounding age window (`MAX_GSR_AGE_BLOCKS`)
-    /// 4. Reject duplicate `tx_final` values already present in the in-progress transactions set
+    /// 4. Reject duplicate created-object commitments both within the payload and against the
+    ///    in-progress created set: a tx that creates an object that already exists fails the same
+    ///    way a nullifier double-spend does. This is also what gives no-input (mining) txs their
+    ///    replay protection.
     /// 5. Reject duplicate nullifiers both within the payload and against the in-progress
     ///    nullifiers set, which starts from canonical state and includes earlier accepted blobs
     ///
     /// If all checks pass, the method mutates the slot-local `WorkingState` by:
-    /// - inserting `tx_final` into the persistent in-progress transactions set handle
+    /// - appending each created-object commitment to the persistent in-progress created array
+    ///   and recording its index in the reverse-index cache
     /// - inserting each nullifier into the persistent in-progress nullifiers set handle
     /// - incrementing the corresponding counts in `state.metadata`
     ///
@@ -123,10 +128,24 @@ impl StateMachine {
             return Ok(());
         }
 
-        let tx_value = Value::from(payload.tx_final);
-        if state.transactions.contains(&tx_value)? {
-            warn!(slot, block_number, "Duplicate tx_final; rejecting");
-            return Ok(());
+        // Pre-check created objects and nullifiers before mutating anything, so a
+        // single collision rejects the whole blob with no partial application.
+        let mut payload_created = HashSet::with_capacity(payload.live.len());
+        for obj in &payload.live {
+            if !payload_created.insert(*obj) {
+                warn!(
+                    slot,
+                    block_number, "Duplicate created object within payload; rejecting"
+                );
+                return Ok(());
+            }
+            if self.is_created(state, *obj)? {
+                warn!(
+                    slot,
+                    block_number, "Created object already exists (creation collision); rejecting"
+                );
+                return Ok(());
+            }
         }
 
         let mut payload_nullifiers = HashSet::with_capacity(payload.nullifiers.len());
@@ -144,8 +163,18 @@ impl StateMachine {
             }
         }
 
-        state.transactions.insert(&tx_value)?;
-        state.metadata.tx_count += 1;
+        for obj in &payload.live {
+            // The array is 1-indexed: slot 0 is left empty so no real object is
+            // ever grounded at `ArrayContains(created, 0, ..)`. Index 0's
+            // RawValue is [0,0,0,0], the all-zeros shape that collides with
+            // `None` / `IndexKey(0)` in pod2's StatementArg encoding -- the same
+            // hazard StateRoot's `_pad` slot avoids. `created_count` stays the
+            // true object count; the array slot is `created_count + 1`.
+            let index = state.metadata.created_count as usize + 1;
+            state.created.insert(index, Value::from(*obj))?;
+            self.app_db.created_index_put(*obj, index as i64)?;
+            state.metadata.created_count += 1;
+        }
         for nullifier in &payload.nullifiers {
             state.nullifiers.insert(&Value::from(*nullifier))?;
             state.metadata.nullifier_count += 1;
@@ -154,23 +183,34 @@ impl StateMachine {
         info!(
             slot,
             block_number,
-            transaction_count = state.metadata.tx_count,
+            created_count = state.metadata.created_count,
             nullifier_count = state.metadata.nullifier_count,
             "Validated blob state update in slot derivation"
         );
         Ok(())
     }
 
+    /// Whether `commitment` is already in the in-progress created set. The cache
+    /// gives a candidate index; the in-progress array is the authority, so a
+    /// stale cache hit (pointing at an index this array does not hold, or holds
+    /// a different commitment at) correctly reads as "not created".
+    fn is_created(&self, state: &WorkingState, commitment: Hash) -> Result<bool> {
+        match self.app_db.created_index_get(commitment)? {
+            None => Ok(false),
+            Some(index) => Ok(state.created.get(index as usize)? == Some(Value::from(commitment))),
+        }
+    }
+
     /// Derive the next canonical head for one execution slot from a caller-provided base head.
     ///
     /// This method is the slot-level orchestration layer around `process_blob`.
     /// It:
-    /// - reopens the persistent transactions, nullifiers, and GSR-history containers from
+    /// - reopens the persistent created-object, nullifiers, and GSR-history containers from
     ///   `base_head.roots`
     /// - seeds the per-slot `WorkingState` with the caller-provided recent-GSR window
     /// - feeds every decoded blob payload through `process_blob`, accumulating accepted updates
     ///   in the in-progress container handles
-    /// - computes the next GSR from the updated transactions/nullifiers roots and the prior
+    /// - computes the next GSR from the updated created/nullifiers roots and the prior
     ///   GSR-history root committed into the resulting `StateRoot`
     /// - appends that new GSR to the full history array and returns the resulting `CanonicalHead`
     ///
@@ -178,7 +218,7 @@ impl StateMachine {
     /// returns, RocksDB may already contain Merkle nodes for the derived containers, but the
     /// head does not become canonical until the caller persists it in Postgres.
     ///
-    /// Empty or fully rejected slots still produce a new head with the same transactions and
+    /// Empty or fully rejected slots still produce a new head with the same created and
     /// nullifiers roots as `base_head`, but with a newly derived `current_gsr` and an appended
     /// GSR-history entry for the slot's execution block.
     pub fn derive_slot_head(
@@ -191,9 +231,7 @@ impl StateMachine {
     ) -> Result<CanonicalHead> {
         let mut working = WorkingState {
             metadata: base_head.metadata,
-            transactions: self
-                .app_db
-                .open_transactions(base_head.roots.transactions)?,
+            created: self.app_db.open_created(base_head.roots.created)?,
             nullifiers: self.app_db.open_nullifiers(base_head.roots.nullifiers)?,
             gsr_history: self.app_db.open_gsr_history(base_head.roots.gsr_history)?,
             recent_gsrs: recent_gsrs.into_iter().collect(),
@@ -212,7 +250,7 @@ impl StateMachine {
         let prior_gsrs_root = base_head.roots.gsr_history;
         let new_gsr = StateRoot::new(
             i64::from(block_number),
-            working.transactions.commitment(),
+            working.created.commitment(),
             working.nullifiers.commitment(),
             prior_gsrs_root,
         )
@@ -224,7 +262,7 @@ impl StateMachine {
 
         let new_head = CanonicalHead {
             roots: CanonicalRoots {
-                transactions: working.transactions.commitment(),
+                created: working.created.commitment(),
                 nullifiers: working.nullifiers.commitment(),
                 state_root_gsrs: prior_gsrs_root,
                 gsr_history: working.gsr_history.commitment(),
@@ -232,7 +270,7 @@ impl StateMachine {
             metadata: HeadMetadata {
                 current_gsr: Some(new_gsr),
                 current_block_number: Some(block_number),
-                tx_count: working.metadata.tx_count,
+                created_count: working.metadata.created_count,
                 nullifier_count: working.metadata.nullifier_count,
                 gsr_count: base_head.metadata.gsr_count + 1,
             },
@@ -256,7 +294,7 @@ impl StateMachine {
             .map(encode_hash_hex)
             .unwrap_or_else(|| "none".to_string());
         info!(
-            transaction_count = head.metadata.tx_count,
+            created_count = head.metadata.created_count,
             nullifier_count = head.metadata.nullifier_count,
             gsr_count = head.metadata.gsr_count,
             current_gsr = %current_gsr,
@@ -284,15 +322,25 @@ mod tests {
         hash_values(&[Value::from(n)])
     }
 
-    fn mock_txn_bytes(tx_final: Hash, nullifiers: &[Hash], state_root: Hash) -> Vec<u8> {
-        let nullifiers_json = nullifiers
-            .iter()
-            .map(|h| format!("\"{:#}\"", h))
-            .collect::<Vec<_>>()
-            .join(",");
+    fn mock_txn_bytes(
+        tx_final: Hash,
+        nullifiers: &[Hash],
+        live: &[Hash],
+        state_root: Hash,
+    ) -> Vec<u8> {
+        let hashes_json = |hashes: &[Hash]| {
+            hashes
+                .iter()
+                .map(|h| format!("\"{:#}\"", h))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
         format!(
-            r#"{{"tx_final":"{:#}","nullifiers":[{}],"state_root_hash":"{:#}"}}"#,
-            tx_final, nullifiers_json, state_root
+            r#"{{"tx_final":"{:#}","nullifiers":[{}],"live":[{}],"state_root_hash":"{:#}"}}"#,
+            tx_final,
+            hashes_json(nullifiers),
+            hashes_json(live),
+            state_root
         )
         .into_bytes()
     }
@@ -320,19 +368,22 @@ mod tests {
 
         let tx_final = unique_hash(10);
         let nullifier = unique_hash(11);
-        let blob = mock_txn_bytes(tx_final, &[nullifier], gsr0);
+        let live_obj = unique_hash(12);
+        let blob = mock_txn_bytes(tx_final, &[nullifier], &[live_obj], gsr0);
         let head1 = sm
             .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
             .unwrap();
-        let tx_present = app_db.tx_exists_batch(&head1.roots, &[tx_final]).unwrap();
+        let created_present = app_db
+            .created_exists_batch(&head1.roots, &[live_obj])
+            .unwrap();
         let nullifier_present = app_db
             .nullifier_exists_batch(&head1.roots, &[nullifier])
             .unwrap();
 
-        assert_eq!(head1.metadata.tx_count, 1);
+        assert_eq!(head1.metadata.created_count, 1);
         assert_eq!(head1.metadata.nullifier_count, 1);
         assert_eq!(head1.metadata.gsr_count, 2);
-        assert_eq!(tx_present, vec![true]);
+        assert_eq!(created_present, vec![true]);
         assert_eq!(nullifier_present, vec![true]);
     }
 
@@ -342,9 +393,9 @@ mod tests {
         let head0 = seed_gsr0(&sm);
 
         let tx_final = unique_hash(21);
-        let blob = mock_txn_bytes(tx_final, &[], unique_hash(99));
+        let blob = mock_txn_bytes(tx_final, &[], &[unique_hash(22)], unique_hash(99));
         let head1 = sm.derive_slot_head(head0, [], 2, 2, &[(0, blob)]).unwrap();
-        assert_eq!(head1.metadata.tx_count, head0.metadata.tx_count);
+        assert_eq!(head1.metadata.created_count, head0.metadata.created_count);
     }
 
     #[test]
@@ -354,14 +405,42 @@ mod tests {
         let gsr0 = head0.metadata.current_gsr.unwrap();
 
         let tx_final = unique_hash(31);
-        let blob = mock_txn_bytes(tx_final, &[], gsr0);
+        let live_obj = unique_hash(32);
+        let blob = mock_txn_bytes(tx_final, &[], &[live_obj], gsr0);
         let head1 = sm
             .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
             .unwrap();
-        let old_membership = app_db.tx_exists_batch(&head0.roots, &[tx_final]).unwrap();
-        let new_membership = app_db.tx_exists_batch(&head1.roots, &[tx_final]).unwrap();
+        let old_membership = app_db
+            .created_exists_batch(&head0.roots, &[live_obj])
+            .unwrap();
+        let new_membership = app_db
+            .created_exists_batch(&head1.roots, &[live_obj])
+            .unwrap();
 
         assert_eq!(old_membership, vec![false]);
         assert_eq!(new_membership, vec![true]);
+    }
+
+    #[test]
+    fn test_rejects_duplicate_created_object() {
+        let (sm, _app_db, _dir) = make_sm();
+        let head0 = seed_gsr0(&sm);
+        let gsr0 = head0.metadata.current_gsr.unwrap();
+
+        let live_obj = unique_hash(40);
+        let blob1 = mock_txn_bytes(unique_hash(41), &[], &[live_obj], gsr0);
+        let head1 = sm
+            .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob1)])
+            .unwrap();
+        assert_eq!(head1.metadata.created_count, 1);
+
+        // A second tx that re-creates the same object is rejected, exactly
+        // like a nullifier double-spend.
+        let gsr1 = head1.metadata.current_gsr.unwrap();
+        let blob2 = mock_txn_bytes(unique_hash(42), &[], &[live_obj], gsr1);
+        let head2 = sm
+            .derive_slot_head(head1, [(gsr1, 1)], 2, 2, &[(0, blob2)])
+            .unwrap();
+        assert_eq!(head2.metadata.created_count, head1.metadata.created_count);
     }
 }

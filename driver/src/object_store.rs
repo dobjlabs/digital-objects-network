@@ -220,6 +220,7 @@ mod tests {
                 vec![],
             )
             .unwrap();
+        let tx_final = outputs.tx.dict().commitment();
         let spendable = outputs.obj(0);
         ObjectRecord {
             id: format!("{:#}", spendable.obj.commitment()),
@@ -227,7 +228,7 @@ mod tests {
             status: ObjectStatus::Live,
             tx_hash: None,
             obj: spendable.obj,
-            evidence: spendable.evidence,
+            tx_final,
         }
     }
 

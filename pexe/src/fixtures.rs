@@ -9,12 +9,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use pod2::middleware::{
-    EMPTY_HASH, EMPTY_VALUE, Hash, StrKey, Value, containers::Set, hash_values,
-};
-use pod2utils::{dict, rand_raw_value, set};
+use pod2::middleware::{EMPTY_HASH, EMPTY_VALUE, Hash, StrKey, Value, containers::Array};
+use pod2utils::{dict, rand_raw_value};
 use sdk::{SdkModule, SpendableObject};
-use txlib::{GroundingEvidence, GroundingWitness, StateRoot};
+use txlib::{GroundingWitness, StateRoot};
 
 use crate::inspect::derive_class_signature;
 
@@ -95,63 +93,45 @@ pub struct SyntheticState {
     pub spendable: Vec<SpendableObject>,
 }
 
-/// Build a state in which each `obj` is Live, by fabricating one
-/// "source tx" per object that inserts it into its own (single-element)
-/// live set, gathering those source-tx ctxs into a `transactions` set,
-/// and packaging the resulting Merkle proofs into a `GroundingWitness`.
-///
-/// For each input, a [`GroundingEvidence`] is constructed against its
-/// source tx so the SDK's [`txlib::TxBuilder`] can verify the live-set
-/// membership chain.
+/// Build a state in which each `obj` is Live, by inserting every object
+/// into a single global created set (an array, indexed by position) and
+/// packaging per-object `(index, membership proof)` into a `GroundingWitness`.
 pub fn build_synthetic_state(
     objs: &[pod2::middleware::containers::Dictionary],
 ) -> Result<SyntheticState> {
-    let mut transactions: Set = set!();
-    let mut source_ctxs: Vec<pod2::middleware::containers::Dictionary> =
-        Vec::with_capacity(objs.len());
-
+    let mut created: Array = Array::new(Vec::new());
+    let mut indices: HashMap<Hash, i64> = HashMap::with_capacity(objs.len());
     for obj in objs {
-        let live: Set = set!(obj.clone());
-        let nullifiers: Set = set!();
-        // Source-tx ctx only needs to carry "live" for the SDK's
-        // grounding checks; the chain_start/chain_end fields are
-        // included for shape consistency with real txs but their
-        // contents aren't checked at grounding time.
-        let chain_seed = hash_values(&[Value::from(live.commitment()), Value::from(EMPTY_VALUE)]);
-        let ctx = dict!({
-            "live" => Value::from(live.clone()),
-            "nullifiers" => Value::from(nullifiers.clone()),
-            "chain_start" => Value::from(chain_seed),
-            "chain_end" => Value::from(chain_seed),
-        });
-        transactions
-            .insert(&Value::from(ctx.clone()))
-            .map_err(|err| anyhow!("recording synthetic source tx: {err}"))?;
-        source_ctxs.push(ctx);
+        let commitment = obj.commitment();
+        if indices.contains_key(&commitment) {
+            continue;
+        }
+        // 1-indexed: slot 0 stays empty so nothing grounds at index 0.
+        let index = indices.len() as i64 + 1;
+        created
+            .insert(index as usize, Value::from(obj.clone()))
+            .map_err(|err| anyhow!("recording synthetic created object: {err}"))?;
+        indices.insert(commitment, index);
     }
 
-    let state_root = StateRoot::new(1, transactions.commitment(), EMPTY_HASH, EMPTY_HASH);
+    let state_root = StateRoot::new(1, created.commitment(), EMPTY_HASH, EMPTY_HASH);
 
-    let mut source_tx_proofs: HashMap<Hash, _> = HashMap::with_capacity(source_ctxs.len());
-    for ctx in &source_ctxs {
-        let commitment = ctx.commitment();
-        let proof = transactions
-            .prove(&Value::from(commitment))
-            .map_err(|err| anyhow!("proving synthetic source-tx membership: {err}"))?;
-        source_tx_proofs.insert(commitment, proof);
+    let mut created_proofs: HashMap<Hash, _> = HashMap::with_capacity(objs.len());
+    for obj in objs {
+        let commitment = obj.commitment();
+        let index = indices[&commitment];
+        let (_value, proof) = created
+            .prove(index as usize)
+            .map_err(|err| anyhow!("proving synthetic created-set membership: {err}"))?;
+        created_proofs.insert(commitment, (index, proof));
     }
 
-    let grounding_witness = Arc::new(GroundingWitness::new(state_root, source_tx_proofs));
+    let grounding_witness = Arc::new(GroundingWitness::new(state_root, created_proofs));
 
-    let mut spendable: Vec<SpendableObject> = Vec::with_capacity(objs.len());
-    for (obj, ctx) in objs.iter().zip(source_ctxs.iter()) {
-        let evidence = GroundingEvidence::new(ctx, obj)
-            .map_err(|err| anyhow!("building grounding evidence: {err}"))?;
-        spendable.push(SpendableObject {
-            obj: obj.clone(),
-            evidence,
-        });
-    }
+    let spendable: Vec<SpendableObject> = objs
+        .iter()
+        .map(|obj| SpendableObject { obj: obj.clone() })
+        .collect();
 
     Ok(SyntheticState {
         grounding_witness,

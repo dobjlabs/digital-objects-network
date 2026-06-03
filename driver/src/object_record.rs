@@ -1,8 +1,7 @@
-use pod2::middleware::containers::Dictionary;
+use pod2::middleware::{Hash, containers::Dictionary};
 use sdk::SpendableObject;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
-use txlib::GroundingEvidence;
 
 use wire_types::{ObjectStatus, QualifiedName};
 
@@ -21,9 +20,10 @@ pub struct ObjectRecord {
     pub tx_hash: Option<String>,
     /// Object payload dictionary
     pub obj: Dictionary,
-    /// Per-object grounding evidence: source tx commitment + Merkle
-    /// proofs anchoring the object inside that source tx's live set.
-    pub evidence: GroundingEvidence,
+    /// Commitment of the transaction that produced this object. Used only to
+    /// correlate with the relayer, resolving the current Ethereum tx hash
+    /// across fee-bump replacements.
+    pub tx_final: Hash,
 }
 
 impl ObjectRecord {
@@ -34,7 +34,6 @@ impl ObjectRecord {
     pub(crate) fn spendable(&self) -> SpendableObject {
         SpendableObject {
             obj: self.obj.clone(),
-            evidence: self.evidence.clone(),
         }
     }
 

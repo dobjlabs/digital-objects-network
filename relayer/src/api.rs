@@ -298,6 +298,7 @@ mod tests {
                     tx_final: EMPTY_HASH,
                     state_root_hash: EMPTY_HASH,
                     nullifiers: vec![],
+                    live: vec![],
                 })),
                 ParseMode::None => Ok(None),
                 ParseMode::Err => Err(anyhow::anyhow!("invalid proof")),

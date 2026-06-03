@@ -54,28 +54,16 @@ fn tx_hash(tx: &txlib::Tx) -> Hash {
     tx.dict().commitment()
 }
 
-fn tx_nullifiers(tx: &txlib::Tx) -> Vec<Hash> {
-    tx.nullifiers
-        .iter()
-        .map(|nullifier| {
-            let nullifier = nullifier.expect("tx nullifier should decode");
-            Hash(nullifier.raw().0)
-        })
-        .collect()
-}
-
 fn apply_tx(state: &mut TestState, tx: &txlib::Tx) {
-    state.apply_tx(tx_hash(tx), tx_nullifiers(tx));
+    state.apply_tx(
+        tx.live_commitments().unwrap(),
+        tx.nullifier_hashes().unwrap(),
+    );
 }
 
 fn state_root(state: &TestState) -> StateRoot {
-    let (transactions_root, nullifiers_root, gsrs_root) = state.roots();
-    StateRoot::new(
-        state.block_number,
-        transactions_root,
-        nullifiers_root,
-        gsrs_root,
-    )
+    let (created_root, nullifiers_root, gsrs_root) = state.roots();
+    StateRoot::new(state.block_number, created_root, nullifiers_root, gsrs_root)
 }
 
 fn craft_basics(name: &str) -> QualifiedName {
@@ -97,7 +85,7 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
         status: ObjectStatus::Live,
         tx_hash: None,
         obj: spendable.obj,
-        evidence: spendable.evidence,
+        tx_final: tx_hash(&source_tx),
     };
     let mut state = TestState::default();
     apply_tx(&mut state, &source_tx);
@@ -149,30 +137,30 @@ impl SynchronizerClient for MockSynchronizer {
     fn fetch_grounding_witness(
         &self,
         _sync_api_url: &str,
-        source_tx_hashes: &[Hash],
+        object_commitments: &[Hash],
     ) -> Result<GroundingWitness> {
-        let source_tx_proofs = source_tx_hashes
+        let created_proofs = object_commitments
             .iter()
             .copied()
-            .map(|tx_hash| (tx_hash, self.state.tx_membership_proof(tx_hash)))
+            .map(|commitment| (commitment, self.state.created_membership_proof(commitment)))
             .collect::<HashMap<_, _>>();
         Ok(GroundingWitness::new(
             state_root(&self.state),
-            source_tx_proofs,
+            created_proofs,
         ))
     }
 
     fn fetch_membership_with_nullifiers(
         &self,
         _sync_api_url: &str,
-        _tx_hashes: &[Hash],
+        _object_commitments: &[Hash],
         _nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership> {
         if self.fail_membership {
             return Err(anyhow!("synchronizer unreachable"));
         }
         Ok(SynchronizerMembership {
-            grounded_txs: self.membership_grounded.clone(),
+            created_objects: self.membership_grounded.clone(),
             on_chain_nullifiers: self.membership_nullifiers.clone(),
         })
     }
@@ -180,7 +168,8 @@ impl SynchronizerClient for MockSynchronizer {
     fn wait_for_tx(
         &self,
         _sync_api_url: &str,
-        _tx_final: Hash,
+        _created_commitments: &[Hash],
+        _nullifiers: &[Hash],
         _timeout_secs: u64,
         _poll_interval_ms: u64,
     ) -> Result<SynchronizerHead> {
@@ -403,7 +392,8 @@ fn make_importable_log() -> (String, Hash, Hash) {
         .execute_action(craft_basics("FindLog"), dummy_grounding_witness(), vec![])
         .unwrap();
     let spendable = outputs.obj(0);
-    let id = format!("{:#}", spendable.obj.commitment());
+    let commitment = spendable.obj.commitment();
+    let id = format!("{:#}", commitment);
     let nullifier = txlib::object_nullifier_hash(&spendable.obj).unwrap();
     let record = ObjectRecord {
         id,
@@ -411,11 +401,10 @@ fn make_importable_log() -> (String, Hash, Hash) {
         status: ObjectStatus::Live,
         tx_hash: None,
         obj: spendable.obj,
-        evidence: spendable.evidence,
+        tx_final: outputs.tx.dict().commitment(),
     };
-    let source_tx = record.evidence.tx_final;
     let json = serde_json::to_string(&record).unwrap();
-    (json, source_tx, nullifier)
+    (json, commitment, nullifier)
 }
 
 fn import_driver(

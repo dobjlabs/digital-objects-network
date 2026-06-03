@@ -23,7 +23,7 @@ use wire_types::{ActionSummary, ObjectStatus};
 pub(crate) fn reconcile_objects(
     paths: &DriverPaths,
     objects: &mut [ObjectFileEntry],
-    grounded_txs: &HashSet<Hash>,
+    created_objects: &HashSet<Hash>,
     on_chain_nullifiers: &HashSet<Hash>,
 ) -> Result<()> {
     let mut errors: Vec<String> = Vec::new();
@@ -78,14 +78,14 @@ pub(crate) fn reconcile_objects(
         entry.record = restored_record;
     }
 
-    // Third pass: mark non-nullified objects as Live when their source tx
-    // is in the canonical grounded set.
+    // Third pass: mark non-nullified objects as Live when their commitment
+    // is present in the canonical global created set.
     for entry in objects.iter_mut() {
         if entry.record.is_nullified() || entry.record.status == ObjectStatus::Live {
             continue;
         }
-        let source_tx_hash = entry.record.evidence.tx_final;
-        if !grounded_txs.contains(&source_tx_hash) {
+        let commitment = entry.record.obj.commitment();
+        if !created_objects.contains(&commitment) {
             continue;
         }
         let live_record = StoredObjectRecord {
@@ -230,6 +230,7 @@ pub(crate) fn save_results(
         ));
     }
 
+    let tx_final = spendable_outputs.tx.dict().commitment();
     let mut output_files = Vec::new();
     for (index, output) in action.total_outputs.iter().enumerate() {
         let spendable = spendable_outputs.obj(index);
@@ -247,7 +248,7 @@ pub(crate) fn save_results(
             status: ObjectStatus::Unknown,
             tx_hash: None,
             obj: spendable.obj,
-            evidence: spendable.evidence,
+            tx_final,
         };
         write_object_file(paths, &live_record, &file_name)?;
     }
@@ -290,17 +291,14 @@ pub(crate) fn build_relayer_payload(
         .map_err(|err| anyhow!("failed to shrink/compress tx proof: {err}"))?;
 
     let tx_final = action_output.tx.dict().commitment();
-    let nullifiers = action_output
-        .tx
-        .nullifiers
-        .iter()
-        .map(|entry| Ok(Hash(entry?.raw().0)))
-        .collect::<Result<Vec<_>>>()?;
+    let nullifiers = action_output.tx.nullifier_hashes()?;
+    let live = action_output.tx.live_commitments()?;
     let payload = Payload {
         proof: PayloadProof::Plonky2(Box::new(compressed)),
         tx_final,
         state_root_hash: *old_state_root_hash,
         nullifiers,
+        live,
     };
 
     Ok(payload.to_bytes())
