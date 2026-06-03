@@ -66,13 +66,16 @@ RUN echo "--- relayer ldd ---" && ldd target/release/relayer || true
 # Runtime libraries both binaries dynamically link, confirmed via the ldd output
 # above: TLS (libssl3 provides libssl + libcrypto), zlib and zstd (rocksdb and
 # others), and libgcc. ca-certificates verifies TLS to the Ethereum endpoints
-# and Postgres. All of these package names exist on amd64 and arm64.
+# and Postgres. All of these package names exist on amd64 and arm64. The service
+# user gets a fixed uid/gid so the synchronizer volume's ownership survives image
+# rebuilds and upgrades.
 FROM debian:trixie-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates libssl3 libgcc-s1 zlib1g libzstd1 \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --create-home --home-dir /home/zkcraft --shell /usr/sbin/nologin zkcraft
+    && groupadd --system --gid 10001 zkcraft \
+    && useradd --system --uid 10001 --gid 10001 --create-home --home-dir /home/zkcraft --shell /usr/sbin/nologin zkcraft
 
 # ---- synchronizer image ----
 FROM runtime AS synchronizer
