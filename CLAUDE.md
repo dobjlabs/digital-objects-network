@@ -1,0 +1,163 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project overview
+
+zk-craft is the reference implementation of the Digital Objects Network: a way for mutually untrusting users to create, mutate, and exchange privately-held stateful objects whose proofs are anchored to Ethereum blob data availability. It ships as a Tauri desktop app demonstrating crafting a chain of objects via POD2/Plonky2 proofs plus the headless services that anchor and sync them.
+
+This file focuses on navigating the code, building/testing, and gotchas.
+
+## Workspace layout
+
+The workspace is declared in `Cargo.toml:2-18`. Crate-by-crate:
+
+| Crate                            | Role                                                                                                  |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `dobjd`                          | **The daemon.** Headless HTTP server on `:7717` wrapping the driver. Every client talks to it.        |
+| `cli`                            | `dobj` CLI binary. Thin HTTP/SSE client of dobjd. No `Driver` of its own.                             |
+| `app-gui/src-tauri`              | Tauri 2 shell. Holds **no** driver state — webview talks to dobjd over HTTP. Native conveniences only.|
+| `app-gui/src` (TS)               | React/Vite frontend. Component-based: `features/{actions,inventory,context,proof-runner,settings}`.   |
+| `driver`                         | Headless Rust orchestration library. **The core.** Owns `~/.dobj/`, runs actions end-to-end.          |
+| `sdk`                            | Rhai engine + two-phase Loader/Executor that compiles plugin scripts into pod2 modules.               |
+| `txlib`                          | Transaction state machine: `StateRoot`, `GroundingWitness`, `Tx`, `TxBuilder` + `TxFinalized` rule.   |
+| `synchronizer`                   | Long-running service: ingests Ethereum blobs, maintains canonical Merkle state, serves HTTP queries.  |
+| `relayer`                        | HTTP service that wraps proofs as EIP-4844 blob txs and submits them.                                 |
+| `common`                         | Cross-crate types: blob payload encoding, plonky2 proof shrink wrapper, `BlobParser`.                 |
+| `wire-types`                     | Pure-data types crossing process boundaries (HTTP/MCP/SSE/CLI). Dependency-light — no pod2/plonky2.   |
+| `pod2utils`                      | Macros (`st_custom!`, `dict!`, `set!`, `op!`, …) and `BuildContext` for loading podlang modules.      |
+| `pexe`                           | `.pexe` plugin archive format (zip of `manifest.toml` + `plugin.rhai`) and the `pexe` CLI.            |
+| `mcp` (crate name `craft-mcp`)   | MCP server exposing driver as tools to AI agents. Embedded by dobjd on the adjacent port.             |
+| `intro_pods/vdfpod`              | VDF intro pod (PoW gating via iterated hashing).                                                      |
+| `intro_pods/lt_eq_u256_pod`      | 256-bit `<=` intro pod (PoW difficulty checks).                                                       |
+| `plugins/*`                      | Example plugin sources: `craft-basics` (Log, Wood, Stick, Stone, WoodPick, StonePick + 9 actions) and `episode-1`. |
+
+## Build / test / dev
+
+Use `just` (recipes in `justfile`):
+
+| Recipe                    | What it does                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------------- |
+| `just dev`                | Brings up synchronizer + relayer + **dobjd** + Vite + Tauri shell via `mprocs.yaml`. Depends on `ensure-plugins` + `ensure-mcp`. Open `http://localhost:1420` in a browser or use the desktop window. |
+| `just sync`               | Runs the synchronizer (loads `synchronizer/.env`).                                            |
+| `just relayer`            | Runs the relayer (loads `relayer/.env`).                                                      |
+| `just dobjd`              | Runs the headless HTTP daemon. Default port `7717` (override via `DOBJD_PORT`).               |
+| `just desktop`            | Standalone Tauri window — Tauri spawns its own Vite on `:1420`.                               |
+| `just desktop-shell`      | Tauri shell pointing at an already-running Vite (used inside `just dev`). Skips `beforeDevCommand`. |
+| `just web`                | Vite dev server alone on `:1420`. Talks to `dobjd` at `:7717`.                                |
+| `just ensure-plugins`     | Installs `craft-basics.pexe` to `~/.dobj/actions/` if none present.                           |
+| `just ensure-mcp`         | Registers/refreshes the bitcraft MCP at `http://127.0.0.1:7718/mcp` with Claude Code, project scope. Idempotent; no-op if the `claude` CLI is missing. |
+| `just install-plugins`    | Builds + installs all `plugins/*` via the `pexe` CLI.                                         |
+| `just pack-plugins`       | Builds plugins to `target/pexe/*.pexe` (no install).                                          |
+| `just reset`              | Stops the dobj daemon, wipes `data/` + `~/.dobj/`, drops the `synchronizer` + `relayer` DBs, and removes the bitcraft MCP registration. |
+| `just test`               | `cargo test --workspace --release`.                                                           |
+| `just test-ignored`       | Runs `--ignored` tests with `--nocapture`.                                                    |
+| `just test-e2e`           | Runs `synchronizer::test_e2e_real_proof` (slow, full real-proof flow).                       |
+| `just build`              | `cargo build --workspace`.                                                                    |
+
+**Infrastructure required for `just dev`:**
+- Postgres on `localhost:5432` (user `postgres`). Synchronizer + relayer create their own DBs.
+- An Ethereum beacon + execution endpoint (configure in `synchronizer/.env`, `relayer/.env`).
+- RocksDB stores under `data/` and `~/.dobj/` are created on first run.
+- `dobjd` binds **two adjacent ports**: HTTP on `DOBJD_PORT` (default `7717`) and MCP on `DOBJD_PORT + 1` (default `7718`). Both must be free or startup fails fast.
+
+**Always run tests with `--release`** — proof generation is impractically slow in debug. Use `MockProver` (not the real Prover) in unit tests; gate real-proof tests with `#[ignore]`. Use `assert!`, not `debug_assert!`, since tests run `--release`.
+
+**Before committing:** run `cargo fmt` and `cargo clippy --tests --examples`. If you use `cargo check`, pass `--tests --examples` too.
+
+## Architecture in 30 seconds
+
+```
+   Tauri desktop       Browser tab        dobj CLI         AI agents
+   (webview, no        (Vite :1420)       (HTTP/SSE)       (MCP client)
+    Driver of its own)
+            \              |                  |                 /
+             \             |                  |                /
+              \            ▼                  ▼               /
+               └───────►  dobjd HTTP :7717  ◄─────────────────┘
+                           │       │
+                           │       └─► MCP :7718 (DOBJD_PORT + 1)
+                           ▼
+                         driver  ────────► synchronizer (HTTP: grounding witness, membership)
+                           │
+                           ▼
+                         relayer  ────────► Ethereum L1 (EIP-4844 blob)
+                                                ▲
+                                                │
+                                           synchronizer (ingests blobs, builds GSRs)
+```
+
+`dobjd` is the **single owner of `Arc<Driver>`** in the running system. Desktop, browser, MCP, and CLI all talk to it over HTTP/SSE — there is no in-process driver inside the Tauri shell anymore.
+
+`Driver::execute` is the central call: validate inputs -> fetch grounding witness -> re-parse plugin script through SDK -> drive `txlib::TxBuilder` -> produce `(tx_pod, obj_pods)` -> shrink + post via relayer -> poll for confirmation -> reconcile via `sync_inventory`.
+
+## Key entry points
+
+- **`driver/src/driver.rs`** — `Driver` struct. Methods: `open_default()`, `list_objects()`, `read_object()`, `execute()`, `check_action()`, `sync_inventory()`, `get_state_root()`. Public types live in `driver/src/types.rs`.
+- **`driver/src/execute.rs`** — the proof-and-commit pipeline.
+- **`driver/src/pexe_catalog.rs`** — concrete `ActionCatalog` impl that loads `.pexe` archives from `~/.dobj/actions/`.
+- **`sdk/src/lib.rs`** — Rhai engine setup, custom syntax for `var` and `unsafe { ... }` (search `register_custom_syntax`), host API registration (search `register_fn`). Entry: `Sdk::load_module_from_src_actions`.
+- **`txlib/src/lib.rs`** — `StateRoot` (typed record), `GroundingWitness`, `Tx`, `TxBuilder`. No `Object` struct: object state is a `pod2::Dictionary` whose `identity` field is the commitment of its initial form (`with_identity`), stable across mutations.
+- **`txlib/src/predicates/txlib.podlang`** — the transaction state machine. See "txlib and the SDK" below.
+- **`synchronizer/src/state_machine.rs`** — `MAX_GSR_AGE_BLOCKS = 300`. Pure derivation: takes a base head + recent GSRs + decoded blob bytes; returns a candidate head.
+- **`synchronizer/src/api.rs`** — Axum routes (`/v1/state/head`, `/v1/state/membership`, `/v1/state/nullifier/contains`, `/v1/state/tx/contains`, `/v1/state/tx/{tx_hash}`, `/v1/txlib/grounding-witness`, plus `/healthz`, `/sync-progress`).
+- **`common/src/shrink.rs`** — Plonky2 wrapper circuit that re-proves a MainPod in a smaller circuit so it fits in a blob.
+- **`common/src/payload.rs`** — blob payload encoding (`PAYLOAD_MAGIC`, proof type, `tx_final`, state root, nullifiers, and the `live` object commitments).
+- **`mcp/src/lib.rs`** — `DEFAULT_PORT = 7718`; crate is named `craft-mcp` (depend on it as `craft-mcp = { path = "../mcp" }`). dobjd runs MCP at `DOBJD_PORT + 1`.
+- **`dobjd/src/main.rs`** — daemon entry point. Binds HTTP + MCP listeners up-front (fail-fast if either port is taken), constructs `Arc<Driver>` once via `Driver::open_default()`, shares it with the embedded `craft-mcp` server. `DEFAULT_HTTP_PORT = 7717`, override via `DOBJD_PORT`.
+- **`dobjd/src/routes/mod.rs`** — axum routes: `/healthz`, `/inventory`, `/state-root`, `/objects/{dir,file_name}`, `/classes[/{name}]`, `/settings`, `/actions[/run,/{id}[/feasibility]]`, `/events` (SSE). dobjd is API-only; the UI is served separately.
+- **`dobjd/src/events.rs`** — broadcast hub behind SSE `/events`, shared with the MCP server so progress updates fan out to every client.
+- **`cli/src/main.rs`** — `dobj` CLI. Thin reqwest/SSE client of dobjd; no driver state.
+- **`wire-types/src/lib.rs`** — shared HTTP/MCP/SSE/CLI payload types (`QualifiedName`, etc.). Optional `schemars` feature for JSON Schema generation.
+- **`app-gui/src-tauri/src/lib.rs`** — Tauri shell, no driver state. Sub-modules: `cpu`, `error`, `objects`, `settings`. Commands cover only desktop-native conveniences; every state-touching call goes through dobjd over HTTP.
+
+## txlib and the SDK
+
+txlib's proof machinery is consumed only through the SDK. Its plain types (`StateRoot`, `GroundingWitness`) are shared more widely (the synchronizer computes GSRs), but the predicate batch and `TxBuilder` are not: the SDK loads the batch (`txlib::predicates::module()`) alongside the plugin module, drives `TxBuilder`, and is the only code that names txlib predicates.
+
+What an action script actually touches is small. Each recorded event emits one of three chain primitives -- `TxInsert`, `TxMutate`, `TxDelete` (rendered in `sdk/src/fmt_podlang.rs`) -- and the whole transaction is proved against the top-level `TxFinalized` rule. `TxMutate`'s shared `type` arg pins `old.type == new.type` implicitly and preserves the object's `identity` across the mutation.
+
+Everything between those is fixed scaffolding inside the batch that the SDK and `TxBuilder` compose automatically; you never write or reference it from a script. It is the replay walker (`ReplayActions` and friends) that re-walks the recorded event chain to update the live/nullifier sets, and grounding (`InputsGrounded`) that proves each input existed in a prior state root. Opened in `txlib.podlang`, the file reads bottom-up: chain primitives -> replay -> grounding -> `TxFinalized`.
+
+## SDK essentials
+
+Action scripts are Rhai files; the SDK registers a host API and runs each action **twice per `execute`**:
+
+1. **Load phase** — symbolic, no real inputs. Records the rule shape (events, statements, wildcards) and produces the compiled `CustomPredicateBatch` whose id is the manifest's `module_hash`.
+2. **Execute phase** — same script with real inputs. Drives `txlib::TxBuilder`, runs intro pods (VDF, `lt_eq_u256`), produces the MainPod.
+
+The driver does not cache compiled modules between calls — every `Driver::execute` re-parses the script.
+
+**Rhai custom syntax** (search `register_custom_syntax` in `sdk/src/lib.rs`):
+- `var <ident> = <expr>` — declare a wildcard. Operations on it generate constraining statements.
+- `let <ident> = <expr>` — plain Rhai, literal known at both phases. No statements emitted.
+- `unsafe { <expr> }` — compute a wildcard value without emitting constraints. Pair with an explicit `action.st_*` call afterward, or a malicious prover can put anything there.
+
+**Host API** (registered via `register_fn` in `sdk/src/lib.rs`):
+- On `action`: `input(class)`, `output(class)`, `mutate(class)`, `subaction(name)`, `random()`, `st_gt(a,b)`, `st_sum_of(a,b,c)`, `intro_vdf(iters, obj)`, `intro_lt_eq_u256(obj, target)`, `pow_obj_grind(obj, target)`, `top_limb_u256(n)`.
+- On object handles: `set([[k,v],...])` (initializer for literals), `update(k,v)` (writes a witness-derived value), `get(k)`, indexer `obj.<field>`.
+
+**Constraint:** the event tree must be the same shape every run. Branching that emits *different events* on different inputs is unsupported. Branching on wildcard values inside `unsafe { ... }` is fine.
+
+**Records-form rendering** (`sdk/src/fmt_podlang.rs`): to keep predicate arity small, the formatter coalesces all same-role objects of an action into one record arg instead of N loose wildcards. The public records are `in <Action>In` / `out <Action>Out` (one entry per input/output object; a Mutate contributes to both); the private `<Action>Initials` record holds one entry per output object's pre-identity (script-final) dict. The related `chain_steps`/`<Action>Chain` packing does the same for intermediate chain states, but only past a threshold (`CHAIN_PACK_MIN_TS = 3`); the in/out/initials records have no threshold and are the canonical form.
+
+**`Side` vs `Collapse`** (same file): these are two distinct axes, do not conflate them. `Side { In, Out }` is the strictly-binary public I/O role — it drives `dispatch_side` and the public signature. `Collapse { Side(Side), Initials }` is the record namespace a *collapsed* object dict pins to when rendered (`in.<name>` / `out.<name>` / `initials.<name>`) or anchored; it is what `collapsed_at` / `collapses_at` return. `Initials` lives only on `Collapse` (private-only, never a public record arg or a dispatch target) and is deliberately **not** a `Side`.
+
+## Coding style
+
+ASCII only in code and comments: no em-dashes or other non-ASCII characters.
+
+### Naming
+
+Name things for what they mean, not for abstract or mathematical placeholders -- at every level:
+- Variables and fields: descriptive over terse, even where it reads long, and even where an algorithm's paper uses a single letter. This is industrial code, not a transliteration of the math (`num_statements`, not `n`; `used_in_link`, not `u`).
+- Types: when the same tuple of scalars keeps travelling together in one role -- across a body, its callers, a loop, or a parameter list -- make it a struct. The type name says what the value is; the field names say what each component means.
+
+### Comments
+
+While coding, write a comment only if all three hold:
+- its subject is present in this unit -- the signature, a parameter, a local, a value's range here, a branch's precondition;
+- it does not transcribe another unit's mechanism, name a specific that will rot (a fixture, a sibling function, a field elsewhere), or lean on what you'd have to leave the repo to check (a prior version, a use case, our conversation);
+- it carries something an intelligent reader could not easily infer from this unit -- not control flow, not types, not return values, not general knowledge, not a paraphrase of the line beside it.
+
+Test: cut any clause that transcribes mechanism, states general knowledge, or names a rot-prone specific; then cut any "because X" you can't check against the repo. If nothing survives, delete the comment. If what survives is inferable from the code, delete that too.
