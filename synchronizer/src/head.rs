@@ -4,8 +4,8 @@ use txlib::StateRoot;
 /// The Merkle roots that reopen the canonical persistent containers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CanonicalRoots {
-    /// Root of the persistent transactions set.
-    pub transactions: Hash,
+    /// Root of the persistent global created-object set (a pod2 `Array`).
+    pub created: Hash,
     /// Root of the persistent spent-nullifiers set.
     pub nullifiers: Hash,
     /// Root of the prior-GSR array committed inside `txlib::StateRoot`.
@@ -23,7 +23,7 @@ impl Default for CanonicalRoots {
 impl CanonicalRoots {
     pub fn empty() -> Self {
         Self {
-            transactions: EMPTY_HASH,
+            created: EMPTY_HASH,
             nullifiers: EMPTY_HASH,
             state_root_gsrs: EMPTY_HASH,
             gsr_history: EMPTY_HASH,
@@ -38,8 +38,10 @@ pub struct HeadMetadata {
     pub current_gsr: Option<Hash>,
     /// Execution block number associated with `current_gsr`.
     pub current_block_number: Option<u32>,
-    /// Number of accepted transactions in the canonical state.
-    pub tx_count: u64,
+    /// Number of objects in the canonical global created set. The array is
+    /// 1-indexed (slot 0 stays empty), so the next array slot is
+    /// `created_count + 1`.
+    pub created_count: u64,
     /// Number of spent nullifiers in the canonical state.
     pub nullifier_count: u64,
     /// Number of GSR entries in the persistent history array.
@@ -57,7 +59,7 @@ impl HeadMetadata {
         Self {
             current_gsr: None,
             current_block_number: None,
-            tx_count: 0,
+            created_count: 0,
             nullifier_count: 0,
             gsr_count: 0,
         }
@@ -94,7 +96,7 @@ impl CanonicalHead {
         self.metadata.current_block_number.map(|block_number| {
             StateRoot::new(
                 block_number as i64,
-                self.roots.transactions,
+                self.roots.created,
                 self.roots.nullifiers,
                 self.roots.state_root_gsrs,
             )

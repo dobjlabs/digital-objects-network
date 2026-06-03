@@ -14,6 +14,15 @@ use pod2::{
     },
 };
 
+fn hashes_to_set(hashes: &[Hash]) -> Set {
+    Set::new(
+        hashes
+            .iter()
+            .map(|h| Value::from(*h))
+            .collect::<HashSet<_>>(),
+    )
+}
+
 /// Decodes and validates a raw blob payload.
 ///
 /// Returns `Ok(Some(payload))` when the blob contains a valid, cryptographically verified
@@ -28,7 +37,7 @@ pub trait BlobParser: Send + Sync {
 // MockBlobParser
 // ---------------------------------------------------------------------------
 
-/// Mock parser: accepts JSON `{ "tx_final": "0x...", "nullifiers": [...], "state_root_hash": "0x..." }`
+/// Mock parser: accepts JSON `{ "tx_final": "0x...", "nullifiers": [...], "live": [...], "state_root_hash": "0x..." }`
 /// Hash bytes serialized as lowercase hex strings.
 /// Returns a `Payload` with a dummy empty `PayloadProof` since no real proof
 /// is needed for mock testing.
@@ -40,6 +49,7 @@ pub struct MockBlobParser;
 struct MockProofJson {
     tx_final: String,
     nullifiers: Vec<String>,
+    live: Vec<String>,
     state_root_hash: String,
 }
 
@@ -57,12 +67,18 @@ impl BlobParser for MockBlobParser {
             .iter()
             .map(|s| decode_hash_hex(s))
             .collect::<Result<Vec<_>>>()?;
+        let live = json
+            .live
+            .iter()
+            .map(|s| decode_hash_hex(s))
+            .collect::<Result<Vec<_>>>()?;
         let state_root_hash = decode_hash_hex(&json.state_root_hash)?;
         Ok(Some(Payload {
             proof: PayloadProof::empty_for_test(),
             tx_final,
             state_root_hash,
             nullifiers,
+            live,
         }))
     }
 }
@@ -136,24 +152,16 @@ impl BlobParser for ProofParser {
             Err(_) => return Ok(None),
         };
 
-        // 2. Reconstruct the nullifiers Set and build the expected Statement::Custom.
-        //    txlib's TxFinalized(state_root_hash, tx_final, nullifiers):
-        //      - state_root_hash: payload.state_root_hash
-        //      - tx_final:        Value::from(tx dict commitment) = Value::from(payload.tx_final)
-        //      - nullifiers:      Set reconstructed from payload.nullifiers
-        let nullifiers_set = Set::new(
-            payload
-                .nullifiers
-                .iter()
-                .map(|h| Value::from(*h))
-                .collect::<HashSet<_>>(),
-        );
+        // 2. Rebuild the public statement the proof was made against. The
+        //    nullifier and live sets travel as plain hash lists, so the set
+        //    commitments have to be reconstructed before they can be matched.
         let statement = Statement::Custom(
             self.txn_finalized_pred.clone(),
             vec![
                 Value::from(payload.state_root_hash).into(),
                 Value::from(payload.tx_final).into(),
-                Value::from(nullifiers_set).into(),
+                Value::from(hashes_to_set(&payload.nullifiers)).into(),
+                Value::from(hashes_to_set(&payload.live)).into(),
             ],
         );
 
@@ -191,7 +199,7 @@ mod tests {
         let sr_hex = format!("0x{}", hash_to_hex(&state_root));
 
         let json = format!(
-            r#"{{"tx_final":"{}","nullifiers":["{}"],"state_root_hash":"{}"}}"#,
+            r#"{{"tx_final":"{}","nullifiers":["{}"],"live":[],"state_root_hash":"{}"}}"#,
             tx_hex, null_hex, sr_hex
         );
 
@@ -219,7 +227,7 @@ mod tests {
         let tx_hex = hash_to_hex(&tx_final); // no "0x" prefix
 
         let json = format!(
-            r#"{{"tx_final":"{}","nullifiers":[],"state_root_hash":"{}"}}"#,
+            r#"{{"tx_final":"{}","nullifiers":[],"live":[],"state_root_hash":"{}"}}"#,
             tx_hex, tx_hex
         );
 

@@ -87,19 +87,11 @@ mod tests {
         module
             .predicate_ref_by_name("InputsGroundedSingle")
             .unwrap();
-        module
-            .predicate_ref_by_name("InputsGroundedSingleVar")
-            .unwrap();
         module.predicate_ref_by_name("InputsGroundedPair").unwrap();
-        module
-            .predicate_ref_by_name("InputsGroundedPairVar")
-            .unwrap();
-        module
-            .predicate_ref_by_name("InputsGroundedTriple")
-            .unwrap();
         module
             .predicate_ref_by_name("InputsGroundedRecursive")
             .unwrap();
+        module.predicate_ref_by_name("TxFinalBindings").unwrap();
         module.predicate_ref_by_name("TxFinalized").unwrap();
     }
 }

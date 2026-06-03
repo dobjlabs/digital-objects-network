@@ -20,7 +20,7 @@ use pod2::{
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
-use txlib::{EventHandle, GroundingEvidence, GroundingWitness, Tx, TxBuilder, with_identity};
+use txlib::{EventHandle, GroundingWitness, Tx, TxBuilder, with_identity};
 use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 
 mod error;
@@ -2098,21 +2098,15 @@ impl SdkModule {
 #[derive(Debug, Clone)]
 pub struct SpendableObject {
     pub obj: Dictionary,
-    pub evidence: GroundingEvidence,
-}
-
-impl SpendableObject {
-    pub fn tx_input(&self) -> (Dictionary, GroundingEvidence) {
-        (self.obj.clone(), self.evidence.clone())
-    }
 }
 
 pub struct SpendableObjects {
     /// Single tx-level pod that proves `TxFinalized` and is published
     /// via the relayer.
     pub tx_pod: MainPod,
-    /// Each produced output object with its own per-object grounding
-    /// evidence (no per-object pod).
+    /// Each produced output object. Grounding when an object is later
+    /// spent is proven against the synchronizer's live set, so outputs
+    /// carry no per-object proof.
     pub objs: Vec<SpendableObject>,
     /// In-flight `Tx` value held by the producer; carries the literal
     /// live/nullifiers/ctx for the SDK's own bookkeeping. Not part of
@@ -2210,11 +2204,7 @@ impl Executor {
     fn new_builder(&self) -> MultiPodBuilder {
         MultiPodBuilder::new(&self.params, &self.vd_set)
     }
-    fn new_tx_builder(
-        &self,
-        ctx: &mut BuildContext,
-        inputs: &[(Dictionary, GroundingEvidence)],
-    ) -> TxBuilder {
+    fn new_tx_builder(&self, ctx: &mut BuildContext, inputs: &[Dictionary]) -> TxBuilder {
         TxBuilder::new(ctx, inputs, self.grounding_witness.clone())
     }
     /// Execute an action that consumes some input objects and produces some output objects
@@ -2232,11 +2222,11 @@ impl Executor {
 
         let total = &self.module.action_by_name(action).total_inputs;
 
-        let mut tx_inputs = Vec::with_capacity(inputs.len());
+        let mut tx_inputs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
         let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
         for (input, _ref) in zip_eq(inputs, total.iter()) {
-            let SpendableObject { obj, evidence } = input;
-            tx_inputs.push((obj.clone(), evidence));
+            let SpendableObject { obj } = input;
+            tx_inputs.push(obj.clone());
             rhai_input_objs.push(obj);
         }
         // Reverse so rhai pops in declaration order (last-declared on top).
@@ -2275,38 +2265,14 @@ impl Executor {
         // The action body's `st_action` and any sub-action `st_sub`
         // statements are not revealed: they would force a wrapping pod
         // to mask them from the relayer / synchronizer's `ProofParser`,
-        // which expects a single public statement. Per-output IsX pods
-        // (which used to consume `st_action` via `prove_is_x_pod`) were
-        // removed when outputs switched to `GroundingEvidence`.
+        // which expects a single public statement.
         log::info!("proving tx_pod for action {}", action);
         let tx_pod = prove(bld.builder, &*self.prover);
         tx_pod.pod.verify().unwrap();
 
-        // tx_final, live_root, and the "live" Merkle path are invariant
-        // across outputs; compute once and share.
-        let tx_final = tx.ctx.commitment();
-        let live_root = tx.live.commitment();
-        let (_, live_in_tx_proof) = tx
-            .ctx
-            .prove(&StrKey::from("live"))
-            .expect("finalized tx has a live key");
         let objs: Vec<SpendableObject> = outputs
             .into_iter()
-            .map(|obj| {
-                let obj_in_live_proof = tx
-                    .live
-                    .prove(&Value::from(obj.clone()))
-                    .expect("output is live in finalized tx");
-                SpendableObject {
-                    obj,
-                    evidence: GroundingEvidence {
-                        tx_final,
-                        live_root,
-                        live_in_tx_proof: live_in_tx_proof.clone(),
-                        obj_in_live_proof,
-                    },
-                }
-            })
+            .map(|obj| SpendableObject { obj })
             .collect();
 
         Ok(SpendableObjects { tx_pod, objs, tx })
@@ -2330,11 +2296,11 @@ impl Executor {
 
         let total = &self.module.action_by_name(action).total_inputs;
 
-        let mut tx_inputs = Vec::with_capacity(inputs.len());
+        let mut tx_inputs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
         let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
         for (input, _ref) in zip_eq(inputs, total.iter()) {
-            let SpendableObject { obj, evidence } = input;
-            tx_inputs.push((obj.clone(), evidence));
+            let SpendableObject { obj } = input;
+            tx_inputs.push(obj.clone());
             rhai_input_objs.push(obj);
         }
         rhai_input_objs.reverse();
