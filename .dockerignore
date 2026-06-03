@@ -1,0 +1,27 @@
+# Keep the build context small and free of secrets. Cargo needs every
+# workspace member's Cargo.toml (including app-gui/src-tauri) for resolution,
+# so crate manifests and sources are intentionally NOT excluded.
+
+# Build outputs (the workspace shares one target/ at the root).
+target
+**/target
+
+# Node / frontend artifacts (not needed to build the server binaries).
+**/node_modules
+app-gui/dist
+
+# Secrets and local state - never bake these into an image.
+.env
+**/.env
+data
+logs
+*.log
+
+# VCS and tooling.
+.git
+.github
+.claude
+
+# Release tarballs and OS cruft.
+*.tar.gz
+.DS_Store
