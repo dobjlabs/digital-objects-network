@@ -10,7 +10,6 @@ name: Images
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   pull_request:
     # Only re-validate the image build when the build definition itself
