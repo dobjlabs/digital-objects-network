@@ -25,14 +25,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential clang libclang-dev cmake pkg-config libssl-dev \
       curl ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
-# Install the exact channel from rust-toolchain.toml here so it is a cached
-# layer and the version is explicit. Keep this ARG in sync with that file.
-ARG RUST_TOOLCHAIN=nightly-2026-01-25
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y --no-modify-path --default-toolchain "$RUST_TOOLCHAIN" --profile minimal \
-    && rustc --version && cargo --version
-RUN cargo install cargo-chef --locked
+      | sh -s -- -y --no-modify-path --default-toolchain none
 WORKDIR /app
+# Toolchain version comes from rust-toolchain.toml
+COPY rust-toolchain.toml .
+RUN rustup toolchain install --profile minimal && rustc --version && cargo --version
+RUN cargo install cargo-chef --locked
 
 # ---- planner: distill the dependency graph into recipe.json ----
 FROM chef AS planner
