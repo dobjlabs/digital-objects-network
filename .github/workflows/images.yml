@@ -2,7 +2,7 @@ name: Images
 
 # Builds the synchronizer and relayer container images and pushes them to GHCR.
 #
-# Production runs amd64 (the EC2 box and most container hosts) and GitHub's
+# Production runs amd64 (most container hosts) and GitHub's
 # Linux runners are amd64, so the build is native - no QEMU emulation. The
 # whole compile happens inside the Dockerfile's debian builder, scoped to
 # `-p synchronizer -p relayer`, so unlike the Rust CI workflows this needs no
