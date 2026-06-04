@@ -22,7 +22,7 @@ fn intro_self_statement(name: String, args: Vec<Value>) -> Statement {
             args_len: args.len(),
             verifier_data_hash: EMPTY_HASH,
         },
-        args,
+        args.into_iter().map(Into::into).collect(),
     )
 }
 

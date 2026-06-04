@@ -243,7 +243,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "d5588dc1b89c1246900b6f1ed86a41e0a8b7059f7c514dc9ac21e4efef69c762"
+        module_hash = "8e2445036c4681ec5cad4e0bb31aed7748cb114559f61e0006503758501a4119"
 
         [[classes]]
         name = "Log"
@@ -309,8 +309,8 @@ fn test_records_form_just_output() {
         .load_module_from_src_actions(craft_src, &["JustOutput"])
         .unwrap();
 
-    let expected = r#"record JustOutputOut = (_pad, x)
-record JustOutputInitials = (_pad, x)
+    let expected = r#"record JustOutputOut = (x)
+record JustOutputInitials = (x)
 
 // Actions
 
@@ -360,9 +360,9 @@ fn test_records_form_input_output_update() {
         .load_module_from_src_actions(craft_src, &["LogToWood"])
         .unwrap();
 
-    let expected = r#"record LogToWoodIn = (_pad, log)
-record LogToWoodOut = (_pad, wood)
-record LogToWoodInitials = (_pad, wood)
+    let expected = r#"record LogToWoodIn = (log)
+record LogToWoodOut = (wood)
+record LogToWoodInitials = (wood)
 
 // Actions
 
@@ -484,8 +484,8 @@ fn test_records_form_mutate() {
         .load_module_from_src_actions(craft_src, &["UseFoo"])
         .unwrap();
 
-    let expected = r#"record UseFooIn = (_pad, foo)
-record UseFooOut = (_pad, foo)
+    let expected = r#"record UseFooIn = (foo)
+record UseFooOut = (foo)
 
 // Actions
 

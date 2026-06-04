@@ -102,8 +102,7 @@ impl TestState {
         nullifier_hashes: impl IntoIterator<Item = Hash>,
     ) {
         for commitment in created_commitments {
-            // 1-indexed: slot 0 stays empty so nothing grounds at index 0.
-            let index = self.created_index.len() as i64 + 1;
+            let index = self.created_index.len() as i64;
             self.created
                 .insert(index as usize, Value::from(commitment))
                 .expect("created object should insert into test state");

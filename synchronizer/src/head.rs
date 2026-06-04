@@ -39,8 +39,7 @@ pub struct HeadMetadata {
     /// Execution block number associated with `current_gsr`.
     pub current_block_number: Option<u32>,
     /// Number of objects in the canonical global created set. The array is
-    /// 1-indexed (slot 0 stays empty), so the next array slot is
-    /// `created_count + 1`.
+    /// 0-indexed, so this doubles as the next array slot.
     pub created_count: u64,
     /// Number of spent nullifiers in the canonical state.
     pub nullifier_count: u64,

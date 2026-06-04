@@ -260,9 +260,8 @@ mod tests {
         let (app_db, _dir) = open_test_db();
         let mut created = app_db.open_created(EMPTY_HASH).unwrap();
         let obj_commitment = test_hash(9);
-        // The created set is 1-indexed (slot 0 is reserved empty).
-        created.insert(1, Value::from(obj_commitment)).unwrap();
-        app_db.created_index_put(obj_commitment, 1).unwrap();
+        created.insert(0, Value::from(obj_commitment)).unwrap();
+        app_db.created_index_put(obj_commitment, 0).unwrap();
 
         let roots = CanonicalRoots {
             created: created.commitment(),
@@ -277,7 +276,7 @@ mod tests {
         );
         let (present, witness) = app_db.prove_created(&roots, obj_commitment).unwrap();
         assert!(present);
-        assert_eq!(witness.map(|(index, _proof)| index), Some(1));
+        assert_eq!(witness.map(|(index, _proof)| index), Some(0));
 
         // A commitment never recorded in the cache is absent, and a cache hit
         // that the array root does not actually contain resolves to absent too.

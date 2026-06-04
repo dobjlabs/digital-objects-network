@@ -56,7 +56,7 @@
 TxInsert(chain, prev_chain, initial, new, type, private: event_hash) = AND(
   DictContains(new, "type", type)
   DictInsert(new, initial, "identity", initial)
-  HashOf(event_hash, 0, new)
+  HashOf(event_hash, {}, new)
   HashOf(chain, prev_chain, event_hash)
 )
 
@@ -73,11 +73,11 @@ TxMutate(chain, prev_chain, new, old, type, private: event_hash) = AND(
   HashOf(chain, prev_chain, event_hash)
 )
 
-// Delete: chain = H(prev, H(old, 0)). The `type` arg pins the
+// Delete: chain = H(prev, H(old, {})). The `type` arg pins the
 // deleted object's type field for guard dispatch.
 TxDelete(chain, prev_chain, old, type, private: event_hash) = AND(
   DictContains(old, "type", type)
-  HashOf(event_hash, old, 0)
+  HashOf(event_hash, old, {})
   HashOf(chain, prev_chain, event_hash)
 )
 
@@ -319,7 +319,7 @@ ReplayDelete(before_tx, after_tx, before_chain, after_chain,
 // global created-object set (every object state ever created, maintained
 // by the synchronizer).
 
-record StateRoot = (_pad, block_number, created, nullifiers, gsrs)
+record StateRoot = (block_number, created, nullifiers, gsrs)
 
 InputsGrounded(inputs, created) = OR(
   // Base case: empty inputs. `created` is intentionally unconstrained --
@@ -380,7 +380,7 @@ InputsGroundedRecursive(inputs, created,
 //
 // The DictInsert clause pins the full schema of `before_tx`:
 // `nullifiers = {}` prevents a tx from inheriting nullifiers it did
-// not emit itself, and `chain_start = chain_end = 0` removes the
+// not emit itself, and `chain_start = chain_end = {}` removes the
 // malleability that would otherwise let the prover witness arbitrary
 // values for those two fields (they pass through ReplayActions
 // verbatim into `tx_final`, since ReplayAction only updates the
@@ -393,8 +393,8 @@ TxFinalBindings(tx_final, nullifiers, live) = AND(
 TxFinalized(state_root StateRoot, tx_final, nullifiers, live,
      private: before_tx, chain_start, chain_final) = AND(
   InputsGrounded(before_tx.live, state_root.created)
-  HashOf(chain_start, before_tx.live, 0)
-  DictInsert(before_tx, {"nullifiers": {}, "chain_start": 0, "chain_end": 0}, "live", before_tx.live)
+  HashOf(chain_start, before_tx.live, {})
+  DictInsert(before_tx, {"nullifiers": {}, "chain_start": {}, "chain_end": {}}, "live", before_tx.live)
   TxFinalBindings(tx_final, nullifiers, live)
   ReplayActions(before_tx, tx_final, chain_start, chain_final)
 )
