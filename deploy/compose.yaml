@@ -20,8 +20,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Pre-creates the `synchronizer` and `relayer` databases on first init.
-      - ./initdb:/docker-entrypoint-initdb.d:ro
+    # Creates the synchronizer and relayer databases on first init (the services
+    # no longer create their own). Inlined below instead of a separate .sql file.
+    configs:
+      - source: init-databases
+        target: /docker-entrypoint-initdb.d/01-create-databases.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -62,3 +65,9 @@ services:
 volumes:
   pgdata:
   syncdata:
+
+configs:
+  init-databases:
+    content: |
+      CREATE DATABASE synchronizer;
+      CREATE DATABASE relayer;
