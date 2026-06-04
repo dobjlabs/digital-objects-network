@@ -24,6 +24,22 @@ pub const SCRIPT_FILE: &str = "plugin.rhai";
 /// File extension (no leading dot) of a pexe archive.
 pub const PEXE_EXTENSION: &str = "pexe";
 
+/// Largest `.pexe` file we will read from disk into memory. A packed bundled
+/// plugin is under 8 KiB; this bounds the compressed-side read for untrusted
+/// archives without rejecting any realistic plugin.
+pub const MAX_PEXE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Largest decompressed size we will accept for a single entry. The biggest
+/// real entry across bundled plugins is ~29 KiB, so 1 MiB is generous headroom
+/// while making decompression bombs impossible: a malicious entry that inflates
+/// past this cap is rejected instead of growing the heap unbounded.
+const MAX_ENTRY_BYTES: u64 = 1024 * 1024;
+
+/// A valid pexe holds exactly two entries (`manifest.toml`, `plugin.rhai`).
+/// Capping the declared entry count stops a crafted central directory from
+/// forcing large allocations inside `ZipArchive`.
+const MAX_ENTRIES: usize = 16;
+
 /// Pexe source on disk: a directory containing `manifest.toml` and `plugin.rhai`.
 pub struct PluginSource {
     pub root: PathBuf,
@@ -72,6 +88,12 @@ pub fn pack(manifest_toml: &str, script: &str) -> Result<Vec<u8>> {
 pub fn unpack_raw(bytes: &[u8]) -> Result<(String, String)> {
     let mut zip =
         ZipArchive::new(Cursor::new(bytes)).map_err(|err| anyhow!("invalid pexe zip: {err}"))?;
+    if zip.len() > MAX_ENTRIES {
+        bail!(
+            "pexe declares {} entries, exceeds limit of {MAX_ENTRIES}",
+            zip.len()
+        );
+    }
     let manifest_toml = read_entry(&mut zip, MANIFEST_FILE)?;
     let script = read_entry(&mut zip, SCRIPT_FILE)?;
     Ok((manifest_toml, script))
@@ -86,13 +108,23 @@ pub fn unpack(bytes: &[u8]) -> Result<(Manifest, String)> {
 }
 
 fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<String> {
-    let mut file = zip
+    let file = zip
         .by_name(name)
         .map_err(|err| anyhow!("missing entry {name} in pexe: {err}"))?;
-    let mut out = String::new();
-    file.read_to_string(&mut out)
+    // Read raw bytes through a capped reader rather than `read_to_string`: the
+    // decompressed output can never grow past the limit (the decompression-bomb
+    // guard), and an over-cap entry fails with a clear size error instead of a
+    // confusing mid-codepoint UTF-8 error.
+    let mut out = Vec::new();
+    file.take(MAX_ENTRY_BYTES + 1)
+        .read_to_end(&mut out)
         .map_err(|err| anyhow!("failed to read {name} in pexe: {err}"))?;
-    Ok(out)
+    if out.len() as u64 > MAX_ENTRY_BYTES {
+        bail!(
+            "pexe entry {name} exceeds {MAX_ENTRY_BYTES}-byte limit (possible decompression bomb)"
+        );
+    }
+    String::from_utf8(out).map_err(|err| anyhow!("entry {name} in pexe is not valid UTF-8: {err}"))
 }
 
 /// Compile the script against its manifest's action names and return the hex-encoded
@@ -141,6 +173,26 @@ pub fn install(bytes: &[u8], target_dir: &Path, plugin_name: &str) -> Result<Pat
     Ok(path)
 }
 
+/// Read a `.pexe` file from disk, rejecting anything larger than
+/// [`MAX_PEXE_BYTES`] before it is loaded into memory. Reading through a capped
+/// reader (rather than stat-then-read) closes the gap where a file grows
+/// between the size check and the read.
+pub fn read_pexe_file(path: &Path) -> Result<Vec<u8>> {
+    let file =
+        std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_PEXE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    if bytes.len() as u64 > MAX_PEXE_BYTES {
+        bail!(
+            "pexe {} exceeds {MAX_PEXE_BYTES}-byte limit",
+            path.display()
+        );
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,6 +210,45 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
         let (manifest, script) = unpack_raw(&bytes).unwrap();
         assert!(manifest.contains("name = \"x\""));
         assert_eq!(script, "fn Foo() {}");
+    }
+
+    fn zip_with_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut zip = ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+        let opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in entries {
+            zip.start_file(*name, opts).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn test_unpack_rejects_decompression_bomb() {
+        // A >1 MiB run of zeros compresses to a few hundred bytes: the classic
+        // small-archive, huge-payload shape.
+        let bomb = vec![0u8; (MAX_ENTRY_BYTES + 1024) as usize];
+        let bytes = zip_with_entries(&[(MANIFEST_FILE, b"name = \"x\""), (SCRIPT_FILE, &bomb)]);
+        assert!(
+            bytes.len() < 4096,
+            "bomb archive should be tiny, got {} bytes",
+            bytes.len()
+        );
+        let err = unpack_raw(&bytes).unwrap_err().to_string();
+        assert!(
+            err.contains("decompression bomb"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_unpack_rejects_too_many_entries() {
+        let names: Vec<String> = (0..=MAX_ENTRIES).map(|i| format!("f{i}.txt")).collect();
+        let data: &[u8] = b"x";
+        let entries: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), data)).collect();
+        let bytes = zip_with_entries(&entries);
+        let err = unpack_raw(&bytes).unwrap_err().to_string();
+        assert!(err.contains("exceeds limit"), "unexpected error: {err}");
     }
 
     #[test]

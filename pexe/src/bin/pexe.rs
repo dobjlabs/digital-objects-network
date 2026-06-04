@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use pexe::{
     MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash, inspect, install, pack,
-    set_manifest_hash, unpack,
+    read_pexe_file, set_manifest_hash, unpack,
 };
 
 // These names intentionally mirror `driver::paths::{DOBJ_HOME_DIR, ACTIONS_DIR}`.
@@ -225,8 +225,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Dump { pexe } => {
-            let bytes = std::fs::read(&pexe)
-                .with_context(|| format!("failed to read {}", pexe.display()))?;
+            let bytes = read_pexe_file(&pexe)?;
             let (manifest, script) = unpack(&bytes)?;
             println!("# manifest");
             println!("{:#?}", manifest);

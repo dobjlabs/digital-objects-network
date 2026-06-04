@@ -354,8 +354,7 @@ fn discover_plugins(actions_dir: &Path) -> Result<Vec<Plugin>> {
 
     let mut plugins = Vec::with_capacity(entries.len());
     for path in entries {
-        let bytes = std::fs::read(&path)
-            .with_context(|| format!("failed to read pexe {}", path.display()))?;
+        let bytes = pexe::read_pexe_file(&path)?;
         plugins.push(load_plugin_from_bytes(path, &bytes)?);
     }
     Ok(plugins)
