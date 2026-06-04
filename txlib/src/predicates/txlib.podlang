@@ -43,7 +43,7 @@
 // the hash relationship but do not update live/nullifier sets --
 // that happens during replay.
 
-// Insert: chain = H(prev, H(0, new)). The `type` arg pins the
+// Insert: chain = H(prev, H({}, new)). The `type` arg pins the
 // inserted object's type field so ReplayInsert can dispatch the
 // guard without re-extracting it. The DictInsert clause stamps
 // `new.identity = commitment(initial)`: `initial` is the

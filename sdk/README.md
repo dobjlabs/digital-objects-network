@@ -159,26 +159,26 @@ The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
 The example in the test `test_sdk_1` produces the following podlang code:
 
 ```
-use module 0x1127dce1866ccc4bb6a32782dec35754451ae33ac72e8daaa7e8454be8ac813d as tx
-use intro Vdf(count, input, output) from 0x92586a223c74ba4083d5c5d5b10f9c0a227b91fb2baa2272ffb99faca7adb993
-use intro LtEqU256(lhs, rhs) from 0xd80d0ac8d9d02dc8e9fa3344936a8c9594b915b10a88a4981ceecc462ed03724
+use module 0x8dcb7d36f8cb0504e533f124246671b983a78072d1ec8e80604cf01a831327b8 as tx
+use intro Vdf(count, input, output) from 0xab82223f501b5056f458f063eb2fc073f8ac01f2ea178a3a2303394fec6828a0
+use intro LtEqU256(lhs, rhs) from 0xe0595e5c75467e5a27bd30fa48a45e1dcc66a327076e5ce7c02ce33dfe357311
 
-record FindLogOut = (_pad, log)
-record FindLogInitials = (_pad, log)
-record CraftWoodIn = (_pad, log)
-record CraftWoodOut = (_pad, wood)
-record CraftSticksIn = (_pad, wood)
-record CraftSticksOut = (_pad, stick_a, stick_b)
-record CraftSticksChain = (_pad, step_0, step_1)
-record CraftSticksInitials = (_pad, stick_a, stick_b)
-record CraftWoodPickIn = (_pad, wood, stick)
-record CraftWoodPickOut = (_pad, pick)
-record CraftWoodPickChain = (_pad, step_0, step_1)
-record CraftWoodPickInitials = (_pad, pick)
-record UseWoodPickIn = (_pad, wood_pick)
-record UseWoodPickOut = (_pad, wood_pick)
-record MineStoneWithWoodPickOut = (_pad, stone)
-record MineStoneWithWoodPickInitials = (_pad, stone)
+record FindLogOut = (log)
+record FindLogInitials = (log)
+record CraftWoodIn = (log)
+record CraftWoodOut = (wood)
+record CraftSticksIn = (wood)
+record CraftSticksOut = (stick_a, stick_b)
+record CraftSticksChain = (step_0, step_1)
+record CraftSticksInitials = (stick_a, stick_b)
+record CraftWoodPickIn = (wood, stick)
+record CraftWoodPickOut = (pick)
+record CraftWoodPickChain = (step_0, step_1)
+record CraftWoodPickInitials = (pick)
+record UseWoodPickIn = (wood_pick)
+record UseWoodPickOut = (wood_pick)
+record MineStoneWithWoodPickOut = (stone)
+record MineStoneWithWoodPickInitials = (stone)
 
 // Actions
 

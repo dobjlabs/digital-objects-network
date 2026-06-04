@@ -77,8 +77,8 @@ impl StateRoot {
         }
     }
 
-    /// Padded-array view used as the canonical state root record. Slot
-    /// layout matches the `record StateRoot` declaration in txlib.podlang.
+    /// Array view used as the canonical state root record. Slot layout
+    /// matches the `record StateRoot` declaration in txlib.podlang.
     /// Predicates access fields via anchored-key syntax (e.g.
     /// `state_root.created`).
     pub fn array(&self) -> Array {
@@ -493,7 +493,7 @@ impl std::fmt::Display for TxBuilder {
 
 impl TxBuilder {
     /// Create a new transaction builder from grounded inputs.
-    /// Seeds `chain_start = H(inputs, 0)`.
+    /// Seeds `chain_start = H(inputs, {})`.
     pub fn new(
         ctx: &mut BuildContext,
         inputs: &[Dictionary],
