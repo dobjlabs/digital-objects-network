@@ -46,13 +46,17 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}/synchronizer
-          # sha-<short> is the immutable tag to pin deploys to; main/latest move.
+          # latest is pushed on every run via the explicit type=raw line below
+          # (latest=false turns off metadata-action's implicit semver-only one).
+          # Pin deploys to the immutable sha-<short>, not latest.
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
 
       - name: Build and push synchronizer
         uses: docker/build-push-action@v6
@@ -78,12 +82,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}/relayer
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
 
       - name: Build and push relayer
         uses: docker/build-push-action@v6
