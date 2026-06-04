@@ -2267,8 +2267,11 @@ impl Executor {
         // to mask them from the relayer / synchronizer's `ProofParser`,
         // which expects a single public statement.
         log::info!("proving tx_pod for action {}", action);
+        let start = std::time::Instant::now();
         let tx_pod = prove(bld.builder, &*self.prover);
         tx_pod.pod.verify().unwrap();
+        let duration = start.elapsed();
+        log::info!("proving tx_pod for action {} took {:?}", action, duration);
 
         let objs: Vec<SpendableObject> = outputs
             .into_iter()
