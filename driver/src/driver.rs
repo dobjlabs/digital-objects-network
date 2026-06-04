@@ -161,9 +161,9 @@ impl Driver {
     pub fn sync_inventory(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
         let mut entries = load_object_files(&self.paths)?;
         let settings = self.load_settings()?;
-        let source_tx_hashes = entries
+        let object_commitments = entries
             .iter()
-            .map(|entry| entry.record.evidence.tx_final)
+            .map(|entry| entry.record.obj.commitment())
             .collect::<HashSet<_>>();
         let all_nullifiers = entries
             .iter()
@@ -172,14 +172,14 @@ impl Driver {
 
         let membership = self.deps.synchronizer.fetch_membership_with_nullifiers(
             &settings.synchronizer_api_url,
-            &source_tx_hashes.iter().copied().collect::<Vec<_>>(),
+            &object_commitments.iter().copied().collect::<Vec<_>>(),
             &all_nullifiers.iter().copied().collect::<Vec<_>>(),
         )?;
 
         reconcile_objects(
             &self.paths,
             &mut entries,
-            &membership.grounded_txs,
+            &membership.created_objects,
             &membership.on_chain_nullifiers,
         )?;
 
@@ -189,7 +189,7 @@ impl Driver {
             if entry.record.status != ObjectStatus::Pending {
                 continue;
             }
-            let tx_final = encode_hash_hex(&entry.record.evidence.tx_final);
+            let tx_final = encode_hash_hex(&entry.record.tx_final);
             let current_hash = self
                 .deps
                 .relayer
@@ -410,11 +410,11 @@ impl Driver {
         }
 
         // 4. Grounding decides status. A nullifier already on-chain means the
-        //    object has been spent — reject it. Otherwise Live if the source
-        //    tx is canonical, else Unknown. Tolerate an unreachable
-        //    synchronizer by importing as Unknown.
+        //    object has been spent — reject it. Otherwise Live if the object's
+        //    commitment is in the canonical created set, else Unknown. Tolerate
+        //    an unreachable synchronizer by importing as Unknown.
         let settings = self.load_settings()?;
-        let source_tx = record.evidence.tx_final;
+        let commitment = record.obj.commitment();
         let nullifier = object_nullifier_hash(&record.obj).map_err(|err| {
             DriverError::InvalidInput(format!(
                 "could not derive nullifier from imported object: {err}"
@@ -422,7 +422,7 @@ impl Driver {
         })?;
         let status = match self.deps.synchronizer.fetch_membership_with_nullifiers(
             &settings.synchronizer_api_url,
-            &[source_tx],
+            &[commitment],
             &[nullifier],
         ) {
             Ok(membership) => {
@@ -431,7 +431,7 @@ impl Driver {
                         "imported object has already been spent on-chain".to_string(),
                     )
                     .into());
-                } else if membership.grounded_txs.contains(&source_tx) {
+                } else if membership.created_objects.contains(&commitment) {
                     ObjectStatus::Live
                 } else {
                     ObjectStatus::Unknown
@@ -475,14 +475,14 @@ impl Driver {
         reporter.on_step(ExecutionPhase::GenerateProof, "Verifying inputs", &no_ctx);
         let entries = load_object_files(&self.paths)?;
         let resolved_inputs = resolve_inputs(&entries, &input, &action)?;
-        let source_tx_hashes = resolved_inputs
+        let input_commitments = resolved_inputs
             .iter()
-            .map(|entry| entry.record.evidence.tx_final)
+            .map(|entry| entry.record.obj.commitment())
             .collect::<Vec<_>>();
         let grounding_witness = self
             .deps
             .synchronizer
-            .fetch_grounding_witness(&settings.synchronizer_api_url, &source_tx_hashes)?;
+            .fetch_grounding_witness(&settings.synchronizer_api_url, &input_commitments)?;
         let old_root_hash = grounding_witness.state_root.hash();
         let old_root = encode_hash_hex(&old_root_hash);
 
@@ -508,7 +508,15 @@ impl Driver {
             .deps
             .payload_builder
             .build_payload(&old_root_hash, &spendable_outputs)?;
-        let expected_tx_final = spendable_outputs.tx.dict().commitment();
+        // A tx has landed once the union of its effects is canonical: every
+        // produced object commitment in the created set and every nullifier in
+        // the nullifier set. Collect both for the confirmation poll below.
+        let output_commitments: Vec<Hash> = spendable_outputs
+            .objs
+            .iter()
+            .map(|spendable| spendable.obj.commitment())
+            .collect();
+        let nullifiers = spendable_outputs.tx.nullifier_hashes()?;
 
         reporter.on_step(ExecutionPhase::Commit, "Creating files", &commit_ctx);
         let saved = save_results(&self.paths, &action, &resolved_inputs, &spendable_outputs)?;
@@ -601,7 +609,8 @@ impl Driver {
         );
         let sync_head = match self.deps.synchronizer.wait_for_tx(
             &settings.synchronizer_api_url,
-            expected_tx_final,
+            &output_commitments,
+            &nullifiers,
             SYNCHRONIZER_POLL_TIMEOUT_SECS,
             SYNCHRONIZER_POLL_INTERVAL_MS,
         ) {

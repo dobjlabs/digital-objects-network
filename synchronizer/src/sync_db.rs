@@ -69,13 +69,13 @@ impl SyncDb {
                 execution_block_number INTEGER NULL,
                 current_gsr BYTEA NULL,
                 is_empty BOOLEAN NOT NULL,
-                head_transactions_root BYTEA NOT NULL,
+                head_created_root BYTEA NOT NULL,
                 head_nullifiers_root BYTEA NOT NULL,
                 head_state_root_gsrs_root BYTEA NOT NULL,
                 head_gsr_history_root BYTEA NOT NULL,
                 head_current_gsr BYTEA NULL,
                 head_current_block_number INTEGER NULL,
-                head_tx_count BIGINT NOT NULL,
+                head_created_count BIGINT NOT NULL,
                 head_nullifier_count BIGINT NOT NULL,
                 head_gsr_count BIGINT NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -145,13 +145,13 @@ impl SyncDb {
             r#"
             SELECT slot,
                    execution_block_number,
-                   head_transactions_root,
+                   head_created_root,
                    head_nullifiers_root,
                    head_state_root_gsrs_root,
                    head_gsr_history_root,
                    head_current_gsr,
                    head_current_block_number,
-                   head_tx_count,
+                   head_created_count,
                    head_nullifier_count,
                    head_gsr_count
             FROM canonical_slots
@@ -222,13 +222,13 @@ impl SyncDb {
                 execution_block_number,
                 current_gsr,
                 is_empty,
-                head_transactions_root,
+                head_created_root,
                 head_nullifiers_root,
                 head_state_root_gsrs_root,
                 head_gsr_history_root,
                 head_current_gsr,
                 head_current_block_number,
-                head_tx_count,
+                head_created_count,
                 head_nullifier_count,
                 head_gsr_count
             )
@@ -241,13 +241,13 @@ impl SyncDb {
         .bind(slot.block_number.map(|v| v as i32))
         .bind(slot.current_gsr.map(hash_to_db_bytes))
         .bind(slot.is_empty)
-        .bind(hash_to_db_bytes(head.roots.transactions))
+        .bind(hash_to_db_bytes(head.roots.created))
         .bind(hash_to_db_bytes(head.roots.nullifiers))
         .bind(hash_to_db_bytes(head.roots.state_root_gsrs))
         .bind(hash_to_db_bytes(head.roots.gsr_history))
         .bind(head.metadata.current_gsr.map(hash_to_db_bytes))
         .bind(head.metadata.current_block_number.map(|v| v as i32))
-        .bind(head.metadata.tx_count as i64)
+        .bind(head.metadata.created_count as i64)
         .bind(head.metadata.nullifier_count as i64)
         .bind(head.metadata.gsr_count as i64)
         .execute(&mut *tx)
@@ -303,7 +303,7 @@ impl SyncDb {
 fn decode_head_row(row: &PgRow) -> Result<CanonicalHead> {
     Ok(CanonicalHead {
         roots: CanonicalRoots {
-            transactions: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_transactions_root"))?,
+            created: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_created_root"))?,
             nullifiers: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_nullifiers_root"))?,
             state_root_gsrs: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_state_root_gsrs_root"))?,
             gsr_history: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_gsr_history_root"))?,
@@ -317,7 +317,7 @@ fn decode_head_row(row: &PgRow) -> Result<CanonicalHead> {
             current_block_number: row
                 .get::<Option<i32>, _>("head_current_block_number")
                 .map(|value| value as u32),
-            tx_count: row.get::<i64, _>("head_tx_count") as u64,
+            created_count: row.get::<i64, _>("head_created_count") as u64,
             nullifier_count: row.get::<i64, _>("head_nullifier_count") as u64,
             gsr_count: row.get::<i64, _>("head_gsr_count") as u64,
         },
@@ -338,7 +338,7 @@ mod tests {
     fn unique_head(block_number: u32, marker: i64) -> CanonicalHead {
         CanonicalHead {
             roots: CanonicalRoots {
-                transactions: unique_hash(marker),
+                created: unique_hash(marker),
                 nullifiers: unique_hash(marker + 1),
                 state_root_gsrs: unique_hash(marker + 2),
                 gsr_history: unique_hash(marker + 3),
@@ -346,7 +346,7 @@ mod tests {
             metadata: HeadMetadata {
                 current_gsr: Some(unique_hash(marker + 4)),
                 current_block_number: Some(block_number),
-                tx_count: block_number as u64,
+                created_count: block_number as u64,
                 nullifier_count: block_number as u64 + 1,
                 gsr_count: block_number as u64 + 2,
             },

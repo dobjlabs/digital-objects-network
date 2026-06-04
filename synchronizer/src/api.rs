@@ -2,7 +2,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use axum::{
-    extract::{Path, State},
+    extract::State,
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -13,8 +13,8 @@ use tracing::info;
 use wire_types::synchronizer::{
     GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, MembershipRequest,
     MembershipResponse, NullifierContainsEntry, NullifierContainsRequest,
-    NullifierContainsResponse, SourceTxProofResponse, StateHeadResponse, SyncProgressResponse,
-    TxContainsEntry, TxContainsRequest, TxContainsResponse, TxStatusResponse,
+    NullifierContainsResponse, ObjectContainsEntry, ObjectContainsRequest, ObjectContainsResponse,
+    ObjectProofResponse, StateHeadResponse, SyncProgressResponse,
 };
 
 use crate::{
@@ -44,8 +44,8 @@ struct HeadSnapshot {
     current_gsr: Option<String>,
     /// Execution block number committed inside the current state root, if any.
     current_block_number: Option<i64>,
-    /// Number of accepted transactions in canonical state.
-    tx_count: usize,
+    /// Number of objects in the canonical global created set.
+    created_count: usize,
     /// Number of spent nullifiers in canonical state.
     nullifier_count: usize,
     /// Number of GSR entries in canonical history.
@@ -55,33 +55,33 @@ struct HeadSnapshot {
 #[derive(Debug, Clone)]
 /// Membership result anchored to one caller-provided root set.
 struct MembershipSnapshot {
-    /// Per-request transaction membership bits under `roots.transactions`.
-    tx_present: Vec<bool>,
+    /// Per-request created-object membership bits under `roots.created`.
+    created_present: Vec<bool>,
     /// Per-request nullifier membership bits under `roots.nullifiers`.
     nullifier_present: Vec<bool>,
 }
 
 #[derive(Debug, Clone)]
-/// Membership proof for a source transaction against the current transactions set root.
-struct TxMembershipProof {
-    /// Source transaction hash the client asked about.
-    tx_hash: Hash,
-    /// Whether the transaction is present in the committed transactions set.
+/// Membership proof for an object against the current created-set root.
+struct ObjectMembershipProof {
+    /// Object commitment the client asked about.
+    commitment: Hash,
+    /// Whether the object is present in the committed created set.
     present: bool,
-    /// Merkle proof against the current transactions set root.
-    proof: MerkleProof,
+    /// `(array index, ArrayContains proof)` when present, else `None`.
+    witness: Option<(i64, MerkleProof)>,
 }
 
 #[derive(Debug, Clone)]
 /// Proof-bearing result used by txlib to ground action execution.
 struct GroundingWitnessSnapshot {
-    /// Per-source transaction membership proofs under the provided roots.
-    source_tx_proofs: Vec<TxMembershipProof>,
+    /// Per-input-object created-set membership proofs under the provided roots.
+    object_proofs: Vec<ObjectMembershipProof>,
 }
 
 struct MembershipContext {
     head: HeadSnapshot,
-    tx_hashes: Vec<Hash>,
+    object_commitments: Vec<Hash>,
     nullifiers: Vec<Hash>,
     membership: MembershipSnapshot,
 }
@@ -97,12 +97,14 @@ pub async fn run_api_server(
         .route("/sync-progress", get(get_sync_progress))
         .route("/v1/state/head", get(get_state_head))
         .route("/v1/state/membership", post(post_state_membership))
-        .route("/v1/state/tx/contains", post(post_state_tx_contains))
+        .route(
+            "/v1/state/object/contains",
+            post(post_state_object_contains),
+        )
         .route(
             "/v1/state/nullifier/contains",
             post(post_state_nullifier_contains),
         )
-        .route("/v1/state/tx/{tx_hash}", get(get_state_tx))
         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(AppState { app_db, sync_db });
@@ -142,28 +144,28 @@ async fn get_state_head(
         last_processed_block_number: head.last_processed_block_number,
         current_gsr: head.current_gsr,
         current_block_number: head.current_block_number,
-        tx_count: head.tx_count,
+        created_count: head.created_count,
         nullifier_count: head.nullifier_count,
         gsr_count: head.gsr_count,
     }))
 }
 
-async fn post_state_tx_contains(
+async fn post_state_object_contains(
     State(app_state): State<AppState>,
-    Json(body): Json<TxContainsRequest>,
-) -> Result<Json<TxContainsResponse>, (StatusCode, String)> {
+    Json(body): Json<ObjectContainsRequest>,
+) -> Result<Json<ObjectContainsResponse>, (StatusCode, String)> {
     let no_nullifiers: &[String] = &[];
     let MembershipContext {
         head,
-        tx_hashes,
+        object_commitments,
         membership,
         ..
-    } = load_membership_context(&app_state, &body.tx_hashes, no_nullifiers).await?;
+    } = load_membership_context(&app_state, &body.object_commitments, no_nullifiers).await?;
 
-    Ok(Json(TxContainsResponse {
+    Ok(Json(ObjectContainsResponse {
         last_processed_slot: head.last_processed_slot,
         current_gsr: head.current_gsr,
-        results: tx_contains_entries(tx_hashes, membership.tx_present),
+        results: object_contains_entries(object_commitments, membership.created_present),
     }))
 }
 
@@ -192,38 +194,16 @@ async fn post_state_membership(
 ) -> Result<Json<MembershipResponse>, (StatusCode, String)> {
     let MembershipContext {
         head,
-        tx_hashes,
+        object_commitments,
         nullifiers,
         membership,
-    } = load_membership_context(&app_state, &body.tx_hashes, &body.nullifiers).await?;
+    } = load_membership_context(&app_state, &body.object_commitments, &body.nullifiers).await?;
 
     Ok(Json(MembershipResponse {
         last_processed_slot: head.last_processed_slot,
         current_gsr: head.current_gsr,
-        tx_results: tx_contains_entries(tx_hashes, membership.tx_present),
+        created_results: object_contains_entries(object_commitments, membership.created_present),
         nullifier_results: nullifier_contains_entries(nullifiers, membership.nullifier_present),
-    }))
-}
-
-async fn get_state_tx(
-    State(app_state): State<AppState>,
-    Path(tx_hash): Path<String>,
-) -> Result<Json<TxStatusResponse>, (StatusCode, String)> {
-    let snapshot = load_current_snapshot(&app_state).await?;
-    let hash = parse_hash_hex(&tx_hash)?;
-    let membership = membership_snapshot(
-        &app_state.app_db,
-        &snapshot.head.roots,
-        std::slice::from_ref(&hash),
-        &[],
-    )
-    .map_err(internal_error)?;
-    let head = build_head_snapshot(&snapshot);
-    Ok(Json(TxStatusResponse {
-        tx_hash: encode_hash_hex(&hash),
-        present: membership.tx_present[0],
-        last_processed_slot: head.last_processed_slot,
-        current_gsr: head.current_gsr,
     }))
 }
 
@@ -231,14 +211,14 @@ async fn post_grounding_witness(
     State(app_state): State<AppState>,
     Json(body): Json<GroundingWitnessRequest>,
 ) -> Result<Json<GroundingWitnessResponse>, (StatusCode, String)> {
-    ensure_hash_query_limit("sourceTxHashes", body.source_tx_hashes.len())?;
+    ensure_hash_query_limit("objectCommitments", body.object_commitments.len())?;
     let snapshot = load_current_snapshot(&app_state).await?;
-    let source_tx_hashes = body
-        .source_tx_hashes
+    let object_commitments = body
+        .object_commitments
         .iter()
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
-    let witness = grounding_witness(&app_state.app_db, &snapshot.head.roots, &source_tx_hashes)
+    let witness = grounding_witness(&app_state.app_db, &snapshot.head.roots, &object_commitments)
         .map_err(internal_error)?;
     let head = snapshot.head;
     let state_root = head.current_state_root().ok_or_else(|| {
@@ -255,16 +235,23 @@ async fn post_grounding_witness(
     Ok(Json(GroundingWitnessResponse {
         state_root_hash: encode_hash_hex(&state_root_hash),
         block_number: state_root.block_number,
-        transactions_root: encode_hash_hex(&state_root.transactions_root),
+        created_root: encode_hash_hex(&state_root.created_root),
         nullifiers_root: encode_hash_hex(&state_root.nullifiers_root),
         gsrs_root: encode_hash_hex(&state_root.gsrs_root),
-        source_tx_proofs: witness
-            .source_tx_proofs
+        created_proofs: witness
+            .object_proofs
             .into_iter()
-            .map(|entry| SourceTxProofResponse {
-                tx_hash: encode_hash_hex(&entry.tx_hash),
-                present: entry.present,
-                proof: entry.proof,
+            .map(|entry| {
+                let (index, proof) = match entry.witness {
+                    Some((index, proof)) => (Some(index), Some(proof)),
+                    None => (None, None),
+                };
+                ObjectProofResponse {
+                    commitment: encode_hash_hex(&entry.commitment),
+                    present: entry.present,
+                    index,
+                    proof,
+                }
             })
             .collect(),
     }))
@@ -281,7 +268,7 @@ fn build_head_snapshot(snapshot: &CurrentSnapshot) -> HeadSnapshot {
             .as_ref()
             .map(encode_hash_hex),
         current_block_number: snapshot.head.metadata.current_block_number.map(i64::from),
-        tx_count: snapshot.head.metadata.tx_count as usize,
+        created_count: snapshot.head.metadata.created_count as usize,
         nullifier_count: snapshot.head.metadata.nullifier_count as usize,
         gsr_count: snapshot.head.metadata.gsr_count as usize,
     }
@@ -290,11 +277,11 @@ fn build_head_snapshot(snapshot: &CurrentSnapshot) -> HeadSnapshot {
 fn membership_snapshot(
     app_db: &AppDb,
     roots: &CanonicalRoots,
-    tx_hashes: &[Hash],
+    object_commitments: &[Hash],
     nullifiers: &[Hash],
 ) -> anyhow::Result<MembershipSnapshot> {
     Ok(MembershipSnapshot {
-        tx_present: app_db.tx_exists_batch(roots, tx_hashes)?,
+        created_present: app_db.created_exists_batch(roots, object_commitments)?,
         nullifier_present: app_db.nullifier_exists_batch(roots, nullifiers)?,
     })
 }
@@ -302,42 +289,42 @@ fn membership_snapshot(
 fn grounding_witness(
     app_db: &AppDb,
     roots: &CanonicalRoots,
-    source_tx_hashes: &[Hash],
+    object_commitments: &[Hash],
 ) -> anyhow::Result<GroundingWitnessSnapshot> {
-    let source_tx_proofs = source_tx_hashes
+    let object_proofs = object_commitments
         .iter()
-        .map(|tx_hash| {
-            let (present, proof) = app_db.prove_tx(roots, *tx_hash)?;
-            Ok(TxMembershipProof {
-                tx_hash: *tx_hash,
+        .map(|commitment| {
+            let (present, witness) = app_db.prove_created(roots, *commitment)?;
+            Ok(ObjectMembershipProof {
+                commitment: *commitment,
                 present,
-                proof,
+                witness,
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    Ok(GroundingWitnessSnapshot { source_tx_proofs })
+    Ok(GroundingWitnessSnapshot { object_proofs })
 }
 
 async fn load_membership_context(
     app_state: &AppState,
-    tx_hashes: &[String],
+    object_commitments: &[String],
     nullifiers: &[String],
 ) -> Result<MembershipContext, (StatusCode, String)> {
-    ensure_membership_query_limit(tx_hashes.len(), nullifiers.len())?;
+    ensure_membership_query_limit(object_commitments.len(), nullifiers.len())?;
     let snapshot = load_current_snapshot(app_state).await?;
-    let tx_hashes = parse_hashes(tx_hashes)?;
+    let object_commitments = parse_hashes(object_commitments)?;
     let nullifiers = parse_hashes(nullifiers)?;
     let membership = membership_snapshot(
         &app_state.app_db,
         &snapshot.head.roots,
-        &tx_hashes,
+        &object_commitments,
         &nullifiers,
     )
     .map_err(internal_error)?;
 
     Ok(MembershipContext {
         head: build_head_snapshot(&snapshot),
-        tx_hashes,
+        object_commitments,
         nullifiers,
         membership,
     })
@@ -393,12 +380,15 @@ fn ensure_membership_query_limit(
     Ok(())
 }
 
-fn tx_contains_entries(tx_hashes: Vec<Hash>, tx_present: Vec<bool>) -> Vec<TxContainsEntry> {
-    tx_hashes
+fn object_contains_entries(
+    object_commitments: Vec<Hash>,
+    created_present: Vec<bool>,
+) -> Vec<ObjectContainsEntry> {
+    object_commitments
         .into_iter()
-        .zip(tx_present)
-        .map(|(hash, present)| TxContainsEntry {
-            tx_hash: encode_hash_hex(&hash),
+        .zip(created_present)
+        .map(|(hash, present)| ObjectContainsEntry {
+            commitment: encode_hash_hex(&hash),
             present,
         })
         .collect()

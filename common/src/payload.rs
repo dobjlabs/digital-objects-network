@@ -33,6 +33,31 @@ pub fn read_elems<const N: usize>(bytes: &mut impl Read) -> Result<[F; N]> {
     Ok(elems)
 }
 
+/// A list of hashes, length-prefixed by a single `u8` count: at most 255
+/// entries.
+fn write_hashes(buffer: &mut Vec<u8>, hashes: &[Hash]) {
+    assert!(hashes.len() <= 255);
+    buffer
+        .write_all(&(hashes.len() as u8).to_le_bytes())
+        .expect("vec write");
+    for hash in hashes {
+        write_elems(buffer, &hash.0);
+    }
+}
+
+fn read_hashes(bytes: &mut &[u8]) -> Result<Vec<Hash>> {
+    let len = {
+        let mut buffer = [0; 1];
+        bytes.read_exact(&mut buffer)?;
+        u8::from_le_bytes(buffer)
+    };
+    let mut hashes = Vec::with_capacity(len as usize);
+    for _ in 0..len {
+        hashes.push(Hash(read_elems(bytes)?));
+    }
+    Ok(hashes)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub struct Payload {
@@ -41,6 +66,13 @@ pub struct Payload {
     pub tx_final: Hash,
     pub state_root_hash: Hash,
     pub nullifiers: Vec<Hash>,
+    /// Commitments of the objects this tx leaves live. The synchronizer
+    /// inserts each into its global created set, rejecting any that already
+    /// exists (the creation-uniqueness check, like a nullifier double-spend).
+    /// The list is also reconstructed into the `live` set that the public
+    /// TxFinalized statement commits to, so the proof only verifies against
+    /// these exact commitments -- the list cannot be forged.
+    pub live: Vec<Hash>,
 }
 
 const PAYLOAD_MAGIC: u16 = 0xd10b;
@@ -54,13 +86,8 @@ impl Payload {
         self.proof.write_bytes(&mut buffer);
         write_elems(&mut buffer, &self.tx_final.0);
         write_elems(&mut buffer, &self.state_root_hash.0);
-        assert!(self.nullifiers.len() <= 255);
-        buffer
-            .write_all(&(self.nullifiers.len() as u8).to_le_bytes())
-            .expect("vec write");
-        for nullifier in &self.nullifiers {
-            write_elems(&mut buffer, &nullifier.0);
-        }
+        write_hashes(&mut buffer, &self.nullifiers);
+        write_hashes(&mut buffer, &self.live);
         buffer
     }
 
@@ -79,20 +106,14 @@ impl Payload {
         bytes = &bytes[len..];
         let tx_final = Hash(read_elems(&mut bytes)?);
         let state_root_hash = Hash(read_elems(&mut bytes)?);
-        let nullifiers_len = {
-            let mut buffer = [0; 1];
-            bytes.read_exact(&mut buffer)?;
-            u8::from_le_bytes(buffer)
-        };
-        let mut nullifiers = Vec::with_capacity(nullifiers_len as usize);
-        for _ in 0..nullifiers_len {
-            nullifiers.push(Hash(read_elems(&mut bytes)?));
-        }
+        let nullifiers = read_hashes(&mut bytes)?;
+        let live = read_hashes(&mut bytes)?;
         Ok(Self {
             proof,
             tx_final,
             state_root_hash,
             nullifiers,
+            live,
         })
     }
 }
@@ -194,7 +215,7 @@ mod tests {
         let vds_root = vd_set.root();
 
         let input = r#"
-        TxnFinalized(state_root_hash, tx_final, nullifiers) = AND(
+        TxnFinalized(state_root_hash, tx_final, nullifiers, live) = AND(
             Equal(0, 0)
         )
         "#;
@@ -216,6 +237,13 @@ mod tests {
             let nullifiers_set = Value::from(Set::new(HashSet::from_iter(
                 nullifiers.iter().map(|h| Value::from(*h)),
             )));
+            let live = vec![
+                Hash(Value::from(10i64).raw().0),
+                Hash(Value::from(11i64).raw().0),
+            ];
+            let live_set = Value::from(Set::new(HashSet::from_iter(
+                live.iter().map(|h| Value::from(*h)),
+            )));
             let state_root = Value::from("dummy_state_root");
             let st0 = builder.priv_op(Operation::eq(0, 0)).unwrap();
             let st_txn_finalized = builder
@@ -225,6 +253,7 @@ mod tests {
                         (0, state_root.clone()),
                         (1, tx_final.clone()),
                         (2, nullifiers_set.clone()),
+                        (3, live_set.clone()),
                     ],
                     Operation::custom(pred.clone(), [st0]),
                 )
@@ -245,6 +274,7 @@ mod tests {
                 tx_final: Hash(tx_final.raw().0),
                 state_root_hash: Hash(state_root.raw().0),
                 nullifiers: nullifiers.clone(),
+                live: live.clone(),
             }
         };
 
@@ -258,12 +288,16 @@ mod tests {
         let nullifiers_set = Value::from(Set::new(HashSet::from_iter(
             payload.nullifiers.iter().map(|h| Value::from(*h)),
         )));
+        let live_set = Value::from(Set::new(HashSet::from_iter(
+            payload.live.iter().map(|h| Value::from(*h)),
+        )));
         let st = Statement::Custom(
             pred,
             vec![
                 Value::from(payload.state_root_hash).into(),
                 Value::from(payload.tx_final).into(),
                 nullifiers_set.into(),
+                live_set.into(),
             ],
         );
         println!("st: {st:?}");

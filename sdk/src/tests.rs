@@ -3,32 +3,20 @@ use super::*;
 use common::test_state::TestState;
 use txlib::StateRoot;
 
-fn tx_hash(tx: &Tx) -> Hash {
-    tx.dict().commitment()
-}
-
-fn tx_nullifiers(tx: &Tx) -> Vec<Hash> {
-    tx.nullifiers
-        .iter()
-        .map(|nullifier| {
-            let nullifier = nullifier.expect("tx nullifier should decode");
-            Hash(nullifier.raw().0)
-        })
-        .collect()
-}
-
 fn apply_tx(state: &mut TestState, tx: &Tx) {
-    state.apply_tx(tx_hash(tx), tx_nullifiers(tx));
+    state.apply_tx(
+        tx.live_commitments().unwrap(),
+        tx.nullifier_hashes().unwrap(),
+    );
 }
 
-fn grounding_witness(state: &TestState, inputs: &[Tx]) -> Arc<GroundingWitness> {
+fn grounding_witness(state: &TestState, input_commitments: &[Hash]) -> Arc<GroundingWitness> {
     state.build_grounding_witness(
-        inputs,
-        tx_hash,
-        |block_number, transactions_root, nullifiers_root, gsrs_root, source_tx_proofs| {
+        input_commitments,
+        |block_number, created_root, nullifiers_root, gsrs_root, created_proofs| {
             Arc::new(GroundingWitness::new(
-                StateRoot::new(block_number, transactions_root, nullifiers_root, gsrs_root),
-                source_tx_proofs,
+                StateRoot::new(block_number, created_root, nullifiers_root, gsrs_root),
+                created_proofs,
             ))
         },
     )
@@ -186,14 +174,14 @@ fn test_sdk_1() {
     apply_tx(&mut state, &log_a_tx);
 
     println!("exe CraftWood");
-    let executor = module.executor(true, grounding_witness(&state, &[log_a_tx]));
+    let executor = module.executor(true, grounding_witness(&state, &[log_a.obj.commitment()]));
     let res = executor.action("CraftWood", vec![log_a]).unwrap();
     let wood_a_tx = res.tx.clone();
     let [wood_a] = res.objs();
     apply_tx(&mut state, &wood_a_tx);
 
     println!("exe CraftSticks");
-    let executor = module.executor(true, grounding_witness(&state, &[wood_a_tx]));
+    let executor = module.executor(true, grounding_witness(&state, &[wood_a.obj.commitment()]));
     let res = executor.action("CraftSticks", vec![wood_a]).unwrap();
     let sticks_tx = res.tx.clone();
     let [stick_a, _stick_b] = res.objs();
@@ -207,14 +195,17 @@ fn test_sdk_1() {
     apply_tx(&mut state, &log_b_tx);
 
     println!("exe CraftWood");
-    let executor = module.executor(true, grounding_witness(&state, &[log_b_tx]));
+    let executor = module.executor(true, grounding_witness(&state, &[log_b.obj.commitment()]));
     let res = executor.action("CraftWood", vec![log_b]).unwrap();
     let wood_b_tx = res.tx.clone();
     let [wood_b] = res.objs();
     apply_tx(&mut state, &wood_b_tx);
 
     println!("exe CraftWoodPick");
-    let executor = module.executor(true, grounding_witness(&state, &[wood_b_tx, sticks_tx]));
+    let executor = module.executor(
+        true,
+        grounding_witness(&state, &[wood_b.obj.commitment(), stick_a.obj.commitment()]),
+    );
     let res = executor
         .action("CraftWoodPick", vec![wood_b, stick_a])
         .unwrap();
@@ -223,14 +214,20 @@ fn test_sdk_1() {
     apply_tx(&mut state, &wood_pick_tx);
 
     println!("exe UseWoodPick");
-    let executor = module.executor(true, grounding_witness(&state, &[wood_pick_tx]));
+    let executor = module.executor(
+        true,
+        grounding_witness(&state, &[wood_pick.obj.commitment()]),
+    );
     let res = executor.action("UseWoodPick", vec![wood_pick]).unwrap();
     let wood_pick_tx = res.tx.clone();
     let [wood_pick] = res.objs();
     apply_tx(&mut state, &wood_pick_tx);
 
     println!("exe MineStoneWithWoodPick");
-    let executor = module.executor(true, grounding_witness(&state, &[wood_pick_tx]));
+    let executor = module.executor(
+        true,
+        grounding_witness(&state, &[wood_pick.obj.commitment()]),
+    );
     let res = executor
         .action("MineStoneWithWoodPick", vec![wood_pick])
         .unwrap();
@@ -246,7 +243,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "8d3754249fb1122eb5baf2127a63856ea7d67e70df9d1258cd67b1dd335d8500"
+        module_hash = "d5588dc1b89c1246900b6f1ed86a41e0a8b7059f7c514dc9ac21e4efef69c762"
 
         [[classes]]
         name = "Log"

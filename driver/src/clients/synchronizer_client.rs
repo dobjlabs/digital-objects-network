@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use txlib::{GroundingWitness, StateRoot};
 use wire_types::synchronizer::{
     GroundingWitnessRequest, GroundingWitnessResponse, MembershipRequest, MembershipResponse,
-    StateHeadResponse, TxStatusResponse,
+    StateHeadResponse,
 };
 
 use common::{decode_hash_hex, encode_hash_hex};
@@ -35,7 +35,8 @@ pub struct SynchronizerHead {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynchronizerMembership {
-    pub grounded_txs: HashSet<Hash>,
+    /// Object commitments present in the canonical global created set.
+    pub created_objects: HashSet<Hash>,
     pub on_chain_nullifiers: HashSet<Hash>,
 }
 
@@ -44,18 +45,23 @@ pub trait SynchronizerClient: Send + Sync {
     fn fetch_grounding_witness(
         &self,
         sync_api_url: &str,
-        source_tx_hashes: &[Hash],
+        object_commitments: &[Hash],
     ) -> Result<GroundingWitness>;
     fn fetch_membership_with_nullifiers(
         &self,
         sync_api_url: &str,
-        tx_hashes: &[Hash],
+        object_commitments: &[Hash],
         nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership>;
+    /// Wait until a transaction has landed: every object commitment it produces
+    /// is in the canonical created set and every nullifier it emits is in the
+    /// canonical nullifier set. Returns the resulting head once the whole union
+    /// is present, or errors on timeout.
     fn wait_for_tx(
         &self,
         sync_api_url: &str,
-        tx_final: Hash,
+        created_commitments: &[Hash],
+        nullifiers: &[Hash],
         timeout_secs: u64,
         poll_interval_ms: u64,
     ) -> Result<SynchronizerHead>;
@@ -84,14 +90,14 @@ impl SynchronizerClient for HttpSynchronizerClient {
     fn fetch_grounding_witness(
         &self,
         sync_api_url: &str,
-        source_tx_hashes: &[Hash],
+        object_commitments: &[Hash],
     ) -> Result<GroundingWitness> {
         let endpoint = format!(
             "{}/v1/txlib/grounding-witness",
             sync_api_url.trim_end_matches('/')
         );
         let request = GroundingWitnessRequest {
-            source_tx_hashes: source_tx_hashes.iter().map(encode_hash_hex).collect(),
+            object_commitments: object_commitments.iter().map(encode_hash_hex).collect(),
         };
         let client = reqwest::blocking::Client::new();
         let payload: GroundingWitnessResponse = send_json_request(
@@ -102,7 +108,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
 
         let state_root = StateRoot::new(
             payload.block_number,
-            parse_hash_hex(&payload.transactions_root)?,
+            parse_hash_hex(&payload.created_root)?,
             parse_hash_hex(&payload.nullifiers_root)?,
             parse_hash_hex(&payload.gsrs_root)?,
         );
@@ -116,53 +122,56 @@ impl SynchronizerClient for HttpSynchronizerClient {
             ));
         }
 
-        let source_tx_proofs = collect_source_tx_proofs(
-            source_tx_hashes,
-            payload
-                .source_tx_proofs
-                .into_iter()
-                .map(|entry| (entry.tx_hash, entry.present, entry.proof)),
+        let created_proofs = collect_created_proofs(
+            object_commitments,
+            payload.created_proofs.into_iter().map(|entry| {
+                (
+                    entry.commitment,
+                    entry.present,
+                    entry.index.zip(entry.proof),
+                )
+            }),
         )?;
 
-        Ok(GroundingWitness::new(state_root, source_tx_proofs))
+        Ok(GroundingWitness::new(state_root, created_proofs))
     }
 
     fn fetch_membership_with_nullifiers(
         &self,
         sync_api_url: &str,
-        tx_hashes: &[Hash],
+        object_commitments: &[Hash],
         nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership> {
         let endpoint = format!("{}/v1/state/membership", sync_api_url.trim_end_matches('/'));
         let client = reqwest::blocking::Client::new();
 
-        let mut grounded_txs: HashSet<Hash> = HashSet::new();
+        let mut created_objects: HashSet<Hash> = HashSet::new();
         let mut on_chain_nullifiers: HashSet<Hash> = HashSet::new();
 
-        // Empty inputs → no network call. The membership endpoint accepts
-        // a request with both lists empty, but it's a wasted round trip.
-        if tx_hashes.is_empty() && nullifiers.is_empty() {
+        // Empty inputs need no network call: the membership endpoint accepts a
+        // request with both lists empty, but it is a wasted round trip.
+        if object_commitments.is_empty() && nullifiers.is_empty() {
             return Ok(SynchronizerMembership {
-                grounded_txs,
+                created_objects,
                 on_chain_nullifiers,
             });
         }
 
-        // The synchronizer rejects bodies where `tx_hashes.len() +
+        // The synchronizer rejects bodies where `object_commitments.len() +
         // nullifiers.len() > MEMBERSHIP_BATCH_LIMIT` with 400. Pack each
-        // batch tightly: take as many tx_hashes as possible (up to the
-        // limit), then fill the remainder with nullifiers. Continue until
+        // batch tightly: take as many object commitments as possible (up to
+        // the limit), then fill the remainder with nullifiers. Continue until
         // both lists are drained. Sequential because reqwest::blocking
         // and synchronizer responses are fast.
-        let mut tx_cursor = 0usize;
+        let mut obj_cursor = 0usize;
         let mut null_cursor = 0usize;
-        while tx_cursor < tx_hashes.len() || null_cursor < nullifiers.len() {
-            let tx_take = (tx_hashes.len() - tx_cursor).min(MEMBERSHIP_BATCH_LIMIT);
-            let remaining_capacity = MEMBERSHIP_BATCH_LIMIT - tx_take;
+        while obj_cursor < object_commitments.len() || null_cursor < nullifiers.len() {
+            let obj_take = (object_commitments.len() - obj_cursor).min(MEMBERSHIP_BATCH_LIMIT);
+            let remaining_capacity = MEMBERSHIP_BATCH_LIMIT - obj_take;
             let null_take = (nullifiers.len() - null_cursor).min(remaining_capacity);
 
             let request = MembershipRequest {
-                tx_hashes: tx_hashes[tx_cursor..tx_cursor + tx_take]
+                object_commitments: object_commitments[obj_cursor..obj_cursor + obj_take]
                     .iter()
                     .map(encode_hash_hex)
                     .collect(),
@@ -178,9 +187,9 @@ impl SynchronizerClient for HttpSynchronizerClient {
                 "synchronizer membership response",
             )?;
 
-            for entry in payload.tx_results {
+            for entry in payload.created_results {
                 if entry.present {
-                    grounded_txs.insert(parse_hash_hex(&entry.tx_hash)?);
+                    created_objects.insert(parse_hash_hex(&entry.commitment)?);
                 }
             }
             for entry in payload.nullifier_results {
@@ -189,12 +198,12 @@ impl SynchronizerClient for HttpSynchronizerClient {
                 }
             }
 
-            tx_cursor += tx_take;
+            obj_cursor += obj_take;
             null_cursor += null_take;
         }
 
         Ok(SynchronizerMembership {
-            grounded_txs,
+            created_objects,
             on_chain_nullifiers,
         })
     }
@@ -202,7 +211,8 @@ impl SynchronizerClient for HttpSynchronizerClient {
     fn wait_for_tx(
         &self,
         sync_api_url: &str,
-        tx_final: Hash,
+        created_commitments: &[Hash],
+        nullifiers: &[Hash],
         timeout_secs: u64,
         poll_interval_ms: u64,
     ) -> Result<SynchronizerHead> {
@@ -210,14 +220,23 @@ impl SynchronizerClient for HttpSynchronizerClient {
         let poll_interval = Duration::from_millis(poll_interval_ms);
         let start = Instant::now();
         loop {
-            let status = fetch_synchronizer_tx_status(sync_api_url, &tx_final)?;
-            if status.present {
+            let membership = self.fetch_membership_with_nullifiers(
+                sync_api_url,
+                created_commitments,
+                nullifiers,
+            )?;
+            let landed = created_commitments
+                .iter()
+                .all(|c| membership.created_objects.contains(c))
+                && nullifiers
+                    .iter()
+                    .all(|n| membership.on_chain_nullifiers.contains(n));
+            if landed {
                 return self.fetch_head(sync_api_url);
             }
             if start.elapsed() >= timeout {
                 return Err(anyhow!(
-                    "synchronizer did not index relayed tx {} within {}s",
-                    encode_hash_hex(&tx_final),
+                    "synchronizer did not observe the transaction within {}s",
                     timeout_secs
                 ));
             }
@@ -251,53 +270,62 @@ fn send_json_request<T: DeserializeOwned>(
         .map_err(|err| anyhow!("failed to decode {decode_context}: {err}"))
 }
 
-fn collect_source_tx_proofs<P>(
-    requested_source_tx_hashes: &[Hash],
-    entries: impl IntoIterator<Item = (String, bool, P)>,
+/// Validate and index the per-object created-set proofs returned by the
+/// synchronizer against the commitments we requested. Rejects unexpected,
+/// conflicting, omitted, or not-yet-present entries.
+fn collect_created_proofs<P>(
+    requested_commitments: &[Hash],
+    entries: impl IntoIterator<Item = (String, bool, Option<P>)>,
 ) -> Result<HashMap<Hash, P>> {
-    let expected_hashes = requested_source_tx_hashes
+    let expected_hashes = requested_commitments
         .iter()
         .copied()
         .collect::<HashSet<_>>();
     let mut response_presence = HashMap::new();
-    let mut source_tx_proofs = HashMap::new();
+    let mut created_proofs = HashMap::new();
 
-    for (tx_hash_raw, present, proof) in entries {
-        let tx_hash = parse_hash_hex(&tx_hash_raw)?;
-        if !expected_hashes.contains(&tx_hash) {
+    for (commitment_raw, present, proof) in entries {
+        let commitment = parse_hash_hex(&commitment_raw)?;
+        if !expected_hashes.contains(&commitment) {
             return Err(anyhow!(
-                "synchronizer grounding witness response contained unexpected source tx proof: {}",
-                encode_hash_hex(&tx_hash)
+                "synchronizer grounding witness response contained unexpected object proof: {}",
+                encode_hash_hex(&commitment)
             ));
         }
 
-        if let Some(previous_present) = response_presence.insert(tx_hash, present)
+        if let Some(previous_present) = response_presence.insert(commitment, present)
             && previous_present != present
         {
             return Err(anyhow!(
-                "synchronizer grounding witness response contained conflicting entries for source tx {}",
-                encode_hash_hex(&tx_hash)
+                "synchronizer grounding witness response contained conflicting entries for object {}",
+                encode_hash_hex(&commitment)
             ));
         }
 
         if present {
-            source_tx_proofs.insert(tx_hash, proof);
+            let proof = proof.ok_or_else(|| {
+                anyhow!(
+                    "synchronizer reported object {} present but omitted its array proof",
+                    encode_hash_hex(&commitment)
+                )
+            })?;
+            created_proofs.insert(commitment, proof);
         }
     }
 
-    let omitted = render_requested_hashes(requested_source_tx_hashes, |tx_hash| {
-        !response_presence.contains_key(tx_hash)
+    let omitted = render_requested_hashes(requested_commitments, |commitment| {
+        !response_presence.contains_key(commitment)
     });
     if !omitted.is_empty() {
         return Err(anyhow!(
-            "synchronizer grounding witness response omitted requested source tx proofs: {}",
+            "synchronizer grounding witness response omitted requested object proofs: {}",
             omitted.join(", ")
         ));
     }
 
-    let unavailable = render_requested_hashes(requested_source_tx_hashes, |tx_hash| {
+    let unavailable = render_requested_hashes(requested_commitments, |commitment| {
         response_presence
-            .get(tx_hash)
+            .get(commitment)
             .is_some_and(|present| !*present)
     });
     if !unavailable.is_empty() {
@@ -307,35 +335,21 @@ fn collect_source_tx_proofs<P>(
         ));
     }
 
-    Ok(source_tx_proofs)
+    Ok(created_proofs)
 }
 
 fn render_requested_hashes(
-    requested_source_tx_hashes: &[Hash],
+    requested_commitments: &[Hash],
     include: impl Fn(&Hash) -> bool,
 ) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut rendered = Vec::new();
-    for tx_hash in requested_source_tx_hashes {
-        if seen.insert(*tx_hash) && include(tx_hash) {
-            rendered.push(encode_hash_hex(tx_hash));
+    for commitment in requested_commitments {
+        if seen.insert(*commitment) && include(commitment) {
+            rendered.push(encode_hash_hex(commitment));
         }
     }
     rendered
-}
-
-fn fetch_synchronizer_tx_status(sync_api_url: &str, tx_hash: &Hash) -> Result<TxStatusResponse> {
-    let endpoint = format!(
-        "{}/v1/state/tx/{}",
-        sync_api_url.trim_end_matches('/'),
-        encode_hash_hex(tx_hash)
-    );
-    let client = reqwest::blocking::Client::new();
-    send_json_request(
-        client.get(&endpoint),
-        &endpoint,
-        "synchronizer tx status response",
-    )
 }
 
 #[cfg(test)]
@@ -347,11 +361,11 @@ mod tests {
     }
 
     #[test]
-    fn collect_source_tx_proofs_rejects_omitted_requested_hash() {
+    fn collect_created_proofs_rejects_omitted_requested_hash() {
         let requested = [test_hash(1), test_hash(2)];
-        let proofs = vec![(encode_hash_hex(&requested[0]), true, "proof-1")];
+        let proofs = vec![(encode_hash_hex(&requested[0]), true, Some("proof-1"))];
 
-        let err = collect_source_tx_proofs(&requested, proofs).expect_err("should fail");
+        let err = collect_created_proofs(&requested, proofs).expect_err("should fail");
 
         assert!(
             err.to_string().contains(&encode_hash_hex(&requested[1])),
@@ -360,12 +374,12 @@ mod tests {
     }
 
     #[test]
-    fn collect_source_tx_proofs_rejects_unexpected_hash() {
+    fn collect_created_proofs_rejects_unexpected_hash() {
         let requested = [test_hash(1)];
         let unexpected = test_hash(9);
-        let proofs = vec![(encode_hash_hex(&unexpected), true, "proof-9")];
+        let proofs = vec![(encode_hash_hex(&unexpected), true, Some("proof-9"))];
 
-        let err = collect_source_tx_proofs(&requested, proofs).expect_err("should fail");
+        let err = collect_created_proofs(&requested, proofs).expect_err("should fail");
 
         assert!(
             err.to_string().contains(&encode_hash_hex(&unexpected)),
@@ -374,14 +388,14 @@ mod tests {
     }
 
     #[test]
-    fn collect_source_tx_proofs_rejects_conflicting_duplicate_status() {
+    fn collect_created_proofs_rejects_conflicting_duplicate_status() {
         let requested = [test_hash(1)];
         let proofs = vec![
-            (encode_hash_hex(&requested[0]), true, "proof-1a"),
-            (encode_hash_hex(&requested[0]), false, "proof-1b"),
+            (encode_hash_hex(&requested[0]), true, Some("proof-1a")),
+            (encode_hash_hex(&requested[0]), false, None),
         ];
 
-        let err = collect_source_tx_proofs(&requested, proofs).expect_err("should fail");
+        let err = collect_created_proofs(&requested, proofs).expect_err("should fail");
 
         assert!(
             err.to_string().contains("conflicting entries"),
@@ -390,14 +404,14 @@ mod tests {
     }
 
     #[test]
-    fn collect_source_tx_proofs_allows_duplicate_requested_hashes() {
+    fn collect_created_proofs_allows_duplicate_requested_hashes() {
         let requested = [test_hash(1), test_hash(1), test_hash(2)];
         let proofs = vec![
-            (encode_hash_hex(&requested[0]), true, "proof-1"),
-            (encode_hash_hex(&requested[2]), true, "proof-2"),
+            (encode_hash_hex(&requested[0]), true, Some("proof-1")),
+            (encode_hash_hex(&requested[2]), true, Some("proof-2")),
         ];
 
-        let result = collect_source_tx_proofs(&requested, proofs).expect("should succeed");
+        let result = collect_created_proofs(&requested, proofs).expect("should succeed");
 
         assert_eq!(result.len(), 2);
         assert_eq!(result.get(&requested[0]), Some(&"proof-1"));
