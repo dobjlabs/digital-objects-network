@@ -2244,7 +2244,10 @@ impl Executor {
             outputs: Vec::new(),
         }));
         let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
+        log::info!("executing action {}", action);
+        let start = std::time::Instant::now();
         action_handle.exe_action()?;
+        log::info!("executing action {} took {:?}", action, start.elapsed());
 
         // Release the handle's Rc clone so `exe_rc` has a unique
         // owner for the `try_unwrap` below.
@@ -2270,8 +2273,11 @@ impl Executor {
         let start = std::time::Instant::now();
         let tx_pod = prove(bld.builder, &*self.prover);
         tx_pod.pod.verify().unwrap();
-        let duration = start.elapsed();
-        log::info!("proving tx_pod for action {} took {:?}", action, duration);
+        log::info!(
+            "proving tx_pod for action {} took {:?}",
+            action,
+            start.elapsed()
+        );
 
         let objs: Vec<SpendableObject> = outputs
             .into_iter()
