@@ -17,11 +17,20 @@ use client::DobjdClient;
 
 const DEFAULT_URL: &str = "http://127.0.0.1:7717";
 
+/// Release tag + target triple, stamped by build.rs ("dev" outside a
+/// release build).
+const VERSION: &str = concat!(
+    env!("DOBJ_RELEASE_TAG"),
+    " (",
+    env!("DOBJ_TARGET_TRIPLE"),
+    ")"
+);
+
 #[derive(Parser)]
 #[command(
     name = "dobj",
     about = "Talk to your local dobjd driver process",
-    version
+    version = VERSION
 )]
 struct Cli {
     /// Base URL of the dobjd HTTP server. Defaults to http://127.0.0.1:7717

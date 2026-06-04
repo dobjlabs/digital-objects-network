@@ -40,6 +40,10 @@ env:
   # `inputs.tag_name` is required:true on workflow_dispatch and empty on
   # push:tags, so the `||` falls through to the tag ref cleanly.
   RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
+  # Same expression as RELEASE_TAG (env can't reference env at this level).
+  # Baked into dobj + dobjd at compile time by their build.rs scripts, so
+  # `dobj --version` and dobjd's /healthz report the release they shipped in.
+  DOBJ_RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
   # Hosted defaults baked into dobjd at compile time (see
   # driver/src/settings.rs::default_settings) AND surfaced in the release
   # notes via envsubst. Change here, both move together.

@@ -15,9 +15,15 @@ use state::AppState;
 
 const DEFAULT_HTTP_PORT: u16 = 7717;
 
+/// Release tag stamped by build.rs ("dev" outside a release build).
+pub(crate) const RELEASE_TAG: &str = env!("DOBJ_RELEASE_TAG");
+/// Target triple stamped by build.rs.
+pub(crate) const TARGET_TRIPLE: &str = env!("DOBJ_TARGET_TRIPLE");
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
+    tracing::info!("dobjd {RELEASE_TAG} ({TARGET_TRIPLE})");
     if let Err(err) = common::load_dotenv() {
         tracing::warn!("failed to load env: {err}");
     }
