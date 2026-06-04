@@ -48,6 +48,9 @@ impl SseProgressReporter {
 
 impl ExecutionReporter for SseProgressReporter {
     fn on_step(&self, phase: ExecutionPhase, message: &str, ctx: &ExecutionStepContext) {
+        // Mirror the SSE step to the daemon's own logs/terminal so progress is
+        // visible without an SSE subscriber.
+        tracing::info!(run_id = %self.run_id, ?phase, "{message}");
         let progress = match phase {
             ExecutionPhase::GenerateProof => RunActionProgress {
                 run_id: self.run_id.clone(),
@@ -103,6 +106,7 @@ impl ExecutionReporter for SseProgressReporter {
                 None => return,
             },
         };
+        tracing::info!(run_id = %self.run_id, ?phase, "{}", progress.message);
         self.send(progress);
     }
 }
