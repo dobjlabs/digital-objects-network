@@ -60,8 +60,8 @@ Set via `.env` (compose) or `-e` flags (`docker run`). Image defaults:
 | `BEACON_URL`           | synchronizer | yes          | Beacon API with blob sidecars               |
 | `TO_ADDRESS`           | both         | yes          | L1 target address; must match across both   |
 | `PRIVATE_KEY`          | relayer      | relayer only | Hot wallet that signs/pays for blob txs     |
-| `SYNC_METADATA_DB_URL` | synchronizer | yes          | Postgres (authoritative state)              |
-| `DB_URL`               | relayer      | yes          | Postgres (job queue)                        |
+| `SYNC_METADATA_DB_URL` | synchronizer | no           | Defaults to the bundled Postgres; set to point at an external one |
+| `DB_URL`               | relayer      | no           | Defaults to the bundled Postgres; set to point at an external one |
 | `IMAGE_TAG`            | compose      | no           | Image tag to run; pin to a release          |
 | `APP_STATE_DB_PATH`    | synchronizer | no           | RocksDB cache path; mount a volume here     |
 | `HTTP_BIND`            | both         | no           | Defaults to `0.0.0.0:3000` / `0.0.0.0:3200` |
