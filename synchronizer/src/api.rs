@@ -302,18 +302,16 @@ fn grounding_witness(
     object_commitments: &[Hash],
     indices: &HashMap<Hash, i64>,
 ) -> anyhow::Result<GroundingWitnessSnapshot> {
+    let proofs = app_db.prove_created_for(roots, object_commitments, indices)?;
     let object_proofs = object_commitments
         .iter()
-        .map(|commitment| {
-            let (present, witness) =
-                app_db.prove_created_at(roots, *commitment, indices.get(commitment).copied())?;
-            Ok(ObjectMembershipProof {
-                commitment: *commitment,
-                present,
-                witness,
-            })
+        .zip(proofs)
+        .map(|(commitment, proof)| ObjectMembershipProof {
+            commitment: *commitment,
+            present: proof.present,
+            witness: proof.witness,
         })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .collect();
     Ok(GroundingWitnessSnapshot { object_proofs })
 }
 

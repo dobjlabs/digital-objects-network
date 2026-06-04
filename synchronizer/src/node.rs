@@ -54,9 +54,9 @@ pub struct ProcessedSlot {
     pub block_number: Option<u32>,
     pub is_empty: bool,
     pub new_head: CanonicalHead,
-    /// Object commitments this slot added to `created`, with array indices,
-    /// persisted to the created index in the slot's commit transaction.
-    pub created_added: Vec<(Hash, i64)>,
+    /// Object commitments this slot added to `created`, keyed to their array
+    /// indices, persisted to the created index in the slot's commit transaction.
+    pub created_added: HashMap<Hash, i64>,
 }
 
 impl ProcessedSlot {
@@ -73,7 +73,7 @@ impl ProcessedSlot {
             block_number: None,
             is_empty: true,
             new_head,
-            created_added: Vec::new(),
+            created_added: HashMap::new(),
         }
     }
 
@@ -83,7 +83,7 @@ impl ProcessedSlot {
         parent_root: B256,
         block_number: u32,
         new_head: CanonicalHead,
-        created_added: Vec<(Hash, i64)>,
+        created_added: HashMap<Hash, i64>,
     ) -> Self {
         Self {
             slot,

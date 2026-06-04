@@ -34,34 +34,12 @@ struct WorkingState {
     gsr_history: Array,
     /// Recent canonical GSRs keyed by hash for grounding validation.
     recent_gsrs: HashMap<Hash, i64>,
-    /// Commitments this slot appended to `created`, with their array indices.
-    /// The persistent index is not written here; the caller persists these to
+    /// Commitments this slot appended to `created`, keyed to their array
+    /// indices. Doubles as the within-slot duplicate check: the persistent
+    /// created index reflects only committed slots, so it cannot see objects
+    /// added earlier in this same slot. The caller persists these entries to
     /// the created index in the slot's commit transaction.
-    created_added: CreatedAdditions,
-}
-
-/// Objects an in-progress slot has appended to `created`, paired with a
-/// membership view of the same set. `record` is the only writer, so the ordered
-/// list and the lookup set cannot drift apart.
-///
-/// The lookup set answers within-slot duplicate detection: the persistent
-/// created index reflects only committed slots, so it cannot see objects added
-/// earlier in this same slot.
-#[derive(Default)]
-struct CreatedAdditions {
-    added: Vec<(Hash, i64)>,
-    seen: HashSet<Hash>,
-}
-
-impl CreatedAdditions {
-    fn record(&mut self, commitment: Hash, index: i64) {
-        self.added.push((commitment, index));
-        self.seen.insert(commitment);
-    }
-
-    fn contains(&self, commitment: &Hash) -> bool {
-        self.seen.contains(commitment)
-    }
+    created_added: HashMap<Hash, i64>,
 }
 
 /// One slot's derivation result: the candidate next canonical head plus the
@@ -69,7 +47,7 @@ impl CreatedAdditions {
 /// persists the additions to the created index when committing the slot.
 pub struct DerivedSlot {
     pub head: CanonicalHead,
-    pub created_added: Vec<(Hash, i64)>,
+    pub created_added: HashMap<Hash, i64>,
 }
 
 /// Domain logic for the synchronizer: proof verification, state validation, and Merkle storage.
@@ -214,7 +192,7 @@ impl StateMachine {
             // `created_count`, which doubles as the true object count.
             let index = state.metadata.created_count as usize;
             state.created.insert(index, Value::from(*obj))?;
-            state.created_added.record(*obj, index as i64);
+            state.created_added.insert(*obj, index as i64);
             state.metadata.created_count += 1;
         }
         for nullifier in &payload.nullifiers {
@@ -243,7 +221,7 @@ impl StateMachine {
         prior_indices: &HashMap<Hash, i64>,
         obj: &Hash,
     ) -> Result<bool> {
-        if state.created_added.contains(obj) {
+        if state.created_added.contains_key(obj) {
             return Ok(true);
         }
         match prior_indices.get(obj) {
@@ -290,7 +268,7 @@ impl StateMachine {
             nullifiers: self.app_db.open_nullifiers(base_head.roots.nullifiers)?,
             gsr_history: self.app_db.open_gsr_history(base_head.roots.gsr_history)?,
             recent_gsrs: recent_gsrs.into_iter().collect(),
-            created_added: CreatedAdditions::default(),
+            created_added: HashMap::new(),
         };
 
         for (blob_index, payload) in payloads {
@@ -338,7 +316,7 @@ impl StateMachine {
 
         Ok(DerivedSlot {
             head: new_head,
-            created_added: working.created_added.added,
+            created_added: working.created_added,
         })
     }
 
@@ -430,10 +408,6 @@ mod tests {
         .unwrap()
     }
 
-    fn index_of(added: &[(Hash, i64)]) -> HashMap<Hash, i64> {
-        added.iter().copied().collect()
-    }
-
     #[test]
     fn test_empty_slot_produces_new_head() {
         let (sm, _app_db, _dir) = make_sm();
@@ -455,7 +429,7 @@ mod tests {
         let derived = derive(&sm, head0, [(gsr0, 0)], 1, 1, &[(0, blob)], &HashMap::new());
         let head1 = derived.head;
         let created_present = app_db
-            .created_exists_for(&head1.roots, &[live_obj], &index_of(&derived.created_added))
+            .created_exists_for(&head1.roots, &[live_obj], &derived.created_added)
             .unwrap();
         let nullifier_present = app_db
             .nullifier_exists_batch(&head1.roots, &[nullifier])
@@ -489,7 +463,7 @@ mod tests {
         let blob = mock_txn_bytes(unique_hash(31), &[], &[live_obj], gsr0);
         let derived = derive(&sm, head0, [(gsr0, 0)], 1, 1, &[(0, blob)], &HashMap::new());
         let head1 = derived.head;
-        let indices = index_of(&derived.created_added);
+        let indices = derived.created_added;
 
         // The same index cross-checks against each head's root: present under
         // the new head, absent under the old.
@@ -527,9 +501,17 @@ mod tests {
         // A second tx in a later slot re-creates the same object. In production
         // slot 1's index row is committed; here it is passed as prior-existing.
         let gsr1 = head1.metadata.current_gsr.unwrap();
-        let prior_indices = index_of(&derived1.created_added);
         let blob2 = mock_txn_bytes(unique_hash(42), &[], &[live_obj], gsr1);
-        let head2 = derive(&sm, head1, [(gsr1, 1)], 2, 2, &[(0, blob2)], &prior_indices).head;
+        let head2 = derive(
+            &sm,
+            head1,
+            [(gsr1, 1)],
+            2,
+            2,
+            &[(0, blob2)],
+            &derived1.created_added,
+        )
+        .head;
         assert_eq!(head2.metadata.created_count, head1.metadata.created_count);
     }
 
@@ -554,8 +536,7 @@ mod tests {
             &HashMap::new(),
         );
         assert_eq!(derived.head.metadata.created_count, 1);
-        assert_eq!(derived.created_added.len(), 1);
-        assert_eq!(derived.created_added[0].0, dup);
+        assert_eq!(derived.created_added.get(&dup), Some(&1));
     }
 
     #[test]
@@ -573,7 +554,6 @@ mod tests {
         let blob = mock_txn_bytes(unique_hash(61), &[], &[obj], gsr0);
         let derived = derive(&sm, head0, [(gsr0, 0)], 1, 1, &[(0, blob)], &phantom);
         assert_eq!(derived.head.metadata.created_count, 1);
-        assert_eq!(derived.created_added.len(), 1);
-        assert_eq!(derived.created_added[0].0, obj);
+        assert_eq!(derived.created_added.get(&obj), Some(&1));
     }
 }

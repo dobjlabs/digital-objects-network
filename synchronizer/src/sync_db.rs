@@ -141,7 +141,7 @@ impl SyncDb {
             return Ok(stored_last);
         }
 
-        self.commit_slot(&bootstrap_slot, &CanonicalHead::empty(), &[])
+        self.commit_slot(&bootstrap_slot, &CanonicalHead::empty(), &HashMap::new())
             .await?;
         Ok(bootstrap_slot.slot)
     }
@@ -237,7 +237,7 @@ impl SyncDb {
         &self,
         slot: &CommittedSlotRecord,
         head: &CanonicalHead,
-        created_added: &[(Hash, i64)],
+        created_added: &HashMap<Hash, i64>,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -554,7 +554,7 @@ mod tests {
             is_empty: false,
         };
 
-        sync_db.commit_slot(&slot, &head, &[]).await?;
+        sync_db.commit_slot(&slot, &head, &HashMap::new()).await?;
 
         let snapshot = sync_db.current_snapshot().await?;
         assert_eq!(snapshot.head, head);
@@ -580,9 +580,12 @@ mod tests {
             is_empty: false,
         };
 
-        sync_db.commit_slot(&slot, &head1, &[]).await?;
+        sync_db.commit_slot(&slot, &head1, &HashMap::new()).await?;
 
-        let err = sync_db.commit_slot(&slot, &head2, &[]).await.unwrap_err();
+        let err = sync_db
+            .commit_slot(&slot, &head2, &HashMap::new())
+            .await
+            .unwrap_err();
         assert!(
             err.to_string().contains("duplicate key")
                 || err.to_string().contains("unique constraint"),
@@ -609,7 +612,7 @@ mod tests {
                     is_empty: false,
                 },
                 &h1,
-                &[],
+                &HashMap::new(),
             )
             .await?;
 
@@ -625,7 +628,7 @@ mod tests {
                     is_empty: false,
                 },
                 &h2,
-                &[],
+                &HashMap::new(),
             )
             .await?;
 
@@ -652,7 +655,7 @@ mod tests {
                     is_empty: false,
                 },
                 &h1,
-                &[],
+                &HashMap::new(),
             )
             .await?;
 
@@ -668,7 +671,7 @@ mod tests {
                     is_empty: false,
                 },
                 &h2,
-                &[],
+                &HashMap::new(),
             )
             .await?;
 
@@ -701,7 +704,7 @@ mod tests {
                     is_empty: false,
                 },
                 &h1,
-                &[(a, 1)],
+                &HashMap::from([(a, 1)]),
             )
             .await?;
         let h2 = unique_head(2, 20);
@@ -716,7 +719,7 @@ mod tests {
                     is_empty: false,
                 },
                 &h2,
-                &[(b, 2)],
+                &HashMap::from([(b, 2)]),
             )
             .await?;
 
