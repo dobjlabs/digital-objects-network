@@ -1,14 +1,16 @@
-# Keep the build context small and free of secrets. Cargo needs every
-# workspace member's Cargo.toml (including app-gui/src-tauri) for resolution,
-# so crate manifests and sources are intentionally NOT excluded.
+# Keep the build context small and free of secrets.
 
-# Build outputs (the workspace shares one target/ at the root).
+# app-gui: only the src-tauri crate is a Cargo workspace member, so cargo needs
+# its manifest to resolve the workspace - keep that, drop the rest of the
+# frontend (TypeScript, assets, build output); none of it builds the servers.
+app-gui/**
+!app-gui/src-tauri/**
+
+# Build outputs and node_modules anywhere (listed after the app-gui rule so they
+# still apply under src-tauri). The workspace shares one target/ at the root.
 target
 **/target
-
-# Node / frontend artifacts (not needed to build the server binaries).
 **/node_modules
-app-gui/dist
 
 # Secrets and local state - never bake these into an image.
 .env
