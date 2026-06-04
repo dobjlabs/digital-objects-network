@@ -196,20 +196,3 @@ pub fn cache_get_shrunk_main_pod_circuit_data(
     })
     .expect("cache ok")
 }
-
-/// Warm pod2's recursive MainPod circuit disk cache.
-///
-/// The first proof a process generates pulls the recursive MainPod circuit data
-/// from `~/.cache/pod2/`, building it on a miss -- a one-time cost of minutes.
-/// Both `Prover::prove` and `build_relayer_payload`'s shrink depend on it.
-/// Constructing `ShrunkMainPodSetup` reads the rec-main-pod common and verifier
-/// data, which (in pod2) forces that shared circuit data to be built and
-/// cached, so a later proof finds it ready. Idempotent: a warm cache just loads
-/// and returns.
-pub fn warm_prover_circuits() {
-    let start = Instant::now();
-    info!("preparing recursive MainPod circuit (first cold build can take several minutes)...");
-    // Construct and drop -- the side effect is the cached circuit build.
-    let _ = ShrunkMainPodSetup::new(&Params::default());
-    info!(elapsed = ?start.elapsed(), "recursive MainPod circuit ready");
-}
