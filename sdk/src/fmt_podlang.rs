@@ -56,11 +56,6 @@ pub(crate) const fn output_max_ts(base_ts: usize, is_output: bool) -> usize {
     if is_output { base_ts + 1 } else { base_ts }
 }
 
-/// Slot 0 placeholder in every records-form schema (`<Action>In`,
-/// `<Action>Out`, `<Action>Chain`). Real entries start at slot 1.
-/// Works around pod2 issue #513.
-pub(crate) const PAD_ENTRY: &str = "_pad";
-
 /// An action's chain max_ts must be at least this for the SDK to pack
 /// intermediate chain states into a `<Action>Chain` record. Below the
 /// threshold, the per-step scalar wildcards (`chain1`, `chain2`, ...)
@@ -84,10 +79,10 @@ pub(crate) fn chain_schema_name(action_name: &str) -> String {
 /// this action's chain is packed. Returns `None` for endpoints
 /// (`ts=0=chain0`, `ts=max_ts=chain`) and for unpacked actions (whose
 /// intermediates are scalar `chain1`, `chain2`, ... wildcards). The
-/// record's array layout is `[_pad, step_0_value, step_1_value, ...]`,
-/// so the slot index equals `ts` and the step name is `step_{ts-1}`.
+/// record's array layout is `[step_0_value, step_1_value, ...]`, so the
+/// slot index is `ts - 1` and the step name is `step_{ts-1}`.
 pub(crate) fn chain_step_at(ts: usize, chain_max_ts: usize) -> Option<usize> {
-    (chain_packed(chain_max_ts) && ts > 0 && ts < chain_max_ts).then_some(ts)
+    (chain_packed(chain_max_ts) && ts > 0 && ts < chain_max_ts).then_some(ts - 1)
 }
 
 #[derive(Clone, Copy)]
@@ -131,7 +126,7 @@ impl<'a> fmt::Display for VarNameFmt<'a> {
         if self.name == "chain"
             && let Some(slot) = chain_step_at(self.ts, max_ts)
         {
-            return write!(f, "chain_steps.step_{}", slot - 1);
+            return write!(f, "chain_steps.step_{slot}");
         }
         write!(f, "{}", fmt_var_at(self.name, self.ts, max_ts))
     }
@@ -228,15 +223,9 @@ fn schema_name(action_name: &str, ns: impl Into<Collapse>) -> String {
 
 /// Emit `record <Action><Side> = (<entries>)` lines for any non-empty
 /// in/out schema across all actions, plus `<Action>Chain` records for
-/// actions whose chain has 2+ intermediate states. Each schema is
-/// prepended with `PAD_ENTRY` so real entries start at index 1.
+/// actions whose chain has 2+ intermediate states.
 fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
-    let render = |entries: &[String]| {
-        std::iter::once(PAD_ENTRY.to_string())
-            .chain(entries.iter().cloned())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+    let render = |entries: &[String]| entries.join(", ");
     for meta in &loader.actions_meta {
         if !meta.in_entries.is_empty() {
             let names: Vec<String> = meta.in_entries.iter().map(|e| e.varname.clone()).collect();

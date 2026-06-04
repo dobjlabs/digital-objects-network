@@ -539,8 +539,7 @@ impl ActionHandle {
 
         // ---- Build in/out record arrays from the action's direct
         // Object insts. Each Object contributes one entry to its
-        // dispatch side's array (Mutate contributes to both). Slot 0
-        // is `_pad`; real entries start at slot 1 (see PAD_ENTRY).
+        // dispatch side's array (Mutate contributes to both).
         //
         // For Outputs, cache the identity-stamped dict once here so the
         // three consumers that need the post-identity form -- the
@@ -577,8 +576,8 @@ impl ActionHandle {
             }
             (raw, stamped)
         };
-        let mut in_dicts: Vec<Value> = vec![Value::from(0_i64)];
-        let mut out_dicts: Vec<Value> = vec![Value::from(0_i64)];
+        let mut in_dicts: Vec<Value> = Vec::new();
+        let mut out_dicts: Vec<Value> = Vec::new();
         {
             let ctx = self.0.borrow();
             for inst in &ctx.insts {
@@ -611,12 +610,9 @@ impl ActionHandle {
         let out_array = Array::new(out_dicts);
 
         // Build the `<Action>Initials` record value (the pre-identity Output
-        // dicts) when the action has one. Slot 0 is the `_pad` (see PAD_ENTRY).
-        let initials_array: Option<Array> = has_initials.then(|| {
-            let mut values: Vec<Value> = vec![Value::from(0_i64)];
-            values.extend(raw_outputs.iter().cloned().map(Value::from));
-            Array::new(values)
-        });
+        // dicts) when the action has one.
+        let initials_array: Option<Array> = has_initials
+            .then(|| Array::new(raw_outputs.iter().cloned().map(Value::from).collect()));
 
         // Resolve an Output's pre-identity dict to its slot in the
         // `<Action>Initials` record.
@@ -721,12 +717,14 @@ impl ActionHandle {
         // advances the parent chain by exactly 1, in inst-iteration
         // order). Drives chain anchoring and the chain_steps record.
         let chain_max_ts = meta.chain_max_ts;
-        // chain_step_values[0] is `_pad`; [1..chain_max_ts] hold per-ts
-        // chain hashes (the final ts is the public `chain` wildcard, not
-        // stored here). SubAction values come from `st_sub` (baked in at
-        // Rhai time); Object values are filled later by the event_sts
-        // loop, once `tx_builder.{insert,mutate,delete}` advances the chain.
-        let mut chain_step_values: Vec<Value> = vec![Value::from(0_i64); chain_max_ts.max(1)];
+        // chain_step_values[ts - 1] holds the per-ts chain hash for each
+        // intermediate ts in 1..chain_max_ts (the final ts is the public
+        // `chain` wildcard, not stored here). SubAction values come from
+        // `st_sub` (baked in at Rhai time); Object values are filled later
+        // by the event_sts loop, once `tx_builder.{insert,mutate,delete}`
+        // advances the chain.
+        let mut chain_step_values: Vec<Value> =
+            vec![Value::from(0_i64); chain_max_ts.saturating_sub(1)];
         let inst_chain_ts: Vec<Option<usize>> = {
             let ctx = self.0.borrow();
             let mut chain_ts: usize = 0;
@@ -1570,24 +1568,22 @@ impl ActionMeta {
         self.total_outputs.iter()
     }
 
-    /// Find this Object's `in` entry. Returns the 1-based slot in the
-    /// `<Action>In` record (slot 0 is `_pad`) and the entry shape.
+    /// Find this Object's `in` entry. Returns its slot in the
+    /// `<Action>In` record and the entry shape.
     pub(crate) fn in_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
         self.in_entries
             .iter()
             .enumerate()
             .find(|(_, e)| e.varname == varname)
-            .map(|(p, e)| (p + 1, e))
     }
 
-    /// 1-based slot for `varname` in the `<Action>Initials` record
-    /// (slot 0 is `_pad`), if such a record exists for this action.
+    /// Slot for `varname` in the `<Action>Initials` record, if such a
+    /// record exists for this action.
     pub(crate) fn initials_slot(&self, varname: &str) -> Option<usize> {
         self.initials_entries
             .as_ref()?
             .iter()
             .position(|name| name == varname)
-            .map(|p| p + 1)
     }
 
     pub(crate) fn out_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
@@ -1595,7 +1591,6 @@ impl ActionMeta {
             .iter()
             .enumerate()
             .find(|(_, e)| e.varname == varname)
-            .map(|(p, e)| (p + 1, e))
     }
 
     pub(crate) fn max_ts(&self, varname: &str) -> usize {

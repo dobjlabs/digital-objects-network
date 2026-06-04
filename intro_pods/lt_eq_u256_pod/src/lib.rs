@@ -432,7 +432,7 @@ mod tests {
     };
     use pod2::{
         backends::plonky2::{basetypes::DEFAULT_VD_SET, recursion::circuit::hash_verifier_data},
-        middleware::hash_str,
+        middleware::{EMPTY_VALUE, hash_str},
     };
 
     use super::*;
@@ -556,7 +556,7 @@ mod tests {
         let params = Params::default();
         let vd_set = &*DEFAULT_VD_SET;
         let rhs = RawValue([F::ZERO, F::ZERO, F::ZERO, F(0x0020_0000_0000_0000u64)]);
-        let hash = RawValue::from(0i64);
+        let hash = EMPTY_VALUE;
 
         let pod = LtEqU256Pod::new_boxed(&params, vd_set.clone(), hash, rhs)?;
         pod.verify()?;

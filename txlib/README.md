@@ -22,7 +22,7 @@ Before the system can answer that question, the prover first produces **action s
 
 ## The hash chain
 
-Every event in a transaction (insert, mutate, delete) is recorded as one step of a chained hash. For each event a small per-event hash is computed (insert: `H(0, new)`; mutate: `H(old, new)`; delete: `H(old, 0)`) and folded into the running chain (`chain = H(prev_chain, event_hash)`). The chain is the canonical, ordering-preserving commitment to "what happened, in what order".
+Every event in a transaction (insert, mutate, delete) is recorded as one step of a chained hash. For each event a small per-event hash is computed (insert: `H({}, new)`; mutate: `H(old, new)`; delete: `H(old, {})`, where `{}` is the empty value) and folded into the running chain (`chain = H(prev_chain, event_hash)`). The chain is the canonical, ordering-preserving commitment to "what happened, in what order".
 
 An **action's range** is the pair `(chain_start, chain_end)` that brackets the action's events. The first event in the action takes `chain_start` as its `prev_chain`; the last event produces `chain_end`. The action statement commits to its range publicly so other proofs can match against it.
 
@@ -75,4 +75,4 @@ Replay is structured as recursive OR-walking over the chain. Four layers, bottom
 
    The created set is grow-only and grounding runs against a possibly-stale state root, so a grounded input may already have been spent. The nullifier set, not grounding, is what rejects a re-spend.
 
-4. **`TxFinalized`.** The public entry point. It seeds the chain (`chain_start = H(live_set, 0)`), pins the initial `before_tx` schema (`nullifiers = {}`, `chain_start = chain_end = 0`, `live = inputs_set`) in a single `DictInsert` clause to remove malleability, and threads everything through one `ReplayActions` call. `TxFinalBindings` surfaces the final `nullifiers` and `live` sets as public args (factored out so `TxFinalized` stays within the clause limit), letting the synchronizer fold them into its global nullifier and created sets. Public outputs: `(state_root, tx_final, nullifiers, live)`.
+4. **`TxFinalized`.** The public entry point. It seeds the chain (`chain_start = H(live_set, {})`), pins the initial `before_tx` schema (`nullifiers = {}`, `chain_start = chain_end = {}`, `live = inputs_set`) in a single `DictInsert` clause to remove malleability, and threads everything through one `ReplayActions` call. `TxFinalBindings` surfaces the final `nullifiers` and `live` sets as public args (factored out so `TxFinalized` stays within the clause limit), letting the synchronizer fold them into its global nullifier and created sets. Public outputs: `(state_root, tx_final, nullifiers, live)`.

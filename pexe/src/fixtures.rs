@@ -110,8 +110,7 @@ pub fn build_synthetic_state(
         if indices.contains_key(&commitment) {
             continue;
         }
-        // 1-indexed: slot 0 stays empty so nothing grounds at index 0.
-        let index = indices.len() as i64 + 1;
+        let index = indices.len() as i64;
         created
             .insert(index as usize, Value::from(obj.clone()))
             .map_err(|err| anyhow!("recording synthetic created object: {err}"))?;

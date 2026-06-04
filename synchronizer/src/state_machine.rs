@@ -164,13 +164,9 @@ impl StateMachine {
         }
 
         for obj in &payload.live {
-            // The array is 1-indexed: slot 0 is left empty so no real object is
-            // ever grounded at `ArrayContains(created, 0, ..)`. Index 0's
-            // RawValue is [0,0,0,0], the all-zeros shape that collides with
-            // `None` / `IndexKey(0)` in pod2's StatementArg encoding -- the same
-            // hazard StateRoot's `_pad` slot avoids. `created_count` stays the
-            // true object count; the array slot is `created_count + 1`.
-            let index = state.metadata.created_count as usize + 1;
+            // The created array is 0-indexed: the next object lands at slot
+            // `created_count`, which doubles as the true object count.
+            let index = state.metadata.created_count as usize;
             state.created.insert(index, Value::from(*obj))?;
             self.app_db.created_index_put(*obj, index as i64)?;
             state.metadata.created_count += 1;

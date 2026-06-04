@@ -77,13 +77,12 @@ impl StateRoot {
         }
     }
 
-    /// Padded-array view used as the canonical state root record. Slot
-    /// layout matches the `record StateRoot` declaration in txlib.podlang.
+    /// Array view used as the canonical state root record. Slot layout
+    /// matches the `record StateRoot` declaration in txlib.podlang.
     /// Predicates access fields via anchored-key syntax (e.g.
     /// `state_root.created`).
     pub fn array(&self) -> Array {
         Array::new(vec![
-            Value::from(0_i64),
             Value::from(self.block_number),
             Value::from(self.created_root),
             Value::from(self.nullifiers_root),
@@ -97,12 +96,12 @@ impl StateRoot {
     }
 }
 
-/// Slot indices for the `StateRoot` record. Slot 0 is `_pad` (works
-/// around pod2 issue #513); real fields start at slot 1.
-pub const STATE_ROOT_BLOCK_NUMBER_SLOT: usize = 1;
-pub const STATE_ROOT_CREATED_SLOT: usize = 2;
-pub const STATE_ROOT_NULLIFIERS_SLOT: usize = 3;
-pub const STATE_ROOT_GSRS_SLOT: usize = 4;
+/// Slot indices for the `StateRoot` record, matching the field order in
+/// the `record StateRoot` declaration in txlib.podlang.
+pub const STATE_ROOT_BLOCK_NUMBER_SLOT: usize = 0;
+pub const STATE_ROOT_CREATED_SLOT: usize = 1;
+pub const STATE_ROOT_NULLIFIERS_SLOT: usize = 2;
+pub const STATE_ROOT_GSRS_SLOT: usize = 3;
 
 /// Proof-bearing grounding data required to build a new transaction.
 ///
@@ -494,7 +493,7 @@ impl std::fmt::Display for TxBuilder {
 
 impl TxBuilder {
     /// Create a new transaction builder from grounded inputs.
-    /// Seeds `chain_start = H(inputs, 0)`.
+    /// Seeds `chain_start = H(inputs, {})`.
     pub fn new(
         ctx: &mut BuildContext,
         inputs: &[Dictionary],
@@ -875,8 +874,8 @@ impl TxBuilder {
                 st_hash,
             ))
             .unwrap();
-        // Pin the full schema of `before_tx` (nullifiers={}, chain_start=0,
-        // chain_end=0, live=inputs_set) in a single DictInsert clause. This
+        // Pin the full schema of `before_tx` (nullifiers={}, chain_start={},
+        // chain_end={}, live=inputs_set) in a single DictInsert clause. This
         // closes the malleability where the prover could otherwise witness
         // arbitrary chain_start/chain_end values that pass through ReplayActions
         // verbatim into tx_final.
@@ -1156,8 +1155,7 @@ mod tests {
             for obj in tx.live.iter() {
                 let obj = obj.expect("tx live entry should decode");
                 let commitment = Hash(obj.raw().0);
-                // 1-indexed: slot 0 stays empty so nothing grounds at index 0.
-                let index = self.created_index.len() as i64 + 1;
+                let index = self.created_index.len() as i64;
                 self.created.insert(index as usize, obj).unwrap();
                 self.created_index.insert(commitment, index);
             }

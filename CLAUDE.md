@@ -160,4 +160,4 @@ While coding, write a comment only if all three hold:
 - it does not transcribe another unit's mechanism, name a specific that will rot (a fixture, a sibling function, a field elsewhere), or lean on what you'd have to leave the repo to check (a prior version, a use case, our conversation);
 - it carries something an intelligent reader could not easily infer from this unit -- not control flow, not types, not return values, not general knowledge, not a paraphrase of the line beside it.
 
-Test: cut any clause that transcribes mechanism, states general knowledge, or names a rot-prone specific; then cut any "because X" you can't check against the repo. If nothing survives, delete the comment. If what survives is inferable from the code, delete that too.
+Test: cut any clause that transcribes mechanism, states general knowledge, or names a rot-prone specific; then cut any "because X" you can't check against the repo. If nothing survives, delete the comment. If what survives is inferable from the code, delete that too. Comments should not quote code directly, as this makes drift between code and comment more likely.
