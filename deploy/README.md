@@ -58,18 +58,18 @@ Set via `.env` (compose) or `-e` flags (`docker run`). Image defaults:
 `HTTP_BIND=0.0.0.0:<port>`, and the synchronizer's
 `APP_STATE_DB_PATH=/var/lib/zkcraft/synchronizer-db`.
 
-| Variable               | Service      | Required     | Notes                                       |
-| ---------------------- | ------------ | ------------ | ------------------------------------------- |
-| `RPC_URL`              | both         | yes          | Execution-layer RPC                         |
-| `BEACON_URL`           | synchronizer | yes          | Beacon API with blob sidecars               |
-| `TO_ADDRESS`           | both         | yes          | L1 target address; must match across both   |
-| `PRIVATE_KEY`          | relayer      | relayer only | Hot wallet that signs/pays for blob txs     |
+| Variable               | Service      | Required     | Notes                                                             |
+| ---------------------- | ------------ | ------------ | ----------------------------------------------------------------- |
+| `RPC_URL`              | both         | yes          | Execution-layer RPC                                               |
+| `BEACON_URL`           | synchronizer | yes          | Beacon API with blob sidecars                                     |
+| `TO_ADDRESS`           | both         | yes          | L1 target address; must match across both                         |
+| `PRIVATE_KEY`          | relayer      | relayer only | Hot wallet that signs/pays for blob txs                           |
 | `SYNC_METADATA_DB_URL` | synchronizer | no           | Defaults to the bundled Postgres; set to point at an external one |
 | `DB_URL`               | relayer      | no           | Defaults to the bundled Postgres; set to point at an external one |
-| `IMAGE_TAG`            | compose      | no           | Image tag to run; pin to a release          |
-| `APP_STATE_DB_PATH`    | synchronizer | no           | RocksDB cache path; mount a volume here     |
-| `HTTP_BIND`            | both         | no           | Defaults to `0.0.0.0:3000` / `0.0.0.0:3200` |
-| `RUST_LOG`             | both         | no           | e.g. `info`                                 |
+| `IMAGE_TAG`            | compose      | no           | Image tag to run; pin to a release                                |
+| `APP_STATE_DB_PATH`    | synchronizer | no           | RocksDB cache path; mount a volume here                           |
+| `HTTP_BIND`            | both         | no           | Defaults to `0.0.0.0:3000` / `0.0.0.0:3200`                       |
+| `RUST_LOG`             | both         | no           | e.g. `info`                                                       |
 
 The synchronizer's `/var/lib/zkcraft` holds RocksDB - a rebuildable cache (the
 authoritative state lives in Postgres), but mounting a volume avoids a slow cold
