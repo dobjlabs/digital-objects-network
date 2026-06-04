@@ -49,7 +49,7 @@ dev-remote: ensure-remote-settings ensure-plugins ensure-mcp
 # Idempotently point ~/.dobj/settings.json at the hosted synchronizer + relayer
 ensure-remote-settings:
     @mkdir -p ~/.dobj
-    @printf '{"synchronizerApiUrl":"http://18.217.144.33:3000","relayerApiUrl":"http://18.217.144.33:3200"}\n' > ~/.dobj/settings.json
+    @printf '{"synchronizerApiUrl":"https://sync.don.pateldhvani.com","relayerApiUrl":"https://relay.don.pateldhvani.com"}\n' > ~/.dobj/settings.json
     @echo "~/.dobj/settings.json → hosted sync + relayer"
 
 # Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
