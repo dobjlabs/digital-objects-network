@@ -42,6 +42,15 @@ async fn main() -> Result<()> {
     let mcp_addr = format!("127.0.0.1:{mcp_port}");
     let mcp_listener = tokio::net::TcpListener::bind(&mcp_addr).await?;
 
+    // Build the proving circuit cache before accepting any requests, so the
+    // first action doesn't pay the one-time (multi-minute) build. Ports are
+    // already bound, so a port conflict still fails fast ahead of this. On a
+    // warm cache it's a fast read. Runs on the blocking pool since circuit
+    // construction is CPU-bound and synchronous.
+    tokio::task::spawn_blocking(common::shrink::warm_prover_circuits)
+        .await
+        .map_err(|err| anyhow!("circuit warm-up task failed: {err}"))?;
+
     // Both ports are ours. Spawn the MCP server; share `Arc<Driver>` and the
     // broadcast hub so MCP, the desktop, and the website drive one process.
     let mcp_event_tx = event_tx.clone();
