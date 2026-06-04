@@ -33,6 +33,21 @@ pub struct CommittedSlotRecord {
     pub is_empty: bool,
 }
 
+impl CommittedSlotRecord {
+    /// Record for a slot with no canonical block content: every block field
+    /// absent, marked empty.
+    pub fn empty(slot: u32) -> Self {
+        Self {
+            slot,
+            block_root: None,
+            parent_root: None,
+            block_number: None,
+            current_gsr: None,
+            is_empty: true,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct SyncDb {
     pool: PgPool,

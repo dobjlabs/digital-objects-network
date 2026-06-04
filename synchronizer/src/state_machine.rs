@@ -536,7 +536,7 @@ mod tests {
             &HashMap::new(),
         );
         assert_eq!(derived.head.metadata.created_count, 1);
-        assert_eq!(derived.created_added.get(&dup), Some(&1));
+        assert_eq!(derived.created_added.get(&dup), Some(&0));
     }
 
     #[test]
@@ -554,6 +554,6 @@ mod tests {
         let blob = mock_txn_bytes(unique_hash(61), &[], &[obj], gsr0);
         let derived = derive(&sm, head0, [(gsr0, 0)], 1, 1, &[(0, blob)], &phantom);
         assert_eq!(derived.head.metadata.created_count, 1);
-        assert_eq!(derived.created_added.get(&obj), Some(&1));
+        assert_eq!(derived.created_added.get(&obj), Some(&0));
     }
 }

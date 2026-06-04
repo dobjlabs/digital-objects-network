@@ -35,22 +35,6 @@ pub fn created_array_holds(created: &Array, index: i64, commitment: Hash) -> Res
     Ok(created.get(index as usize)? == Some(Value::from(commitment)))
 }
 
-/// One commitment's authenticated membership result against the created `Array`:
-/// whether it is present, and the `(array index, ArrayContains proof)` when it is.
-pub struct CreatedProof {
-    pub present: bool,
-    pub witness: Option<(i64, MerkleProof)>,
-}
-
-impl CreatedProof {
-    fn absent() -> Self {
-        Self {
-            present: false,
-            witness: None,
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct AppDb {
     db: Arc<TransactionDB>,
@@ -87,28 +71,27 @@ impl AppDb {
         Ok(Array::from_db(root, self.db_box())?)
     }
 
-    /// Authenticated membership result for each object commitment against the
-    /// created `Array` at `roots.created`, using candidate indices prefetched
-    /// from the Postgres created index. A commitment with no index is absent;
-    /// otherwise proving the array leaf at its index is what authenticates
-    /// membership. The array is opened once for the whole batch.
+    /// Membership witness for each object commitment against the created `Array`
+    /// at `roots.created`: `Some((array index, ArrayContains proof))` when the
+    /// array authenticates the commitment at its prefetched index, `None` when
+    /// absent (no index, or a leaf mismatch). The array is opened once for the
+    /// whole batch.
     pub fn prove_created_for(
         &self,
         roots: &CanonicalRoots,
         obj_commitments: &[Hash],
         indices: &HashMap<Hash, i64>,
-    ) -> Result<Vec<CreatedProof>> {
+    ) -> Result<Vec<Option<(i64, MerkleProof)>>> {
         let created = self.open_created(roots.created)?;
         obj_commitments
             .iter()
             .map(|commitment| match indices.get(commitment) {
-                None => Ok(CreatedProof::absent()),
+                None => Ok(None),
                 Some(&index) => match created.prove(index as usize) {
-                    Ok((value, proof)) if value == Value::from(*commitment) => Ok(CreatedProof {
-                        present: true,
-                        witness: Some((index, proof)),
-                    }),
-                    _ => Ok(CreatedProof::absent()),
+                    Ok((value, proof)) if value == Value::from(*commitment) => {
+                        Ok(Some((index, proof)))
+                    }
+                    _ => Ok(None),
                 },
             })
             .collect()
@@ -269,7 +252,7 @@ mod tests {
             created: created.commitment(),
             ..CanonicalRoots::empty()
         };
-        let indices = HashMap::from([(obj_commitment, 1i64)]);
+        let indices = HashMap::from([(obj_commitment, 0i64)]);
 
         assert_eq!(
             app_db
@@ -277,12 +260,11 @@ mod tests {
                 .unwrap(),
             vec![true]
         );
-        let proofs = app_db
+        let witnesses = app_db
             .prove_created_for(&roots, &[obj_commitment], &indices)
             .unwrap();
-        let proof = proofs.into_iter().next().unwrap();
-        assert!(proof.present);
-        assert_eq!(proof.witness.map(|(index, _proof)| index), Some(0));
+        let witness = witnesses.into_iter().next().unwrap();
+        assert_eq!(witness.map(|(index, _proof)| index), Some(0));
 
         // A commitment with no index is absent, and an index the array root
         // does not actually contain resolves to absent too.
