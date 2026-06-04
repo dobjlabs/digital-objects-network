@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use alloy::primitives::B256;
 use anyhow::{anyhow, Context, Result};
+use common::encode_hash_hex;
 use pod2::middleware::Hash;
 use sqlx::{
     postgres::{PgPoolOptions, PgRow},
-    Executor, PgPool, Row,
+    Executor, PgExecutor, PgPool, Row,
 };
 
 use crate::{
@@ -91,6 +94,22 @@ impl SyncDb {
                 ON canonical_slots(execution_block_number)
                 WHERE current_gsr IS NOT NULL AND execution_block_number IS NOT NULL
             "#,
+            // Reverse index from object commitment to its position in the created
+            // `Array`. A materialized view of committed state: rows are inserted in
+            // the same transaction that commits their slot and deleted in the same
+            // transaction that rolls the slot back, so the index never diverges
+            // from the canonical head. `slot` carries the rollback axis.
+            r#"
+            CREATE TABLE IF NOT EXISTS created_index (
+                commitment BYTEA PRIMARY KEY,
+                array_index BIGINT NOT NULL,
+                slot INTEGER NOT NULL
+            )
+            "#,
+            r#"
+            CREATE INDEX IF NOT EXISTS created_index_slot_idx
+                ON created_index(slot)
+            "#,
         ];
 
         for stmt in statements {
@@ -122,7 +141,7 @@ impl SyncDb {
             return Ok(stored_last);
         }
 
-        self.commit_slot(&bootstrap_slot, &CanonicalHead::empty())
+        self.commit_slot(&bootstrap_slot, &CanonicalHead::empty(), &[])
             .await?;
         Ok(bootstrap_slot.slot)
     }
@@ -141,6 +160,12 @@ impl SyncDb {
 
     /// Return the current canonical head plus sync progress from one Postgres snapshot.
     pub async fn current_snapshot(&self) -> Result<CurrentSnapshot> {
+        Self::read_snapshot(&self.pool).await
+    }
+
+    /// Read the current canonical head plus progress over any executor (pool or
+    /// transaction), so a caller can pin it to the same snapshot as other reads.
+    async fn read_snapshot<'e, E: PgExecutor<'e>>(executor: E) -> Result<CurrentSnapshot> {
         let row = sqlx::query(
             r#"
             SELECT slot,
@@ -159,7 +184,7 @@ impl SyncDb {
             LIMIT 1
             "#,
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(executor)
         .await?;
 
         let row = row.ok_or_else(|| anyhow!("sync metadata not initialized"))?;
@@ -203,13 +228,16 @@ impl SyncDb {
         }
     }
 
-    /// Commit one new canonical slot as the new highest canonical slot.
+    /// Commit one new canonical slot as the new highest canonical slot, writing
+    /// its created-index rows in the same transaction so the index is always
+    /// consistent with the committed head.
     ///
     /// Duplicate slot inserts are treated as logic bugs and must fail loudly.
     pub async fn commit_slot(
         &self,
         slot: &CommittedSlotRecord,
         head: &CanonicalHead,
+        created_added: &[(Hash, i64)],
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -253,11 +281,32 @@ impl SyncDb {
         .execute(&mut *tx)
         .await?;
 
+        for (commitment, index) in created_added {
+            // `commitment` is the PRIMARY KEY; a conflict is a bug and fails loudly.
+            sqlx::query(
+                "INSERT INTO created_index(commitment, array_index, slot) VALUES ($1, $2, $3)",
+            )
+            .bind(hash_to_db_bytes(*commitment))
+            .bind(*index)
+            .bind(slot.slot as i32)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| {
+                format!(
+                    "inserting created_index row for {} at slot {}",
+                    encode_hash_hex(commitment),
+                    slot.slot
+                )
+            })?;
+        }
+
         tx.commit().await?;
         Ok(())
     }
 
-    /// Delete canonical slots after `keep_slot`, leaving the highest remaining row as current.
+    /// Delete canonical slots after `keep_slot`, leaving the highest remaining
+    /// row as current, and prune the created-index rows those slots added in the
+    /// same transaction.
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -266,8 +315,69 @@ impl SyncDb {
             .execute(&mut *tx)
             .await?;
 
+        sqlx::query("DELETE FROM created_index WHERE slot > $1")
+            .bind(keep_slot as i32)
+            .execute(&mut *tx)
+            .await?;
+
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Map each known object commitment to its position in the created `Array`.
+    /// Commitments absent from the index are omitted; a membership read treats a
+    /// missing entry as "not present". Used both by the read API and as the
+    /// derivation-time existence prefetch (where the index is cross-checked
+    /// against the array before a commitment is treated as already created).
+    pub async fn created_indices(&self, commitments: &[Hash]) -> Result<HashMap<Hash, i64>> {
+        Self::read_created_indices(&self.pool, commitments).await
+    }
+
+    /// Read the created indices for `commitments` over any executor (pool or
+    /// transaction), so a caller can pin them to the same snapshot as other reads.
+    async fn read_created_indices<'e, E: PgExecutor<'e>>(
+        executor: E,
+        commitments: &[Hash],
+    ) -> Result<HashMap<Hash, i64>> {
+        if commitments.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let keys: Vec<Vec<u8>> = commitments.iter().map(|c| hash_to_db_bytes(*c)).collect();
+        let rows = sqlx::query(
+            "SELECT commitment, array_index FROM created_index WHERE commitment = ANY($1)",
+        )
+        .bind(keys)
+        .fetch_all(executor)
+        .await?;
+
+        let mut map = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let commitment: Vec<u8> = row.get("commitment");
+            let index: i64 = row.get("array_index");
+            map.insert(db_bytes_to_hash(&commitment)?, index);
+        }
+        Ok(map)
+    }
+
+    /// Read the current snapshot and the created indices for `commitments` from
+    /// one `REPEATABLE READ` transaction, so the head roots and the index rows
+    /// reflect a single consistent Postgres snapshot. Without this a concurrent
+    /// `commit_slot`/`rollback_to_slot` could land between the two reads and make
+    /// the index inconsistent with the head a query is answering against. The
+    /// RocksDB array read needs no coordination: nodes are content-addressed and
+    /// immutable by root, so reading at the pinned root is stable regardless.
+    pub async fn snapshot_with_created_indices(
+        &self,
+        commitments: &[Hash],
+    ) -> Result<(CurrentSnapshot, HashMap<Hash, i64>)> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
+        let snapshot = Self::read_snapshot(&mut *tx).await?;
+        let indices = Self::read_created_indices(&mut *tx, commitments).await?;
+        tx.commit().await?;
+        Ok((snapshot, indices))
     }
 
     /// Return the recent canonical GSRs at or above the given execution block number.
@@ -444,7 +554,7 @@ mod tests {
             is_empty: false,
         };
 
-        sync_db.commit_slot(&slot, &head).await?;
+        sync_db.commit_slot(&slot, &head, &[]).await?;
 
         let snapshot = sync_db.current_snapshot().await?;
         assert_eq!(snapshot.head, head);
@@ -470,9 +580,9 @@ mod tests {
             is_empty: false,
         };
 
-        sync_db.commit_slot(&slot, &head1).await?;
+        sync_db.commit_slot(&slot, &head1, &[]).await?;
 
-        let err = sync_db.commit_slot(&slot, &head2).await.unwrap_err();
+        let err = sync_db.commit_slot(&slot, &head2, &[]).await.unwrap_err();
         assert!(
             err.to_string().contains("duplicate key")
                 || err.to_string().contains("unique constraint"),
@@ -499,6 +609,7 @@ mod tests {
                     is_empty: false,
                 },
                 &h1,
+                &[],
             )
             .await?;
 
@@ -514,6 +625,7 @@ mod tests {
                     is_empty: false,
                 },
                 &h2,
+                &[],
             )
             .await?;
 
@@ -540,6 +652,7 @@ mod tests {
                     is_empty: false,
                 },
                 &h1,
+                &[],
             )
             .await?;
 
@@ -555,6 +668,7 @@ mod tests {
                     is_empty: false,
                 },
                 &h2,
+                &[],
             )
             .await?;
 
@@ -563,6 +677,65 @@ mod tests {
         let snapshot = sync_db.current_snapshot().await?;
         assert_eq!(snapshot.head, h1);
         assert_eq!(snapshot.last_processed_slot, 1);
+
+        drop_db(&db_name, &admin_url).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn test_created_index_commit_and_rollback() -> Result<()> {
+        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let a = unique_hash(1);
+        let b = unique_hash(2);
+
+        let h1 = unique_head(1, 10);
+        sync_db
+            .commit_slot(
+                &CommittedSlotRecord {
+                    slot: 1,
+                    block_root: None,
+                    parent_root: None,
+                    block_number: Some(1),
+                    current_gsr: h1.metadata.current_gsr,
+                    is_empty: false,
+                },
+                &h1,
+                &[(a, 1)],
+            )
+            .await?;
+        let h2 = unique_head(2, 20);
+        sync_db
+            .commit_slot(
+                &CommittedSlotRecord {
+                    slot: 2,
+                    block_root: None,
+                    parent_root: None,
+                    block_number: Some(2),
+                    current_gsr: h2.metadata.current_gsr,
+                    is_empty: false,
+                },
+                &h2,
+                &[(b, 2)],
+            )
+            .await?;
+
+        let indices = sync_db.created_indices(&[a, b]).await?;
+        assert_eq!(indices.get(&a), Some(&1));
+        assert_eq!(indices.get(&b), Some(&2));
+
+        // Rolling back to slot 1 prunes slot 2's index row in the same
+        // transaction as the canonical-slot delete.
+        sync_db.rollback_to_slot(1).await?;
+        let indices = sync_db.created_indices(&[a, b]).await?;
+        assert_eq!(indices.get(&a), Some(&1));
+        assert_eq!(indices.get(&b), None);
+
+        // The atomic read returns the same index against the current head.
+        let (snapshot, indices) = sync_db.snapshot_with_created_indices(&[a, b]).await?;
+        assert_eq!(snapshot.last_processed_slot, 1);
+        assert_eq!(indices.get(&a), Some(&1));
+        assert_eq!(indices.get(&b), None);
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())

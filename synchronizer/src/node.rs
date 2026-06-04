@@ -23,7 +23,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::config::AppConfig;
 use crate::head::CanonicalHead;
-use crate::state_machine::{StateMachine, MAX_GSR_AGE_BLOCKS};
+use crate::state_machine::{DerivedSlot, StateMachine, MAX_GSR_AGE_BLOCKS};
 use crate::sync_db::{CommittedSlotRecord, SyncDb};
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
@@ -54,6 +54,9 @@ pub struct ProcessedSlot {
     pub block_number: Option<u32>,
     pub is_empty: bool,
     pub new_head: CanonicalHead,
+    /// Object commitments this slot added to `created`, with array indices,
+    /// persisted to the created index in the slot's commit transaction.
+    pub created_added: Vec<(Hash, i64)>,
 }
 
 impl ProcessedSlot {
@@ -70,6 +73,7 @@ impl ProcessedSlot {
             block_number: None,
             is_empty: true,
             new_head,
+            created_added: Vec::new(),
         }
     }
 
@@ -79,6 +83,7 @@ impl ProcessedSlot {
         parent_root: B256,
         block_number: u32,
         new_head: CanonicalHead,
+        created_added: Vec<(Hash, i64)>,
     ) -> Self {
         Self {
             slot,
@@ -87,6 +92,7 @@ impl ProcessedSlot {
             block_number: Some(block_number),
             is_empty: false,
             new_head,
+            created_added,
         }
     }
 
@@ -147,7 +153,8 @@ impl Node {
         self.sync_db.current_head().await
     }
 
-    /// Rewind to `keep_slot` by deleting later canonical slot rows.
+    /// Rewind to `keep_slot` by deleting later canonical slot rows; the created
+    /// index rows those slots added are pruned in the same Postgres transaction.
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
         self.sync_db.rollback_to_slot(keep_slot).await
     }
@@ -365,6 +372,40 @@ impl Node {
         self.derive_from_context(slot_ctx).await
     }
 
+    /// Parse the slot's blobs, prefetch the array positions of their created
+    /// commitments that already exist in canonical state, and derive the next
+    /// head.
+    ///
+    /// The prefetch is one batched query against the created index, mirroring how
+    /// `recent_gsrs` is prefetched, so the state machine never has to query the
+    /// database itself. It returns indices (not just a membership set) so the
+    /// state machine can cross-check each hit against the array at the base root.
+    async fn derive_slot(
+        &self,
+        base_head: CanonicalHead,
+        recent_gsrs: Vec<(Hash, i64)>,
+        slot: u32,
+        block_number: u32,
+        blob_payloads: &[(u32, Vec<u8>)],
+    ) -> Result<DerivedSlot> {
+        let parsed = self
+            .state_machine
+            .parse_blobs(blob_payloads, slot, block_number);
+        let candidates: Vec<Hash> = parsed
+            .iter()
+            .flat_map(|(_, payload)| payload.live.iter().copied())
+            .collect();
+        let prior_indices = self.sync_db.created_indices(&candidates).await?;
+        self.state_machine.derive_slot_head(
+            base_head,
+            recent_gsrs,
+            slot,
+            block_number,
+            &parsed,
+            &prior_indices,
+        )
+    }
+
     /// Shared derivation logic: given an already-resolved `SlotContext`, fetch execution data
     /// as needed, run the state machine, and return the processed slot.
     async fn derive_from_context(&self, slot_ctx: SlotContext) -> Result<ProcessedSlot> {
@@ -393,19 +434,16 @@ impl Node {
 
         if !slot_ctx.has_blob_commitments {
             debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
-            let new_head = self.state_machine.derive_slot_head(
-                base_head,
-                recent_gsrs,
-                slot_ctx.slot,
-                block_number,
-                &[],
-            )?;
+            let derived = self
+                .derive_slot(base_head, recent_gsrs, slot_ctx.slot, block_number, &[])
+                .await?;
             return Ok(ProcessedSlot::present(
                 slot_ctx.slot,
                 slot_ctx.beacon_block_root,
                 slot_ctx.parent_root,
                 block_number,
-                new_head,
+                derived.head,
+                derived.created_added,
             ));
         }
 
@@ -459,19 +497,16 @@ impl Node {
                 to_address = ?self.config.to_address,
                 "No matching target blob transactions in execution block"
             );
-            let new_head = self.state_machine.derive_slot_head(
-                base_head,
-                recent_gsrs,
-                slot_ctx.slot,
-                block_number,
-                &[],
-            )?;
+            let derived = self
+                .derive_slot(base_head, recent_gsrs, slot_ctx.slot, block_number, &[])
+                .await?;
             return Ok(ProcessedSlot::present(
                 slot_ctx.slot,
                 slot_ctx.beacon_block_root,
                 slot_ctx.parent_root,
                 block_number,
-                new_head,
+                derived.head,
+                derived.created_added,
             ));
         }
 
@@ -519,24 +554,28 @@ impl Node {
             }
         }
 
-        let new_head = self.state_machine.derive_slot_head(
-            base_head,
-            recent_gsrs,
-            slot_ctx.slot,
-            block_number,
-            &blob_payloads,
-        )?;
+        let derived = self
+            .derive_slot(
+                base_head,
+                recent_gsrs,
+                slot_ctx.slot,
+                block_number,
+                &blob_payloads,
+            )
+            .await?;
 
         Ok(ProcessedSlot::present(
             slot_ctx.slot,
             slot_ctx.beacon_block_root,
             slot_ctx.parent_root,
             block_number,
-            new_head,
+            derived.head,
+            derived.created_added,
         ))
     }
 
-    /// Commit one derived slot to Postgres as the new canonical head.
+    /// Commit one derived slot to Postgres as the new canonical head, writing
+    /// its created-index rows in the same transaction.
     pub async fn commit_slot(&self, processed: &ProcessedSlot) -> Result<()> {
         let slot = CommittedSlotRecord {
             slot: processed.slot,
@@ -547,6 +586,8 @@ impl Node {
             is_empty: processed.is_empty,
         };
 
-        self.sync_db.commit_slot(&slot, &processed.new_head).await
+        self.sync_db
+            .commit_slot(&slot, &processed.new_head, &processed.created_added)
+            .await
     }
 }
