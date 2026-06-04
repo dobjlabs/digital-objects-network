@@ -556,7 +556,7 @@ mod tests {
         let params = Params::default();
         let vd_set = &*DEFAULT_VD_SET;
         let rhs = RawValue([F::ZERO, F::ZERO, F::ZERO, F(0x0020_0000_0000_0000u64)]);
-        let hash = RawValue::from(0i64);
+        let hash = RawValue([F::ZERO, F::ZERO, F::ZERO, F::ZERO]);
 
         let pod = LtEqU256Pod::new_boxed(&params, vd_set.clone(), hash, rhs)?;
         pod.verify()?;

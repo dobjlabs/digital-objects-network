@@ -39,7 +39,7 @@
 
 use anyhow::{Result, anyhow};
 use plonky2::{
-    field::types::Field,
+    field::types::{Field, PrimeField64},
     hash::{
         hash_types::{HashOut, HashOutTarget},
         poseidon::PoseidonHash,
@@ -98,7 +98,9 @@ pub static STANDARD_VDF_VD_HASH: std::sync::LazyLock<Hash> = std::sync::LazyLock
 static STANDARD_VDF_POD_DATA: std::sync::LazyLock<
     CacheEntry<(VdfPodTarget, CircuitDataSerializer)>,
 > = std::sync::LazyLock::new(|| {
-    cache::get("standard_vdf_pod_circuit_data", &(), |_| {
+    // v2: the count arg in the public statement uses the tagged pod2 int
+    // encoding. The version suffix evicts cache entries built before that.
+    cache::get("standard_vdf_pod_circuit_data_v2", &(), |_| {
         let (target, circuit_data) = build().expect("successful build");
         (target, CircuitDataSerializer(circuit_data))
     })
@@ -397,6 +399,10 @@ fn single_statement_mt(st: &middleware::Statement) -> Array {
 }
 
 fn pub_raw_statements(count: F, input: RawValue, output: RawValue) -> Vec<middleware::Statement> {
+    // The circuit packs the count into a single limb (from_int_lo), while
+    // the int encoding splits lo/hi at 2^32; they only agree below that.
+    let count = count.to_canonical_u64();
+    assert!(count < (1 << 32));
     vec![middleware::Statement::Intro(
         IntroPredicateRef {
             name: VDF_POD_TYPE.1.to_string(),
@@ -404,7 +410,7 @@ fn pub_raw_statements(count: F, input: RawValue, output: RawValue) -> Vec<middle
             verifier_data_hash: EMPTY_HASH,
         },
         vec![
-            RawValue([count, F::ZERO, F::ZERO, F::ZERO]).into(),
+            RawValue::from(count as i64).into(),
             input.into(),
             output.into(),
         ],
@@ -417,11 +423,8 @@ fn pub_raw_statements_target(
     input: &[Target],
     output: &[Target],
 ) -> Vec<StatementTarget> {
-    let zero = builder.zero();
-    let st_arg_0 = StatementArgTarget::literal(
-        builder,
-        &ValueTarget::from_slice(&[count, zero, zero, zero]),
-    );
+    let count_value = ValueTarget::from_int_lo(builder, count);
+    let st_arg_0 = StatementArgTarget::literal(builder, &count_value);
     let st_arg_1 = StatementArgTarget::literal(builder, &ValueTarget::from_slice(input));
     let st_arg_2 = StatementArgTarget::literal(builder, &ValueTarget::from_slice(output));
     let args = [st_arg_0, st_arg_1, st_arg_2]
