@@ -36,9 +36,13 @@ no wallet key. Run only those services:
 docker compose -f deploy/compose.yaml up -d synchronizer postgres
 ```
 
-Or fully standalone against your own Postgres, no compose:
+Or fully standalone against your own Postgres, no compose. Create the
+`synchronizer` database first - the service creates its tables, but not the
+database:
 
 ```bash
+psql "postgres://user:pass@host:5432/postgres" -c 'CREATE DATABASE synchronizer'
+
 docker run -d --name synchronizer -p 3000:3000 \
   -e RPC_URL=https://your-execution-rpc \
   -e BEACON_URL=https://your-beacon-api \

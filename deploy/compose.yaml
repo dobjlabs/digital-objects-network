@@ -20,8 +20,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    # Creates the synchronizer and relayer databases on first init (the services
-    # no longer create their own). Inlined below instead of a separate .sql file.
+    # Runs on first Postgres init to create the synchronizer and relayer databases.
     configs:
       - source: init-databases
         target: /docker-entrypoint-initdb.d/init-databases.sql
