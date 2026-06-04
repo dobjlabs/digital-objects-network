@@ -24,7 +24,7 @@ services:
     # no longer create their own). Inlined below instead of a separate .sql file.
     configs:
       - source: init-databases
-        target: /docker-entrypoint-initdb.d/01-create-databases.sql
+        target: /docker-entrypoint-initdb.d/init-databases.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
