@@ -42,18 +42,18 @@ async fn main() -> Result<()> {
     let mcp_addr = format!("127.0.0.1:{mcp_port}");
     let mcp_listener = tokio::net::TcpListener::bind(&mcp_addr).await?;
 
-    // Build the proving circuits (recursive MainPod, empty pod, and the VDF +
+    // Load the proving circuits (recursive MainPod, empty pod, and the VDF +
     // lt_eq_u256 intro pods) before accepting requests, so the first action
-    // doesn't pay the one-time build. Ports are already bound, so a port
-    // conflict still fails fast ahead of this. On a warm cache it's mostly fast
-    // reads. Runs on the blocking pool since circuit construction is CPU-bound
-    // and synchronous. A failure is fatal: a circuit that can't build now would
+    // doesn't pay to build them. Ports are already bound, so a port conflict
+    // still fails fast ahead of this. This only touches circuit data (no
+    // proving), so on a warm cache it's fast reads. Runs on the blocking pool
+    // since circuit construction is CPU-bound and synchronous. A failure is
+    // fatal (the warm panics internally): a circuit that can't build now would
     // fail every action, so refuse to start rather than serve a daemon that
-    // cannot prove. The `??` propagates both a panic (JoinError) and the
-    // warm-up's own error.
+    // cannot prove.
     tokio::task::spawn_blocking(driver::warm_proving_circuits)
         .await
-        .map_err(|err| anyhow!("circuit warm-up task panicked: {err}"))??;
+        .map_err(|err| anyhow!("circuit warm-up task panicked: {err}"))?;
 
     // Both ports are ours. Spawn the MCP server; share `Arc<Driver>` and the
     // broadcast hub so MCP, the desktop, and the website drive one process.
