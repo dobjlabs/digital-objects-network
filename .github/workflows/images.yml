@@ -11,15 +11,6 @@ name: Images
 on:
   push:
     tags: ["v*"]
-  pull_request:
-    # Only re-validate the image build when the build definition itself
-    # changes; rust_tests.yml already compiles the code on every PR.
-    branches: [main]
-    types: [ready_for_review, opened, synchronize, reopened]
-    paths:
-      - Dockerfile
-      - .dockerignore
-      - .github/workflows/images.yml
   workflow_dispatch:
 
 # One build per ref; a newer push cancels an older in-flight run for that ref.
@@ -37,18 +28,13 @@ env:
 jobs:
   build:
     name: Build and push images
-    # Skip draft PRs; always run for push, tag, and manual dispatch.
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
-      # No registry login (and no push) on pull_request: PRs only prove the
-      # image still builds, and forked-PR runs can't access secrets anyway.
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -74,7 +60,7 @@ jobs:
           context: .
           target: synchronizer
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta-synchronizer.outputs.tags }}
           labels: ${{ steps.meta-synchronizer.outputs.labels }}
           # Single-arch image: skip the provenance attestation that would
@@ -105,7 +91,7 @@ jobs:
           context: .
           target: relayer
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta-relayer.outputs.tags }}
           labels: ${{ steps.meta-relayer.outputs.labels }}
           provenance: false
