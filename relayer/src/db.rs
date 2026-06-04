@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
-use url::Url;
 
 use crate::model::{JobStatus, RelayJob};
 
@@ -18,9 +17,11 @@ pub struct Db {
 }
 
 impl Db {
-    /// Connect to Postgres, create database if needed, and bootstrap schema/indexes.
+    /// Connect to an existing Postgres database and bootstrap schema/indexes.
+    ///
+    /// The database itself must already exist — provisioning is an explicit
+    /// operator step so the app role does not need the `CREATEDB` privilege.
     pub async fn connect(database_url: &str) -> Result<Self> {
-        ensure_database_exists(database_url).await?;
         let pool = PgPoolOptions::new()
             .max_connections(5)
             .connect(database_url)
@@ -345,39 +346,6 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<RelayJob> {
     })
 }
 
-/// Local-dev convenience: ensure the target database exists before connecting.
-async fn ensure_database_exists(database_url: &str) -> Result<()> {
-    let parsed = Url::parse(database_url).with_context(|| "Invalid DB_URL")?;
-    let db_name = parsed
-        .path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .filter(|segment| !segment.is_empty())
-        .ok_or_else(|| anyhow!("DB_URL must include a database name"))?;
-
-    let mut admin_url = parsed.clone();
-    admin_url.set_path("/postgres");
-
-    let admin_pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(admin_url.as_str())
-        .await
-        .with_context(|| "Failed to connect to postgres admin database")?;
-
-    let exists = sqlx::query_scalar::<_, i32>("SELECT 1 FROM pg_database WHERE datname = $1")
-        .bind(db_name)
-        .fetch_optional(&admin_pool)
-        .await?
-        .is_some();
-
-    if !exists {
-        let escaped = db_name.replace('"', "\"\"");
-        let create_stmt = format!("CREATE DATABASE \"{escaped}\"");
-        sqlx::query(&create_stmt).execute(&admin_pool).await?;
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,6 +354,7 @@ mod tests {
     use std::sync::OnceLock;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::sync::Mutex;
+    use url::Url;
 
     fn now() -> i64 {
         1_700_000_000
@@ -453,9 +422,21 @@ mod tests {
         Ok(())
     }
 
+    async fn create_db(admin_url: &str, db_name: &str) -> Result<()> {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(admin_url)
+            .await?;
+        let escaped = db_name.replace('"', "\"\"");
+        pool.execute(format!("CREATE DATABASE \"{escaped}\"").as_str())
+            .await?;
+        Ok(())
+    }
+
     async fn setup_db() -> Result<(Db, String, String)> {
         let (admin_url, db_url, db_name) = test_urls();
         drop_db(&admin_url, &db_name).await?;
+        create_db(&admin_url, &db_name).await?;
         let db = Db::connect(&db_url).await?;
         Ok((db, admin_url, db_name))
     }

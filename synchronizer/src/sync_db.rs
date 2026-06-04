@@ -5,7 +5,6 @@ use sqlx::{
     postgres::{PgPoolOptions, PgRow},
     Executor, PgPool, Row,
 };
-use url::Url;
 
 use crate::{
     app_db::{db_bytes_to_hash, hash_to_db_bytes},
@@ -39,11 +38,13 @@ pub struct SyncDb {
 impl SyncDb {
     /// Connect to the synchronizer's Postgres metadata database.
     ///
+    /// The database must already exist — provisioning is an explicit operator
+    /// step so the app role does not need the `CREATEDB` privilege.
+    ///
     /// Postgres is the sole source of canonical heads. Each committed slot stores its
     /// `CanonicalHead`,
     /// while RocksDB only stores the content-addressed Merkle node/value backing store.
     pub async fn connect(database_url: &str) -> Result<Self> {
-        ensure_database_exists(database_url).await?;
         let pool = PgPoolOptions::new()
             .max_connections(5)
             .connect(database_url)
@@ -323,39 +324,6 @@ fn decode_head_row(row: &PgRow) -> Result<CanonicalHead> {
     })
 }
 
-/// Ensure target Postgres database exists (local/dev convenience).
-async fn ensure_database_exists(database_url: &str) -> Result<()> {
-    let parsed = Url::parse(database_url).with_context(|| "Invalid SYNC_METADATA_DB_URL value")?;
-    let db_name = parsed
-        .path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .filter(|segment| !segment.is_empty())
-        .ok_or_else(|| anyhow!("SYNC_METADATA_DB_URL must include a database name"))?;
-
-    let mut admin_url = parsed.clone();
-    admin_url.set_path("/postgres");
-
-    let admin_pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(admin_url.as_str())
-        .await
-        .with_context(|| "Failed to connect to postgres admin database")?;
-
-    let exists = sqlx::query_scalar::<_, i32>("SELECT 1 FROM pg_database WHERE datname = $1")
-        .bind(db_name)
-        .fetch_optional(&admin_pool)
-        .await?
-        .is_some();
-
-    if !exists {
-        let escaped = db_name.replace('"', "\"\"");
-        let create_stmt = format!("CREATE DATABASE \"{escaped}\"");
-        sqlx::query(&create_stmt).execute(&admin_pool).await?;
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,8 +369,21 @@ mod tests {
         (db_name, db_url, admin_url)
     }
 
+    async fn create_db(db_name: &str, admin_url: &str) -> Result<()> {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(admin_url)
+            .await?;
+        let escaped = db_name.replace('"', "\"\"");
+        sqlx::query(&format!("CREATE DATABASE \"{escaped}\""))
+            .execute(&pool)
+            .await?;
+        Ok(())
+    }
+
     async fn fresh_sync_db() -> Result<(SyncDb, String, String)> {
         let (db_name, db_url, admin_url) = test_urls();
+        create_db(&db_name, &admin_url).await?;
         let sync_db = SyncDb::connect(&db_url).await?;
         Ok((sync_db, db_name, admin_url))
     }

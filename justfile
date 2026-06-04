@@ -36,7 +36,7 @@ dobjd:
 # shell — all backed by one dobjd process. Open http://localhost:1420 in a
 # browser to use the website client; the desktop window opens automatically.
 # https://github.com/pvolok/mprocs
-dev: ensure-plugins ensure-mcp
+dev: ensure-db ensure-plugins ensure-mcp
     mprocs --config mprocs.yaml
 
 # Like `just dev`, but without spawning the local synchronizer + relayer —
@@ -75,6 +75,13 @@ ensure-mcp:
     claude mcp remove bitcraft 2>/dev/null || true
     claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp \
         && echo "registered: bitcraft MCP (project scope, http://127.0.0.1:7718/mcp)"
+
+# Ensure the local Postgres databases the synchronizer + relayer expect exist.
+# `just dev` runs this automatically; run it yourself before `just sync` /
+# `just relayer`. Idempotent: skips a database that already exists.
+ensure-db:
+    @psql postgres://postgres@localhost:5432/postgres -tAc "SELECT 1 FROM pg_database WHERE datname='synchronizer'" | grep -q 1 || psql postgres://postgres@localhost:5432/postgres -c 'CREATE DATABASE synchronizer'
+    @psql postgres://postgres@localhost:5432/postgres -tAc "SELECT 1 FROM pg_database WHERE datname='relayer'" | grep -q 1 || psql postgres://postgres@localhost:5432/postgres -c 'CREATE DATABASE relayer'
 
 # Wipe local state (RocksDB + local Postgres DBs + objects)
 reset:
