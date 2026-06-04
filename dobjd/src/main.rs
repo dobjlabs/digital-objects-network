@@ -47,13 +47,13 @@ async fn main() -> Result<()> {
     // doesn't pay the one-time build. Ports are already bound, so a port
     // conflict still fails fast ahead of this. On a warm cache it's mostly fast
     // reads. Runs on the blocking pool since circuit construction is CPU-bound
-    // and synchronous. Best-effort: if it fails, start anyway and let the first
-    // action build whatever is missing on demand.
-    if let Err(err) = tokio::task::spawn_blocking(driver::warm_proving_circuits).await {
-        tracing::warn!(
-            "circuit warm-up did not finish cleanly: {err}; the first action will build any missing circuits on demand"
-        );
-    }
+    // and synchronous. A failure is fatal: a circuit that can't build now would
+    // fail every action, so refuse to start rather than serve a daemon that
+    // cannot prove. The `??` propagates both a panic (JoinError) and the
+    // warm-up's own error.
+    tokio::task::spawn_blocking(driver::warm_proving_circuits)
+        .await
+        .map_err(|err| anyhow!("circuit warm-up task panicked: {err}"))??;
 
     // Both ports are ours. Spawn the MCP server; share `Arc<Driver>` and the
     // broadcast hub so MCP, the desktop, and the website drive one process.
