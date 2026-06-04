@@ -6,14 +6,15 @@
 use common::shrink::ShrunkMainPodSetup;
 use lt_eq_u256_pod::LtEqU256Pod;
 use pod2::backends::plonky2::basetypes::DEFAULT_VD_SET;
-use pod2::backends::plonky2::emptypod::cache_get_standard_empty_pod_circuit_data;
+use pod2::backends::plonky2::emptypod::EmptyPod;
 use pod2::middleware::{Params, RawValue};
 use vdfpod::VdfPod;
 
 /// Build every proving circuit the first action would otherwise build lazily,
 /// so the first `execute` is fast. On a cold start the first proof builds:
 /// - the recursive MainPod circuit (pod2's disk cache, the dominant artifact),
-/// - pod2's standard empty pod circuit (recursion padding the prover inserts),
+/// - pod2's empty pod (the proved instance the prover inserts as recursion
+///   padding, plus its circuit),
 /// - the VDF intro pod circuit, including its in-memory `VDF_RECURSIVE_CIRCUIT`
 ///   -- only generating a proof forces that one to build, so we prove a minimal
 ///   input (the VDF requires at least 2 iterations), and
@@ -37,10 +38,12 @@ pub fn warm_proving_circuits() {
     log::info!("warming recursive MainPod circuit (first cold build can take minutes)...");
     let _ = ShrunkMainPodSetup::new(&params);
 
-    // Empty pod: the prover pads recursive slots with it, so proving builds it
-    // on a cold cache even though no action references it directly.
-    log::info!("warming empty pod circuit...");
-    let _ = cache_get_standard_empty_pod_circuit_data();
+    // Empty pod: the prover pads recursive slots with a proved empty pod keyed
+    // by vd_set. `new_boxed` caches that instance ("empty_pod") and, building
+    // it, the empty pod circuit ("standard_empty_pod_circuit_data") -- so this
+    // one call covers both empty pod caches the first proof would build.
+    log::info!("warming empty pod...");
+    let _ = EmptyPod::new_boxed(vd_set.clone());
 
     log::info!("warming VDF intro pod circuit...");
     if let Err(err) = VdfPod::new_boxed(&params, vd_set.clone(), 2, RawValue::from(0_i64)) {
