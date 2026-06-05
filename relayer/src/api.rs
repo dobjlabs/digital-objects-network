@@ -108,6 +108,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/proofs", post(submit_proof))
         .route("/api/v1/proofs/{job_id}", get(get_proof))
         .route("/api/v1/proofs/tx-hashes", post(get_tx_hashes))
+        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
 }
 
