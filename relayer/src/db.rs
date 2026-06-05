@@ -1,4 +1,6 @@
 use anyhow::{anyhow, Context, Result};
+use common::{db_bytes_to_hash, hash_to_db_bytes};
+use pod2::middleware::Hash;
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
 
 use crate::model::{JobStatus, RelayJob};
@@ -41,8 +43,8 @@ impl Db {
                 job_id TEXT PRIMARY KEY,
                 status TEXT NOT NULL CHECK (status IN ('queued','sending','submitted','confirmed','failed')),
                 payload_bytes BYTEA NOT NULL,
-                tx_final TEXT NOT NULL UNIQUE,
-                state_root_hash TEXT NOT NULL,
+                tx_final BYTEA NOT NULL UNIQUE,
+                state_root_hash BYTEA NOT NULL,
                 client_ref TEXT NULL,
                 attempt_count INTEGER NOT NULL,
                 tx_hash TEXT NULL,
@@ -107,8 +109,8 @@ impl Db {
         .bind(&job.job_id)
         .bind(job.status.as_str())
         .bind(&job.payload_bytes)
-        .bind(&job.tx_final)
-        .bind(&job.state_root_hash)
+        .bind(hash_to_db_bytes(job.tx_final))
+        .bind(hash_to_db_bytes(job.state_root_hash))
         .bind(job.client_ref.clone())
         .bind(job.attempt_count as i32)
         .bind(job.tx_hash.clone())
@@ -132,7 +134,7 @@ impl Db {
             Ok(InsertJobResult::Existing(Box::new(existing)))
         } else {
             Err(anyhow!(
-                "idempotent insert conflict but existing job not found for tx_final={}",
+                "idempotent insert conflict but existing job not found for tx_final={:#}",
                 job.tx_final
             ))
         }
@@ -165,8 +167,8 @@ impl Db {
         .bind(&job.job_id)
         .bind(job.status.as_str())
         .bind(&job.payload_bytes)
-        .bind(&job.tx_final)
-        .bind(&job.state_root_hash)
+        .bind(hash_to_db_bytes(job.tx_final))
+        .bind(hash_to_db_bytes(job.state_root_hash))
         .bind(job.client_ref.clone())
         .bind(job.attempt_count as i32)
         .bind(job.tx_hash.clone())
@@ -223,7 +225,7 @@ impl Db {
     }
 
     /// Lookup by idempotency key.
-    pub async fn get_job_by_tx_final(&self, tx_final: &str) -> Result<Option<RelayJob>> {
+    pub async fn get_job_by_tx_final(&self, tx_final: &Hash) -> Result<Option<RelayJob>> {
         let row = sqlx::query(
             r#"
             SELECT job_id,
@@ -247,7 +249,7 @@ impl Db {
             WHERE tx_final = $1
             "#,
         )
-        .bind(tx_final)
+        .bind(hash_to_db_bytes(*tx_final))
         .fetch_optional(&self.pool)
         .await?;
 
@@ -329,8 +331,8 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<RelayJob> {
         job_id: row.get("job_id"),
         status,
         payload_bytes: row.get("payload_bytes"),
-        tx_final: row.get("tx_final"),
-        state_root_hash: row.get("state_root_hash"),
+        tx_final: db_bytes_to_hash(&row.get::<Vec<u8>, _>("tx_final"))?,
+        state_root_hash: db_bytes_to_hash(&row.get::<Vec<u8>, _>("state_root_hash"))?,
         client_ref: row.get("client_ref"),
         attempt_count,
         tx_hash: row.get("tx_hash"),
@@ -350,6 +352,7 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<RelayJob> {
 mod tests {
     use super::*;
     use crate::model::{JobStatus, RelayJob};
+    use pod2::middleware::RawValue;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::OnceLock;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -360,13 +363,17 @@ mod tests {
         1_700_000_000
     }
 
-    fn mk_job(id: &str, tx_final: &str, status: JobStatus, next: Option<i64>) -> RelayJob {
+    fn th(byte: u8) -> Hash {
+        Hash::from(RawValue::from(i64::from(byte)))
+    }
+
+    fn mk_job(id: &str, tx_final: Hash, status: JobStatus, next: Option<i64>) -> RelayJob {
         RelayJob {
             job_id: id.to_string(),
             status,
             payload_bytes: vec![1, 2, 3],
-            tx_final: tx_final.to_string(),
-            state_root_hash: "0x00".to_string(),
+            tx_final,
+            state_root_hash: Hash::default(),
             client_ref: None,
             attempt_count: 0,
             tx_hash: None,
@@ -447,11 +454,11 @@ mod tests {
         let _guard = test_db_lock().lock().await;
         let (db, admin_url, db_name) = setup_db().await?;
 
-        let job = mk_job("job-1", "0xaa", JobStatus::Queued, Some(now()));
+        let job = mk_job("job-1", th(0xaa), JobStatus::Queued, Some(now()));
         let inserted = db.insert_job(&job).await?;
         assert!(matches!(inserted, InsertJobResult::Inserted));
 
-        let second = mk_job("job-2", "0xaa", JobStatus::Queued, Some(now()));
+        let second = mk_job("job-2", th(0xaa), JobStatus::Queued, Some(now()));
         let existing = db.insert_job(&second).await?;
         match existing {
             InsertJobResult::Existing(found) => assert_eq!(found.job_id, "job-1"),
@@ -469,7 +476,7 @@ mod tests {
         let _guard = test_db_lock().lock().await;
         let (db, admin_url, db_name) = setup_db().await?;
 
-        let mut sending = mk_job("job-1", "0xaa", JobStatus::Sending, None);
+        let mut sending = mk_job("job-1", th(0xaa), JobStatus::Sending, None);
         sending.next_attempt_at = None;
         db.insert_job(&sending).await?;
 
@@ -490,7 +497,7 @@ mod tests {
         let _guard = test_db_lock().lock().await;
         let (db, admin_url, db_name) = setup_db().await?;
 
-        let submitted = mk_job("job-1", "0xaa", JobStatus::Submitted, None);
+        let submitted = mk_job("job-1", th(0xaa), JobStatus::Submitted, None);
         db.insert_job(&submitted).await?;
 
         let updated = db.recover_inflight_jobs(now()).await?;
@@ -510,8 +517,8 @@ mod tests {
         let _guard = test_db_lock().lock().await;
         let (db, admin_url, db_name) = setup_db().await?;
 
-        let a = mk_job("job-a", "0xaa", JobStatus::Queued, Some(now() + 5));
-        let b = mk_job("job-b", "0xbb", JobStatus::Queued, Some(now()));
+        let a = mk_job("job-a", th(0xaa), JobStatus::Queued, Some(now() + 5));
+        let b = mk_job("job-b", th(0xbb), JobStatus::Queued, Some(now()));
         db.insert_job(&a).await?;
         db.insert_job(&b).await?;
 

@@ -16,7 +16,9 @@ use wire_types::relayer::{
     HealthResponse, JobStatusResponse, SubmitProofRequest, SubmitProofResponse,
 };
 
-use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, encode_hash_hex, proof::BlobParser};
+use common::{
+    blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, decode_hash_hex, encode_hash_hex, proof::BlobParser,
+};
 
 use crate::{
     db::{Db, InsertJobResult},
@@ -144,16 +146,13 @@ async fn submit_proof(
             ApiError::BadRequest("payload did not decode into a valid proof payload".to_string())
         })?;
 
-    let tx_final = encode_hash_hex(&payload.tx_final);
-    let state_root_hash = encode_hash_hex(&payload.state_root_hash);
-
     let now = now_ts();
     let job = RelayJob {
         job_id: Uuid::new_v4().to_string(),
         status: JobStatus::Queued,
         payload_bytes,
-        tx_final,
-        state_root_hash,
+        tx_final: payload.tx_final,
+        state_root_hash: payload.state_root_hash,
         client_ref: req.client_ref,
         attempt_count: 0,
         tx_hash: None,
@@ -177,7 +176,7 @@ async fn submit_proof(
         InsertJobResult::Inserted => {
             info!(
                 job_id = %job.job_id,
-                tx_final = %job.tx_final,
+                tx_final = %encode_hash_hex(&job.tx_final),
                 payload_bytes = job.payload_bytes.len(),
                 "Accepted new relay job"
             );
@@ -188,7 +187,7 @@ async fn submit_proof(
             info!(
                 job_id = %existing.job_id,
                 status = existing.status.as_str(),
-                tx_final = %existing.tx_final,
+                tx_final = %encode_hash_hex(&existing.tx_final),
                 "Idempotent insert returned existing relay job"
             );
             (StatusCode::OK, to_submit_response(existing))
@@ -228,9 +227,11 @@ async fn get_proof_by_tx_final(
 ) -> Result<Json<JobStatusResponse>, ApiError> {
     debug!(tx_final = %tx_final, "Handling relay job lookup by tx_final");
 
+    let tx_final_hash = decode_hash_hex(&tx_final)
+        .map_err(|err| ApiError::BadRequest(format!("invalid tx_final: {err}")))?;
     let job = app_state
         .db
-        .get_job_by_tx_final(&tx_final)
+        .get_job_by_tx_final(&tx_final_hash)
         .await
         .map_err(ApiError::Internal)?
         .ok_or_else(|| ApiError::NotFound(format!("job not found for tx_final: {tx_final}")))?;

@@ -2,7 +2,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES;
+use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, encode_hash_hex};
+use pod2::middleware::Hash;
 use wire_types::relayer::{JobStatus, JobStatusResponse, SubmitProofRequest, SubmitProofResponse};
 
 pub const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
@@ -39,7 +40,7 @@ pub trait RelayerClient: Send + Sync {
     ) -> Result<RelayerConfirmation>;
     /// Look up the current tx_hash for a job by its tx_final (proof commitment).
     /// Returns `Ok(None)` if the relayer has no record for this tx_final.
-    fn lookup_tx_hash(&self, relayer_api_url: &str, tx_final: &str) -> Result<Option<String>>;
+    fn lookup_tx_hash(&self, relayer_api_url: &str, tx_final: &Hash) -> Result<Option<String>>;
 }
 
 #[derive(Debug, Default)]
@@ -197,10 +198,11 @@ impl RelayerClient for HttpRelayerClient {
         }
     }
 
-    fn lookup_tx_hash(&self, relayer_api_url: &str, tx_final: &str) -> Result<Option<String>> {
+    fn lookup_tx_hash(&self, relayer_api_url: &str, tx_final: &Hash) -> Result<Option<String>> {
         let endpoint = format!(
-            "{}/api/v1/proofs/by-tx-final/{tx_final}",
-            relayer_api_url.trim_end_matches('/')
+            "{}/api/v1/proofs/by-tx-final/{}",
+            relayer_api_url.trim_end_matches('/'),
+            encode_hash_hex(tx_final)
         );
         let client = reqwest::blocking::Client::new();
         let response = client

@@ -12,8 +12,6 @@ use wire_types::synchronizer::{
     StateHeadResponse,
 };
 
-use common::encode_hash_hex;
-
 pub const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
 pub const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
 
@@ -114,9 +112,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
         let derived_state_root_hash = state_root.hash();
         if remote_state_root_hash != derived_state_root_hash {
             return Err(anyhow!(
-                "synchronizer grounding witness hash mismatch: remote={} derived={}",
-                encode_hash_hex(&remote_state_root_hash),
-                encode_hash_hex(&derived_state_root_hash)
+                "synchronizer grounding witness hash mismatch: remote={remote_state_root_hash:#} derived={derived_state_root_hash:#}"
             ));
         }
 
@@ -275,8 +271,7 @@ fn collect_created_proofs<P>(
     for (commitment, present, proof) in entries {
         if !expected_hashes.contains(&commitment) {
             return Err(anyhow!(
-                "synchronizer grounding witness response contained unexpected object proof: {}",
-                encode_hash_hex(&commitment)
+                "synchronizer grounding witness response contained unexpected object proof: {commitment:#}"
             ));
         }
 
@@ -284,16 +279,14 @@ fn collect_created_proofs<P>(
             && previous_present != present
         {
             return Err(anyhow!(
-                "synchronizer grounding witness response contained conflicting entries for object {}",
-                encode_hash_hex(&commitment)
+                "synchronizer grounding witness response contained conflicting entries for object {commitment:#}"
             ));
         }
 
         if present {
             let proof = proof.ok_or_else(|| {
                 anyhow!(
-                    "synchronizer reported object {} present but omitted its array proof",
-                    encode_hash_hex(&commitment)
+                    "synchronizer reported object {commitment:#} present but omitted its array proof"
                 )
             })?;
             created_proofs.insert(commitment, proof);
@@ -333,7 +326,7 @@ fn render_requested_hashes(
     let mut rendered = Vec::new();
     for commitment in requested_commitments {
         if seen.insert(*commitment) && include(commitment) {
-            rendered.push(encode_hash_hex(commitment));
+            rendered.push(format!("{commitment:#}"));
         }
     }
     rendered
@@ -342,10 +335,10 @@ fn render_requested_hashes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::decode_hash_hex;
+    use pod2::middleware::RawValue;
 
     fn test_hash(byte: u8) -> Hash {
-        decode_hash_hex(&hex::encode([byte; 32])).expect("valid test hash")
+        Hash::from(RawValue::from(i64::from(byte)))
     }
 
     #[test]
@@ -356,7 +349,7 @@ mod tests {
         let err = collect_created_proofs(&requested, proofs).expect_err("should fail");
 
         assert!(
-            err.to_string().contains(&encode_hash_hex(&requested[1])),
+            err.to_string().contains(&format!("{:#}", requested[1])),
             "unexpected error: {err}"
         );
     }
@@ -370,7 +363,7 @@ mod tests {
         let err = collect_created_proofs(&requested, proofs).expect_err("should fail");
 
         assert!(
-            err.to_string().contains(&encode_hash_hex(&unexpected)),
+            err.to_string().contains(&format!("{:#}", unexpected)),
             "unexpected error: {err}"
         );
     }

@@ -72,7 +72,7 @@ impl CraftOps for DobjdCraftOps {
     }
 
     fn get_state_root(&self) -> anyhow::Result<String> {
-        self.driver.get_state_root()
+        Ok(common::encode_hash_hex(&self.driver.get_state_root()?))
     }
 
     fn inspect_object(&self, file_name: &str) -> anyhow::Result<mcp::ObjectDetail> {

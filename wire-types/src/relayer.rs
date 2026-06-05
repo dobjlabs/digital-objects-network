@@ -3,8 +3,16 @@
 //! Lifted out of the `relayer` crate so consumers (driver, dobjd, tests)
 //! can deserialize relayer responses without pulling in relayer's
 //! server-side deps (sqlx-postgres, alloy, axum).
+//!
+//! The status/request types are pure serde. The two response types carry
+//! pod2 `Hash` (`tx_final`, `state_root_hash`, serialized as the 64-char
+//! hex pod2 emits), so they live behind the `chain` feature; `tx_hash`
+//! stays a `String` because it is an Ethereum keccak hash, not a pod2 one.
 
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "chain")]
+use pod2::middleware::Hash;
 
 /// Persistent relay lifecycle states.
 ///
@@ -66,6 +74,7 @@ pub struct SubmitProofRequest {
 }
 
 /// Submit response returns the created/existing job identity and key metadata.
+#[cfg(feature = "chain")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitProofResponse {
     /// Stable job id used for status polling.
@@ -73,9 +82,9 @@ pub struct SubmitProofResponse {
     /// Current lifecycle status of the returned job.
     pub status: JobStatus,
     /// Idempotency key derived from the decoded payload.
-    pub tx_final: String,
+    pub tx_final: Hash,
     /// State root hash claimed by the payload.
-    pub state_root_hash: String,
+    pub state_root_hash: Hash,
     /// Submission attempts observed so far for this job.
     pub attempt_count: u32,
     /// Job creation timestamp in unix seconds.
@@ -83,6 +92,7 @@ pub struct SubmitProofResponse {
 }
 
 /// Status response is the durable view of worker progress for one job.
+#[cfg(feature = "chain")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobStatusResponse {
     /// Stable job id used for status polling.
@@ -102,9 +112,9 @@ pub struct JobStatusResponse {
     /// Creation timestamp in unix seconds.
     pub created_at: i64,
     /// Idempotency key derived from the decoded payload.
-    pub tx_final: String,
+    pub tx_final: Hash,
     /// State root hash claimed by the payload.
-    pub state_root_hash: String,
+    pub state_root_hash: Hash,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

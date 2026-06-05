@@ -201,8 +201,8 @@ impl RelayerClient for MockRelayer {
         Ok(wire_types::relayer::SubmitProofResponse {
             job_id: "job-1".to_string(),
             status: wire_types::relayer::JobStatus::Queued,
-            tx_final: "0x0".to_string(),
-            state_root_hash: "0x0".to_string(),
+            tx_final: Default::default(),
+            state_root_hash: Default::default(),
             attempt_count: 0,
             created_at: 0,
         })
@@ -238,7 +238,7 @@ impl RelayerClient for MockRelayer {
         })
     }
 
-    fn lookup_tx_hash(&self, _relayer_api_url: &str, _tx_final: &str) -> Result<Option<String>> {
+    fn lookup_tx_hash(&self, _relayer_api_url: &str, _tx_final: &Hash) -> Result<Option<String>> {
         Ok(Some("0xtx".to_string()))
     }
 }

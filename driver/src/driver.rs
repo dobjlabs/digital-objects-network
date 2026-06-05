@@ -195,11 +195,10 @@ impl Driver {
             if entry.record.status != ObjectStatus::Pending {
                 continue;
             }
-            let tx_final = encode_hash_hex(&entry.record.tx_final);
             let current_hash = self
                 .deps
                 .relayer
-                .lookup_tx_hash(&settings.relayer_api_url, &tx_final);
+                .lookup_tx_hash(&settings.relayer_api_url, &entry.record.tx_final);
             if let Ok(Some(relayer_hash)) = current_hash
                 && entry.record.tx_hash.as_deref() != Some(&relayer_hash)
             {
@@ -334,13 +333,13 @@ impl Driver {
         })
     }
 
-    pub fn get_state_root(&self) -> Result<String> {
+    pub fn get_state_root(&self) -> Result<Hash> {
         let settings = self.load_settings()?;
         let head = self
             .deps
             .synchronizer
             .fetch_head(&settings.synchronizer_api_url)?;
-        Ok(encode_hash_hex(&head.current_gsr))
+        Ok(head.current_gsr)
     }
 
     /// Import an external `.dobj` object — one not produced by this driver

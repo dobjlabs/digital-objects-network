@@ -15,7 +15,7 @@ use std::io;
 
 use anyhow::{Result, anyhow};
 use hex::{FromHex, ToHex};
-use pod2::middleware::Hash;
+use pod2::middleware::{F, Hash, RawValue};
 use tracing_subscriber::{EnvFilter, fmt::time::OffsetTime, prelude::*};
 
 pub fn load_dotenv() -> Result<()> {
@@ -66,6 +66,27 @@ pub fn encode_hash_hex(hash: &Hash) -> String {
 pub fn decode_hash_hex(s: &str) -> Result<Hash> {
     let trimmed = s.strip_prefix("0x").unwrap_or(s);
     Hash::from_hex(trimmed).map_err(|err| anyhow!("invalid hash hex {s:?}: {err}"))
+}
+
+/// Encode a `Hash` as the little-endian limb bytes stored in `BYTEA` columns.
+pub fn hash_to_db_bytes(hash: Hash) -> Vec<u8> {
+    RawValue::from(hash).to_bytes()
+}
+
+/// Decode the little-endian limb bytes from a `BYTEA` column back into a `Hash`.
+pub fn db_bytes_to_hash(bytes: &[u8]) -> Result<Hash> {
+    let limbs: [[u8; 8]; 4] = bytes
+        .chunks_exact(8)
+        .map(|chunk| {
+            chunk
+                .try_into()
+                .map_err(|_| anyhow!("invalid hash limb length"))
+        })
+        .collect::<Result<Vec<[u8; 8]>>>()?
+        .try_into()
+        .map_err(|_| anyhow!("invalid hash byte length"))?;
+
+    Ok(Hash(limbs.map(|limb| F(u64::from_le_bytes(limb)))))
 }
 
 pub fn log_init() {
