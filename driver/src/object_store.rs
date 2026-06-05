@@ -223,7 +223,7 @@ mod tests {
         let tx_final = outputs.tx.dict().commitment();
         let spendable = outputs.obj(0);
         ObjectRecord {
-            content_hash: format!("{:#}", spendable.obj.commitment()),
+            content_hash: spendable.obj.commitment(),
             class: wire_types::QualifiedName::new("craft-basics", "Log"),
             status: ObjectStatus::Live,
             tx_hash: None,

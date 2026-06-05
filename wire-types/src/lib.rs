@@ -9,13 +9,13 @@
 //! ## Submodules
 //!
 //! - [`relayer`] — DTOs for the relayer's HTTP API. No heavy deps.
-//! - [`synchronizer`] — DTOs for the synchronizer's HTTP API. The bulk
-//!   are pure serde; the proof-bearing types (`SourceTxProofResponse`,
-//!   `GroundingWitnessResponse`) live behind the `chain` feature because
-//!   they embed a pod2 `MerkleProof`. Server crates and the driver enable
-//!   the feature; `cli` and `mcp` don't.
+//! - [`synchronizer`] — DTOs for the synchronizer's HTTP API. Every type
+//!   carries pod2 `Hash` values directly, so the whole module lives behind
+//!   the `chain` feature. Only the synchronizer server and the driver speak
+//!   this API, and both enable the feature; `cli` and `mcp` don't.
 
 pub mod relayer;
+#[cfg(feature = "chain")]
 pub mod synchronizer;
 
 use std::collections::HashMap;

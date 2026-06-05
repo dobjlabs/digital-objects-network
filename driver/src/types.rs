@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use pod2::middleware::Hash;
 use serde::{Deserialize, Serialize};
 use wire_types::{ExecutionPhase, ObjectStatus, QualifiedName};
 
@@ -41,8 +42,8 @@ pub struct ExecuteActionInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecuteActionResult {
-    pub old_root: String,
-    pub new_root: String,
+    pub old_root: Hash,
+    pub new_root: Hash,
     pub output_files: Vec<String>,
     pub nullified_files: Vec<String>,
     pub relayer_job_id: String,
@@ -54,7 +55,7 @@ pub struct ExecuteActionResult {
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionStepContext {
     /// The state root hash before this execution (available during Commit phase).
-    pub old_root: Option<String>,
+    pub old_root: Option<Hash>,
     /// Output files touched by this step, when the step corresponds to a
     /// filesystem write. Surfaced to clients so a GUI can light up rows as
     /// they appear / change status.

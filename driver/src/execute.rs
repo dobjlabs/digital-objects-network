@@ -160,7 +160,7 @@ pub(crate) fn resolve_inputs(
             .ok_or_else(|| DriverError::ObjectFileNotFound(file_name.clone()))?;
         if entry.record.status != ObjectStatus::Live {
             return Err(anyhow!(
-                "input object is not live (status: {:?}): {}",
+                "input object is not live (status: {:?}): {:#}",
                 entry.record.status,
                 entry.record.content_hash
             ));
@@ -171,7 +171,7 @@ pub(crate) fn resolve_inputs(
         // text drifted from the actual pod-level identity.
         if entry.record.class != required.class {
             return Err(anyhow!(
-                "input class mismatch for {}: expected {}, got {}",
+                "input class mismatch for {:#}: expected {}, got {}",
                 entry.record.content_hash,
                 required.class,
                 entry.record.class
@@ -179,13 +179,13 @@ pub(crate) fn resolve_inputs(
         }
         let actual_class_hash = obj_type_hash(&entry.record.obj).ok_or_else(|| {
             anyhow!(
-                "input object {} has no readable 'type' field",
+                "input object {:#} has no readable 'type' field",
                 entry.record.content_hash
             )
         })?;
         if actual_class_hash != expected_class_hash {
             return Err(anyhow!(
-                "input class hash mismatch for {}: pod 'type' = {:#}, action expects {}",
+                "input class hash mismatch for {:#}: pod 'type' = {:#}, action expects {}",
                 entry.record.content_hash,
                 actual_class_hash,
                 required.hash,
@@ -234,11 +234,11 @@ pub(crate) fn save_results(
     let mut output_files = Vec::new();
     for (index, output) in action.total_outputs.iter().enumerate() {
         let spendable = spendable_outputs.obj(index);
-        let content_hash = format!("{:#}", spendable.obj.commitment());
+        let content_hash = spendable.obj.commitment();
         let file_name = format!(
             "{}_{}.{DOBJ_EXTENSION}",
             output.class.file_prefix(),
-            content_hash.to_ascii_lowercase()
+            format!("{content_hash:#}").to_ascii_lowercase()
         );
         output_files.push(file_name.clone());
 
