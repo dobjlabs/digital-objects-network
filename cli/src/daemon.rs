@@ -238,7 +238,7 @@ fn mcp_port_for_http_port(port: u16) -> Result<u16> {
 ///
 /// A per-call timeout caps each probe so a stuck server can't hang the
 /// polling loop forever.
-async fn http_alive(client: &DobjdClient) -> bool {
+pub(crate) async fn http_alive(client: &DobjdClient) -> bool {
     let url = format!("{}/healthz", client.base_url());
     reqwest::Client::new()
         .get(&url)

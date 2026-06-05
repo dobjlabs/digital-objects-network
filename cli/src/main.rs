@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand};
 mod client;
 mod commands;
 mod daemon;
+mod update;
 
 use client::DobjdClient;
 
@@ -125,6 +126,18 @@ enum Cmd {
         #[arg(short = 'n', long, default_value_t = 100)]
         lines: usize,
     },
+    /// Update dobj, dobjd, and bitcraft-mcp-proxy to a newer release.
+    Update {
+        /// Report current and latest versions without changing anything.
+        #[arg(long)]
+        check: bool,
+        /// Target a specific release tag instead of the latest.
+        #[arg(long, value_name = "TAG")]
+        version: Option<String>,
+        /// Proceed when the target is not newer (reinstall or downgrade).
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -179,5 +192,10 @@ async fn main() -> Result<()> {
         Cmd::Stop => daemon::stop().await,
         Cmd::Status => daemon::status(&client).await,
         Cmd::Logs { follow, lines } => daemon::logs(follow, lines).await,
+        Cmd::Update {
+            check,
+            version,
+            force,
+        } => update::run(&client, check, version, force).await,
     }
 }

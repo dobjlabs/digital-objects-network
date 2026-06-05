@@ -22,6 +22,13 @@ pub(crate) const TARGET_TRIPLE: &str = env!("DOBJ_TARGET_TRIPLE");
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Print the stamp and exit without touching ports or the driver state.
+    // `dobj update` runs this to validate a freshly installed binary.
+    if std::env::args().any(|arg| arg == "--version") {
+        println!("dobjd {RELEASE_TAG} ({TARGET_TRIPLE})");
+        return Ok(());
+    }
+
     init_tracing();
     tracing::info!("dobjd {RELEASE_TAG} ({TARGET_TRIPLE})");
     if let Err(err) = common::load_dotenv() {

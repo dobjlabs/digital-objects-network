@@ -22,6 +22,14 @@ urlencoding = "2"
 uuid = { version = "1.18.1", features = ["v4"] }
 wire-types = { workspace = true }
 
+# `dobj update`: release tag ordering + tarball extraction.
+semver = "1"
+tar = "0.4"
+flate2 = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
 # POSIX signal + setsid used by the daemon subcommands. Unix-only —
 # Windows uses the windows-sys equivalents below.
 [target.'cfg(unix)'.dependencies]
