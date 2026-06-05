@@ -2,15 +2,15 @@
 
 Paste this to Claude Code, Cursor, or any MCP-aware agent:
 
-> Read https://raw.githubusercontent.com/dobjlabs/zk-craft/main/SKILL.md and set up bitcraft.
+> Read https://raw.githubusercontent.com/dobjlabs/zk-craft-releases/main/README.md and set up bitcraft.
 
-The skill installs `dobjd`, `dobj`, `bitcraft-mcp-proxy`, and the
-`craft-basics` plugin into `~/.dobj/` and registers MCP with the
+The steps install `dobjd`, `dobj`, `bitcraft-mcp-proxy`, and the
+`craft-basics` plugin into `~/.dobj/` and register MCP with the
 agent so you can drive bitcraft directly.
 
 ## Manual install
 
-See [SKILL.md](https://github.com/dobjlabs/zk-craft/blob/main/SKILL.md) for the underlying steps.
+See the [README](https://github.com/dobjlabs/zk-craft-releases#readme) for the underlying steps.
 
 ## What's in the release
 
