@@ -5,7 +5,7 @@ import { InventoryPanel } from "./features/inventory/InventoryPanel";
 import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { SettingsModal } from "./features/settings/SettingsModal";
 import {
-  getGlobalStateRoot,
+  getStateRoot,
   getObjectsDir,
   listenOpenSettings,
   listenRunActionProgress,
@@ -42,7 +42,7 @@ function App() {
   const clearSelection = useStore((state) => state.clearSelection);
   const toggleNullified = useStore((state) => state.toggleNullified);
   const recordCpuSample = useStore((state) => state.recordCpuSample);
-  const setGlobalStateRoot = useStore((state) => state.setGlobalStateRoot);
+  const setStateRoot = useStore((state) => state.setStateRoot);
   const applyRunActionProgress = useStore(
     (state) => state.applyRunActionProgress,
   );
@@ -105,7 +105,10 @@ function App() {
         if (cancelled) return;
         hydrateData().catch((error) => {
           if (!cancelled) {
-            console.error("Failed to refresh GUI after action progress:", error);
+            console.error(
+              "Failed to refresh GUI after action progress:",
+              error,
+            );
           }
         });
       }, 120);
@@ -178,13 +181,13 @@ function App() {
     let cancelled = false;
     const poll = async () => {
       try {
-        const root = await getGlobalStateRoot();
+        const root = await getStateRoot();
         if (!cancelled) {
-          setGlobalStateRoot(root);
+          setStateRoot(root);
         }
       } catch (error) {
         if (!cancelled) {
-          console.error("Failed to fetch global state root:", error);
+          console.error("Failed to fetch state root:", error);
         }
       }
     };
@@ -198,7 +201,7 @@ function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [setGlobalStateRoot]);
+  }, [setStateRoot]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

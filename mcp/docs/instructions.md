@@ -47,7 +47,7 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 - `inspect_object(file_name)` — full detail on one object: fields, status, predicate source
 - `inspect_class(class_name)` — predicate definition + which actions produce/consume the class
 - `check_feasibility(action_id)` — does the user's inventory have what this action needs?
-- `get_state_root` — current canonical state root from the synchronizer
+- `get_state_root` — current state root from the synchronizer
 - `read_doc(name)` — reference docs (`podlang-reference`, `object-lifecycle`, `txlib.podlang`,
   `time.podlang`, `generated.podlang`, or `list` to enumerate)
 

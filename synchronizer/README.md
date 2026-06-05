@@ -76,7 +76,7 @@ Important: RocksDB is not the source of truth. It is an append-only backing stor
 
 Postgres stores the synchronization state:
 
-- `canonical_slots`
+- `state_slots`
   - one row per slot
   - on first initialization, the first row is a bootstrap row at `start_slot - 1`
   - that bootstrap row uses the real beacon/execution metadata when `start_slot - 1` had a block
@@ -93,7 +93,7 @@ Postgres stores the synchronization state:
     cross-checks it against the created array at the queried root
 
 Postgres is the sole source of `StateHead`. The highest committed
-`canonical_slots.slot` is the current state head.
+`state_slots.slot` is the current state head.
 
 ## Slot derivation rules
 
@@ -142,7 +142,7 @@ Because the Merkle nodes were already materialized during derivation, there is n
 On reorg:
 
 - the synchronizer finds the last common ancestor slot
-- deletes `canonical_slots` rows after the keep-point, and the `created_index`
+- deletes `state_slots` rows after the keep-point, and the `created_index`
   rows those slots added, in one transaction
 - resumes syncing from the first divergent slot
 

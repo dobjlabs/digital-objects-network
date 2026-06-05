@@ -354,7 +354,7 @@ impl Driver {
     /// (e.g. a file from outside `~/.dobj/`) — into local inventory.
     ///
     /// `dobj_json` is the raw JSON contents of a `.dobj` file. The object is
-    /// filed under a canonical name derived from its commitment — the file's
+    /// filed under a name derived from its commitment — the file's
     /// own `id` and filename are not trusted.
     ///
     /// Validation:
@@ -364,7 +364,7 @@ impl Driver {
     /// - the object must not already be in inventory (live or nullified);
     /// - the object's nullifier must not already be spent on-chain.
     ///
-    /// Status is decided by grounding: `Live` if the source tx is canonical,
+    /// Status is decided by grounding: `Live` if the source tx is committed,
     /// otherwise `Unknown` (a later `sync_inventory` promotes it). If the
     /// synchronizer is unreachable the object is imported as `Unknown` rather
     /// than failing, so the flow still works offline.
@@ -424,7 +424,7 @@ impl Driver {
 
         // 4. Grounding decides status. A nullifier already on-chain means the
         //    object has been spent — reject it. Otherwise Live if the object's
-        //    commitment is in the canonical created set, else Unknown. Tolerate
+        //    commitment is in the created set, else Unknown. Tolerate
         //    an unreachable synchronizer by importing as Unknown.
         let settings = self.load_settings()?;
         let commitment = record.obj.commitment();
@@ -521,7 +521,7 @@ impl Driver {
             .deps
             .payload_builder
             .build_payload(&old_root_hash, &spendable_outputs)?;
-        // A tx has landed once the union of its effects is canonical: every
+        // A tx has landed once the union of its effects is committed: every
         // produced object commitment in the created set and every nullifier in
         // the nullifier set. Collect both for the confirmation poll below.
         let output_commitments: Vec<Hash> = spendable_outputs

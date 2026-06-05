@@ -45,9 +45,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 // Data structures
 // ============================================================================
 
-/// Compact committed view of canonical app state used for grounding transactions.
+/// Compact committed view of app state used for grounding transactions.
 ///
-/// Holds only the Merkle roots needed to recompute the canonical global state
+/// Holds only the Merkle roots needed to recompute the state
 /// root hash and to verify synchronizer-supplied membership proofs. Full
 /// containers are not carried -- callers prove each input's liveness with a
 /// per-object Merkle proof packaged in a [`GroundingWitness`].
@@ -77,7 +77,7 @@ impl StateHeader {
         }
     }
 
-    /// Array view used as the canonical state root record. Slot layout
+    /// Array view used as the state root record. Slot layout
     /// matches the `record StateHeader` declaration in txlib.podlang.
     /// Predicates access fields via anchored-key syntax (e.g.
     /// `state_header.created`).

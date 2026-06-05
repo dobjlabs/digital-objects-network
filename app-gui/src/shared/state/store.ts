@@ -25,7 +25,7 @@ interface ProofStep {
 interface ProofStats {
   cpuHistory: number[];
   totalCpuSecs: number;
-  globalStateRoot: string | null;
+  stateRoot: string | null;
 }
 
 interface ProofSummary {
@@ -71,7 +71,7 @@ export interface AppState {
   clearSelection: () => void;
   toggleNullified: () => void;
   recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
-  setGlobalStateRoot: (hash: string | null) => void;
+  setStateRoot: (hash: string | null) => void;
   applyRunActionProgress: (event: RunActionProgress) => void;
   initProofPanel: (input: {
     runId: string;
@@ -119,7 +119,7 @@ export const useStore = create<AppState>((set, get) => ({
     stats: {
       cpuHistory: Array.from({ length: 24 }, () => 0),
       totalCpuSecs: 0,
-      globalStateRoot: null,
+      stateRoot: null,
     },
   },
   hydrateData: async () => {
@@ -210,10 +210,10 @@ export const useStore = create<AppState>((set, get) => ({
         },
       };
     }),
-  setGlobalStateRoot: (hash) =>
+  setStateRoot: (hash) =>
     set((prev) => {
       const nextHash = hash?.trim() || null;
-      if (prev.proof.stats.globalStateRoot === nextHash) {
+      if (prev.proof.stats.stateRoot === nextHash) {
         return prev;
       }
       return {
@@ -222,7 +222,7 @@ export const useStore = create<AppState>((set, get) => ({
           ...prev.proof,
           stats: {
             ...prev.proof.stats,
-            globalStateRoot: nextHash,
+            stateRoot: nextHash,
           },
         },
       };

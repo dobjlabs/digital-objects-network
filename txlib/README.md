@@ -8,7 +8,7 @@ The SDK defines **actions** and **classes**. A class is a label for an object's 
 
 ## Transactions: verifying state changes
 
-A transaction verifies a set of state changes: newly created object states and nullifications of existing object states. It checks both that the initial states are valid (grounded in the prior global state) and that every change (creating a new object, mutating or deleting an existing one) has a valid cause.
+A transaction verifies a set of state changes: newly created object states and nullifications of existing object states. It checks both that the initial states are valid (grounded in the prior state) and that every change (creating a new object, mutating or deleting an existing one) has a valid cause.
 
 For this to work, actions need a way of saying "these are the changes I caused", and the system needs a way to look at any change and ask whether there is a valid cause for it: did this change originate in one of the permitted actions for the affected object's class?
 
@@ -22,7 +22,7 @@ Before the system can answer that question, the prover first produces **action s
 
 ## The hash chain
 
-Every event in a transaction (insert, mutate, delete) is recorded as one step of a chained hash. For each event a small per-event hash is computed (insert: `H({}, new)`; mutate: `H(old, new)`; delete: `H(old, {})`, where `{}` is the empty value) and folded into the running chain (`chain = H(prev_chain, event_hash)`). The chain is the canonical, ordering-preserving commitment to "what happened, in what order".
+Every event in a transaction (insert, mutate, delete) is recorded as one step of a chained hash. For each event a small per-event hash is computed (insert: `H({}, new)`; mutate: `H(old, new)`; delete: `H(old, {})`, where `{}` is the empty value) and folded into the running chain (`chain = H(prev_chain, event_hash)`). The chain is the definitive, ordering-preserving commitment to "what happened, in what order".
 
 An **action's range** is the pair `(chain_start, chain_end)` that brackets the action's events. The first event in the action takes `chain_start` as its `prev_chain`; the last event produces `chain_end`. The action statement commits to its range publicly so other proofs can match against it.
 

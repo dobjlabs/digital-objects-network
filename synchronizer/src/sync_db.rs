@@ -74,12 +74,12 @@ impl SyncDb {
 
     /// Create the Postgres schema used by the synchronizer control plane.
     ///
-    /// `canonical_slots` stores per-slot metadata plus the committed state roots and metadata
+    /// `state_slots` stores per-slot metadata plus the committed state roots and metadata
     /// as regular SQL columns. The highest committed slot is the current state head.
     async fn bootstrap(&self) -> Result<()> {
         let statements = [
             r#"
-            CREATE TABLE IF NOT EXISTS canonical_slots (
+            CREATE TABLE IF NOT EXISTS state_slots (
                 slot INTEGER PRIMARY KEY,
                 block_root BYTEA NULL,
                 parent_root BYTEA NULL,
@@ -99,13 +99,13 @@ impl SyncDb {
             )
             "#,
             r#"
-            CREATE UNIQUE INDEX IF NOT EXISTS canonical_slots_block_root_uq
-                ON canonical_slots(block_root)
+            CREATE UNIQUE INDEX IF NOT EXISTS state_slots_block_root_uq
+                ON state_slots(block_root)
                 WHERE block_root IS NOT NULL
             "#,
             r#"
-            CREATE INDEX IF NOT EXISTS canonical_slots_state_root_block_idx
-                ON canonical_slots(execution_block_number)
+            CREATE INDEX IF NOT EXISTS state_slots_state_root_block_idx
+                ON state_slots(execution_block_number)
                 WHERE current_state_root IS NOT NULL AND execution_block_number IS NOT NULL
             "#,
             // Reverse index from object commitment to its position in the created
@@ -137,7 +137,7 @@ impl SyncDb {
         let row = sqlx::query(
             r#"
             SELECT slot
-            FROM canonical_slots
+            FROM state_slots
             ORDER BY slot DESC
             LIMIT 1
             "#,
@@ -193,7 +193,7 @@ impl SyncDb {
                    head_created_count,
                    head_nullifier_count,
                    head_state_root_count
-            FROM canonical_slots
+            FROM state_slots
             ORDER BY slot DESC
             LIMIT 1
             "#,
@@ -209,7 +209,7 @@ impl SyncDb {
             .map(|block_number| block_number as u32);
 
         let head = decode_head_row(&row).with_context(|| {
-            format!("canonical_slots row for slot {last_processed_slot} had invalid head data")
+            format!("state_slots row for slot {last_processed_slot} had invalid head data")
         })?;
 
         Ok(CurrentSnapshot {
@@ -221,7 +221,7 @@ impl SyncDb {
 
     /// Return the beacon block root for a committed slot.
     pub async fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
-        let row = sqlx::query("SELECT block_root FROM canonical_slots WHERE slot = $1")
+        let row = sqlx::query("SELECT block_root FROM state_slots WHERE slot = $1")
             .bind(slot as i32)
             .fetch_optional(&self.pool)
             .await?;
@@ -257,7 +257,7 @@ impl SyncDb {
 
         sqlx::query(
             r#"
-            INSERT INTO canonical_slots(
+            INSERT INTO state_slots(
                 slot,
                 block_root,
                 parent_root,
@@ -323,7 +323,7 @@ impl SyncDb {
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query("DELETE FROM canonical_slots WHERE slot > $1")
+        sqlx::query("DELETE FROM state_slots WHERE slot > $1")
             .bind(keep_slot as i32)
             .execute(&mut *tx)
             .await?;
@@ -405,7 +405,7 @@ impl SyncDb {
         let rows = sqlx::query(
             r#"
             SELECT current_state_root, execution_block_number
-            FROM canonical_slots
+            FROM state_slots
             WHERE current_state_root IS NOT NULL
               AND execution_block_number IS NOT NULL
               AND execution_block_number >= $1

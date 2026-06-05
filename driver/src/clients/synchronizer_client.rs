@@ -33,7 +33,7 @@ pub struct SynchronizerHead {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynchronizerMembership {
-    /// Object commitments present in the canonical global created set.
+    /// Object commitments present in the global created set.
     pub created_objects: HashSet<Hash>,
     pub on_chain_nullifiers: HashSet<Hash>,
 }
@@ -52,8 +52,8 @@ pub trait SynchronizerClient: Send + Sync {
         nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership>;
     /// Wait until a transaction has landed: every object commitment it produces
-    /// is in the canonical created set and every nullifier it emits is in the
-    /// canonical nullifier set. Returns the resulting head once the whole union
+    /// is in the created set and every nullifier it emits is in the
+    /// nullifier set. Returns the resulting head once the whole union
     /// is present, or errors on timeout.
     fn wait_for_tx(
         &self,
@@ -79,7 +79,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
         )?;
         let current_state_root = payload
             .current_state_root
-            .ok_or_else(|| anyhow!("synchronizer has no canonical grounded state yet"))?;
+            .ok_or_else(|| anyhow!("synchronizer has no grounded state yet"))?;
         Ok(SynchronizerHead { current_state_root })
     }
 
