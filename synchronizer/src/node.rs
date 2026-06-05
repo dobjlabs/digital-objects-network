@@ -49,8 +49,8 @@ struct SlotContext {
 /// Outcome of processing one beacon slot, ready to be committed.
 pub enum ProcessedSlot {
     /// Beacon produced no block for the slot. With no execution block there is
-    /// nothing to derive against, so the previous canonical head is carried
-    /// forward unchanged, committed under the new slot number to keep canonical
+    /// nothing to derive against, so the previous state head is carried
+    /// forward unchanged, committed under the new slot number to keep the
     /// slot history contiguous.
     Missing { slot: u32, carried_head: StateHead },
     /// Beacon produced a block and the state machine derived the slot against
@@ -104,7 +104,7 @@ impl Node {
         self.sync_db.current_head().await
     }
 
-    /// Rewind to `keep_slot` by deleting later canonical slot rows; the created
+    /// Rewind to `keep_slot` by deleting later slot rows; the created
     /// index rows those slots added are pruned in the same Postgres transaction.
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
         self.sync_db.rollback_to_slot(keep_slot).await
@@ -317,7 +317,7 @@ impl Node {
     }
 
     /// Parse the slot's blobs, prefetch the array positions of their created
-    /// commitments that already exist in canonical state, and derive the next
+    /// commitments that already exist in committed state, and derive the next
     /// head.
     ///
     /// The prefetch is one batched query against the created index, mirroring how
@@ -527,7 +527,7 @@ impl Node {
         })
     }
 
-    /// Commit one processed slot to Postgres as the new canonical head, writing
+    /// Commit one processed slot to Postgres as the new state head, writing
     /// its created-index rows in the same transaction.
     pub async fn commit_slot(&self, processed: &ProcessedSlot) -> Result<()> {
         match processed {

@@ -1,7 +1,7 @@
 use pod2::middleware::{Hash, EMPTY_HASH};
 use txlib::StateHeader;
 
-/// The Merkle roots that reopen the canonical persistent containers.
+/// The Merkle roots that reopen the persistent containers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StateRoots {
     /// Root of the persistent global created-object set (a pod2 `Array`).
@@ -31,17 +31,17 @@ impl StateRoots {
     }
 }
 
-/// Non-root metadata tracked alongside the canonical roots.
+/// Non-root metadata tracked alongside the state roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StateMetadata {
-    /// Current canonical state root for this head, if one exists.
+    /// Current state root for this head, if one exists.
     pub current_state_root: Option<Hash>,
     /// Execution block number associated with `current_state_root`.
     pub current_block_number: Option<u32>,
-    /// Number of objects in the canonical global created set. The array is
+    /// Number of objects in the global created set. The array is
     /// 0-indexed, so this doubles as the next array slot.
     pub created_count: u64,
-    /// Number of spent nullifiers in the canonical state.
+    /// Number of spent nullifiers in the committed state.
     pub nullifier_count: u64,
     /// Number of state root entries in the persistent history array.
     pub state_root_count: u64,
@@ -65,15 +65,15 @@ impl StateMetadata {
     }
 }
 
-/// Canonical head snapshot used across sync, query, and storage code.
+/// State head snapshot used across sync, query, and storage code.
 ///
 /// `roots` are what reopen the persistent Merkle containers in RocksDB.
-/// `metadata` is the auxiliary canonical state carried alongside those roots.
+/// `metadata` is the auxiliary state carried alongside those roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StateHead {
-    /// Merkle roots for the canonical persistent containers.
+    /// Merkle roots for the persistent containers.
     pub roots: StateRoots,
-    /// Non-root metadata associated with the same canonical head.
+    /// Non-root metadata associated with the same state head.
     pub metadata: StateMetadata,
 }
 

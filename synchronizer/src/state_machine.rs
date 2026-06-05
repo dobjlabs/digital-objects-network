@@ -32,7 +32,7 @@ struct WorkingState {
     nullifiers: Set,
     /// Persistent full state root history array opened from `head.roots.next_state_history`.
     next_state_history: Array,
-    /// Recent canonical state roots keyed by hash for grounding validation.
+    /// Recent state roots keyed by hash for grounding validation.
     recent_state_roots: HashMap<Hash, i64>,
     /// Commitments this slot appended to `created`, keyed to their array
     /// indices. Doubles as the within-slot duplicate check: the persistent
@@ -42,7 +42,7 @@ struct WorkingState {
     created_added: HashMap<Hash, i64>,
 }
 
-/// One slot's derivation result: the candidate next canonical head plus the
+/// One slot's derivation result: the candidate next state head plus the
 /// object commitments (with array indices) it appended to `created`. The caller
 /// persists the additions to the created index when committing the slot.
 pub struct DerivedSlot {
@@ -52,9 +52,9 @@ pub struct DerivedSlot {
 
 /// Domain logic for the synchronizer: proof verification, state validation, and Merkle storage.
 ///
-/// `StateMachine` is intentionally decoupled from networking and canonical-head ownership.
+/// `StateMachine` is intentionally decoupled from networking and state-head ownership.
 /// Callers supply the `StateHead` they want to operate against, and Postgres remains the sole
-/// source of truth for which head is canonical.
+/// source of truth for which head is current.
 pub struct StateMachine {
     /// RocksDB-backed app-state store used to open the created, nullifier, and
     /// state root containers during derivation.
@@ -112,7 +112,7 @@ impl StateMachine {
     /// apply it, or skip it (fail-soft) on a grounding or duplicate violation.
     ///
     /// Validation order:
-    /// 1. `payload.state_root` must exist in the recent canonical state root window
+    /// 1. `payload.state_root` must exist in the recent state root window
     /// 2. that grounding must be within `MAX_STATE_ROOT_AGE_BLOCKS`
     /// 3. created-object commitments must not collide -- within the payload, with
     ///    objects added earlier this slot, or with prior committed state
@@ -125,7 +125,7 @@ impl StateMachine {
     /// On success it appends each created commitment to the in-progress array
     /// (recording the addition in `created_added`), inserts each nullifier, and
     /// bumps the counts. Mutating the container handles may materialize Merkle
-    /// nodes in RocksDB, but nothing becomes canonical until the caller commits
+    /// nodes in RocksDB, but nothing is committed until the caller commits
     /// the resulting head.
     fn apply_payload(
         &self,
@@ -230,7 +230,7 @@ impl StateMachine {
         }
     }
 
-    /// Derive the next canonical head for one execution slot from a caller
+    /// Derive the next state head for one execution slot from a caller
     /// provided base head and the slot's already-parsed payloads.
     ///
     /// It:
@@ -238,16 +238,16 @@ impl StateMachine {
     ///   `base_head.roots`
     /// - seeds the per-slot `WorkingState` with the caller-provided recent-state root window
     /// - applies every payload via `apply_payload`, using `prior_indices` (the created-object
-    ///   commitments already canonical as of the base head, with their array positions,
+    ///   commitments already committed as of the base head, with their array positions,
     ///   prefetched from the created index) for the creation-collision check
     /// - computes the next state root from the updated created/nullifiers roots and the prior
     ///   state root-history root committed into the resulting `StateHeader`
     /// - appends that new state root to the full history array and returns the resulting `StateHead`
     ///   together with the object commitments this slot added, as a `DerivedSlot`
     ///
-    /// The returned head is only a candidate next canonical state. By the time this method
+    /// The returned head is only a candidate next state. By the time this method
     /// returns, RocksDB may already contain Merkle nodes for the derived containers, but the
-    /// head does not become canonical until the caller persists it (and the `created_added`
+    /// head is not committed until the caller persists it (and the `created_added`
     /// index rows) in Postgres.
     ///
     /// Empty or fully rejected slots still produce a new head with the same created and

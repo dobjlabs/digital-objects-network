@@ -13,7 +13,7 @@ use crate::{
     head::{StateHead, StateMetadata, StateRoots},
 };
 
-/// Current canonical head plus progress metadata loaded from Postgres.
+/// Current state head plus progress metadata loaded from Postgres.
 #[derive(Debug, Clone, Copy)]
 pub struct CurrentSnapshot {
     pub head: StateHead,
@@ -21,7 +21,7 @@ pub struct CurrentSnapshot {
     pub last_processed_block_number: Option<u32>,
 }
 
-/// Canonical slot metadata written when a slot is committed.
+/// Slot metadata written when a slot is committed.
 #[derive(Debug, Clone, Copy)]
 pub struct CommittedSlotRecord {
     pub slot: u32,
@@ -33,7 +33,7 @@ pub struct CommittedSlotRecord {
 }
 
 impl CommittedSlotRecord {
-    /// Record for a slot with no canonical block content: every block field
+    /// Record for a slot with no block content: every block field
     /// absent, marked empty.
     pub fn empty(slot: u32) -> Self {
         Self {
@@ -58,7 +58,7 @@ impl SyncDb {
     /// The database must already exist — provisioning is an explicit operator
     /// step so the app role does not need the `CREATEDB` privilege.
     ///
-    /// Postgres is the sole source of canonical heads. Each committed slot stores its
+    /// Postgres is the sole source of state heads. Each committed slot stores its
     /// `StateHead`,
     /// while RocksDB only stores the content-addressed Merkle node/value backing store.
     pub async fn connect(database_url: &str) -> Result<Self> {
@@ -74,8 +74,8 @@ impl SyncDb {
 
     /// Create the Postgres schema used by the synchronizer control plane.
     ///
-    /// `canonical_slots` stores per-slot metadata plus the committed canonical roots and metadata
-    /// as regular SQL columns. The highest committed slot is the current canonical head.
+    /// `canonical_slots` stores per-slot metadata plus the committed state roots and metadata
+    /// as regular SQL columns. The highest committed slot is the current state head.
     async fn bootstrap(&self) -> Result<()> {
         let statements = [
             r#"
@@ -112,7 +112,7 @@ impl SyncDb {
             // `Array`. A materialized view of committed state: rows are inserted in
             // the same transaction that commits their slot and deleted in the same
             // transaction that rolls the slot back, so the index never diverges
-            // from the canonical head. `slot` carries the rollback axis.
+            // from the state head. `slot` carries the rollback axis.
             r#"
             CREATE TABLE IF NOT EXISTS created_index (
                 commitment BYTEA PRIMARY KEY,
@@ -148,8 +148,8 @@ impl SyncDb {
         Ok(row.map(|row| row.get::<i32, _>("slot") as u32))
     }
 
-    /// Insert the bootstrap canonical row when the database is still empty, and return the
-    /// highest committed canonical slot afterward.
+    /// Insert the bootstrap row when the database is still empty, and return the
+    /// highest committed slot afterward.
     pub async fn ensure_bootstrap_row(&self, bootstrap_slot: CommittedSlotRecord) -> Result<u32> {
         if let Some(stored_last) = self.latest_committed_slot().await? {
             return Ok(stored_last);
@@ -160,24 +160,24 @@ impl SyncDb {
         Ok(bootstrap_slot.slot)
     }
 
-    /// Return the last canonical slot fully committed by the synchronizer.
+    /// Return the last committed slot fully committed by the synchronizer.
     pub async fn last_processed_slot(&self) -> Result<u32> {
         self.latest_committed_slot()
             .await?
             .ok_or_else(|| anyhow!("sync metadata not initialized"))
     }
 
-    /// Return the current canonical head without sync-progress metadata.
+    /// Return the current state head without sync-progress metadata.
     pub async fn current_head(&self) -> Result<StateHead> {
         Ok(self.current_snapshot().await?.head)
     }
 
-    /// Return the current canonical head plus sync progress from one Postgres snapshot.
+    /// Return the current state head plus sync progress from one Postgres snapshot.
     pub async fn current_snapshot(&self) -> Result<CurrentSnapshot> {
         Self::read_snapshot(&self.pool).await
     }
 
-    /// Read the current canonical head plus progress over any executor (pool or
+    /// Read the current state head plus progress over any executor (pool or
     /// transaction), so a caller can pin it to the same snapshot as other reads.
     async fn read_snapshot<'e, E: PgExecutor<'e>>(executor: E) -> Result<CurrentSnapshot> {
         let row = sqlx::query(
@@ -219,7 +219,7 @@ impl SyncDb {
         })
     }
 
-    /// Return the canonical beacon block root for a committed slot.
+    /// Return the beacon block root for a committed slot.
     pub async fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
         let row = sqlx::query("SELECT block_root FROM canonical_slots WHERE slot = $1")
             .bind(slot as i32)
@@ -242,7 +242,7 @@ impl SyncDb {
         }
     }
 
-    /// Commit one new canonical slot as the new highest canonical slot, writing
+    /// Commit one new slot as the new highest slot, writing
     /// its created-index rows in the same transaction so the index is always
     /// consistent with the committed head.
     ///
@@ -317,7 +317,7 @@ impl SyncDb {
         Ok(())
     }
 
-    /// Delete canonical slots after `keep_slot`, leaving the highest remaining
+    /// Delete slots after `keep_slot`, leaving the highest remaining
     /// row as current, and prune the created-index rows those slots added in the
     /// same transaction.
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
@@ -393,7 +393,7 @@ impl SyncDb {
         Ok((snapshot, indices))
     }
 
-    /// Return the recent canonical state roots at or above the given execution block number.
+    /// Return the recent state roots at or above the given execution block number.
     pub async fn recent_state_roots(
         &self,
         min_block_number: Option<u32>,
@@ -749,7 +749,7 @@ mod tests {
         assert_eq!(indices.get(&b), Some(&2));
 
         // Rolling back to slot 1 prunes slot 2's index row in the same
-        // transaction as the canonical-slot delete.
+        // transaction as the slot delete.
         sync_db.rollback_to_slot(1).await?;
         let indices = sync_db.created_indices(&[a, b]).await?;
         assert_eq!(indices.get(&a), Some(&1));

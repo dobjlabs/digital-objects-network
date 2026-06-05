@@ -29,25 +29,25 @@ const MAX_HASH_QUERY_ITEMS: usize = 256;
 struct AppState {
     /// RocksDB-backed read path used for membership checks and Merkle proofs.
     app_db: AppDb,
-    /// Postgres-backed canonical head and sync-progress store.
+    /// Postgres-backed state head and sync-progress store.
     sync_db: Arc<SyncDb>,
 }
 
 /// Internal view of head/progress fields shaped for HTTP responses.
 struct HeadSnapshot {
-    /// Last canonical slot fully committed by the synchronizer.
+    /// Last slot fully committed by the synchronizer.
     last_processed_slot: u32,
     /// Execution block number associated with the last processed slot, if any.
     last_processed_block_number: Option<u32>,
-    /// Current canonical state root, if one exists.
+    /// Current state root, if one exists.
     current_state_root: Option<Hash>,
     /// Execution block number committed inside the current state root, if any.
     current_block_number: Option<i64>,
-    /// Number of objects in the canonical global created set.
+    /// Number of objects in the global created set.
     created_count: usize,
-    /// Number of spent nullifiers in canonical state.
+    /// Number of spent nullifiers in committed state.
     nullifier_count: usize,
-    /// Number of state root entries in canonical history.
+    /// Number of state root entries in chain history.
     state_root_count: usize,
 }
 
@@ -228,7 +228,7 @@ async fn post_grounding_witness(
     let state_header = head.current_state_header().ok_or_else(|| {
         (
             StatusCode::CONFLICT,
-            "synchronizer has no canonical grounded state yet".to_string(),
+            "synchronizer has no grounded state yet".to_string(),
         )
     })?;
     let state_root = head
