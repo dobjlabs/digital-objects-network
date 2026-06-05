@@ -73,6 +73,14 @@ pub struct SubmitProofRequest {
     pub client_ref: Option<String>,
 }
 
+/// Request body for looking up a relay job by its proof idempotency key.
+#[cfg(feature = "chain")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LookupByTxFinalRequest {
+    /// Proof commitment (`tx_final`) to look up.
+    pub tx_final: Hash,
+}
+
 /// Submit response returns the created/existing job identity and key metadata.
 #[cfg(feature = "chain")]
 #[derive(Debug, Clone, Serialize, Deserialize)]

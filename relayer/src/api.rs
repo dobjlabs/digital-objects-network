@@ -13,10 +13,11 @@ use tokio::sync::watch;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 use wire_types::relayer::{
-    HealthResponse, JobStatusResponse, SubmitProofRequest, SubmitProofResponse,
+    HealthResponse, JobStatusResponse, LookupByTxFinalRequest, SubmitProofRequest,
+    SubmitProofResponse,
 };
 
-use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, decode_hash_hex, proof::BlobParser};
+use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
 
 use crate::{
     db::{Db, InsertJobResult},
@@ -102,10 +103,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/v1/proofs", post(submit_proof))
         .route("/api/v1/proofs/{job_id}", get(get_proof))
-        .route(
-            "/api/v1/proofs/by-tx-final/{tx_final}",
-            get(get_proof_by_tx_final),
-        )
+        .route("/api/v1/proofs/by-tx-final", post(get_proof_by_tx_final))
         .with_state(state)
 }
 
@@ -221,18 +219,18 @@ async fn get_proof(
 
 async fn get_proof_by_tx_final(
     State(app_state): State<AppState>,
-    Path(tx_final): Path<String>,
+    Json(body): Json<LookupByTxFinalRequest>,
 ) -> Result<Json<JobStatusResponse>, ApiError> {
-    debug!(tx_final = %tx_final, "Handling relay job lookup by tx_final");
+    debug!(tx_final = %format_args!("{:#}", body.tx_final), "Handling relay job lookup by tx_final");
 
-    let tx_final_hash = decode_hash_hex(&tx_final)
-        .map_err(|err| ApiError::BadRequest(format!("invalid tx_final: {err}")))?;
     let job = app_state
         .db
-        .get_job_by_tx_final(&tx_final_hash)
+        .get_job_by_tx_final(&body.tx_final)
         .await
         .map_err(ApiError::Internal)?
-        .ok_or_else(|| ApiError::NotFound(format!("job not found for tx_final: {tx_final}")))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!("job not found for tx_final: {:#}", body.tx_final))
+        })?;
 
     Ok(Json(to_status_response(job)))
 }

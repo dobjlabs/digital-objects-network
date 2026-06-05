@@ -2,9 +2,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, encode_hash_hex};
+use common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES;
 use pod2::middleware::Hash;
-use wire_types::relayer::{JobStatus, JobStatusResponse, SubmitProofRequest, SubmitProofResponse};
+use wire_types::relayer::{
+    JobStatus, JobStatusResponse, LookupByTxFinalRequest, SubmitProofRequest, SubmitProofResponse,
+};
 
 pub const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
 pub const RELAYER_POLL_INTERVAL_MS: u64 = 1500;
@@ -200,13 +202,16 @@ impl RelayerClient for HttpRelayerClient {
 
     fn lookup_tx_hash(&self, relayer_api_url: &str, tx_final: &Hash) -> Result<Option<String>> {
         let endpoint = format!(
-            "{}/api/v1/proofs/by-tx-final/{}",
-            relayer_api_url.trim_end_matches('/'),
-            encode_hash_hex(tx_final)
+            "{}/api/v1/proofs/by-tx-final",
+            relayer_api_url.trim_end_matches('/')
         );
+        let request = LookupByTxFinalRequest {
+            tx_final: *tx_final,
+        };
         let client = reqwest::blocking::Client::new();
         let response = client
-            .get(&endpoint)
+            .post(&endpoint)
+            .json(&request)
             .send()
             .map_err(|err| anyhow!("failed to query relayer by tx_final at {endpoint}: {err}"))?;
 
