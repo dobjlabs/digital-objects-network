@@ -100,7 +100,7 @@ Use `just` (recipes in `justfile`):
 - **`txlib/src/lib.rs`** — `StateRoot` (typed record), `GroundingWitness`, `Tx`, `TxBuilder`. No `Object` struct: object state is a `pod2::Dictionary` whose `identity` field is the commitment of its initial form (`with_identity`), stable across mutations.
 - **`txlib/src/predicates/txlib.podlang`** — the transaction state machine. See "txlib and the SDK" below.
 - **`synchronizer/src/state_machine.rs`** — `MAX_GSR_AGE_BLOCKS = 300`. Pure derivation: takes a base head + recent GSRs + decoded blob bytes; returns a candidate head.
-- **`synchronizer/src/api.rs`** — Axum routes (`/v1/state/head`, `/v1/state/membership`, `/v1/state/nullifier/contains`, `/v1/state/tx/contains`, `/v1/state/tx/{tx_hash}`, `/v1/txlib/grounding-witness`, plus `/healthz`, `/sync-progress`).
+- **`synchronizer/src/api.rs`** — Axum routes (`/v1/state/head`, `/v1/state/membership`, `/v1/state/object/contains`, `/v1/state/nullifier/contains`, `/v1/txlib/grounding-witness`, plus `/healthz`, `/sync-progress`).
 - **`common/src/shrink.rs`** — Plonky2 wrapper circuit that re-proves a MainPod in a smaller circuit so it fits in a blob.
 - **`common/src/payload.rs`** — blob payload encoding (`PAYLOAD_MAGIC`, proof type, `tx_final`, state root, nullifiers, and the `live` object commitments).
 - **`mcp/src/lib.rs`** — `DEFAULT_PORT = 7718`; crate is named `craft-mcp` (depend on it as `craft-mcp = { path = "../mcp" }`). dobjd runs MCP at `DOBJD_PORT + 1`.
