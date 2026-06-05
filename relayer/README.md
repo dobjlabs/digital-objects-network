@@ -8,7 +8,7 @@ Service that accepts zk-craft proof payloads over HTTP and relays them to Ethere
 2. Verifies payload format/proof using shared parser logic from `common`.
 3. Persists relay jobs in Postgres with idempotency keyed by `tx_final`.
 4. Runs a single worker that submits blob transactions and polls receipts.
-5. Exposes job status (`GET /api/v1/proofs/{job_id}`) and health (`GET /healthz`).
+5. Exposes job status (`GET /api/v1/proofs/{job_id}`), lookup by idempotency key (`POST /api/v1/proofs/by-tx-final`), and health (`GET /healthz`).
 
 ## Storage model
 
@@ -19,8 +19,8 @@ Service that accepts zk-craft proof payloads over HTTP and relays them to Ethere
 - `job_id TEXT PRIMARY KEY`
 - `status TEXT NOT NULL CHECK (status IN ('queued','sending','submitted','confirmed','failed'))`
 - `payload_bytes BYTEA NOT NULL`
-- `tx_final TEXT NOT NULL UNIQUE`
-- `state_root_hash TEXT NOT NULL`
+- `tx_final BYTEA NOT NULL UNIQUE`
+- `state_root_hash BYTEA NOT NULL`
 - `client_ref TEXT NULL`
 - `attempt_count INTEGER NOT NULL`
 - `tx_hash TEXT NULL`
@@ -30,8 +30,11 @@ Service that accepts zk-craft proof payloads over HTTP and relays them to Ethere
 - `next_attempt_at BIGINT NULL`
 - `nonce BIGINT NULL`
 - `bump_count INTEGER NOT NULL DEFAULT 0`
+- `prev_tx_hashes TEXT[] NOT NULL DEFAULT '{}'`
 - `created_at BIGINT NOT NULL`
 - `updated_at BIGINT NOT NULL`
+
+`tx_final` and `state_root_hash` are pod2 hashes stored as their 32-byte `BYTEA` form; `tx_hash` and `prev_tx_hashes` are Ethereum tx hashes kept as hex text.
 
 Indexes:
 
@@ -44,6 +47,7 @@ Indexes:
 - `GET /healthz` (no auth)
 - `POST /api/v1/proofs` (no auth)
 - `GET /api/v1/proofs/{job_id}` (no auth)
+- `POST /api/v1/proofs/by-tx-final` (no auth) — look up a job by its `tx_final`; JSON body `{ "tx_final": "<hash>" }`
 
 ## Required env vars
 

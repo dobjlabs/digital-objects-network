@@ -204,7 +204,7 @@ against those pinned roots; Merkle nodes are content-addressed and immutable
 by root, so a concurrent commit or rollback cannot change what the captured
 roots resolve to.
 
-Hash parsing accepts `0x`-prefixed or raw hex input; responses are normalized to lowercase `0x...`.
+Hashes in request and response bodies are pod2 `Hash` values, serialized as lowercase 64-character hex with no `0x` prefix; inputs must use that same form (a `0x` prefix or wrong length is rejected).
 
 ## Required env vars
 
