@@ -118,8 +118,8 @@ curl.exe -fsSL "$RELEASE/craft-basics.pexe" -o "$DOBJ\actions\craft-basics.pexe"
 ```bash
 cat > ~/.dobj/settings.json <<'EOF'
 {
-  "synchronizerApiUrl": "http://18.217.144.33:3000",
-  "relayerApiUrl": "http://18.217.144.33:3200"
+  "synchronizerApiUrl": "https://sync.don.pateldhvani.com",
+  "relayerApiUrl": "https://relay.don.pateldhvani.com"
 }
 EOF
 ```
@@ -132,8 +132,8 @@ EOF
 # .NET's WriteAllText is BOM-less on both PowerShell 5.1 and 7.
 $settings = @'
 {
-  "synchronizerApiUrl": "http://18.217.144.33:3000",
-  "relayerApiUrl": "http://18.217.144.33:3200"
+  "synchronizerApiUrl": "https://sync.don.pateldhvani.com",
+  "relayerApiUrl": "https://relay.don.pateldhvani.com"
 }
 '@
 [System.IO.File]::WriteAllText("$DOBJ\settings.json", $settings)

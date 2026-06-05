@@ -59,8 +59,8 @@ chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj ~/.dobj/bin/bitcraft-mcp-proxy
 #    somewhere else.
 cat > ~/.dobj/settings.json <<'EOF'
 {
-  "synchronizerApiUrl": "http://18.217.144.33:3000",
-  "relayerApiUrl": "http://18.217.144.33:3200"
+  "synchronizerApiUrl": "https://sync.don.pateldhvani.com",
+  "relayerApiUrl": "https://relay.don.pateldhvani.com"
 }
 EOF
 
@@ -98,8 +98,8 @@ Copy-Item "$tmp\craft-basics*.pexe" "$DOBJ\actions\craft-basics.pexe"
 # 5. (Optional) override endpoints — baked-in defaults are used otherwise.
 @'
 {
-  "synchronizerApiUrl": "http://18.217.144.33:3000",
-  "relayerApiUrl": "http://18.217.144.33:3200"
+  "synchronizerApiUrl": "https://sync.don.pateldhvani.com",
+  "relayerApiUrl": "https://relay.don.pateldhvani.com"
 }
 '@ | Set-Content -Path "$DOBJ\settings.json" -Encoding utf8
 

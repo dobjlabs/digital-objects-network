@@ -1,0 +1,75 @@
+# Self-host stack for the synchronizer and relayer: pulls the published GHCR
+# images and runs each as a single instance with a bundled Postgres. Run both,
+# or just the synchronizer to verify network state from chain data yourself:
+#
+#   cp deploy/.env.example deploy/.env    # fill in your endpoints
+#   docker compose -f deploy/compose.yaml up -d
+#   docker compose -f deploy/compose.yaml up -d synchronizer postgres   # verify-only
+#
+# The images must be published (or built locally - see README.md). Both services
+# are singletons: never scale either past one replica per database. For hardened
+# production (managed Postgres, secret-store key) see README.md.
+name: zkcraft
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Runs on first Postgres init to create the synchronizer and relayer databases.
+    configs:
+      - source: init-databases
+        target: /docker-entrypoint-initdb.d/init-databases.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  synchronizer:
+    image: ghcr.io/dobjlabs/zk-craft/synchronizer:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      HTTP_BIND: 0.0.0.0:3000
+      APP_STATE_DB_PATH: /var/lib/zkcraft/synchronizer-db
+      # Bundled Postgres by default; set SYNC_METADATA_DB_URL in .env to override
+      # (e.g. a managed/external Postgres).
+      SYNC_METADATA_DB_URL: ${SYNC_METADATA_DB_URL:-postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/synchronizer}
+    volumes:
+      - syncdata:/var/lib/zkcraft
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  relayer:
+    image: ghcr.io/dobjlabs/zk-craft/relayer:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      HTTP_BIND: 0.0.0.0:3200
+      # Bundled Postgres by default; set DB_URL in .env to override.
+      DB_URL: ${DB_URL:-postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/relayer}
+    ports:
+      - "3200:3200"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  syncdata:
+
+configs:
+  init-databases:
+    content: |
+      CREATE DATABASE synchronizer;
+      CREATE DATABASE relayer;

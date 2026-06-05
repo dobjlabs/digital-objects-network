@@ -103,8 +103,8 @@ Read on every `load_settings()` call from `~/.dobj/settings.json`:
 
 ```json
 {
-  "synchronizerApiUrl": "http://18.119.100.201:3000",
-  "relayerApiUrl": "http://18.119.100.201:3200"
+  "synchronizerApiUrl": "https://sync.don.pateldhvani.com",
+  "relayerApiUrl": "https://relay.don.pateldhvani.com"
 }
 ```
 

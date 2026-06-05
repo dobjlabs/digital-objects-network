@@ -1,0 +1,105 @@
+name: Images
+
+# Builds the synchronizer and relayer container images and pushes them to GHCR.
+#
+# Production runs amd64 (most container hosts) and GitHub's
+# Linux runners are amd64, so the build is native - no QEMU emulation. The
+# whole compile happens inside the Dockerfile's debian builder, scoped to
+# `-p synchronizer -p relayer`, so unlike the Rust CI workflows this needs no
+# Tauri/GTK packages on the runner - it only drives buildx.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# One build per ref; a newer push cancels an older in-flight run for that ref.
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write # push to GHCR via GITHUB_TOKEN
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Synchronizer image metadata
+        id: meta-synchronizer
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/synchronizer
+          # latest is pushed on every run via the explicit type=raw line below
+          # (latest=false turns off metadata-action's implicit semver-only one).
+          # Pin deploys to the immutable sha-<short>, not latest.
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
+
+      - name: Build and push synchronizer
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: synchronizer
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta-synchronizer.outputs.tags }}
+          labels: ${{ steps.meta-synchronizer.outputs.labels }}
+          # Single-arch image: skip the provenance attestation that would
+          # otherwise publish a multi-manifest index with an unknown/unknown entry.
+          provenance: false
+          # cargo-chef's dependency layer (pod2 + plonky2 + rocksdb) is the
+          # expensive part; persist it across runs so an unchanged-dependency
+          # build skips the multi-minute compile. The relayer build below reuses
+          # this same builder from the runner's local cache within the job.
+          cache-from: type=gha,scope=zkcraft-build
+          cache-to: type=gha,scope=zkcraft-build,mode=max
+
+      - name: Relayer image metadata
+        id: meta-relayer
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/relayer
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
+
+      - name: Build and push relayer
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: relayer
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta-relayer.outputs.tags }}
+          labels: ${{ steps.meta-relayer.outputs.labels }}
+          provenance: false
+          cache-from: type=gha,scope=zkcraft-build
+          cache-to: type=gha,scope=zkcraft-build,mode=max
