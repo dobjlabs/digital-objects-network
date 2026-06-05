@@ -13,8 +13,8 @@ use tokio::sync::watch;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 use wire_types::relayer::{
-    HealthResponse, JobStatusResponse, LookupByTxFinalRequest, SubmitProofRequest,
-    SubmitProofResponse,
+    HealthResponse, JobStatusResponse, SubmitProofRequest, SubmitProofResponse, TxHashEntry,
+    TxHashesByTxFinalRequest, TxHashesByTxFinalResponse,
 };
 
 use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
@@ -24,6 +24,10 @@ use crate::{
     model::{JobStatus, RelayJob},
     time_utils::now_ts,
 };
+
+/// Per-request cap on `tx_finals` accepted by `POST /api/v1/proofs/tx-hashes`.
+/// Clients chunk their lookups at or below this.
+const MAX_TX_HASH_QUERY_ITEMS: usize = 256;
 
 /// Shared API dependencies.
 #[derive(Clone)]
@@ -103,7 +107,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/v1/proofs", post(submit_proof))
         .route("/api/v1/proofs/{job_id}", get(get_proof))
-        .route("/api/v1/proofs/by-tx-final", post(get_proof_by_tx_final))
+        .route("/api/v1/proofs/tx-hashes", post(get_tx_hashes))
         .with_state(state)
 }
 
@@ -217,22 +221,31 @@ async fn get_proof(
     Ok(Json(to_status_response(job)))
 }
 
-async fn get_proof_by_tx_final(
+async fn get_tx_hashes(
     State(app_state): State<AppState>,
-    Json(body): Json<LookupByTxFinalRequest>,
-) -> Result<Json<JobStatusResponse>, ApiError> {
-    debug!(tx_final = %format_args!("{:#}", body.tx_final), "Handling relay job lookup by tx_final");
+    Json(body): Json<TxHashesByTxFinalRequest>,
+) -> Result<Json<TxHashesByTxFinalResponse>, ApiError> {
+    if body.tx_finals.len() > MAX_TX_HASH_QUERY_ITEMS {
+        return Err(ApiError::BadRequest(format!(
+            "tx_finals exceeds maximum item count: {} > {MAX_TX_HASH_QUERY_ITEMS}",
+            body.tx_finals.len()
+        )));
+    }
+    debug!(
+        count = body.tx_finals.len(),
+        "Handling relay tx-hash batch lookup"
+    );
 
-    let job = app_state
+    let results = app_state
         .db
-        .get_job_by_tx_final(&body.tx_final)
+        .tx_hashes_by_tx_finals(&body.tx_finals)
         .await
         .map_err(ApiError::Internal)?
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("job not found for tx_final: {:#}", body.tx_final))
-        })?;
+        .into_iter()
+        .map(|(tx_final, tx_hash)| TxHashEntry { tx_final, tx_hash })
+        .collect();
 
-    Ok(Json(to_status_response(job)))
+    Ok(Json(TxHashesByTxFinalResponse { results }))
 }
 
 fn to_submit_response(job: RelayJob) -> SubmitProofResponse {

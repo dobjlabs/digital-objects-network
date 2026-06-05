@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
@@ -5,11 +6,16 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES;
 use pod2::middleware::Hash;
 use wire_types::relayer::{
-    JobStatus, JobStatusResponse, LookupByTxFinalRequest, SubmitProofRequest, SubmitProofResponse,
+    JobStatus, JobStatusResponse, SubmitProofRequest, SubmitProofResponse,
+    TxHashesByTxFinalRequest, TxHashesByTxFinalResponse,
 };
 
 pub const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
 pub const RELAYER_POLL_INTERVAL_MS: u64 = 1500;
+
+/// Per-request cap on `tx_finals` sent to the relayer's `tx-hashes` endpoint.
+/// MUST stay at or below the server's `MAX_TX_HASH_QUERY_ITEMS`.
+const TX_HASH_BATCH_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayerConfirmation {
@@ -40,9 +46,14 @@ pub trait RelayerClient: Send + Sync {
         timeout_secs: u64,
         poll_interval_ms: u64,
     ) -> Result<RelayerConfirmation>;
-    /// Look up the current tx_hash for a job by its tx_final (proof commitment).
-    /// Returns `Ok(None)` if the relayer has no record for this tx_final.
-    fn lookup_tx_hash(&self, relayer_api_url: &str, tx_final: &Hash) -> Result<Option<String>>;
+    /// Resolve the current Ethereum tx hash for each given `tx_final` (proof
+    /// commitment), in one batched call. Commitments the relayer has no
+    /// broadcast hash for are omitted from the returned map.
+    fn lookup_tx_hashes(
+        &self,
+        relayer_api_url: &str,
+        tx_finals: &[Hash],
+    ) -> Result<HashMap<Hash, String>>;
 }
 
 #[derive(Debug, Default)]
@@ -200,38 +211,54 @@ impl RelayerClient for HttpRelayerClient {
         }
     }
 
-    fn lookup_tx_hash(&self, relayer_api_url: &str, tx_final: &Hash) -> Result<Option<String>> {
+    fn lookup_tx_hashes(
+        &self,
+        relayer_api_url: &str,
+        tx_finals: &[Hash],
+    ) -> Result<HashMap<Hash, String>> {
+        let mut resolved = HashMap::new();
+        if tx_finals.is_empty() {
+            return Ok(resolved);
+        }
+
         let endpoint = format!(
-            "{}/api/v1/proofs/by-tx-final",
+            "{}/api/v1/proofs/tx-hashes",
             relayer_api_url.trim_end_matches('/')
         );
-        let request = LookupByTxFinalRequest {
-            tx_final: *tx_final,
-        };
         let client = reqwest::blocking::Client::new();
-        let response = client
-            .post(&endpoint)
-            .json(&request)
-            .send()
-            .map_err(|err| anyhow!("failed to query relayer by tx_final at {endpoint}: {err}"))?;
 
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
+        // Chunk so a large pending inventory still resolves in one
+        // `sync_inventory` call, just spread across a few HTTP requests.
+        for chunk in tx_finals.chunks(TX_HASH_BATCH_LIMIT) {
+            let request = TxHashesByTxFinalRequest {
+                tx_finals: chunk.to_vec(),
+            };
+            let response = client
+                .post(&endpoint)
+                .json(&request)
+                .send()
+                .map_err(|err| anyhow!("failed to query relayer tx hashes at {endpoint}: {err}"))?;
+
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "relayer tx-hash lookup failed with {} {}: {}",
+                    status.as_u16(),
+                    status,
+                    body
+                ));
+            }
+
+            let payload: TxHashesByTxFinalResponse =
+                serde_json::from_str(&body).map_err(|err| {
+                    anyhow!("failed to decode relayer tx-hash response: {err}; body={body}")
+                })?;
+            for entry in payload.results {
+                resolved.insert(entry.tx_final, entry.tx_hash);
+            }
         }
 
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "relayer lookup by tx_final failed with {} {}: {}",
-                status.as_u16(),
-                status,
-                body
-            ));
-        }
-
-        let job: JobStatusResponse = serde_json::from_str(&body)
-            .map_err(|err| anyhow!("failed to decode relayer response: {err}; body={body}"))?;
-        Ok(job.tx_hash)
+        Ok(resolved)
     }
 }

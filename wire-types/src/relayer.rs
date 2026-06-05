@@ -73,12 +73,33 @@ pub struct SubmitProofRequest {
     pub client_ref: Option<String>,
 }
 
-/// Request body for looking up a relay job by its proof idempotency key.
+/// Batch request to resolve current Ethereum tx hashes for a set of proof
+/// commitments (`tx_final`). Used to refresh hashes that may have changed via
+/// fee-bump replacement.
 #[cfg(feature = "chain")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LookupByTxFinalRequest {
-    /// Proof commitment (`tx_final`) to look up.
+pub struct TxHashesByTxFinalRequest {
+    /// Proof commitments to resolve.
+    pub tx_finals: Vec<Hash>,
+}
+
+/// One resolved `(tx_final, current Ethereum tx hash)` pair.
+#[cfg(feature = "chain")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TxHashEntry {
+    /// Proof commitment the job is keyed by.
     pub tx_final: Hash,
+    /// Current Ethereum tx hash the relayer has broadcast for it.
+    pub tx_hash: String,
+}
+
+/// Batch response: one entry per requested `tx_final` that has a known,
+/// broadcast tx hash. Unknown or not-yet-broadcast commitments are omitted.
+#[cfg(feature = "chain")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TxHashesByTxFinalResponse {
+    /// Resolved hashes, in no particular order.
+    pub results: Vec<TxHashEntry>,
 }
 
 /// Submit response returns the created/existing job identity and key metadata.

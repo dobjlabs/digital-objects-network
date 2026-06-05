@@ -238,8 +238,12 @@ impl RelayerClient for MockRelayer {
         })
     }
 
-    fn lookup_tx_hash(&self, _relayer_api_url: &str, _tx_final: &Hash) -> Result<Option<String>> {
-        Ok(Some("0xtx".to_string()))
+    fn lookup_tx_hashes(
+        &self,
+        _relayer_api_url: &str,
+        tx_finals: &[Hash],
+    ) -> Result<HashMap<Hash, String>> {
+        Ok(tx_finals.iter().map(|h| (*h, "0xtx".to_string())).collect())
     }
 }
 
