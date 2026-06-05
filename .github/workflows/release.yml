@@ -49,9 +49,20 @@ env:
   # notes via envsubst. Change here, both move together.
   DEFAULT_SYNCHRONIZER_API_URL: https://sync.don.pateldhvani.com
   DEFAULT_RELAYER_API_URL: https://relay.don.pateldhvani.com
+  # Public repo hosting the release artifacts. This source repo is private
+  # and GitHub has no public-releases-on-private-repo option, so releases
+  # are published over there: end users download without auth, and the
+  # draft-then-publish gate still applies (drafts on a public repo are
+  # invisible until published). Uploading cross-repo needs
+  # RELEASES_REPO_TOKEN, a fine-grained PAT with contents read/write on
+  # that one repo. Publishing a release creates the tag in that repo
+  # (pointing at its README commit); the source tag lives only here.
+  RELEASES_REPO: dobjlabs/zk-craft-releases
 
+# Release uploads go to RELEASES_REPO via RELEASES_REPO_TOKEN, so the
+# workflow's own token only needs checkout access.
 permissions:
-  contents: write
+  contents: read
 
 defaults:
   run:
@@ -364,6 +375,8 @@ jobs:
       - name: Upload to draft release
         uses: softprops/action-gh-release@v2
         with:
+          repository: ${{ env.RELEASES_REPO }}
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
           files: |
             dobjd-${{ matrix.target }}.tar.gz
             dobj-${{ matrix.target }}.tar.gz
@@ -414,6 +427,8 @@ jobs:
       - name: Upload to draft release
         uses: softprops/action-gh-release@v2
         with:
+          repository: ${{ env.RELEASES_REPO }}
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
           files: ${{ steps.find.outputs.pexe }}
           tag_name: ${{ env.RELEASE_TAG }}
           draft: true
