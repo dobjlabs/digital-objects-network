@@ -46,6 +46,23 @@ dev: ensure-db ensure-plugins ensure-mcp
 dev-remote: ensure-remote-settings ensure-plugins ensure-mcp
     mprocs --config mprocs.remote.yaml
 
+# Block (up to ~5 min) until an HTTP endpoint responds, then return. mprocs
+# uses this to launch synchronizer -> relayer -> dobjd -> web -> desktop in
+# order, each gated on the previous one's health, so they don't race to
+# cold-build the shared proving-circuit cache on first run.
+wait-health URL:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "waiting for {{URL}} ..."
+    for _ in $(seq 1 600); do
+        if curl -sf "{{URL}}" >/dev/null 2>&1; then
+            echo "{{URL}} is up"
+            exit 0
+        fi
+        sleep 0.5
+    done
+    echo "timed out waiting for {{URL}}; starting anyway"
+
 # Idempotently point ~/.dobj/settings.json at the hosted synchronizer + relayer
 ensure-remote-settings:
     @mkdir -p ~/.dobj

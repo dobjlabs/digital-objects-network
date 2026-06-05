@@ -9,6 +9,7 @@ pub mod paths;
 mod pexe_catalog;
 mod settings;
 mod types;
+mod warm;
 
 #[cfg(test)]
 mod tests;
@@ -26,3 +27,4 @@ pub use crate::types::{
     ActionQuery, DriverPaths, ExecuteActionInput, ExecuteActionResult, ExecutionReporter,
     ExecutionStepContext, NoopExecutionReporter, ObjectQuery,
 };
+pub use crate::warm::warm_proving_circuits;

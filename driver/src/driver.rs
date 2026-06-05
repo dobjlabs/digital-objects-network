@@ -66,7 +66,13 @@ pub struct DriverDeps {
 impl DriverDeps {
     /// Build deps with a catalog loaded from `paths.actions_dir`.
     pub fn load(paths: &DriverPaths) -> Result<Self> {
+        let start = std::time::Instant::now();
+        log::info!(
+            "loading action catalog from {}...",
+            paths.actions_dir.display()
+        );
         let catalog = PexeCatalog::load(&paths.actions_dir)?;
+        log::info!("action catalog loaded in {:?}", start.elapsed());
         if catalog.plugin_count() == 0 {
             log::warn!(
                 "no .pexe plugins installed in {}; run `just install-plugins`",
