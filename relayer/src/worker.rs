@@ -1,7 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Result};
-use common::encode_hash_hex;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
@@ -124,8 +123,8 @@ async fn send_queued_job(
         job_id = %job.job_id,
         attempt = job.attempt_count,
         payload_bytes = job.payload_bytes.len(),
-        tx_final = %encode_hash_hex(&job.tx_final),
-        state_root_hash = %encode_hash_hex(&job.state_root_hash),
+        tx_final = %format_args!("{:#}", job.tx_final),
+        state_root_hash = %format_args!("{:#}", job.state_root_hash),
         nonce,
         "Submitting relay payload to Ethereum"
     );

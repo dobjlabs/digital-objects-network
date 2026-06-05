@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use common::{encode_hash_hex, payload::Payload, proof::BlobParser};
+use common::{payload::Payload, proof::BlobParser};
 use pod2::middleware::{containers::Array, containers::Set, Hash, Value};
 use tracing::{info, warn};
 
@@ -324,8 +324,7 @@ impl StateMachine {
         let current_gsr = head
             .metadata
             .current_gsr
-            .as_ref()
-            .map(encode_hash_hex)
+            .map(|gsr| format!("{gsr:#}"))
             .unwrap_or_else(|| "none".to_string());
         info!(
             created_count = head.metadata.created_count,

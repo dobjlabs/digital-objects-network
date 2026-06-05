@@ -16,9 +16,7 @@ use wire_types::relayer::{
     HealthResponse, JobStatusResponse, SubmitProofRequest, SubmitProofResponse,
 };
 
-use common::{
-    blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, decode_hash_hex, encode_hash_hex, proof::BlobParser,
-};
+use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, decode_hash_hex, proof::BlobParser};
 
 use crate::{
     db::{Db, InsertJobResult},
@@ -176,7 +174,7 @@ async fn submit_proof(
         InsertJobResult::Inserted => {
             info!(
                 job_id = %job.job_id,
-                tx_final = %encode_hash_hex(&job.tx_final),
+                tx_final = %format_args!("{:#}", job.tx_final),
                 payload_bytes = job.payload_bytes.len(),
                 "Accepted new relay job"
             );
@@ -187,7 +185,7 @@ async fn submit_proof(
             info!(
                 job_id = %existing.job_id,
                 status = existing.status.as_str(),
-                tx_final = %encode_hash_hex(&existing.tx_final),
+                tx_final = %format_args!("{:#}", existing.tx_final),
                 "Idempotent insert returned existing relay job"
             );
             (StatusCode::OK, to_submit_response(existing))
