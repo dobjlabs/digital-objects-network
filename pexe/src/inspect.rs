@@ -17,9 +17,10 @@ use sdk::{Dependency, Sdk, SdkModule, manifest::Manifest};
 
 use crate::{PluginSource, read_pexe_file, unpack};
 
-/// txlib's compiled predicate module. Building it isn't free, so we
-/// share one instance between the two event-hash statics below.
-static TXLIB_MODULE: LazyLock<pod2::lang::Module> = LazyLock::new(txlib::predicates::module);
+/// txlib's compiled chain-primitive module. Building it isn't free, so
+/// we share one instance between the two event-hash statics below.
+static TX_EVENTS_MODULE: LazyLock<pod2::lang::Module> =
+    LazyLock::new(txlib::predicates::events_module);
 
 /// Hashes of `Predicate::Custom(txlib::TxInsert)` and `TxMutate`. Used
 /// to identify txlib events regardless of which batch referenced them.
@@ -27,10 +28,10 @@ static TX_INSERT_HASH: LazyLock<Hash> = LazyLock::new(|| txlib_event_hash("TxIns
 static TX_MUTATE_HASH: LazyLock<Hash> = LazyLock::new(|| txlib_event_hash("TxMutate"));
 
 fn txlib_event_hash(name: &str) -> Hash {
-    let custom_ref = TXLIB_MODULE
+    let custom_ref = TX_EVENTS_MODULE
         .batch
         .predicate_ref_by_name(name)
-        .unwrap_or_else(|| panic!("txlib module is missing predicate {name}"));
+        .unwrap_or_else(|| panic!("tx_events module is missing predicate {name}"));
     Predicate::Custom(custom_ref).hash()
 }
 

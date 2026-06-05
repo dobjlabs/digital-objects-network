@@ -4,7 +4,7 @@
   structural correctness of actions, replay, and guard dispatch.
 */
 
-use module 0xTXLIB_MODULE_HASH as tx
+use module 0xTX_EVENTS_MODULE_HASH as tx
 
 // ========================================================
 // Deletion Sub-Actions

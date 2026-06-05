@@ -50,7 +50,7 @@ This is what ties the two halves together. The action statement commits to a ran
 
 Replay is structured as recursive OR-walking over the chain. Four layers, bottom up:
 
-1. **Chain primitives.** `TxInsert`, `TxMutate`, `TxDelete` each witness one hash-step and pin the affected object's `type`. These primitives are referenced both by application action predicates at record time and by replay at finalize time, so the chain-step hash work is proved exactly once.
+1. **Chain primitives.** `TxInsert`, `TxMutate`, `TxDelete` each witness one hash-step and pin the affected object's `type`. These primitives are referenced both by application action predicates at record time and by replay at finalize time, so the chain-step hash work is proved exactly once. They live in their own podlang module (`tx_events.podlang`, imported by `txlib.podlang`) so that their hashes -- which every plugin module and recorded transaction bakes in -- survive churn in the replay and finalize predicates.
 
 2. **Replay.** Conceptually, replay walks the event tree and applies each step's state change and guard dispatch. In pseudocode:
 

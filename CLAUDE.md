@@ -98,7 +98,7 @@ Use `just` (recipes in `justfile`):
 - **`driver/src/pexe_catalog.rs`** — concrete `ActionCatalog` impl that loads `.pexe` archives from `~/.dobj/actions/`.
 - **`sdk/src/lib.rs`** — Rhai engine setup, custom syntax for `var` and `unsafe { ... }` (search `register_custom_syntax`), host API registration (search `register_fn`). Entry: `Sdk::load_module_from_src_actions`.
 - **`txlib/src/lib.rs`** — `StateRoot` (typed record), `GroundingWitness`, `Tx`, `TxBuilder`. No `Object` struct: object state is a `pod2::Dictionary` whose `identity` field is the commitment of its initial form (`with_identity`), stable across mutations.
-- **`txlib/src/predicates/txlib.podlang`** — the transaction state machine. See "txlib and the SDK" below.
+- **`txlib/src/predicates/txlib.podlang`** — the transaction state machine (replay, grounding, `TxFinalized`). Imports **`tx_events.podlang`**, the frozen chain-primitive batch (`TxInsert`/`TxMutate`/`TxDelete`) whose id is pinned by a test. See "txlib and the SDK" below.
 - **`synchronizer/src/state_machine.rs`** — `MAX_GSR_AGE_BLOCKS = 300`. Pure derivation: takes a base head + recent GSRs + decoded blob bytes; returns a candidate head.
 - **`synchronizer/src/api.rs`** — Axum routes (`/v1/state/head`, `/v1/state/membership`, `/v1/state/object/contains`, `/v1/state/nullifier/contains`, `/v1/txlib/grounding-witness`, plus `/healthz`, `/sync-progress`).
 - **`common/src/shrink.rs`** — Plonky2 wrapper circuit that re-proves a MainPod in a smaller circuit so it fits in a blob.
@@ -113,11 +113,11 @@ Use `just` (recipes in `justfile`):
 
 ## txlib and the SDK
 
-txlib's proof machinery is consumed only through the SDK. Its plain types (`StateRoot`, `GroundingWitness`) are shared more widely (the synchronizer computes GSRs), but the predicate batch and `TxBuilder` are not: the SDK loads the batch (`txlib::predicates::module()`) alongside the plugin module, drives `TxBuilder`, and is the only code that names txlib predicates.
+txlib's proof machinery is consumed only through the SDK. Its plain types (`StateRoot`, `GroundingWitness`) are shared more widely (the synchronizer computes GSRs), but the predicate batches and `TxBuilder` are not: the SDK loads both batches (`txlib::predicates::events_module()` and `module()`) alongside the plugin module, drives `TxBuilder`, and is the only code that names txlib predicates.
 
-What an action script actually touches is small. Each recorded event emits one of three chain primitives -- `TxInsert`, `TxMutate`, `TxDelete` (rendered in `sdk/src/fmt_podlang.rs`) -- and the whole transaction is proved against the top-level `TxFinalized` rule. `TxMutate`'s shared `type` arg pins `old.type == new.type` implicitly and preserves the object's `identity` across the mutation.
+The predicates are split across two batches. `tx_events.podlang` holds the three chain primitives -- `TxInsert`, `TxMutate`, `TxDelete` -- the only txlib predicates an action script's rendered podlang ever references (via `tx::`, rendered in `sdk/src/fmt_podlang.rs`). Plugin module hashes bake in only this batch's id, so it is frozen: its id is pinned by `test_events_module_hash_pinned`, and editing it invalidates every plugin manifest and recorded proof. `TxMutate`'s shared `type` arg pins `old.type == new.type` implicitly and preserves the object's `identity` across the mutation.
 
-Everything between those is fixed scaffolding inside the batch that the SDK and `TxBuilder` compose automatically; you never write or reference it from a script. It is the replay walker (`ReplayActions` and friends) that re-walks the recorded event chain to update the live/nullifier sets, and grounding (`InputsGrounded`) that proves each input existed in a prior state root. Opened in `txlib.podlang`, the file reads bottom-up: chain primitives -> replay -> grounding -> `TxFinalized`.
+`txlib.podlang` (the batch from `module()`, which imports the events batch) is fixed scaffolding that the SDK and `TxBuilder` compose automatically; you never write or reference it from a script, and it can churn without touching plugin hashes. It is the replay walker (`ReplayActions` and friends) that re-walks the recorded event chain to update the live/nullifier sets, grounding (`InputsGrounded`) that proves each input existed in a prior state root, and the top-level `TxFinalized` rule the whole transaction is proved against. The file reads bottom-up: replay -> grounding -> `TxFinalized`.
 
 ## SDK essentials
 
