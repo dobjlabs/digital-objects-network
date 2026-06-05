@@ -5,7 +5,7 @@
 //! server-side deps (sqlx-postgres, alloy, axum).
 //!
 //! The status/request types are pure serde. The two response types carry
-//! pod2 `Hash` (`tx_final`, `state_root_hash`, serialized as the 64-char
+//! pod2 `Hash` (`tx_final`, `state_root`, serialized as the 64-char
 //! hex pod2 emits), so they live behind the `chain` feature; `tx_hash`
 //! stays a `String` because it is an Ethereum keccak hash, not a pod2 one.
 
@@ -113,7 +113,7 @@ pub struct SubmitProofResponse {
     /// Idempotency key derived from the decoded payload.
     pub tx_final: Hash,
     /// State root hash claimed by the payload.
-    pub state_root_hash: Hash,
+    pub state_root: Hash,
     /// Submission attempts observed so far for this job.
     pub attempt_count: u32,
     /// Job creation timestamp in unix seconds.
@@ -143,7 +143,7 @@ pub struct JobStatusResponse {
     /// Idempotency key derived from the decoded payload.
     pub tx_final: Hash,
     /// State root hash claimed by the payload.
-    pub state_root_hash: Hash,
+    pub state_root: Hash,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

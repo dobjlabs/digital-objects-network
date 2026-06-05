@@ -6,7 +6,7 @@ use common::test_state::TestState;
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
 use tempfile::tempdir;
-use txlib::{GroundingWitness, StateRoot};
+use txlib::{GroundingWitness, StateHeader};
 
 use crate::catalog::ActionCatalog;
 use crate::clients::{
@@ -40,7 +40,7 @@ fn make_catalog() -> PexeCatalog {
 
 fn dummy_grounding_witness() -> GroundingWitness {
     GroundingWitness::new(
-        StateRoot::new(
+        StateHeader::new(
             1,
             pod2::middleware::EMPTY_HASH,
             pod2::middleware::EMPTY_HASH,
@@ -61,9 +61,14 @@ fn apply_tx(state: &mut TestState, tx: &txlib::Tx) {
     );
 }
 
-fn state_root(state: &TestState) -> StateRoot {
-    let (created_root, nullifiers_root, gsrs_root) = state.roots();
-    StateRoot::new(state.block_number, created_root, nullifiers_root, gsrs_root)
+fn state_header(state: &TestState) -> StateHeader {
+    let (created_root, nullifiers_root, state_history_root) = state.roots();
+    StateHeader::new(
+        state.block_number,
+        created_root,
+        nullifiers_root,
+        state_history_root,
+    )
 }
 
 fn craft_basics(name: &str) -> QualifiedName {
@@ -111,7 +116,7 @@ struct MockPayloadBuilder;
 impl PayloadBuilder for MockPayloadBuilder {
     fn build_payload(
         &self,
-        _old_state_root_hash: &Hash,
+        _old_state_root: &Hash,
         _action_output: &SpendableObjects,
     ) -> Result<Vec<u8>> {
         Ok(vec![1, 2, 3])
@@ -130,7 +135,7 @@ struct MockSynchronizer {
 impl SynchronizerClient for MockSynchronizer {
     fn fetch_head(&self, _sync_api_url: &str) -> Result<SynchronizerHead> {
         Ok(SynchronizerHead {
-            current_gsr: state_root(&self.state).hash(),
+            current_state_root: state_header(&self.state).hash(),
         })
     }
 
@@ -145,7 +150,7 @@ impl SynchronizerClient for MockSynchronizer {
             .map(|commitment| (commitment, self.state.created_membership_proof(commitment)))
             .collect::<HashMap<_, _>>();
         Ok(GroundingWitness::new(
-            state_root(&self.state),
+            state_header(&self.state),
             created_proofs,
         ))
     }
@@ -177,7 +182,7 @@ impl SynchronizerClient for MockSynchronizer {
             return Err(anyhow!("synchronizer timeout"));
         }
         Ok(SynchronizerHead {
-            current_gsr: state_root(&self.state).hash(),
+            current_state_root: state_header(&self.state).hash(),
         })
     }
 }
@@ -202,7 +207,7 @@ impl RelayerClient for MockRelayer {
             job_id: "job-1".to_string(),
             status: wire_types::relayer::JobStatus::Queued,
             tx_final: Default::default(),
-            state_root_hash: Default::default(),
+            state_root: Default::default(),
             attempt_count: 0,
             created_at: 0,
         })

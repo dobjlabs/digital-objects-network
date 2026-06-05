@@ -37,7 +37,7 @@ use wire_types::{
 pub trait PayloadBuilder: Send + Sync {
     fn build_payload(
         &self,
-        old_state_root_hash: &Hash,
+        old_state_root: &Hash,
         action_output: &SpendableObjects,
     ) -> Result<Vec<u8>>;
 }
@@ -48,10 +48,10 @@ struct DefaultPayloadBuilder;
 impl PayloadBuilder for DefaultPayloadBuilder {
     fn build_payload(
         &self,
-        old_state_root_hash: &Hash,
+        old_state_root: &Hash,
         action_output: &SpendableObjects,
     ) -> Result<Vec<u8>> {
-        build_relayer_payload(old_state_root_hash, action_output)
+        build_relayer_payload(old_state_root, action_output)
     }
 }
 
@@ -347,7 +347,7 @@ impl Driver {
             .deps
             .synchronizer
             .fetch_head(&settings.synchronizer_api_url)?;
-        Ok(head.current_gsr)
+        Ok(head.current_state_root)
     }
 
     /// Import an external `.dobj` object — one not produced by this driver
@@ -496,7 +496,7 @@ impl Driver {
             .deps
             .synchronizer
             .fetch_grounding_witness(&settings.synchronizer_api_url, &input_commitments)?;
-        let old_root_hash = grounding_witness.state_root.hash();
+        let old_root_hash = grounding_witness.state_header.hash();
         let old_root = old_root_hash;
 
         reporter.on_step(ExecutionPhase::GenerateProof, "Generating proof", &no_ctx);
@@ -664,7 +664,7 @@ impl Driver {
 
         let result = ExecuteActionResult {
             old_root,
-            new_root: sync_head.current_gsr,
+            new_root: sync_head.current_state_root,
             output_files: saved.output_files.clone(),
             nullified_files: saved.nullified_files.clone(),
             relayer_job_id: confirmation.job_id,

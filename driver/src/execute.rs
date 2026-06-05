@@ -280,7 +280,7 @@ pub(crate) fn update_output_files(
 }
 
 pub(crate) fn build_relayer_payload(
-    old_state_root_hash: &Hash,
+    old_state_root: &Hash,
     action_output: &SpendableObjects,
 ) -> Result<Vec<u8>> {
     let params = Params::default();
@@ -296,7 +296,7 @@ pub(crate) fn build_relayer_payload(
     let payload = Payload {
         proof: PayloadProof::Plonky2(Box::new(compressed)),
         tx_final,
-        state_root_hash: *old_state_root_hash,
+        state_root: *old_state_root,
         nullifiers,
         live,
     };

@@ -16,7 +16,7 @@
 
   3. TxFinalized -- the public entry point. Ties input grounding,
      chain seeding, and full replay together. Exposes
-     (state_root, tx_final, nullifiers, live) publicly.
+     (state_header, tx_final, nullifiers, live) publicly.
 
   State convention: most predicates thread four public arguments:
   (before_tx, after_tx, before_chain, after_chain). Each step
@@ -272,7 +272,7 @@ ReplayDelete(before_tx, after_tx, before_chain, after_chain,
 // global created-object set (every object state ever created, maintained
 // by the synchronizer).
 
-record StateRoot = (block_number, created, nullifiers, gsrs)
+record StateHeader = (block_number, created, nullifiers, state_history)
 
 InputsGrounded(inputs, created) = OR(
   // Base case: empty inputs. `created` is intentionally unconstrained --
@@ -319,9 +319,9 @@ InputsGroundedRecursive(inputs, created,
 // certificate: it attests to the final state without revealing the
 // event sequence that produced it.
 
-// Exposes (state_root, tx_final, nullifiers, live) publicly. The
-// verifier sees `state_root` as a single hash -- the commitment of the
-// `StateRoot` record.
+// Exposes (state_header, tx_final, nullifiers, live) publicly. The
+// verifier sees `state_header` as a single hash -- the commitment of the
+// `StateHeader` record.
 // tx_final is the after_tx dictionary commitment, which binds the
 // live set, nullifiers, and final chain_start/chain_end together. Both
 // the nullifier set and the final live set are also surfaced as their
@@ -343,9 +343,9 @@ TxFinalBindings(tx_final, nullifiers, live) = AND(
   DictContains(tx_final, "live", live)
 )
 
-TxFinalized(state_root StateRoot, tx_final, nullifiers, live,
+TxFinalized(state_header StateHeader, tx_final, nullifiers, live,
      private: before_tx, chain_start, chain_final) = AND(
-  InputsGrounded(before_tx.live, state_root.created)
+  InputsGrounded(before_tx.live, state_header.created)
   HashOf(chain_start, before_tx.live, {})
   DictInsert(before_tx, {"nullifiers": {}, "chain_start": {}, "chain_end": {}}, "live", before_tx.live)
   TxFinalBindings(tx_final, nullifiers, live)

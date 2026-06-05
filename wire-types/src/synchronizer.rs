@@ -39,16 +39,16 @@ pub struct StateHeadResponse {
     pub last_processed_slot: u32,
     /// Execution block number associated with the last processed slot, if any.
     pub last_processed_block_number: Option<u32>,
-    /// Current canonical global state root, if one exists.
-    pub current_gsr: Option<Hash>,
+    /// Current canonical state root, if one exists.
+    pub current_state_root: Option<Hash>,
     /// Execution block number committed inside the current state root, if any.
     pub current_block_number: Option<i64>,
     /// Number of objects in the canonical global created set.
     pub created_count: usize,
     /// Number of spent nullifiers in canonical state.
     pub nullifier_count: usize,
-    /// Number of GSR entries in canonical history.
-    pub gsr_count: usize,
+    /// Number of state root entries in canonical history.
+    pub state_root_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,8 +72,8 @@ pub struct ObjectContainsEntry {
 pub struct ObjectContainsResponse {
     /// Last canonical slot fully committed by the synchronizer.
     pub last_processed_slot: u32,
-    /// Current canonical global state root, if one exists.
-    pub current_gsr: Option<Hash>,
+    /// Current canonical state root, if one exists.
+    pub current_state_root: Option<Hash>,
     /// Per-commitment membership results.
     pub results: Vec<ObjectContainsEntry>,
 }
@@ -99,8 +99,8 @@ pub struct NullifierContainsEntry {
 pub struct NullifierContainsResponse {
     /// Last canonical slot fully committed by the synchronizer.
     pub last_processed_slot: u32,
-    /// Current canonical global state root, if one exists.
-    pub current_gsr: Option<Hash>,
+    /// Current canonical state root, if one exists.
+    pub current_state_root: Option<Hash>,
     /// Per-hash membership results.
     pub results: Vec<NullifierContainsEntry>,
 }
@@ -119,8 +119,8 @@ pub struct MembershipRequest {
 pub struct MembershipResponse {
     /// Last canonical slot fully committed by the synchronizer.
     pub last_processed_slot: u32,
-    /// Current canonical global state root, if one exists.
-    pub current_gsr: Option<Hash>,
+    /// Current canonical state root, if one exists.
+    pub current_state_root: Option<Hash>,
     /// Per-object created-set membership results.
     pub created_results: Vec<ObjectContainsEntry>,
     /// Per-nullifier membership results.
@@ -154,16 +154,16 @@ pub struct ObjectProofResponse {
 #[serde(rename_all = "camelCase")]
 /// txlib witness response anchored to one canonical state root.
 pub struct GroundingWitnessResponse {
-    /// Hash of the compact `txlib::StateRoot` built from the canonical roots.
-    pub state_root_hash: Hash,
+    /// Hash of the compact `txlib::StateHeader` built from the canonical roots.
+    pub state_root: Hash,
     /// Execution block number committed inside that state root.
     pub block_number: i64,
     /// Canonical created-set root.
     pub created_root: Hash,
     /// Canonical nullifiers set root.
     pub nullifiers_root: Hash,
-    /// Prior-GSR array root committed inside the state root.
-    pub gsrs_root: Hash,
+    /// Prior-state root array root committed inside the state root.
+    pub state_history_root: Hash,
     /// Per-input-object created-set membership proofs.
     pub created_proofs: Vec<ObjectProofResponse>,
 }

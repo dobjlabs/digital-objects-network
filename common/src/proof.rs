@@ -37,7 +37,7 @@ pub trait BlobParser: Send + Sync {
 // MockBlobParser
 // ---------------------------------------------------------------------------
 
-/// Mock parser: accepts JSON `{ "tx_final": "0x...", "nullifiers": [...], "live": [...], "state_root_hash": "0x..." }`
+/// Mock parser: accepts JSON `{ "tx_final": "0x...", "nullifiers": [...], "live": [...], "state_root": "0x..." }`
 /// Hash bytes serialized as lowercase hex strings.
 /// Returns a `Payload` with a dummy empty `PayloadProof` since no real proof
 /// is needed for mock testing.
@@ -50,7 +50,7 @@ struct MockProofJson {
     tx_final: String,
     nullifiers: Vec<String>,
     live: Vec<String>,
-    state_root_hash: String,
+    state_root: String,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -72,11 +72,11 @@ impl BlobParser for MockBlobParser {
             .iter()
             .map(|s| decode_hash_hex(s))
             .collect::<Result<Vec<_>>>()?;
-        let state_root_hash = decode_hash_hex(&json.state_root_hash)?;
+        let state_root = decode_hash_hex(&json.state_root)?;
         Ok(Some(Payload {
             proof: PayloadProof::empty_for_test(),
             tx_final,
-            state_root_hash,
+            state_root,
             nullifiers,
             live,
         }))
@@ -158,7 +158,7 @@ impl BlobParser for ProofParser {
         let statement = Statement::Custom(
             self.txn_finalized_pred.clone(),
             vec![
-                Value::from(payload.state_root_hash).into(),
+                Value::from(payload.state_root).into(),
                 Value::from(payload.tx_final).into(),
                 Value::from(hashes_to_set(&payload.nullifiers)).into(),
                 Value::from(hashes_to_set(&payload.live)).into(),
@@ -199,7 +199,7 @@ mod tests {
         let sr_hex = format!("0x{}", hash_to_hex(&state_root));
 
         let json = format!(
-            r#"{{"tx_final":"{}","nullifiers":["{}"],"live":[],"state_root_hash":"{}"}}"#,
+            r#"{{"tx_final":"{}","nullifiers":["{}"],"live":[],"state_root":"{}"}}"#,
             tx_hex, null_hex, sr_hex
         );
 
@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(payload.tx_final, tx_final);
         assert_eq!(payload.nullifiers.len(), 1);
         assert_eq!(payload.nullifiers[0], nullifier);
-        assert_eq!(payload.state_root_hash, state_root);
+        assert_eq!(payload.state_root, state_root);
     }
 
     #[test]
@@ -227,7 +227,7 @@ mod tests {
         let tx_hex = hash_to_hex(&tx_final); // no "0x" prefix
 
         let json = format!(
-            r#"{{"tx_final":"{}","nullifiers":[],"live":[],"state_root_hash":"{}"}}"#,
+            r#"{{"tx_final":"{}","nullifiers":[],"live":[],"state_root":"{}"}}"#,
             tx_hex, tx_hex
         );
 

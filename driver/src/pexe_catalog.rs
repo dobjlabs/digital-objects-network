@@ -754,7 +754,7 @@ description = "consume a Foo to make a Bar"
 
     fn dummy_grounding_witness() -> txlib::GroundingWitness {
         txlib::GroundingWitness::new(
-            txlib::StateRoot::new(
+            txlib::StateHeader::new(
                 1,
                 pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,

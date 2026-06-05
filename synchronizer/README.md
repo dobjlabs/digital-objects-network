@@ -14,8 +14,8 @@ Service that tracks Digital Object blob transactions on Ethereum, derives canoni
    - fetches matching blob sidecars
    - parses and verifies `TxFinalized` payloads
    - prefetches the payloads' created-object commitments from the Postgres created index
-   - opens the current Merkle containers from the canonical `CanonicalHead`
-   - derives the next `CanonicalHead`
+   - opens the current Merkle containers from the canonical `StateHead`
+   - derives the next `StateHead`
 4. Publishes the new canonical slot/head and its created-index rows in one Postgres transaction, and serves state/proof APIs for clients like `app-gui`.
 
 ## State model
@@ -27,29 +27,29 @@ The synchronizer splits state into two layers:
   - persistent POD2 values
 - Postgres stores the canonical control plane
   - canonical slot metadata
-  - the canonical `CanonicalHead` for each slot
+  - the canonical `StateHead` for each slot
   - the created index: object commitment -> position in the created array
 
 There is no canonical head stored in RocksDB, and no resident in-memory head/cache. Every slot derivation and API read loads the current canonical head from Postgres, then reopens the needed persistent containers from RocksDB by root.
 
-### `CanonicalHead`
+### `StateHead`
 
-`CanonicalHead` is the compact committed app-state snapshot stored on canonical slot rows. It is split into:
+`StateHead` is the compact committed app-state snapshot stored on canonical slot rows. It is split into:
 
-- `CanonicalRoots`
+- `StateRoots`
   - `created`
   - `nullifiers`
-  - `state_root_gsrs`
-  - `gsr_history`
-- `HeadMetadata`
-  - `current_gsr`
+  - `state_history`
+  - `next_state_history`
+- `StateMetadata`
+  - `current_state_root`
   - `current_block_number`
   - `created_count`
   - `nullifier_count`
-  - `gsr_count`
+  - `state_root_count`
 
-`CanonicalRoots.state_root_gsrs` is the prior-GSR array root committed inside `txlib::StateRoot`.
-`CanonicalRoots.gsr_history` is the full GSR-history root after appending `HeadMetadata.current_gsr`.
+`StateRoots.state_history` is the prior-state root array root committed inside `txlib::StateHeader`.
+`StateRoots.next_state_history` is the full state root-history root after appending `StateMetadata.current_state_root`.
 
 ## Storage model
 
@@ -66,11 +66,11 @@ The Merkle-backed containers are:
 
 - created objects: persistent `Array` of object commitments (0-indexed)
 - nullifiers: persistent `Set`
-- GSR history: persistent `Array`
+- state root history: persistent `Array`
 
-The synchronizer reopens those containers from the roots stored in `CanonicalRoots`.
+The synchronizer reopens those containers from the roots stored in `StateRoots`.
 
-Important: RocksDB is not the source of canonical truth. It is an append-only backing store for Merkle data. Derivation may materialize nodes that never become canonical; those orphaned nodes are harmless and are ignored unless a future `CanonicalHead` points at them.
+Important: RocksDB is not the source of canonical truth. It is an append-only backing store for Merkle data. Derivation may materialize nodes that never become canonical; those orphaned nodes are harmless and are ignored unless a future `StateHead` points at them.
 
 ### Postgres (`SYNC_METADATA_DB_URL`) — canonical heads and sync metadata
 
@@ -81,8 +81,8 @@ Postgres stores the canonical synchronization state:
   - on first initialization, the first row is a bootstrap row at `start_slot - 1`
   - that bootstrap row uses the real beacon/execution metadata when `start_slot - 1` had a block
   - if `start_slot - 1` was an empty beacon slot, its block fields remain `NULL`
-  - includes `block_root`, `parent_root`, `execution_block_number`, `current_gsr`, `is_empty`
-  - includes normalized `head_*` columns for the canonical `CanonicalHead` at that slot
+  - includes `block_root`, `parent_root`, `execution_block_number`, `current_state_root`, `is_empty`
+  - includes normalized `head_*` columns for the canonical `StateHead` at that slot
 - `created_index`
   - reverse index from object commitment to its position in the created array
   - one row per created object: `commitment` (primary key), `array_index`, `slot`
@@ -92,7 +92,7 @@ Postgres stores the canonical synchronization state:
   - reads treat the index as a hint: every membership and proof answer
     cross-checks it against the created array at the queried root
 
-Postgres is the sole source of canonical `CanonicalHead`. The highest committed
+Postgres is the sole source of canonical `StateHead`. The highest committed
 `canonical_slots.slot` is the current canonical head.
 
 ## Slot derivation rules
@@ -100,8 +100,8 @@ Postgres is the sole source of canonical `CanonicalHead`. The highest committed
 For each decoded blob payload, the synchronizer:
 
 - skips blobs that do not decode into a valid `TxFinalized` proof
-- rejects payloads whose `state_root_hash` is not in recent canonical GSR history
-- rejects payloads whose grounding GSR is older than `MAX_GSR_AGE_BLOCKS` (currently 300)
+- rejects payloads whose `state_root_hash` is not in recent canonical state root history
+- rejects payloads whose grounding state root is older than `MAX_STATE_ROOT_AGE_BLOCKS` (currently 300)
 - rejects creation collisions: a created-object commitment that repeats within
   the payload, repeats within the slot, or already exists in committed state
   (prefetched from the created index and cross-checked against the created
@@ -110,16 +110,16 @@ For each decoded blob payload, the synchronizer:
 - appends accepted object commitments to the created array and inserts
   nullifiers into the persistent set
 
-After processing all blobs in the slot, it computes the next GSR from:
+After processing all blobs in the slot, it computes the next state root from:
 
 - current execution block number
 - created array root
 - nullifiers set root
-- prior GSR-array root
+- prior state root-array root
 
-Then it appends that new GSR to the persistent GSR history array and derives a new `CanonicalHead`.
+Then it appends that new state root to the persistent state root history array and derives a new `StateHead`.
 
-Important: GSR history advances for each canonical processed slot, even if that slot accepted zero app transactions.
+Important: state root history advances for each canonical processed slot, even if that slot accepted zero app transactions.
 
 ## Publish, recovery, and reorgs
 
@@ -135,7 +135,7 @@ Because the Merkle nodes were already materialized during derivation, there is n
 ### Crash semantics
 
 - If the process crashes before the Postgres commit, the old canonical head remains in force and any newly written RocksDB nodes are just orphaned.
-- If the process crashes after the Postgres commit, the published `CanonicalHead` is already durable and sufficient to reopen the canonical containers.
+- If the process crashes after the Postgres commit, the published `StateHead` is already durable and sufficient to reopen the canonical containers.
 
 ### Reorg handling
 
@@ -146,7 +146,7 @@ On reorg:
   rows those slots added, in one transaction
 - resumes syncing from the first divergent slot
 
-Reorg rollback does not modify RocksDB. The surviving Postgres `CanonicalHead` determines which Merkle roots are canonical after rewind.
+Reorg rollback does not modify RocksDB. The surviving Postgres `StateHead` determines which Merkle roots are canonical after rewind.
 
 ## API
 
@@ -158,18 +158,18 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `CanonicalHead` d
   - returns:
     - `last_processed_slot`
     - `last_processed_block_number`
-    - `current_gsr`
+    - `current_state_root`
     - `current_block_number`
     - `created_count`
     - `nullifier_count`
-    - `gsr_count`
+    - `state_root_count`
 - `POST /v1/state/membership`
   - request body:
     - `object_commitments` (array of hash strings)
     - `nullifiers` (array of hash strings)
   - returns membership for both sets from one captured canonical head:
     - `last_processed_slot`
-    - `current_gsr`
+    - `current_state_root`
     - `created_results` (array of `{ commitment, present }`)
     - `nullifier_results` (array of `{ nullifier, present }`)
 - `POST /v1/state/object/contains`
@@ -177,24 +177,24 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `CanonicalHead` d
     - `object_commitments` (array of hash strings)
   - returns:
     - `last_processed_slot`
-    - `current_gsr`
+    - `current_state_root`
     - `results` (array of `{ commitment, present }`)
 - `POST /v1/state/nullifier/contains`
   - request body:
     - `nullifiers` (array of hash strings)
   - returns:
     - `last_processed_slot`
-    - `current_gsr`
+    - `current_state_root`
     - `results` (array of `{ nullifier, present }`)
 - `POST /v1/txlib/grounding-witness`
   - request body:
     - `objectCommitments` (array of hash strings)
   - returns:
-    - `stateRootHash`
+    - `stateRoot`
     - `blockNumber`
     - `createdRoot`
     - `nullifiersRoot`
-    - `gsrsRoot`
+    - `stateHistoryRoot`
     - `createdProofs` (array of `{ commitment, present, index, proof }`)
 
 Membership and grounding-witness requests read the canonical head and the

@@ -143,7 +143,7 @@ Imports a predicate group (identified by its Merkle root hash) and gives it a lo
 use module 0xHASH as txlib
 
 MyPred(...) = AND(
-  txlib::StateRoot(...)
+  txlib::StateHeader(...)
 )
 ```
 

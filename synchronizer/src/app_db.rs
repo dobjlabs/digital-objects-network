@@ -11,7 +11,7 @@ use pod2::{
 };
 use rocksdb::{Options, TransactionDB, TransactionDBOptions};
 
-use crate::head::CanonicalRoots;
+use crate::head::StateRoots;
 
 fn node_key(hash: Hash) -> Vec<u8> {
     let mut k = Vec::with_capacity(34);
@@ -67,7 +67,7 @@ impl AppDb {
         Ok(Set::from_db(root, self.db_box())?)
     }
 
-    pub fn open_gsr_history(&self, root: Hash) -> Result<Array> {
+    pub fn open_next_state_history(&self, root: Hash) -> Result<Array> {
         Ok(Array::from_db(root, self.db_box())?)
     }
 
@@ -78,7 +78,7 @@ impl AppDb {
     /// whole batch.
     pub fn prove_created_for(
         &self,
-        roots: &CanonicalRoots,
+        roots: &StateRoots,
         obj_commitments: &[Hash],
         indices: &HashMap<Hash, i64>,
     ) -> Result<Vec<Option<(i64, MerkleProof)>>> {
@@ -104,7 +104,7 @@ impl AppDb {
     /// index against the authoritative root.
     pub fn created_exists_for(
         &self,
-        roots: &CanonicalRoots,
+        roots: &StateRoots,
         obj_commitments: &[Hash],
         indices: &HashMap<Hash, i64>,
     ) -> Result<Vec<bool>> {
@@ -120,7 +120,7 @@ impl AppDb {
 
     pub fn nullifier_exists_batch(
         &self,
-        roots: &CanonicalRoots,
+        roots: &StateRoots,
         nullifiers: &[Hash],
     ) -> Result<Vec<bool>> {
         let nullifier_set = self.open_nullifiers(roots.nullifiers)?;
@@ -231,9 +231,9 @@ mod tests {
         let obj_commitment = test_hash(9);
         created.insert(0, Value::from(obj_commitment)).unwrap();
 
-        let roots = CanonicalRoots {
+        let roots = StateRoots {
             created: created.commitment(),
-            ..CanonicalRoots::empty()
+            ..StateRoots::empty()
         };
         let indices = HashMap::from([(obj_commitment, 0i64)]);
 
@@ -258,7 +258,7 @@ mod tests {
                 .unwrap(),
             vec![false]
         );
-        let empty_roots = CanonicalRoots::empty();
+        let empty_roots = StateRoots::empty();
         assert_eq!(
             app_db
                 .created_exists_for(&empty_roots, &[obj_commitment], &indices)

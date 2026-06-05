@@ -15,7 +15,7 @@ pub struct RelayJob {
     /// Idempotency key derived from proof payload.
     pub tx_final: Hash,
     /// State root hash claimed by the payload.
-    pub state_root_hash: Hash,
+    pub state_root: Hash,
     /// Optional caller-provided trace string for observability.
     pub client_ref: Option<String>,
     /// Total submission attempts made so far.

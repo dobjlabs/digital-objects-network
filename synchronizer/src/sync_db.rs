@@ -10,13 +10,13 @@ use sqlx::{
 
 use crate::{
     app_db::{db_bytes_to_hash, hash_to_db_bytes},
-    head::{CanonicalHead, CanonicalRoots, HeadMetadata},
+    head::{StateHead, StateMetadata, StateRoots},
 };
 
 /// Current canonical head plus progress metadata loaded from Postgres.
 #[derive(Debug, Clone, Copy)]
 pub struct CurrentSnapshot {
-    pub head: CanonicalHead,
+    pub head: StateHead,
     pub last_processed_slot: u32,
     pub last_processed_block_number: Option<u32>,
 }
@@ -28,7 +28,7 @@ pub struct CommittedSlotRecord {
     pub block_root: Option<B256>,
     pub parent_root: Option<B256>,
     pub block_number: Option<u32>,
-    pub current_gsr: Option<Hash>,
+    pub current_state_root: Option<Hash>,
     pub is_empty: bool,
 }
 
@@ -41,7 +41,7 @@ impl CommittedSlotRecord {
             block_root: None,
             parent_root: None,
             block_number: None,
-            current_gsr: None,
+            current_state_root: None,
             is_empty: true,
         }
     }
@@ -59,7 +59,7 @@ impl SyncDb {
     /// step so the app role does not need the `CREATEDB` privilege.
     ///
     /// Postgres is the sole source of canonical heads. Each committed slot stores its
-    /// `CanonicalHead`,
+    /// `StateHead`,
     /// while RocksDB only stores the content-addressed Merkle node/value backing store.
     pub async fn connect(database_url: &str) -> Result<Self> {
         let pool = PgPoolOptions::new()
@@ -84,17 +84,17 @@ impl SyncDb {
                 block_root BYTEA NULL,
                 parent_root BYTEA NULL,
                 execution_block_number INTEGER NULL,
-                current_gsr BYTEA NULL,
+                current_state_root BYTEA NULL,
                 is_empty BOOLEAN NOT NULL,
                 head_created_root BYTEA NOT NULL,
                 head_nullifiers_root BYTEA NOT NULL,
-                head_state_root_gsrs_root BYTEA NOT NULL,
-                head_gsr_history_root BYTEA NOT NULL,
-                head_current_gsr BYTEA NULL,
+                head_state_history_root BYTEA NOT NULL,
+                head_next_state_history_root BYTEA NOT NULL,
+                head_current_state_root BYTEA NULL,
                 head_current_block_number INTEGER NULL,
                 head_created_count BIGINT NOT NULL,
                 head_nullifier_count BIGINT NOT NULL,
-                head_gsr_count BIGINT NOT NULL,
+                head_state_root_count BIGINT NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
             "#,
@@ -104,9 +104,9 @@ impl SyncDb {
                 WHERE block_root IS NOT NULL
             "#,
             r#"
-            CREATE INDEX IF NOT EXISTS canonical_slots_gsr_block_idx
+            CREATE INDEX IF NOT EXISTS canonical_slots_state_root_block_idx
                 ON canonical_slots(execution_block_number)
-                WHERE current_gsr IS NOT NULL AND execution_block_number IS NOT NULL
+                WHERE current_state_root IS NOT NULL AND execution_block_number IS NOT NULL
             "#,
             // Reverse index from object commitment to its position in the created
             // `Array`. A materialized view of committed state: rows are inserted in
@@ -155,7 +155,7 @@ impl SyncDb {
             return Ok(stored_last);
         }
 
-        self.commit_slot(&bootstrap_slot, &CanonicalHead::empty(), &HashMap::new())
+        self.commit_slot(&bootstrap_slot, &StateHead::empty(), &HashMap::new())
             .await?;
         Ok(bootstrap_slot.slot)
     }
@@ -168,7 +168,7 @@ impl SyncDb {
     }
 
     /// Return the current canonical head without sync-progress metadata.
-    pub async fn current_head(&self) -> Result<CanonicalHead> {
+    pub async fn current_head(&self) -> Result<StateHead> {
         Ok(self.current_snapshot().await?.head)
     }
 
@@ -186,13 +186,13 @@ impl SyncDb {
                    execution_block_number,
                    head_created_root,
                    head_nullifiers_root,
-                   head_state_root_gsrs_root,
-                   head_gsr_history_root,
-                   head_current_gsr,
+                   head_state_history_root,
+                   head_next_state_history_root,
+                   head_current_state_root,
                    head_current_block_number,
                    head_created_count,
                    head_nullifier_count,
-                   head_gsr_count
+                   head_state_root_count
             FROM canonical_slots
             ORDER BY slot DESC
             LIMIT 1
@@ -250,7 +250,7 @@ impl SyncDb {
     pub async fn commit_slot(
         &self,
         slot: &CommittedSlotRecord,
-        head: &CanonicalHead,
+        head: &StateHead,
         created_added: &HashMap<Hash, i64>,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
@@ -262,17 +262,17 @@ impl SyncDb {
                 block_root,
                 parent_root,
                 execution_block_number,
-                current_gsr,
+                current_state_root,
                 is_empty,
                 head_created_root,
                 head_nullifiers_root,
-                head_state_root_gsrs_root,
-                head_gsr_history_root,
-                head_current_gsr,
+                head_state_history_root,
+                head_next_state_history_root,
+                head_current_state_root,
                 head_current_block_number,
                 head_created_count,
                 head_nullifier_count,
-                head_gsr_count
+                head_state_root_count
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             "#,
@@ -281,17 +281,17 @@ impl SyncDb {
         .bind(slot.block_root.map(|v| v.as_slice().to_vec()))
         .bind(slot.parent_root.map(|v| v.as_slice().to_vec()))
         .bind(slot.block_number.map(|v| v as i32))
-        .bind(slot.current_gsr.map(hash_to_db_bytes))
+        .bind(slot.current_state_root.map(hash_to_db_bytes))
         .bind(slot.is_empty)
         .bind(hash_to_db_bytes(head.roots.created))
         .bind(hash_to_db_bytes(head.roots.nullifiers))
-        .bind(hash_to_db_bytes(head.roots.state_root_gsrs))
-        .bind(hash_to_db_bytes(head.roots.gsr_history))
-        .bind(head.metadata.current_gsr.map(hash_to_db_bytes))
+        .bind(hash_to_db_bytes(head.roots.state_history))
+        .bind(hash_to_db_bytes(head.roots.next_state_history))
+        .bind(head.metadata.current_state_root.map(hash_to_db_bytes))
         .bind(head.metadata.current_block_number.map(|v| v as i32))
         .bind(head.metadata.created_count as i64)
         .bind(head.metadata.nullifier_count as i64)
-        .bind(head.metadata.gsr_count as i64)
+        .bind(head.metadata.state_root_count as i64)
         .execute(&mut *tx)
         .await?;
 
@@ -393,17 +393,20 @@ impl SyncDb {
         Ok((snapshot, indices))
     }
 
-    /// Return the recent canonical GSRs at or above the given execution block number.
-    pub async fn recent_gsrs(&self, min_block_number: Option<u32>) -> Result<Vec<(Hash, i64)>> {
+    /// Return the recent canonical state roots at or above the given execution block number.
+    pub async fn recent_state_roots(
+        &self,
+        min_block_number: Option<u32>,
+    ) -> Result<Vec<(Hash, i64)>> {
         let Some(min_block_number) = min_block_number else {
             return Ok(Vec::new());
         };
 
         let rows = sqlx::query(
             r#"
-            SELECT current_gsr, execution_block_number
+            SELECT current_state_root, execution_block_number
             FROM canonical_slots
-            WHERE current_gsr IS NOT NULL
+            WHERE current_state_root IS NOT NULL
               AND execution_block_number IS NOT NULL
               AND execution_block_number >= $1
             ORDER BY execution_block_number ASC, slot ASC
@@ -415,25 +418,30 @@ impl SyncDb {
 
         rows.into_iter()
             .map(|row| {
-                let current_gsr: Vec<u8> = row.get("current_gsr");
+                let current_state_root: Vec<u8> = row.get("current_state_root");
                 let block_number = row.get::<i32, _>("execution_block_number");
-                Ok((db_bytes_to_hash(&current_gsr)?, i64::from(block_number)))
+                Ok((
+                    db_bytes_to_hash(&current_state_root)?,
+                    i64::from(block_number),
+                ))
             })
             .collect()
     }
 }
 
-fn decode_head_row(row: &PgRow) -> Result<CanonicalHead> {
-    Ok(CanonicalHead {
-        roots: CanonicalRoots {
+fn decode_head_row(row: &PgRow) -> Result<StateHead> {
+    Ok(StateHead {
+        roots: StateRoots {
             created: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_created_root"))?,
             nullifiers: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_nullifiers_root"))?,
-            state_root_gsrs: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_state_root_gsrs_root"))?,
-            gsr_history: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_gsr_history_root"))?,
+            state_history: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_state_history_root"))?,
+            next_state_history: db_bytes_to_hash(
+                &row.get::<Vec<u8>, _>("head_next_state_history_root"),
+            )?,
         },
-        metadata: HeadMetadata {
-            current_gsr: row
-                .get::<Option<Vec<u8>>, _>("head_current_gsr")
+        metadata: StateMetadata {
+            current_state_root: row
+                .get::<Option<Vec<u8>>, _>("head_current_state_root")
                 .as_deref()
                 .map(db_bytes_to_hash)
                 .transpose()?,
@@ -442,7 +450,7 @@ fn decode_head_row(row: &PgRow) -> Result<CanonicalHead> {
                 .map(|value| value as u32),
             created_count: row.get::<i64, _>("head_created_count") as u64,
             nullifier_count: row.get::<i64, _>("head_nullifier_count") as u64,
-            gsr_count: row.get::<i64, _>("head_gsr_count") as u64,
+            state_root_count: row.get::<i64, _>("head_state_root_count") as u64,
         },
     })
 }
@@ -458,20 +466,20 @@ mod tests {
         hash_values(&[Value::from(n)])
     }
 
-    fn unique_head(block_number: u32, marker: i64) -> CanonicalHead {
-        CanonicalHead {
-            roots: CanonicalRoots {
+    fn unique_head(block_number: u32, marker: i64) -> StateHead {
+        StateHead {
+            roots: StateRoots {
                 created: unique_hash(marker),
                 nullifiers: unique_hash(marker + 1),
-                state_root_gsrs: unique_hash(marker + 2),
-                gsr_history: unique_hash(marker + 3),
+                state_history: unique_hash(marker + 2),
+                next_state_history: unique_hash(marker + 3),
             },
-            metadata: HeadMetadata {
-                current_gsr: Some(unique_hash(marker + 4)),
+            metadata: StateMetadata {
+                current_state_root: Some(unique_hash(marker + 4)),
                 current_block_number: Some(block_number),
                 created_count: block_number as u64,
                 nullifier_count: block_number as u64 + 1,
-                gsr_count: block_number as u64 + 2,
+                state_root_count: block_number as u64 + 2,
             },
         }
     }
@@ -536,7 +544,7 @@ mod tests {
             block_root: None,
             parent_root: None,
             block_number: None,
-            current_gsr: None,
+            current_state_root: None,
             is_empty: true,
         };
         let start_slot = sync_db
@@ -546,7 +554,7 @@ mod tests {
             .ok_or_else(|| anyhow!("last processed slot overflow"))?;
         assert_eq!(start_slot, 5);
         let snapshot = sync_db.current_snapshot().await?;
-        assert_eq!(snapshot.head, CanonicalHead::empty());
+        assert_eq!(snapshot.head, StateHead::empty());
         assert_eq!(snapshot.last_processed_slot, 4);
         assert_eq!(snapshot.last_processed_block_number, None);
         drop_db(&db_name, &admin_url).await?;
@@ -563,7 +571,7 @@ mod tests {
             block_root: None,
             parent_root: None,
             block_number: Some(7),
-            current_gsr: head.metadata.current_gsr,
+            current_state_root: head.metadata.current_state_root,
             is_empty: false,
         };
 
@@ -589,7 +597,7 @@ mod tests {
             block_root: None,
             parent_root: None,
             block_number: Some(7),
-            current_gsr: head1.metadata.current_gsr,
+            current_state_root: head1.metadata.current_state_root,
             is_empty: false,
         };
 
@@ -611,7 +619,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires local postgres"]
-    async fn test_recent_gsrs_query() -> Result<()> {
+    async fn test_recent_state_roots_query() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let h1 = unique_head(5, 10);
         sync_db
@@ -621,7 +629,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(5),
-                    current_gsr: h1.metadata.current_gsr,
+                    current_state_root: h1.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h1,
@@ -637,7 +645,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(9),
-                    current_gsr: h2.metadata.current_gsr,
+                    current_state_root: h2.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h2,
@@ -645,8 +653,8 @@ mod tests {
             )
             .await?;
 
-        let recent = sync_db.recent_gsrs(Some(6)).await?;
-        assert_eq!(recent, vec![(h2.metadata.current_gsr.unwrap(), 9)]);
+        let recent = sync_db.recent_state_roots(Some(6)).await?;
+        assert_eq!(recent, vec![(h2.metadata.current_state_root.unwrap(), 9)]);
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -664,7 +672,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(1),
-                    current_gsr: h1.metadata.current_gsr,
+                    current_state_root: h1.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h1,
@@ -680,7 +688,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(2),
-                    current_gsr: h2.metadata.current_gsr,
+                    current_state_root: h2.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h2,
@@ -713,7 +721,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(1),
-                    current_gsr: h1.metadata.current_gsr,
+                    current_state_root: h1.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h1,
@@ -728,7 +736,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(2),
-                    current_gsr: h2.metadata.current_gsr,
+                    current_state_root: h2.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h2,

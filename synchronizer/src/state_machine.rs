@@ -10,30 +10,30 @@ use tracing::{info, warn};
 
 use crate::{
     app_db::{created_array_holds, AppDb},
-    head::{CanonicalHead, CanonicalRoots, HeadMetadata},
+    head::{StateHead, StateMetadata, StateRoots},
 };
-use txlib::StateRoot;
+use txlib::StateHeader;
 
-/// The maximum age of a GSR used as grounding for a transaction.
+/// The maximum age of a state root used as grounding for a transaction.
 /// At one block per 12 seconds, this is one hour.
-pub const MAX_GSR_AGE_BLOCKS: i64 = 300;
+pub const MAX_STATE_ROOT_AGE_BLOCKS: i64 = 300;
 
 /// Ephemeral mutable view used while deriving one slot.
 ///
 /// This view opens the persistent POD2 containers used during slot derivation so validation can
-/// query and mutate the created-object set, nullifiers, and GSR history for one slot.
+/// query and mutate the created-object set, nullifiers, and state root history for one slot.
 struct WorkingState {
     /// Mutable non-root metadata accumulated while deriving the slot.
-    metadata: HeadMetadata,
+    metadata: StateMetadata,
     /// Persistent global created-object set (a pod2 `Array`) opened from
     /// `head.roots.created`.
     created: Array,
     /// Persistent nullifiers set opened from `head.roots.nullifiers`.
     nullifiers: Set,
-    /// Persistent full GSR history array opened from `head.roots.gsr_history`.
-    gsr_history: Array,
-    /// Recent canonical GSRs keyed by hash for grounding validation.
-    recent_gsrs: HashMap<Hash, i64>,
+    /// Persistent full state root history array opened from `head.roots.next_state_history`.
+    next_state_history: Array,
+    /// Recent canonical state roots keyed by hash for grounding validation.
+    recent_state_roots: HashMap<Hash, i64>,
     /// Commitments this slot appended to `created`, keyed to their array
     /// indices. Doubles as the within-slot duplicate check: the persistent
     /// created index reflects only committed slots, so it cannot see objects
@@ -46,18 +46,18 @@ struct WorkingState {
 /// object commitments (with array indices) it appended to `created`. The caller
 /// persists the additions to the created index when committing the slot.
 pub struct DerivedSlot {
-    pub head: CanonicalHead,
+    pub head: StateHead,
     pub created_added: HashMap<Hash, i64>,
 }
 
 /// Domain logic for the synchronizer: proof verification, state validation, and Merkle storage.
 ///
 /// `StateMachine` is intentionally decoupled from networking and canonical-head ownership.
-/// Callers supply the `CanonicalHead` they want to operate against, and Postgres remains the sole
+/// Callers supply the `StateHead` they want to operate against, and Postgres remains the sole
 /// source of truth for which head is canonical.
 pub struct StateMachine {
     /// RocksDB-backed app-state store used to open the created, nullifier, and
-    /// GSR containers during derivation.
+    /// state root containers during derivation.
     app_db: AppDb,
     /// Blob parser/verifier used to decode TxFinalized payloads from blob bytes.
     proof_parser: Arc<dyn BlobParser>,
@@ -112,8 +112,8 @@ impl StateMachine {
     /// apply it, or skip it (fail-soft) on a grounding or duplicate violation.
     ///
     /// Validation order:
-    /// 1. `payload.state_root_hash` must exist in the recent canonical GSR window
-    /// 2. that grounding must be within `MAX_GSR_AGE_BLOCKS`
+    /// 1. `payload.state_root` must exist in the recent canonical state root window
+    /// 2. that grounding must be within `MAX_STATE_ROOT_AGE_BLOCKS`
     /// 3. created-object commitments must not collide -- within the payload, with
     ///    objects added earlier this slot, or with prior committed state
     ///    (`prior_indices`, prefetched from the created index and cross-checked
@@ -135,19 +135,19 @@ impl StateMachine {
         slot: u32,
         block_number: u32,
     ) -> Result<()> {
-        let Some(&gsr_block) = state.recent_gsrs.get(&payload.state_root_hash) else {
+        let Some(&state_root_block) = state.recent_state_roots.get(&payload.state_root) else {
             warn!(
                 slot,
                 block_number,
-                "Blob proof state_root_hash not found in recent GSR history; rejecting"
+                "Blob proof state_root not found in recent state root history; rejecting"
             );
             return Ok(());
         };
-        let age = i64::from(block_number) - gsr_block;
-        if age > MAX_GSR_AGE_BLOCKS {
+        let age = i64::from(block_number) - state_root_block;
+        if age > MAX_STATE_ROOT_AGE_BLOCKS {
             warn!(
                 slot,
-                block_number, gsr_block, age, "Blob proof state_root_hash is too old; rejecting"
+                block_number, state_root_block, age, "Blob proof state_root is too old; rejecting"
             );
             return Ok(());
         }
@@ -234,15 +234,15 @@ impl StateMachine {
     /// provided base head and the slot's already-parsed payloads.
     ///
     /// It:
-    /// - reopens the persistent created-object, nullifiers, and GSR-history containers from
+    /// - reopens the persistent created-object, nullifiers, and state root-history containers from
     ///   `base_head.roots`
-    /// - seeds the per-slot `WorkingState` with the caller-provided recent-GSR window
+    /// - seeds the per-slot `WorkingState` with the caller-provided recent-state root window
     /// - applies every payload via `apply_payload`, using `prior_indices` (the created-object
     ///   commitments already canonical as of the base head, with their array positions,
     ///   prefetched from the created index) for the creation-collision check
-    /// - computes the next GSR from the updated created/nullifiers roots and the prior
-    ///   GSR-history root committed into the resulting `StateRoot`
-    /// - appends that new GSR to the full history array and returns the resulting `CanonicalHead`
+    /// - computes the next state root from the updated created/nullifiers roots and the prior
+    ///   state root-history root committed into the resulting `StateHeader`
+    /// - appends that new state root to the full history array and returns the resulting `StateHead`
     ///   together with the object commitments this slot added, as a `DerivedSlot`
     ///
     /// The returned head is only a candidate next canonical state. By the time this method
@@ -251,12 +251,12 @@ impl StateMachine {
     /// index rows) in Postgres.
     ///
     /// Empty or fully rejected slots still produce a new head with the same created and
-    /// nullifiers roots as `base_head`, but with a newly derived `current_gsr` and an appended
-    /// GSR-history entry for the slot's execution block.
+    /// nullifiers roots as `base_head`, but with a newly derived `current_state_root` and an appended
+    /// state root-history entry for the slot's execution block.
     pub fn derive_slot_head(
         &self,
-        base_head: CanonicalHead,
-        recent_gsrs: impl IntoIterator<Item = (Hash, i64)>,
+        base_head: StateHead,
+        recent_state_roots: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
         block_number: u32,
         payloads: &[(u32, Payload)],
@@ -266,8 +266,10 @@ impl StateMachine {
             metadata: base_head.metadata,
             created: self.app_db.open_created(base_head.roots.created)?,
             nullifiers: self.app_db.open_nullifiers(base_head.roots.nullifiers)?,
-            gsr_history: self.app_db.open_gsr_history(base_head.roots.gsr_history)?,
-            recent_gsrs: recent_gsrs.into_iter().collect(),
+            next_state_history: self
+                .app_db
+                .open_next_state_history(base_head.roots.next_state_history)?,
+            recent_state_roots: recent_state_roots.into_iter().collect(),
             created_added: HashMap::new(),
         };
 
@@ -278,39 +280,40 @@ impl StateMachine {
                 })?;
         }
 
-        let prior_gsrs_root = base_head.roots.gsr_history;
-        let new_gsr = StateRoot::new(
+        let prior_state_history_root = base_head.roots.next_state_history;
+        let new_state_root = StateHeader::new(
             i64::from(block_number),
             working.created.commitment(),
             working.nullifiers.commitment(),
-            prior_gsrs_root,
+            prior_state_history_root,
         )
         .hash();
 
-        working
-            .gsr_history
-            .insert(base_head.metadata.gsr_count as usize, Value::from(new_gsr))?;
+        working.next_state_history.insert(
+            base_head.metadata.state_root_count as usize,
+            Value::from(new_state_root),
+        )?;
 
-        let new_head = CanonicalHead {
-            roots: CanonicalRoots {
+        let new_head = StateHead {
+            roots: StateRoots {
                 created: working.created.commitment(),
                 nullifiers: working.nullifiers.commitment(),
-                state_root_gsrs: prior_gsrs_root,
-                gsr_history: working.gsr_history.commitment(),
+                state_history: prior_state_history_root,
+                next_state_history: working.next_state_history.commitment(),
             },
-            metadata: HeadMetadata {
-                current_gsr: Some(new_gsr),
+            metadata: StateMetadata {
+                current_state_root: Some(new_state_root),
                 current_block_number: Some(block_number),
                 created_count: working.metadata.created_count,
                 nullifier_count: working.metadata.nullifier_count,
-                gsr_count: base_head.metadata.gsr_count + 1,
+                state_root_count: base_head.metadata.state_root_count + 1,
             },
         };
 
         info!(
             slot,
             block_number,
-            gsr_count = new_head.metadata.gsr_count,
+            state_root_count = new_head.metadata.state_root_count,
             "Slot data"
         );
 
@@ -320,17 +323,17 @@ impl StateMachine {
         })
     }
 
-    pub fn log_current_state(&self, head: CanonicalHead) {
-        let current_gsr = head
+    pub fn log_current_state(&self, head: StateHead) {
+        let current_state_root = head
             .metadata
-            .current_gsr
-            .map(|gsr| format!("{gsr:#}"))
+            .current_state_root
+            .map(|state_root| format!("{state_root:#}"))
             .unwrap_or_else(|| "none".to_string());
         info!(
             created_count = head.metadata.created_count,
             nullifier_count = head.metadata.nullifier_count,
-            gsr_count = head.metadata.gsr_count,
-            current_gsr = %current_gsr,
+            state_root_count = head.metadata.state_root_count,
+            current_state_root = %current_state_root,
             "Current state"
         );
     }
@@ -359,7 +362,7 @@ mod tests {
         tx_final: Hash,
         nullifiers: &[Hash],
         live: &[Hash],
-        state_root: Hash,
+        state_header: Hash,
     ) -> Vec<u8> {
         let hashes_json = |hashes: &[Hash]| {
             hashes
@@ -369,17 +372,17 @@ mod tests {
                 .join(",")
         };
         format!(
-            r#"{{"tx_final":"{:#}","nullifiers":[{}],"live":[{}],"state_root_hash":"{:#}"}}"#,
+            r#"{{"tx_final":"{:#}","nullifiers":[{}],"live":[{}],"state_root":"{:#}"}}"#,
             tx_final,
             hashes_json(nullifiers),
             hashes_json(live),
-            state_root
+            state_header
         )
         .into_bytes()
     }
 
-    fn seed_gsr0(sm: &StateMachine) -> CanonicalHead {
-        sm.derive_slot_head(CanonicalHead::empty(), [], 0, 0, &[], &HashMap::new())
+    fn seed_state_root0(sm: &StateMachine) -> StateHead {
+        sm.derive_slot_head(StateHead::empty(), [], 0, 0, &[], &HashMap::new())
             .unwrap()
             .head
     }
@@ -388,8 +391,8 @@ mod tests {
     /// minus the Postgres existence prefetch, which tests supply directly).
     fn derive(
         sm: &StateMachine,
-        base_head: CanonicalHead,
-        recent_gsrs: impl IntoIterator<Item = (Hash, i64)>,
+        base_head: StateHead,
+        recent_state_roots: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
         block_number: u32,
         blobs: &[(u32, Vec<u8>)],
@@ -398,7 +401,7 @@ mod tests {
         let parsed = sm.parse_blobs(blobs, slot, block_number);
         sm.derive_slot_head(
             base_head,
-            recent_gsrs,
+            recent_state_roots,
             slot,
             block_number,
             &parsed,
@@ -410,22 +413,30 @@ mod tests {
     #[test]
     fn test_empty_slot_produces_new_head() {
         let (sm, _app_db, _dir) = make_sm();
-        let head = derive(&sm, CanonicalHead::empty(), [], 1, 7, &[], &HashMap::new()).head;
+        let head = derive(&sm, StateHead::empty(), [], 1, 7, &[], &HashMap::new()).head;
         assert_eq!(head.metadata.current_block_number, Some(7));
-        assert_eq!(head.metadata.gsr_count, 1);
+        assert_eq!(head.metadata.state_root_count, 1);
     }
 
     #[test]
     fn test_accepts_valid_blob_and_updates_counts() {
         let (sm, app_db, _dir) = make_sm();
-        let head0 = seed_gsr0(&sm);
-        let gsr0 = head0.metadata.current_gsr.unwrap();
+        let head0 = seed_state_root0(&sm);
+        let state_root0 = head0.metadata.current_state_root.unwrap();
 
         let tx_final = unique_hash(10);
         let nullifier = unique_hash(11);
         let live_obj = unique_hash(12);
-        let blob = mock_txn_bytes(tx_final, &[nullifier], &[live_obj], gsr0);
-        let derived = derive(&sm, head0, [(gsr0, 0)], 1, 1, &[(0, blob)], &HashMap::new());
+        let blob = mock_txn_bytes(tx_final, &[nullifier], &[live_obj], state_root0);
+        let derived = derive(
+            &sm,
+            head0,
+            [(state_root0, 0)],
+            1,
+            1,
+            &[(0, blob)],
+            &HashMap::new(),
+        );
         let head1 = derived.head;
         let created_present = app_db
             .created_exists_for(&head1.roots, &[live_obj], &derived.created_added)
@@ -436,15 +447,15 @@ mod tests {
 
         assert_eq!(head1.metadata.created_count, 1);
         assert_eq!(head1.metadata.nullifier_count, 1);
-        assert_eq!(head1.metadata.gsr_count, 2);
+        assert_eq!(head1.metadata.state_root_count, 2);
         assert_eq!(created_present, vec![true]);
         assert_eq!(nullifier_present, vec![true]);
     }
 
     #[test]
-    fn test_rejects_unknown_grounding_gsr() {
+    fn test_rejects_unknown_grounding_state_root() {
         let (sm, _app_db, _dir) = make_sm();
-        let head0 = seed_gsr0(&sm);
+        let head0 = seed_state_root0(&sm);
 
         let tx_final = unique_hash(21);
         let blob = mock_txn_bytes(tx_final, &[], &[unique_hash(22)], unique_hash(99));
@@ -455,12 +466,20 @@ mod tests {
     #[test]
     fn test_membership_is_scoped_to_head_root() {
         let (sm, app_db, _dir) = make_sm();
-        let head0 = seed_gsr0(&sm);
-        let gsr0 = head0.metadata.current_gsr.unwrap();
+        let head0 = seed_state_root0(&sm);
+        let state_root0 = head0.metadata.current_state_root.unwrap();
 
         let live_obj = unique_hash(32);
-        let blob = mock_txn_bytes(unique_hash(31), &[], &[live_obj], gsr0);
-        let derived = derive(&sm, head0, [(gsr0, 0)], 1, 1, &[(0, blob)], &HashMap::new());
+        let blob = mock_txn_bytes(unique_hash(31), &[], &[live_obj], state_root0);
+        let derived = derive(
+            &sm,
+            head0,
+            [(state_root0, 0)],
+            1,
+            1,
+            &[(0, blob)],
+            &HashMap::new(),
+        );
         let head1 = derived.head;
         let indices = derived.created_added;
 
@@ -480,15 +499,15 @@ mod tests {
     #[test]
     fn test_rejects_duplicate_created_object() {
         let (sm, _app_db, _dir) = make_sm();
-        let head0 = seed_gsr0(&sm);
-        let gsr0 = head0.metadata.current_gsr.unwrap();
+        let head0 = seed_state_root0(&sm);
+        let state_root0 = head0.metadata.current_state_root.unwrap();
 
         let live_obj = unique_hash(40);
-        let blob1 = mock_txn_bytes(unique_hash(41), &[], &[live_obj], gsr0);
+        let blob1 = mock_txn_bytes(unique_hash(41), &[], &[live_obj], state_root0);
         let derived1 = derive(
             &sm,
             head0,
-            [(gsr0, 0)],
+            [(state_root0, 0)],
             1,
             1,
             &[(0, blob1)],
@@ -499,12 +518,12 @@ mod tests {
 
         // A second tx in a later slot re-creates the same object. In production
         // slot 1's index row is committed; here it is passed as prior-existing.
-        let gsr1 = head1.metadata.current_gsr.unwrap();
-        let blob2 = mock_txn_bytes(unique_hash(42), &[], &[live_obj], gsr1);
+        let state_root1 = head1.metadata.current_state_root.unwrap();
+        let blob2 = mock_txn_bytes(unique_hash(42), &[], &[live_obj], state_root1);
         let head2 = derive(
             &sm,
             head1,
-            [(gsr1, 1)],
+            [(state_root1, 1)],
             2,
             2,
             &[(0, blob2)],
@@ -517,18 +536,18 @@ mod tests {
     #[test]
     fn test_rejects_duplicate_created_object_within_slot() {
         let (sm, _app_db, _dir) = make_sm();
-        let head0 = seed_gsr0(&sm);
-        let gsr0 = head0.metadata.current_gsr.unwrap();
+        let head0 = seed_state_root0(&sm);
+        let state_root0 = head0.metadata.current_state_root.unwrap();
 
         // Two blobs in one slot create the same object; the second is rejected
         // via the in-slot view, with no prior committed state.
         let dup = unique_hash(50);
-        let blob_a = mock_txn_bytes(unique_hash(51), &[], &[dup], gsr0);
-        let blob_b = mock_txn_bytes(unique_hash(52), &[], &[dup], gsr0);
+        let blob_a = mock_txn_bytes(unique_hash(51), &[], &[dup], state_root0);
+        let blob_b = mock_txn_bytes(unique_hash(52), &[], &[dup], state_root0);
         let derived = derive(
             &sm,
             head0,
-            [(gsr0, 0)],
+            [(state_root0, 0)],
             1,
             1,
             &[(0, blob_a), (1, blob_b)],
@@ -541,8 +560,8 @@ mod tests {
     #[test]
     fn test_phantom_prior_index_does_not_reject_creation() {
         let (sm, _app_db, _dir) = make_sm();
-        let head0 = seed_gsr0(&sm);
-        let gsr0 = head0.metadata.current_gsr.unwrap();
+        let head0 = seed_state_root0(&sm);
+        let state_root0 = head0.metadata.current_state_root.unwrap();
 
         // The prefetched index claims this object exists at index 1, but the
         // array at the base root does not actually hold it (a phantom/stale
@@ -550,8 +569,8 @@ mod tests {
         // creation rather than rejecting a legitimate object.
         let obj = unique_hash(60);
         let phantom = HashMap::from([(obj, 1i64)]);
-        let blob = mock_txn_bytes(unique_hash(61), &[], &[obj], gsr0);
-        let derived = derive(&sm, head0, [(gsr0, 0)], 1, 1, &[(0, blob)], &phantom);
+        let blob = mock_txn_bytes(unique_hash(61), &[], &[obj], state_root0);
+        let derived = derive(&sm, head0, [(state_root0, 0)], 1, 1, &[(0, blob)], &phantom);
         assert_eq!(derived.head.metadata.created_count, 1);
         assert_eq!(derived.created_added.get(&obj), Some(&0));
     }

@@ -52,7 +52,7 @@ Once published, any attempt to use the same object in another action will fail b
 
 ## 6. State root grounding
 
-Every action must reference a recent Global State Root (GSR) — a hash of all published transactions and nullifiers. This ensures the action's inputs were live at a known point in time. The synchronizer rejects actions grounded in a GSR more than ~300 blocks (~1 hour) old.
+Every action must reference a recent state root — a hash of all published transactions and nullifiers. This ensures the action's inputs were live at a known point in time. The synchronizer rejects actions grounded in a state root more than ~300 blocks (~1 hour) old.
 
 ## Summary of what changes after each action
 

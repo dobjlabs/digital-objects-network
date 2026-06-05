@@ -117,7 +117,7 @@ impl<T: CraftOps> CraftMcpService<T> {
             .map_err(|e| e.to_string())
     }
 
-    #[tool(description = "Get the current global state root hash from the synchronizer")]
+    #[tool(description = "Get the current state root hash from the synchronizer")]
     fn get_state_root(&self) -> Result<Json<StateRootResponse>, String> {
         self.ops
             .get_state_root()

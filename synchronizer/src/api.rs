@@ -19,7 +19,7 @@ use wire_types::synchronizer::{
 
 use crate::{
     app_db::AppDb,
-    head::CanonicalRoots,
+    head::StateRoots,
     sync_db::{CurrentSnapshot, SyncDb},
 };
 
@@ -39,16 +39,16 @@ struct HeadSnapshot {
     last_processed_slot: u32,
     /// Execution block number associated with the last processed slot, if any.
     last_processed_block_number: Option<u32>,
-    /// Current canonical global state root, if one exists.
-    current_gsr: Option<Hash>,
+    /// Current canonical state root, if one exists.
+    current_state_root: Option<Hash>,
     /// Execution block number committed inside the current state root, if any.
     current_block_number: Option<i64>,
     /// Number of objects in the canonical global created set.
     created_count: usize,
     /// Number of spent nullifiers in canonical state.
     nullifier_count: usize,
-    /// Number of GSR entries in canonical history.
-    gsr_count: usize,
+    /// Number of state root entries in canonical history.
+    state_root_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -141,11 +141,11 @@ async fn get_state_head(
     Ok(Json(StateHeadResponse {
         last_processed_slot: head.last_processed_slot,
         last_processed_block_number: head.last_processed_block_number,
-        current_gsr: head.current_gsr,
+        current_state_root: head.current_state_root,
         current_block_number: head.current_block_number,
         created_count: head.created_count,
         nullifier_count: head.nullifier_count,
-        gsr_count: head.gsr_count,
+        state_root_count: head.state_root_count,
     }))
 }
 
@@ -163,7 +163,7 @@ async fn post_state_object_contains(
 
     Ok(Json(ObjectContainsResponse {
         last_processed_slot: head.last_processed_slot,
-        current_gsr: head.current_gsr,
+        current_state_root: head.current_state_root,
         results: object_contains_entries(object_commitments, membership.created_present),
     }))
 }
@@ -182,7 +182,7 @@ async fn post_state_nullifier_contains(
 
     Ok(Json(NullifierContainsResponse {
         last_processed_slot: head.last_processed_slot,
-        current_gsr: head.current_gsr,
+        current_state_root: head.current_state_root,
         results: nullifier_contains_entries(nullifiers, membership.nullifier_present),
     }))
 }
@@ -200,7 +200,7 @@ async fn post_state_membership(
 
     Ok(Json(MembershipResponse {
         last_processed_slot: head.last_processed_slot,
-        current_gsr: head.current_gsr,
+        current_state_root: head.current_state_root,
         created_results: object_contains_entries(object_commitments, membership.created_present),
         nullifier_results: nullifier_contains_entries(nullifiers, membership.nullifier_present),
     }))
@@ -225,23 +225,23 @@ async fn post_grounding_witness(
     )
     .map_err(internal_error)?;
     let head = snapshot.head;
-    let state_root = head.current_state_root().ok_or_else(|| {
+    let state_header = head.current_state_header().ok_or_else(|| {
         (
             StatusCode::CONFLICT,
             "synchronizer has no canonical grounded state yet".to_string(),
         )
     })?;
-    let state_root_hash = head
+    let state_root = head
         .metadata
-        .current_gsr
-        .unwrap_or_else(|| state_root.hash());
+        .current_state_root
+        .unwrap_or_else(|| state_header.hash());
 
     Ok(Json(GroundingWitnessResponse {
-        state_root_hash,
-        block_number: state_root.block_number,
-        created_root: state_root.created_root,
-        nullifiers_root: state_root.nullifiers_root,
-        gsrs_root: state_root.gsrs_root,
+        state_root,
+        block_number: state_header.block_number,
+        created_root: state_header.created_root,
+        nullifiers_root: state_header.nullifiers_root,
+        state_history_root: state_header.state_history_root,
         created_proofs: witness
             .object_proofs
             .into_iter()
@@ -265,17 +265,17 @@ fn build_head_snapshot(snapshot: &CurrentSnapshot) -> HeadSnapshot {
     HeadSnapshot {
         last_processed_slot: snapshot.last_processed_slot,
         last_processed_block_number: snapshot.last_processed_block_number,
-        current_gsr: snapshot.head.metadata.current_gsr,
+        current_state_root: snapshot.head.metadata.current_state_root,
         current_block_number: snapshot.head.metadata.current_block_number.map(i64::from),
         created_count: snapshot.head.metadata.created_count as usize,
         nullifier_count: snapshot.head.metadata.nullifier_count as usize,
-        gsr_count: snapshot.head.metadata.gsr_count as usize,
+        state_root_count: snapshot.head.metadata.state_root_count as usize,
     }
 }
 
 fn membership_snapshot(
     app_db: &AppDb,
-    roots: &CanonicalRoots,
+    roots: &StateRoots,
     object_commitments: &[Hash],
     nullifiers: &[Hash],
     indices: &HashMap<Hash, i64>,
@@ -288,7 +288,7 @@ fn membership_snapshot(
 
 fn grounding_witness(
     app_db: &AppDb,
-    roots: &CanonicalRoots,
+    roots: &StateRoots,
     object_commitments: &[Hash],
     indices: &HashMap<Hash, i64>,
 ) -> anyhow::Result<GroundingWitnessSnapshot> {

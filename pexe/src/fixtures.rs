@@ -12,7 +12,7 @@ use anyhow::{Result, anyhow};
 use pod2::middleware::{EMPTY_HASH, EMPTY_VALUE, Hash, StrKey, Value, containers::Array};
 use pod2utils::{dict, rand_raw_value};
 use sdk::{SdkModule, SpendableObject};
-use txlib::{GroundingWitness, StateRoot, with_identity};
+use txlib::{GroundingWitness, StateHeader, with_identity};
 
 use crate::inspect::derive_class_signature;
 
@@ -117,7 +117,7 @@ pub fn build_synthetic_state(
         indices.insert(commitment, index);
     }
 
-    let state_root = StateRoot::new(1, created.commitment(), EMPTY_HASH, EMPTY_HASH);
+    let state_header = StateHeader::new(1, created.commitment(), EMPTY_HASH, EMPTY_HASH);
 
     let mut created_proofs: HashMap<Hash, _> = HashMap::with_capacity(objs.len());
     for obj in objs {
@@ -129,7 +129,7 @@ pub fn build_synthetic_state(
         created_proofs.insert(commitment, (index, proof));
     }
 
-    let grounding_witness = Arc::new(GroundingWitness::new(state_root, created_proofs));
+    let grounding_witness = Arc::new(GroundingWitness::new(state_header, created_proofs));
 
     let spendable: Vec<SpendableObject> = objs
         .iter()

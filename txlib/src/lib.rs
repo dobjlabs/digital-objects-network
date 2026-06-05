@@ -53,40 +53,40 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// per-object Merkle proof packaged in a [`GroundingWitness`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StateRoot {
+pub struct StateHeader {
     pub block_number: i64,
     /// Root of the global created-object set: the commitment of every object
     /// state ever created. Grounding proves an input is a member here.
     pub created_root: Hash,
     pub nullifiers_root: Hash,
-    pub gsrs_root: Hash,
+    pub state_history_root: Hash,
 }
 
-impl StateRoot {
+impl StateHeader {
     pub fn new(
         block_number: i64,
         created_root: Hash,
         nullifiers_root: Hash,
-        gsrs_root: Hash,
+        state_history_root: Hash,
     ) -> Self {
         Self {
             block_number,
             created_root,
             nullifiers_root,
-            gsrs_root,
+            state_history_root,
         }
     }
 
     /// Array view used as the canonical state root record. Slot layout
-    /// matches the `record StateRoot` declaration in txlib.podlang.
+    /// matches the `record StateHeader` declaration in txlib.podlang.
     /// Predicates access fields via anchored-key syntax (e.g.
-    /// `state_root.created`).
+    /// `state_header.created`).
     pub fn array(&self) -> Array {
         Array::new(vec![
             Value::from(self.block_number),
             Value::from(self.created_root),
             Value::from(self.nullifiers_root),
-            Value::from(self.gsrs_root),
+            Value::from(self.state_history_root),
         ])
     }
 
@@ -96,34 +96,37 @@ impl StateRoot {
     }
 }
 
-/// Slot indices for the `StateRoot` record, matching the field order in
-/// the `record StateRoot` declaration in txlib.podlang.
-pub const STATE_ROOT_BLOCK_NUMBER_SLOT: usize = 0;
-pub const STATE_ROOT_CREATED_SLOT: usize = 1;
-pub const STATE_ROOT_NULLIFIERS_SLOT: usize = 2;
-pub const STATE_ROOT_GSRS_SLOT: usize = 3;
+/// Slot indices for the `StateHeader` record, matching the field order in
+/// the `record StateHeader` declaration in txlib.podlang.
+pub const STATE_HEADER_BLOCK_NUMBER_SLOT: usize = 0;
+pub const STATE_HEADER_CREATED_SLOT: usize = 1;
+pub const STATE_HEADER_NULLIFIERS_SLOT: usize = 2;
+pub const STATE_HEADER_STATE_HISTORY_SLOT: usize = 3;
 
 /// Proof-bearing grounding data required to build a new transaction.
 ///
-/// Callers use `state_root` as the committed global context and
+/// Callers use `state_header` as the committed global context and
 /// `created_proofs` to prove that each consumed input object is present in
-/// `state_root.created_root` (the global created-object set). Proofs are keyed
+/// `state_header.created_root` (the global created-object set). Proofs are keyed
 /// by object commitment (`Dictionary::commitment()`) and carry the object's
 /// array index, since grounding is `ArrayContains(created, index, obj)`. They
 /// are fetched fresh at consume time because the created set grows: a proof is
 /// only valid against the state root it was drawn from.
 #[derive(Clone, Debug)]
 pub struct GroundingWitness {
-    pub state_root: StateRoot,
+    pub state_header: StateHeader,
     /// Per-object `(index, Merkle proof)` for membership in the global created
     /// set, keyed by object commitment (`Dictionary::commitment()`).
     pub created_proofs: HashMap<Hash, (i64, MerkleProof)>,
 }
 
 impl GroundingWitness {
-    pub fn new(state_root: StateRoot, created_proofs: HashMap<Hash, (i64, MerkleProof)>) -> Self {
+    pub fn new(
+        state_header: StateHeader,
+        created_proofs: HashMap<Hash, (i64, MerkleProof)>,
+    ) -> Self {
         Self {
-            state_root,
+            state_header,
             created_proofs,
         }
     }
@@ -138,7 +141,7 @@ pub struct Tx {
     /// The after_tx dictionary. Its commitment is tx_final (the value the
     /// relayer publishes). Contains live, nullifiers, chain_start, chain_end.
     pub ctx: Dictionary,
-    pub state_root: Arc<StateRoot>,
+    pub state_header: Arc<StateHeader>,
 }
 
 impl Tx {
@@ -171,7 +174,7 @@ struct TxSerde {
     live: Set,
     nullifiers: Set,
     ctx: Dictionary,
-    state_root: StateRoot,
+    state_header: StateHeader,
 }
 
 impl Serialize for Tx {
@@ -183,7 +186,7 @@ impl Serialize for Tx {
             live: self.live.clone(),
             nullifiers: self.nullifiers.clone(),
             ctx: self.ctx.clone(),
-            state_root: (*self.state_root).clone(),
+            state_header: (*self.state_header).clone(),
         }
         .serialize(serializer)
     }
@@ -199,7 +202,7 @@ impl<'de> Deserialize<'de> for Tx {
             live: payload.live,
             nullifiers: payload.nullifiers,
             ctx: payload.ctx,
-            state_root: Arc::new(payload.state_root),
+            state_header: Arc::new(payload.state_header),
         })
     }
 }
@@ -374,7 +377,7 @@ pub struct TxBuilder {
     pub chain_start: Hash,
     live: Set,
     nullifiers: Set,
-    state_root: Arc<StateRoot>,
+    state_header: Arc<StateHeader>,
     st_inputs_grounded: Statement,
     inputs_set: Set,
     events: Vec<ChainEvent>,
@@ -505,13 +508,13 @@ impl TxBuilder {
             Value::from(inputs_set.commitment()),
             Value::from(EMPTY_VALUE),
         ]);
-        let state_root = Arc::new(grounding.state_root.clone());
+        let state_header = Arc::new(grounding.state_header.clone());
         Self {
             chain: chain_start,
             chain_start,
             live: inputs_set.clone(),
             nullifiers: set!(),
-            state_root,
+            state_header,
             st_inputs_grounded,
             inputs_set,
             events: vec![],
@@ -841,7 +844,7 @@ impl TxBuilder {
 
         // Tie grounding to the public state root: rebind the InputsGrounded
         // statement's `inputs` to `before_tx.live` (the in-tx working set) and
-        // its created set to `state_root.created`. The latter is the single
+        // its created set to `state_header.created`. The latter is the single
         // state-root array access anchoring the whole grounding tree. Two calls
         // rather than one because the entries are different anchored-key types:
         // a dict key and an array index.
@@ -852,13 +855,13 @@ impl TxBuilder {
                 self.st_inputs_grounded.clone(),
             ))
             .unwrap();
-        let state_root_arr = self.state_root.array();
+        let state_header_arr = self.state_header.array();
         let st_inputs_rebound = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
                 vec![
                     None,
-                    Some((&state_root_arr, STATE_ROOT_CREATED_SLOT as i64)),
+                    Some((&state_header_arr, STATE_HEADER_CREATED_SLOT as i64)),
                 ],
                 st_inputs_rebound,
             ))
@@ -936,7 +939,7 @@ impl TxBuilder {
             live: self.live,
             nullifiers: self.nullifiers,
             ctx: after_tx,
-            state_root: self.state_root,
+            state_header: self.state_header,
         };
         (st, tx, stats)
     }
@@ -960,8 +963,8 @@ impl TxBuilder {
     ) -> (Statement, Set, TxStats) {
         let mut stats = TxStats::new();
         // Ground against the created-set commitment as a plain value; TxFinalized
-        // is what ties it back to `state_root.created`.
-        let created_root = grounding.state_root.created_root;
+        // is what ties it back to `state_header.created`.
+        let created_root = grounding.state_header.created_root;
         let created_value = Value::from(created_root);
 
         if inputs.is_empty() {
@@ -1122,13 +1125,13 @@ mod tests {
     /// Running grounding state for the tests: keeps the full created-object set
     /// (as an array, plus a reverse index for proofs) and the nullifier set so
     /// it can hand out real Merkle proofs, while exposing only the
-    /// commitments-only `StateRoot`. The created set is grow-only.
+    /// commitments-only `StateHeader`. The created set is grow-only.
     struct TestState {
         block_number: i64,
         created: Array,
         created_index: HashMap<Hash, i64>,
         nullifiers: Set,
-        gsrs: Array,
+        state_history: Array,
     }
 
     impl TestState {
@@ -1138,16 +1141,16 @@ mod tests {
                 created: Array::new(Vec::new()),
                 created_index: HashMap::new(),
                 nullifiers: set!(),
-                gsrs: Array::new(Vec::new()),
+                state_history: Array::new(Vec::new()),
             }
         }
 
-        fn state_root(&self) -> StateRoot {
-            StateRoot::new(
+        fn state_header(&self) -> StateHeader {
+            StateHeader::new(
                 self.block_number,
                 self.created.commitment(),
                 self.nullifiers.commitment(),
-                self.gsrs.commitment(),
+                self.state_history.commitment(),
             )
         }
 
@@ -1183,7 +1186,7 @@ mod tests {
                     (commitment, (index, proof))
                 })
                 .collect();
-            Arc::new(GroundingWitness::new(self.state_root(), created_proofs))
+            Arc::new(GroundingWitness::new(self.state_header(), created_proofs))
         }
     }
 
@@ -1229,14 +1232,14 @@ mod tests {
     }
 
     #[test]
-    fn state_root_hash_matches_array_commitment() {
-        let sr = StateRoot::new(7, test_hash(1), test_hash(2), test_hash(3));
+    fn state_header_hash_matches_array_commitment() {
+        let sr = StateHeader::new(7, test_hash(1), test_hash(2), test_hash(3));
         assert_eq!(sr.hash(), sr.array().commitment());
     }
 
     #[test]
-    fn state_root_serializes_and_deserializes_camelcase() {
-        let original = StateRoot::new(9, test_hash(1), test_hash(2), test_hash(3));
+    fn state_header_serializes_and_deserializes_camelcase() {
+        let original = StateHeader::new(9, test_hash(1), test_hash(2), test_hash(3));
         let encoded = serde_json::to_value(&original).unwrap();
         assert_eq!(encoded["blockNumber"], serde_json::json!(9));
         assert_eq!(
@@ -1248,11 +1251,11 @@ mod tests {
             serde_json::json!(hex::encode([2_u8; 32]))
         );
         assert_eq!(
-            encoded["gsrsRoot"],
+            encoded["stateHistoryRoot"],
             serde_json::json!(hex::encode([3_u8; 32]))
         );
 
-        let decoded: StateRoot = serde_json::from_value(encoded).unwrap();
+        let decoded: StateHeader = serde_json::from_value(encoded).unwrap();
         assert_eq!(decoded, original);
     }
 
