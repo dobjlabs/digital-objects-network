@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
 use pod2::{
@@ -27,11 +27,12 @@ fn value_key(raw: RawValue) -> Vec<u8> {
     k
 }
 
-fn created_index_key(commitment: Hash) -> Vec<u8> {
-    let mut k = Vec::with_capacity(35);
-    k.extend_from_slice(b"ci/");
-    k.extend_from_slice(&hash_to_db_bytes(commitment));
-    k
+/// Whether the created `Array` holds `commitment` at `index`: the leaf there
+/// must equal it. A prefetched index is only a hint until this confirms the
+/// array actually holds the commitment at that position, so the read path and
+/// the derivation collision check both call it to authenticate an index.
+pub fn created_array_holds(created: &Array, index: i64, commitment: Hash) -> Result<bool> {
+    Ok(created.get(index as usize)? == Some(Value::from(commitment)))
 }
 
 #[derive(Clone)]
@@ -70,64 +71,49 @@ impl AppDb {
         Ok(Array::from_db(root, self.db_box())?)
     }
 
-    /// Record an object commitment's position in the created `Array`.
-    ///
-    /// The cache is a plain `commitment -> index` map: not Merkleized, not part
-    /// of any committed root. It is only ever read as a hint -- every membership
-    /// or proof query cross-checks the index against the `Array` at the queried
-    /// root, so a stale entry (e.g. one left behind by an abandoned reorg branch)
-    /// resolves to "absent" rather than a wrong answer.
-    pub fn created_index_put(&self, commitment: Hash, index: i64) -> Result<()> {
-        self.db
-            .put(created_index_key(commitment), index.to_le_bytes())
-            .map_err(|err| anyhow!("rocksdb created-index put failed: {err}"))
-    }
-
-    pub fn created_index_get(&self, commitment: Hash) -> Result<Option<i64>> {
-        match self.db.get(created_index_key(commitment))? {
-            None => Ok(None),
-            Some(bytes) => {
-                let limbs: [u8; 8] = bytes
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| anyhow!("invalid created-index entry length"))?;
-                Ok(Some(i64::from_le_bytes(limbs)))
-            }
-        }
-    }
-
-    /// `(index, membership proof)` for one object commitment against the created
-    /// `Array` at `roots.created`, or `(false, None)` when it is not present
-    /// there. The cache supplies the candidate index; proving it against the
-    /// array is what authenticates membership (and rejects stale cache hits).
-    pub fn prove_created(
-        &self,
-        roots: &CanonicalRoots,
-        obj_commitment: Hash,
-    ) -> Result<(bool, Option<(i64, MerkleProof)>)> {
-        let Some(index) = self.created_index_get(obj_commitment)? else {
-            return Ok((false, None));
-        };
-        let created = self.open_created(roots.created)?;
-        match created.prove(index as usize) {
-            Ok((value, proof)) if value == Value::from(obj_commitment) => {
-                Ok((true, Some((index, proof))))
-            }
-            _ => Ok((false, None)),
-        }
-    }
-
-    pub fn created_exists_batch(
+    /// Membership witness for each object commitment against the created `Array`
+    /// at `roots.created`: `Some((array index, ArrayContains proof))` when the
+    /// array authenticates the commitment at its prefetched index, `None` when
+    /// absent (no index, or a leaf mismatch). The array is opened once for the
+    /// whole batch.
+    pub fn prove_created_for(
         &self,
         roots: &CanonicalRoots,
         obj_commitments: &[Hash],
+        indices: &HashMap<Hash, i64>,
+    ) -> Result<Vec<Option<(i64, MerkleProof)>>> {
+        let created = self.open_created(roots.created)?;
+        obj_commitments
+            .iter()
+            .map(|commitment| match indices.get(commitment) {
+                None => Ok(None),
+                Some(&index) => match created.prove(index as usize) {
+                    Ok((value, proof)) if value == Value::from(*commitment) => {
+                        Ok(Some((index, proof)))
+                    }
+                    _ => Ok(None),
+                },
+            })
+            .collect()
+    }
+
+    /// Membership bits for `obj_commitments` against the created `Array` at
+    /// `roots.created`, using candidate indices prefetched from the Postgres
+    /// created index. A commitment with no index is absent; otherwise the array
+    /// leaf at its index must equal it -- the cross-check that authenticates the
+    /// index against the authoritative root.
+    pub fn created_exists_for(
+        &self,
+        roots: &CanonicalRoots,
+        obj_commitments: &[Hash],
+        indices: &HashMap<Hash, i64>,
     ) -> Result<Vec<bool>> {
         let created = self.open_created(roots.created)?;
         obj_commitments
             .iter()
-            .map(|commitment| match self.created_index_get(*commitment)? {
+            .map(|commitment| match indices.get(commitment) {
                 None => Ok(false),
-                Some(index) => Ok(created.get(index as usize)? == Some(Value::from(*commitment))),
+                Some(&index) => created_array_holds(&created, index, *commitment),
             })
             .collect()
     }
@@ -256,39 +242,43 @@ mod tests {
     }
 
     #[test]
-    fn test_persistent_created_membership() {
+    fn test_created_membership_via_index() {
         let (app_db, _dir) = open_test_db();
         let mut created = app_db.open_created(EMPTY_HASH).unwrap();
         let obj_commitment = test_hash(9);
         created.insert(0, Value::from(obj_commitment)).unwrap();
-        app_db.created_index_put(obj_commitment, 0).unwrap();
 
         let roots = CanonicalRoots {
             created: created.commitment(),
             ..CanonicalRoots::empty()
         };
+        let indices = HashMap::from([(obj_commitment, 0i64)]);
 
         assert_eq!(
             app_db
-                .created_exists_batch(&roots, &[obj_commitment])
+                .created_exists_for(&roots, &[obj_commitment], &indices)
                 .unwrap(),
             vec![true]
         );
-        let (present, witness) = app_db.prove_created(&roots, obj_commitment).unwrap();
-        assert!(present);
+        let witnesses = app_db
+            .prove_created_for(&roots, &[obj_commitment], &indices)
+            .unwrap();
+        let witness = witnesses.into_iter().next().unwrap();
         assert_eq!(witness.map(|(index, _proof)| index), Some(0));
 
-        // A commitment never recorded in the cache is absent, and a cache hit
-        // that the array root does not actually contain resolves to absent too.
+        // A commitment with no index is absent, and an index the array root
+        // does not actually contain resolves to absent too.
         let absent = test_hash(7);
         assert_eq!(
-            app_db.created_exists_batch(&roots, &[absent]).unwrap(),
+            app_db
+                .created_exists_for(&roots, &[absent], &HashMap::new())
+                .unwrap(),
             vec![false]
         );
         let empty_roots = CanonicalRoots::empty();
         assert_eq!(
             app_db
-                .created_exists_batch(&empty_roots, &[obj_commitment])
+                .created_exists_for(&empty_roots, &[obj_commitment], &indices)
                 .unwrap(),
             vec![false]
         );

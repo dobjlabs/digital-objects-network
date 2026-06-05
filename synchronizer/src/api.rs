@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use axum::{
@@ -212,14 +212,23 @@ async fn post_grounding_witness(
     Json(body): Json<GroundingWitnessRequest>,
 ) -> Result<Json<GroundingWitnessResponse>, (StatusCode, String)> {
     ensure_hash_query_limit("objectCommitments", body.object_commitments.len())?;
-    let snapshot = load_current_snapshot(&app_state).await?;
     let object_commitments = body
         .object_commitments
         .iter()
         .map(|raw| parse_hash_hex(raw))
         .collect::<Result<Vec<_>, _>>()?;
-    let witness = grounding_witness(&app_state.app_db, &snapshot.head.roots, &object_commitments)
+    let (snapshot, indices) = app_state
+        .sync_db
+        .snapshot_with_created_indices(&object_commitments)
+        .await
         .map_err(internal_error)?;
+    let witness = grounding_witness(
+        &app_state.app_db,
+        &snapshot.head.roots,
+        &object_commitments,
+        &indices,
+    )
+    .map_err(internal_error)?;
     let head = snapshot.head;
     let state_root = head.current_state_root().ok_or_else(|| {
         (
@@ -279,9 +288,10 @@ fn membership_snapshot(
     roots: &CanonicalRoots,
     object_commitments: &[Hash],
     nullifiers: &[Hash],
+    indices: &HashMap<Hash, i64>,
 ) -> anyhow::Result<MembershipSnapshot> {
     Ok(MembershipSnapshot {
-        created_present: app_db.created_exists_batch(roots, object_commitments)?,
+        created_present: app_db.created_exists_for(roots, object_commitments, indices)?,
         nullifier_present: app_db.nullifier_exists_batch(roots, nullifiers)?,
     })
 }
@@ -290,18 +300,18 @@ fn grounding_witness(
     app_db: &AppDb,
     roots: &CanonicalRoots,
     object_commitments: &[Hash],
+    indices: &HashMap<Hash, i64>,
 ) -> anyhow::Result<GroundingWitnessSnapshot> {
+    let witnesses = app_db.prove_created_for(roots, object_commitments, indices)?;
     let object_proofs = object_commitments
         .iter()
-        .map(|commitment| {
-            let (present, witness) = app_db.prove_created(roots, *commitment)?;
-            Ok(ObjectMembershipProof {
-                commitment: *commitment,
-                present,
-                witness,
-            })
+        .zip(witnesses)
+        .map(|(commitment, witness)| ObjectMembershipProof {
+            commitment: *commitment,
+            present: witness.is_some(),
+            witness,
         })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .collect();
     Ok(GroundingWitnessSnapshot { object_proofs })
 }
 
@@ -311,14 +321,19 @@ async fn load_membership_context(
     nullifiers: &[String],
 ) -> Result<MembershipContext, (StatusCode, String)> {
     ensure_membership_query_limit(object_commitments.len(), nullifiers.len())?;
-    let snapshot = load_current_snapshot(app_state).await?;
     let object_commitments = parse_hashes(object_commitments)?;
     let nullifiers = parse_hashes(nullifiers)?;
+    let (snapshot, indices) = app_state
+        .sync_db
+        .snapshot_with_created_indices(&object_commitments)
+        .await
+        .map_err(internal_error)?;
     let membership = membership_snapshot(
         &app_state.app_db,
         &snapshot.head.roots,
         &object_commitments,
         &nullifiers,
+        &indices,
     )
     .map_err(internal_error)?;
 

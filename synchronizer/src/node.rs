@@ -23,7 +23,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::config::AppConfig;
 use crate::head::CanonicalHead;
-use crate::state_machine::{StateMachine, MAX_GSR_AGE_BLOCKS};
+use crate::state_machine::{DerivedSlot, StateMachine, MAX_GSR_AGE_BLOCKS};
 use crate::sync_db::{CommittedSlotRecord, SyncDb};
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
@@ -46,65 +46,25 @@ struct SlotContext {
     has_blob_commitments: bool,
 }
 
-/// Fully-derived result for one slot, ready to be committed.
-pub struct ProcessedSlot {
-    pub slot: u32,
-    pub block_root: B256,
-    pub parent_root: B256,
-    pub block_number: Option<u32>,
-    pub is_empty: bool,
-    pub new_head: CanonicalHead,
-}
-
-impl ProcessedSlot {
-    pub(crate) fn empty(
+/// Outcome of processing one beacon slot, ready to be committed.
+pub enum ProcessedSlot {
+    /// Beacon produced no block for the slot. With no execution block there is
+    /// nothing to derive against, so the previous canonical head is carried
+    /// forward unchanged, committed under the new slot number to keep canonical
+    /// slot history contiguous.
+    Missing {
         slot: u32,
-        block_root: B256,
-        parent_root: B256,
-        new_head: CanonicalHead,
-    ) -> Self {
-        Self {
-            slot,
-            block_root,
-            parent_root,
-            block_number: None,
-            is_empty: true,
-            new_head,
-        }
-    }
-
-    fn present(
+        carried_head: CanonicalHead,
+    },
+    /// Beacon produced a block and the state machine derived the slot against
+    /// it (deriving a fresh GSR even when the block carries no usable blobs).
+    Present {
         slot: u32,
         block_root: B256,
         parent_root: B256,
         block_number: u32,
-        new_head: CanonicalHead,
-    ) -> Self {
-        Self {
-            slot,
-            block_root,
-            parent_root,
-            block_number: Some(block_number),
-            is_empty: false,
-            new_head,
-        }
-    }
-
-    fn canonical_block_root(&self) -> Option<B256> {
-        (!self.is_empty).then_some(self.block_root)
-    }
-
-    fn canonical_parent_root(&self) -> Option<B256> {
-        (!self.is_empty).then_some(self.parent_root)
-    }
-
-    fn canonical_current_gsr(&self) -> Option<Hash> {
-        if self.is_empty {
-            None
-        } else {
-            self.new_head.metadata.current_gsr
-        }
-    }
+        derived: DerivedSlot,
+    },
 }
 
 impl Node {
@@ -147,7 +107,8 @@ impl Node {
         self.sync_db.current_head().await
     }
 
-    /// Rewind to `keep_slot` by deleting later canonical slot rows.
+    /// Rewind to `keep_slot` by deleting later canonical slot rows; the created
+    /// index rows those slots added are pruned in the same Postgres transaction.
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
         self.sync_db.rollback_to_slot(keep_slot).await
     }
@@ -276,14 +237,7 @@ impl Node {
         slot: u32,
     ) -> Result<CommittedSlotRecord> {
         let Some(header) = self.get_beacon_slot_header_with_retry(slot).await? else {
-            return Ok(CommittedSlotRecord {
-                slot,
-                block_root: None,
-                parent_root: None,
-                block_number: None,
-                current_gsr: None,
-                is_empty: true,
-            });
+            return Ok(CommittedSlotRecord::empty(slot));
         };
 
         let block = self
@@ -365,6 +319,40 @@ impl Node {
         self.derive_from_context(slot_ctx).await
     }
 
+    /// Parse the slot's blobs, prefetch the array positions of their created
+    /// commitments that already exist in canonical state, and derive the next
+    /// head.
+    ///
+    /// The prefetch is one batched query against the created index, mirroring how
+    /// `recent_gsrs` is prefetched, so the state machine never has to query the
+    /// database itself. It returns indices (not just a membership set) so the
+    /// state machine can cross-check each hit against the array at the base root.
+    async fn derive_slot(
+        &self,
+        base_head: CanonicalHead,
+        recent_gsrs: Vec<(Hash, i64)>,
+        slot: u32,
+        block_number: u32,
+        blob_payloads: &[(u32, Vec<u8>)],
+    ) -> Result<DerivedSlot> {
+        let parsed = self
+            .state_machine
+            .parse_blobs(blob_payloads, slot, block_number);
+        let candidates: Vec<Hash> = parsed
+            .iter()
+            .flat_map(|(_, payload)| payload.live.iter().copied())
+            .collect();
+        let prior_indices = self.sync_db.created_indices(&candidates).await?;
+        self.state_machine.derive_slot_head(
+            base_head,
+            recent_gsrs,
+            slot,
+            block_number,
+            &parsed,
+            &prior_indices,
+        )
+    }
+
     /// Shared derivation logic: given an already-resolved `SlotContext`, fetch execution data
     /// as needed, run the state machine, and return the processed slot.
     async fn derive_from_context(&self, slot_ctx: SlotContext) -> Result<ProcessedSlot> {
@@ -393,20 +381,16 @@ impl Node {
 
         if !slot_ctx.has_blob_commitments {
             debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
-            let new_head = self.state_machine.derive_slot_head(
-                base_head,
-                recent_gsrs,
-                slot_ctx.slot,
+            let derived = self
+                .derive_slot(base_head, recent_gsrs, slot_ctx.slot, block_number, &[])
+                .await?;
+            return Ok(ProcessedSlot::Present {
+                slot: slot_ctx.slot,
+                block_root: slot_ctx.beacon_block_root,
+                parent_root: slot_ctx.parent_root,
                 block_number,
-                &[],
-            )?;
-            return Ok(ProcessedSlot::present(
-                slot_ctx.slot,
-                slot_ctx.beacon_block_root,
-                slot_ctx.parent_root,
-                block_number,
-                new_head,
-            ));
+                derived,
+            });
         }
 
         let mut blob_payloads = Vec::new();
@@ -459,20 +443,16 @@ impl Node {
                 to_address = ?self.config.to_address,
                 "No matching target blob transactions in execution block"
             );
-            let new_head = self.state_machine.derive_slot_head(
-                base_head,
-                recent_gsrs,
-                slot_ctx.slot,
+            let derived = self
+                .derive_slot(base_head, recent_gsrs, slot_ctx.slot, block_number, &[])
+                .await?;
+            return Ok(ProcessedSlot::Present {
+                slot: slot_ctx.slot,
+                block_root: slot_ctx.beacon_block_root,
+                parent_root: slot_ctx.parent_root,
                 block_number,
-                &[],
-            )?;
-            return Ok(ProcessedSlot::present(
-                slot_ctx.slot,
-                slot_ctx.beacon_block_root,
-                slot_ctx.parent_root,
-                block_number,
-                new_head,
-            ));
+                derived,
+            });
         }
 
         let blob_versioned_hashes: Vec<B256> = indexed_do_blob_txs
@@ -519,34 +499,57 @@ impl Node {
             }
         }
 
-        let new_head = self.state_machine.derive_slot_head(
-            base_head,
-            recent_gsrs,
-            slot_ctx.slot,
-            block_number,
-            &blob_payloads,
-        )?;
+        let derived = self
+            .derive_slot(
+                base_head,
+                recent_gsrs,
+                slot_ctx.slot,
+                block_number,
+                &blob_payloads,
+            )
+            .await?;
 
-        Ok(ProcessedSlot::present(
-            slot_ctx.slot,
-            slot_ctx.beacon_block_root,
-            slot_ctx.parent_root,
+        Ok(ProcessedSlot::Present {
+            slot: slot_ctx.slot,
+            block_root: slot_ctx.beacon_block_root,
+            parent_root: slot_ctx.parent_root,
             block_number,
-            new_head,
-        ))
+            derived,
+        })
     }
 
-    /// Commit one derived slot to Postgres as the new canonical head.
+    /// Commit one processed slot to Postgres as the new canonical head, writing
+    /// its created-index rows in the same transaction.
     pub async fn commit_slot(&self, processed: &ProcessedSlot) -> Result<()> {
-        let slot = CommittedSlotRecord {
-            slot: processed.slot,
-            block_root: processed.canonical_block_root(),
-            parent_root: processed.canonical_parent_root(),
-            block_number: processed.block_number,
-            current_gsr: processed.canonical_current_gsr(),
-            is_empty: processed.is_empty,
-        };
-
-        self.sync_db.commit_slot(&slot, &processed.new_head).await
+        match processed {
+            ProcessedSlot::Missing { slot, carried_head } => {
+                self.sync_db
+                    .commit_slot(
+                        &CommittedSlotRecord::empty(*slot),
+                        carried_head,
+                        &HashMap::new(),
+                    )
+                    .await
+            }
+            ProcessedSlot::Present {
+                slot,
+                block_root,
+                parent_root,
+                block_number,
+                derived,
+            } => {
+                let record = CommittedSlotRecord {
+                    slot: *slot,
+                    block_root: Some(*block_root),
+                    parent_root: Some(*parent_root),
+                    block_number: Some(*block_number),
+                    current_gsr: derived.head.metadata.current_gsr,
+                    is_empty: false,
+                };
+                self.sync_db
+                    .commit_slot(&record, &derived.head, &derived.created_added)
+                    .await
+            }
+        }
     }
 }

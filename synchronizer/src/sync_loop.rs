@@ -192,10 +192,12 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
         ));
     }
 
-    // Empty slots are valid on beacon; commit an empty processed slot so canonical slot history
-    // stays contiguous.
-    let head = node.current_head().await?;
-    let processed = ProcessedSlot::empty(slot, Default::default(), Default::default(), head);
+    // Skipped slots are valid on beacon; commit a Missing slot so canonical
+    // slot history stays contiguous.
+    let processed = ProcessedSlot::Missing {
+        slot,
+        carried_head: node.current_head().await?,
+    };
 
     info!(slot, "No block produced for slot");
     node.commit_slot(&processed).await?;

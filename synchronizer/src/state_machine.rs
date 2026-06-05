@@ -4,12 +4,12 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use common::{encode_hash_hex, proof::BlobParser};
+use common::{encode_hash_hex, payload::Payload, proof::BlobParser};
 use pod2::middleware::{containers::Array, containers::Set, Hash, Value};
 use tracing::{info, warn};
 
 use crate::{
-    app_db::AppDb,
+    app_db::{created_array_holds, AppDb},
     head::{CanonicalHead, CanonicalRoots, HeadMetadata},
 };
 use txlib::StateRoot;
@@ -34,6 +34,20 @@ struct WorkingState {
     gsr_history: Array,
     /// Recent canonical GSRs keyed by hash for grounding validation.
     recent_gsrs: HashMap<Hash, i64>,
+    /// Commitments this slot appended to `created`, keyed to their array
+    /// indices. Doubles as the within-slot duplicate check: the persistent
+    /// created index reflects only committed slots, so it cannot see objects
+    /// added earlier in this same slot. The caller persists these entries to
+    /// the created index in the slot's commit transaction.
+    created_added: HashMap<Hash, i64>,
+}
+
+/// One slot's derivation result: the candidate next canonical head plus the
+/// object commitments (with array indices) it appended to `created`. The caller
+/// persists the additions to the created index when committing the slot.
+pub struct DerivedSlot {
+    pub head: CanonicalHead,
+    pub created_added: HashMap<Hash, i64>,
 }
 
 /// Domain logic for the synchronizer: proof verification, state validation, and Merkle storage.
@@ -42,7 +56,8 @@ struct WorkingState {
 /// Callers supply the `CanonicalHead` they want to operate against, and Postgres remains the sole
 /// source of truth for which head is canonical.
 pub struct StateMachine {
-    /// RocksDB-backed app-state store used to open persistent containers and prove membership.
+    /// RocksDB-backed app-state store used to open the created, nullifier, and
+    /// GSR containers during derivation.
     app_db: AppDb,
     /// Blob parser/verifier used to decode TxFinalized payloads from blob bytes.
     proof_parser: Arc<dyn BlobParser>,
@@ -56,60 +71,70 @@ impl StateMachine {
         }
     }
 
-    /// Parse and validate one blob payload against the in-progress slot state.
+    /// Parse and verify each blob as a `TxFinalized` payload, returning the
+    /// valid ones in order.
     ///
-    /// This is the core per-blob derivation step used by `derive_slot_head`.
-    /// The method is intentionally fail-soft for invalid blob contents: malformed payloads,
-    /// proofs grounded in unknown/too-old GSRs, duplicate transactions, and duplicate
-    /// nullifiers are logged and skipped rather than aborting the whole slot.
+    /// Fail-soft: malformed or unverifiable blobs are logged and skipped, never
+    /// aborting the slot. Verification happens here once so the parsed payloads
+    /// can be reused for both the existence prefetch (the caller queries the
+    /// created index for their `live` commitments) and the apply pass in
+    /// `derive_slot_head`. Each kept payload carries its originating blob index
+    /// so the apply pass can attribute a hard error to the right blob.
+    pub fn parse_blobs(
+        &self,
+        blob_payloads: &[(u32, Vec<u8>)],
+        slot: u32,
+        block_number: u32,
+    ) -> Vec<(u32, Payload)> {
+        let mut parsed = Vec::with_capacity(blob_payloads.len());
+        for (blob_index, bytes) in blob_payloads {
+            match self.proof_parser.parse_blob(bytes) {
+                Ok(Some(payload)) => parsed.push((*blob_index, payload)),
+                Ok(None) => info!(
+                    slot,
+                    block_number,
+                    blob_index,
+                    "Blob did not contain a valid TxFinalized proof; skipping"
+                ),
+                Err(err) => warn!(
+                    slot,
+                    block_number,
+                    blob_index,
+                    ?err,
+                    "Failed to parse/verify TxFinalized payload; skipping blob"
+                ),
+            }
+        }
+        parsed
+    }
+
+    /// Validate one already-parsed payload against the in-progress slot state and
+    /// apply it, or skip it (fail-soft) on a grounding or duplicate violation.
     ///
     /// Validation order:
-    /// 1. Parse and verify the blob as a `TxFinalized` payload via `proof_parser`
-    /// 2. Check that `payload.state_root_hash` exists in the recent canonical GSR cache
-    /// 3. Enforce the maximum grounding age window (`MAX_GSR_AGE_BLOCKS`)
-    /// 4. Reject duplicate created-object commitments both within the payload and against the
-    ///    in-progress created set: a tx that creates an object that already exists fails the same
-    ///    way a nullifier double-spend does. This is also what gives no-input (mining) txs their
+    /// 1. `payload.state_root_hash` must exist in the recent canonical GSR window
+    /// 2. that grounding must be within `MAX_GSR_AGE_BLOCKS`
+    /// 3. created-object commitments must not collide -- within the payload, with
+    ///    objects added earlier this slot, or with prior committed state
+    ///    (`prior_indices`, prefetched from the created index and cross-checked
+    ///    against the array). This is what gives no-input (mining) txs their
     ///    replay protection.
-    /// 5. Reject duplicate nullifiers both within the payload and against the in-progress
-    ///    nullifiers set, which starts from canonical state and includes earlier accepted blobs
+    /// 4. nullifiers must not collide within the payload or with the in-progress
+    ///    nullifier set
     ///
-    /// If all checks pass, the method mutates the slot-local `WorkingState` by:
-    /// - appending each created-object commitment to the persistent in-progress created array
-    ///   and recording its index in the reverse-index cache
-    /// - inserting each nullifier into the persistent in-progress nullifiers set handle
-    /// - incrementing the corresponding counts in `state.metadata`
-    ///
-    /// No new canonical head is committed here. Mutating the persistent container handles may
-    /// materialize Merkle nodes/values in RocksDB, but the canonical state changes only if the
-    /// caller later publishes the resulting `CanonicalHead` in Postgres.
-    fn process_blob(
+    /// On success it appends each created commitment to the in-progress array
+    /// (recording the addition in `created_added`), inserts each nullifier, and
+    /// bumps the counts. Mutating the container handles may materialize Merkle
+    /// nodes in RocksDB, but nothing becomes canonical until the caller commits
+    /// the resulting head.
+    fn apply_payload(
         &self,
         state: &mut WorkingState,
-        bytes: &[u8],
+        payload: &Payload,
+        prior_indices: &HashMap<Hash, i64>,
         slot: u32,
         block_number: u32,
     ) -> Result<()> {
-        let payload = match self.proof_parser.parse_blob(bytes) {
-            Ok(Some(payload)) => payload,
-            Ok(None) => {
-                info!(
-                    slot,
-                    block_number, "Blob did not contain a valid TxFinalized proof; skipping"
-                );
-                return Ok(());
-            }
-            Err(err) => {
-                warn!(
-                    slot,
-                    block_number,
-                    ?err,
-                    "Failed to parse/verify TxFinalized payload; skipping blob"
-                );
-                return Ok(());
-            }
-        };
-
         let Some(&gsr_block) = state.recent_gsrs.get(&payload.state_root_hash) else {
             warn!(
                 slot,
@@ -118,8 +143,7 @@ impl StateMachine {
             );
             return Ok(());
         };
-        let current_block = i64::from(block_number);
-        let age = current_block - gsr_block;
+        let age = i64::from(block_number) - gsr_block;
         if age > MAX_GSR_AGE_BLOCKS {
             warn!(
                 slot,
@@ -139,7 +163,7 @@ impl StateMachine {
                 );
                 return Ok(());
             }
-            if self.is_created(state, *obj)? {
+            if self.already_created(state, prior_indices, obj)? {
                 warn!(
                     slot,
                     block_number, "Created object already exists (creation collision); rejecting"
@@ -168,7 +192,7 @@ impl StateMachine {
             // `created_count`, which doubles as the true object count.
             let index = state.metadata.created_count as usize;
             state.created.insert(index, Value::from(*obj))?;
-            self.app_db.created_index_put(*obj, index as i64)?;
+            state.created_added.insert(*obj, index as i64);
             state.metadata.created_count += 1;
         }
         for nullifier in &payload.nullifiers {
@@ -186,33 +210,45 @@ impl StateMachine {
         Ok(())
     }
 
-    /// Whether `commitment` is already in the in-progress created set. The cache
-    /// gives a candidate index; the in-progress array is the authority, so a
-    /// stale cache hit (pointing at an index this array does not hold, or holds
-    /// a different commitment at) correctly reads as "not created".
-    fn is_created(&self, state: &WorkingState, commitment: Hash) -> Result<bool> {
-        match self.app_db.created_index_get(commitment)? {
+    /// Whether `obj` already exists as of the in-progress slot state: it was
+    /// either added earlier this slot, or the prefetched created index points at
+    /// a position the array at the base root actually holds it in. Re-reading the
+    /// array rejects a phantom index entry (one the root does not contain), so a
+    /// stale index never wrongly rejects a legitimate creation.
+    fn already_created(
+        &self,
+        state: &WorkingState,
+        prior_indices: &HashMap<Hash, i64>,
+        obj: &Hash,
+    ) -> Result<bool> {
+        if state.created_added.contains_key(obj) {
+            return Ok(true);
+        }
+        match prior_indices.get(obj) {
+            Some(&index) => created_array_holds(&state.created, index, *obj),
             None => Ok(false),
-            Some(index) => Ok(state.created.get(index as usize)? == Some(Value::from(commitment))),
         }
     }
 
-    /// Derive the next canonical head for one execution slot from a caller-provided base head.
+    /// Derive the next canonical head for one execution slot from a caller
+    /// provided base head and the slot's already-parsed payloads.
     ///
-    /// This method is the slot-level orchestration layer around `process_blob`.
     /// It:
     /// - reopens the persistent created-object, nullifiers, and GSR-history containers from
     ///   `base_head.roots`
     /// - seeds the per-slot `WorkingState` with the caller-provided recent-GSR window
-    /// - feeds every decoded blob payload through `process_blob`, accumulating accepted updates
-    ///   in the in-progress container handles
+    /// - applies every payload via `apply_payload`, using `prior_indices` (the created-object
+    ///   commitments already canonical as of the base head, with their array positions,
+    ///   prefetched from the created index) for the creation-collision check
     /// - computes the next GSR from the updated created/nullifiers roots and the prior
     ///   GSR-history root committed into the resulting `StateRoot`
     /// - appends that new GSR to the full history array and returns the resulting `CanonicalHead`
+    ///   together with the object commitments this slot added, as a `DerivedSlot`
     ///
     /// The returned head is only a candidate next canonical state. By the time this method
     /// returns, RocksDB may already contain Merkle nodes for the derived containers, but the
-    /// head does not become canonical until the caller persists it in Postgres.
+    /// head does not become canonical until the caller persists it (and the `created_added`
+    /// index rows) in Postgres.
     ///
     /// Empty or fully rejected slots still produce a new head with the same created and
     /// nullifiers roots as `base_head`, but with a newly derived `current_gsr` and an appended
@@ -223,23 +259,22 @@ impl StateMachine {
         recent_gsrs: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
         block_number: u32,
-        blob_payloads: &[(u32, Vec<u8>)],
-    ) -> Result<CanonicalHead> {
+        payloads: &[(u32, Payload)],
+        prior_indices: &HashMap<Hash, i64>,
+    ) -> Result<DerivedSlot> {
         let mut working = WorkingState {
             metadata: base_head.metadata,
             created: self.app_db.open_created(base_head.roots.created)?,
             nullifiers: self.app_db.open_nullifiers(base_head.roots.nullifiers)?,
             gsr_history: self.app_db.open_gsr_history(base_head.roots.gsr_history)?,
             recent_gsrs: recent_gsrs.into_iter().collect(),
+            created_added: HashMap::new(),
         };
 
-        for (blob_index, bytes) in blob_payloads {
-            self.process_blob(&mut working, bytes, slot, block_number)
+        for (blob_index, payload) in payloads {
+            self.apply_payload(&mut working, payload, prior_indices, slot, block_number)
                 .with_context(|| {
-                    format!(
-                        "Failed to process blob at slot {}, blob_index {}",
-                        slot, blob_index
-                    )
+                    format!("applying blob at slot {slot}, blob_index {blob_index}")
                 })?;
         }
 
@@ -279,7 +314,10 @@ impl StateMachine {
             "Slot data"
         );
 
-        Ok(new_head)
+        Ok(DerivedSlot {
+            head: new_head,
+            created_added: working.created_added,
+        })
     }
 
     pub fn log_current_state(&self, head: CanonicalHead) {
@@ -342,16 +380,38 @@ mod tests {
     }
 
     fn seed_gsr0(sm: &StateMachine) -> CanonicalHead {
-        sm.derive_slot_head(CanonicalHead::empty(), [], 0, 0, &[])
+        sm.derive_slot_head(CanonicalHead::empty(), [], 0, 0, &[], &HashMap::new())
             .unwrap()
+            .head
+    }
+
+    /// Parse blobs and derive one slot in one step (mirroring `Node::derive_slot`
+    /// minus the Postgres existence prefetch, which tests supply directly).
+    fn derive(
+        sm: &StateMachine,
+        base_head: CanonicalHead,
+        recent_gsrs: impl IntoIterator<Item = (Hash, i64)>,
+        slot: u32,
+        block_number: u32,
+        blobs: &[(u32, Vec<u8>)],
+        prior_indices: &HashMap<Hash, i64>,
+    ) -> DerivedSlot {
+        let parsed = sm.parse_blobs(blobs, slot, block_number);
+        sm.derive_slot_head(
+            base_head,
+            recent_gsrs,
+            slot,
+            block_number,
+            &parsed,
+            prior_indices,
+        )
+        .unwrap()
     }
 
     #[test]
     fn test_empty_slot_produces_new_head() {
         let (sm, _app_db, _dir) = make_sm();
-        let head = sm
-            .derive_slot_head(CanonicalHead::empty(), [], 1, 7, &[])
-            .unwrap();
+        let head = derive(&sm, CanonicalHead::empty(), [], 1, 7, &[], &HashMap::new()).head;
         assert_eq!(head.metadata.current_block_number, Some(7));
         assert_eq!(head.metadata.gsr_count, 1);
     }
@@ -366,11 +426,10 @@ mod tests {
         let nullifier = unique_hash(11);
         let live_obj = unique_hash(12);
         let blob = mock_txn_bytes(tx_final, &[nullifier], &[live_obj], gsr0);
-        let head1 = sm
-            .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
-            .unwrap();
+        let derived = derive(&sm, head0, [(gsr0, 0)], 1, 1, &[(0, blob)], &HashMap::new());
+        let head1 = derived.head;
         let created_present = app_db
-            .created_exists_batch(&head1.roots, &[live_obj])
+            .created_exists_for(&head1.roots, &[live_obj], &derived.created_added)
             .unwrap();
         let nullifier_present = app_db
             .nullifier_exists_batch(&head1.roots, &[nullifier])
@@ -390,27 +449,29 @@ mod tests {
 
         let tx_final = unique_hash(21);
         let blob = mock_txn_bytes(tx_final, &[], &[unique_hash(22)], unique_hash(99));
-        let head1 = sm.derive_slot_head(head0, [], 2, 2, &[(0, blob)]).unwrap();
+        let head1 = derive(&sm, head0, [], 2, 2, &[(0, blob)], &HashMap::new()).head;
         assert_eq!(head1.metadata.created_count, head0.metadata.created_count);
     }
 
     #[test]
-    fn test_uncommitted_derived_nodes_do_not_affect_old_head() {
+    fn test_membership_is_scoped_to_head_root() {
         let (sm, app_db, _dir) = make_sm();
         let head0 = seed_gsr0(&sm);
         let gsr0 = head0.metadata.current_gsr.unwrap();
 
-        let tx_final = unique_hash(31);
         let live_obj = unique_hash(32);
-        let blob = mock_txn_bytes(tx_final, &[], &[live_obj], gsr0);
-        let head1 = sm
-            .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob)])
-            .unwrap();
+        let blob = mock_txn_bytes(unique_hash(31), &[], &[live_obj], gsr0);
+        let derived = derive(&sm, head0, [(gsr0, 0)], 1, 1, &[(0, blob)], &HashMap::new());
+        let head1 = derived.head;
+        let indices = derived.created_added;
+
+        // The same index cross-checks against each head's root: present under
+        // the new head, absent under the old.
         let old_membership = app_db
-            .created_exists_batch(&head0.roots, &[live_obj])
+            .created_exists_for(&head0.roots, &[live_obj], &indices)
             .unwrap();
         let new_membership = app_db
-            .created_exists_batch(&head1.roots, &[live_obj])
+            .created_exists_for(&head1.roots, &[live_obj], &indices)
             .unwrap();
 
         assert_eq!(old_membership, vec![false]);
@@ -425,18 +486,74 @@ mod tests {
 
         let live_obj = unique_hash(40);
         let blob1 = mock_txn_bytes(unique_hash(41), &[], &[live_obj], gsr0);
-        let head1 = sm
-            .derive_slot_head(head0, [(gsr0, 0)], 1, 1, &[(0, blob1)])
-            .unwrap();
+        let derived1 = derive(
+            &sm,
+            head0,
+            [(gsr0, 0)],
+            1,
+            1,
+            &[(0, blob1)],
+            &HashMap::new(),
+        );
+        let head1 = derived1.head;
         assert_eq!(head1.metadata.created_count, 1);
 
-        // A second tx that re-creates the same object is rejected, exactly
-        // like a nullifier double-spend.
+        // A second tx in a later slot re-creates the same object. In production
+        // slot 1's index row is committed; here it is passed as prior-existing.
         let gsr1 = head1.metadata.current_gsr.unwrap();
         let blob2 = mock_txn_bytes(unique_hash(42), &[], &[live_obj], gsr1);
-        let head2 = sm
-            .derive_slot_head(head1, [(gsr1, 1)], 2, 2, &[(0, blob2)])
-            .unwrap();
+        let head2 = derive(
+            &sm,
+            head1,
+            [(gsr1, 1)],
+            2,
+            2,
+            &[(0, blob2)],
+            &derived1.created_added,
+        )
+        .head;
         assert_eq!(head2.metadata.created_count, head1.metadata.created_count);
+    }
+
+    #[test]
+    fn test_rejects_duplicate_created_object_within_slot() {
+        let (sm, _app_db, _dir) = make_sm();
+        let head0 = seed_gsr0(&sm);
+        let gsr0 = head0.metadata.current_gsr.unwrap();
+
+        // Two blobs in one slot create the same object; the second is rejected
+        // via the in-slot view, with no prior committed state.
+        let dup = unique_hash(50);
+        let blob_a = mock_txn_bytes(unique_hash(51), &[], &[dup], gsr0);
+        let blob_b = mock_txn_bytes(unique_hash(52), &[], &[dup], gsr0);
+        let derived = derive(
+            &sm,
+            head0,
+            [(gsr0, 0)],
+            1,
+            1,
+            &[(0, blob_a), (1, blob_b)],
+            &HashMap::new(),
+        );
+        assert_eq!(derived.head.metadata.created_count, 1);
+        assert_eq!(derived.created_added.get(&dup), Some(&0));
+    }
+
+    #[test]
+    fn test_phantom_prior_index_does_not_reject_creation() {
+        let (sm, _app_db, _dir) = make_sm();
+        let head0 = seed_gsr0(&sm);
+        let gsr0 = head0.metadata.current_gsr.unwrap();
+
+        // The prefetched index claims this object exists at index 1, but the
+        // array at the base root does not actually hold it (a phantom/stale
+        // entry). The array cross-check must treat it as absent and accept the
+        // creation rather than rejecting a legitimate object.
+        let obj = unique_hash(60);
+        let phantom = HashMap::from([(obj, 1i64)]);
+        let blob = mock_txn_bytes(unique_hash(61), &[], &[obj], gsr0);
+        let derived = derive(&sm, head0, [(gsr0, 0)], 1, 1, &[(0, blob)], &phantom);
+        assert_eq!(derived.head.metadata.created_count, 1);
+        assert_eq!(derived.created_added.get(&obj), Some(&0));
     }
 }
