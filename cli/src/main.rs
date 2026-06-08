@@ -153,6 +153,17 @@ enum SettingsCmd {
     },
 }
 
+/// Run a daemon command, then surface the "a newer release is available"
+/// notice on success only. The update flow restarts dobjd via `daemon::start`
+/// directly (not through this path), so a post-update restart never prints a
+/// stale notice against the old CLI binary still doing the update.
+async fn with_update_notice(result: Result<()>) -> Result<()> {
+    if result.is_ok() {
+        update::notify_if_outdated().await;
+    }
+    result
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -188,9 +199,9 @@ async fn main() -> Result<()> {
             quiet,
         } => commands::run(&client, qualified_id, inputs, quiet).await,
         Cmd::Events => commands::events(&client).await,
-        Cmd::Start => daemon::start(&client).await,
+        Cmd::Start => with_update_notice(daemon::start(&client).await).await,
         Cmd::Stop => daemon::stop().await,
-        Cmd::Status => daemon::status(&client).await,
+        Cmd::Status => with_update_notice(daemon::status(&client).await).await,
         Cmd::Logs { follow, lines } => daemon::logs(follow, lines).await,
         Cmd::Update {
             check,

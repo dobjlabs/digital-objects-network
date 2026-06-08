@@ -373,6 +373,23 @@ pub struct ObjectsDirInfo {
     pub path: String,
 }
 
+/// dobjd `/healthz` body. A superset of the relayer/synchronizer health shape:
+/// the shared `ok` liveness flag, plus the build stamp so a client can tell
+/// which dobjd build is serving. `version`/`target` are optional so a client
+/// can still parse a daemon built before they were added.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HealthResponse {
+    pub ok: bool,
+    /// Release tag this daemon was built from ("dev" outside a release).
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Target triple this daemon was built for.
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================

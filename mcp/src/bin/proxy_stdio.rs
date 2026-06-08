@@ -186,6 +186,18 @@ fn parse_url_from_args() -> String {
                         .unwrap_or_else(|| die("--port requires a value")),
                 );
             }
+            "--version" | "-V" => {
+                // `dobj update` runs this to confirm the binary is runnable
+                // (right architecture, deps present, not Gatekeeper-blocked);
+                // it just needs a clean exit. The proxy isn't release-stamped,
+                // so this reports the crate version rather than the bundle tag.
+                println!("bitcraft-mcp-proxy {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
+            "--help" | "-h" => {
+                println!("usage: bitcraft-mcp-proxy [--url <url> | --port <num>]");
+                std::process::exit(0);
+            }
             other => die(&format!("unknown argument: {other}")),
         }
     }

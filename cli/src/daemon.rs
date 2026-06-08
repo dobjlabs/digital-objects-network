@@ -58,11 +58,19 @@ pub struct DaemonPaths {
     pub log_file: PathBuf,
 }
 
+/// Resolve `~/.dobj` (without creating it). The single source for the dobj
+/// home directory, shared by the daemon lifecycle here and the updater
+/// (`crate::update`) so the launcher and the installer can't disagree on where
+/// the install lives.
+pub(crate) fn dobj_home() -> Result<PathBuf> {
+    Ok(dirs::home_dir()
+        .ok_or_else(|| anyhow!("could not resolve home directory"))?
+        .join(".dobj"))
+}
+
 impl DaemonPaths {
     pub fn resolve() -> Result<Self> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| anyhow!("could not resolve home directory"))?
-            .join(".dobj");
+        let home = dobj_home()?;
         fs::create_dir_all(&home)
             .with_context(|| format!("failed to create {}", home.display()))?;
         Ok(Self {
@@ -292,6 +300,18 @@ async fn wait_until_ready(client: &DobjdClient, pid: i32, timeout: Duration) -> 
 }
 
 pub async fn start(client: &DobjdClient) -> Result<()> {
+    start_dobjd(client, None).await
+}
+
+/// Start a specific dobjd binary, bypassing the `$DOBJD_BIN` / PATH resolution
+/// in `find_dobjd_binary`. The updater uses this so it restarts exactly the
+/// binary it just installed and validated under `~/.dobj/bin`, rather than
+/// whatever `$DOBJD_BIN` happens to point at.
+pub async fn start_binary(client: &DobjdClient, dobjd_bin: &Path) -> Result<()> {
+    start_dobjd(client, Some(dobjd_bin.as_os_str().to_os_string())).await
+}
+
+async fn start_dobjd(client: &DobjdClient, dobjd_bin: Option<OsString>) -> Result<()> {
     let paths = DaemonPaths::resolve()?;
     let dobjd_port = dobjd_port_from_url(client.base_url())?;
     let mcp_port = mcp_port_for_http_port(dobjd_port)?;
@@ -330,7 +350,7 @@ pub async fn start(client: &DobjdClient) -> Result<()> {
         .with_context(|| format!("failed to open {}", paths.log_file.display()))?;
     let log_clone = log.try_clone()?;
 
-    let bin = find_dobjd_binary(&paths);
+    let bin = dobjd_bin.unwrap_or_else(|| find_dobjd_binary(&paths));
     let mut cmd = Command::new(&bin);
     cmd.env("DOBJD_PORT", dobjd_port.to_string());
     cmd.stdin(Stdio::null())
