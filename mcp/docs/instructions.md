@@ -53,8 +53,10 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ### Mutation
 
-- `run_action(action_id, input_object_paths)` — execute an action,
-  blocks for proof generation. See "running actions" below.
+- `run_action(action_id, input_object_paths)` — start an action; returns a
+  `runId` immediately (the proof + commit run in the background). See
+  "running actions" below.
+- `get_run(run_id)` — poll a run's status, result/error, and progress log.
 
 ### Configuration
 
@@ -67,29 +69,27 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 - Start with `list_inventory` and `list_actions` to understand what's available.
 - Use `check_feasibility` before `run_action` to verify inputs exist (and to confirm the action's required input classes).
 - Use `inspect_object` / `inspect_class` to understand state and predicates.
-- After `run_action`, call `list_inventory` again to see the updated state.
+- After a run reaches `succeeded`, call `list_inventory` again to see the updated state.
 
 ## Running actions
 
-`run_action` blocks for the duration of proof generation (seconds to
-minutes). Two behaviors worth knowing about:
+`run_action` does not block. It returns immediately with a `runId` and
+`status: queued`; proof generation and the commit run in the background
+(seconds to minutes).
 
-- **Progress notifications.** If you supply a `progressToken` in the
-  call's `_meta`, the server streams `notifications/progress` for each
-  proof-generation and commit step. The user-visible host UI may render
-  these as a status indicator. Useful for long-running actions where you
-  want the user to see something is happening.
-- **Elicitation for ambiguous inputs.** If you call `run_action` with an
-  empty `input_object_paths` (or omit the field), the server resolves
-  bindings from the user's inventory:
-  - 0 candidates for a required class → returns an error
-  - 1 candidate → bound automatically (no prompt)
-  - 2+ candidates → server sends an `elicitation/create` request with a
-    form asking the user to pick one per ambiguous class. The user's
-    answer is used as the input bindings.
+To wait for the result, poll `get_run(run_id)` until `status` is terminal:
 
-  If the user has clearly indicated which object to use, you can pass
-  `input_object_paths` explicitly and skip the elicitation round-trip.
+- `succeeded` → read `result` (old/new state root, output and nullified files)
+- `failed` → read `error`
+
+The returned state also carries the ordered `progress` log, so you can show
+the user which step a run is on while it's still `generateProof` or
+`committing`. Multiple runs proceed concurrently — start several and poll each
+`runId` independently.
+
+Pass `input_object_paths` explicitly (one per the action's required input
+classes, in order); resolve them from `list_inventory` / `check_feasibility`
+first. An input count that doesn't match the action makes the run fail.
   When in doubt, leave the array empty and let the user choose.
 
 ## Podlang predicates
