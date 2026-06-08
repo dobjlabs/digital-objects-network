@@ -1,10 +1,9 @@
 [package]
-name = "synchronizer"
+name = "blob-archiver"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-eth-clients = { path = "../eth-clients" }
 anyhow = "1.0.56"
 dotenvy = "0.15.7"
 alloy = { workspace = true  }
@@ -25,15 +24,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 futures-util = "0.3.31"
 rocksdb = "0.23.0"
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres"] }
-pod2 = { workspace = true }
-plonky2 = { workspace = true }
+tempfile = "3"
 common = { path = "../common" }
-txlib = { path = "../txlib" }
-pod2utils = { path = "../pod2utils" }
-# `chain` feature pulls in pod2 so `SourceTxProofResponse` /
-# `GroundingWitnessResponse` (both server-side and re-exported here)
-# carry their `MerkleProof` field.
-wire-types = { workspace = true, features = ["chain"] }
-
-[dev-dependencies]
-common = { path = "../common", features = ["test-utils"] }
+eth-clients = { path = "../eth-clients" }
+itertools = { workspace = true }

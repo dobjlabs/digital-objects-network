@@ -2,8 +2,8 @@ use anyhow::Result;
 use futures_util::future::join_all;
 use tracing::{info, warn};
 
-use crate::clients::beacon::types::{Block, BlockHeader};
 use crate::node::Node;
+use eth_clients::beacon::types::{Block, BlockHeader};
 
 /// Pre-fetched data for a single slot in a catch-up batch.
 pub enum FetchedSlot {

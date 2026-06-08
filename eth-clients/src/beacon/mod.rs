@@ -21,7 +21,7 @@
 
 pub mod types;
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Write};
 
 use anyhow::Context as AnyhowContext;
 use backoff::ExponentialBackoff;
@@ -29,11 +29,15 @@ use reqwest::{Client, Url};
 use reqwest_eventsource::EventSource;
 use types::BlockHeader;
 
-use self::types::{Blob, BlobsResponse, Block, BlockId, BlockResponse, Topic};
-use crate::clients::{
+use self::types::{
+    BlobSidecar, BlobsResponse, BlobsSidecarsResponse, Block, BlockId, BlockResponse, Topic,
+};
+use crate::{
     beacon::types::{BlockHeaderResponse, Spec, SpecResponse},
     common::{json_get, ClientError, ClientResult},
 };
+use alloy::eips::eip4844::HeapBlob;
+use alloy::primitives::B256;
 
 #[derive(Debug, Clone)]
 pub struct BeaconClient {
@@ -90,17 +94,36 @@ impl BeaconClient {
         )
     }
 
-    pub async fn get_blobs(&self, block_id: BlockId) -> ClientResult<Vec<Blob>> {
+    pub async fn get_blob_sidecars(&self, block_id: BlockId) -> ClientResult<Vec<BlobSidecar>> {
         let path = format!("v1/beacon/blob_sidecars/{}", {
             block_id.to_detailed_string()
         });
         let url = self.base_url.join(path.as_str())?;
 
         let mut blobs =
-            json_get::<BlobsResponse>(&self.client, url, None, self.exp_backoff.clone())
+            json_get::<BlobsSidecarsResponse>(&self.client, url, None, self.exp_backoff.clone())
                 .await
                 .map(|res| res.data)?;
         blobs.sort_by_key(|blob| blob.index);
+        Ok(blobs)
+    }
+
+    pub async fn get_blobs(
+        &self,
+        block_id: BlockId,
+        versioned_hashes: &[B256],
+    ) -> ClientResult<Vec<HeapBlob>> {
+        let path = format!("v1/beacon/blobs/{}", { block_id.to_detailed_string() });
+        let mut url = self.base_url.join(path.as_str())?;
+        url.query_pairs_mut().extend_pairs(
+            versioned_hashes
+                .iter()
+                .map(|h| ("versioned_hashes", format!("{}", *h))),
+        );
+
+        let blobs = json_get::<BlobsResponse>(&self.client, url, None, self.exp_backoff.clone())
+            .await
+            .map(|res| res.data)?;
         Ok(blobs)
     }
 

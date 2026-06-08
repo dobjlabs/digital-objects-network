@@ -1591,6 +1591,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "blob-archiver"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "axum",
+ "backoff",
+ "chrono",
+ "common",
+ "dotenvy",
+ "eth-clients",
+ "futures-util",
+ "hex",
+ "itertools 0.14.0",
+ "reqwest 0.12.28",
+ "reqwest-eventsource",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "block"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3010,6 +3040,26 @@ dependencies = [
  "cfg-if",
  "home",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "eth-clients"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "backoff",
+ "futures-util",
+ "hex",
+ "reqwest 0.12.28",
+ "reqwest-eventsource",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -8057,6 +8107,7 @@ dependencies = [
  "chrono",
  "common",
  "dotenvy",
+ "eth-clients",
  "futures-util",
  "hex",
  "plonky2",
@@ -8068,7 +8119,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tower-http",

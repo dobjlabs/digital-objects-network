@@ -8,7 +8,6 @@ use tracing::{error, info};
 mod api;
 mod app_db;
 mod catchup;
-mod clients;
 mod config;
 mod head;
 mod node;

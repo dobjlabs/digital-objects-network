@@ -2,10 +2,12 @@
 members = [
     "app-gui/src-tauri",
     "common",
+    "eth-clients",
     "driver",
     "pod2utils",
     "synchronizer",
     "relayer",
+    "blob-archiver",
     "txlib",
     "sdk",
     "pexe",
