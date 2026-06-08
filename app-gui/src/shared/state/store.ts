@@ -21,11 +21,7 @@ import { qualifiedEq } from "../objectUtils";
 async function pollRunToTerminal(runId: string): Promise<RunState> {
   for (;;) {
     const state = await getRun(runId);
-    if (
-      state.status === "succeeded" ||
-      state.status === "failed" ||
-      state.status === "interrupted"
-    ) {
+    if (state.status === "succeeded" || state.status === "failed") {
       return state;
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));

@@ -323,10 +323,6 @@ pub enum RunStatus {
     Succeeded,
     /// Finished with an error; `RunState::error` is populated.
     Failed,
-    /// The daemon restarted (or the worker died) while this run was in
-    /// flight, so the registry never observed its outcome. On-chain state
-    /// and local `.dobj` files still reconcile independently via sync.
-    Interrupted,
 }
 
 /// `POST /actions/run` response. The run was accepted and now executes in the

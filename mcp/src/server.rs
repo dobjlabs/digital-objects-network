@@ -187,7 +187,7 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Get the current state of a run started by run_action. Returns its status (queued, generateProof, committing, succeeded, failed, interrupted), the result (old/new root + output and nullified files) once succeeded, an error message if failed, and the ordered progress log. Poll this after run_action."
+        description = "Get the current state of a run started by run_action. Returns its status (queued, generateProof, committing, succeeded, failed), the result (old/new root + output and nullified files) once succeeded, an error message if failed, and the ordered progress log. Poll this after run_action."
     )]
     fn get_run(
         &self,

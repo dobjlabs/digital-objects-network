@@ -265,9 +265,6 @@ pub async fn run(
             "run {run_id} failed: {}",
             state.error.unwrap_or_else(|| "unknown error".to_string())
         )),
-        RunStatus::Interrupted => Err(anyhow!(
-            "run {run_id} was interrupted (dobjd restarted mid-run); re-run once it is back up"
-        )),
         other => Err(anyhow!("run {run_id} ended in unexpected state: {other:?}")),
     }
 }
@@ -280,7 +277,7 @@ async fn poll_run_to_terminal(client: &DobjdClient, run_id: &str) -> Result<RunS
     loop {
         let state: RunState = client.get_json(&path).await?;
         match state.status {
-            RunStatus::Succeeded | RunStatus::Failed | RunStatus::Interrupted => return Ok(state),
+            RunStatus::Succeeded | RunStatus::Failed => return Ok(state),
             _ => sleep(Duration::from_millis(500)).await,
         }
     }

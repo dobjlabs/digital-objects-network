@@ -8,8 +8,7 @@ export type RunStatus =
   | "generateProof"
   | "committing"
   | "succeeded"
-  | "failed"
-  | "interrupted";
+  | "failed";
 
 export type ObjectStatus = "unknown" | "pending" | "live" | "nullified";
 
