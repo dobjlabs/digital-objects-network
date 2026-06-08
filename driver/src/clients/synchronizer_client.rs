@@ -24,7 +24,7 @@ pub const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
 /// We chunk client-side at this value so inventories with hundreds of
 /// objects still reconcile in a single `sync_inventory` call (just spread
 /// across multiple HTTP requests).
-const MEMBERSHIP_BATCH_LIMIT: usize = 256;
+const HASH_BATCH_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynchronizerHead {
@@ -152,7 +152,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
         }
 
         // The synchronizer rejects bodies where `object_commitments.len() +
-        // nullifiers.len() > MEMBERSHIP_BATCH_LIMIT` with 400. Pack each
+        // nullifiers.len() > HASH_BATCH_LIMIT` with 400. Pack each
         // batch tightly: take as many object commitments as possible (up to
         // the limit), then fill the remainder with nullifiers. Continue until
         // both lists are drained. Sequential because reqwest::blocking
@@ -160,8 +160,8 @@ impl SynchronizerClient for HttpSynchronizerClient {
         let mut obj_cursor = 0usize;
         let mut null_cursor = 0usize;
         while obj_cursor < object_commitments.len() || null_cursor < nullifiers.len() {
-            let obj_take = (object_commitments.len() - obj_cursor).min(MEMBERSHIP_BATCH_LIMIT);
-            let remaining_capacity = MEMBERSHIP_BATCH_LIMIT - obj_take;
+            let obj_take = (object_commitments.len() - obj_cursor).min(HASH_BATCH_LIMIT);
+            let remaining_capacity = HASH_BATCH_LIMIT - obj_take;
             let null_take = (nullifiers.len() - null_cursor).min(remaining_capacity);
 
             let request = MembershipRequest {

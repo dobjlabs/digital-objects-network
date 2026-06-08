@@ -189,20 +189,28 @@ impl Driver {
             &membership.on_chain_nullifiers,
         )?;
 
-        // Resolve correct Ethereum tx hashes from the relayer for any
-        // objects whose hash may be stale due to fee-bump replacements.
+        // Resolve correct Ethereum tx hashes from the relayer for any objects
+        // whose hash may be stale due to fee-bump replacements. One batched
+        // lookup rather than a request per pending object; best-effort, so a
+        // relayer error leaves existing hashes untouched.
+        let pending_tx_finals: Vec<Hash> = entries
+            .iter()
+            .filter(|entry| entry.record.status == ObjectStatus::Pending)
+            .map(|entry| entry.record.tx_final)
+            .collect();
+        let current_hashes = self
+            .deps
+            .relayer
+            .lookup_tx_hashes(&settings.relayer_api_url, &pending_tx_finals)
+            .unwrap_or_default();
         for entry in entries.iter_mut() {
             if entry.record.status != ObjectStatus::Pending {
                 continue;
             }
-            let current_hash = self
-                .deps
-                .relayer
-                .lookup_tx_hash(&settings.relayer_api_url, &entry.record.tx_final);
-            if let Ok(Some(relayer_hash)) = current_hash
-                && entry.record.tx_hash.as_deref() != Some(&relayer_hash)
+            if let Some(relayer_hash) = current_hashes.get(&entry.record.tx_final)
+                && entry.record.tx_hash.as_deref() != Some(relayer_hash.as_str())
             {
-                entry.record.tx_hash = Some(relayer_hash);
+                entry.record.tx_hash = Some(relayer_hash.clone());
                 let _ = write_object_file(&self.paths, &entry.record, &entry.file_name);
             }
         }

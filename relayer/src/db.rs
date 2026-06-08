@@ -256,6 +256,31 @@ impl Db {
         row.map(row_to_job).transpose()
     }
 
+    /// Resolve the current Ethereum tx hash for each given `tx_final` that
+    /// exists and has been broadcast. Unknown or not-yet-broadcast commitments
+    /// are omitted from the result.
+    pub async fn tx_hashes_by_tx_finals(&self, tx_finals: &[Hash]) -> Result<Vec<(Hash, String)>> {
+        let keys: Vec<Vec<u8>> = tx_finals.iter().map(|h| hash_to_db_bytes(*h)).collect();
+        let rows = sqlx::query(
+            r#"
+            SELECT tx_final, tx_hash
+            FROM relay_jobs
+            WHERE tx_final = ANY($1::bytea[]) AND tx_hash IS NOT NULL
+            "#,
+        )
+        .bind(keys)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let tx_final = db_bytes_to_hash(&row.get::<Vec<u8>, _>("tx_final"))?;
+                let tx_hash: String = row.get("tx_hash");
+                Ok((tx_final, tx_hash))
+            })
+            .collect()
+    }
+
     /// Requeue in-flight states that can be left behind on crash/restart.
     pub async fn recover_inflight_jobs(&self, now: i64) -> Result<usize> {
         let result = sqlx::query(
