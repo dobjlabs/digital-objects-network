@@ -25,9 +25,10 @@ import type {
   InventoryObjectPayload,
   ObjectRecordPayload,
   ObjectSummaryPayload,
+  RunAccepted,
   RunActionInput,
   RunActionProgress,
-  RunActionResult,
+  RunState,
 } from "./wireTypes";
 
 export type {
@@ -38,9 +39,12 @@ export type {
   ObjectRecordPayload,
   ObjectSummaryPayload,
   QualifiedNamePayload,
+  RunAccepted,
   RunActionInput,
   RunActionProgress,
   RunActionResult,
+  RunState,
+  RunStatus,
 } from "./wireTypes";
 
 declare global {
@@ -117,15 +121,26 @@ export function getStateRoot(): Promise<string> {
   return dobjdFetch("/state-root").then(httpJson<string>);
 }
 
-export function runAction(input: RunActionInput): Promise<RunActionResult> {
+// Start a run. dobjd registers it and returns immediately with a handle
+// (runId + status); proof generation + commit happen on a background worker.
+// Follow progress via the `/events` SSE stream and read the terminal outcome
+// with `getRun` — so the request is short and a dropped connection can't lose
+// the result.
+export function runAction(input: RunActionInput): Promise<RunAccepted> {
   return dobjdFetch("/actions/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input }),
-    // Proof generation + commit can take much longer than the default
-    // read timeout. SSE progress events are how we detect hangs here.
-    timeoutMs: null,
-  }).then(httpJson<RunActionResult>);
+  }).then(httpJson<RunAccepted>);
+}
+
+// Current state of a run by id: status, the result once it succeeds, an error
+// if it fails, and the progress log. Polled to detect completion and to
+// recover the outcome if live progress was missed.
+export function getRun(runId: string): Promise<RunState> {
+  return dobjdFetch(`/actions/runs/${encodeURIComponent(runId)}`).then(
+    httpJson<RunState>,
+  );
 }
 
 // Import an external `.dobj` (one not produced by this driver). The body

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import {
+  getRun,
   importObject as importObjectApi,
   loadActions,
   loadInventory,
@@ -8,9 +9,28 @@ import {
   type InventoryObjectPayload as InventoryObject,
   type QualifiedNamePayload,
   type RunActionProgress,
+  type RunState,
 } from "../api/tauriClient";
 import { normalizeErrorMessage } from "../error";
 import { qualifiedEq } from "../objectUtils";
+
+/** Poll a run until it reaches a terminal state. Local HTTP, and the daemon's
+ * supervisor guarantees every run terminates, so this always resolves. This
+ * is the authoritative completion signal (and recovery path) now that the
+ * run POST returns immediately rather than carrying the result. */
+async function pollRunToTerminal(runId: string): Promise<RunState> {
+  for (;;) {
+    const state = await getRun(runId);
+    if (
+      state.status === "succeeded" ||
+      state.status === "failed" ||
+      state.status === "interrupted"
+    ) {
+      return state;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
 
 type ProofStatus = "idle" | "generating" | "committing" | "summary" | "error";
 type StepStatus = "pending" | "running" | "done";
@@ -231,6 +251,19 @@ export const useStore = create<AppState>((set, get) => ({
     set((prev) => {
       if (prev.proof.runActionId !== event.runId) return prev;
 
+      // Terminal failure arrives as its own event now; surface it on the
+      // panel immediately rather than waiting for the poll to catch up.
+      if (event.status === "failed") {
+        return {
+          ...prev,
+          proof: {
+            ...prev.proof,
+            status: "error",
+            error: event.message,
+          },
+        };
+      }
+
       const nextSteps = prev.proof.steps.map((step) => ({ ...step }));
       const updateStep = (stepId: string, patch: Partial<ProofStep>) => {
         const index = nextSteps.findIndex((step) => step.id === stepId);
@@ -351,11 +384,23 @@ export const useStore = create<AppState>((set, get) => ({
     get().initProofPanel({ runId, action, args: verifyTargets });
 
     try {
-      const result = await runAction({
+      // Returns immediately with a handle. Live progress arrives over the
+      // shared `/events` SSE (applyRunActionProgress); the poll below is the
+      // authoritative completion + result signal, so a missed event can't
+      // leave the panel stuck or lose the outcome.
+      await runAction({
         action,
         inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
         runId,
       });
+
+      const finalState = await pollRunToTerminal(runId);
+      if (finalState.status !== "succeeded" || !finalState.result) {
+        throw new Error(
+          finalState.error ?? `Run ended in state: ${finalState.status}`,
+        );
+      }
+      const result = finalState.result;
 
       set((prev) => {
         if (prev.proof.runActionId !== runId) return prev;

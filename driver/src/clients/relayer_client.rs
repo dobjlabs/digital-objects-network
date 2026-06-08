@@ -10,7 +10,12 @@ use wire_types::relayer::{
     TxHashesByTxFinalRequest, TxHashesByTxFinalResponse,
 };
 
-pub const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
+/// Deadline for the relayer to broadcast the tx and expose a tx_hash.
+pub const RELAYER_TX_HASH_TIMEOUT_SECS: u64 = 180;
+/// Deadline for the broadcast tx to reach `Confirmed`. Tracked separately
+/// from the tx-hash wait so the two sequential phases each have an explicit
+/// budget rather than silently sharing (and doubling) one constant.
+pub const RELAYER_CONFIRM_TIMEOUT_SECS: u64 = 180;
 pub const RELAYER_POLL_INTERVAL_MS: u64 = 1500;
 
 /// Per-request cap on `tx_finals` sent to the relayer's `tx-hashes` endpoint.
@@ -56,17 +61,31 @@ pub trait RelayerClient: Send + Sync {
     ) -> Result<HashMap<Hash, String>>;
 }
 
-#[derive(Debug, Default)]
-pub struct HttpRelayerClient;
+#[derive(Debug, Clone)]
+pub struct HttpRelayerClient {
+    client: reqwest::blocking::Client,
+}
+
+impl Default for HttpRelayerClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl HttpRelayerClient {
+    pub fn new() -> Self {
+        Self {
+            client: super::build_http_client(),
+        }
+    }
+
     fn fetch_job_status(&self, relayer_api_url: &str, job_id: &str) -> Result<JobStatusResponse> {
         let endpoint = format!(
             "{}/api/v1/proofs/{job_id}",
             relayer_api_url.trim_end_matches('/')
         );
-        let client = reqwest::blocking::Client::new();
-        let response = client
+        let response = self
+            .client
             .get(&endpoint)
             .send()
             .map_err(|err| anyhow!("failed to query relayer job at {endpoint}: {err}"))?;
@@ -108,8 +127,8 @@ impl RelayerClient for HttpRelayerClient {
             client_ref,
         };
 
-        let client = reqwest::blocking::Client::new();
-        let response = client
+        let response = self
+            .client
             .post(&endpoint)
             .json(&request)
             .send()
@@ -225,7 +244,6 @@ impl RelayerClient for HttpRelayerClient {
             "{}/api/v1/proofs/tx-hashes",
             relayer_api_url.trim_end_matches('/')
         );
-        let client = reqwest::blocking::Client::new();
 
         // Chunk so a large pending inventory still resolves in one
         // `sync_inventory` call, just spread across a few HTTP requests.
@@ -233,7 +251,8 @@ impl RelayerClient for HttpRelayerClient {
             let request = TxHashesByTxFinalRequest {
                 tx_finals: chunk.to_vec(),
             };
-            let response = client
+            let response = self
+                .client
                 .post(&endpoint)
                 .json(&request)
                 .send()

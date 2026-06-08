@@ -16,8 +16,8 @@ mod tests;
 
 pub use crate::catalog::ActionCatalog as DriverActionCatalog;
 pub use crate::clients::{
-    RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS, SYNCHRONIZER_POLL_INTERVAL_MS,
-    SYNCHRONIZER_POLL_TIMEOUT_SECS,
+    RELAYER_CONFIRM_TIMEOUT_SECS, RELAYER_POLL_INTERVAL_MS, RELAYER_TX_HASH_TIMEOUT_SECS,
+    SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS,
 };
 pub use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 pub use crate::error::DriverError;

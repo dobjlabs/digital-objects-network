@@ -308,6 +308,58 @@ pub struct RunActionResult {
     pub nullified_files: Vec<String>,
 }
 
+/// Lifecycle state of a run tracked in the daemon's run registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum RunStatus {
+    /// Accepted, not yet started executing.
+    Queued,
+    /// Building the local ZK proof.
+    GenerateProof,
+    /// Submitting the proof, then waiting for on-chain confirmation + sync.
+    Committing,
+    /// Finished successfully; `RunState::result` is populated.
+    Succeeded,
+    /// Finished with an error; `RunState::error` is populated.
+    Failed,
+    /// The daemon restarted (or the worker died) while this run was in
+    /// flight, so the registry never observed its outcome. On-chain state
+    /// and local `.dobj` files still reconcile independently via sync.
+    Interrupted,
+}
+
+/// `POST /actions/run` response. The run was accepted and now executes in the
+/// background; follow it via `GET /actions/runs/{runId}` (poll) or
+/// `GET /actions/runs/{runId}/events` (SSE, replayable via `Last-Event-ID`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RunAccepted {
+    pub run_id: String,
+    pub status: RunStatus,
+}
+
+/// `GET /actions/runs/{runId}` response: the current state of a run. The
+/// poll-and-recover counterpart to the SSE stream — a client that lost its
+/// connection re-reads the outcome here for as long as the run is retained.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RunState {
+    pub run_id: String,
+    pub action: QualifiedName,
+    pub status: RunStatus,
+    /// Populated once `status` is `succeeded`.
+    pub result: Option<RunActionResult>,
+    /// Populated once `status` is `failed`.
+    pub error: Option<String>,
+    /// Every progress event emitted so far, in order. Each entry's index is
+    /// its SSE event id, so a poller sees the same history a `Last-Event-ID`
+    /// SSE reconnect would replay.
+    pub progress: Vec<RunActionProgress>,
+}
+
 // ===========================================================================
 // Execution progress
 // ===========================================================================

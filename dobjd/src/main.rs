@@ -7,10 +7,11 @@ use tracing_subscriber::{EnvFilter, prelude::*};
 mod error;
 mod events;
 mod mcp;
-mod progress;
 mod routes;
+mod runs;
 mod state;
 
+use runs::RunRegistry;
 use state::AppState;
 
 const DEFAULT_HTTP_PORT: u16 = 7717;
@@ -40,8 +41,9 @@ async fn main() -> Result<()> {
 
     let driver = Arc::new(Driver::open_default()?);
     let (event_tx, _initial_rx) = events::channel();
+    let runs = RunRegistry::new();
 
-    let state = AppState::new(driver.clone(), event_tx.clone());
+    let state = AppState::new(driver.clone(), event_tx.clone(), runs.clone());
     let app = routes::router(state);
 
     // Bind both listeners up-front so we fail fast and synchronously if
@@ -68,12 +70,25 @@ async fn main() -> Result<()> {
         .await
         .map_err(|err| anyhow!("circuit warm-up task panicked: {err}"))?;
 
-    // Both ports are ours. Spawn the MCP server; share `Arc<Driver>` and the
-    // broadcast hub so MCP, the desktop, and the website drive one process.
+    // Reap terminal runs whose retention window has elapsed, bounding the
+    // in-memory registry. Runs that are still in flight are never reaped.
+    let reaper_runs = runs.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(runs::REAP_INTERVAL);
+        loop {
+            ticker.tick().await;
+            reaper_runs.reap();
+        }
+    });
+
+    // Both ports are ours. Spawn the MCP server; share `Arc<Driver>`, the
+    // broadcast hub, and the run registry so MCP, the desktop, and the
+    // website drive one process and one set of runs.
     let mcp_event_tx = event_tx.clone();
     let mcp_driver = driver.clone();
+    let mcp_runs = runs.clone();
     tokio::spawn(async move {
-        if let Err(err) = start_mcp_server(mcp_driver, mcp_event_tx, mcp_listener).await {
+        if let Err(err) = start_mcp_server(mcp_driver, mcp_event_tx, mcp_runs, mcp_listener).await {
             tracing::error!("MCP server crashed after startup: {err:#}");
             std::process::exit(1);
         }
@@ -103,9 +118,10 @@ fn mcp_port_for_http_port(port: u16) -> Result<u16> {
 async fn start_mcp_server(
     driver: Arc<Driver>,
     events: events::EventTx,
+    runs: RunRegistry,
     listener: tokio::net::TcpListener,
 ) -> Result<()> {
-    let ops = mcp::DobjdCraftOps::new(driver, events);
+    let ops = mcp::DobjdCraftOps::new(driver, events, runs);
     let config = craft_mcp::McpConfig::default();
     let server = craft_mcp::McpServer::new(ops, config);
     server.serve(listener).await?;

@@ -11,7 +11,11 @@ pub trait CraftOps: Send + Sync + 'static {
     fn inspect_object(&self, file_name: &str) -> anyhow::Result<ObjectDetail>;
     fn inspect_class(&self, class: &QualifiedName) -> anyhow::Result<ClassDetail>;
     fn inspect_action(&self, action: &QualifiedName) -> anyhow::Result<ActionDetail>;
-    fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunActionResult>;
+    /// Start a run in the background and return its handle immediately. The
+    /// proof + commit pipeline runs asynchronously; follow it with `get_run`.
+    fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunAccepted>;
+    /// Current state of a previously-started run, by its run id.
+    fn get_run(&self, run_id: &str) -> anyhow::Result<RunState>;
     fn check_feasibility(&self, action: &QualifiedName) -> anyhow::Result<FeasibilityReport>;
 
     /// Import an external `.dobj` object — one not produced by this driver —

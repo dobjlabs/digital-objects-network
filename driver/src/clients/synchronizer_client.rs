@@ -65,15 +65,30 @@ pub trait SynchronizerClient: Send + Sync {
     ) -> Result<SynchronizerHead>;
 }
 
-#[derive(Debug, Default)]
-pub struct HttpSynchronizerClient;
+#[derive(Debug, Clone)]
+pub struct HttpSynchronizerClient {
+    client: reqwest::blocking::Client,
+}
+
+impl Default for HttpSynchronizerClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HttpSynchronizerClient {
+    pub fn new() -> Self {
+        Self {
+            client: super::build_http_client(),
+        }
+    }
+}
 
 impl SynchronizerClient for HttpSynchronizerClient {
     fn fetch_head(&self, sync_api_url: &str) -> Result<SynchronizerHead> {
         let endpoint = format!("{}/v1/state/head", sync_api_url.trim_end_matches('/'));
-        let client = reqwest::blocking::Client::new();
         let payload: StateHeadResponse = send_json_request(
-            client.get(&endpoint),
+            self.client.get(&endpoint),
             &endpoint,
             "synchronizer head response",
         )?;
@@ -95,9 +110,8 @@ impl SynchronizerClient for HttpSynchronizerClient {
         let request = GroundingWitnessRequest {
             object_commitments: object_commitments.to_vec(),
         };
-        let client = reqwest::blocking::Client::new();
         let payload: GroundingWitnessResponse = send_json_request(
-            client.post(&endpoint).json(&request),
+            self.client.post(&endpoint).json(&request),
             &endpoint,
             "synchronizer grounding witness response",
         )?;
@@ -137,7 +151,6 @@ impl SynchronizerClient for HttpSynchronizerClient {
         nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership> {
         let endpoint = format!("{}/v1/state/membership", sync_api_url.trim_end_matches('/'));
-        let client = reqwest::blocking::Client::new();
 
         let mut created_objects: HashSet<Hash> = HashSet::new();
         let mut on_chain_nullifiers: HashSet<Hash> = HashSet::new();
@@ -170,7 +183,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
             };
 
             let payload: MembershipResponse = send_json_request(
-                client.post(&endpoint).json(&request),
+                self.client.post(&endpoint).json(&request),
                 &endpoint,
                 "synchronizer membership response",
             )?;

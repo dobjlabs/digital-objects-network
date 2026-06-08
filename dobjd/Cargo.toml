@@ -25,6 +25,6 @@ tracing-log = { workspace = true }
 axum = "0.8.8"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 futures-util = "0.3"
 uuid = { version = "1.18.1", features = ["v4"] }
