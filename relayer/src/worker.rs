@@ -123,8 +123,8 @@ async fn send_queued_job(
         job_id = %job.job_id,
         attempt = job.attempt_count,
         payload_bytes = job.payload_bytes.len(),
-        tx_final = %job.tx_final,
-        state_root_hash = %job.state_root_hash,
+        tx_final = %format_args!("{:#}", job.tx_final),
+        state_root_hash = %format_args!("{:#}", job.state_root_hash),
         nonce,
         "Submitting relay payload to Ethereum"
     );
@@ -626,8 +626,8 @@ mod tests {
             job_id: "job-1".to_string(),
             status,
             payload_bytes: vec![1, 2, 3],
-            tx_final: "0xaa".to_string(),
-            state_root_hash: "0xbb".to_string(),
+            tx_final: Default::default(),
+            state_root_hash: Default::default(),
             client_ref: None,
             attempt_count: 0,
             tx_hash: None,

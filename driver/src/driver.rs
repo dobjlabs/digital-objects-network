@@ -195,11 +195,10 @@ impl Driver {
             if entry.record.status != ObjectStatus::Pending {
                 continue;
             }
-            let tx_final = encode_hash_hex(&entry.record.tx_final);
             let current_hash = self
                 .deps
                 .relayer
-                .lookup_tx_hash(&settings.relayer_api_url, &tx_final);
+                .lookup_tx_hash(&settings.relayer_api_url, &entry.record.tx_final);
             if let Ok(Some(relayer_hash)) = current_hash
                 && entry.record.tx_hash.as_deref() != Some(&relayer_hash)
             {
@@ -315,10 +314,10 @@ impl Driver {
                     )
             });
             if let Some(entry) = candidate {
-                used_content_hashes.insert(entry.record.content_hash.clone());
+                used_content_hashes.insert(entry.record.content_hash);
                 available.push(CheckActionCandidate {
                     class: required.class.clone(),
-                    content_hash: entry.record.content_hash.clone(),
+                    content_hash: encode_hash_hex(&entry.record.content_hash),
                     file_name: entry.file_name.clone(),
                 });
             } else {
@@ -334,13 +333,13 @@ impl Driver {
         })
     }
 
-    pub fn get_state_root(&self) -> Result<String> {
+    pub fn get_state_root(&self) -> Result<Hash> {
         let settings = self.load_settings()?;
         let head = self
             .deps
             .synchronizer
             .fetch_head(&settings.synchronizer_api_url)?;
-        Ok(encode_hash_hex(&head.current_gsr))
+        Ok(head.current_gsr)
     }
 
     /// Import an external `.dobj` object — one not produced by this driver
@@ -395,20 +394,20 @@ impl Driver {
         // 2. Recompute content hash + file name from the commitment; never
         //    trust the sender's. The content hash is self-certifying -- it IS
         //    the commitment.
-        let content_hash = format!("{:#}", record.obj.commitment());
+        let commitment = record.obj.commitment();
         let file_name = format!(
             "{}_{}.{}",
             record.class.file_prefix(),
-            content_hash.to_ascii_lowercase(),
+            format!("{commitment:#}").to_ascii_lowercase(),
             crate::paths::DOBJ_EXTENSION
         );
-        record.content_hash = content_hash.clone();
+        record.content_hash = commitment;
 
         // 3. Reject if we already hold this object (live or nullified).
         let entries = load_object_files(&self.paths)?;
         if entries
             .iter()
-            .any(|entry| entry.record.content_hash == content_hash || entry.file_name == file_name)
+            .any(|entry| entry.record.content_hash == commitment || entry.file_name == file_name)
         {
             return Err(
                 DriverError::Conflict(format!("object already in inventory: {file_name}")).into(),
@@ -490,7 +489,7 @@ impl Driver {
             .synchronizer
             .fetch_grounding_witness(&settings.synchronizer_api_url, &input_commitments)?;
         let old_root_hash = grounding_witness.state_root.hash();
-        let old_root = encode_hash_hex(&old_root_hash);
+        let old_root = old_root_hash;
 
         reporter.on_step(ExecutionPhase::GenerateProof, "Generating proof", &no_ctx);
         let execution_inputs = resolved_inputs
@@ -505,7 +504,7 @@ impl Driver {
         reporter.on_done(ExecutionPhase::GenerateProof, None);
 
         let mut commit_ctx = ExecutionStepContext {
-            old_root: Some(old_root.clone()),
+            old_root: Some(old_root),
             output_files: Vec::new(),
             output_status: None,
         };
@@ -526,7 +525,7 @@ impl Driver {
 
         reporter.on_step(ExecutionPhase::Commit, "Creating files", &commit_ctx);
         let saved = save_results(&self.paths, &action, &resolved_inputs, &spendable_outputs)?;
-        commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Unknown);
+        commit_ctx = file_write_ctx(old_root, &saved.output_files, ObjectStatus::Unknown);
         reporter.on_step(
             ExecutionPhase::Commit,
             "Output object files created with status unknown",
@@ -574,7 +573,7 @@ impl Driver {
             ObjectStatus::Pending,
             Some(&eth_tx_hash),
         )?;
-        commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Pending);
+        commit_ctx = file_write_ctx(old_root, &saved.output_files, ObjectStatus::Pending);
         reporter.on_step(
             ExecutionPhase::Commit,
             "Got transaction hash; output object files updated to pending while waiting for submission confirmation",
@@ -631,7 +630,7 @@ impl Driver {
                     ObjectStatus::Unknown,
                     Some(final_tx_hash),
                 )?;
-                commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Unknown);
+                commit_ctx = file_write_ctx(old_root, &saved.output_files, ObjectStatus::Unknown);
                 reporter.on_step(
                     ExecutionPhase::Commit,
                     "Synchronizer did not observe commit; output object files reverted to unknown",
@@ -648,7 +647,7 @@ impl Driver {
             ObjectStatus::Live,
             Some(final_tx_hash),
         )?;
-        commit_ctx = file_write_ctx(&old_root, &saved.output_files, ObjectStatus::Live);
+        commit_ctx = file_write_ctx(old_root, &saved.output_files, ObjectStatus::Live);
         reporter.on_step(
             ExecutionPhase::Commit,
             "Commit observed; output object files updated to live",
@@ -657,7 +656,7 @@ impl Driver {
 
         let result = ExecuteActionResult {
             old_root,
-            new_root: encode_hash_hex(&sync_head.current_gsr),
+            new_root: sync_head.current_gsr,
             output_files: saved.output_files.clone(),
             nullified_files: saved.nullified_files.clone(),
             relayer_job_id: confirmation.job_id,
@@ -680,7 +679,7 @@ impl Driver {
             .map(|c| c.hash)
             .unwrap_or_default();
         ObjectSummary {
-            content_hash: entry.record.content_hash.clone(),
+            content_hash: encode_hash_hex(&entry.record.content_hash),
             file_name: entry.file_name.clone(),
             class: entry.record.class.clone(),
             class_hash,
@@ -705,12 +704,12 @@ impl Driver {
 }
 
 fn file_write_ctx(
-    old_root: &str,
+    old_root: Hash,
     output_files: &[String],
     output_status: ObjectStatus,
 ) -> ExecutionStepContext {
     ExecutionStepContext {
-        old_root: Some(old_root.to_string()),
+        old_root: Some(old_root),
         output_files: output_files.to_vec(),
         output_status: Some(output_status),
     }

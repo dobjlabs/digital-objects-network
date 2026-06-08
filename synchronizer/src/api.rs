@@ -22,7 +22,6 @@ use crate::{
     head::CanonicalRoots,
     sync_db::{CurrentSnapshot, SyncDb},
 };
-use common::{decode_hash_hex, encode_hash_hex};
 
 const MAX_HASH_QUERY_ITEMS: usize = 256;
 
@@ -40,8 +39,8 @@ struct HeadSnapshot {
     last_processed_slot: u32,
     /// Execution block number associated with the last processed slot, if any.
     last_processed_block_number: Option<u32>,
-    /// Current canonical global state root encoded as hex, if one exists.
-    current_gsr: Option<String>,
+    /// Current canonical global state root, if one exists.
+    current_gsr: Option<Hash>,
     /// Execution block number committed inside the current state root, if any.
     current_block_number: Option<i64>,
     /// Number of objects in the canonical global created set.
@@ -154,7 +153,7 @@ async fn post_state_object_contains(
     State(app_state): State<AppState>,
     Json(body): Json<ObjectContainsRequest>,
 ) -> Result<Json<ObjectContainsResponse>, (StatusCode, String)> {
-    let no_nullifiers: &[String] = &[];
+    let no_nullifiers: &[Hash] = &[];
     let MembershipContext {
         head,
         object_commitments,
@@ -173,7 +172,7 @@ async fn post_state_nullifier_contains(
     State(app_state): State<AppState>,
     Json(body): Json<NullifierContainsRequest>,
 ) -> Result<Json<NullifierContainsResponse>, (StatusCode, String)> {
-    let no_tx_hashes: &[String] = &[];
+    let no_tx_hashes: &[Hash] = &[];
     let MembershipContext {
         head,
         nullifiers,
@@ -212,11 +211,7 @@ async fn post_grounding_witness(
     Json(body): Json<GroundingWitnessRequest>,
 ) -> Result<Json<GroundingWitnessResponse>, (StatusCode, String)> {
     ensure_hash_query_limit("objectCommitments", body.object_commitments.len())?;
-    let object_commitments = body
-        .object_commitments
-        .iter()
-        .map(|raw| parse_hash_hex(raw))
-        .collect::<Result<Vec<_>, _>>()?;
+    let object_commitments = body.object_commitments;
     let (snapshot, indices) = app_state
         .sync_db
         .snapshot_with_created_indices(&object_commitments)
@@ -242,11 +237,11 @@ async fn post_grounding_witness(
         .unwrap_or_else(|| state_root.hash());
 
     Ok(Json(GroundingWitnessResponse {
-        state_root_hash: encode_hash_hex(&state_root_hash),
+        state_root_hash,
         block_number: state_root.block_number,
-        created_root: encode_hash_hex(&state_root.created_root),
-        nullifiers_root: encode_hash_hex(&state_root.nullifiers_root),
-        gsrs_root: encode_hash_hex(&state_root.gsrs_root),
+        created_root: state_root.created_root,
+        nullifiers_root: state_root.nullifiers_root,
+        gsrs_root: state_root.gsrs_root,
         created_proofs: witness
             .object_proofs
             .into_iter()
@@ -256,7 +251,7 @@ async fn post_grounding_witness(
                     None => (None, None),
                 };
                 ObjectProofResponse {
-                    commitment: encode_hash_hex(&entry.commitment),
+                    commitment: entry.commitment,
                     present: entry.present,
                     index,
                     proof,
@@ -270,12 +265,7 @@ fn build_head_snapshot(snapshot: &CurrentSnapshot) -> HeadSnapshot {
     HeadSnapshot {
         last_processed_slot: snapshot.last_processed_slot,
         last_processed_block_number: snapshot.last_processed_block_number,
-        current_gsr: snapshot
-            .head
-            .metadata
-            .current_gsr
-            .as_ref()
-            .map(encode_hash_hex),
+        current_gsr: snapshot.head.metadata.current_gsr,
         current_block_number: snapshot.head.metadata.current_block_number.map(i64::from),
         created_count: snapshot.head.metadata.created_count as usize,
         nullifier_count: snapshot.head.metadata.nullifier_count as usize,
@@ -317,12 +307,12 @@ fn grounding_witness(
 
 async fn load_membership_context(
     app_state: &AppState,
-    object_commitments: &[String],
-    nullifiers: &[String],
+    object_commitments: &[Hash],
+    nullifiers: &[Hash],
 ) -> Result<MembershipContext, (StatusCode, String)> {
     ensure_membership_query_limit(object_commitments.len(), nullifiers.len())?;
-    let object_commitments = parse_hashes(object_commitments)?;
-    let nullifiers = parse_hashes(nullifiers)?;
+    let object_commitments = object_commitments.to_vec();
+    let nullifiers = nullifiers.to_vec();
     let (snapshot, indices) = app_state
         .sync_db
         .snapshot_with_created_indices(&object_commitments)
@@ -365,10 +355,6 @@ async fn load_sync_progress(
     ))
 }
 
-fn parse_hashes(values: &[String]) -> Result<Vec<Hash>, (StatusCode, String)> {
-    values.iter().map(|value| parse_hash_hex(value)).collect()
-}
-
 fn ensure_hash_query_limit(field_name: &str, count: usize) -> Result<(), (StatusCode, String)> {
     if count > MAX_HASH_QUERY_ITEMS {
         return Err((
@@ -403,7 +389,7 @@ fn object_contains_entries(
         .into_iter()
         .zip(created_present)
         .map(|(hash, present)| ObjectContainsEntry {
-            commitment: encode_hash_hex(&hash),
+            commitment: hash,
             present,
         })
         .collect()
@@ -417,14 +403,10 @@ fn nullifier_contains_entries(
         .into_iter()
         .zip(nullifier_present)
         .map(|(hash, present)| NullifierContainsEntry {
-            nullifier: encode_hash_hex(&hash),
+            nullifier: hash,
             present,
         })
         .collect()
-}
-
-fn parse_hash_hex(value: &str) -> Result<Hash, (StatusCode, String)> {
-    decode_hash_hex(value.trim()).map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))
 }
 
 fn internal_error(err: anyhow::Error) -> (StatusCode, String) {

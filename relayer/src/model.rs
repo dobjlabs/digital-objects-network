@@ -1,3 +1,4 @@
+use pod2::middleware::Hash;
 use serde::{Deserialize, Serialize};
 
 pub use wire_types::relayer::JobStatus;
@@ -12,9 +13,9 @@ pub struct RelayJob {
     /// Raw verified payload bytes to submit as EIP-4844 blob data.
     pub payload_bytes: Vec<u8>,
     /// Idempotency key derived from proof payload.
-    pub tx_final: String,
+    pub tx_final: Hash,
     /// State root hash claimed by the payload.
-    pub state_root_hash: String,
+    pub state_root_hash: Hash,
     /// Optional caller-provided trace string for observability.
     pub client_ref: Option<String>,
     /// Total submission attempts made so far.

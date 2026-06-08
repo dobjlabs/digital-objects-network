@@ -13,10 +13,11 @@ use tokio::sync::watch;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 use wire_types::relayer::{
-    HealthResponse, JobStatusResponse, SubmitProofRequest, SubmitProofResponse,
+    HealthResponse, JobStatusResponse, LookupByTxFinalRequest, SubmitProofRequest,
+    SubmitProofResponse,
 };
 
-use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, encode_hash_hex, proof::BlobParser};
+use common::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
 
 use crate::{
     db::{Db, InsertJobResult},
@@ -102,10 +103,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/v1/proofs", post(submit_proof))
         .route("/api/v1/proofs/{job_id}", get(get_proof))
-        .route(
-            "/api/v1/proofs/by-tx-final/{tx_final}",
-            get(get_proof_by_tx_final),
-        )
+        .route("/api/v1/proofs/by-tx-final", post(get_proof_by_tx_final))
         .with_state(state)
 }
 
@@ -144,16 +142,13 @@ async fn submit_proof(
             ApiError::BadRequest("payload did not decode into a valid proof payload".to_string())
         })?;
 
-    let tx_final = encode_hash_hex(&payload.tx_final);
-    let state_root_hash = encode_hash_hex(&payload.state_root_hash);
-
     let now = now_ts();
     let job = RelayJob {
         job_id: Uuid::new_v4().to_string(),
         status: JobStatus::Queued,
         payload_bytes,
-        tx_final,
-        state_root_hash,
+        tx_final: payload.tx_final,
+        state_root_hash: payload.state_root_hash,
         client_ref: req.client_ref,
         attempt_count: 0,
         tx_hash: None,
@@ -177,7 +172,7 @@ async fn submit_proof(
         InsertJobResult::Inserted => {
             info!(
                 job_id = %job.job_id,
-                tx_final = %job.tx_final,
+                tx_final = %format_args!("{:#}", job.tx_final),
                 payload_bytes = job.payload_bytes.len(),
                 "Accepted new relay job"
             );
@@ -188,7 +183,7 @@ async fn submit_proof(
             info!(
                 job_id = %existing.job_id,
                 status = existing.status.as_str(),
-                tx_final = %existing.tx_final,
+                tx_final = %format_args!("{:#}", existing.tx_final),
                 "Idempotent insert returned existing relay job"
             );
             (StatusCode::OK, to_submit_response(existing))
@@ -224,16 +219,18 @@ async fn get_proof(
 
 async fn get_proof_by_tx_final(
     State(app_state): State<AppState>,
-    Path(tx_final): Path<String>,
+    Json(body): Json<LookupByTxFinalRequest>,
 ) -> Result<Json<JobStatusResponse>, ApiError> {
-    debug!(tx_final = %tx_final, "Handling relay job lookup by tx_final");
+    debug!(tx_final = %format_args!("{:#}", body.tx_final), "Handling relay job lookup by tx_final");
 
     let job = app_state
         .db
-        .get_job_by_tx_final(&tx_final)
+        .get_job_by_tx_final(&body.tx_final)
         .await
         .map_err(ApiError::Internal)?
-        .ok_or_else(|| ApiError::NotFound(format!("job not found for tx_final: {tx_final}")))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!("job not found for tx_final: {:#}", body.tx_final))
+        })?;
 
     Ok(Json(to_status_response(job)))
 }

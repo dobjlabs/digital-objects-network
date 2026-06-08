@@ -72,7 +72,7 @@ impl CraftOps for DobjdCraftOps {
     }
 
     fn get_state_root(&self) -> anyhow::Result<String> {
-        self.driver.get_state_root()
+        Ok(common::encode_hash_hex(&self.driver.get_state_root()?))
     }
 
     fn inspect_object(&self, file_name: &str) -> anyhow::Result<mcp::ObjectDetail> {
@@ -123,12 +123,14 @@ impl CraftOps for DobjdCraftOps {
             success: true,
             message: format!(
                 "Action {} completed. Old root: {}, New root: {}",
-                action_qname, result.old_root, result.new_root
+                action_qname,
+                common::encode_hash_hex(&result.old_root),
+                common::encode_hash_hex(&result.new_root)
             ),
             result: RunActionInner {
                 run_id,
-                old_root: result.old_root,
-                new_root: result.new_root,
+                old_root: common::encode_hash_hex(&result.old_root),
+                new_root: common::encode_hash_hex(&result.new_root),
                 output_files: result.output_files,
                 nullified_files: result.nullified_files,
             },

@@ -60,8 +60,8 @@ pub async fn run_action(
 
             Ok(RunActionResult {
                 run_id,
-                old_root: result.old_root,
-                new_root: result.new_root,
+                old_root: common::encode_hash_hex(&result.old_root),
+                new_root: common::encode_hash_hex(&result.new_root),
                 output_files: result.output_files,
                 nullified_files: result.nullified_files,
             })

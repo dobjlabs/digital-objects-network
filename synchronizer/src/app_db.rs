@@ -6,7 +6,7 @@ use pod2::{
     middleware::{
         containers::{Array, Set},
         db::DB as PodDb,
-        Hash, RawValue, Value, EMPTY_HASH, F,
+        Hash, RawValue, Value, EMPTY_HASH,
     },
 };
 use rocksdb::{Options, TransactionDB, TransactionDBOptions};
@@ -205,24 +205,7 @@ impl PodDb for AppDb {
     }
 }
 
-pub fn hash_to_db_bytes(hash: Hash) -> Vec<u8> {
-    RawValue::from(hash).to_bytes().to_vec()
-}
-
-pub fn db_bytes_to_hash(bytes: &[u8]) -> Result<Hash> {
-    let limbs: [[u8; 8]; 4] = bytes
-        .chunks_exact(8)
-        .map(|chunk| {
-            chunk
-                .try_into()
-                .map_err(|_| anyhow!("invalid hash limb length"))
-        })
-        .collect::<Result<Vec<[u8; 8]>>>()?
-        .try_into()
-        .map_err(|_| anyhow!("invalid hash byte length"))?;
-
-    Ok(Hash(limbs.map(|limb| F(u64::from_le_bytes(limb)))))
-}
+pub use common::{db_bytes_to_hash, hash_to_db_bytes};
 
 #[cfg(test)]
 mod tests {

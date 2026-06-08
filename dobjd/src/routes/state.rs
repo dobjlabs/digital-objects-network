@@ -8,5 +8,5 @@ pub async fn get_state_root(State(state): State<AppState>) -> ApiResult<Json<Str
     let root = tokio::task::spawn_blocking(move || driver.get_state_root())
         .await
         .map_err(|err| anyhow::anyhow!("state root task panicked: {err}"))??;
-    Ok(Json(root))
+    Ok(Json(common::encode_hash_hex(&root)))
 }

@@ -78,7 +78,7 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
         .unwrap();
     let source_tx = outputs.tx.clone();
     let spendable = outputs.obj(0);
-    let content_hash = format!("{:#}", spendable.obj.commitment());
+    let content_hash = spendable.obj.commitment();
     let record = ObjectRecord {
         content_hash,
         class: craft_basics("Log"),
@@ -201,8 +201,8 @@ impl RelayerClient for MockRelayer {
         Ok(wire_types::relayer::SubmitProofResponse {
             job_id: "job-1".to_string(),
             status: wire_types::relayer::JobStatus::Queued,
-            tx_final: "0x0".to_string(),
-            state_root_hash: "0x0".to_string(),
+            tx_final: Default::default(),
+            state_root_hash: Default::default(),
             attempt_count: 0,
             created_at: 0,
         })
@@ -238,7 +238,7 @@ impl RelayerClient for MockRelayer {
         })
     }
 
-    fn lookup_tx_hash(&self, _relayer_api_url: &str, _tx_final: &str) -> Result<Option<String>> {
+    fn lookup_tx_hash(&self, _relayer_api_url: &str, _tx_final: &Hash) -> Result<Option<String>> {
         Ok(Some("0xtx".to_string()))
     }
 }
@@ -392,7 +392,7 @@ fn make_importable_log() -> (String, Hash, Hash) {
         .execute_action(craft_basics("FindLog"), dummy_grounding_witness(), vec![])
         .unwrap();
     let spendable = outputs.obj(0);
-    let content_hash = format!("{:#}", spendable.obj.commitment());
+    let content_hash = spendable.obj.commitment();
     let commitment = spendable.obj.commitment();
     let nullifier = txlib::object_nullifier_hash(&spendable.obj).unwrap();
     let record = ObjectRecord {

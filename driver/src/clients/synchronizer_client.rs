@@ -12,8 +12,6 @@ use wire_types::synchronizer::{
     StateHeadResponse,
 };
 
-use common::{decode_hash_hex, encode_hash_hex};
-
 pub const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
 pub const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
 
@@ -81,9 +79,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
         )?;
         let current_gsr = payload
             .current_gsr
-            .as_deref()
-            .ok_or_else(|| anyhow!("synchronizer has no canonical grounded state yet"))
-            .and_then(parse_hash_hex)?;
+            .ok_or_else(|| anyhow!("synchronizer has no canonical grounded state yet"))?;
         Ok(SynchronizerHead { current_gsr })
     }
 
@@ -97,7 +93,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
             sync_api_url.trim_end_matches('/')
         );
         let request = GroundingWitnessRequest {
-            object_commitments: object_commitments.iter().map(encode_hash_hex).collect(),
+            object_commitments: object_commitments.to_vec(),
         };
         let client = reqwest::blocking::Client::new();
         let payload: GroundingWitnessResponse = send_json_request(
@@ -108,17 +104,15 @@ impl SynchronizerClient for HttpSynchronizerClient {
 
         let state_root = StateRoot::new(
             payload.block_number,
-            parse_hash_hex(&payload.created_root)?,
-            parse_hash_hex(&payload.nullifiers_root)?,
-            parse_hash_hex(&payload.gsrs_root)?,
+            payload.created_root,
+            payload.nullifiers_root,
+            payload.gsrs_root,
         );
-        let remote_state_root_hash = parse_hash_hex(&payload.state_root_hash)?;
+        let remote_state_root_hash = payload.state_root_hash;
         let derived_state_root_hash = state_root.hash();
         if remote_state_root_hash != derived_state_root_hash {
             return Err(anyhow!(
-                "synchronizer grounding witness hash mismatch: remote={} derived={}",
-                encode_hash_hex(&remote_state_root_hash),
-                encode_hash_hex(&derived_state_root_hash)
+                "synchronizer grounding witness hash mismatch: remote={remote_state_root_hash:#} derived={derived_state_root_hash:#}"
             ));
         }
 
@@ -171,14 +165,8 @@ impl SynchronizerClient for HttpSynchronizerClient {
             let null_take = (nullifiers.len() - null_cursor).min(remaining_capacity);
 
             let request = MembershipRequest {
-                object_commitments: object_commitments[obj_cursor..obj_cursor + obj_take]
-                    .iter()
-                    .map(encode_hash_hex)
-                    .collect(),
-                nullifiers: nullifiers[null_cursor..null_cursor + null_take]
-                    .iter()
-                    .map(encode_hash_hex)
-                    .collect(),
+                object_commitments: object_commitments[obj_cursor..obj_cursor + obj_take].to_vec(),
+                nullifiers: nullifiers[null_cursor..null_cursor + null_take].to_vec(),
             };
 
             let payload: MembershipResponse = send_json_request(
@@ -189,12 +177,12 @@ impl SynchronizerClient for HttpSynchronizerClient {
 
             for entry in payload.created_results {
                 if entry.present {
-                    created_objects.insert(parse_hash_hex(&entry.commitment)?);
+                    created_objects.insert(entry.commitment);
                 }
             }
             for entry in payload.nullifier_results {
                 if entry.present {
-                    on_chain_nullifiers.insert(parse_hash_hex(&entry.nullifier)?);
+                    on_chain_nullifiers.insert(entry.nullifier);
                 }
             }
 
@@ -245,10 +233,6 @@ impl SynchronizerClient for HttpSynchronizerClient {
     }
 }
 
-fn parse_hash_hex(value: &str) -> Result<Hash> {
-    decode_hash_hex(value.trim())
-}
-
 fn send_json_request<T: DeserializeOwned>(
     request: reqwest::blocking::RequestBuilder,
     endpoint: &str,
@@ -275,7 +259,7 @@ fn send_json_request<T: DeserializeOwned>(
 /// conflicting, omitted, or not-yet-present entries.
 fn collect_created_proofs<P>(
     requested_commitments: &[Hash],
-    entries: impl IntoIterator<Item = (String, bool, Option<P>)>,
+    entries: impl IntoIterator<Item = (Hash, bool, Option<P>)>,
 ) -> Result<HashMap<Hash, P>> {
     let expected_hashes = requested_commitments
         .iter()
@@ -284,12 +268,10 @@ fn collect_created_proofs<P>(
     let mut response_presence = HashMap::new();
     let mut created_proofs = HashMap::new();
 
-    for (commitment_raw, present, proof) in entries {
-        let commitment = parse_hash_hex(&commitment_raw)?;
+    for (commitment, present, proof) in entries {
         if !expected_hashes.contains(&commitment) {
             return Err(anyhow!(
-                "synchronizer grounding witness response contained unexpected object proof: {}",
-                encode_hash_hex(&commitment)
+                "synchronizer grounding witness response contained unexpected object proof: {commitment:#}"
             ));
         }
 
@@ -297,16 +279,14 @@ fn collect_created_proofs<P>(
             && previous_present != present
         {
             return Err(anyhow!(
-                "synchronizer grounding witness response contained conflicting entries for object {}",
-                encode_hash_hex(&commitment)
+                "synchronizer grounding witness response contained conflicting entries for object {commitment:#}"
             ));
         }
 
         if present {
             let proof = proof.ok_or_else(|| {
                 anyhow!(
-                    "synchronizer reported object {} present but omitted its array proof",
-                    encode_hash_hex(&commitment)
+                    "synchronizer reported object {commitment:#} present but omitted its array proof"
                 )
             })?;
             created_proofs.insert(commitment, proof);
@@ -346,7 +326,7 @@ fn render_requested_hashes(
     let mut rendered = Vec::new();
     for commitment in requested_commitments {
         if seen.insert(*commitment) && include(commitment) {
-            rendered.push(encode_hash_hex(commitment));
+            rendered.push(format!("{commitment:#}"));
         }
     }
     rendered
@@ -355,20 +335,21 @@ fn render_requested_hashes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pod2::middleware::RawValue;
 
     fn test_hash(byte: u8) -> Hash {
-        decode_hash_hex(&hex::encode([byte; 32])).expect("valid test hash")
+        Hash::from(RawValue::from(i64::from(byte)))
     }
 
     #[test]
     fn collect_created_proofs_rejects_omitted_requested_hash() {
         let requested = [test_hash(1), test_hash(2)];
-        let proofs = vec![(encode_hash_hex(&requested[0]), true, Some("proof-1"))];
+        let proofs = vec![(requested[0], true, Some("proof-1"))];
 
         let err = collect_created_proofs(&requested, proofs).expect_err("should fail");
 
         assert!(
-            err.to_string().contains(&encode_hash_hex(&requested[1])),
+            err.to_string().contains(&format!("{:#}", requested[1])),
             "unexpected error: {err}"
         );
     }
@@ -377,12 +358,12 @@ mod tests {
     fn collect_created_proofs_rejects_unexpected_hash() {
         let requested = [test_hash(1)];
         let unexpected = test_hash(9);
-        let proofs = vec![(encode_hash_hex(&unexpected), true, Some("proof-9"))];
+        let proofs = vec![(unexpected, true, Some("proof-9"))];
 
         let err = collect_created_proofs(&requested, proofs).expect_err("should fail");
 
         assert!(
-            err.to_string().contains(&encode_hash_hex(&unexpected)),
+            err.to_string().contains(&format!("{:#}", unexpected)),
             "unexpected error: {err}"
         );
     }
@@ -391,8 +372,8 @@ mod tests {
     fn collect_created_proofs_rejects_conflicting_duplicate_status() {
         let requested = [test_hash(1)];
         let proofs = vec![
-            (encode_hash_hex(&requested[0]), true, Some("proof-1a")),
-            (encode_hash_hex(&requested[0]), false, None),
+            (requested[0], true, Some("proof-1a")),
+            (requested[0], false, None),
         ];
 
         let err = collect_created_proofs(&requested, proofs).expect_err("should fail");
@@ -407,8 +388,8 @@ mod tests {
     fn collect_created_proofs_allows_duplicate_requested_hashes() {
         let requested = [test_hash(1), test_hash(1), test_hash(2)];
         let proofs = vec![
-            (encode_hash_hex(&requested[0]), true, Some("proof-1")),
-            (encode_hash_hex(&requested[2]), true, Some("proof-2")),
+            (requested[0], true, Some("proof-1")),
+            (requested[2], true, Some("proof-2")),
         ];
 
         let result = collect_created_proofs(&requested, proofs).expect("should succeed");

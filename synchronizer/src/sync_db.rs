@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use alloy::primitives::B256;
 use anyhow::{anyhow, Context, Result};
-use common::encode_hash_hex;
 use pod2::middleware::Hash;
 use sqlx::{
     postgres::{PgPoolOptions, PgRow},
@@ -308,8 +307,7 @@ impl SyncDb {
             .await
             .with_context(|| {
                 format!(
-                    "inserting created_index row for {} at slot {}",
-                    encode_hash_hex(commitment),
+                    "inserting created_index row for {commitment:#} at slot {}",
                     slot.slot
                 )
             })?;
