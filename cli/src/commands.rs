@@ -14,6 +14,8 @@ use wire_types::{
     RunActionRequest, RunState, RunStatus,
 };
 
+const MAX_CONSECUTIVE_RUN_POLL_ERRORS: usize = 5;
+
 fn parse_qualified(id: &str) -> Result<QualifiedName> {
     QualifiedName::parse(id).map_err(|err| anyhow!("{err}"))
 }
@@ -237,7 +239,7 @@ pub async fn run(
 
     // Authoritative outcome, and the recovery path if the stream dropped:
     // poll the run until it reaches a terminal state.
-    let state = poll_run_to_terminal(client, &run_id).await?;
+    let state = poll_run_to_terminal(client, &run_id, quiet).await?;
     match state.status {
         RunStatus::Succeeded => {
             let result = state
@@ -269,16 +271,36 @@ pub async fn run(
     }
 }
 
-/// Poll `GET /actions/runs/{run_id}` until the run reaches a terminal state.
-/// Cheap local HTTP; the daemon's supervisor guarantees every run terminates,
-/// so this always resolves (Ctrl+C to abandon waiting).
-async fn poll_run_to_terminal(client: &DobjdClient, run_id: &str) -> Result<RunState> {
+/// Poll `GET /actions/runs/{run_id}` until the run reaches a terminal state,
+/// tolerating transient follow-up failures so a brief HTTP hiccup is not
+/// reported as an action failure.
+async fn poll_run_to_terminal(client: &DobjdClient, run_id: &str, quiet: bool) -> Result<RunState> {
     let path = format!("/actions/runs/{run_id}");
+    let mut consecutive_errors = 0usize;
     loop {
-        let state: RunState = client.get_json(&path).await?;
-        match state.status {
-            RunStatus::Succeeded | RunStatus::Failed => return Ok(state),
-            _ => sleep(Duration::from_millis(500)).await,
+        match client.get_json::<RunState>(&path).await {
+            Ok(state) => {
+                consecutive_errors = 0;
+                match state.status {
+                    RunStatus::Succeeded | RunStatus::Failed => return Ok(state),
+                    _ => sleep(Duration::from_millis(500)).await,
+                }
+            }
+            Err(err) => {
+                consecutive_errors += 1;
+                if consecutive_errors >= MAX_CONSECUTIVE_RUN_POLL_ERRORS {
+                    return Err(anyhow!(
+                        "lost contact while following run {run_id}; it may still complete. Run `dobj inventory` to reconcile. Last error: {err:#}"
+                    ));
+                }
+                if !quiet {
+                    eprintln!(
+                        "(poll failed {consecutive_errors}/{MAX_CONSECUTIVE_RUN_POLL_ERRORS}: {err}; retrying)"
+                    );
+                }
+                let delay_ms = 500 * consecutive_errors.min(10) as u64;
+                sleep(Duration::from_millis(delay_ms)).await;
+            }
         }
     }
 }

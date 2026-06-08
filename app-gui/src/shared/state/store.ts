@@ -14,17 +14,41 @@ import {
 import { normalizeErrorMessage } from "../error";
 import { qualifiedEq } from "../objectUtils";
 
+const MAX_CONSECUTIVE_RUN_POLL_ERRORS = 5;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Poll a run until it reaches a terminal state. Local HTTP, and the daemon's
- * supervisor guarantees every run terminates, so this always resolves. This
- * is the authoritative completion signal (and recovery path) now that the
- * run POST returns immediately rather than carrying the result. */
+ * supervisor guarantees every run reaches a terminal state while dobjd stays
+ * up. Transient follow-up polling failures are tolerated so a momentary HTTP
+ * hiccup is not reported as an action failure. */
 async function pollRunToTerminal(runId: string): Promise<RunState> {
+  let consecutiveErrors = 0;
   for (;;) {
-    const state = await getRun(runId);
-    if (state.status === "succeeded" || state.status === "failed") {
-      return state;
+    try {
+      const state = await getRun(runId);
+      consecutiveErrors = 0;
+      if (state.status === "succeeded" || state.status === "failed") {
+        return state;
+      }
+      await sleep(1000);
+    } catch (error) {
+      consecutiveErrors += 1;
+      const message =
+        error instanceof Error ? error.message : String(error ?? "unknown");
+      if (consecutiveErrors >= MAX_CONSECUTIVE_RUN_POLL_ERRORS) {
+        throw new Error(
+          `Lost contact while following run ${runId}; it may still complete. Sync inventory to reconcile. Last error: ${message}`,
+        );
+      }
+      console.warn(
+        `Failed to poll run ${runId} (${consecutiveErrors}/${MAX_CONSECUTIVE_RUN_POLL_ERRORS}); retrying`,
+        error,
+      );
+      await sleep(Math.min(1000 * consecutiveErrors, 5000));
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 }
 

@@ -1,16 +1,10 @@
-use std::time::Duration;
-
 use axum::{
     Router,
-<<<<<<< HEAD
     extract::DefaultBodyLimit,
-=======
     http::StatusCode,
->>>>>>> cf312a6d (add non blocking run)
     routing::{get, post},
 };
 use tower_http::cors::CorsLayer;
-use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::Level;
 
@@ -25,13 +19,6 @@ mod objects;
 mod settings;
 mod state;
 
-/// Backstop timeout for non-streaming routes. Every endpoint except the SSE
-/// streams now returns promptly — the long proof + commit work happens on a
-/// background run worker — so a request that exceeds this is a hang, and
-/// failing it frees the connection instead of pinning it. SSE routes are
-/// layered separately because their responses are long-lived by design.
-const REQUEST_TIMEOUT_SECS: u64 = 60;
-
 /// Build the axum router.
 ///
 /// dobjd is API-only — the UI is served separately (Vite on `:1420` in dev,
@@ -41,15 +28,11 @@ const REQUEST_TIMEOUT_SECS: u64 = 60;
 /// parameterized ones (`/objects/{file_name}`), so the relative order
 /// isn't load-bearing — but the literals are listed first for readability.
 pub fn router(app_state: AppState) -> Router {
-    // Streaming responses must NOT carry the request timeout, or it would
-    // sever every SSE connection at REQUEST_TIMEOUT_SECS.
-    let sse_routes = Router::new()
+    Router::new()
         .route("/events", get(events::stream))
-        .route("/actions/runs/{run_id}/events", get(actions::run_events));
-
-    let api_routes = Router::new()
-        .route("/healthz", get(health::healthz))
+        .route("/actions/runs/{run_id}/events", get(actions::run_events))
         .route("/inventory", get(inventory::load_inventory))
+        .route("/healthz", get(health::healthz))
         .route("/state-root", get(state::get_state_root))
         .route("/objects/dir", get(objects::get_objects_dir))
         .route("/objects/import", post(objects::import_object))
@@ -73,13 +56,6 @@ pub fn router(app_state: AppState) -> Router {
         .route("/actions/runs/{run_id}", get(actions::get_run))
         .route("/actions/{id}", get(actions::inspect_action))
         .route("/actions/{id}/feasibility", get(actions::check_feasibility))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(REQUEST_TIMEOUT_SECS),
-        ));
-
-    sse_routes
-        .merge(api_routes)
         .with_state(app_state)
         .layer(CorsLayer::permissive())
         .layer(
