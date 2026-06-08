@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use anyhow::{Result, anyhow};
 use common::test_state::TestState;
@@ -95,7 +96,7 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
             record,
         },
         DriverDeps {
-            catalog: Arc::new(catalog),
+            catalog: Arc::new(RwLock::new(Arc::new(catalog))),
             synchronizer: Arc::new(MockSynchronizer {
                 state,
                 ..MockSynchronizer::default()
@@ -254,7 +255,7 @@ fn test_list_actions_filters_by_input_class() {
     let paths = temp_paths();
     ensure_store_dirs(&paths).unwrap();
     let deps = DriverDeps {
-        catalog: Arc::new(make_catalog()),
+        catalog: Arc::new(RwLock::new(Arc::new(make_catalog()))),
         synchronizer: Arc::new(MockSynchronizer::default()),
         relayer: Arc::new(MockRelayer::default()),
         payload_builder: Arc::new(MockPayloadBuilder),
@@ -419,7 +420,7 @@ fn import_driver(
     let paths = temp_paths();
     ensure_store_dirs(&paths).unwrap();
     let deps = DriverDeps {
-        catalog: Arc::new(make_catalog()),
+        catalog: Arc::new(RwLock::new(Arc::new(make_catalog()))),
         synchronizer: Arc::new(MockSynchronizer {
             membership_grounded: grounded,
             membership_nullifiers: nullifiers,
@@ -448,6 +449,57 @@ fn test_import_ungrounded_object_is_unknown() {
     let driver = import_driver(HashSet::new(), HashSet::new(), false);
     let summary = driver.import_object(&json).unwrap();
     assert_eq!(summary.status, ObjectStatus::Unknown);
+}
+
+/// A driver with an empty catalog and mock chain deps. `install_plugin` only
+/// touches the actions dir and the catalog, so the mocks are never exercised.
+fn empty_catalog_driver() -> Driver {
+    let paths = temp_paths();
+    ensure_store_dirs(&paths).unwrap();
+    let empty =
+        PexeCatalog::from_bytes(std::iter::empty::<(std::path::PathBuf, Vec<u8>)>(), true).unwrap();
+    let deps = DriverDeps {
+        catalog: Arc::new(RwLock::new(Arc::new(empty))),
+        synchronizer: Arc::new(MockSynchronizer::default()),
+        relayer: Arc::new(MockRelayer::default()),
+        payload_builder: Arc::new(MockPayloadBuilder),
+    };
+    Driver::open(paths, deps).unwrap()
+}
+
+#[test]
+fn install_plugin_writes_and_hot_reloads() {
+    let driver = empty_catalog_driver();
+    assert!(driver.list_actions(None).unwrap().is_empty());
+
+    let name = driver.install_plugin(&test_plugin_bytes()).unwrap();
+    assert_eq!(name, "craft-basics");
+    // Live without a restart...
+    assert!(!driver.list_actions(None).unwrap().is_empty());
+    // ...and the archive landed in the actions dir.
+    assert!(
+        driver
+            .paths()
+            .actions_dir
+            .join("craft-basics.pexe")
+            .exists()
+    );
+}
+
+#[test]
+fn install_plugin_rejects_bad_archive_and_leaves_catalog_intact() {
+    let driver = empty_catalog_driver();
+    let err = driver.install_plugin(b"not a valid pexe").unwrap_err();
+    assert!(
+        err.to_string().contains("archive") || err.to_string().contains("pexe"),
+        "expected an archive error, got: {err}"
+    );
+    // A rejected install must not populate the catalog or leave a file behind.
+    assert!(driver.list_actions(None).unwrap().is_empty());
+    let leftovers = std::fs::read_dir(&driver.paths().actions_dir)
+        .map(|rd| rd.filter_map(|e| e.ok()).count())
+        .unwrap_or(0);
+    assert_eq!(leftovers, 0, "a rejected install left files behind");
 }
 
 #[test]

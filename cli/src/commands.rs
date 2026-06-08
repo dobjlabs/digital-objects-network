@@ -463,6 +463,44 @@ pub async fn feasibility(client: &DobjdClient, action_id: String, json: bool) ->
     Ok(())
 }
 
+/// Install a plugin from a local path or an http(s) URL. The bytes are sent to
+/// dobjd, which writes the `.pexe` into `~/.dobj/actions/` and hot-reloads the
+/// catalog so the plugin is usable immediately (no restart).
+pub async fn install(client: &DobjdClient, source: String, json: bool) -> Result<()> {
+    let bytes = read_or_download(&source).await?;
+    let plugin: String = client.post_bytes("/actions/install", bytes).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({ "plugin": plugin }))?
+        );
+    } else {
+        println!("installed plugin '{plugin}' - run `dobj actions` to see what it added");
+    }
+    Ok(())
+}
+
+/// Resolve the install source: an http(s) URL is downloaded, anything else is
+/// read as a local file path. The byte cap is enforced authoritatively by
+/// dobjd (the request body limit), so there's no client-side limit here.
+async fn read_or_download(source: &str) -> Result<Vec<u8>> {
+    let is_url = reqwest::Url::parse(source)
+        .map(|u| matches!(u.scheme(), "http" | "https"))
+        .unwrap_or(false);
+    if is_url {
+        Ok(reqwest::get(source)
+            .await
+            .with_context(|| format!("GET {source}"))?
+            .error_for_status()
+            .with_context(|| format!("download failed: {source}"))?
+            .bytes()
+            .await?
+            .to_vec())
+    } else {
+        std::fs::read(source).with_context(|| format!("reading {source}"))
+    }
+}
+
 fn short_hex(hex: &str) -> String {
     let trimmed = hex.trim_start_matches("0x");
     if trimmed.len() <= 12 {

@@ -28,3 +28,4 @@ pub use crate::types::{
     ExecutionStepContext, NoopExecutionReporter, ObjectQuery,
 };
 pub use crate::warm::warm_proving_circuits;
+pub use pexe::MAX_PEXE_BYTES;

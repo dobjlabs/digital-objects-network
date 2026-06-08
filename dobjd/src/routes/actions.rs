@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use axum::{
     Json,
+    body::Bytes,
     extract::{Path, State},
 };
 use wire_types::{
@@ -71,6 +72,19 @@ pub async fn run_action(
     .map_err(|err| anyhow!("run_action task panicked: {err}"))??;
 
     Ok(Json(result))
+}
+
+/// `POST /actions/install` — install a `.pexe` (raw archive bytes in the
+/// request body) into the actions dir and hot-reload the catalog, so the
+/// plugin is usable without restarting dobjd. The catalog is validated before
+/// the swap commits and a bad archive is removed, so a failed install leaves
+/// the running catalog untouched. Returns the installed plugin name.
+pub async fn install_plugin(State(state): State<AppState>, body: Bytes) -> ApiResult<Json<String>> {
+    let driver = state.driver.clone();
+    let name = tokio::task::spawn_blocking(move || driver.install_plugin(&body))
+        .await
+        .map_err(|err| anyhow!("install_plugin task panicked: {err}"))??;
+    Ok(Json(name))
 }
 
 /// `GET /actions` — full catalog of every action the loaded plugins

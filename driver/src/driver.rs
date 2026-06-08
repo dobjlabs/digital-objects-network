@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::RwLock;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use common::{decode_hash_hex, encode_hash_hex};
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
@@ -57,7 +58,7 @@ impl PayloadBuilder for DefaultPayloadBuilder {
 
 #[derive(Clone)]
 pub struct DriverDeps {
-    pub catalog: Arc<dyn ActionCatalog>,
+    pub catalog: Arc<RwLock<Arc<dyn ActionCatalog>>>,
     pub synchronizer: Arc<dyn SynchronizerClient>,
     pub relayer: Arc<dyn RelayerClient>,
     pub payload_builder: Arc<dyn PayloadBuilder>,
@@ -80,7 +81,7 @@ impl DriverDeps {
             );
         }
         Ok(Self {
-            catalog: Arc::new(catalog),
+            catalog: Arc::new(RwLock::new(Arc::new(catalog))),
             synchronizer: Arc::new(HttpSynchronizerClient),
             relayer: Arc::new(HttpRelayerClient),
             payload_builder: Arc::new(DefaultPayloadBuilder),
@@ -109,6 +110,40 @@ impl Driver {
 
     pub fn paths(&self) -> &DriverPaths {
         &self.paths
+    }
+
+    fn catalog(&self) -> Arc<dyn ActionCatalog> {
+        self.deps
+            .catalog
+            .read()
+            .expect("catalog lock poisoned")
+            .clone()
+    }
+
+    /// Rebuild the action catalog from `actions_dir` and swap it in. Loads
+    /// first, so a failed load (e.g. a bad .pexe) leaves the current catalog
+    /// intact. Returns the new plugin count.
+    pub fn reload_catalog(&self) -> Result<usize> {
+        let catalog = PexeCatalog::load(&self.paths.actions_dir)?;
+        let count = catalog.plugin_count();
+        *self.deps.catalog.write().expect("catalog lock poisoned") = Arc::new(catalog);
+        Ok(count)
+    }
+
+    /// Install a `.pexe` into the actions dir and hot-reload the catalog.
+    /// Validates the archive and plugin name first; if the reload fails, the
+    /// just-written file is removed so it can't break the next startup.
+    /// Returns the installed plugin name.
+    pub fn install_plugin(&self, bytes: &[u8]) -> Result<String> {
+        let (manifest, _script) = pexe::unpack(bytes).context("invalid .pexe archive")?;
+        let name = manifest.plugin.name.clone();
+        crate::pexe_catalog::validate_plugin_name(&name)?;
+        let path = pexe::install(bytes, &self.paths.actions_dir, &name)?;
+        if let Err(err) = self.reload_catalog() {
+            let _ = std::fs::remove_file(&path);
+            return Err(err.context(format!("plugin {name} failed to load; not installed")));
+        }
+        Ok(name)
     }
 
     pub fn load_settings(&self) -> Result<DriverSettings> {
@@ -223,7 +258,7 @@ impl Driver {
     }
 
     pub fn list_actions(&self, query: Option<&ActionQuery>) -> Result<Vec<ActionSummary>> {
-        let actions = self.deps.catalog.list_actions();
+        let actions = self.catalog().list_actions();
         Ok(actions
             .into_iter()
             .filter(|action| {
@@ -245,8 +280,7 @@ impl Driver {
     /// Look up a single action by its qualified name. Errors if no plugin
     /// provides the action.
     pub fn get_action(&self, action: &QualifiedName) -> Result<ActionSummary> {
-        self.deps
-            .catalog
+        self.catalog()
             .get_action(action)
             .ok_or_else(|| anyhow!("unknown action: {action}"))
     }
@@ -257,8 +291,7 @@ impl Driver {
             .filter(|entry| entry.record.status == ObjectStatus::Live)
             .collect::<Vec<_>>();
         Ok(self
-            .deps
-            .catalog
+            .catalog()
             .list_classes()
             .into_iter()
             .map(|class_info| ClassSummary {
@@ -273,8 +306,7 @@ impl Driver {
 
     pub fn get_class(&self, class: &QualifiedName) -> Result<ClassSummary> {
         let class_info = self
-            .deps
-            .catalog
+            .catalog()
             .get_class(class)
             .ok_or_else(|| anyhow!("unknown class: {class}"))?;
         let live_count = load_object_files(&self.paths)?
@@ -291,8 +323,7 @@ impl Driver {
 
     pub fn check_action(&self, action: &QualifiedName) -> Result<CheckActionReport> {
         let action_summary = self
-            .deps
-            .catalog
+            .catalog()
             .get_action(action)
             .ok_or_else(|| anyhow!("unknown action: {action}"))?;
         let entries = load_object_files(&self.paths)?;
@@ -378,8 +409,7 @@ impl Driver {
         //    the second check catches a `class` label that drifted from the
         //    object's actual pod-level identity.
         let class_info = self
-            .deps
-            .catalog
+            .catalog()
             .get_class(&record.class)
             .ok_or_else(|| DriverError::UnknownClass(record.class.to_string()))?;
         let expected_class_hash = decode_hash_hex(class_info.hash.as_str()).map_err(|err| {
@@ -477,8 +507,7 @@ impl Driver {
     ) -> Result<ExecuteActionResult> {
         let settings = self.load_settings()?;
         let action = self
-            .deps
-            .catalog
+            .catalog()
             .get_action(&input.action)
             .ok_or_else(|| anyhow!("unknown action: {}", input.action))?;
 
@@ -504,7 +533,7 @@ impl Driver {
             .iter()
             .map(|input| input.record.spendable())
             .collect::<Vec<_>>();
-        let spendable_outputs = self.deps.catalog.execute_action(
+        let spendable_outputs = self.catalog().execute_action(
             input.action.clone(),
             grounding_witness,
             execution_inputs,
@@ -676,13 +705,12 @@ impl Driver {
     }
 
     pub fn generated_podlang(&self) -> Option<String> {
-        self.deps.catalog.generated_podlang()
+        self.catalog().generated_podlang()
     }
 
     fn object_summary(&self, entry: &ObjectFileEntry) -> ObjectSummary {
         let class_hash = self
-            .deps
-            .catalog
+            .catalog()
             .get_class(&entry.record.class)
             .map(|c| c.hash)
             .unwrap_or_default();
