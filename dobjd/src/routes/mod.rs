@@ -29,10 +29,10 @@ mod state;
 /// isn't load-bearing — but the literals are listed first for readability.
 pub fn router(app_state: AppState) -> Router {
     Router::new()
+        .route("/healthz", get(health::healthz))
         .route("/events", get(events::stream))
         .route("/actions/runs/{run_id}/events", get(actions::run_events))
         .route("/inventory", get(inventory::load_inventory))
-        .route("/healthz", get(health::healthz))
         .route("/state-root", get(state::get_state_root))
         .route("/objects/dir", get(objects::get_objects_dir))
         .route("/objects/import", post(objects::import_object))
