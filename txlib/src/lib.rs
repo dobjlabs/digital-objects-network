@@ -1260,9 +1260,10 @@ mod tests {
     /// Tx 2: MineStone using the WoodPick (mutate pick + insert stone).
     #[test]
     fn test_mine_stone() {
+        let events = Arc::new(crate::predicates::events_module());
         let txlib = Arc::new(crate::predicates::module());
         let craft = Arc::new(crate::predicates::crafting_test_module());
-        let modules = vec![txlib.clone(), craft.clone()];
+        let modules = vec![events, txlib.clone(), craft.clone()];
 
         let is_wood_pick = Value::from(
             Predicate::Custom(craft.predicate_ref_by_name("IsWoodPick").unwrap()).hash(),
@@ -1398,9 +1399,10 @@ mod tests {
     /// Tx 3: CraftSticks (delete wood, insert two sticks).
     #[test]
     fn test_craft_sticks() {
+        let events = Arc::new(crate::predicates::events_module());
         let txlib = Arc::new(crate::predicates::module());
         let craft = Arc::new(crate::predicates::crafting_test_module());
-        let modules = vec![txlib.clone(), craft.clone()];
+        let modules = vec![events, txlib.clone(), craft.clone()];
 
         let is_log =
             Value::from(Predicate::Custom(craft.predicate_ref_by_name("IsLog").unwrap()).hash());
@@ -1609,9 +1611,10 @@ mod tests {
     /// one- and two-input tests never reach.
     #[test]
     fn test_grounds_three_inputs() {
+        let events = Arc::new(crate::predicates::events_module());
         let txlib = Arc::new(crate::predicates::module());
         let craft = Arc::new(crate::predicates::crafting_test_module());
-        let modules = vec![txlib.clone(), craft.clone()];
+        let modules = vec![events, txlib.clone(), craft.clone()];
 
         let is_log =
             Value::from(Predicate::Custom(craft.predicate_ref_by_name("IsLog").unwrap()).hash());

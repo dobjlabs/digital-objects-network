@@ -1,24 +1,38 @@
-#[cfg(test)]
 use std::sync::Arc;
 
 use pod2::lang::{self, load_module};
 
-#[cfg(test)]
-const TXLIB_HASH_PLACEHOLDER: &str = "0xTXLIB_MODULE_HASH";
+const TX_EVENTS_HASH_PLACEHOLDER: &str = "0xTX_EVENTS_MODULE_HASH";
 
 #[cfg(test)]
 /// Load the test crafting predicates (simplified, no VDF).
 pub fn crafting_test_module() -> lang::Module {
     let params = pod2::middleware::Params::default();
-    let txlib = Arc::new(module());
-    let txlib_hash = format!("{:#}", txlib.batch.id());
-    let source = include_str!("crafting_test.podlang").replace(TXLIB_HASH_PLACEHOLDER, &txlib_hash);
-    load_module(&source, "craft", &params, &[txlib]).expect("crafting_test.podlang compiles")
+    let events = Arc::new(events_module());
+    let events_hash = format!("{:#}", events.batch.id());
+    let source =
+        include_str!("crafting_test.podlang").replace(TX_EVENTS_HASH_PLACEHOLDER, &events_hash);
+    load_module(&source, "craft", &params, &[events]).expect("crafting_test.podlang compiles")
 }
 
+/// The chain-primitive event predicates (TxInsert/TxMutate/TxDelete).
+/// Kept in their own batch so action predicates and recorded
+/// transactions keep stable hashes across edits to the replay and
+/// finalize predicates in [`module`].
+pub fn events_module() -> lang::Module {
+    let params = pod2::middleware::Params::default();
+    load_module(include_str!("tx_events.podlang"), "txev", &params, &[])
+        .expect("tx_events.podlang compiles")
+}
+
+/// The replay/grounding/finalize predicates. Imports [`events_module`]
+/// for the chain primitives.
 pub fn module() -> lang::Module {
     let params = pod2::middleware::Params::default();
-    load_module(include_str!("txlib.podlang"), "tx", &params, &[]).expect("txlib.podlang compiles")
+    let events = Arc::new(events_module());
+    let events_hash = format!("{:#}", events.batch.id());
+    let source = include_str!("txlib.podlang").replace(TX_EVENTS_HASH_PLACEHOLDER, &events_hash);
+    load_module(&source, "tx", &params, &[events]).expect("txlib.podlang compiles")
 }
 
 #[cfg(test)]
@@ -49,15 +63,33 @@ mod tests {
         module.predicate_ref_by_name("IsStone").unwrap();
     }
 
+    // Every plugin module hash and every recorded transaction bakes in
+    // the events batch id. If this test fails, the change is
+    // interface-breaking: every plugin manifest must be regenerated and
+    // existing proofs/objects no longer verify. Only then update the
+    // pinned hash.
+    #[test]
+    fn test_events_module_hash_pinned() {
+        let module = events_module();
+        assert_eq!(
+            format!("{:#}", module.batch.id()),
+            "0x845770b5494c1793e749c7110c0db3e0faefd0d675cd11f83901432dc08dccd2",
+        );
+    }
+
+    #[test]
+    fn test_events_predicates_exist() {
+        let module = events_module();
+
+        module.predicate_ref_by_name("TxInsert").unwrap();
+        module.predicate_ref_by_name("TxMutate").unwrap();
+        module.predicate_ref_by_name("TxDelete").unwrap();
+    }
+
     #[test]
     fn test_predicates_exist() {
         let module = module();
         println!("txlib id: {:#}", module.batch.id());
-
-        // Chain primitives
-        module.predicate_ref_by_name("TxInsert").unwrap();
-        module.predicate_ref_by_name("TxMutate").unwrap();
-        module.predicate_ref_by_name("TxDelete").unwrap();
 
         // Replay structure
         module.predicate_ref_by_name("ReplayActions").unwrap();

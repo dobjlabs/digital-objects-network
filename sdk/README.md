@@ -159,7 +159,7 @@ The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
 The example in the test `test_sdk_1` produces the following podlang code:
 
 ```
-use module 0x8dcb7d36f8cb0504e533f124246671b983a78072d1ec8e80604cf01a831327b8 as tx
+use module 0x845770b5494c1793e749c7110c0db3e0faefd0d675cd11f83901432dc08dccd2 as tx
 use intro Vdf(count, input, output) from 0xab82223f501b5056f458f063eb2fc073f8ac01f2ea178a3a2303394fec6828a0
 use intro LtEqU256(lhs, rhs) from 0xe0595e5c75467e5a27bd30fa48a45e1dcc66a327076e5ce7c02ce33dfe357311
 

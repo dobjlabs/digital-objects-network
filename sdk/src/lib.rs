@@ -1831,6 +1831,10 @@ pub struct ClassMeta {
 
 /// The Loader is used to store declarative module information at Load time.
 struct Loader {
+    // The frozen chain-primitive batch (TxInsert/TxMutate/TxDelete).
+    // The only txlib module the rendered plugin source imports, so
+    // plugin module hashes survive churn in the replay/finalize batch.
+    tx_events_mod: Arc<Module>,
     txlib_mod: Arc<Module>,
     dependencies: Vec<Dependency>,
     actions: Vec<ActionHandle>,
@@ -1868,11 +1872,12 @@ impl Loader {
     }
 
     fn new(actions: Vec<ActionHandle>) -> Result<Self> {
+        let tx_events_mod = Arc::new(txlib::predicates::events_module());
         let txlib_mod = Arc::new(txlib::predicates::module());
         let dependencies = vec![
             Dependency::Module {
                 name: "tx".to_string(),
-                hash: txlib_mod.id(),
+                hash: tx_events_mod.id(),
             },
             Dependency::Intro {
                 pred: "Vdf(count, input, output)".to_string(),
@@ -1890,6 +1895,7 @@ impl Loader {
         }
         let classes = Self::actions_to_classes(&actions_meta);
         Ok(Self {
+            tx_events_mod,
             txlib_mod,
             dependencies,
             actions,
@@ -1925,7 +1931,7 @@ impl Loader {
                 podlang_src.as_str(),
                 "root",
                 &params,
-                slice::from_ref(&self.txlib_mod),
+                slice::from_ref(&self.tx_events_mod),
             )
             .expect("compiles"),
         );
@@ -1940,6 +1946,7 @@ impl Loader {
             })
             .collect();
         SdkModule {
+            tx_events_mod: self.tx_events_mod,
             txlib_mod: self.txlib_mod,
             podlang_src,
             actions: self.actions_meta,
@@ -1956,6 +1963,7 @@ impl Loader {
 
 /// An SdkModule contains a loaded module and allows executing actions.
 pub struct SdkModule {
+    tx_events_mod: Arc<Module>,
     txlib_mod: Arc<Module>,
     podlang_src: String,
     actions: Vec<ActionMeta>,
@@ -2185,7 +2193,11 @@ impl Executor {
             (vd_set.clone(), Box::new(real_prover))
         };
         let params = Params::default();
-        let modules = vec![module.txlib_mod.clone(), module.module.clone()];
+        let modules = vec![
+            module.tx_events_mod.clone(),
+            module.txlib_mod.clone(),
+            module.module.clone(),
+        ];
         Self {
             mock,
             params,
