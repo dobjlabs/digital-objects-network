@@ -1,6 +1,6 @@
-# bitcraft setup skill
+# Digital Objects setup skill
 
-Set up the **bitcraft driver** on this machine. After this runs you'll have:
+Set up the **Digital Objects driver** on this machine. After this runs you'll have:
 
 - `~/.dobj/bin/dobjd` (`dobjd.exe` on Windows) - the driver daemon, serving:
   - REST/SSE on `http://127.0.0.1:7717`
@@ -9,11 +9,12 @@ Set up the **bitcraft driver** on this machine. After this runs you'll have:
 - `~/.dobj/bin/bitcraft-mcp-proxy` - stdio<->HTTP bridge for Claude Desktop
 - `~/.dobj/actions/craft-basics.pexe` - the bundled crafting plugin
 
-bitcraft is a privacy-preserving crafting game where each item is a digital
-object backed by a ZK proof. The driver runs locally, talks to a hosted
-synchronizer + relayer for chain anchoring (their URLs are baked into the
-binaries at build time), and exposes the same API to every client (CLI,
-agents via MCP, and optional desktop / web GUIs).
+Digital Objects is a network for privately-held, ZK-proved stateful objects;
+the bundled `craft-basics` plugin is a small crafting demo where each item is
+one such object. The driver runs locally, talks to a hosted synchronizer +
+relayer for chain anchoring (their URLs are baked into the binaries at build
+time), and exposes the same API to every client (CLI, agents via MCP, and
+optional desktop / web GUIs).
 
 ## Prerequisites
 
@@ -49,7 +50,7 @@ irm https://raw.githubusercontent.com/dobjlabs/zk-craft-releases/main/install.ps
 
 ### 2. Install the craft-basics plugin
 
-The driver starts with an empty action catalog; bitcraft's actions ship as
+The driver starts with an empty action catalog; the crafting demo's actions ship as
 the `craft-basics` plugin. Download it into `~/.dobj/actions/` before
 starting the daemon (the daemon loads plugins at startup).
 
@@ -110,7 +111,7 @@ You should see `dobjd is running (pid ...)`, the craft-basics actions, and a
 ### 5. Register MCP with the agent
 
 dobjd serves MCP at `http://127.0.0.1:7718/mcp` so this agent can drive
-bitcraft directly (list inventory, run actions, inspect classes).
+Digital Objects directly (list inventory, run actions, inspect classes).
 
 **Claude Code** - if `claude` is on the PATH, register it now (idempotent):
 

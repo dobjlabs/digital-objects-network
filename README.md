@@ -1,7 +1,7 @@
-# bitcraft
+# Digital Objects
 
-A crafting game where each item is a **digital object**
-backed by a recursive zero-knowledge proof. Items are `.dobj` JSON files on disk;
+The reference implementation of the **Digital Objects** network: privately-held,
+stateful objects each backed by a recursive zero-knowledge proof. Items are `.dobj` JSON files on disk;
 their validity is anchored to Ethereum via EIP-4844 blobs. The chain
 sees only opaque commitments — an observer can't tell what an object is
 or who holds it.
@@ -45,7 +45,7 @@ A single **driver daemon** (`dobjd`) on the user's machine owns
 
 Paste this prompt to any MCP-aware agent (Claude Code, Cursor, etc.):
 
-> Read https://raw.githubusercontent.com/dobjlabs/zk-craft/main/SKILL.md and set up bitcraft.
+> Read https://raw.githubusercontent.com/dobjlabs/zk-craft/main/SKILL.md and set up the Digital Objects driver.
 
 The skill installs `dobjd`, `dobj`, `bitcraft-mcp-proxy`, and the
 `craft-basics` plugin into `~/.dobj/` (the hosted synchronizer + relayer
