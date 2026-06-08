@@ -31,7 +31,6 @@ pub const RUN_RETENTION: Duration = Duration::from_secs(600);
 pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
 
 struct RunInner {
-    action: QualifiedName,
     status: RunStatus,
     progress: Vec<RunActionProgress>,
     result: Option<RunActionResult>,
@@ -41,18 +40,25 @@ struct RunInner {
     finished_at: Option<Instant>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RunRequest {
+    action: QualifiedName,
+    input_objects: Vec<String>,
+}
+
 /// One run's mutable state plus its identity.
 pub struct RunEntry {
     run_id: String,
+    request: RunRequest,
     inner: Mutex<RunInner>,
 }
 
 impl RunEntry {
-    fn new(run_id: String, action: QualifiedName) -> Self {
+    fn new(run_id: String, request: RunRequest) -> Self {
         Self {
             run_id,
+            request,
             inner: Mutex::new(RunInner {
-                action,
                 status: RunStatus::Queued,
                 progress: Vec::new(),
                 result: None,
@@ -60,6 +66,10 @@ impl RunEntry {
                 finished_at: None,
             }),
         }
+    }
+
+    fn request_matches(&self, request: &RunRequest) -> bool {
+        self.request == *request
     }
 
     pub fn status(&self) -> RunStatus {
@@ -121,7 +131,7 @@ impl RunEntry {
         let inner = self.inner.lock().unwrap();
         RunState {
             run_id: self.run_id.clone(),
-            action: inner.action.clone(),
+            action: self.request.action.clone(),
             status: inner.status,
             result: inner.result.clone(),
             error: inner.error.clone(),
@@ -143,9 +153,11 @@ impl RunEntry {
 enum StartOutcome {
     /// Newly created; the caller spawns the worker.
     Started(Arc<RunEntry>),
-    /// A run with this id already exists; its current status. An idempotent
-    /// re-POST returns this instead of starting a duplicate worker.
+    /// A run with this id and request already exists; its current status. An
+    /// idempotent re-POST returns this instead of starting a duplicate worker.
     Existing(RunStatus),
+    /// A run with this id already exists for a different request.
+    Conflict,
 }
 
 #[derive(Clone, Default)]
@@ -158,12 +170,15 @@ impl RunRegistry {
         Self::default()
     }
 
-    fn start(&self, run_id: String, action: QualifiedName) -> StartOutcome {
+    fn start(&self, run_id: String, request: RunRequest) -> StartOutcome {
         let mut runs = self.runs.write().unwrap();
         if let Some(existing) = runs.get(&run_id) {
-            return StartOutcome::Existing(existing.status());
+            if existing.request_matches(&request) {
+                return StartOutcome::Existing(existing.status());
+            }
+            return StartOutcome::Conflict;
         }
-        let entry = Arc::new(RunEntry::new(run_id.clone(), action));
+        let entry = Arc::new(RunEntry::new(run_id.clone(), request));
         runs.insert(run_id, entry.clone());
         StartOutcome::Started(entry)
     }
@@ -179,6 +194,12 @@ impl RunRegistry {
             .unwrap()
             .retain(|_, entry| !entry.expired(RUN_RETENTION));
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("run id {run_id} is already used for a different action request")]
+pub struct RunIdConflict {
+    run_id: String,
 }
 
 /// `ExecutionReporter` that fans every step out to both the global `/events`
@@ -299,7 +320,9 @@ impl ExecutionReporter for RunReporter {
 
 /// Register `run_id` and spawn the background worker that runs the action and
 /// records its outcome. Returns immediately. A re-used `run_id` is idempotent:
-/// the existing run's status is returned and no second worker is spawned.
+/// if the request is identical, the existing run's status is returned and no
+/// second worker is spawned. Reusing the id for a different request is an
+/// error so callers cannot accidentally follow the wrong run.
 pub fn spawn_run(
     registry: &RunRegistry,
     driver: Arc<Driver>,
@@ -307,9 +330,16 @@ pub fn spawn_run(
     run_id: String,
     action: QualifiedName,
     input_objects: Vec<String>,
-) -> RunAccepted {
-    let entry = match registry.start(run_id.clone(), action.clone()) {
-        StartOutcome::Existing(status) => return RunAccepted { run_id, status },
+) -> Result<RunAccepted, RunIdConflict> {
+    let request = RunRequest {
+        action: action.clone(),
+        input_objects: input_objects.clone(),
+    };
+    let entry = match registry.start(run_id.clone(), request) {
+        StartOutcome::Existing(status) => return Ok(RunAccepted { run_id, status }),
+        StartOutcome::Conflict => {
+            return Err(RunIdConflict { run_id });
+        }
         StartOutcome::Started(entry) => entry,
     };
 
@@ -334,10 +364,10 @@ pub fn spawn_run(
         }
     });
 
-    RunAccepted {
+    Ok(RunAccepted {
         run_id,
         status: RunStatus::Queued,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -348,6 +378,16 @@ mod tests {
         QualifiedName {
             plugin_name: "test".to_string(),
             name: name.to_string(),
+        }
+    }
+
+    fn request(name: &str, input_objects: &[&str]) -> RunRequest {
+        RunRequest {
+            action: action(name),
+            input_objects: input_objects
+                .iter()
+                .map(|input| input.to_string())
+                .collect(),
         }
     }
 
@@ -383,20 +423,38 @@ mod tests {
     fn start_is_idempotent() {
         let registry = RunRegistry::new();
         assert!(matches!(
-            registry.start("r1".to_string(), action("A")),
+            registry.start("r1".to_string(), request("A", &["in.dobj"])),
             StartOutcome::Started(_)
         ));
         // A second start with the same id never spawns a duplicate; it reports
         // the existing run's status instead.
-        match registry.start("r1".to_string(), action("A")) {
+        match registry.start("r1".to_string(), request("A", &["in.dobj"])) {
             StartOutcome::Existing(status) => assert_eq!(status, RunStatus::Queued),
             StartOutcome::Started(_) => panic!("re-used run id must not start a new run"),
+            StartOutcome::Conflict => panic!("same run id and request must be idempotent"),
         }
     }
 
     #[test]
+    fn start_rejects_reused_id_for_different_request() {
+        let registry = RunRegistry::new();
+        assert!(matches!(
+            registry.start("r1".to_string(), request("A", &["one.dobj"])),
+            StartOutcome::Started(_)
+        ));
+        assert!(matches!(
+            registry.start("r1".to_string(), request("A", &["two.dobj"])),
+            StartOutcome::Conflict
+        ));
+        assert!(matches!(
+            registry.start("r1".to_string(), request("B", &["one.dobj"])),
+            StartOutcome::Conflict
+        ));
+    }
+
+    #[test]
     fn progress_advances_status_and_indexes_events() {
-        let entry = RunEntry::new("r1".to_string(), action("A"));
+        let entry = RunEntry::new("r1".to_string(), request("A", &[]));
         assert_eq!(entry.status(), RunStatus::Queued);
 
         entry.push_progress(step(
@@ -429,7 +487,7 @@ mod tests {
 
     #[test]
     fn succeed_is_terminal_and_blocks_late_events() {
-        let entry = RunEntry::new("r1".to_string(), action("A"));
+        let entry = RunEntry::new("r1".to_string(), request("A", &[]));
         entry.push_progress(step(
             ExecutionPhase::GenerateProof,
             ProofProgressStatus::Running,
@@ -456,7 +514,7 @@ mod tests {
 
     #[test]
     fn fail_records_terminal_event_and_error() {
-        let entry = RunEntry::new("r1".to_string(), action("A"));
+        let entry = RunEntry::new("r1".to_string(), request("A", &[]));
         let terminal_event = step(ExecutionPhase::Commit, ProofProgressStatus::Failed, "boom");
         entry.fail(terminal_event, "boom".to_string());
 
@@ -470,7 +528,7 @@ mod tests {
 
     #[test]
     fn expired_only_after_terminal() {
-        let entry = RunEntry::new("r1".to_string(), action("A"));
+        let entry = RunEntry::new("r1".to_string(), request("A", &[]));
         // In-flight runs are never reaped, even at zero TTL.
         assert!(!entry.expired(Duration::from_secs(0)));
         entry.succeed(ok_result());
@@ -482,8 +540,8 @@ mod tests {
     #[test]
     fn reaper_keeps_in_flight_and_recent_terminal_runs() {
         let registry = RunRegistry::new();
-        let _live = registry.start("live".to_string(), action("A"));
-        if let StartOutcome::Started(done) = registry.start("done".to_string(), action("A")) {
+        let _live = registry.start("live".to_string(), request("A", &[]));
+        if let StartOutcome::Started(done) = registry.start("done".to_string(), request("A", &[])) {
             done.succeed(ok_result());
         }
         // RUN_RETENTION has not elapsed, so nothing is dropped yet.
@@ -495,7 +553,7 @@ mod tests {
     #[test]
     fn reporter_drives_entry_through_lifecycle() {
         let (events, _rx) = crate::events::channel();
-        let entry = Arc::new(RunEntry::new("r1".to_string(), action("A")));
+        let entry = Arc::new(RunEntry::new("r1".to_string(), request("A", &[])));
         let reporter = RunReporter::new(events, entry.clone(), "r1".to_string());
 
         let ctx = ExecutionStepContext::default();
@@ -533,7 +591,7 @@ mod tests {
     #[test]
     fn reporter_failure_is_terminal_and_logged() {
         let (events, _rx) = crate::events::channel();
-        let entry = Arc::new(RunEntry::new("r1".to_string(), action("A")));
+        let entry = Arc::new(RunEntry::new("r1".to_string(), request("A", &[])));
         let reporter = RunReporter::new(events, entry.clone(), "r1".to_string());
 
         reporter.finish_failure("kaboom".to_string());

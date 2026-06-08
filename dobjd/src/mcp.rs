@@ -115,7 +115,7 @@ impl CraftOps for DobjdCraftOps {
             run_id,
             input.action,
             input_objects,
-        ))
+        )?)
     }
 
     fn get_run(&self, run_id: &str) -> anyhow::Result<mcp::RunState> {

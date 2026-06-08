@@ -29,7 +29,7 @@ use crate::state::AppState;
 pub async fn run_action(
     State(state): State<AppState>,
     Json(req): Json<RunActionRequest>,
-) -> (StatusCode, Json<RunAccepted>) {
+) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
     let input = req.input;
     let run_id = input
         .run_id
@@ -51,8 +51,9 @@ pub async fn run_action(
         run_id,
         input.action,
         input_objects,
-    );
-    (StatusCode::ACCEPTED, Json(accepted))
+    )
+    .map_err(|err| ApiError::new(StatusCode::CONFLICT, err.to_string()))?;
+    Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
 
 /// `GET /actions/runs/{run_id}` — current state of a run: status, the result
@@ -84,12 +85,7 @@ pub async fn run_events(
 
     // Resume just past the last event the client acknowledged, so a reconnect
     // replays only what it missed rather than the whole log.
-    let start = headers
-        .get("last-event-id")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|raw| raw.parse::<usize>().ok())
-        .map(|last| last + 1)
-        .unwrap_or(0);
+    let start = resume_start_index(&headers);
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<SseEvent, Infallible>>(64);
     tokio::spawn(async move {
@@ -139,6 +135,15 @@ pub async fn install_plugin(State(state): State<AppState>, body: Bytes) -> ApiRe
     Ok(Json(name))
 }
 
+fn resume_start_index(headers: &HeaderMap) -> usize {
+    headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .map(|last| last.saturating_add(1))
+        .unwrap_or(0)
+}
+
 /// `GET /actions` — full catalog of every action the loaded plugins
 /// declare. Pure local state; no synchronizer round-trip. Use this
 /// instead of `/inventory` when you only need the action list.
@@ -178,4 +183,32 @@ pub async fn check_feasibility(
         .await
         .map_err(|err| anyhow!("check_feasibility task panicked: {err}"))??;
     Ok(Json(report))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn resume_start_index_defaults_to_zero() {
+        assert_eq!(resume_start_index(&HeaderMap::new()), 0);
+    }
+
+    #[test]
+    fn resume_start_index_starts_after_last_seen_event() {
+        let mut headers = HeaderMap::new();
+        headers.insert("last-event-id", HeaderValue::from_static("41"));
+        assert_eq!(resume_start_index(&headers), 42);
+    }
+
+    #[test]
+    fn resume_start_index_does_not_wrap_on_max_usize() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "last-event-id",
+            HeaderValue::from_str(&usize::MAX.to_string()).unwrap(),
+        );
+        assert_eq!(resume_start_index(&headers), usize::MAX);
+    }
 }
