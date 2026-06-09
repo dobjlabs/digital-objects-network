@@ -90,18 +90,37 @@ impl RunEntry {
         inner.finished_at = Some(Instant::now());
     }
 
-    /// Record terminal failure: append the terminal event, then set the error
-    /// + status. Asserts the run hasn't already finished.
-    fn fail(&self, terminal_event: RunActionProgress, message: String) {
+    /// Record terminal failure: append a `Failed` event tagged with the phase
+    /// the run was in then set the error + status. Returns the event so the caller
+    /// can broadcast it too. Asserts the run hasn't already finished.
+    fn fail(&self, message: String) -> RunActionProgress {
         let mut inner = self.inner.lock().unwrap();
         assert!(
             inner.finished_at.is_none(),
             "run state mutated after it finished"
         );
-        inner.progress.push(terminal_event);
+        // The current status is the phase the run reached; a pre-proof failure
+        // (still `Queued`) is reported against `GenerateProof`.
+        let phase = match inner.status {
+            RunStatus::Committing => ExecutionPhase::Commit,
+            _ => ExecutionPhase::GenerateProof,
+        };
+        let event = RunActionProgress {
+            run_id: self.run_id.clone(),
+            phase,
+            status: ProofProgressStatus::Failed,
+            message: message.clone(),
+            old_root: None,
+            new_root: None,
+            output_files: None,
+            output_status: None,
+            nullified_files: None,
+        };
+        inner.progress.push(event.clone());
         inner.status = RunStatus::Failed;
         inner.error = Some(message);
         inner.finished_at = Some(Instant::now());
+        event
     }
 
     /// Progress events at index >= `from` (paired with their index, which is
@@ -208,19 +227,10 @@ impl RunReporter {
     }
 
     fn finish_failure(&self, message: String) {
-        let progress = RunActionProgress {
-            run_id: self.run_id.clone(),
-            phase: ExecutionPhase::Commit,
-            status: ProofProgressStatus::Failed,
-            message: message.clone(),
-            old_root: None,
-            new_root: None,
-            output_files: None,
-            output_status: None,
-            nullified_files: None,
-        };
-        let _ = self.events.send(Event::RunActionProgress(progress.clone()));
-        self.entry.fail(progress, message);
+        // `fail` builds the event (tagged with the failing phase) and records
+        // it in the registry; mirror it to the global hub.
+        let event = self.entry.fail(message);
+        let _ = self.events.send(Event::RunActionProgress(event));
     }
 }
 
@@ -443,8 +453,8 @@ mod tests {
     #[test]
     fn fail_records_terminal_event_and_error() {
         let entry = RunEntry::new("r1".to_string(), action("A"));
-        let terminal_event = step(ExecutionPhase::Commit, ProofProgressStatus::Failed, "boom");
-        entry.fail(terminal_event, "boom".to_string());
+        let event = entry.fail("boom".to_string());
+        assert_eq!(event.status, ProofProgressStatus::Failed);
 
         let snapshot = entry.snapshot();
         assert_eq!(snapshot.status, RunStatus::Failed);
@@ -452,6 +462,40 @@ mod tests {
         // The terminal failure event is appended so SSE subscribers see it.
         assert_eq!(snapshot.progress.len(), 1);
         assert_eq!(snapshot.progress[0].status, ProofProgressStatus::Failed);
+    }
+
+    #[test]
+    fn fail_event_is_tagged_with_the_phase_the_run_was_in() {
+        // No step has run yet -> attributed to proof generation, not commit.
+        let queued = RunEntry::new("r1".to_string(), action("A"));
+        assert_eq!(
+            queued.fail("early".to_string()).phase,
+            ExecutionPhase::GenerateProof
+        );
+
+        // Failing during proof generation -> GenerateProof.
+        let proving = RunEntry::new("r2".to_string(), action("A"));
+        proving.push_progress(step(
+            ExecutionPhase::GenerateProof,
+            ProofProgressStatus::Running,
+            "proving",
+        ));
+        assert_eq!(
+            proving.fail("proof failed".to_string()).phase,
+            ExecutionPhase::GenerateProof
+        );
+
+        // Failing during commit -> Commit.
+        let committing = RunEntry::new("r3".to_string(), action("A"));
+        committing.push_progress(step(
+            ExecutionPhase::Commit,
+            ProofProgressStatus::Running,
+            "submitting",
+        ));
+        assert_eq!(
+            committing.fail("relayer rejected".to_string()).phase,
+            ExecutionPhase::Commit
+        );
     }
 
     #[test]
