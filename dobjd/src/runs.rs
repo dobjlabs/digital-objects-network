@@ -35,8 +35,9 @@ struct RunInner {
     progress: Vec<RunActionProgress>,
     result: Option<RunActionResult>,
     error: Option<String>,
-    /// Set when the run reached a terminal state; gates the reaper and stops a
-    /// late event from regressing a finished run.
+    /// Set when the run reached a terminal state; gates the reaper. The
+    /// mutators assert it is `None` on entry, so updating a finished run is a
+    /// loud bug rather than a silent no-op.
     finished_at: Option<Instant>,
 }
 
@@ -63,12 +64,14 @@ impl RunEntry {
     }
 
     /// Append a non-terminal progress event and advance the status to match
-    /// its phase. No-op once the run is terminal.
+    /// its phase. Asserts the run is still in flight — the worker never emits
+    /// events after the run finishes.
     fn push_progress(&self, progress: RunActionProgress) {
         let mut inner = self.inner.lock().unwrap();
-        if inner.finished_at.is_some() {
-            return;
-        }
+        assert!(
+            inner.finished_at.is_none(),
+            "run state mutated after it finished"
+        );
         inner.status = match progress.phase {
             ExecutionPhase::GenerateProof => RunStatus::GenerateProof,
             ExecutionPhase::Commit => RunStatus::Committing,
@@ -78,21 +81,23 @@ impl RunEntry {
 
     fn succeed(&self, result: RunActionResult) {
         let mut inner = self.inner.lock().unwrap();
-        if inner.finished_at.is_some() {
-            return;
-        }
+        assert!(
+            inner.finished_at.is_none(),
+            "run state mutated after it finished"
+        );
         inner.status = RunStatus::Succeeded;
         inner.result = Some(result);
         inner.finished_at = Some(Instant::now());
     }
 
-    /// Record terminal failure: append the terminal event, then set the
-    /// error + status. No-op if the run already finished.
+    /// Record terminal failure: append the terminal event, then set the error
+    /// + status. Asserts the run hasn't already finished.
     fn fail(&self, terminal_event: RunActionProgress, message: String) {
         let mut inner = self.inner.lock().unwrap();
-        if inner.finished_at.is_some() {
-            return;
-        }
+        assert!(
+            inner.finished_at.is_none(),
+            "run state mutated after it finished"
+        );
         inner.progress.push(terminal_event);
         inner.status = RunStatus::Failed;
         inner.error = Some(message);
@@ -404,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn succeed_is_terminal_and_blocks_late_events() {
+    fn succeed_is_terminal() {
         let entry = RunEntry::new("r1".to_string(), action("A"));
         entry.push_progress(step(
             ExecutionPhase::GenerateProof,
@@ -417,17 +422,22 @@ mod tests {
         assert_eq!(snapshot.status, RunStatus::Succeeded);
         assert_eq!(snapshot.result.unwrap().new_root, "0xnew");
         assert!(snapshot.error.is_none());
+        assert_eq!(snapshot.progress.len(), 1);
+        let (_, terminal) = entry.events_from(0);
+        assert!(terminal);
+    }
 
-        // A late event must not regress a finished run or append to its log.
+    #[test]
+    #[should_panic(expected = "mutated after it finished")]
+    fn mutating_a_finished_run_panics() {
+        let entry = RunEntry::new("r1".to_string(), action("A"));
+        entry.succeed(ok_result());
+        // A progress event after the run finished is a logic bug, not a no-op.
         entry.push_progress(step(
             ExecutionPhase::Commit,
             ProofProgressStatus::Running,
             "late",
         ));
-        assert_eq!(entry.status(), RunStatus::Succeeded);
-        let (_, terminal) = entry.events_from(0);
-        assert!(terminal);
-        assert_eq!(entry.snapshot().progress.len(), 1);
     }
 
     #[test]
