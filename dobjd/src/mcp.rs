@@ -5,7 +5,6 @@
 //! aliases for the same `wire-types` definitions the HTTP routes use, so
 //! there's nothing to convert.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use dobj_mcp::ops::DobjOps;
@@ -31,39 +30,10 @@ impl DobjdOps {
 }
 
 impl DobjOps for DobjdOps {
-    fn list_objects(&self) -> anyhow::Result<Vec<mcp::ObjectListing>> {
-        // Driver returns the basic `ObjectSummary`; the objects wire
-        // shape folds in per-class metadata (emoji, description) so
-        // clients can render rows without a `/classes` round-trip. Same
-        // logic as `routes::objects::load_objects`.
-        let classes = self
-            .driver
-            .list_classes()?
-            .into_iter()
-            .map(|c| (c.class.clone(), c))
-            .collect::<HashMap<_, _>>();
-
-        Ok(self
-            .driver
-            .sync_objects(None)?
-            .into_iter()
-            .map(|object| {
-                let class_info = classes.get(&object.class);
-                mcp::ObjectListing {
-                    content_hash: object.content_hash,
-                    file_name: object.file_name,
-                    class: object.class.clone(),
-                    class_hash: object.class_hash,
-                    emoji: class_info
-                        .map(|c| c.emoji.clone())
-                        .unwrap_or_else(|| "📦".to_string()),
-                    status: object.status,
-                    tx_hash: object.tx_hash,
-                    description: class_info.map(|c| c.description.clone()),
-                    fields: object.fields,
-                }
-            })
-            .collect())
+    fn list_objects(&self) -> anyhow::Result<Vec<mcp::ObjectSummary>> {
+        // The driver folds each object's class metadata (emoji, description)
+        // into the summary, so clients need no `/classes` round-trip.
+        self.driver.sync_objects(None)
     }
 
     fn list_actions(&self) -> anyhow::Result<Vec<mcp::Action>> {

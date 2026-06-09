@@ -162,8 +162,11 @@ impl fmt::Display for ObjectStatus {
     }
 }
 
-/// Summary view of an object on disk. Returned by `/objects/{name}` and
-/// surfaced by the driver to every client.
+/// Summary view of an object on disk: the object's own fields plus its
+/// class's display metadata (emoji, description), folded in so clients can
+/// render rows without a second `/classes` round-trip. Surfaced by the
+/// driver to every client and returned by `GET /objects` and
+/// `GET /objects/{name}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -172,28 +175,13 @@ pub struct ObjectSummary {
     pub file_name: String,
     pub class: QualifiedName,
     pub class_hash: String,
-    pub status: ObjectStatus,
-    pub tx_hash: Option<String>,
-    pub fields: HashMap<String, serde_json::Value>,
-}
-
-/// Object row served by `GET /objects`. Folds class metadata (emoji,
-/// description) into the object summary so GUI clients can render rows
-/// without a second `/classes` round-trip.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct ObjectListing {
-    pub content_hash: String,
-    pub file_name: String,
-    pub class: QualifiedName,
-    pub class_hash: String,
+    /// The object's class display emoji (`📦` when the class is unknown).
     pub emoji: String,
     pub status: ObjectStatus,
     pub tx_hash: Option<String>,
+    /// The object's class description, when its class is known.
     pub description: Option<String>,
     /// Application-layer fields (e.g. `durability`, `key`, `work`).
-    /// Same shape as [`ObjectSummary::fields`].
     pub fields: HashMap<String, serde_json::Value>,
 }
 

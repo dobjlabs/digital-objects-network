@@ -23,7 +23,10 @@ export interface QualifiedNamePayload {
   name: string;
 }
 
-export interface ObjectListingPayload {
+/** The `ObjectSummary` wire shape returned by `/objects`, `/objects/{name}`,
+ * and `/objects/import`. The driver folds in the object's class emoji and
+ * description so clients can render rows without a second `/classes` call. */
+export interface ObjectSummaryPayload {
   contentHash: string;
   fileName: string;
   class: QualifiedNamePayload;
@@ -33,19 +36,6 @@ export interface ObjectListingPayload {
   txHash: string | null;
   description?: string;
   /** Application-layer fields (e.g. `durability`, `key`, `work`). */
-  fields: Record<string, unknown>;
-}
-
-/** The `ObjectSummary` wire shape returned by `/objects/{name}` and
- * `/objects/import` — like `ObjectListingPayload` but without the
- * folded-in class emoji/description. */
-export interface ObjectSummaryPayload {
-  contentHash: string;
-  fileName: string;
-  class: QualifiedNamePayload;
-  classHash: string;
-  status: ObjectStatus;
-  txHash: string | null;
   fields: Record<string, unknown>;
 }
 

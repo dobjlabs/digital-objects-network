@@ -10,7 +10,7 @@ use tokio::time::sleep;
 use crate::client::DobjdClient;
 use wire_types::{
     ActionSummary, CheckActionReport, ClassRef, ClassSummary, DriverSettings, ImportObjectRequest,
-    ObjectListing, ObjectSummary, ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput,
+    ObjectSummary, ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput,
     RunActionRequest, RunState, RunStatus,
 };
 
@@ -41,7 +41,7 @@ fn render_outputs(refs: &[ClassRef]) -> String {
 }
 
 pub async fn objects(client: &DobjdClient, json: bool) -> Result<()> {
-    let objects: Vec<ObjectListing> = client.get_json("/objects").await?;
+    let objects: Vec<ObjectSummary> = client.get_json("/objects").await?;
     if json {
         println!(
             "{}",

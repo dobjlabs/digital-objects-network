@@ -4,7 +4,7 @@ use crate::types::*;
 /// In production it's implemented by `DobjdOps` in the `dobjd` crate
 /// (one driver process serving HTTP + MCP). Tests use `MockDobjOps`.
 pub trait DobjOps: Send + Sync + 'static {
-    fn list_objects(&self) -> anyhow::Result<Vec<ObjectListing>>;
+    fn list_objects(&self) -> anyhow::Result<Vec<ObjectSummary>>;
     fn list_actions(&self) -> anyhow::Result<Vec<Action>>;
     fn list_classes(&self) -> anyhow::Result<Vec<ClassSummary>>;
     fn get_state_root(&self) -> anyhow::Result<String>;

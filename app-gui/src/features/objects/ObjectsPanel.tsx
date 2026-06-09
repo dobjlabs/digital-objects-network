@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
-import type { ObjectListingPayload as ObjectListing } from "../../shared/api/wireTypes";
+import type { ObjectSummaryPayload as ObjectSummary } from "../../shared/api/wireTypes";
 import { truncateDisplayHash } from "../../shared/format";
 import {
   displayPathInObjectsDir,
@@ -11,7 +11,7 @@ import {
 } from "../../shared/objectUtils";
 
 interface ObjectsPanelProps {
-  objects: ObjectListing[];
+  objects: ObjectSummary[];
   objectsDirPath: string;
   activeObjectContentHash: string | null;
   showNullifiedItems: boolean;
@@ -58,11 +58,11 @@ export function ObjectsPanel({
     }
   };
 
-  const isUsable = (object: ObjectListing) => isLiveObject(object);
+  const isUsable = (object: ObjectSummary) => isLiveObject(object);
 
   const handleDragStart = (
     event: DragEvent<HTMLButtonElement>,
-    object: ObjectListing,
+    object: ObjectSummary,
   ) => {
     if (!isUsable(object)) {
       event.preventDefault();
@@ -95,7 +95,7 @@ export function ObjectsPanel({
   const activeObjects = objects.filter((object) => !isNullifiedObject(object));
   const nullifiedObjects = objects.filter((object) => isNullifiedObject(object));
 
-  const renderObjectListing = (object: ObjectListing) => {
+  const renderObjectSummary = (object: ObjectSummary) => {
     const displayName = pluginScopedLabel(object.class);
     const hashLineRaw = object.status === "live"
       ? object.contentHash
@@ -163,7 +163,7 @@ export function ObjectsPanel({
       </div>
 
       <div className="objects-list">
-        {activeObjects.map(renderObjectListing)}
+        {activeObjects.map(renderObjectSummary)}
 
         {nullifiedObjects.length > 0 && (
           <div className="nullified-section">
@@ -177,7 +177,7 @@ export function ObjectsPanel({
                 {showNullifiedItems ? "▴" : "▾"} {nullifiedObjects.length}
               </span>
             </button>
-            {showNullifiedItems && nullifiedObjects.map(renderObjectListing)}
+            {showNullifiedItems && nullifiedObjects.map(renderObjectSummary)}
           </div>
         )}
       </div>

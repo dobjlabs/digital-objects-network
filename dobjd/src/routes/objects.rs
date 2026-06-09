@@ -1,12 +1,10 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::Result;
 use axum::{
     Json,
     extract::{Path, State},
 };
-use wire_types::{ImportObjectRequest, ObjectListing, ObjectSummary, ObjectsDirInfo};
+use wire_types::{ImportObjectRequest, ObjectSummary, ObjectsDirInfo};
 
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -51,45 +49,20 @@ pub async fn import_object(
     Ok(Json(summary))
 }
 
-/// `GET /objects` — local objects synced against the chain. The action
-/// catalog comes from `GET /actions` separately, so clients can fetch the
-/// two in parallel.
-pub async fn load_objects(State(state): State<AppState>) -> ApiResult<Json<Vec<ObjectListing>>> {
+/// `GET /objects` — local objects synced against the chain, each already
+/// carrying its class's emoji/description (the driver folds that in). The
+/// action catalog comes from `GET /actions` separately, so clients can
+/// fetch the two in parallel.
+pub async fn load_objects(State(state): State<AppState>) -> ApiResult<Json<Vec<ObjectSummary>>> {
     let driver = state.driver.clone();
-    let objects = tokio::task::spawn_blocking(move || -> Result<Vec<ObjectListing>> {
-        let classes = driver
-            .list_classes()?
-            .into_iter()
-            .map(|class_info| (class_info.class.clone(), class_info))
-            .collect::<HashMap<_, _>>();
-
-        Ok(driver
-            .sync_objects(None)
-            .unwrap_or_else(|err| {
-                tracing::warn!("sync_objects failed, falling back to local: {err:#}");
-                driver.list_objects(None).unwrap_or_default()
-            })
-            .into_iter()
-            .map(|object| {
-                let class_info = classes.get(&object.class);
-                ObjectListing {
-                    content_hash: object.content_hash,
-                    file_name: object.file_name,
-                    class: object.class.clone(),
-                    class_hash: object.class_hash,
-                    emoji: class_info
-                        .map(|class_info| class_info.emoji.clone())
-                        .unwrap_or_else(|| "📦".to_string()),
-                    status: object.status,
-                    tx_hash: object.tx_hash,
-                    description: class_info.map(|class_info| class_info.description.clone()),
-                    fields: object.fields,
-                }
-            })
-            .collect())
+    let objects = tokio::task::spawn_blocking(move || {
+        driver.sync_objects(None).unwrap_or_else(|err| {
+            tracing::warn!("sync_objects failed, falling back to local: {err:#}");
+            driver.list_objects(None).unwrap_or_default()
+        })
     })
     .await
-    .map_err(|err| anyhow::anyhow!("load_objects task panicked: {err}"))??;
+    .map_err(|err| anyhow::anyhow!("load_objects task panicked: {err}"))?;
 
     Ok(Json(objects))
 }

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub use wire_types::{
     ActionSummary as Action, ActionSummary as ActionDetail,
     CheckActionCandidate as FeasibilityInput, CheckActionReport as FeasibilityReport, ClassRef,
-    ClassSummary, ClassSummary as ClassDetail, DriverSettings, ObjectListing, ObjectStatus,
+    ClassSummary, ClassSummary as ClassDetail, DriverSettings, ObjectStatus, ObjectSummary,
     ObjectSummary as ObjectDetail, ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput,
     RunActionResult as RunActionInner, RunState, RunStatus,
 };
@@ -24,7 +24,7 @@ pub use wire_types::{
 #[serde(rename_all = "camelCase")]
 pub struct ObjectList {
     /// All objects.
-    pub objects: Vec<ObjectListing>,
+    pub objects: Vec<ObjectSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
