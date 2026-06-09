@@ -62,10 +62,6 @@ impl RunEntry {
         }
     }
 
-    pub fn status(&self) -> RunStatus {
-        self.inner.lock().unwrap().status
-    }
-
     /// Append a non-terminal progress event and advance the status to match
     /// its phase. No-op once the run is terminal.
     fn push_progress(&self, progress: RunActionProgress) {
@@ -334,6 +330,15 @@ mod tests {
         QualifiedName {
             plugin_name: "test".to_string(),
             name: name.to_string(),
+        }
+    }
+
+    // Test-only accessor. `mod tests` is a child of `runs`, so it can both
+    // add an inherent method to `RunEntry` and read its private `inner` —
+    // keeping this out of the production impl where nothing else needs it.
+    impl RunEntry {
+        fn status(&self) -> RunStatus {
+            self.inner.lock().unwrap().status
         }
     }
 
