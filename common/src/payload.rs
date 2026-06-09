@@ -64,7 +64,7 @@ pub struct Payload {
     pub proof: PayloadProof,
     /// Commitment of the finalized transaction dictionary `{live, nullifiers, chain_start, chain_end}`.
     pub tx_final: Hash,
-    pub state_root_hash: Hash,
+    pub state_root: Hash,
     pub nullifiers: Vec<Hash>,
     /// Commitments of the objects this tx leaves live. The synchronizer
     /// inserts each into its global created set, rejecting any that already
@@ -85,7 +85,7 @@ impl Payload {
             .expect("vec write");
         self.proof.write_bytes(&mut buffer);
         write_elems(&mut buffer, &self.tx_final.0);
-        write_elems(&mut buffer, &self.state_root_hash.0);
+        write_elems(&mut buffer, &self.state_root.0);
         write_hashes(&mut buffer, &self.nullifiers);
         write_hashes(&mut buffer, &self.live);
         buffer
@@ -105,13 +105,13 @@ impl Payload {
         let (proof, len) = PayloadProof::from_bytes(bytes, common_data)?;
         bytes = &bytes[len..];
         let tx_final = Hash(read_elems(&mut bytes)?);
-        let state_root_hash = Hash(read_elems(&mut bytes)?);
+        let state_root = Hash(read_elems(&mut bytes)?);
         let nullifiers = read_hashes(&mut bytes)?;
         let live = read_hashes(&mut bytes)?;
         Ok(Self {
             proof,
             tx_final,
-            state_root_hash,
+            state_root,
             nullifiers,
             live,
         })
@@ -215,7 +215,7 @@ mod tests {
         let vds_root = vd_set.root();
 
         let input = r#"
-        TxnFinalized(state_root_hash, tx_final, nullifiers, live) = AND(
+        TxnFinalized(state_root, tx_final, nullifiers, live) = AND(
             Equal(0, 0)
         )
         "#;
@@ -272,7 +272,7 @@ mod tests {
             Payload {
                 proof: PayloadProof::Plonky2(Box::new(shrunk_main_pod_proof.clone())),
                 tx_final: Hash(tx_final.raw().0),
-                state_root_hash: Hash(state_root.raw().0),
+                state_root: Hash(state_root.raw().0),
                 nullifiers: nullifiers.clone(),
                 live: live.clone(),
             }
@@ -294,7 +294,7 @@ mod tests {
         let st = Statement::Custom(
             pred,
             vec![
-                Value::from(payload.state_root_hash).into(),
+                Value::from(payload.state_root).into(),
                 Value::from(payload.tx_final).into(),
                 nullifiers_set.into(),
                 live_set.into(),

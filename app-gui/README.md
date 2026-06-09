@@ -33,7 +33,7 @@ Frontend panels (`src/features/`):
 - `InventoryPanel` — local live/nullified objects, drag source, `+ Import .dobj` button
 - `ActionGrid` — action catalog + search/filter
 - `ContextPanel` — selected object/action details, input binding, run button
-- `ProofRunnerPanel` — proof-run status, CPU stats, global state root
+- `ProofRunnerPanel` — proof-run status, CPU stats, state root
 - `SettingsModal` — synchronizer/relayer URL editor
 
 State: Zustand store at `src/shared/state/store.ts` (`useStore`).
@@ -49,7 +49,7 @@ provides things the browser fundamentally can't do.
 | ------------------------------------ | ------------------------------------------ |
 | `loadInventory`                      | `GET /inventory`                           |
 | `loadActions`                        | `GET /actions`                             |
-| `getGlobalStateRoot`                 | `GET /state-root`                          |
+| `getStateRoot`                       | `GET /state-root`                          |
 | `getObjectsDir`                      | `GET /objects/dir`                         |
 | `getAppSettings` / `saveAppSettings` | `GET` / `PUT /settings`                    |
 | `importObject`                       | `POST /objects/import`                     |
@@ -86,7 +86,7 @@ desktop's progress UI in real time.
 ## Polling
 
 - **CPU sample**: 1s, via `sample_app_cpu` (desktop only — browser shows zeros)
-- **Global state root**: 4s, via `GET /state-root`
+- **state root**: 4s, via `GET /state-root`
 
 ## Run
 

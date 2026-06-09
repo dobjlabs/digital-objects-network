@@ -10,7 +10,7 @@ use pod2::{
 
 /// Reusable committed-state helper for proof-heavy tests across crates. Holds
 /// a grow-only global created-object set (an array, plus a reverse index for
-/// proofs), a nullifier set, and a GSR history array, and hands out the Merkle
+/// proofs), a nullifier set, and a state root history array, and hands out the Merkle
 /// proofs grounding needs.
 #[derive(Clone, Debug)]
 pub struct TestState {
@@ -18,7 +18,7 @@ pub struct TestState {
     created: Array,
     created_index: HashMap<Hash, i64>,
     nullifiers: Set,
-    gsrs: Array,
+    state_history: Array,
 }
 
 impl Default for TestState {
@@ -34,22 +34,22 @@ impl TestState {
             created: Array::new(Vec::<Value>::new()),
             created_index: HashMap::new(),
             nullifiers: Set::new(HashSet::<Value>::new()),
-            gsrs: Array::new(Vec::<Value>::new()),
+            state_history: Array::new(Vec::<Value>::new()),
         }
     }
 
-    /// `(created_root, nullifiers_root, gsrs_root)`.
+    /// `(created_root, nullifiers_root, prior_state_history_root)`.
     pub fn roots(&self) -> (Hash, Hash, Hash) {
         (
             self.created.commitment(),
             self.nullifiers.commitment(),
-            self.gsrs.commitment(),
+            self.state_history.commitment(),
         )
     }
 
     /// Build a grounding witness proving each input object commitment is a
     /// member of the global created set. `build` assembles the crate's witness
-    /// type from `(block_number, created_root, nullifiers_root, gsrs_root,
+    /// type from `(block_number, created_root, nullifiers_root, prior_state_history_root,
     /// per-object (index, proof) keyed by commitment)`.
     pub fn build_grounding_witness<W>(
         &self,
@@ -60,12 +60,12 @@ impl TestState {
             .iter()
             .map(|commitment| (*commitment, self.created_membership_proof(*commitment)))
             .collect::<HashMap<_, _>>();
-        let (created_root, nullifiers_root, gsrs_root) = self.roots();
+        let (created_root, nullifiers_root, prior_state_history_root) = self.roots();
         build(
             self.block_number,
             created_root,
             nullifiers_root,
-            gsrs_root,
+            prior_state_history_root,
             created_proofs,
         )
     }
@@ -84,12 +84,15 @@ impl TestState {
         (index, proof)
     }
 
-    pub fn prior_state_root_membership(&self, prior_state_root_hash: Hash) -> (usize, MerkleProof) {
-        let target = Value::from(prior_state_root_hash);
-        for entry in self.gsrs.iter() {
-            let (index, value) = entry.expect("gsr entry should decode");
+    pub fn prior_state_root_membership(&self, prior_state_root: Hash) -> (usize, MerkleProof) {
+        let target = Value::from(prior_state_root);
+        for entry in self.state_history.iter() {
+            let (index, value) = entry.expect("state root entry should decode");
             if value == target {
-                let (_, proof) = self.gsrs.prove(index).expect("gsr proof should build");
+                let (_, proof) = self
+                    .state_history
+                    .prove(index)
+                    .expect("state root proof should build");
                 return (index, proof);
             }
         }

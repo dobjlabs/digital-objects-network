@@ -113,7 +113,7 @@ export function loadActions(): Promise<ActionPayload[]> {
   return dobjdFetch("/actions").then(httpJson<ActionPayload[]>);
 }
 
-export function getGlobalStateRoot(): Promise<string> {
+export function getStateRoot(): Promise<string> {
   return dobjdFetch("/state-root").then(httpJson<string>);
 }
 

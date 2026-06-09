@@ -79,7 +79,7 @@ pub(crate) fn reconcile_objects(
     }
 
     // Third pass: mark non-nullified objects as Live when their commitment
-    // is present in the canonical global created set.
+    // is present in the created set.
     for entry in objects.iter_mut() {
         if entry.record.is_nullified() || entry.record.status == ObjectStatus::Live {
             continue;
@@ -280,7 +280,7 @@ pub(crate) fn update_output_files(
 }
 
 pub(crate) fn build_relayer_payload(
-    old_state_root_hash: &Hash,
+    old_state_root: &Hash,
     action_output: &SpendableObjects,
 ) -> Result<Vec<u8>> {
     let params = Params::default();
@@ -296,7 +296,7 @@ pub(crate) fn build_relayer_payload(
     let payload = Payload {
         proof: PayloadProof::Plonky2(Box::new(compressed)),
         tx_final,
-        state_root_hash: *old_state_root_hash,
+        state_root: *old_state_root,
         nullifiers,
         live,
     };

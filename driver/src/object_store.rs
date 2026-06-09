@@ -173,7 +173,7 @@ mod tests {
     use std::collections::HashMap;
 
     use tempfile::tempdir;
-    use txlib::{GroundingWitness, StateRoot};
+    use txlib::{GroundingWitness, StateHeader};
 
     use crate::catalog::ActionCatalog;
     use crate::paths::default_paths;
@@ -193,7 +193,7 @@ mod tests {
 
     fn dummy_grounding_witness() -> GroundingWitness {
         GroundingWitness::new(
-            StateRoot::new(
+            StateHeader::new(
                 1,
                 pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,

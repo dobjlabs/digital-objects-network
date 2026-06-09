@@ -19,7 +19,7 @@ pub fn list() -> Vec<Resource> {
         Annotated::new(
             RawResource::new(TXLIB_PREDICATES_URI, "txlib.podlang")
                 .with_description(
-                    "Core transaction-model predicates: StateRoot, TxInit, \
+                    "Core transaction-model predicates: StateHeader, TxInit, \
                      TxInsert, TxMutate, TxDelete, TxFinalized, and \
                      nullifier logic. This is the foundation all actions build on.",
                 )

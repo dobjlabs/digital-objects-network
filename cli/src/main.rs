@@ -82,7 +82,7 @@ enum Cmd {
         #[arg(value_name = "PLUGIN::ACTION")]
         qualified_id: String,
     },
-    /// Print the current global state root.
+    /// Print the current state root.
     StateRoot,
     /// Print the local objects directory path (`~/.dobj/objects/`).
     ObjectsDir,

@@ -10,7 +10,7 @@
 //!
 //! - [`relayer`] — DTOs for the relayer's HTTP API. The status/request
 //!   types are pure serde; the two proof-bearing response types carry pod2
-//!   `Hash` (`tx_final`, `state_root_hash`), so they live behind the
+//!   `Hash` (`tx_final`, `state_root`), so they live behind the
 //!   `chain` feature. The relayer server and the driver enable it.
 //! - [`synchronizer`] — DTOs for the synchronizer's HTTP API. Every type
 //!   carries pod2 `Hash` values directly, so the whole module lives behind

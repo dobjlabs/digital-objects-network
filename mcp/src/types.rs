@@ -46,7 +46,7 @@ pub struct ClassList {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StateRootResponse {
-    /// The current global state root hash.
+    /// The current state root hash.
     pub state_root: String,
 }
 

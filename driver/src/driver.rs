@@ -38,7 +38,7 @@ use wire_types::{
 pub trait PayloadBuilder: Send + Sync {
     fn build_payload(
         &self,
-        old_state_root_hash: &Hash,
+        old_state_root: &Hash,
         action_output: &SpendableObjects,
     ) -> Result<Vec<u8>>;
 }
@@ -49,10 +49,10 @@ struct DefaultPayloadBuilder;
 impl PayloadBuilder for DefaultPayloadBuilder {
     fn build_payload(
         &self,
-        old_state_root_hash: &Hash,
+        old_state_root: &Hash,
         action_output: &SpendableObjects,
     ) -> Result<Vec<u8>> {
-        build_relayer_payload(old_state_root_hash, action_output)
+        build_relayer_payload(old_state_root, action_output)
     }
 }
 
@@ -413,14 +413,14 @@ impl Driver {
             .deps
             .synchronizer
             .fetch_head(&settings.synchronizer_api_url)?;
-        Ok(head.current_gsr)
+        Ok(head.current_state_root)
     }
 
     /// Import an external `.dobj` object — one not produced by this driver
     /// (e.g. a file from outside `~/.dobj/`) — into local inventory.
     ///
     /// `dobj_json` is the raw JSON contents of a `.dobj` file. The object is
-    /// filed under a canonical name derived from its commitment — the file's
+    /// filed under a name derived from its commitment — the file's
     /// own `id` and filename are not trusted.
     ///
     /// Validation:
@@ -430,7 +430,7 @@ impl Driver {
     /// - the object must not already be in inventory (live or nullified);
     /// - the object's nullifier must not already be spent on-chain.
     ///
-    /// Status is decided by grounding: `Live` if the source tx is canonical,
+    /// Status is decided by grounding: `Live` if the source tx is committed,
     /// otherwise `Unknown` (a later `sync_inventory` promotes it). If the
     /// synchronizer is unreachable the object is imported as `Unknown` rather
     /// than failing, so the flow still works offline.
@@ -489,7 +489,7 @@ impl Driver {
 
         // 4. Grounding decides status. A nullifier already on-chain means the
         //    object has been spent — reject it. Otherwise Live if the object's
-        //    commitment is in the canonical created set, else Unknown. Tolerate
+        //    commitment is in the created set, else Unknown. Tolerate
         //    an unreachable synchronizer by importing as Unknown.
         let settings = self.load_settings()?;
         let commitment = record.obj.commitment();
@@ -563,8 +563,7 @@ impl Driver {
             .deps
             .synchronizer
             .fetch_grounding_witness(&settings.synchronizer_api_url, &input_commitments)?;
-        let old_root_hash = grounding_witness.state_root.hash();
-        let old_root = old_root_hash;
+        let old_root = grounding_witness.state_header.hash();
 
         reporter.on_step(ExecutionPhase::GenerateProof, "Generating proof", &no_ctx);
         let execution_inputs = resolved_inputs
@@ -584,8 +583,8 @@ impl Driver {
         let payload_bytes = self
             .deps
             .payload_builder
-            .build_payload(&old_root_hash, &spendable_outputs)?;
-        // A tx has landed once the union of its effects is canonical: every
+            .build_payload(&old_root, &spendable_outputs)?;
+        // A tx has landed once the union of its effects is committed: every
         // produced object commitment in the created set and every nullifier in
         // the nullifier set. Collect both for the confirmation poll below.
         let output_commitments: Vec<Hash> = spendable_outputs
@@ -728,7 +727,7 @@ impl Driver {
 
         let result = ExecuteActionResult {
             old_root,
-            new_root: sync_head.current_gsr,
+            new_root: sync_head.current_state_root,
             output_files: saved.output_files.clone(),
             nullified_files: saved.nullified_files.clone(),
             relayer_job_id: confirmation.job_id,

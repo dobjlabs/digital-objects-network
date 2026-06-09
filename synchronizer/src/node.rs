@@ -22,8 +22,8 @@ use pod2::middleware::Hash;
 use tracing::{debug, info, trace, warn};
 
 use crate::config::AppConfig;
-use crate::head::CanonicalHead;
-use crate::state_machine::{DerivedSlot, StateMachine, MAX_GSR_AGE_BLOCKS};
+use crate::head::StateHead;
+use crate::state_machine::{DerivedSlot, StateMachine, MAX_STATE_ROOT_AGE_BLOCKS};
 use crate::sync_db::{CommittedSlotRecord, SyncDb};
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
@@ -49,15 +49,12 @@ struct SlotContext {
 /// Outcome of processing one beacon slot, ready to be committed.
 pub enum ProcessedSlot {
     /// Beacon produced no block for the slot. With no execution block there is
-    /// nothing to derive against, so the previous canonical head is carried
-    /// forward unchanged, committed under the new slot number to keep canonical
+    /// nothing to derive against, so the previous state head is carried
+    /// forward unchanged, committed under the new slot number to keep the
     /// slot history contiguous.
-    Missing {
-        slot: u32,
-        carried_head: CanonicalHead,
-    },
+    Missing { slot: u32, carried_head: StateHead },
     /// Beacon produced a block and the state machine derived the slot against
-    /// it (deriving a fresh GSR even when the block carries no usable blobs).
+    /// it (deriving a fresh state root even when the block carries no usable blobs).
     Present {
         slot: u32,
         block_root: B256,
@@ -103,11 +100,11 @@ impl Node {
         self.sync_db.slot_root(slot).await
     }
 
-    pub async fn current_head(&self) -> Result<CanonicalHead> {
+    pub async fn current_head(&self) -> Result<StateHead> {
         self.sync_db.current_head().await
     }
 
-    /// Rewind to `keep_slot` by deleting later canonical slot rows; the created
+    /// Rewind to `keep_slot` by deleting later slot rows; the created
     /// index rows those slots added are pruned in the same Postgres transaction.
     pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
         self.sync_db.rollback_to_slot(keep_slot).await
@@ -255,7 +252,7 @@ impl Node {
             block_root: Some(header.root),
             parent_root: Some(block.parent_root),
             block_number: Some(execution_payload.block_number),
-            current_gsr: None,
+            current_state_root: None,
             is_empty: false,
         })
     }
@@ -320,17 +317,17 @@ impl Node {
     }
 
     /// Parse the slot's blobs, prefetch the array positions of their created
-    /// commitments that already exist in canonical state, and derive the next
+    /// commitments that already exist in committed state, and derive the next
     /// head.
     ///
     /// The prefetch is one batched query against the created index, mirroring how
-    /// `recent_gsrs` is prefetched, so the state machine never has to query the
+    /// `recent_state_roots` is prefetched, so the state machine never has to query the
     /// database itself. It returns indices (not just a membership set) so the
     /// state machine can cross-check each hit against the array at the base root.
     async fn derive_slot(
         &self,
-        base_head: CanonicalHead,
-        recent_gsrs: Vec<(Hash, i64)>,
+        base_head: StateHead,
+        recent_state_roots: Vec<(Hash, i64)>,
         slot: u32,
         block_number: u32,
         blob_payloads: &[(u32, Vec<u8>)],
@@ -345,7 +342,7 @@ impl Node {
         let prior_indices = self.sync_db.created_indices(&candidates).await?;
         self.state_machine.derive_slot_head(
             base_head,
-            recent_gsrs,
+            recent_state_roots,
             slot,
             block_number,
             &parsed,
@@ -376,13 +373,19 @@ impl Node {
         let min_block_number = base_head
             .metadata
             .current_block_number
-            .map(|n| n.saturating_sub(MAX_GSR_AGE_BLOCKS as u32));
-        let recent_gsrs = self.sync_db.recent_gsrs(min_block_number).await?;
+            .map(|n| n.saturating_sub(MAX_STATE_ROOT_AGE_BLOCKS as u32));
+        let recent_state_roots = self.sync_db.recent_state_roots(min_block_number).await?;
 
         if !slot_ctx.has_blob_commitments {
             debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
             let derived = self
-                .derive_slot(base_head, recent_gsrs, slot_ctx.slot, block_number, &[])
+                .derive_slot(
+                    base_head,
+                    recent_state_roots,
+                    slot_ctx.slot,
+                    block_number,
+                    &[],
+                )
                 .await?;
             return Ok(ProcessedSlot::Present {
                 slot: slot_ctx.slot,
@@ -444,7 +447,13 @@ impl Node {
                 "No matching target blob transactions in execution block"
             );
             let derived = self
-                .derive_slot(base_head, recent_gsrs, slot_ctx.slot, block_number, &[])
+                .derive_slot(
+                    base_head,
+                    recent_state_roots,
+                    slot_ctx.slot,
+                    block_number,
+                    &[],
+                )
                 .await?;
             return Ok(ProcessedSlot::Present {
                 slot: slot_ctx.slot,
@@ -502,7 +511,7 @@ impl Node {
         let derived = self
             .derive_slot(
                 base_head,
-                recent_gsrs,
+                recent_state_roots,
                 slot_ctx.slot,
                 block_number,
                 &blob_payloads,
@@ -518,7 +527,7 @@ impl Node {
         })
     }
 
-    /// Commit one processed slot to Postgres as the new canonical head, writing
+    /// Commit one processed slot to Postgres as the new state head, writing
     /// its created-index rows in the same transaction.
     pub async fn commit_slot(&self, processed: &ProcessedSlot) -> Result<()> {
         match processed {
@@ -543,7 +552,7 @@ impl Node {
                     block_root: Some(*block_root),
                     parent_root: Some(*parent_root),
                     block_number: Some(*block_number),
-                    current_gsr: derived.head.metadata.current_gsr,
+                    current_state_root: derived.head.metadata.current_state_root,
                     is_empty: false,
                 };
                 self.sync_db

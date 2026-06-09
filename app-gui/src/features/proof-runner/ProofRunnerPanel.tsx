@@ -34,9 +34,9 @@ export function ProofRunnerPanel() {
     }
   }, [runActive, proof.action]);
 
-  const globalRootRaw = proof.stats.globalStateRoot?.trim() ?? "";
-  const globalRootDisplay = globalRootRaw
-    ? truncateDisplayHash(globalRootRaw)
+  const stateRootRaw = proof.stats.stateRoot?.trim() ?? "";
+  const globalRootDisplay = stateRootRaw
+    ? truncateDisplayHash(stateRootRaw)
     : "0x----...----";
 
   const formatCpuDuration = (totalSecs: number) => {
@@ -127,7 +127,7 @@ export function ProofRunnerPanel() {
               <span className="root-dot live" />
               <span className="root-label">Global Valid State Roots</span>
             </span>
-            <span className="root-hash" title={globalRootRaw || undefined}>
+            <span className="root-hash" title={stateRootRaw || undefined}>
               {globalRootDisplay}
             </span>
           </div>
@@ -136,7 +136,7 @@ export function ProofRunnerPanel() {
               <span className="root-dot nullified" />
               <span className="root-label">Global Nullified State Roots</span>
             </span>
-            <span className="root-hash" title={globalRootRaw || undefined}>
+            <span className="root-hash" title={stateRootRaw || undefined}>
               {globalRootDisplay}
             </span>
           </div>

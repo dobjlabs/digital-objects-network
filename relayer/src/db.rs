@@ -44,7 +44,7 @@ impl Db {
                 status TEXT NOT NULL CHECK (status IN ('queued','sending','submitted','confirmed','failed')),
                 payload_bytes BYTEA NOT NULL,
                 tx_final BYTEA NOT NULL UNIQUE,
-                state_root_hash BYTEA NOT NULL,
+                state_root BYTEA NOT NULL,
                 client_ref TEXT NULL,
                 attempt_count INTEGER NOT NULL,
                 tx_hash TEXT NULL,
@@ -87,7 +87,7 @@ impl Db {
                 status,
                 payload_bytes,
                 tx_final,
-                state_root_hash,
+                state_root,
                 client_ref,
                 attempt_count,
                 tx_hash,
@@ -110,7 +110,7 @@ impl Db {
         .bind(job.status.as_str())
         .bind(&job.payload_bytes)
         .bind(hash_to_db_bytes(job.tx_final))
-        .bind(hash_to_db_bytes(job.state_root_hash))
+        .bind(hash_to_db_bytes(job.state_root))
         .bind(job.client_ref.clone())
         .bind(job.attempt_count as i32)
         .bind(job.tx_hash.clone())
@@ -148,7 +148,7 @@ impl Db {
             SET status = $2,
                 payload_bytes = $3,
                 tx_final = $4,
-                state_root_hash = $5,
+                state_root = $5,
                 client_ref = $6,
                 attempt_count = $7,
                 tx_hash = $8,
@@ -168,7 +168,7 @@ impl Db {
         .bind(job.status.as_str())
         .bind(&job.payload_bytes)
         .bind(hash_to_db_bytes(job.tx_final))
-        .bind(hash_to_db_bytes(job.state_root_hash))
+        .bind(hash_to_db_bytes(job.state_root))
         .bind(job.client_ref.clone())
         .bind(job.attempt_count as i32)
         .bind(job.tx_hash.clone())
@@ -200,7 +200,7 @@ impl Db {
                    status,
                    payload_bytes,
                    tx_final,
-                   state_root_hash,
+                   state_root,
                    client_ref,
                    attempt_count,
                    tx_hash,
@@ -232,7 +232,7 @@ impl Db {
                    status,
                    payload_bytes,
                    tx_final,
-                   state_root_hash,
+                   state_root,
                    client_ref,
                    attempt_count,
                    tx_hash,
@@ -307,7 +307,7 @@ impl Db {
                    status,
                    payload_bytes,
                    tx_final,
-                   state_root_hash,
+                   state_root,
                    client_ref,
                    attempt_count,
                    tx_hash,
@@ -357,7 +357,7 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<RelayJob> {
         status,
         payload_bytes: row.get("payload_bytes"),
         tx_final: db_bytes_to_hash(&row.get::<Vec<u8>, _>("tx_final"))?,
-        state_root_hash: db_bytes_to_hash(&row.get::<Vec<u8>, _>("state_root_hash"))?,
+        state_root: db_bytes_to_hash(&row.get::<Vec<u8>, _>("state_root"))?,
         client_ref: row.get("client_ref"),
         attempt_count,
         tx_hash: row.get("tx_hash"),
@@ -398,7 +398,7 @@ mod tests {
             status,
             payload_bytes: vec![1, 2, 3],
             tx_final,
-            state_root_hash: Hash::default(),
+            state_root: Hash::default(),
             client_ref: None,
             attempt_count: 0,
             tx_hash: None,

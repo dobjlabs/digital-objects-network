@@ -32,10 +32,10 @@ prevents double-spending. An object is "live" if its nullifier has not
 been published. Dead objects remain in inventory for reference but
 cannot be used as inputs.
 
-**State root.** A Global State Root (GSR) is a hash of all published
+**State root.** A state root is a hash of all published
 transactions and nullifiers at a given Ethereum block. Actions must be
-grounded in a recent GSR (within ~300 blocks / ~1 hour). The
-`get_state_root` tool returns the current GSR.
+grounded in a recent state root (within ~300 blocks / ~1 hour). The
+`get_state_root` tool returns the current state root.
 
 ## Tools
 
@@ -47,7 +47,7 @@ grounded in a recent GSR (within ~300 blocks / ~1 hour). The
 - `inspect_object(file_name)` — full detail on one object: fields, status, predicate source
 - `inspect_class(class_name)` — predicate definition + which actions produce/consume the class
 - `check_feasibility(action_id)` — does the user's inventory have what this action needs?
-- `get_state_root` — current canonical GSR from the synchronizer
+- `get_state_root` — current state root from the synchronizer
 - `read_doc(name)` — reference docs (`podlang-reference`, `object-lifecycle`, `txlib.podlang`,
   `time.podlang`, `generated.podlang`, or `list` to enumerate)
 

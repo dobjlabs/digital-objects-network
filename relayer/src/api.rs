@@ -153,7 +153,7 @@ async fn submit_proof(
         status: JobStatus::Queued,
         payload_bytes,
         tx_final: payload.tx_final,
-        state_root_hash: payload.state_root_hash,
+        state_root: payload.state_root,
         client_ref: req.client_ref,
         attempt_count: 0,
         tx_hash: None,
@@ -254,7 +254,7 @@ fn to_submit_response(job: RelayJob) -> SubmitProofResponse {
         job_id: job.job_id,
         status: job.status,
         tx_final: job.tx_final,
-        state_root_hash: job.state_root_hash,
+        state_root: job.state_root,
         attempt_count: job.attempt_count,
         created_at: job.created_at,
     }
@@ -271,7 +271,7 @@ fn to_status_response(job: RelayJob) -> JobStatusResponse {
         updated_at: job.updated_at,
         created_at: job.created_at,
         tx_final: job.tx_final,
-        state_root_hash: job.state_root_hash,
+        state_root: job.state_root,
     }
 }
 
@@ -307,7 +307,7 @@ mod tests {
                 ParseMode::Valid => Ok(Some(Payload {
                     proof: PayloadProof::empty_for_test(),
                     tx_final: EMPTY_HASH,
-                    state_root_hash: EMPTY_HASH,
+                    state_root: EMPTY_HASH,
                     nullifiers: vec![],
                     live: vec![],
                 })),
@@ -514,7 +514,7 @@ mod tests {
         assert_eq!(first.job_id, second.job_id);
         assert_eq!(first.tx_final, second.tx_final);
         assert!(second_json.get("tx_final").is_some());
-        assert!(second_json.get("state_root_hash").is_some());
+        assert!(second_json.get("state_root").is_some());
         assert!(second_json.get("attempt_count").is_some());
         assert!(second_json.get("txFinal").is_none());
 

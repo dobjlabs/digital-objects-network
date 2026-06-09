@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Result, anyhow};
 use pod2::middleware::Hash;
 use serde::de::DeserializeOwned;
-use txlib::{GroundingWitness, StateRoot};
+use txlib::{GroundingWitness, StateHeader};
 use wire_types::synchronizer::{
     GroundingWitnessRequest, GroundingWitnessResponse, MembershipRequest, MembershipResponse,
     StateHeadResponse,
@@ -28,12 +28,12 @@ const HASH_BATCH_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynchronizerHead {
-    pub current_gsr: Hash,
+    pub current_state_root: Hash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynchronizerMembership {
-    /// Object commitments present in the canonical global created set.
+    /// Object commitments present in the global created set.
     pub created_objects: HashSet<Hash>,
     pub on_chain_nullifiers: HashSet<Hash>,
 }
@@ -52,8 +52,8 @@ pub trait SynchronizerClient: Send + Sync {
         nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership>;
     /// Wait until a transaction has landed: every object commitment it produces
-    /// is in the canonical created set and every nullifier it emits is in the
-    /// canonical nullifier set. Returns the resulting head once the whole union
+    /// is in the created set and every nullifier it emits is in the
+    /// nullifier set. Returns the resulting head once the whole union
     /// is present, or errors on timeout.
     fn wait_for_tx(
         &self,
@@ -77,10 +77,10 @@ impl SynchronizerClient for HttpSynchronizerClient {
             &endpoint,
             "synchronizer head response",
         )?;
-        let current_gsr = payload
-            .current_gsr
-            .ok_or_else(|| anyhow!("synchronizer has no canonical grounded state yet"))?;
-        Ok(SynchronizerHead { current_gsr })
+        let current_state_root = payload
+            .current_state_root
+            .ok_or_else(|| anyhow!("synchronizer has no grounded state yet"))?;
+        Ok(SynchronizerHead { current_state_root })
     }
 
     fn fetch_grounding_witness(
@@ -102,17 +102,17 @@ impl SynchronizerClient for HttpSynchronizerClient {
             "synchronizer grounding witness response",
         )?;
 
-        let state_root = StateRoot::new(
+        let state_header = StateHeader::new(
             payload.block_number,
             payload.created_root,
             payload.nullifiers_root,
-            payload.gsrs_root,
+            payload.prior_state_history_root,
         );
-        let remote_state_root_hash = payload.state_root_hash;
-        let derived_state_root_hash = state_root.hash();
-        if remote_state_root_hash != derived_state_root_hash {
+        let remote_state_root = payload.state_root;
+        let derived_state_root = state_header.hash();
+        if remote_state_root != derived_state_root {
             return Err(anyhow!(
-                "synchronizer grounding witness hash mismatch: remote={remote_state_root_hash:#} derived={derived_state_root_hash:#}"
+                "synchronizer grounding witness hash mismatch: remote={remote_state_root:#} derived={derived_state_root:#}"
             ));
         }
 
@@ -127,7 +127,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
             }),
         )?;
 
-        Ok(GroundingWitness::new(state_root, created_proofs))
+        Ok(GroundingWitness::new(state_header, created_proofs))
     }
 
     fn fetch_membership_with_nullifiers(
