@@ -12,16 +12,26 @@ use clap::{Parser, Subcommand};
 mod client;
 mod commands;
 mod daemon;
+mod update;
 
 use client::DobjdClient;
 
 const DEFAULT_URL: &str = "http://127.0.0.1:7717";
 
+/// Release tag + target triple, stamped by build.rs ("dev" outside a
+/// release build).
+const VERSION: &str = concat!(
+    env!("DOBJ_RELEASE_TAG"),
+    " (",
+    env!("DOBJ_TARGET_TRIPLE"),
+    ")"
+);
+
 #[derive(Parser)]
 #[command(
     name = "dobj",
     about = "Talk to your local dobjd driver process",
-    version
+    version = VERSION
 )]
 struct Cli {
     /// Base URL of the dobjd HTTP server. Defaults to http://127.0.0.1:7717
@@ -122,6 +132,18 @@ enum Cmd {
         #[arg(short = 'n', long, default_value_t = 100)]
         lines: usize,
     },
+    /// Update dobj, dobjd, and bitcraft-mcp-proxy to a newer release.
+    Update {
+        /// Report current and latest versions without changing anything.
+        #[arg(long)]
+        check: bool,
+        /// Target a specific release tag instead of the latest.
+        #[arg(long, value_name = "TAG")]
+        version: Option<String>,
+        /// Proceed when the target is not newer (reinstall or downgrade).
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -135,6 +157,17 @@ enum SettingsCmd {
         #[arg(long)]
         relayer: Option<String>,
     },
+}
+
+/// Run a daemon command, then surface the "a newer release is available"
+/// notice on success only. The update flow restarts dobjd via `daemon::start`
+/// directly (not through this path), so a post-update restart never prints a
+/// stale notice against the old CLI binary still doing the update.
+async fn with_update_notice(result: Result<()>) -> Result<()> {
+    if result.is_ok() {
+        update::notify_if_outdated().await;
+    }
+    result
 }
 
 #[tokio::main]
@@ -173,9 +206,14 @@ async fn main() -> Result<()> {
             quiet,
         } => commands::run(&client, qualified_id, inputs, quiet).await,
         Cmd::Events => commands::events(&client).await,
-        Cmd::Start => daemon::start(&client).await,
+        Cmd::Start => with_update_notice(daemon::start(&client).await).await,
         Cmd::Stop => daemon::stop().await,
-        Cmd::Status => daemon::status(&client).await,
+        Cmd::Status => with_update_notice(daemon::status(&client).await).await,
         Cmd::Logs { follow, lines } => daemon::logs(follow, lines).await,
+        Cmd::Update {
+            check,
+            version,
+            force,
+        } => update::run(&client, check, version, force).await,
     }
 }

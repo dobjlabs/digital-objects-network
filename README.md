@@ -1,7 +1,7 @@
-# bitcraft
+# Digital Objects
 
-A crafting game where each item is a **digital object**
-backed by a recursive zero-knowledge proof. Items are `.dobj` JSON files on disk;
+The reference implementation of the **Digital Objects** network: privately-held,
+stateful objects each backed by a recursive zero-knowledge proof. Items are `.dobj` JSON files on disk;
 their validity is anchored to Ethereum via EIP-4844 blobs. The chain
 sees only opaque commitments — an observer can't tell what an object is
 or who holds it.
@@ -45,16 +45,18 @@ A single **driver daemon** (`dobjd`) on the user's machine owns
 
 Paste this prompt to any MCP-aware agent (Claude Code, Cursor, etc.):
 
-> Read https://raw.githubusercontent.com/dobjlabs/zk-craft/main/SKILL.md and set up bitcraft.
+> Read https://raw.githubusercontent.com/dobjlabs/zk-craft/main/SKILL.md and set up the Digital Objects driver.
 
 The skill installs `dobjd`, `dobj`, `bitcraft-mcp-proxy`, and the
-bundled `craft-basics` plugin into `~/.dobj/`, configures the hosted
-synchronizer + relayer URLs, starts the daemon, and registers MCP with
-the agent. End-to-end install is a couple of minutes.
+`craft-basics` plugin into `~/.dobj/` (the hosted synchronizer + relayer
+URLs are baked into the binaries), starts the daemon, and registers MCP
+with the agent. End-to-end install is a couple of minutes.
 
-Prefer to install by hand (macOS / Linux / Windows)? See
-[INSTALL.md](INSTALL.md) for step-by-step manual instructions that pull
-the prebuilt binaries from a release. The underlying skill script is in
+Prefer to install by hand? The driver and its installer scripts live in
+the public releases repo,
+[dobjlabs/zk-craft-releases](https://github.com/dobjlabs/zk-craft-releases#install):
+a `curl ... | sh` one-liner (macOS / Linux), an `irm ... | iex` line
+(Windows), and step-by-step manual instructions. The agent skill above is
 [SKILL.md](SKILL.md).
 
 ## Develop (from source)

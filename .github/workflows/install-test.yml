@@ -16,6 +16,10 @@ name: Install test
 # Required repo secrets (Settings → Secrets and variables → Actions). When
 # invoked via `workflow_call` with `secrets: inherit`, the caller passes
 # these down automatically — no need to redeclare them here:
+#   RELEASES_REPO_TOKEN  — fine-grained PAT, contents read/write on the
+#                          public releases repo (see RELEASES_REPO in
+#                          release.yml). Used to download DRAFT release
+#                          assets from that repo.
 #   SEPOLIA_RPC_URL      — JSON-RPC endpoint (public is fine but
 #                          rate-limited; Alchemy/Infura recommended for
 #                          parallel matrix jobs hitting it simultaneously)
@@ -89,11 +93,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     permissions:
-      # `gh release download` here targets the DRAFT release created by
-      # release.yml. Draft releases are invisible to read-only tokens, so
-      # this needs write — `contents: read` 404s on a draft. Tighten to
-      # `read` only once releases are published before the test runs.
-      contents: write
+      # Artifacts are downloaded from the public releases repo using
+      # RELEASES_REPO_TOKEN (see the download step); the job's own token
+      # is not used for anything, so keep it read-only.
+      contents: read
 
     env:
       # Supplied by workflow_call (from release.yml) or workflow_dispatch.
@@ -195,13 +198,18 @@ jobs:
 
       - name: Download release artifacts
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT with contents read/write on the releases repo
+          # (must match RELEASES_REPO in release.yml). Needed even though
+          # that repo is public: the release is still a DRAFT when this
+          # runs, and drafts are invisible without push access there. The
+          # job's own GITHUB_TOKEN has no access to another repo's drafts.
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
           gh release download "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
+            --repo dobjlabs/zk-craft-releases \
             --pattern "dobjd-$TARGET.tar.gz" \
             --pattern "dobj-$TARGET.tar.gz" \
             --pattern "synchronizer-$TARGET.tar.gz" \

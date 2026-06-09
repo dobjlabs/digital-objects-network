@@ -2,15 +2,21 @@
 
 Paste this to Claude Code, Cursor, or any MCP-aware agent:
 
-> Read https://raw.githubusercontent.com/dobjlabs/zk-craft/main/SKILL.md and set up bitcraft.
+> Read https://raw.githubusercontent.com/dobjlabs/zk-craft-releases/main/README.md and set up the Digital Objects driver.
 
-The skill installs `dobjd`, `dobj`, `bitcraft-mcp-proxy`, and the
-`craft-basics` plugin into `~/.dobj/` and registers MCP with the
-agent so you can drive bitcraft directly.
+The steps install `dobjd`, `dobj`, `bitcraft-mcp-proxy`, and the
+`craft-basics` plugin into `~/.dobj/` and register MCP with the
+agent so you can drive Digital Objects directly.
 
 ## Manual install
 
-See [SKILL.md](https://github.com/dobjlabs/zk-craft/blob/main/SKILL.md) for the underlying steps.
+See the [README](https://github.com/dobjlabs/zk-craft-releases#readme) for the underlying steps.
+
+## Upgrading
+
+Already installed? Run `dobj update` to upgrade in place to this release. It
+swaps `dobj`, `dobjd`, and `bitcraft-mcp-proxy` as a unit (atomic, with
+rollback) and leaves your plugins under `~/.dobj/actions/` untouched.
 
 ## What's in the release
 
@@ -22,7 +28,7 @@ See [SKILL.md](https://github.com/dobjlabs/zk-craft/blob/main/SKILL.md) for the 
 
 Plus `synchronizer-{target}.tar.gz` and `relayer-{target}.tar.gz` —
 server binaries used by the install-test CI workflow. End users don't
-need these; the SKILL.md install path doesn't fetch them.
+need these; the installer doesn't fetch them.
 
 Targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
 `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`.
