@@ -402,7 +402,7 @@ export function ContextPanel({
       );
     })();
 
-  const displayThingPath = (object: ObjectListing) => {
+  const displayObjectPath = (object: ObjectListing) => {
     const absolutePath = joinObjectsDirPath(objectsDirPath, object.fileName, {
       nullified: isNullifiedObject(object),
     });
@@ -542,7 +542,7 @@ export function ContextPanel({
           {renderMetaRow(
             "Path",
             <span className="context-inline-path">
-              {displayThingPath(object)}
+              {displayObjectPath(object)}
             </span>,
           )}
         </div>

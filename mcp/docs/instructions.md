@@ -42,7 +42,7 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 ### Inspection
 
 - `list_objects` — every object the user holds, with class + liveness
-- `list_actions` — every available crafting action with its required inputs
+- `list_actions` — every available action with its required inputs
 - `list_classes` — every known object class with live counts and producing/consuming actions
 - `inspect_object(file_name)` — full detail on one object: fields, status, predicate source
 - `inspect_class(class_name)` — predicate definition + which actions produce/consume the class

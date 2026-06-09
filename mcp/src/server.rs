@@ -104,7 +104,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "List all available crafting actions with input/output class requirements and CPU cost"
+        description = "List all available actions with input/output class requirements and CPU cost"
     )]
     fn list_actions(&self) -> Result<Json<ActionList>, String> {
         self.ops
@@ -171,7 +171,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Start a crafting action. Returns immediately with a runId and status=queued; proof generation and commit run in the background. Poll get_run(runId) until status is succeeded or failed (then read result / error). Multiple actions run concurrently."
+        description = "Start an action. Returns immediately with a runId and status=queued; proof generation and commit run in the background. Poll get_run(runId) until status is succeeded or failed (then read result / error). Multiple actions run concurrently."
     )]
     fn run_action(
         &self,
@@ -257,7 +257,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes in this game). Pass \"list\" to see all available documents."
+        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes). Pass \"list\" to see all available documents."
     )]
     fn read_doc(&self, Parameters(params): Parameters<ReadDocParams>) -> String {
         match params.name.as_str() {
@@ -275,7 +275,7 @@ impl<T: DobjOps> DobjMcpService<T> {
                     })
                     .collect();
                 lines.push(
-                    "- generated.podlang\n  Generated podlang source for all actions and IsClassName predicates in this game instance."
+                    "- generated.podlang\n  Generated podlang source for all actions and IsClassName predicates."
                         .to_string(),
                 );
                 lines.join("\n")
