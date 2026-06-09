@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES;
 use pod2::middleware::Hash;
@@ -88,10 +88,12 @@ impl HttpRelayerClient {
             .client
             .get(&endpoint)
             .send()
-            .map_err(|err| anyhow!("failed to query relayer job at {endpoint}: {err}"))?;
+            .with_context(|| format!("failed to query relayer job at {endpoint}"))?;
 
         let status = response.status();
-        let body = response.text().unwrap_or_default();
+        let body = response
+            .text()
+            .with_context(|| format!("failed to read relayer status response from {endpoint}"))?;
         if !status.is_success() {
             return Err(anyhow!(
                 "relayer status failed with {} {}: {}",
@@ -161,7 +163,21 @@ impl RelayerClient for HttpRelayerClient {
         let start = Instant::now();
 
         loop {
-            let status = self.fetch_job_status(relayer_api_url, job_id)?;
+            let status = match self.fetch_job_status(relayer_api_url, job_id) {
+                Ok(status) => status,
+                Err(err) if super::is_retryable_request_error(&err) => {
+                    if start.elapsed() >= timeout {
+                        return Err(anyhow!(
+                            "timed out waiting for tx hash on relayer job {} after {}s; last status query failed: {err:#}",
+                            job_id,
+                            timeout_secs
+                        ));
+                    }
+                    std::thread::sleep(poll_interval);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             if let Some(tx_hash) = status.tx_hash {
                 return Ok(tx_hash);
             }
@@ -197,7 +213,21 @@ impl RelayerClient for HttpRelayerClient {
         let start = Instant::now();
 
         loop {
-            let status = self.fetch_job_status(relayer_api_url, job_id)?;
+            let status = match self.fetch_job_status(relayer_api_url, job_id) {
+                Ok(status) => status,
+                Err(err) if super::is_retryable_request_error(&err) => {
+                    if start.elapsed() >= timeout {
+                        return Err(anyhow!(
+                            "timed out waiting for relayer job {} after {}s; last status query failed: {err:#}",
+                            job_id,
+                            timeout_secs
+                        ));
+                    }
+                    std::thread::sleep(poll_interval);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             match status.status {
                 JobStatus::Confirmed => {
                     return Ok(RelayerConfirmation {

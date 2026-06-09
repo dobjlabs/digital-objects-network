@@ -32,3 +32,9 @@ pub(crate) fn build_http_client() -> reqwest::blocking::Client {
         .build()
         .expect("failed to build blocking HTTP client")
 }
+
+pub(crate) fn is_retryable_request_error(err: &anyhow::Error) -> bool {
+    err.chain()
+        .filter_map(|cause| cause.downcast_ref::<reqwest::Error>())
+        .any(|err| err.is_timeout() || err.is_connect() || err.is_body())
+}

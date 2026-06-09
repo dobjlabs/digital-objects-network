@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use pod2::middleware::Hash;
 use serde::de::DeserializeOwned;
 use txlib::{GroundingWitness, StateHeader};
@@ -221,11 +221,24 @@ impl SynchronizerClient for HttpSynchronizerClient {
         let poll_interval = Duration::from_millis(poll_interval_ms);
         let start = Instant::now();
         loop {
-            let membership = self.fetch_membership_with_nullifiers(
+            let membership = match self.fetch_membership_with_nullifiers(
                 sync_api_url,
                 created_commitments,
                 nullifiers,
-            )?;
+            ) {
+                Ok(membership) => membership,
+                Err(err) if super::is_retryable_request_error(&err) => {
+                    if start.elapsed() >= timeout {
+                        return Err(anyhow!(
+                            "synchronizer did not observe the transaction within {}s; last membership query failed: {err:#}",
+                            timeout_secs
+                        ));
+                    }
+                    std::thread::sleep(poll_interval);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             let landed = created_commitments
                 .iter()
                 .all(|c| membership.created_objects.contains(c))
@@ -233,7 +246,20 @@ impl SynchronizerClient for HttpSynchronizerClient {
                     .iter()
                     .all(|n| membership.on_chain_nullifiers.contains(n));
             if landed {
-                return self.fetch_head(sync_api_url);
+                match self.fetch_head(sync_api_url) {
+                    Ok(head) => return Ok(head),
+                    Err(err) if super::is_retryable_request_error(&err) => {
+                        if start.elapsed() >= timeout {
+                            return Err(anyhow!(
+                                "synchronizer observed the transaction but did not return a head within {}s; last head query failed: {err:#}",
+                                timeout_secs
+                            ));
+                        }
+                        std::thread::sleep(poll_interval);
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                }
             }
             if start.elapsed() >= timeout {
                 return Err(anyhow!(
@@ -253,7 +279,7 @@ fn send_json_request<T: DeserializeOwned>(
 ) -> Result<T> {
     let response = request
         .send()
-        .map_err(|err| anyhow!("failed to query endpoint at {endpoint}: {err}"))?;
+        .with_context(|| format!("failed to query endpoint at {endpoint}"))?;
     if !response.status().is_success() {
         return Err(anyhow!(
             "request failed with {} {}",
@@ -264,7 +290,7 @@ fn send_json_request<T: DeserializeOwned>(
 
     response
         .json()
-        .map_err(|err| anyhow!("failed to decode {decode_context}: {err}"))
+        .with_context(|| format!("failed to decode {decode_context}"))
 }
 
 /// Validate and index the per-object created-set proofs returned by the
