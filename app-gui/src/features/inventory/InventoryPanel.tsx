@@ -76,7 +76,7 @@ export function InventoryPanel({
       name: displayLabel,
       class: object.class,
     });
-    event.dataTransfer.setData("application/x-zkcraft-object", payload);
+    event.dataTransfer.setData("application/x-dobj-object", payload);
     event.dataTransfer.setData("text/plain", displayLabel);
     event.dataTransfer.setData("text", displayLabel);
     event.dataTransfer.effectAllowed = "copy";

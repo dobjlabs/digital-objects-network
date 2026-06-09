@@ -1,6 +1,6 @@
 # `dobjd`
 
-The bitcraft driver daemon. Wraps `Arc<driver::Driver>` behind an HTTP/SSE
+The Digital Objects Network driver daemon. Wraps `Arc<driver::Driver>` behind an HTTP/SSE
 API and an MCP server so that every client (terminal CLI, desktop app,
 website, MCP-aware agents) talks to a single driver process per machine.
 
@@ -24,7 +24,7 @@ Two concurrent listeners:
   routes mirror driver capabilities and there's a single SSE event
   stream every client subscribes to.
 - **MCP on `127.0.0.1:7718`** (`DOBJD_PORT + 1`) — streamable-HTTP MCP server (from the
-  [`craft-mcp`](../mcp) crate) sharing the same `Arc<Driver>` as the
+  [`dobj-mcp`](../mcp) crate) sharing the same `Arc<Driver>` as the
   HTTP routes, so an MCP-driven action shows up in real time on every
   other connected client.
 
@@ -78,7 +78,7 @@ subscribers.
 ## MCP integration
 
 The `mcp` module ([`src/mcp.rs`](src/mcp.rs)) is the glue between this crate
-and [`mcp/`](../mcp). `DobjdCraftOps` implements `CraftOps` against the same
+and [`mcp/`](../mcp). `DobjdOps` implements `DobjOps` against the same
 `Arc<Driver>` and run registry the HTTP routes use, so `run_action` starts a
 run (returning a `runId`) and `get_run` polls it — an MCP-driven action is the
 same run object the desktop GUI / website / `dobj` CLI can follow, and its
@@ -98,7 +98,7 @@ DOBJD_PORT=7727 cargo run --release -p dobjd
 ```
 
 Released binaries are signed + notarized on macOS. The tarball is just
-the three executables (`dobjd`, `dobj`, `bitcraft-mcp-proxy`).
+the three executables (`dobjd`, `dobj`, `dobj-mcp-proxy`).
 Windows binaries are not codesigned yet — first run shows a SmartScreen warning.
 
 ## Lifecycle

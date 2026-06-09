@@ -1,7 +1,7 @@
 name: Release
 
-# Single workflow producing every bitcraft release artifact: the daemon
-# (`dobjd`), CLI (`dobj`), Claude Desktop stdio bridge (`bitcraft-mcp-proxy`),
+# Single workflow producing every Digital Objects Network release artifact: the daemon
+# (`dobjd`), CLI (`dobj`), Claude Desktop stdio bridge (`dobj-mcp-proxy`),
 # and the bundled `craft-basics` plugin. Triggered on `v*` tags or via the
 # Actions UI with a tag name.
 #
@@ -99,7 +99,7 @@ jobs:
   dobjd:
     # Builds and signs every native binary that ships in the release: the
     # daemon (`dobjd`) is the dominant artifact, with `dobj` (the CLI) and
-    # `bitcraft-mcp-proxy` riding alongside. Named after dobjd because the
+    # `dobj-mcp-proxy` riding alongside. Named after dobjd because the
     # daemon is the load-bearing piece — the others are thin wrappers
     # around its HTTP/MCP surfaces.
     needs: validate
@@ -178,13 +178,13 @@ jobs:
       - name: Build dobj
         run: cargo build --release --locked -p cli --target ${{ matrix.target }}
 
-      - name: Build bitcraft-mcp-proxy
+      - name: Build dobj-mcp-proxy
         # Stdio↔HTTP bridge that Claude Desktop launches as a child process
         # to reach dobjd's MCP endpoint. Ships in the dobjd tarball because
         # it's a companion to the MCP server inside dobjd — anyone running
         # the daemon can wire it into Claude Desktop without also needing
         # the dobj CLI.
-        run: cargo build --release --locked -p craft-mcp --bin bitcraft-mcp-proxy --features proxy --target ${{ matrix.target }}
+        run: cargo build --release --locked -p dobj-mcp --bin dobj-mcp-proxy --features proxy --target ${{ matrix.target }}
 
       - name: Build synchronizer
         # Server binary used by the install-test workflow to spin up a
@@ -207,7 +207,7 @@ jobs:
           #
           # Final layout inside dobjd-{target}.tar.gz:
           #   dobjd[.exe]
-          #   bitcraft-mcp-proxy[.exe]
+          #   dobj-mcp-proxy[.exe]
           #
           DOBJD_STAGE="$GITHUB_WORKSPACE/staging/dobjd"
           DOBJ_STAGE="$GITHUB_WORKSPACE/staging/dobj"
@@ -216,7 +216,7 @@ jobs:
           # ${{ matrix.exe_suffix }} is `.exe` on Windows, empty everywhere
           # else, so a single set of cp lines works across all targets.
           cp "$OUT/dobjd${{ matrix.exe_suffix }}"              "$DOBJD_STAGE/"
-          cp "$OUT/bitcraft-mcp-proxy${{ matrix.exe_suffix }}" "$DOBJD_STAGE/"
+          cp "$OUT/dobj-mcp-proxy${{ matrix.exe_suffix }}" "$DOBJD_STAGE/"
           cp "$OUT/dobj${{ matrix.exe_suffix }}"               "$DOBJ_STAGE/"
 
           # Diagnostic dump of dobjd's dynamic deps. If anyone ever bumps
@@ -307,7 +307,7 @@ jobs:
           codesign --force --sign "$IDENTITY" \
             --options runtime --timestamp "$DOBJD_STAGE/dobjd"
           codesign --force --sign "$IDENTITY" \
-            --options runtime --timestamp "$DOBJD_STAGE/bitcraft-mcp-proxy"
+            --options runtime --timestamp "$DOBJD_STAGE/dobj-mcp-proxy"
           codesign --force --sign "$IDENTITY" \
             --options runtime --timestamp "$DOBJ_STAGE/dobj"
 
@@ -322,7 +322,7 @@ jobs:
           # off — we want the workflow to fail loudly here rather than ship
           # broken signatures.
           codesign --verify --verbose=2 "$DOBJD_STAGE/dobjd"
-          codesign --verify --verbose=2 "$DOBJD_STAGE/bitcraft-mcp-proxy"
+          codesign --verify --verbose=2 "$DOBJD_STAGE/dobj-mcp-proxy"
           codesign --verify --verbose=2 "$DOBJ_STAGE/dobj"
           codesign --verify --verbose=2 "$SYNCHRONIZER_STAGE/synchronizer"
           codesign --verify --verbose=2 "$RELAYER_STAGE/relayer"
@@ -400,7 +400,7 @@ jobs:
           cache-shared-key: plugin
 
       - name: Build craft-basics.pexe
-        run: cargo run --release --locked -p pexe -- build plugins/craft-basics
+        run: cargo run --release --locked -p pexe -- build examples/craft-basics
 
       - name: Locate artifact
         id: find

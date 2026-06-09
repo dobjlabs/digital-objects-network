@@ -6,7 +6,7 @@ Set up the **Digital Objects driver** on this machine. After this runs you'll ha
   - REST/SSE on `http://127.0.0.1:7717`
   - MCP on `http://127.0.0.1:7718/mcp`
 - `~/.dobj/bin/dobj` - terminal CLI that talks to dobjd
-- `~/.dobj/bin/bitcraft-mcp-proxy` - stdio<->HTTP bridge for Claude Desktop
+- `~/.dobj/bin/dobj-mcp-proxy` - stdio<->HTTP bridge for Claude Desktop
 - `~/.dobj/actions/craft-basics.pexe` - the bundled crafting plugin
 
 Digital Objects is a network for privately-held, ZK-proved stateful objects;
@@ -31,7 +31,7 @@ Windows.
 
 ### 1. Install the binaries
 
-Downloads the latest release of `dobjd`, `dobj`, and `bitcraft-mcp-proxy`
+Downloads the latest release of `dobjd`, `dobj`, and `dobj-mcp-proxy`
 from the public releases repo into `~/.dobj/bin`. The installer detects the
 platform and prints a PATH hint. To pin a version, set `DOBJ_VERSION` (bash)
 / `$env:DOBJ_VERSION` (PowerShell) to a release tag first.
@@ -119,8 +119,8 @@ macOS / Linux:
 
 ```bash
 if command -v claude >/dev/null 2>&1; then
-  claude mcp remove bitcraft 2>/dev/null || true
-  claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp
+  claude mcp remove dobj 2>/dev/null || true
+  claude mcp add --transport http dobj http://127.0.0.1:7718/mcp
 fi
 ```
 
@@ -128,8 +128,8 @@ Windows (PowerShell):
 
 ```powershell
 if (Get-Command claude -ErrorAction SilentlyContinue) {
-    claude mcp remove bitcraft 2>$null
-    claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp
+    claude mcp remove dobj 2>$null
+    claude mcp add --transport http dobj http://127.0.0.1:7718/mcp
 }
 ```
 
@@ -137,7 +137,7 @@ The new server takes effect on the next Claude Code session (restart the CLI
 or open a new chat).
 
 **Claude Desktop** only speaks stdio, so point it at the bundled
-`bitcraft-mcp-proxy`. Merge a `bitcraft` entry into `mcpServers` in its
+`dobj-mcp-proxy`. Merge a `dobj` entry into `mcpServers` in its
 config, preserving any existing servers.
 
 macOS / Linux (uses `jq`; `brew install jq` / `apt install jq` if missing):
@@ -146,8 +146,8 @@ macOS / Linux (uses `jq`; `brew install jq` / `apt install jq` if missing):
 CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 mkdir -p "$(dirname "$CONFIG")"
 [ -f "$CONFIG" ] || echo '{}' > "$CONFIG"
-jq --arg cmd "$HOME/.dobj/bin/bitcraft-mcp-proxy" \
-   '.mcpServers.bitcraft = {command: $cmd, args: ["--port", "7718"]}' \
+jq --arg cmd "$HOME/.dobj/bin/dobj-mcp-proxy" \
+   '.mcpServers.dobj = {command: $cmd, args: ["--port", "7718"]}' \
    "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
 ```
 
@@ -161,8 +161,8 @@ $json = Get-Content $config -Raw | ConvertFrom-Json
 if (-not $json.PSObject.Properties.Match('mcpServers').Count) {
     $json | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{}) -Force
 }
-$json.mcpServers | Add-Member -NotePropertyName bitcraft -NotePropertyValue ([pscustomobject]@{
-    command = "$env:USERPROFILE\.dobj\bin\bitcraft-mcp-proxy.exe"
+$json.mcpServers | Add-Member -NotePropertyName dobj -NotePropertyValue ([pscustomobject]@{
+    command = "$env:USERPROFILE\.dobj\bin\dobj-mcp-proxy.exe"
     args    = @("--port", "7718")
 }) -Force
 # BOM-less UTF-8 so Claude Desktop's JSON parser doesn't choke on a leading BOM.
@@ -185,7 +185,7 @@ dobj start    # launch in the background (idempotent)
 dobj status   # is it running?
 dobj logs -f  # tail the log at ~/.dobj/dobjd.log
 dobj stop     # graceful shutdown (hard kill on Windows)
-dobj update   # update dobj + dobjd + bitcraft-mcp-proxy to the latest release
+dobj update   # update dobj + dobjd + dobj-mcp-proxy to the latest release
 ```
 
 On Windows, invoke as `& "$env:USERPROFILE\.dobj\bin\dobj.exe" <cmd>`.

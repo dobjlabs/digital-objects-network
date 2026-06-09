@@ -121,9 +121,9 @@ async fn start_mcp_server(
     runs: RunRegistry,
     listener: tokio::net::TcpListener,
 ) -> Result<()> {
-    let ops = mcp::DobjdCraftOps::new(driver, events, runs);
-    let config = craft_mcp::McpConfig::default();
-    let server = craft_mcp::McpServer::new(ops, config);
+    let ops = mcp::DobjdOps::new(driver, events, runs);
+    let config = dobj_mcp::McpConfig::default();
+    let server = dobj_mcp::McpServer::new(ops, config);
     server.serve(listener).await?;
     Ok(())
 }

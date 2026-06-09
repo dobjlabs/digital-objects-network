@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 driver = { path = "../driver" }
 common = { path = "../common" }
-craft-mcp = { path = "../mcp" }
+dobj-mcp = { path = "../mcp" }
 wire-types = { workspace = true }
 
 anyhow = { workspace = true }

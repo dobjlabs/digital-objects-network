@@ -1,7 +1,7 @@
 [plugin]
 name = "episode-1"
 version = "0.1.0"
-# Rewritten by `cargo run -p pexe -- build plugins/episode-1`.
+# Rewritten by `cargo run -p pexe -- build examples/episode-1`.
 module_hash = "827e81d712e9daec361cca12184e9e1fd6799aebf86e78ac6f3b09a44f74a107"
 
 # ── raw resources ────────────────────────────────────────────────────────────

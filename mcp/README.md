@@ -1,6 +1,6 @@
-# bitcraft MCP Server
+# Digital Objects Network MCP Server
 
-An MCP (Model Context Protocol) server that exposes bitcraft's digital
+An MCP (Model Context Protocol) server that exposes dobj's digital
 object operations to AI agents. Claude Code, Claude Desktop, Cursor, and any
 other MCP-aware client can inspect inventory, explore crafting actions, read
 documentation, and execute ZK-proof-based crafting through this server.
@@ -9,7 +9,7 @@ documentation, and execute ZK-proof-based crafting through this server.
 
 ```
 Claude Code, Cursor, …       ──HTTP──┐
-Claude Desktop ──stdio── bitcraft-mcp-proxy ──HTTP──┤
+Claude Desktop ──stdio── dobj-mcp-proxy ──HTTP──┤
                                                    ▼
                                                  dobjd
                                           (one driver process,
@@ -25,7 +25,7 @@ the desktop window or browser tab.
 
 Clients that speak streamable HTTP MCP (Claude Code, Cursor, Continue, …)
 connect to dobjd directly. Claude Desktop only speaks stdio MCP, so it
-launches `bitcraft-mcp-proxy` as a child process; the proxy bridges its
+launches `dobj-mcp-proxy` as a child process; the proxy bridges its
 stdin/stdout to dobjd's HTTP endpoint.
 
 ### Crate structure
@@ -34,25 +34,25 @@ stdin/stdout to dobjd's HTTP endpoint.
 mcp/
   src/
     lib.rs          McpServer, McpConfig — HTTP embedding interface
-    ops.rs          CraftOps trait — boundary between MCP and the host
+    ops.rs          DobjOps trait — boundary between MCP and the host
     types.rs        MCP request/response types (JsonSchema-derived)
-    server.rs       CraftMcpService — rmcp tool handlers + ServerHandler
-    mock.rs         MockCraftOps — realistic test fixtures
+    server.rs       DobjMcpService — rmcp tool handlers + ServerHandler
+    mock.rs         MockDobjOps — realistic test fixtures
     resources.rs    MCP resources (docs + podlang source files)
     bin/
       mock_server.rs   Standalone HTTP server with mock data (port 7718)
       mock_stdio.rs    Standalone stdio server with mock data
-      proxy_stdio.rs   Stdio↔HTTP proxy (binary: bitcraft-mcp-proxy)
+      proxy_stdio.rs   Stdio↔HTTP proxy (binary: dobj-mcp-proxy)
   docs/
     podlang-reference.md   Full podlang language reference
     object-lifecycle.md    Digital Object lifecycle walkthrough
 ```
 
 The `mcp` crate has **no dependencies** on pod2, txlib, craft_sdk, dobjd,
-or app-gui. The `CraftOps` trait is the integration boundary — the
+or app-gui. The `DobjOps` trait is the integration boundary — the
 production implementation lives in
 [`dobjd/src/mcp.rs`](../dobjd/src/mcp.rs); the test implementation is
-`MockCraftOps`.
+`MockDobjOps`.
 
 ## Tools
 
@@ -83,22 +83,22 @@ Make sure dobjd is running, then point the client at
 `http://127.0.0.1:7718/mcp`:
 
 ```sh
-claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp
+claude mcp add --transport http dobj http://127.0.0.1:7718/mcp
 ```
 
 This is what [SKILL.md](../SKILL.md) automates as part of end-user install.
 
 ### Claude Desktop (stdio only)
 
-Claude Desktop launches `bitcraft-mcp-proxy` as a child process. The proxy
+Claude Desktop launches `dobj-mcp-proxy` as a child process. The proxy
 connects to dobjd's HTTP MCP endpoint over loopback. Edit
 `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
-    "bitcraft": {
-      "command": "/Users/<you>/.dobj/bin/bitcraft-mcp-proxy",
+    "dobj": {
+      "command": "/Users/<you>/.dobj/bin/dobj-mcp-proxy",
       "args": ["--port", "7718"]
     }
   }
@@ -108,11 +108,11 @@ connects to dobjd's HTTP MCP endpoint over loopback. Edit
 The proxy accepts `--port <PORT>` or `--url <URL>`. Default upstream:
 `http://127.0.0.1:7718/mcp`.
 
-The release tarball ships the proxy binary at `~/.dobj/bin/bitcraft-mcp-proxy`
+The release tarball ships the proxy binary at `~/.dobj/bin/dobj-mcp-proxy`
 alongside `dobjd` and `dobj`. For a from-source build:
 
 ```sh
-cargo build -p craft-mcp --bin bitcraft-mcp-proxy --features proxy --release
+cargo build -p dobj-mcp --bin dobj-mcp-proxy --features proxy --release
 ```
 
 ## Development
@@ -120,10 +120,10 @@ cargo build -p craft-mcp --bin bitcraft-mcp-proxy --features proxy --release
 ### Running tests
 
 ```sh
-cargo test -p craft-mcp --release
+cargo test -p dobj-mcp --release
 ```
 
-Tests run against `MockCraftOps` and cover tool handlers, structured
+Tests run against `MockDobjOps` and cover tool handlers, structured
 output, error cases, and concurrent action dispatch.
 
 ### Mock servers (no dobjd required)
@@ -132,21 +132,21 @@ output, error cases, and concurrent action dispatch.
 without dobjd:
 
 ```sh
-cargo run -p craft-mcp --bin craft-mcp-mock --release
+cargo run -p dobj-mcp --bin dobj-mcp-mock --release
 # Listens on http://127.0.0.1:7718/mcp
 ```
 
 **Stdio mock** — for wiring Claude Desktop/Code straight to fixture data:
 
 ```sh
-cargo run -p craft-mcp --bin craft-mcp-stdio --release
+cargo run -p dobj-mcp --bin dobj-mcp-stdio --release
 ```
 
 ### Adding tools
 
-1. Add the method to `CraftOps` in `ops.rs`
+1. Add the method to `DobjOps` in `ops.rs`
 2. Add the mock implementation in `mock.rs`
 3. Add the tool handler in `server.rs` (use `#[tool(description = "...")]`)
 4. Add request/response types to `types.rs` if needed
-5. Add the matching method to `DobjdCraftOps` in `dobjd/src/mcp.rs`
+5. Add the matching method to `DobjdOps` in `dobjd/src/mcp.rs`
 6. Update the tool count assertion in `tests::test_tool_router_lists_all_tools`

@@ -109,8 +109,8 @@ export function ContextPanel({
     event.preventDefault();
     event.stopPropagation();
     const raw =
-      event.dataTransfer.getData("application/x-zkcraft-object") ||
-      event.dataTransfer.getData("application/x-zkcraft-item") ||
+      event.dataTransfer.getData("application/x-dobj-object") ||
+      event.dataTransfer.getData("application/x-dobj-object") ||
       event.dataTransfer.getData("text/plain") ||
       event.dataTransfer.getData("text");
     if (!raw) return;

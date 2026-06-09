@@ -7,26 +7,27 @@ manner.
 # Architecture
 
 The main interface of the SDK is a scripting language that is used to define
-actions.  The current implementation uses [Rhai](https://rhai.rs) for that.
+actions. The current implementation uses [Rhai](https://rhai.rs) for that.
 Each action is defined via a script function and a collection of actions define
 a module which in turn define a collection of classes.
 
 Action scripts are evaluated in two different phases:
-- **Load**.  In this phase the scripting engine evaluates the code symbolically
+
+- **Load**. In this phase the scripting engine evaluates the code symbolically
   to extract the declaration of an action.
-- **Execution**.  In this phase the scripting engine evaluates the code with
+- **Execution**. In this phase the scripting engine evaluates the code with
   real inputs to execute the action (which consumes, mutates and generates
   objects).
 
 Both phases use the type `ActionHandle`, which contains a shared
-`ActionContext` to track the state of evaluation.  `ActionHandle` offers a list
+`ActionContext` to track the state of evaluation. `ActionHandle` offers a list
 of host methods available in the script environment to define action
 operations.
 
-Action operations deal with literal values and runtime variable values.  The
+Action operations deal with literal values and runtime variable values. The
 `Ref` type contains a shared `VarOrValue` which allows treating literals and
-variables uniformly.  The `Ref` type offers a list of host methods available in
-the script environment to define value operations.  Operations will promote
+variables uniformly. The `Ref` type offers a list of host methods available in
+the script environment to define value operations. Operations will promote
 native types compatible with pod2 values to `VarOrValue` automatically so no
 type conversions are explicitly required on the scripting side.
 
@@ -41,19 +42,19 @@ artifacts.
 The action needs to be translated to a pod2 predicate which will use a mix of
 literal embedded values and variables (called wildcards in the pod2 context).
 In the scripting environment everything is stored in a scripting variable, but
-we need to distinguish between the two cases.  For this reason we extend Rhai
-with the following syntax: `var $ident$ = $expr$` for `var` declaration.  Any
-expression not involving `var` will be evaluated at Load and Execute time.  A
-declaration of a `var` will introduce it to the predicate scope.  Any
+we need to distinguish between the two cases. For this reason we extend Rhai
+with the following syntax: `var $ident$ = $expr$` for `var` declaration. Any
+expression not involving `var` will be evaluated at Load and Execute time. A
+declaration of a `var` will introduce it to the predicate scope. Any
 expression involving a `var` will be evaluated symbolically at Load time and
 non-symbolically at Execute time.
 
 ## Unsafe expressions
 
 By default all expressions that involve a `var` generate corresponding
-statements that constrain the operation.  Sometimes this is not desirable
+statements that constrain the operation. Sometimes this is not desirable
 because we want to calculate the value of a `var` as a witness to some
-statement.  The generation of constraining statements can be disabled by using
+statement. The generation of constraining statements can be disabled by using
 an `unsafe` block.
 
 ## Type checking
@@ -66,12 +67,12 @@ entries (at Load time we don't know what's the type of `pick.durability`).
 ## u256 difficulty targets
 
 `pow_obj_grind(obj, target)` and `intro_lt_eq_u256(x, target)` both compare
-full 256-bit `RawValue`s.  Integer literals in Rhai promote to a pod2 `Value`
-whose `RawValue` has the integer in the *least*-significant limb — not what
+full 256-bit `RawValue`s. Integer literals in Rhai promote to a pod2 `Value`
+whose `RawValue` has the integer in the _least_-significant limb — not what
 you want for a "top-limb ≤ N" difficulty target.
 
 Use `action.top_limb_u256(n)` to build a `RawValue` with `n` in the
-most-significant limb and zeros elsewhere.  Bind it once with `let` (not
+most-significant limb and zeros elsewhere. Bind it once with `let` (not
 `var`, since it is a literal, not a wildcard) and reuse for both grinding
 and the proof:
 
@@ -116,37 +117,37 @@ The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
   - [ ] insert
   - [ ] delete
 - [ ] Statements:
-    - [ ] Equal
-    - [ ] NotEqual
-    - [ ] LtEq
-    - [ ] Lt
-    - [ ] Contains
-    - [ ] NotContains
-    - [x] SumOf
-    - [ ] ProductOf
-    - [ ] MaxOf
-    - [ ] HashOf
-    - [ ] PublicKeyOf
-    - [ ] SignedBy
-    - [ ] ContainerInsert
-    - [ ] ContainerUpdate
-    - [ ] ContainerDelete
-    - [ ] DictContains
-    - [ ] DictNotContains
-    - [ ] SetContains
-    - [ ] SetNotContains
-    - [ ] ArrayContains
-    - [ ] GtEq
-    - [x] Gt
-    - [ ] DictInsert
-    - [ ] DictUpdate
-    - [ ] DictDelete
-    - [ ] SetInsert
-    - [ ] SetDelete
-    - [ ] ArrayUpdate
+  - [ ] Equal
+  - [ ] NotEqual
+  - [ ] LtEq
+  - [ ] Lt
+  - [ ] Contains
+  - [ ] NotContains
+  - [x] SumOf
+  - [ ] ProductOf
+  - [ ] MaxOf
+  - [ ] HashOf
+  - [ ] PublicKeyOf
+  - [ ] SignedBy
+  - [ ] ContainerInsert
+  - [ ] ContainerUpdate
+  - [ ] ContainerDelete
+  - [ ] DictContains
+  - [ ] DictNotContains
+  - [ ] SetContains
+  - [ ] SetNotContains
+  - [ ] ArrayContains
+  - [ ] GtEq
+  - [x] Gt
+  - [ ] DictInsert
+  - [ ] DictUpdate
+  - [ ] DictDelete
+  - [ ] SetInsert
+  - [ ] SetDelete
+  - [ ] ArrayUpdate
 - [ ] Execution time type checking without panics
 - [ ] operator+
-- [ ] operator*
+- [ ] operator\*
 - [x] dependent action
 - [x] pexe.zip support (packaged by the `pexe` crate's CLI)
 - [x] manifest support

@@ -1,7 +1,7 @@
 [plugin]
 name = "craft-basics"
 version = "0.1.0"
-# Rewritten by `cargo run -p pexe -- build plugins/craft-basics`.
+# Rewritten by `cargo run -p pexe -- build examples/craft-basics`.
 module_hash = "1327998e7704f3868c069d7bdd527ffaf0d6ae7bc0bf97bde6935bb7272dce57"
 
 [[classes]]

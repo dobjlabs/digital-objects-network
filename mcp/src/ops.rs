@@ -1,9 +1,9 @@
 use crate::types::*;
 
 /// The interface the MCP server needs from the host process.
-/// In production it's implemented by `DobjdCraftOps` in the `dobjd` crate
-/// (one driver process serving HTTP + MCP). Tests use `MockCraftOps`.
-pub trait CraftOps: Send + Sync + 'static {
+/// In production it's implemented by `DobjdOps` in the `dobjd` crate
+/// (one driver process serving HTTP + MCP). Tests use `MockDobjOps`.
+pub trait DobjOps: Send + Sync + 'static {
     fn list_inventory(&self) -> anyhow::Result<Vec<InventoryObject>>;
     fn list_actions(&self) -> anyhow::Result<Vec<Action>>;
     fn list_classes(&self) -> anyhow::Result<Vec<ClassSummary>>;

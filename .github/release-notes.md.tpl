@@ -4,7 +4,7 @@ Paste this to Claude Code, Cursor, or any MCP-aware agent:
 
 > Read https://raw.githubusercontent.com/dobjlabs/zk-craft-releases/main/README.md and set up the Digital Objects driver.
 
-The steps install `dobjd`, `dobj`, `bitcraft-mcp-proxy`, and the
+The steps install `dobjd`, `dobj`, `dobj-mcp-proxy`, and the
 `craft-basics` plugin into `~/.dobj/` and register MCP with the
 agent so you can drive Digital Objects directly.
 
@@ -15,13 +15,13 @@ See the [README](https://github.com/dobjlabs/zk-craft-releases#readme) for the u
 ## Upgrading
 
 Already installed? Run `dobj update` to upgrade in place to this release. It
-swaps `dobj`, `dobjd`, and `bitcraft-mcp-proxy` as a unit (atomic, with
+swaps `dobj`, `dobjd`, and `dobj-mcp-proxy` as a unit (atomic, with
 rollback) and leaves your plugins under `~/.dobj/actions/` untouched.
 
 ## What's in the release
 
 - **`dobjd-{target}.tar.gz`** — the daemon (HTTP API on `:7717`,
-  MCP on `:7718`). Bundles `bitcraft-mcp-proxy` alongside.
+  MCP on `:7718`). Bundles `dobj-mcp-proxy` alongside.
 - **`dobj-{target}.tar.gz`** — terminal CLI for the daemon.
 - **`craft-basics.pexe`** — the bundled crafting plugin (Log,
   Wood, Stone, sticks, picks…).

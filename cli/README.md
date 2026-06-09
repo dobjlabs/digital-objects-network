@@ -18,22 +18,22 @@ Two flavors of commands.
 
 ### API wrappers — every driver capability through one HTTP/SSE endpoint
 
-| Command                                         | Hits                                                                       |
-| ----------------------------------------------- | -------------------------------------------------------------------------- |
-| `inventory`                                     | `GET /inventory`                                                           |
-| `actions`                                       | `GET /actions`                                                             |
-| `classes`                                       | `GET /classes`                                                             |
-| `inspect-object <file_name>`                    | `GET /objects/{file_name}`                                                 |
-| `inspect-class <plugin::class>`                 | `GET /classes/{name}`                                                      |
-| `inspect-action <plugin::action>`               | `GET /actions/{id}`                                                        |
-| `feasibility <plugin::action>`                  | `GET /actions/{id}/feasibility`                                            |
-| `state-root`                                    | `GET /state-root`                                                          |
-| `objects-dir`                                   | `GET /objects/dir`                                                         |
-| `import <path>`                                 | `POST /objects/import` (reads the `.dobj` file locally, sends contents)    |
-| `settings get`                                  | `GET /settings`                                                            |
-| `settings set --synchronizer URL --relayer URL` | `PUT /settings` (omitted flags left unchanged)                             |
+| Command                                         | Hits                                                                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `inventory`                                     | `GET /inventory`                                                                                                    |
+| `actions`                                       | `GET /actions`                                                                                                      |
+| `classes`                                       | `GET /classes`                                                                                                      |
+| `inspect-object <file_name>`                    | `GET /objects/{file_name}`                                                                                          |
+| `inspect-class <plugin::class>`                 | `GET /classes/{name}`                                                                                               |
+| `inspect-action <plugin::action>`               | `GET /actions/{id}`                                                                                                 |
+| `feasibility <plugin::action>`                  | `GET /actions/{id}/feasibility`                                                                                     |
+| `state-root`                                    | `GET /state-root`                                                                                                   |
+| `objects-dir`                                   | `GET /objects/dir`                                                                                                  |
+| `import <path>`                                 | `POST /objects/import` (reads the `.dobj` file locally, sends contents)                                             |
+| `settings get`                                  | `GET /settings`                                                                                                     |
+| `settings set --synchronizer URL --relayer URL` | `PUT /settings` (omitted flags left unchanged)                                                                      |
 | `run <action> [paths...]`                       | `POST /actions/run`, then follows `/actions/runs/{id}/events` and polls `/actions/runs/{id}` to the terminal result |
-| `events`                                        | `GET /events` SSE — prints every event as JSON lines                       |
+| `events`                                        | `GET /events` SSE — prints every event as JSON lines                                                                |
 
 Each command renders human-friendly output by default. Pass `--json`
 for the raw payload (suitable for `jq`).

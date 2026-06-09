@@ -1,4 +1,4 @@
-# bitcraft justfile
+# Digital Objects Network justfile
 # Install just: https://github.com/casey/just
 
 # Run the synchronizer (loads env from synchronizer/.env if present)
@@ -74,13 +74,13 @@ ensure-remote-settings:
 ensure-plugins:
     @mkdir -p ~/.dobj/actions
     @if [ -z "$(find ~/.dobj/actions -maxdepth 1 -name '*.pexe' -print -quit)" ]; then \
-        echo "No .pexe plugins installed — packaging from plugins/ and installing..."; \
+        echo "No .pexe plugins installed — packaging from examples/ and installing..."; \
         just install-plugins; \
     fi
 
-# Register the bitcraft MCP with Claude Code at project (default) scope, so it
+# Register the dobj MCP with Claude Code at project (default) scope, so it
 # only loads in chats started from this directory. Other directories stay
-# uncontaminated by the bitcraft dispatch rules. Idempotent: remove + add on
+# uncontaminated by the dobj dispatch rules. Idempotent: remove + add on
 # each run so the URL stays current. Skipped silently if the `claude` CLI is
 # missing.
 ensure-mcp:
@@ -89,9 +89,9 @@ ensure-mcp:
     if ! command -v claude >/dev/null 2>&1; then
         exit 0
     fi
-    claude mcp remove bitcraft 2>/dev/null || true
-    claude mcp add --transport http bitcraft http://127.0.0.1:7718/mcp \
-        && echo "registered: bitcraft MCP (project scope, http://127.0.0.1:7718/mcp)"
+    claude mcp remove dobj 2>/dev/null || true
+    claude mcp add --transport http dobj http://127.0.0.1:7718/mcp \
+        && echo "registered: dobj MCP (project scope, http://127.0.0.1:7718/mcp)"
 
 # Ensure the local Postgres databases the synchronizer + relayer expect exist.
 # `just dev` runs this automatically; run it yourself before `just sync` /
@@ -104,7 +104,7 @@ ensure-db:
 reset:
     @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
-    @command -v claude >/dev/null 2>&1 && claude mcp remove bitcraft 2>/dev/null && echo "removed: bitcraft MCP registration" || true
+    @command -v claude >/dev/null 2>&1 && claude mcp remove dobj 2>/dev/null && echo "removed: dobj MCP registration" || true
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
     psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
 
@@ -126,14 +126,14 @@ build:
 
 # Build all plugins into target/pexe/*.pexe
 pack-plugins:
-    cargo run -p pexe --release -- build plugins/*
+    cargo run -p pexe --release -- build examples/*
 
 # Build and install plugins into ~/.dobj/actions/
 install-plugins:
-    cargo run -p pexe --release -- build --install plugins/*
+    cargo run -p pexe --release -- build --install examples/*
 
 # Run the `pexe` CLI with arbitrary args. Example:
-#   just pexe inspect plan --action CraftWood plugins/craft-basics
+#   just pexe inspect plan --action CraftWood examples/craft-basics
 pexe *ARGS:
     cargo run -p pexe --release -- {{ARGS}}
 

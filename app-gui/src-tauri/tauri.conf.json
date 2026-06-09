@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "bitcraft",
+  "productName": "Digital Objects Network",
   "version": "0.1.0",
-  "identifier": "com.dobjlabs.bitcraft",
+  "identifier": "com.dobjlabs.don",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "bitcraft",
+        "title": "Digital Objects Network",
         "width": 1400,
         "height": 900,
         "dragDropEnabled": false

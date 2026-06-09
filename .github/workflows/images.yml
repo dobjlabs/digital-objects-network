@@ -74,8 +74,8 @@ jobs:
           # expensive part; persist it across runs so an unchanged-dependency
           # build skips the multi-minute compile. The relayer build below reuses
           # this same builder from the runner's local cache within the job.
-          cache-from: type=gha,scope=zkcraft-build
-          cache-to: type=gha,scope=zkcraft-build,mode=max
+          cache-from: type=gha,scope=don-build
+          cache-to: type=gha,scope=don-build,mode=max
 
       - name: Relayer image metadata
         id: meta-relayer
@@ -101,5 +101,5 @@ jobs:
           tags: ${{ steps.meta-relayer.outputs.tags }}
           labels: ${{ steps.meta-relayer.outputs.labels }}
           provenance: false
-          cache-from: type=gha,scope=zkcraft-build
-          cache-to: type=gha,scope=zkcraft-build,mode=max
+          cache-from: type=gha,scope=don-build
+          cache-to: type=gha,scope=don-build,mode=max
