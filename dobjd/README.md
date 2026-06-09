@@ -69,11 +69,11 @@ result/error in an in-memory registry. Follow a run either way:
   progress (honoring `Last-Event-ID` on reconnect) then tails live events
   until the run is terminal.
 
-A re-used `runId` is idempotent: it returns the existing run instead of
-starting a duplicate. Terminal runs are retained for a short TTL then reaped;
-runs are in-memory only (on-chain state and local `.dobj` files reconcile via
-sync regardless). The global `/events` stream carries every run's progress
-(`type: run-action-progress`) for firehose subscribers.
+Each `POST` mints a fresh `runId`; clients don't choose it. Terminal runs are
+retained for a short TTL then reaped; runs are in-memory only (on-chain state
+and local `.dobj` files reconcile via sync regardless). The global `/events`
+stream carries every run's progress (`type: run-action-progress`) for firehose
+subscribers.
 
 ## MCP integration
 

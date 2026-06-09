@@ -72,7 +72,6 @@ export interface ActionPayload {
 export interface RunActionInput {
   action: QualifiedNamePayload;
   inputObjectPaths: string[];
-  runId: string;
 }
 
 export interface RunActionResult {

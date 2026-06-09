@@ -397,22 +397,17 @@ export const useStore = create<AppState>((set, get) => ({
         ? inputBindings.map((binding) => binding.label)
         : ["(no inputs)"];
 
-    // Mint a per-run id up front so progress events streaming back during
-    // the action can be matched against this run before runAction returns.
-    // Two concurrent runs of the same action would collide on action alone.
-    const runId = crypto.randomUUID();
-    get().initProofPanel({ runId, action, args: verifyTargets });
-
     try {
-      // Returns immediately with a handle. Live progress arrives over the
-      // shared `/events` SSE (applyRunActionProgress); the poll below is the
-      // authoritative completion + result signal, so a missed event can't
-      // leave the panel stuck or lose the outcome.
-      await runAction({
+      // dobjd assigns the run id and returns it immediately; the proof +
+      // commit run on a background worker. Initialize the panel against that
+      // id, render live progress from the shared `/events` SSE
+      // (applyRunActionProgress), and poll the run for the authoritative
+      // completion + result so a missed event can't strand the panel.
+      const { runId } = await runAction({
         action,
         inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
-        runId,
       });
+      get().initProofPanel({ runId, action, args: verifyTargets });
 
       const finalState = await pollRunToTerminal(runId);
       if (finalState.status !== "succeeded" || !finalState.result) {

@@ -181,9 +181,8 @@ pub async fn run(
 ) -> Result<()> {
     let action = parse_qualified(&action_id)?;
 
-    // Start the run. dobjd registers it and returns immediately with the
-    // handle; proof generation and commit run on a background worker, so this
-    // POST no longer holds the connection open for the whole pipeline.
+    // Start the run. dobjd registers it, runs proof generation and commit on a
+    // background worker, and returns the run handle immediately.
     let accepted: RunAccepted = client
         .post_json(
             "/actions/run",
@@ -191,7 +190,6 @@ pub async fn run(
                 input: RunActionInput {
                     action: action.clone(),
                     input_object_paths: input_paths,
-                    run_id: None,
                 },
             },
         )

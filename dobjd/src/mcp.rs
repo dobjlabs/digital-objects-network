@@ -100,22 +100,15 @@ impl CraftOps for DobjdCraftOps {
             .map(|path| path.trim().to_string())
             .collect();
 
-        // Use the client-supplied run id if present, otherwise mint one. Same
-        // convention as the HTTP `/actions/run` route, and the run shares the
-        // same registry — an agent and the GUI can follow the same run id.
-        let run_id = input
-            .run_id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
+        // The run shares the same registry as the HTTP routes, so the GUI and
+        // an agent can both follow the daemon-assigned run id.
         Ok(crate::runs::spawn_run(
             &self.runs,
             self.driver.clone(),
             self.events.clone(),
-            run_id,
             input.action,
             input_objects,
-        )?)
+        ))
     }
 
     fn get_run(&self, run_id: &str) -> anyhow::Result<mcp::RunState> {

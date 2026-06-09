@@ -505,10 +505,9 @@ mod tests {
             .run_action(Parameters(RunActionInput {
                 action: craft_basics("FindLog"),
                 input_object_paths: vec![],
-                run_id: Some("run-1".to_string()),
             }))
             .unwrap();
-        assert_eq!(accepted.run_id, "run-1");
+        assert!(!accepted.run_id.is_empty());
     }
 
     #[test]

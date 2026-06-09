@@ -29,11 +29,8 @@ use crate::state::AppState;
 pub async fn run_action(
     State(state): State<AppState>,
     Json(req): Json<RunActionRequest>,
-) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
+) -> (StatusCode, Json<RunAccepted>) {
     let input = req.input;
-    let run_id = input
-        .run_id
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     // Pass strings through verbatim — the driver extracts basenames via
     // `Path::file_name`, so an absolute path or a bare basename resolve to the
@@ -48,12 +45,10 @@ pub async fn run_action(
         &state.runs,
         state.driver.clone(),
         state.events.clone(),
-        run_id,
         input.action,
         input_objects,
-    )
-    .map_err(|err| ApiError::new(StatusCode::CONFLICT, err.to_string()))?;
-    Ok((StatusCode::ACCEPTED, Json(accepted)))
+    );
+    (StatusCode::ACCEPTED, Json(accepted))
 }
 
 /// `GET /actions/runs/{run_id}` — current state of a run: status, the result

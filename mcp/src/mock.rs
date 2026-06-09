@@ -181,11 +181,8 @@ impl CraftOps for MockCraftOps {
 
         Ok(RunAccepted {
             // Static fixture so tests can assert on it without depending on
-            // wall-clock or randomness. Real `DobjdCraftOps` mints a UUID v4
-            // (or echoes the client-supplied id).
-            run_id: input
-                .run_id
-                .unwrap_or_else(|| "00000000-0000-4000-8000-000000000000".to_string()),
+            // wall-clock or randomness. Real `DobjdCraftOps` mints a UUID v4.
+            run_id: "00000000-0000-4000-8000-000000000000".to_string(),
             status: RunStatus::Queued,
         })
     }
@@ -598,10 +595,9 @@ mod tests {
             .run_action(RunActionInput {
                 action: qname("CraftWood"),
                 input_object_paths: vec!["craft-basics__log_0xabc1.dobj".to_string()],
-                run_id: Some("run-abc".to_string()),
             })
             .unwrap();
-        assert_eq!(accepted.run_id, "run-abc");
+        assert!(!accepted.run_id.is_empty());
         assert_eq!(accepted.status, RunStatus::Queued);
     }
 
@@ -625,7 +621,6 @@ mod tests {
                     mock.run_action(RunActionInput {
                         action: qname("FindLog"),
                         input_object_paths: vec![],
-                        run_id: None,
                     })
                 })
             })
@@ -643,7 +638,6 @@ mod tests {
         let result = mock.run_action(RunActionInput {
             action: qname("CraftDiamond"),
             input_object_paths: vec![],
-            run_id: None,
         });
         assert!(result.is_err());
     }
