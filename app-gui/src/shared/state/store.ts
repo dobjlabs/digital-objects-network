@@ -4,6 +4,7 @@ import {
   importObject as importObjectApi,
   loadActions,
   loadInventory,
+  listenRunActionProgressForRun,
   runAction,
   type ActionPayload as Action,
   type InventoryObjectPayload as InventoryObject,
@@ -396,18 +397,21 @@ export const useStore = create<AppState>((set, get) => ({
       inputBindings.length > 0
         ? inputBindings.map((binding) => binding.label)
         : ["(no inputs)"];
+    let stopRunEvents: (() => void) | null = null;
 
     try {
       // dobjd assigns the run id and returns it immediately; the proof +
       // commit run on a background worker. Initialize the panel against that
-      // id, render live progress from the shared `/events` SSE
-      // (applyRunActionProgress), and poll the run for the authoritative
-      // completion + result so a missed event can't strand the panel.
+      // id, then subscribe to the run's replayable SSE before polling for the
+      // authoritative terminal result.
       const { runId } = await runAction({
         action,
         inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
       });
       get().initProofPanel({ runId, action, args: verifyTargets });
+      stopRunEvents = await listenRunActionProgressForRun(runId, (event) => {
+        get().applyRunActionProgress(event);
+      });
 
       const finalState = await pollRunToTerminal(runId);
       if (finalState.status !== "succeeded" || !finalState.result) {
@@ -458,6 +462,8 @@ export const useStore = create<AppState>((set, get) => ({
           stats: prev.proof.stats,
         },
       }));
+    } finally {
+      stopRunEvents?.();
     }
   },
 }));
