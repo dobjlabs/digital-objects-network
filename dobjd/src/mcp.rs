@@ -31,11 +31,11 @@ impl DobjdOps {
 }
 
 impl DobjOps for DobjdOps {
-    fn list_inventory(&self) -> anyhow::Result<Vec<mcp::InventoryObject>> {
-        // Driver returns the basic `ObjectSummary`; the inventory wire
+    fn list_objects(&self) -> anyhow::Result<Vec<mcp::ObjectListing>> {
+        // Driver returns the basic `ObjectSummary`; the objects wire
         // shape folds in per-class metadata (emoji, description) so
         // clients can render rows without a `/classes` round-trip. Same
-        // logic as `routes::inventory::load_inventory`.
+        // logic as `routes::objects::load_objects`.
         let classes = self
             .driver
             .list_classes()?
@@ -45,11 +45,11 @@ impl DobjOps for DobjdOps {
 
         Ok(self
             .driver
-            .sync_inventory(None)?
+            .sync_objects(None)?
             .into_iter()
             .map(|object| {
                 let class_info = classes.get(&object.class);
-                mcp::InventoryObject {
+                mcp::ObjectListing {
                     content_hash: object.content_hash,
                     file_name: object.file_name,
                     class: object.class.clone(),

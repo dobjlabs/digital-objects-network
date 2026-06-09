@@ -10,7 +10,7 @@
 //! - process CPU sample for the desktop app's status bar
 //! - native menu (incl. `Cmd+,` settings shortcut)
 //!
-//! Every call that touches `~/.dobj/` state — inventory, run_action, settings,
+//! Every call that touches `~/.dobj/` state — objects, run_action, settings,
 //! state-root, MCP — lives in [`dobjd`]. The user must
 //! start `dobjd` separately for the desktop app's webview to function.
 

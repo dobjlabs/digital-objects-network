@@ -3,11 +3,11 @@ import {
   getRun,
   importObject as importObjectApi,
   loadActions,
-  loadInventory,
+  loadObjects,
   listenRunActionProgressForRun,
   runAction,
   type ActionPayload as Action,
-  type InventoryObjectPayload as InventoryObject,
+  type ObjectListingPayload as ObjectListing,
   type QualifiedNamePayload,
   type RunActionProgress,
   type RunState,
@@ -41,7 +41,7 @@ async function pollRunToTerminal(runId: string): Promise<RunState> {
         error instanceof Error ? error.message : String(error ?? "unknown");
       if (consecutiveErrors >= MAX_CONSECUTIVE_RUN_POLL_ERRORS) {
         throw new Error(
-          `Lost contact while following run ${runId}; it may still complete. Sync inventory to reconcile. Last error: ${message}`,
+          `Lost contact while following run ${runId}; it may still complete. Sync objects to reconcile. Last error: ${message}`,
         );
       }
       console.warn(
@@ -102,7 +102,7 @@ export interface AppState {
   activeObjectContentHash: string | null;
   activeAction: QualifiedNamePayload | null;
   showNullifiedItems: boolean;
-  inventory: InventoryObject[];
+  objects: ObjectListing[];
   actions: Action[];
   proof: ProofState;
   hydrateData: () => Promise<void>;
@@ -144,7 +144,7 @@ const initialAppState: Pick<
 
 export const useStore = create<AppState>((set, get) => ({
   ...initialAppState,
-  inventory: [],
+  objects: [],
   actions: [],
   proof: {
     runActionId: null,
@@ -164,14 +164,14 @@ export const useStore = create<AppState>((set, get) => ({
     },
   },
   hydrateData: async () => {
-    // Inventory hits the synchronizer (network-bound); the action catalog
+    // Objects hits the synchronizer (network-bound); the action catalog
     // is purely local. Fire them in parallel so the catalog isn't gated
     // on the slower call.
-    const [inventory, actions] = await Promise.all([
-      loadInventory(),
+    const [objects, actions] = await Promise.all([
+      loadObjects(),
       loadActions(),
     ]);
-    set((prev) => ({ ...prev, inventory, actions }));
+    set((prev) => ({ ...prev, objects, actions }));
   },
   importObject: async (dobj) => {
     // The driver validates + files the object; refetch so the new row shows

@@ -2,7 +2,7 @@
 
 An MCP (Model Context Protocol) server that exposes dobj's digital
 object operations to AI agents. Claude Code, Claude Desktop, Cursor, and any
-other MCP-aware client can inspect inventory, explore crafting actions, read
+other MCP-aware client can inspect objects, explore crafting actions, read
 documentation, and execute ZK-proof-based crafting through this server.
 
 ## Architecture
@@ -58,16 +58,16 @@ production implementation lives in
 
 | Tool                               | Description                                                           |
 | ---------------------------------- | --------------------------------------------------------------------- |
-| `list_inventory`                   | All objects with types, fields, liveness status                       |
+| `list_objects`                     | All objects with types, fields, liveness status                       |
 | `list_actions`                     | Available crafting actions with input/output classes                  |
 | `list_classes`                     | All object classes with live counts and related actions               |
 | `get_state_root`                   | Current state root from the synchronizer                              |
 | `inspect_object`                   | Full object detail: fields, class, liveness, predicate                |
-| `import_object_file`               | Adopt an external `.dobj` from a local path into inventory            |
+| `import_object_file`               | Adopt an external `.dobj` from a local path into objects              |
 | `inspect_class`                    | Class predicate definition and related actions                        |
 | `run_action`                       | Start a crafting action; returns a `runId` immediately (non-blocking) |
 | `get_run`                          | Poll a run's status, result/error, and progress log by `runId`        |
-| `check_feasibility`                | Whether an action can run with current inventory                      |
+| `check_feasibility`                | Whether an action can run with current objects                        |
 | `read_settings` / `write_settings` | Synchronizer + relayer URLs                                           |
 | `get_objects_dir`                  | Path to `~/.dobj/objects/`                                            |
 | `read_doc`                         | Reference docs (podlang, object-lifecycle, generated podlang)         |

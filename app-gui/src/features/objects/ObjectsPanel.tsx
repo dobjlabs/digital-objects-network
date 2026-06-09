@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
-import type { InventoryObjectPayload as InventoryObject } from "../../shared/api/wireTypes";
+import type { ObjectListingPayload as ObjectListing } from "../../shared/api/wireTypes";
 import { truncateDisplayHash } from "../../shared/format";
 import {
   displayPathInObjectsDir,
@@ -10,8 +10,8 @@ import {
   pluginScopedLabel,
 } from "../../shared/objectUtils";
 
-interface InventoryPanelProps {
-  inventory: InventoryObject[];
+interface ObjectsPanelProps {
+  objects: ObjectListing[];
   objectsDirPath: string;
   activeObjectContentHash: string | null;
   showNullifiedItems: boolean;
@@ -21,8 +21,8 @@ interface InventoryPanelProps {
   onImportObject: (dobj: string) => Promise<void>;
 }
 
-export function InventoryPanel({
-  inventory,
+export function ObjectsPanel({
+  objects,
   objectsDirPath,
   activeObjectContentHash,
   showNullifiedItems,
@@ -30,7 +30,7 @@ export function InventoryPanel({
   onToggleNullified,
   onOpenObjectsDir,
   onImportObject,
-}: InventoryPanelProps) {
+}: ObjectsPanelProps) {
   const isDraggingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
@@ -58,11 +58,11 @@ export function InventoryPanel({
     }
   };
 
-  const isUsable = (object: InventoryObject) => isLiveObject(object);
+  const isUsable = (object: ObjectListing) => isLiveObject(object);
 
   const handleDragStart = (
     event: DragEvent<HTMLButtonElement>,
-    object: InventoryObject,
+    object: ObjectListing,
   ) => {
     if (!isUsable(object)) {
       event.preventDefault();
@@ -92,10 +92,10 @@ export function InventoryPanel({
     onSelectObject(contentHash);
   };
 
-  const activeObjects = inventory.filter((object) => !isNullifiedObject(object));
-  const nullifiedObjects = inventory.filter((object) => isNullifiedObject(object));
+  const activeObjects = objects.filter((object) => !isNullifiedObject(object));
+  const nullifiedObjects = objects.filter((object) => isNullifiedObject(object));
 
-  const renderInventoryObject = (object: InventoryObject) => {
+  const renderObjectListing = (object: ObjectListing) => {
     const displayName = pluginScopedLabel(object.class);
     const hashLineRaw = object.status === "live"
       ? object.contentHash
@@ -105,23 +105,23 @@ export function InventoryPanel({
       <button
         key={object.contentHash}
         type="button"
-        className={`inventory-item ${activeObjectContentHash === object.contentHash ? "active" : ""}`}
+        className={`objects-item ${activeObjectContentHash === object.contentHash ? "active" : ""}`}
         onClick={() => handleClickObject(object.contentHash)}
         draggable={isUsable(object)}
         onDragStart={(event) => handleDragStart(event, object)}
         onDragEnd={handleDragEnd}
       >
-        <span className="inventory-file-icon">
-          <span className="inventory-emoji">{object.emoji}</span>
+        <span className="objects-file-icon">
+          <span className="objects-emoji">{object.emoji}</span>
         </span>
-        <span className="inventory-main">
-          <span className="inventory-name">{displayName}</span>
-          <span className="inventory-hash" title={hashLineRaw}>
+        <span className="objects-main">
+          <span className="objects-name">{displayName}</span>
+          <span className="objects-hash" title={hashLineRaw}>
             {hashLine}
           </span>
         </span>
         <span
-          className={`inventory-dot ${object.status}`}
+          className={`objects-dot ${object.status}`}
           title={object.status !== "live" && object.status !== "nullified" ? object.status : undefined}
         />
       </button>
@@ -129,7 +129,7 @@ export function InventoryPanel({
   };
 
   return (
-    <section className="inventory-panel">
+    <section className="objects-panel">
       <button
         type="button"
         className="panel-header panel-header-button"
@@ -139,7 +139,7 @@ export function InventoryPanel({
         Your Objects
       </button>
 
-      <div className="inventory-import">
+      <div className="objects-import">
         <input
           ref={fileInputRef}
           type="file"
@@ -149,21 +149,21 @@ export function InventoryPanel({
         />
         <button
           type="button"
-          className="inventory-import-button"
+          className="objects-import-button"
           onClick={handleImportClick}
           disabled={importing}
         >
           {importing ? "Importing…" : "+ Import .dobj"}
         </button>
         {importError && (
-          <span className="inventory-import-error" title={importError}>
+          <span className="objects-import-error" title={importError}>
             {importError}
           </span>
         )}
       </div>
 
-      <div className="inventory-list">
-        {activeObjects.map(renderInventoryObject)}
+      <div className="objects-list">
+        {activeObjects.map(renderObjectListing)}
 
         {nullifiedObjects.length > 0 && (
           <div className="nullified-section">
@@ -177,7 +177,7 @@ export function InventoryPanel({
                 {showNullifiedItems ? "▴" : "▾"} {nullifiedObjects.length}
               </span>
             </button>
-            {showNullifiedItems && nullifiedObjects.map(renderInventoryObject)}
+            {showNullifiedItems && nullifiedObjects.map(renderObjectListing)}
           </div>
         )}
       </div>

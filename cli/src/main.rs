@@ -50,7 +50,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Show every object the driver knows about.
-    Inventory,
+    Objects,
     /// Show every action the action catalog exposes.
     Actions,
     /// Show every class the action catalog defines.
@@ -58,7 +58,7 @@ enum Cmd {
     /// Inspect a single object by its `.dobj` file name.
     InspectObject {
         /// The `.dobj` basename in `~/.dobj/objects/` (e.g.
-        /// `wood_0xabc….dobj`). See `dobj inventory`.
+        /// `wood_0xabc….dobj`). See `dobj objects`.
         file_name: String,
     },
     /// Inspect a single class (with predicate source).
@@ -75,7 +75,7 @@ enum Cmd {
         #[arg(value_name = "PLUGIN::ACTION")]
         qualified_id: String,
     },
-    /// Check whether an action can run with the current inventory.
+    /// Check whether an action can run with the current objects.
     Feasibility {
         /// Action to check, e.g. `craft-basics::CraftWoodPick`. Run
         /// `dobj actions` for the available list.
@@ -86,7 +86,7 @@ enum Cmd {
     StateRoot,
     /// Print the local objects directory path (`~/.dobj/objects/`).
     ObjectsDir,
-    /// Import an external `.dobj` file into inventory.
+    /// Import an external `.dobj` file into your objects.
     Import {
         /// Path to the `.dobj` file to import. Its contents are read and sent
         /// to dobjd, which files the object under a canonical name.
@@ -176,7 +176,7 @@ async fn main() -> Result<()> {
     let client = DobjdClient::new(cli.url);
 
     match cli.cmd {
-        Cmd::Inventory => commands::inventory(&client, cli.json).await,
+        Cmd::Objects => commands::objects(&client, cli.json).await,
         Cmd::Actions => commands::actions(&client, cli.json).await,
         Cmd::Classes => commands::classes(&client, cli.json).await,
         Cmd::InspectObject { file_name } => {

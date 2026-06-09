@@ -4,7 +4,7 @@ name: Install test
 # independent local stack on each runner — postgres + synchronizer +
 # relayer + dobjd — pointed at Ethereum Sepolia.
 # Then exercises the full action round-trip:
-# `dobj start → status → actions → run FindLog → inventory → stop`.
+# `dobj start → status → actions → run FindLog → objects → stop`.
 #
 # Triggered:
 #   - automatically at the end of the Release workflow, which calls this as
@@ -381,10 +381,10 @@ jobs:
           # Success means: local proof engine ran, relayer submitted to
           # Sepolia, blob landed, synchronizer observed + grounded the tx.
           $DOBJ run craft-basics::FindLog
-          INV=$($DOBJ inventory)
+          INV=$($DOBJ objects)
           echo "$INV"
           echo "$INV" | grep -qi 'log\|craft-basics' \
-            || { echo "::error::inventory empty after FindLog run"; exit 1; }
+            || { echo "::error::objects empty after FindLog run"; exit 1; }
           $DOBJ stop
 
       - name: Start stack + smoke test (Windows)
@@ -434,11 +434,11 @@ jobs:
               & $DOBJ run craft-basics::FindLog
               if ($LASTEXITCODE -ne 0) { throw "dobj run FindLog failed ($LASTEXITCODE)" }
 
-              $inv = (& $DOBJ inventory) -join "`n"
-              if ($LASTEXITCODE -ne 0) { throw "dobj inventory failed ($LASTEXITCODE)" }
+              $inv = (& $DOBJ objects) -join "`n"
+              if ($LASTEXITCODE -ne 0) { throw "dobj objects failed ($LASTEXITCODE)" }
               Write-Host $inv
               if ($inv -notmatch '(?i)log|craft-basics') {
-                  throw "inventory empty after FindLog run"
+                  throw "objects empty after FindLog run"
               }
 
               # Windows `stop` is a hard kill via TerminateProcess.

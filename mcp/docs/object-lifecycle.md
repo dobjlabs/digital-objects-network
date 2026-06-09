@@ -9,7 +9,7 @@ When an action creates a new object, it:
 1. Builds a fresh dictionary with the object's fields (e.g. `{key: 0xabc, durability: 100}` for a WoodPick).
 2. Generates a ZK proof that this dictionary satisfies the class predicate (e.g. `IsWood(state) = AND(CraftWood(state, log))`). The proof includes verification that the input `log` was itself valid.
 3. Records the new object in a transaction via `TxInserted`, adding it to the transaction's live set.
-4. The object appears in inventory as `live: true` with its fields visible.
+4. The object appears in objects as `live: true` with its fields visible.
 
 The resulting `.dobj` file contains the state dictionary and the proof. The proof is constant-size — it does not grow as objects are created from longer chains of prior objects.
 

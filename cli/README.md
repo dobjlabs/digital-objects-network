@@ -20,7 +20,7 @@ Two flavors of commands.
 
 | Command                                         | Hits                                                                                                                |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `inventory`                                     | `GET /inventory`                                                                                                    |
+| `objects`                                       | `GET /objects`                                                                                                      |
 | `actions`                                       | `GET /actions`                                                                                                      |
 | `classes`                                       | `GET /classes`                                                                                                      |
 | `inspect-object <file_name>`                    | `GET /objects/{file_name}`                                                                                          |
@@ -73,11 +73,11 @@ order:
 cargo build --release -p cli
 
 # run via cargo (during dev)
-cargo run -p cli -- inventory
+cargo run -p cli -- objects
 
 # install on $PATH
 cargo install --path cli
-dobj inventory
+dobj objects
 ```
 
 The release workflow ships `dobj-{target}.tar.gz` per platform — just
@@ -92,7 +92,7 @@ just dev   # in another terminal
 # query state
 dobj status
 dobj actions
-dobj inventory
+dobj objects
 
 # run an action: POST returns a run handle immediately, then the CLI
 # follows the run's SSE stream and polls it to the terminal result

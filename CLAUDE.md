@@ -17,7 +17,7 @@ The workspace is declared in `Cargo.toml:2-18`. Crate-by-crate:
 | `dobjd`                       | **The daemon.** Headless HTTP server on `:7717` wrapping the driver. Every client talks to it.                     |
 | `cli`                         | `dobj` CLI binary. Thin HTTP/SSE client of dobjd. No `Driver` of its own.                                          |
 | `app-gui/src-tauri`           | Tauri 2 shell. Holds **no** driver state — webview talks to dobjd over HTTP. Native conveniences only.             |
-| `app-gui/src` (TS)            | React/Vite frontend. Component-based: `features/{actions,inventory,context,proof-runner,settings}`.                |
+| `app-gui/src` (TS)            | React/Vite frontend. Component-based: `features/{actions,objects,context,proof-runner,settings}`.                  |
 | `driver`                      | Headless Rust orchestration library. **The core.** Owns `~/.dobj/`, runs actions end-to-end.                       |
 | `sdk`                         | Rhai engine + two-phase Loader/Executor that compiles plugin scripts into pod2 modules.                            |
 | `txlib`                       | Transaction state machine: `StateHeader`, `GroundingWitness`, `Tx`, `TxBuilder` + `TxFinalized` rule.              |
@@ -90,11 +90,11 @@ Use `just` (recipes in `justfile`):
 
 `dobjd` is the **single owner of `Arc<Driver>`** in the running system. Desktop, browser, MCP, and CLI all talk to it over HTTP/SSE; the Tauri shell holds no driver state of its own.
 
-`Driver::execute` is the central call: validate inputs -> fetch grounding witness -> re-parse plugin script through SDK -> drive `txlib::TxBuilder` -> produce `(tx_pod, obj_pods)` -> shrink + post via relayer -> poll for confirmation -> reconcile via `sync_inventory`.
+`Driver::execute` is the central call: validate inputs -> fetch grounding witness -> re-parse plugin script through SDK -> drive `txlib::TxBuilder` -> produce `(tx_pod, obj_pods)` -> shrink + post via relayer -> poll for confirmation -> reconcile via `sync_objects`.
 
 ## Key entry points
 
-- **`driver/src/driver.rs`** — `Driver` struct. Methods: `open_default()`, `list_objects()`, `read_object()`, `execute()`, `check_action()`, `sync_inventory()`, `get_state_root()`. Public types live in `driver/src/types.rs`.
+- **`driver/src/driver.rs`** — `Driver` struct. Methods: `open_default()`, `list_objects()`, `read_object()`, `execute()`, `check_action()`, `sync_objects()`, `get_state_root()`. Public types live in `driver/src/types.rs`.
 - **`driver/src/execute.rs`** — the proof-and-commit pipeline.
 - **`driver/src/pexe_catalog.rs`** — concrete `ActionCatalog` impl that loads `.pexe` archives from `~/.dobj/actions/`.
 - **`sdk/src/lib.rs`** — Rhai engine setup, custom syntax for `var` and `unsafe { ... }` (search `register_custom_syntax`), host API registration (search `register_fn`). Entry: `Sdk::load_module_from_src_actions`.
@@ -106,7 +106,7 @@ Use `just` (recipes in `justfile`):
 - **`common/src/payload.rs`** — blob payload encoding (`PAYLOAD_MAGIC`, proof type, `tx_final`, state root, nullifiers, and the `live` object commitments).
 - **`mcp/src/lib.rs`** — `DEFAULT_PORT = 7718`; crate is named `dobj-mcp` (depend on it as `dobj-mcp = { path = "../mcp" }`). dobjd runs MCP at `DOBJD_PORT + 1`.
 - **`dobjd/src/main.rs`** — daemon entry point. Binds HTTP + MCP listeners up-front (fail-fast if either port is taken), constructs `Arc<Driver>` once via `Driver::open_default()`, shares it with the embedded `dobj-mcp` server. `DEFAULT_HTTP_PORT = 7717`, override via `DOBJD_PORT`.
-- **`dobjd/src/routes/mod.rs`** — axum routes: `/healthz`, `/inventory`, `/state-root`, `/objects/{dir,file_name}`, `/classes[/{name}]`, `/settings`, `/actions[/run,/{id}[/feasibility]]`, `/actions/runs/{id}[/events]` (run-status poll + per-run replayable SSE), `/events` (SSE). dobjd is API-only; the UI is served separately.
+- **`dobjd/src/routes/mod.rs`** — axum routes: `/healthz`, `/objects`, `/state-root`, `/objects/{dir,file_name}`, `/classes[/{name}]`, `/settings`, `/actions[/run,/{id}[/feasibility]]`, `/actions/runs/{id}[/events]` (run-status poll + per-run replayable SSE), `/events` (SSE). dobjd is API-only; the UI is served separately.
 - **`dobjd/src/runs.rs`** — the run registry. `POST /actions/run` is non-blocking: it registers a run, spawns a background worker, and returns a `runId`. The worker records status + progress + terminal result/error into an in-memory, TTL-reaped registry that backs `/actions/runs/{id}` (poll) and its SSE. Shared by the HTTP routes and the MCP server.
 - **`dobjd/src/events.rs`** — broadcast hub behind SSE `/events`, shared with the MCP server so progress updates fan out to every client.
 - **`cli/src/main.rs`** — `dobj` CLI. Thin reqwest/SSE client of dobjd; no driver state.

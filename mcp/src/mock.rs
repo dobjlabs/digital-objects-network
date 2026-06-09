@@ -25,7 +25,7 @@ fn class_ref(name: &str) -> ClassRef {
 /// Returns realistic fixtures for tests.
 /// Multiple actions can run concurrently.
 pub struct MockDobjOps {
-    inventory: Vec<InventoryObject>,
+    objects: Vec<ObjectListing>,
     actions: Vec<Action>,
     state_root: String,
 }
@@ -33,15 +33,15 @@ pub struct MockDobjOps {
 impl MockDobjOps {
     pub fn new() -> Self {
         Self {
-            inventory: default_inventory(),
+            objects: default_objects(),
             actions: default_actions(),
             state_root: "0x9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b".to_string(),
         }
     }
 
-    /// Create a mock with a custom inventory.
-    pub fn with_inventory(mut self, inventory: Vec<InventoryObject>) -> Self {
-        self.inventory = inventory;
+    /// Create a mock with a custom objects.
+    pub fn with_objects(mut self, objects: Vec<ObjectListing>) -> Self {
+        self.objects = objects;
         self
     }
 }
@@ -53,8 +53,8 @@ impl Default for MockDobjOps {
 }
 
 impl DobjOps for MockDobjOps {
-    fn list_inventory(&self) -> anyhow::Result<Vec<InventoryObject>> {
-        Ok(self.inventory.clone())
+    fn list_objects(&self) -> anyhow::Result<Vec<ObjectListing>> {
+        Ok(self.objects.clone())
     }
 
     fn list_actions(&self) -> anyhow::Result<Vec<Action>> {
@@ -67,7 +67,7 @@ impl DobjOps for MockDobjOps {
             .map(|&name| {
                 let class = qname(name);
                 let live_count = self
-                    .inventory
+                    .objects
                     .iter()
                     .filter(|o| o.class == class && o.status == ObjectStatus::Live)
                     .count();
@@ -105,7 +105,7 @@ impl DobjOps for MockDobjOps {
 
     fn inspect_object(&self, file_name: &str) -> anyhow::Result<ObjectDetail> {
         let obj = self
-            .inventory
+            .objects
             .iter()
             .find(|o| o.file_name == file_name)
             .ok_or_else(|| anyhow!("object file not found: {file_name}"))?;
@@ -140,7 +140,7 @@ impl DobjOps for MockDobjOps {
             .map(|a| a.action.clone())
             .collect();
         let live_count = self
-            .inventory
+            .objects
             .iter()
             .filter(|o| o.class == *class && o.status == ObjectStatus::Live)
             .count();
@@ -218,7 +218,7 @@ impl DobjOps for MockDobjOps {
 
         for required in &action_summary.total_inputs {
             if let Some(obj) = self
-                .inventory
+                .objects
                 .iter()
                 .find(|o| o.class == required.class && o.status == ObjectStatus::Live)
             {
@@ -282,7 +282,7 @@ fn make_obj(
     tx_hash: &str,
     status: ObjectStatus,
     extra: Vec<(&str, serde_json::Value)>,
-) -> InventoryObject {
+) -> ObjectListing {
     let mut fields = HashMap::from([(
         "key".to_string(),
         serde_json::Value::String(content_hash.to_string()),
@@ -290,7 +290,7 @@ fn make_obj(
     for (k, v) in extra {
         fields.insert(k.to_string(), v);
     }
-    InventoryObject {
+    ObjectListing {
         content_hash: content_hash.to_string(),
         file_name: file_name.to_string(),
         class: qname(class_name),
@@ -314,7 +314,7 @@ fn emoji_for(class_name: &str) -> &'static str {
     }
 }
 
-fn default_inventory() -> Vec<InventoryObject> {
+fn default_objects() -> Vec<ObjectListing> {
     vec![
         make_obj(
             "0xabc1111111111111",
@@ -500,9 +500,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_inventory_has_all_classes() {
+    fn test_default_objects_has_all_classes() {
         let mock = MockDobjOps::new();
-        let inv = mock.list_inventory().unwrap();
+        let inv = mock.list_objects().unwrap();
         let names: Vec<&str> = inv.iter().map(|o| o.class.name.as_str()).collect();
         assert!(names.contains(&"Log"));
         assert!(names.contains(&"Wood"));

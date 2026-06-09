@@ -111,7 +111,7 @@ You should see `dobjd is running (pid ...)`, the craft-basics actions, and a
 ### 5. Register MCP with the agent
 
 dobjd serves MCP at `http://127.0.0.1:7718/mcp` so this agent can drive
-Digital Objects directly (list inventory, run actions, inspect classes).
+Digital Objects directly (list objects, run actions, inspect classes).
 
 **Claude Code** - if `claude` is on the PATH, register it now (idempotent):
 
