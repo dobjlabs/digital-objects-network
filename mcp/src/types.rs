@@ -6,8 +6,6 @@
 //!   spec requires every tool's `outputSchema` to have root type `object`,
 //!   so we can't return bare arrays.
 //! - `StateRootResponse`: a one-field wrapper for the same reason.
-//! - `RunActionResult`: wraps the wire-types result with two MCP-specific
-//!   convenience fields (`success`, `message`) for the agent.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

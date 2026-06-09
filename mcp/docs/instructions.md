@@ -90,7 +90,6 @@ the user which step a run is on while it's still `generateProof` or
 Pass `input_object_paths` explicitly (one per the action's required input
 classes, in order); resolve them from `list_inventory` / `check_feasibility`
 first. An input count that doesn't match the action makes the run fail.
-  When in doubt, leave the array empty and let the user choose.
 
 ## Podlang predicates
 
