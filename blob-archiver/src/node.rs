@@ -55,11 +55,11 @@ fn parse_blob_file_name(file_name: &str) -> Result<Option<(usize, B256)>> {
 
 const DIR_LEVELS: usize = 3;
 
-fn slot_dir_from(base: &PathBuf, slot: u32) -> PathBuf {
+fn slot_dir_from(base: &Path, slot: u32) -> PathBuf {
     let slot_hi = slot / 1_000_000;
     let slot_mid = (slot - slot_hi * 1_000_000) / 1_000;
     let slot_lo = slot - slot_hi * 1_000_000 - slot_mid * 1_000;
-    let mut slot_dir = base.clone();
+    let mut slot_dir = base.to_path_buf();
     slot_dir.push("by_slot");
     slot_dir.push(format!("{:03}", slot_hi));
     slot_dir.push(format!("{:03}", slot_mid));
@@ -67,12 +67,12 @@ fn slot_dir_from(base: &PathBuf, slot: u32) -> PathBuf {
     slot_dir
 }
 
-fn root_dir_from(base: &PathBuf, root: &B256) -> PathBuf {
+fn root_dir_from(base: &Path, root: &B256) -> PathBuf {
     let root_str = format!("{}", root);
     let root_hi = &root_str[0..5];
     let root_mid = &root_str[5..8];
     let root_lo = &root_str[8..];
-    let mut root_dir = base.clone();
+    let mut root_dir = base.to_path_buf();
     root_dir.push("by_root");
     root_dir.push(format!("{:03}", root_hi));
     root_dir.push(format!("{:03}", root_mid));
@@ -283,7 +283,7 @@ impl Node {
         slot_mid_path.pop();
         create_dir_all(&slot_mid_path)?;
         let root_dir_rel = root_dir_from(
-            &["..", "..", ".."].iter().collect(),
+            ["..", "..", ".."].iter().collect::<PathBuf>().as_path(),
             &beacon_block_header.root,
         );
         unix::fs::symlink(&root_dir_rel, slot_path)?;
