@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type {
   ActionPayload as Action,
-  ObjectListingPayload as ObjectListing,
+  ObjectSummaryPayload as ObjectSummary,
   QualifiedNamePayload,
 } from "../../shared/api/wireTypes";
 import { truncateDisplayHash } from "../../shared/format";
@@ -10,7 +10,7 @@ import { pluginScopedLabel, qualifiedEq, qualifiedId } from "../../shared/object
 interface ActionGridProps {
   actions: Action[];
   activeAction: QualifiedNamePayload | null;
-  selectedObject: ObjectListing | null;
+  selectedObject: ObjectSummary | null;
   onSelectAction: (action: QualifiedNamePayload) => void;
   onClearSelection: () => void;
 }

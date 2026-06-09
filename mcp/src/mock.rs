@@ -25,7 +25,7 @@ fn class_ref(name: &str) -> ClassRef {
 /// Returns realistic fixtures for tests.
 /// Multiple actions can run concurrently.
 pub struct MockDobjOps {
-    objects: Vec<ObjectListing>,
+    objects: Vec<ObjectSummary>,
     actions: Vec<Action>,
     state_root: String,
 }
@@ -40,7 +40,7 @@ impl MockDobjOps {
     }
 
     /// Create a mock with a custom objects.
-    pub fn with_objects(mut self, objects: Vec<ObjectListing>) -> Self {
+    pub fn with_objects(mut self, objects: Vec<ObjectSummary>) -> Self {
         self.objects = objects;
         self
     }
@@ -53,7 +53,7 @@ impl Default for MockDobjOps {
 }
 
 impl DobjOps for MockDobjOps {
-    fn list_objects(&self) -> anyhow::Result<Vec<ObjectListing>> {
+    fn list_objects(&self) -> anyhow::Result<Vec<ObjectSummary>> {
         Ok(self.objects.clone())
     }
 
@@ -110,17 +110,9 @@ impl DobjOps for MockDobjOps {
             .find(|o| o.file_name == file_name)
             .ok_or_else(|| anyhow!("object file not found: {file_name}"))?;
 
-        // ObjectDetail is now an alias for wire_types::ObjectSummary —
-        // the basic summary shape (no embedded predicate source).
-        Ok(ObjectDetail {
-            content_hash: obj.content_hash.clone(),
-            file_name: obj.file_name.clone(),
-            class: obj.class.clone(),
-            class_hash: obj.class_hash.clone(),
-            status: obj.status,
-            tx_hash: obj.tx_hash.clone(),
-            fields: obj.fields.clone(),
-        })
+        // ObjectDetail is an alias for wire_types::ObjectSummary, the same
+        // shape stored in the mock object list — return it directly.
+        Ok(obj.clone())
     }
 
     fn inspect_class(&self, class: &QualifiedName) -> anyhow::Result<ClassDetail> {
@@ -249,8 +241,10 @@ impl DobjOps for MockDobjOps {
             file_name: "craft-basics__log_0ximported.dobj".to_string(),
             class: qname("Log"),
             class_hash: format!("0x{}", "0".repeat(64)),
+            emoji: emoji_for("Log").to_string(),
             status: ObjectStatus::Live,
             tx_hash: Some("0xmocktximported".to_string()),
+            description: Some("Mock Log".to_string()),
             fields: HashMap::from([(
                 "blueprint".to_string(),
                 serde_json::Value::String("Log".to_string()),
@@ -282,7 +276,7 @@ fn make_obj(
     tx_hash: &str,
     status: ObjectStatus,
     extra: Vec<(&str, serde_json::Value)>,
-) -> ObjectListing {
+) -> ObjectSummary {
     let mut fields = HashMap::from([(
         "key".to_string(),
         serde_json::Value::String(content_hash.to_string()),
@@ -290,7 +284,7 @@ fn make_obj(
     for (k, v) in extra {
         fields.insert(k.to_string(), v);
     }
-    ObjectListing {
+    ObjectSummary {
         content_hash: content_hash.to_string(),
         file_name: file_name.to_string(),
         class: qname(class_name),
@@ -314,7 +308,7 @@ fn emoji_for(class_name: &str) -> &'static str {
     }
 }
 
-fn default_objects() -> Vec<ObjectListing> {
+fn default_objects() -> Vec<ObjectSummary> {
     vec![
         make_obj(
             "0xabc1111111111111",

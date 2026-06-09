@@ -22,7 +22,6 @@ import type {
   ActionPayload,
   AppSettingsPayload,
   CpuSample,
-  ObjectListingPayload,
   ObjectRecordPayload,
   ObjectSummaryPayload,
   RunAccepted,
@@ -35,7 +34,6 @@ export type {
   ActionPayload,
   AppSettingsPayload,
   CpuSample,
-  ObjectListingPayload,
   ObjectRecordPayload,
   ObjectSummaryPayload,
   QualifiedNamePayload,
@@ -108,8 +106,8 @@ async function httpJson<T>(res: Response): Promise<T> {
 
 // Objects and the action catalog are independent reads; callers run them
 // in parallel via Promise.all rather than letting one block the other.
-export function loadObjects(): Promise<ObjectListingPayload[]> {
-  return dobjdFetch("/objects").then(httpJson<ObjectListingPayload[]>);
+export function loadObjects(): Promise<ObjectSummaryPayload[]> {
+  return dobjdFetch("/objects").then(httpJson<ObjectSummaryPayload[]>);
 }
 
 export function loadActions(): Promise<ActionPayload[]> {

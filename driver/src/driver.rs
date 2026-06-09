@@ -743,18 +743,22 @@ impl Driver {
     }
 
     fn object_summary(&self, entry: &ObjectFileEntry) -> ObjectSummary {
-        let class_hash = self
-            .catalog()
-            .get_class(&entry.record.class)
-            .map(|c| c.hash)
-            .unwrap_or_default();
+        let class_info = self.catalog().get_class(&entry.record.class);
         ObjectSummary {
             content_hash: encode_hash_hex(&entry.record.content_hash),
             file_name: entry.file_name.clone(),
             class: entry.record.class.clone(),
-            class_hash,
+            class_hash: class_info
+                .as_ref()
+                .map(|c| c.hash.clone())
+                .unwrap_or_default(),
+            emoji: class_info
+                .as_ref()
+                .map(|c| c.emoji.clone())
+                .unwrap_or_else(|| "📦".to_string()),
             status: entry.record.status,
             tx_hash: entry.record.tx_hash.clone(),
+            description: class_info.as_ref().map(|c| c.description.clone()),
             fields: entry.record.fields_map(),
         }
     }

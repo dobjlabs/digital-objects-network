@@ -3,7 +3,7 @@ import type { DragEvent } from "react";
 import type {
   ActionPayload as Action,
   ClassRefPayload,
-  ObjectListingPayload as ObjectListing,
+  ObjectSummaryPayload as ObjectSummary,
   QualifiedNamePayload,
 } from "../../shared/api/wireTypes";
 import { pickDobjFilePath, readDobjFile } from "../../shared/api/tauriClient";
@@ -21,7 +21,7 @@ import type { ContextSelection } from "../../shared/state/store";
 
 interface ContextPanelProps {
   selection: ContextSelection;
-  objects: ObjectListing[];
+  objects: ObjectSummary[];
   objectsDirPath: string;
   actions: Action[];
   onClearSelection: () => void;
@@ -402,7 +402,7 @@ export function ContextPanel({
       );
     })();
 
-  const displayObjectPath = (object: ObjectListing) => {
+  const displayObjectPath = (object: ObjectSummary) => {
     const absolutePath = joinObjectsDirPath(objectsDirPath, object.fileName, {
       nullified: isNullifiedObject(object),
     });
@@ -455,7 +455,7 @@ export function ContextPanel({
     };
   };
 
-  const renderObjectData = (object: ObjectListing) => {
+  const renderObjectData = (object: ObjectSummary) => {
     const normalizedObject = normalizePod2Value(object.fields);
     const entries = isRecord(normalizedObject)
       ? Object.entries(normalizedObject).sort(([left], [right]) =>

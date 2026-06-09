@@ -7,7 +7,7 @@ import {
   listenRunActionProgressForRun,
   runAction,
   type ActionPayload as Action,
-  type ObjectListingPayload as ObjectListing,
+  type ObjectSummaryPayload as ObjectSummary,
   type QualifiedNamePayload,
   type RunActionProgress,
   type RunState,
@@ -102,7 +102,7 @@ export interface AppState {
   activeObjectContentHash: string | null;
   activeAction: QualifiedNamePayload | null;
   showNullifiedItems: boolean;
-  objects: ObjectListing[];
+  objects: ObjectSummary[];
   actions: Action[];
   proof: ProofState;
   hydrateData: () => Promise<void>;
