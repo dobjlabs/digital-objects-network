@@ -199,16 +199,23 @@ pub async fn run(
         eprintln!("run id:   {run_id}");
     }
 
-    // Follow progress over the run's own SSE stream: it replays whatever we
-    // missed (resuming after Last-Event-ID on reconnect), then tails live
-    // events. We stop at the first terminal event and then read the
-    // authoritative outcome below — so a dropped stream is never fatal.
+    // Follow progress over the run's own SSE stream. `EventSource` reconnects
+    // on a dropped connection, resending the last event id it saw, and the
+    // endpoint replays from there — so a hiccup mid-run just resumes where it
+    // left off. We stop at the first terminal event; the authoritative outcome
+    // is read below either way.
     let events_url = format!("{}/actions/runs/{}/events", client.base_url(), run_id);
     let mut es = EventSource::get(&events_url);
+    // Bound consecutive reconnect failures so a genuinely-down daemon falls
+    // through to the poll (which surfaces the error) instead of retrying
+    // forever. A successful (re)connect resets the count.
+    const MAX_RECONNECTS: u32 = 5;
+    let mut failures = 0u32;
     while let Some(event) = es.next().await {
         match event {
-            Ok(SseEvent::Open) => {}
+            Ok(SseEvent::Open) => failures = 0,
             Ok(SseEvent::Message(msg)) => {
+                failures = 0;
                 let Ok(value) = serde_json::from_str::<Value>(&msg.data) else {
                     continue;
                 };
@@ -224,13 +231,17 @@ pub async fn run(
                     break;
                 }
             }
-            // A stream hiccup is not a run failure: stop streaming and fall
-            // through to polling for the authoritative result.
+            // A hiccup isn't a run failure: let EventSource reconnect and
+            // resume from the last event id. Only give up after repeated
+            // failures (dobjd is likely down), then poll for the result.
             Err(err) => {
-                if !quiet {
-                    eprintln!("(progress stream ended: {err}; polling for result)");
+                failures += 1;
+                if failures > MAX_RECONNECTS {
+                    if !quiet {
+                        eprintln!("(progress stream lost: {err}; polling for result)");
+                    }
+                    break;
                 }
-                break;
             }
         }
     }
