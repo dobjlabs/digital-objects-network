@@ -2,7 +2,7 @@ use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
 use eth_clients::beacon::{
     self,
-    types::{Blob, Block, BlockHeader, BlockId, Spec},
+    types::{BlobSidecar, Block, BlockHeader, BlockId, Spec},
     BeaconClient,
 };
 
@@ -180,7 +180,11 @@ impl Node {
     }
 
     /// Fetch beacon blob sidecars for a slot and retain only requested versioned hashes.
-    async fn get_blobs(&self, slot: u32, versioned_hashes: &[B256]) -> Result<HashMap<B256, Blob>> {
+    async fn get_blobs(
+        &self,
+        slot: u32,
+        versioned_hashes: &[B256],
+    ) -> Result<HashMap<B256, BlobSidecar>> {
         let blobs = self
             .retry_rpc("beacon blob sidecars", format!("slot {slot}"), || async {
                 let blobs = self.beacon_cli.get_blob_sidecars(slot.into()).await?;

@@ -1,28 +1,18 @@
-use alloy::network::Ethereum;
-use alloy::providers::{Provider, RootProvider};
-use anyhow::anyhow;
-use anyhow::Context;
 use anyhow::Result;
-use backoff::ExponentialBackoffBuilder;
-use eth_clients::beacon::{
-    self,
-    types::{BlobSidecar, Block, BlockHeader, BlockId, Spec},
-    BeaconClient,
-};
-use std::future::Future;
+use eth_clients::beacon::types::BlockId;
 use std::sync::Arc;
-use std::{net::SocketAddr, str::FromStr, time::Duration};
-use tokio::sync::watch;
-use tokio::task::JoinError;
+use std::time::Duration;
+use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::debug;
-use tracing::warn;
-use tracing::{error, info};
+use tracing::info;
 
+mod api;
 mod config;
 mod node;
 
-use config::{load_config, AppConfig};
+use api::run_api_server;
+use config::load_config;
 use node::Node;
 
 #[tokio::main]
@@ -42,20 +32,21 @@ async fn main() -> Result<()> {
         .expect("head is not None");
     info!(?head, "Beacon head");
 
-    // {
-    //     let node = node.clone();
-    //     std::thread::spawn(move || -> Result<_, std::io::Error> {
-    //         Runtime::new().map(|rt| {
-    //             rt.block_on(async {
-    //                 let routes = endpoints::routes(node);
-    //                 warp::serve(routes).run(([0, 0, 0, 0], 8001)).await
-    //             })
-    //         })
-    //     });
-    // }
-    // info!("Started HTTP server");
+    let last_header = Arc::new(RwLock::new(None));
+    let api_state = api::ApiState {
+        config: Arc::new(api::Config {
+            filter_address: node.config.filter_address.clone(),
+        }),
+        store: Arc::new(node.store.clone()),
+        header: last_header.clone(),
+    };
+    tokio::spawn(run_api_server(api_state, node.config.http_bind));
 
-    let mut slot = node.start_slot()?;
+    let mut prev_beacon_block_header = node.store.last_header()?;
+    let mut slot = prev_beacon_block_header
+        .as_ref()
+        .map(|h| h.slot + 1)
+        .unwrap_or(node.config.init_slot);
     loop {
         debug!("checking slot {}", slot);
         let some_beacon_block_header = if slot <= head.slot {
@@ -95,15 +86,22 @@ async fn main() -> Result<()> {
                 continue;
             }
         };
+        if let Some(prev) = &prev_beacon_block_header {
+            if beacon_block_header.parent_root != prev.root {
+                info!(
+                    "reorg: slot {} ({}) has different parent than us",
+                    beacon_block_header.slot, beacon_block_header.root
+                );
+                slot = prev.slot;
+                node.store.delete_block_data(&node.store.slot_dir(slot))?;
+                continue;
+            }
+        }
 
         node.process_beacon_block_header(&beacon_block_header)
             .await?;
-
-        if node.config.request_rate != 0 {
-            let requests = 5;
-            let delay_ms = 1000 * requests / node.config.request_rate;
-            sleep(Duration::from_millis(delay_ms)).await;
-        }
+        prev_beacon_block_header = Some(beacon_block_header);
+        *last_header.write().await = prev_beacon_block_header.clone();
 
         slot += 1;
     }

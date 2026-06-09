@@ -1,21 +1,19 @@
-use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
+use std::time::Duration;
 
 use alloy::eips::eip4844::HeapBlob;
 use eth_clients::beacon::{
     self,
-    types::{BlobSidecar, Block, BlockHeader, BlockId, KzgCommitment, Spec},
+    types::{BlockHeader, BlockId, KzgCommitment},
     BeaconClient,
 };
 use itertools::zip_eq;
 use std::os::unix;
 use std::{
-    collections::HashSet,
     fs::{self, create_dir_all, read_dir, rename, File},
     io,
     io::{Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::RwLock,
 };
 
 use alloy::network::Ethereum;
@@ -28,17 +26,9 @@ use alloy::{
 use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info};
 
-use crate::config::AppConfig;
-
-pub struct Node {
-    pub beacon_cli: BeaconClient,
-    pub rpc_cli: RootProvider,
-    pub config: AppConfig,
-    // pub state_machine: Arc<StateMachine>,
-    // pub sync_db: Arc<SyncDb>,
-}
+use crate::config::Config;
 
 fn blob_file_name(index: usize, vh: &B256) -> String {
     format!("blob-{:02}_{}.bin", index, vh)
@@ -63,6 +53,8 @@ fn parse_blob_file_name(file_name: &str) -> Result<Option<(usize, B256)>> {
         Ok(None)
     }
 }
+
+const DIR_LEVELS: usize = 3;
 
 fn slot_dir_from(base: &PathBuf, slot: u32) -> PathBuf {
     let slot_hi = slot / 1_000_000;
@@ -89,38 +81,38 @@ fn root_dir_from(base: &PathBuf, root: &B256) -> PathBuf {
     root_dir
 }
 
-impl Node {
-    /// Construct network clients and bind shared state/sync stores.
-    pub async fn new(
-        config: AppConfig,
-        // state_machine: Arc<StateMachine>,
-        // sync_db: Arc<SyncDb>,
-    ) -> Result<Self> {
-        let http_cli = reqwest::Client::builder()
-            .timeout(Duration::from_secs(8))
-            .build()?;
+#[derive(Clone)]
+pub struct Store {
+    pub blobs_path: String,
+}
 
-        let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
-        let beacon_cli_config = beacon::Config {
-            base_url: config.beacon_url.clone(),
-            exp_backoff,
-        };
-        let beacon_cli = BeaconClient::try_with_client(http_cli, beacon_cli_config)?;
-        let rpc_cli = RootProvider::<Ethereum>::new_http(config.rpc_url.parse()?);
-
-        Ok(Self {
-            beacon_cli,
-            rpc_cli,
-            config,
-            // state_machine,
-            // sync_db,
-        })
+impl Store {
+    pub(crate) fn delete_block_data(&self, slot_path: &Path) -> Result<()> {
+        if !fs::exists(&slot_path)? {
+            return Ok(());
+        }
+        let mut root_path = fs::canonicalize(&slot_path)?; // Resolve symlink
+        if fs::exists(&root_path)? {
+            // Remove at highest intermediate directory that only has one entry
+            for _level in 0..DIR_LEVELS - 1 {
+                let mut root_mid_path = root_path.clone();
+                root_mid_path.pop();
+                if fs::read_dir(&root_mid_path)?.count() == 1 {
+                    root_path = root_mid_path;
+                } else {
+                    break;
+                }
+            }
+            info!("Removing stale dir recursively at {:?}", root_path);
+            fs::remove_dir_all(&root_path)?;
+        }
+        info!("Removing stale symlink at {:?}", slot_path);
+        fs::remove_file(&slot_path)?;
+        Ok(())
     }
 
-    // Get the starting slot by finding the latest valid processed block (and deleting stale ones
-    // if found) or if no valid processed slot is found, return the init slot value from the
-    // config.
-    pub(crate) fn start_slot(&self) -> Result<u32> {
+    // Find the latest valid processed block header (and deleting stale ones if found)
+    pub(crate) fn last_header(&self) -> Result<Option<BlockHeader>> {
         fn read_file(path: &Path) -> Result<Vec<u8>, io::Error> {
             let mut file = File::open(&path)?;
             let mut data = Vec::new();
@@ -128,10 +120,10 @@ impl Node {
             Ok(data)
         }
         'outer: loop {
-            let mut slot_path = PathBuf::from(&self.config.blobs_path);
+            let mut slot_path = PathBuf::from(&self.blobs_path);
             slot_path.push("by_slot");
             // Find the highest slot number path
-            for _level in 0..=2 {
+            for _level in 0..DIR_LEVELS {
                 let read_dir = match fs::read_dir(&slot_path) {
                     Err(e) => match e.kind() {
                         io::ErrorKind::NotFound => break 'outer,
@@ -151,20 +143,15 @@ impl Node {
                 // Next level
                 slot_path.push(last);
             }
-            let root_path = fs::canonicalize(&slot_path)?;
-            let mut header_path = root_path.clone();
+            // See if that block was completed, if not delete it and try again
+            let mut header_path = slot_path.clone();
             header_path.push("header.json");
             let header_data = match read_file(&header_path) {
                 Err(e) => match e.kind() {
                     io::ErrorKind::NotFound => {
                         // The node didn't complete processing this block, remove the stale data in
                         // reverse order of creation.
-                        info!("Removing stale dir recursively at {:?}", root_path);
-                        if fs::exists(&root_path)? {
-                            fs::remove_dir_all(&root_path)?;
-                        }
-                        info!("Removing stale symlink at {:?}", slot_path);
-                        fs::remove_file(&slot_path)?;
+                        self.delete_block_data(&slot_path)?;
                         continue 'outer;
                     }
                     _ => return Err(e.into()),
@@ -172,10 +159,119 @@ impl Node {
                 Ok(data) => data,
             };
             let header: BlockHeader = serde_json::from_slice(&header_data)?;
-            return Ok(header.slot + 1);
+            return Ok(Some(header));
         }
         // No block found
-        return Ok(self.config.init_slot);
+        return Ok(None);
+    }
+
+    pub(crate) fn slot_dir(&self, slot: u32) -> PathBuf {
+        let base = PathBuf::from(&self.blobs_path);
+        slot_dir_from(&base, slot)
+    }
+
+    fn root_dir(&self, root: &B256) -> PathBuf {
+        let base = PathBuf::from(&self.blobs_path);
+        root_dir_from(&base, root)
+    }
+
+    // Returns a vector of index, versioned_hash, blob; sorted by index
+    pub(crate) async fn load_blobs_disk(
+        &self,
+        root: &B256,
+    ) -> Result<Vec<(usize, B256, HeapBlob)>> {
+        let root_dir = self.root_dir(root);
+        let rd = match read_dir(&root_dir) {
+            Err(e) => {
+                if e.kind() == io::ErrorKind::NotFound {
+                    return Ok(Vec::new());
+                } else {
+                    return Err(e.into());
+                }
+            }
+            Ok(rd) => rd,
+        };
+        info!("loading blobs of slot root {} from {:?}", root, root_dir);
+        let mut blobs = Vec::new();
+        for entry in rd {
+            let entry = entry?;
+            let file_name = entry.file_name();
+            let file_name = file_name.to_str().unwrap_or("");
+            if let Some((index, versioned_hash)) = parse_blob_file_name(file_name)? {
+                let file_path = root_dir.join(file_name);
+                let mut file = File::open(&file_path)?;
+                let mut data = Vec::new();
+                file.read_to_end(&mut data)?;
+                blobs.push((
+                    index,
+                    versioned_hash,
+                    HeapBlob::from_bytes(Bytes::from(data))?,
+                ));
+            }
+        }
+        blobs.sort_by_key(|(index, _, _)| *index);
+        Ok(blobs)
+    }
+
+    async fn store_blobs_disk(
+        &self,
+        beacon_block_header: &BlockHeader,
+        blobs: &[(usize, B256, HeapBlob)],
+    ) -> Result<()> {
+        let slot_path = self.slot_dir(beacon_block_header.slot);
+        let root_dir = self.root_dir(&beacon_block_header.root);
+        info!(
+            "storing {} blobs of slot {} to {:?} with symlink {:?}",
+            blobs.len(),
+            beacon_block_header.slot,
+            root_dir,
+            slot_path
+        );
+        for (index, vh, blob) in blobs {
+            let name = blob_file_name(*index, vh);
+            let blob_path = root_dir.join(&name);
+            let blob_path_tmp = root_dir.join(format!("{}.tmp", name));
+            let mut file_tmp = File::create(&blob_path_tmp)?;
+            file_tmp.write_all(blob.inner())?;
+            rename(blob_path_tmp, blob_path)?;
+        }
+        Ok(())
+    }
+}
+
+pub struct Node {
+    pub beacon_cli: BeaconClient,
+    pub rpc_cli: RootProvider,
+    pub store: Store,
+    pub config: Config,
+}
+
+impl Node {
+    /// Construct network clients and bind shared state/sync stores.
+    pub async fn new(config: Config) -> Result<Self> {
+        let store = Store {
+            blobs_path: config.blobs_path.clone(),
+        };
+        let http_cli = reqwest::Client::builder()
+            .timeout(Duration::from_secs(8))
+            .read_timeout(Duration::from_secs(8))
+            .connect_timeout(Duration::from_secs(8))
+            .build()?;
+
+        let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
+        let beacon_cli_config = beacon::Config {
+            base_url: config.beacon_url.clone(),
+            exp_backoff,
+        };
+        let beacon_cli = BeaconClient::try_with_client(http_cli, beacon_cli_config)?;
+        let rpc_cli = RootProvider::<Ethereum>::new_http(config.rpc_url.parse()?);
+
+        Ok(Self {
+            beacon_cli,
+            rpc_cli,
+            store,
+            config,
+        })
     }
 
     pub(crate) async fn process_beacon_block_header(
@@ -183,7 +279,7 @@ impl Node {
         beacon_block_header: &BlockHeader,
     ) -> Result<()> {
         // Create the path with the symlink to the yet to be created block dir, indexed by slot
-        let slot_path = self.slot_dir(beacon_block_header.slot);
+        let slot_path = self.store.slot_dir(beacon_block_header.slot);
         let mut slot_mid_path = slot_path.clone();
         slot_mid_path.pop();
         create_dir_all(&slot_mid_path)?;
@@ -195,7 +291,7 @@ impl Node {
 
         // Create the block dir where the filtered blobs and header will be stored, indexed by
         // block root
-        let root_dir = self.root_dir(&beacon_block_header.root);
+        let root_dir = self.store.root_dir(&beacon_block_header.root);
         create_dir_all(&root_dir)?;
         // We store the header as a tmp file, and only rename after successfully processing the
         // beacon block.  This way seeing the `header.json` without the `.tmp` guarantees that the
@@ -318,95 +414,16 @@ impl Node {
         Ok(())
     }
 
-    fn slot_dir(&self, slot: u32) -> PathBuf {
-        let base = PathBuf::from(&self.config.blobs_path);
-        slot_dir_from(&base, slot)
-    }
-
-    fn root_dir(&self, root: &B256) -> PathBuf {
-        let base = PathBuf::from(&self.config.blobs_path);
-        root_dir_from(&base, root)
-    }
-
-    // Returns a vector of index, versioned_hash, blob; sorted by index
-    async fn load_blobs_disk(&self, root: &B256) -> Result<Vec<(usize, B256, HeapBlob)>> {
-        let root_dir = self.root_dir(root);
-        let rd = match read_dir(&root_dir) {
-            Err(e) => {
-                if e.kind() == io::ErrorKind::NotFound {
-                    return Ok(Vec::new());
-                } else {
-                    return Err(e.into());
-                }
-            }
-            Ok(rd) => rd,
-        };
-        info!("loading blobs of slot root {} from {:?}", root, root_dir);
-        let mut blobs = Vec::new();
-        for entry in rd {
-            let entry = entry?;
-            let file_name = entry.file_name();
-            let file_name = file_name.to_str().unwrap_or("");
-            if let Some((index, versioned_hash)) = parse_blob_file_name(file_name)? {
-                let file_path = root_dir.join(file_name);
-                let mut file = File::open(&file_path)?;
-                let mut data = Vec::new();
-                file.read_to_end(&mut data)?;
-                blobs.push((
-                    index,
-                    versioned_hash,
-                    HeapBlob::from_bytes(Bytes::from(data))?,
-                ));
-            }
-        }
-        blobs.sort_by_key(|(index, _, _)| *index);
-        Ok(blobs)
-    }
-
-    async fn store_blobs_disk(
-        &self,
-        beacon_block_header: &BlockHeader,
-        blobs: &[(usize, B256, HeapBlob)],
-    ) -> Result<()> {
-        let slot_path = self.slot_dir(beacon_block_header.slot);
-        let root_dir = self.root_dir(&beacon_block_header.root);
-        info!(
-            "storing {} blobs of slot {} to {:?} with symlink {:?}",
-            blobs.len(),
-            beacon_block_header.slot,
-            root_dir,
-            slot_path
-        );
-        for (index, vh, blob) in blobs {
-            let name = blob_file_name(*index, vh);
-            let blob_path = root_dir.join(&name);
-            let blob_path_tmp = root_dir.join(format!("{}.tmp", name));
-            let mut file_tmp = File::create(&blob_path_tmp)?;
-            file_tmp.write_all(blob.inner())?;
-            rename(blob_path_tmp, blob_path)?;
-        }
-        Ok(())
-    }
-
-    // Checks that the blobs contain all the blobs identified by `versioned_hashes`.  If some are
-    // missing, return the versioned_hash of the first missing one.
-    // fn validate_blobs(blobs: &HashMap<B256, HeapBlob>, versioned_hashes: &[B256]) -> Vec<B256> {
-    //     let mut missing = Vec::new();
-    //     for vh in versioned_hashes.iter() {
-    //         if !blobs.contains_key(vh) {
-    //             missing.push(*vh);
-    //         }
-    //     }
-    //     missing
-    // }
-
     async fn get_blobs(
         &self,
         beacon_block_header: &BlockHeader,
         block_kzg_blob_commitments: &[(B256, KzgCommitment)],
         versioned_hashes: &[B256],
     ) -> Result<Vec<(usize, B256, HeapBlob)>> {
-        let blobs = self.load_blobs_disk(&beacon_block_header.root).await?;
+        let blobs = self
+            .store
+            .load_blobs_disk(&beacon_block_header.root)
+            .await?;
         let mut result = Vec::new();
         let mut missing_vhs = Vec::new();
         for vh in versioned_hashes {
@@ -415,9 +432,6 @@ impl Node {
             } else {
                 missing_vhs.push(*vh);
             }
-        }
-        for vh in &missing_vhs {
-            println!("  {}", vh);
         }
         let mut missing_blobs = Vec::new();
         if !missing_vhs.is_empty() {
@@ -434,86 +448,11 @@ impl Node {
                     .unwrap();
                 missing_blobs.push((index, vh, blob));
             }
-            self.store_blobs_disk(&beacon_block_header, &missing_blobs)
+            self.store
+                .store_blobs_disk(&beacon_block_header, &missing_blobs)
                 .await?;
             result.extend(missing_blobs.into_iter());
         }
         Ok(result)
     }
-
-    /*
-    async fn process_do_blob(&self, blob: &Blob) -> Result<()> {
-        let bytes =
-            bytes_from_simple_blob(blob.blob.inner()).context("Invalid byte encoding in blob")?;
-        let payload = Payload::from_bytes(&bytes, &self.common_circuit_data)?;
-
-        let mut state = self.state.write().expect("lock");
-
-        // Check the proof is using an official createdItems set
-        if !state
-            .created_items_roots
-            .contains(&payload.created_items_root)
-        {
-            bail!(
-                "created_items_root {} not in created_items_roots",
-                payload.created_items_root
-            );
-        }
-
-        // Check that output is unique
-        if state.created_items.contains(&Value::from(payload.item)) {
-            bail!("item {} exists in created_items", payload.item);
-        }
-
-        // Check that inputs are unique
-        for nullifier in &payload.nullifiers {
-            if state.nullifiers.contains(nullifier) {
-                bail!("nullifier {} exists in nullifiers", nullifier);
-            }
-        }
-
-        let nullifiers_set = Value::from(
-            Set::new(
-                self.params.max_depth_mt_containers,
-                HashSet::from_iter(payload.nullifiers.iter().map(|r| Value::from(*r))),
-            )
-            .unwrap(),
-        );
-        let st_commit_creation = Statement::Custom(
-            self.pred_commit_creation.clone(),
-            vec![
-                Value::from(payload.item),
-                nullifiers_set,
-                Value::from(payload.created_items_root),
-            ],
-        );
-
-        // Check the proof and ignore invalid ones
-        self.verify_shrunk_main_pod(payload.proof, st_commit_creation)?;
-
-        // Register nullifiers
-        for nullifier in &payload.nullifiers {
-            state.nullifiers.insert(*nullifier);
-        }
-        // Register item
-        state
-            .created_items
-            .insert(&Value::from(payload.item))
-            .unwrap();
-
-        state.epoch += 1;
-        let created_items_root = state.created_items.commitment();
-        state
-            .created_items_roots
-            .push(RawValue::from(created_items_root));
-        info!(
-            "state update: ecpoh={}, created_items.len={}, nullifiers.len={}, created_items_root={}, ",
-            state.epoch,
-            state.created_items.set().len(),
-            state.nullifiers.len(),
-            created_items_root,
-        );
-        Ok(())
-    }
-    */
 }

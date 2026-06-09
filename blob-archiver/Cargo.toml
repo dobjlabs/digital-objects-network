@@ -19,7 +19,8 @@ reqwest = { version = "0.12.15", features = ["json"] }
 reqwest-eventsource = "0.6.0"
 backoff = { version = "0.4.0", features = ["tokio"] }
 chrono = "0.4.42"
-axum = "0.8.6"
+axum = { version = "0.8.6", features = ["macros"] }
+axum-extra = { version = "0.12.6", features = ["query"] }
 tower-http = { version = "0.6", features = ["cors"] }
 futures-util = "0.3.31"
 rocksdb = "0.23.0"

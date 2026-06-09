@@ -21,7 +21,7 @@
 
 pub mod types;
 
-use std::fmt::{Debug, Write};
+use std::fmt::Debug;
 
 use anyhow::Context as AnyhowContext;
 use backoff::ExponentialBackoff;

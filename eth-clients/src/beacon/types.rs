@@ -122,7 +122,7 @@ pub struct BlobsSidecarsResponse {
     pub data: Vec<BlobSidecar>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct BlobsResponse {
     pub data: Vec<HeapBlob>,
 }
