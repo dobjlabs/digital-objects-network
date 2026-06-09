@@ -67,6 +67,11 @@ pub async fn run(
              check your connection and retry",
         )?,
     };
+    // The tag becomes a path component below (staging dir, deleted on each
+    // attempt) and a release-download URL, so it must be confirmed safe before
+    // either use: a `--version ../..` or absolute path would otherwise let
+    // remove_dir_all escape ~/.dobj.
+    validate_release_tag(&target_tag)?;
 
     match compare_tags(CURRENT_TAG, &target_tag) {
         Ordering::Newer => {}
@@ -232,6 +237,43 @@ fn parse_tag_from_location(location: &str) -> Result<String> {
         bail!("could not extract a release tag from redirect target {location}");
     }
     Ok(tag.to_string())
+}
+
+/// Accept only the tag grammar the release workflow enforces:
+/// `vMAJOR.MINOR.PATCH` with an optional `-rc.N` / `-alpha.N` / `-beta.N`
+/// prerelease. This is a security gate, not a nicety: `target_tag` is used
+/// unmodified as a path component and a download URL, so rejecting anything
+/// outside this shape is what stops a `--version ../..` (or absolute path)
+/// from steering the staging directory -- and its remove_dir_all -- outside
+/// `~/.dobj`.
+fn validate_release_tag(tag: &str) -> Result<()> {
+    fn all_digits(s: &str) -> bool {
+        !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+    }
+    let parsed = (|| {
+        let body = tag.strip_prefix('v')?;
+        let (core, pre) = match body.split_once('-') {
+            Some((core, pre)) => (core, Some(pre)),
+            None => (body, None),
+        };
+        let core_parts: Vec<&str> = core.split('.').collect();
+        if core_parts.len() != 3 || !core_parts.iter().all(|p| all_digits(p)) {
+            return None;
+        }
+        if let Some(pre) = pre {
+            let (channel, n) = pre.split_once('.')?;
+            if !matches!(channel, "rc" | "alpha" | "beta") || !all_digits(n) {
+                return None;
+            }
+        }
+        Some(())
+    })();
+    ensure!(
+        parsed.is_some(),
+        "invalid release tag {tag:?}; expected vMAJOR.MINOR.PATCH with an \
+         optional -rc.N / -alpha.N / -beta.N suffix"
+    );
+    Ok(())
 }
 
 enum Ordering {
@@ -755,6 +797,38 @@ mod tests {
         ));
         assert!(matches!(compare_tags("v0.1.0", "v0.1.0"), Ordering::Same));
         assert!(matches!(compare_tags("dev", "v0.1.0"), Ordering::Unknown));
+    }
+
+    #[test]
+    fn accepts_well_formed_release_tags() {
+        for tag in [
+            "v0.1.0",
+            "v1.2.3",
+            "v0.1.0-rc.34",
+            "v0.1.0-alpha.1",
+            "v0.1.0-beta.10",
+        ] {
+            assert!(validate_release_tag(tag).is_ok(), "should accept {tag}");
+        }
+    }
+
+    #[test]
+    fn rejects_path_traversal_and_malformed_tags() {
+        // The path-escape cases this gate exists to stop.
+        for tag in ["../..", "/etc", "..", "v0.1.0/../../x", "v0.1.0-rc.1/.."] {
+            assert!(validate_release_tag(tag).is_err(), "should reject {tag}");
+        }
+        // Plain malformed tags, rejected for free by the same grammar.
+        for tag in [
+            "0.1.0",
+            "v0.1",
+            "v0.1.0-rc",
+            "v0.1.0-nightly.1",
+            "vx.y.z",
+            "",
+        ] {
+            assert!(validate_release_tag(tag).is_err(), "should reject {tag}");
+        }
     }
 
     #[test]
