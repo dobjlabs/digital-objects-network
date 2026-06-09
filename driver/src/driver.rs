@@ -131,19 +131,54 @@ impl Driver {
     }
 
     /// Install a `.pexe` into the actions dir and hot-reload the catalog.
-    /// Validates the archive and plugin name first; if the reload fails, the
-    /// just-written file is removed so it can't break the next startup.
-    /// Returns the installed plugin name.
+    /// Validates the archive and plugin name first. If the reload fails, the
+    /// previously-installed plugin of the same name is restored (or the new
+    /// file removed if there was none), so a failed upgrade can't destroy a
+    /// working plugin or break the next startup. Returns the installed name.
     pub fn install_plugin(&self, bytes: &[u8]) -> Result<String> {
         let (manifest, _script) = pexe::unpack(bytes).context("invalid .pexe archive")?;
         let name = manifest.plugin.name.clone();
         crate::pexe_catalog::validate_plugin_name(&name)?;
-        let path = pexe::install(bytes, &self.paths.actions_dir, &name)?;
-        if let Err(err) = self.reload_catalog() {
-            let _ = std::fs::remove_file(&path);
-            return Err(err.context(format!("plugin {name} failed to load; not installed")));
+
+        let dest = self
+            .paths
+            .actions_dir
+            .join(format!("{name}.{}", pexe::PEXE_EXTENSION));
+        // Move any same-named plugin aside first, so a failed reload can restore
+        // it rather than leaving the user with nothing. The `.bak` name stays
+        // out of the catalog scan, which only picks up `.pexe`.
+        let backup = dest.exists().then(|| {
+            self.paths
+                .actions_dir
+                .join(format!("{name}.{}.bak", pexe::PEXE_EXTENSION))
+        });
+        if let Some(backup) = &backup {
+            std::fs::rename(&dest, backup)
+                .with_context(|| format!("failed to back up {}", dest.display()))?;
         }
-        Ok(name)
+
+        // reload only swaps the in-memory catalog on success, so on failure the
+        // running catalog still reflects the prior plugin - restoring the file
+        // keeps disk and memory consistent.
+        let outcome = pexe::install(bytes, &self.paths.actions_dir, &name)
+            .and_then(|_| self.reload_catalog());
+        match outcome {
+            Ok(_) => {
+                if let Some(backup) = backup {
+                    let _ = std::fs::remove_file(backup);
+                }
+                Ok(name)
+            }
+            Err(err) => {
+                let _ = std::fs::remove_file(&dest);
+                if let Some(backup) = backup {
+                    let _ = std::fs::rename(&backup, &dest);
+                }
+                Err(err.context(format!(
+                    "plugin {name} failed to load; previous version left in place"
+                )))
+            }
+        }
     }
 
     pub fn load_settings(&self) -> Result<DriverSettings> {
@@ -506,8 +541,11 @@ impl Driver {
         reporter: &R,
     ) -> Result<ExecuteActionResult> {
         let settings = self.load_settings()?;
-        let action = self
-            .catalog()
+        // Pin one catalog snapshot for the whole execute: a concurrent
+        // `dobj install` can hot-swap the catalog, and the action resolved here
+        // must be the one we execute below.
+        let catalog = self.catalog();
+        let action = catalog
             .get_action(&input.action)
             .ok_or_else(|| anyhow!("unknown action: {}", input.action))?;
 
@@ -533,11 +571,8 @@ impl Driver {
             .iter()
             .map(|input| input.record.spendable())
             .collect::<Vec<_>>();
-        let spendable_outputs = self.catalog().execute_action(
-            input.action.clone(),
-            grounding_witness,
-            execution_inputs,
-        )?;
+        let spendable_outputs =
+            catalog.execute_action(input.action.clone(), grounding_witness, execution_inputs)?;
         reporter.on_done(ExecutionPhase::GenerateProof, None);
 
         let mut commit_ctx = ExecutionStepContext {
