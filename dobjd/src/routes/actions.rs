@@ -104,7 +104,13 @@ pub async fn run_events(
             if terminal {
                 return;
             }
-            ticker.tick().await;
+            // Wait for the next poll tick, but stop immediately if the client
+            // has disconnected — otherwise we'd keep polling for a dropped
+            // receiver through a long quiet phase (e.g. proof generation).
+            tokio::select! {
+                _ = ticker.tick() => {}
+                _ = tx.closed() => return,
+            }
         }
     });
 
