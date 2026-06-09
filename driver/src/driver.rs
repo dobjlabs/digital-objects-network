@@ -82,8 +82,8 @@ impl DriverDeps {
         }
         Ok(Self {
             catalog: Arc::new(RwLock::new(Arc::new(catalog))),
-            synchronizer: Arc::new(HttpSynchronizerClient),
-            relayer: Arc::new(HttpRelayerClient),
+            synchronizer: Arc::new(HttpSynchronizerClient::new()),
+            relayer: Arc::new(HttpRelayerClient::new()),
             payload_builder: Arc::new(DefaultPayloadBuilder),
         })
     }
