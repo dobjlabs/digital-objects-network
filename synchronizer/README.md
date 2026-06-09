@@ -194,7 +194,7 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `StateHead` deter
     - `blockNumber`
     - `createdRoot`
     - `nullifiersRoot`
-    - `stateHistoryRoot`
+    - `priorStateHistoryRoot`
     - `createdProofs` (array of `{ commitment, present, index, proof }`)
 
 Membership and grounding-witness requests read the state head and the

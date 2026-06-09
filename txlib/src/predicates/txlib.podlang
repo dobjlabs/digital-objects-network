@@ -272,7 +272,7 @@ ReplayDelete(before_tx, after_tx, before_chain, after_chain,
 // global created-object set (every object state ever created, maintained
 // by the synchronizer).
 
-record StateHeader = (block_number, created, nullifiers, state_history)
+record StateHeader = (block_number, created, nullifiers, prior_state_history)
 
 InputsGrounded(inputs, created) = OR(
   // Base case: empty inputs. `created` is intentionally unconstrained --

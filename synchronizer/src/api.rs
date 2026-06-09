@@ -241,7 +241,7 @@ async fn post_grounding_witness(
         block_number: state_header.block_number,
         created_root: state_header.created_root,
         nullifiers_root: state_header.nullifiers_root,
-        state_history_root: state_header.state_history_root,
+        prior_state_history_root: state_header.prior_state_history_root,
         created_proofs: witness
             .object_proofs
             .into_iter()

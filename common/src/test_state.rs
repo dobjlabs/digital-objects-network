@@ -38,7 +38,7 @@ impl TestState {
         }
     }
 
-    /// `(created_root, nullifiers_root, state_history_root)`.
+    /// `(created_root, nullifiers_root, prior_state_history_root)`.
     pub fn roots(&self) -> (Hash, Hash, Hash) {
         (
             self.created.commitment(),
@@ -49,7 +49,7 @@ impl TestState {
 
     /// Build a grounding witness proving each input object commitment is a
     /// member of the global created set. `build` assembles the crate's witness
-    /// type from `(block_number, created_root, nullifiers_root, state_history_root,
+    /// type from `(block_number, created_root, nullifiers_root, prior_state_history_root,
     /// per-object (index, proof) keyed by commitment)`.
     pub fn build_grounding_witness<W>(
         &self,
@@ -60,12 +60,12 @@ impl TestState {
             .iter()
             .map(|commitment| (*commitment, self.created_membership_proof(*commitment)))
             .collect::<HashMap<_, _>>();
-        let (created_root, nullifiers_root, state_history_root) = self.roots();
+        let (created_root, nullifiers_root, prior_state_history_root) = self.roots();
         build(
             self.block_number,
             created_root,
             nullifiers_root,
-            state_history_root,
+            prior_state_history_root,
             created_proofs,
         )
     }

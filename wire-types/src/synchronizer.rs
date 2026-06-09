@@ -163,7 +163,7 @@ pub struct GroundingWitnessResponse {
     /// Nullifiers set root.
     pub nullifiers_root: Hash,
     /// Prior-state root array root committed inside the state root.
-    pub state_history_root: Hash,
+    pub prior_state_history_root: Hash,
     /// Per-input-object created-set membership proofs.
     pub created_proofs: Vec<ObjectProofResponse>,
 }

@@ -13,13 +13,13 @@ fn apply_tx(state: &mut TestState, tx: &Tx) {
 fn grounding_witness(state: &TestState, input_commitments: &[Hash]) -> Arc<GroundingWitness> {
     state.build_grounding_witness(
         input_commitments,
-        |block_number, created_root, nullifiers_root, state_history_root, created_proofs| {
+        |block_number, created_root, nullifiers_root, prior_state_history_root, created_proofs| {
             Arc::new(GroundingWitness::new(
                 StateHeader::new(
                     block_number,
                     created_root,
                     nullifiers_root,
-                    state_history_root,
+                    prior_state_history_root,
                 ),
                 created_proofs,
             ))

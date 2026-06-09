@@ -62,12 +62,12 @@ fn apply_tx(state: &mut TestState, tx: &txlib::Tx) {
 }
 
 fn state_header(state: &TestState) -> StateHeader {
-    let (created_root, nullifiers_root, state_history_root) = state.roots();
+    let (created_root, nullifiers_root, prior_state_history_root) = state.roots();
     StateHeader::new(
         state.block_number,
         created_root,
         nullifiers_root,
-        state_history_root,
+        prior_state_history_root,
     )
 }
 

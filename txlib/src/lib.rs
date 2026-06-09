@@ -59,7 +59,7 @@ pub struct StateHeader {
     /// state ever created. Grounding proves an input is a member here.
     pub created_root: Hash,
     pub nullifiers_root: Hash,
-    pub state_history_root: Hash,
+    pub prior_state_history_root: Hash,
 }
 
 impl StateHeader {
@@ -67,13 +67,13 @@ impl StateHeader {
         block_number: i64,
         created_root: Hash,
         nullifiers_root: Hash,
-        state_history_root: Hash,
+        prior_state_history_root: Hash,
     ) -> Self {
         Self {
             block_number,
             created_root,
             nullifiers_root,
-            state_history_root,
+            prior_state_history_root,
         }
     }
 
@@ -86,7 +86,7 @@ impl StateHeader {
             Value::from(self.block_number),
             Value::from(self.created_root),
             Value::from(self.nullifiers_root),
-            Value::from(self.state_history_root),
+            Value::from(self.prior_state_history_root),
         ])
     }
 
@@ -101,7 +101,7 @@ impl StateHeader {
 pub const STATE_HEADER_BLOCK_NUMBER_SLOT: usize = 0;
 pub const STATE_HEADER_CREATED_SLOT: usize = 1;
 pub const STATE_HEADER_NULLIFIERS_SLOT: usize = 2;
-pub const STATE_HEADER_STATE_HISTORY_SLOT: usize = 3;
+pub const STATE_HEADER_PRIOR_STATE_HISTORY_SLOT: usize = 3;
 
 /// Proof-bearing grounding data required to build a new transaction.
 ///
@@ -1251,7 +1251,7 @@ mod tests {
             serde_json::json!(hex::encode([2_u8; 32]))
         );
         assert_eq!(
-            encoded["stateHistoryRoot"],
+            encoded["priorStateHistoryRoot"],
             serde_json::json!(hex::encode([3_u8; 32]))
         );
 

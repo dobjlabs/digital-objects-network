@@ -106,7 +106,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
             payload.block_number,
             payload.created_root,
             payload.nullifiers_root,
-            payload.state_history_root,
+            payload.prior_state_history_root,
         );
         let remote_state_root = payload.state_root;
         let derived_state_root = state_header.hash();
