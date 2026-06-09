@@ -39,7 +39,7 @@ There is no state head stored in RocksDB, and no resident in-memory head/cache. 
 - `StateRoots`
   - `created`
   - `nullifiers`
-  - `state_history`
+  - `prior_state_history`
   - `next_state_history`
 - `StateMetadata`
   - `current_state_root`
@@ -48,7 +48,7 @@ There is no state head stored in RocksDB, and no resident in-memory head/cache. 
   - `nullifier_count`
   - `state_root_count`
 
-`StateRoots.state_history` is the prior-state root array root committed inside `txlib::StateHeader`.
+`StateRoots.prior_state_history` is the prior-state root array root committed inside `txlib::StateHeader`.
 `StateRoots.next_state_history` is the full state root-history root after appending `StateMetadata.current_state_root`.
 
 ## Storage model

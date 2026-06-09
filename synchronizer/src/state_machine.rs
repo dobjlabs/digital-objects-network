@@ -298,7 +298,7 @@ impl StateMachine {
             roots: StateRoots {
                 created: working.created.commitment(),
                 nullifiers: working.nullifiers.commitment(),
-                state_history: prior_state_history_root,
+                prior_state_history: prior_state_history_root,
                 next_state_history: working.next_state_history.commitment(),
             },
             metadata: StateMetadata {

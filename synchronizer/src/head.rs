@@ -9,7 +9,7 @@ pub struct StateRoots {
     /// Root of the persistent spent-nullifiers set.
     pub nullifiers: Hash,
     /// Root of the prior-state root array committed inside `txlib::StateHeader`.
-    pub state_history: Hash,
+    pub prior_state_history: Hash,
     /// Root of the full state root history array after appending the current state root.
     pub next_state_history: Hash,
 }
@@ -25,7 +25,7 @@ impl StateRoots {
         Self {
             created: EMPTY_HASH,
             nullifiers: EMPTY_HASH,
-            state_history: EMPTY_HASH,
+            prior_state_history: EMPTY_HASH,
             next_state_history: EMPTY_HASH,
         }
     }
@@ -97,7 +97,7 @@ impl StateHead {
                 block_number as i64,
                 self.roots.created,
                 self.roots.nullifiers,
-                self.roots.state_history,
+                self.roots.prior_state_history,
             )
         })
     }

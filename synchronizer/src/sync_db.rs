@@ -88,7 +88,7 @@ impl SyncDb {
                 is_empty BOOLEAN NOT NULL,
                 head_created_root BYTEA NOT NULL,
                 head_nullifiers_root BYTEA NOT NULL,
-                head_state_history_root BYTEA NOT NULL,
+                head_prior_state_history_root BYTEA NOT NULL,
                 head_next_state_history_root BYTEA NOT NULL,
                 head_current_state_root BYTEA NULL,
                 head_current_block_number INTEGER NULL,
@@ -186,7 +186,7 @@ impl SyncDb {
                    execution_block_number,
                    head_created_root,
                    head_nullifiers_root,
-                   head_state_history_root,
+                   head_prior_state_history_root,
                    head_next_state_history_root,
                    head_current_state_root,
                    head_current_block_number,
@@ -266,7 +266,7 @@ impl SyncDb {
                 is_empty,
                 head_created_root,
                 head_nullifiers_root,
-                head_state_history_root,
+                head_prior_state_history_root,
                 head_next_state_history_root,
                 head_current_state_root,
                 head_current_block_number,
@@ -285,7 +285,7 @@ impl SyncDb {
         .bind(slot.is_empty)
         .bind(hash_to_db_bytes(head.roots.created))
         .bind(hash_to_db_bytes(head.roots.nullifiers))
-        .bind(hash_to_db_bytes(head.roots.state_history))
+        .bind(hash_to_db_bytes(head.roots.prior_state_history))
         .bind(hash_to_db_bytes(head.roots.next_state_history))
         .bind(head.metadata.current_state_root.map(hash_to_db_bytes))
         .bind(head.metadata.current_block_number.map(|v| v as i32))
@@ -434,7 +434,9 @@ fn decode_head_row(row: &PgRow) -> Result<StateHead> {
         roots: StateRoots {
             created: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_created_root"))?,
             nullifiers: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_nullifiers_root"))?,
-            state_history: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_state_history_root"))?,
+            prior_state_history: db_bytes_to_hash(
+                &row.get::<Vec<u8>, _>("head_prior_state_history_root"),
+            )?,
             next_state_history: db_bytes_to_hash(
                 &row.get::<Vec<u8>, _>("head_next_state_history_root"),
             )?,
@@ -471,7 +473,7 @@ mod tests {
             roots: StateRoots {
                 created: unique_hash(marker),
                 nullifiers: unique_hash(marker + 1),
-                state_history: unique_hash(marker + 2),
+                prior_state_history: unique_hash(marker + 2),
                 next_state_history: unique_hash(marker + 3),
             },
             metadata: StateMetadata {
