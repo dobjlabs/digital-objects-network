@@ -3,8 +3,8 @@
 # Builds the two headless server binaries into separate, minimal images that
 # share one cooked dependency layer. Build either one independently:
 #
-#   docker build --target synchronizer -t zkcraft/synchronizer .
-#   docker build --target relayer      -t zkcraft/relayer .
+#   docker build --target synchronizer -t don/synchronizer .
+#   docker build --target relayer      -t don/relayer .
 #
 # --target synchronizer compiles only the synchronizer binary (and vice versa);
 # the expensive dependency compile is cooked once and reused by both.
@@ -73,8 +73,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates libssl3 libgcc-s1 zlib1g libzstd1 \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system --gid 10001 zkcraft \
-    && useradd --system --uid 10001 --gid 10001 --create-home --home-dir /home/zkcraft --shell /usr/sbin/nologin zkcraft
+    && groupadd --system --gid 10001 don \
+    && useradd --system --uid 10001 --gid 10001 --create-home --home-dir /home/don --shell /usr/sbin/nologin don
 
 # ---- synchronizer image ----
 FROM runtime AS synchronizer
@@ -84,14 +84,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build-synchronizer /app/target/release/synchronizer /usr/local/bin/synchronizer
-RUN mkdir -p /var/lib/zkcraft && chown -R zkcraft:zkcraft /var/lib/zkcraft
+RUN mkdir -p /var/lib/don && chown -R don:don /var/lib/don
 # Bind all interfaces: inside the container the orchestrator or reverse proxy
 # controls public exposure. RocksDB lives on a path meant to be a mounted volume
 # (it is a rebuildable cache, but a volume avoids slow cold re-sync on restart).
 ENV HTTP_BIND=0.0.0.0:3000 \
-    APP_STATE_DB_PATH=/var/lib/zkcraft/synchronizer-db
-VOLUME ["/var/lib/zkcraft"]
-USER zkcraft
+    APP_STATE_DB_PATH=/var/lib/don/synchronizer-db
+VOLUME ["/var/lib/don"]
+USER don
 EXPOSE 3000
 ENTRYPOINT ["/usr/local/bin/synchronizer"]
 
@@ -100,6 +100,6 @@ FROM runtime AS relayer
 COPY --from=build-relayer /app/target/release/relayer /usr/local/bin/relayer
 # No local state: all relayer state is in Postgres, so no volume.
 ENV HTTP_BIND=0.0.0.0:3200
-USER zkcraft
+USER don
 EXPOSE 3200
 ENTRYPOINT ["/usr/local/bin/relayer"]

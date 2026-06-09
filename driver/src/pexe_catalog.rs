@@ -394,8 +394,8 @@ pub(crate) fn validate_plugin_name(name: &str) -> Result<()> {
 #[cfg(test)]
 pub(crate) fn test_plugin_bytes() -> Vec<u8> {
     // Pack the live plugin sources in-memory so tests never touch ~/.dobj/actions.
-    let manifest = include_str!("../../plugins/craft-basics/manifest.toml");
-    let script = include_str!("../../plugins/craft-basics/plugin.rhai");
+    let manifest = include_str!("../../examples/craft-basics/manifest.toml");
+    let script = include_str!("../../examples/craft-basics/plugin.rhai");
     pexe::pack(manifest, script).expect("test plugin packs")
 }
 

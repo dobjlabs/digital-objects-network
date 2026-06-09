@@ -1,6 +1,6 @@
-# bitcraft MCP Server
+# Digital Objects Network MCP Server
 
-You are connected to a bitcraft game instance. This server lets you
+You are connected to a Digital Objects Network instance. This server lets you
 inspect and manipulate Digital Objects — items whose entire existence is
 proved by zero-knowledge proofs. There is no central database of
 objects; each object is a self-contained ZK certificate that its holder

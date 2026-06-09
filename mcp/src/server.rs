@@ -12,12 +12,12 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::ops::CraftOps;
+use crate::ops::DobjOps;
 use crate::types::*;
 
-/// MCP server service that exposes bitcraft operations as tools.
+/// MCP server service that exposes Digital Objects Network operations as tools.
 #[derive(Clone)]
-pub struct CraftMcpService<T: CraftOps> {
+pub struct DobjMcpService<T: DobjOps> {
     ops: Arc<T>,
     /// Used by the `#[tool_handler]` macro at request-dispatch time and by
     /// the test below. Plain dead-code analysis can't see the macro
@@ -26,7 +26,7 @@ pub struct CraftMcpService<T: CraftOps> {
     tool_router: ToolRouter<Self>,
 }
 
-impl<T: CraftOps> CraftMcpService<T> {
+impl<T: DobjOps> DobjMcpService<T> {
     pub fn new(ops: Arc<T>) -> Self {
         Self {
             ops,
@@ -92,7 +92,7 @@ pub struct ReadDocParams {
 // -- Tool implementations --
 
 #[tool_router]
-impl<T: CraftOps> CraftMcpService<T> {
+impl<T: DobjOps> DobjMcpService<T> {
     #[tool(
         description = "List all objects in the inventory with their types, fields, and liveness status"
     )]
@@ -282,10 +282,10 @@ impl<T: CraftOps> CraftMcpService<T> {
             }
             _ => {
                 let uri = match params.name.as_str() {
-                    "podlang-reference" => "bitcraft://docs/podlang-reference",
-                    "object-lifecycle" => "bitcraft://docs/object-lifecycle",
-                    "txlib.podlang" => "bitcraft://source/txlib.podlang",
-                    "time.podlang" => "bitcraft://source/time.podlang",
+                    "podlang-reference" => "dobj://docs/podlang-reference",
+                    "object-lifecycle" => "dobj://docs/object-lifecycle",
+                    "txlib.podlang" => "dobj://source/txlib.podlang",
+                    "time.podlang" => "dobj://source/time.podlang",
                     "generated.podlang" => {
                         return self
                             .ops
@@ -328,7 +328,7 @@ const INSTRUCTIONS: &str = include_str!("../docs/instructions.md");
 // -- ServerHandler --
 
 #[tool_handler]
-impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
+impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
             ServerCapabilities::builder()
@@ -365,11 +365,11 @@ impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mock::MockCraftOps;
+    use crate::mock::MockDobjOps;
     use rmcp::handler::server::wrapper::Json;
 
-    fn make_service() -> CraftMcpService<MockCraftOps> {
-        CraftMcpService::new(Arc::new(MockCraftOps::new()))
+    fn make_service() -> DobjMcpService<MockDobjOps> {
+        DobjMcpService::new(Arc::new(MockDobjOps::new()))
     }
 
     fn craft_basics(name: &str) -> QualifiedName {
@@ -412,7 +412,7 @@ mod tests {
         let info = service.get_info();
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
-        assert!(info.instructions.unwrap().contains("bitcraft MCP Server"));
+        assert!(info.instructions.unwrap().contains("Digital Objects Network MCP Server"));
     }
 
     #[test]
@@ -536,8 +536,8 @@ mod tests {
 
     #[test]
     fn test_check_feasibility_infeasible() {
-        let mock = MockCraftOps::new().with_inventory(vec![]);
-        let service = CraftMcpService::new(Arc::new(mock));
+        let mock = MockDobjOps::new().with_inventory(vec![]);
+        let service = DobjMcpService::new(Arc::new(mock));
         let Json(report) = service
             .check_feasibility(Parameters(CheckFeasibilityParams {
                 action: craft_basics("CraftWoodPick"),
@@ -557,7 +557,7 @@ mod tests {
         let config = McpConfig {
             cancellation_token: ct.clone(),
         };
-        let server = McpServer::new(MockCraftOps::new(), config);
+        let server = McpServer::new(MockDobjOps::new(), config);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 

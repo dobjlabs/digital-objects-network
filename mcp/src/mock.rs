@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, bail};
 
-use crate::ops::CraftOps;
+use crate::ops::DobjOps;
 use crate::types::{RunActionInner, *};
 
 const PLUGIN: &str = "craft-basics";
@@ -21,16 +21,16 @@ fn class_ref(name: &str) -> ClassRef {
     }
 }
 
-/// Mock implementation of CraftOps for testing.
-/// Returns realistic fixtures matching the bitcraft game.
+/// Mock implementation of DobjOps for testing.
+/// Returns realistic fixtures for tests.
 /// Multiple actions can run concurrently.
-pub struct MockCraftOps {
+pub struct MockDobjOps {
     inventory: Vec<InventoryObject>,
     actions: Vec<Action>,
     state_root: String,
 }
 
-impl MockCraftOps {
+impl MockDobjOps {
     pub fn new() -> Self {
         Self {
             inventory: default_inventory(),
@@ -46,13 +46,13 @@ impl MockCraftOps {
     }
 }
 
-impl Default for MockCraftOps {
+impl Default for MockDobjOps {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CraftOps for MockCraftOps {
+impl DobjOps for MockDobjOps {
     fn list_inventory(&self) -> anyhow::Result<Vec<InventoryObject>> {
         Ok(self.inventory.clone())
     }
@@ -181,7 +181,7 @@ impl CraftOps for MockCraftOps {
 
         Ok(RunAccepted {
             // Static fixture so tests can assert on it without depending on
-            // wall-clock or randomness. Real `DobjdCraftOps` mints a UUID v4.
+            // wall-clock or randomness. Real `DobjdOps` mints a UUID v4.
             run_id: "00000000-0000-4000-8000-000000000000".to_string(),
             status: RunStatus::Queued,
         })
@@ -501,7 +501,7 @@ mod tests {
 
     #[test]
     fn test_default_inventory_has_all_classes() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let inv = mock.list_inventory().unwrap();
         let names: Vec<&str> = inv.iter().map(|o| o.class.name.as_str()).collect();
         assert!(names.contains(&"Log"));
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn test_inspect_object_found() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let detail = mock
             .inspect_object("craft-basics__log_0xabc1.dobj")
             .unwrap();
@@ -523,13 +523,13 @@ mod tests {
 
     #[test]
     fn test_inspect_object_not_found() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         assert!(mock.inspect_object("nonexistent.dobj").is_err());
     }
 
     #[test]
     fn test_inspect_class() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let detail = mock.inspect_class(&qname("Wood")).unwrap();
         assert!(detail.produced_by.contains(&qname("CraftWood")));
         assert!(detail.consumed_by.contains(&qname("CraftSticks")));
@@ -539,13 +539,13 @@ mod tests {
 
     #[test]
     fn test_inspect_unknown_class() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         assert!(mock.inspect_class(&qname("Diamond")).is_err());
     }
 
     #[test]
     fn test_inspect_action() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let detail = mock.inspect_action(&qname("CraftWoodPick")).unwrap();
         assert_eq!(detail.action.name, "CraftWoodPick");
         assert!(detail.total_inputs.iter().any(|r| r.class.name == "Wood"));
@@ -561,13 +561,13 @@ mod tests {
 
     #[test]
     fn test_inspect_unknown_action() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         assert!(mock.inspect_action(&qname("CraftDiamond")).is_err());
     }
 
     #[test]
     fn test_check_feasibility_feasible() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let report = mock.check_feasibility(&qname("CraftWoodPick")).unwrap();
         assert!(report.feasible);
         assert!(report.missing_inputs.is_empty());
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn test_check_feasibility_missing() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let report = mock.check_feasibility(&qname("CraftStonePick")).unwrap();
         // We have Stone and Stick, so this should be feasible
         assert!(report.feasible);
@@ -584,13 +584,13 @@ mod tests {
 
     #[test]
     fn test_check_feasibility_unknown_action() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         assert!(mock.check_feasibility(&qname("CraftDiamond")).is_err());
     }
 
     #[test]
     fn test_run_action_success() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let accepted = mock
             .run_action(RunActionInput {
                 action: qname("CraftWood"),
@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_get_run_reports_completed() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let state = mock.get_run("run-abc").unwrap();
         assert_eq!(state.run_id, "run-abc");
         assert_eq!(state.status, RunStatus::Succeeded);
@@ -613,7 +613,7 @@ mod tests {
     #[test]
     fn test_run_action_concurrent() {
         use std::sync::Arc;
-        let mock = Arc::new(MockCraftOps::new());
+        let mock = Arc::new(MockDobjOps::new());
         let handles: Vec<_> = (0..3)
             .map(|_| {
                 let mock = mock.clone();
@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_run_action_unknown() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let result = mock.run_action(RunActionInput {
             action: qname("CraftDiamond"),
             input_object_paths: vec![],
@@ -644,7 +644,7 @@ mod tests {
 
     #[test]
     fn test_get_state_root() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let root = mock.get_state_root().unwrap();
         assert!(root.starts_with("0x"));
     }

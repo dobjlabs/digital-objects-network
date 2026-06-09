@@ -2239,25 +2239,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "reqwest 0.12.28",
- "rmcp",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "wire-types",
-]
-
-[[package]]
 name = "crc"
 version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2758,13 +2739,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "dobj-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "reqwest 0.12.28",
+ "rmcp",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "wire-types",
+]
+
+[[package]]
 name = "dobjd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
  "common",
- "craft-mcp",
+ "dobj-mcp",
  "driver",
  "futures-util",
  "log",

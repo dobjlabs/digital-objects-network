@@ -147,7 +147,7 @@ mod tests {
     use super::*;
     use sdk::Sdk;
 
-    const PLUGIN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/craft-basics");
+    const PLUGIN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/craft-basics");
 
     fn load_craft_basics() -> std::rc::Rc<SdkModule> {
         let source = crate::PluginSource::read(PLUGIN_DIR).unwrap();

@@ -2,8 +2,8 @@
 
 Both services ship as published container images:
 
-- `ghcr.io/dobjlabs/zk-craft/synchronizer`
-- `ghcr.io/dobjlabs/zk-craft/relayer`
+- `ghcr.io/dobjlabs/digital-objects-network/synchronizer`
+- `ghcr.io/dobjlabs/digital-objects-network/relayer`
 
 Run the full stack, or just a **synchronizer** to independently verify the
 network's canonical state from Ethereum chain data without trusting anyone
@@ -48,15 +48,15 @@ docker run -d --name synchronizer -p 3000:3000 \
   -e BEACON_URL=https://your-beacon-api \
   -e TO_ADDRESS=0x... \
   -e SYNC_METADATA_DB_URL=postgres://user:pass@host:5432/synchronizer \
-  -v zkcraft_data:/var/lib/zkcraft \
-  ghcr.io/dobjlabs/zk-craft/synchronizer:latest
+  -v don_data:/var/lib/don \
+  ghcr.io/dobjlabs/digital-objects-network/synchronizer:latest
 ```
 
 ## Configuration
 
 Set via `.env` (compose) or `-e` flags (`docker run`). Image defaults:
 `HTTP_BIND=0.0.0.0:<port>`, and the synchronizer's
-`APP_STATE_DB_PATH=/var/lib/zkcraft/synchronizer-db`.
+`APP_STATE_DB_PATH=/var/lib/don/synchronizer-db`.
 
 | Variable               | Service      | Required     | Notes                                                             |
 | ---------------------- | ------------ | ------------ | ----------------------------------------------------------------- |
@@ -71,7 +71,7 @@ Set via `.env` (compose) or `-e` flags (`docker run`). Image defaults:
 | `HTTP_BIND`            | both         | no           | Defaults to `0.0.0.0:3000` / `0.0.0.0:3200`                       |
 | `RUST_LOG`             | both         | no           | e.g. `info`                                                       |
 
-The synchronizer's `/var/lib/zkcraft` holds RocksDB - a rebuildable cache (the
+The synchronizer's `/var/lib/don` holds RocksDB - a rebuildable cache (the
 authoritative state lives in Postgres), but mounting a volume avoids a slow cold
 re-sync on restart. The relayer keeps no local state.
 
@@ -91,7 +91,7 @@ The compose pulls published images. To build from source instead, tag them with
 the names the compose expects and point `IMAGE_TAG` at your tag:
 
 ```bash
-docker build --target synchronizer -t ghcr.io/dobjlabs/zk-craft/synchronizer:dev .
-docker build --target relayer      -t ghcr.io/dobjlabs/zk-craft/relayer:dev .
+docker build --target synchronizer -t ghcr.io/dobjlabs/digital-objects-network/synchronizer:dev .
+docker build --target relayer      -t ghcr.io/dobjlabs/digital-objects-network/relayer:dev .
 # then set IMAGE_TAG=dev in deploy/.env
 ```

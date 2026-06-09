@@ -1,4 +1,4 @@
-//! `pexe`: build and install bitcraft plugin archives.
+//! `pexe`: build and install plugin archives.
 
 use std::path::{Path, PathBuf};
 
@@ -22,7 +22,7 @@ fn default_install_dir() -> Result<PathBuf> {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "pexe", about = "bitcraft plugin packaging tool")]
+#[command(name = "pexe", about = "plugin packaging tool")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,

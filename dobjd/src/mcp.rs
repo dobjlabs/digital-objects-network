@@ -8,19 +8,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use craft_mcp::ops::CraftOps;
-use craft_mcp::types as mcp;
+use dobj_mcp::ops::DobjOps;
+use dobj_mcp::types as mcp;
 
 use crate::events::EventTx;
 use crate::runs::RunRegistry;
 
-pub struct DobjdCraftOps {
+pub struct DobjdOps {
     driver: Arc<::driver::Driver>,
     events: EventTx,
     runs: RunRegistry,
 }
 
-impl DobjdCraftOps {
+impl DobjdOps {
     pub fn new(driver: Arc<::driver::Driver>, events: EventTx, runs: RunRegistry) -> Self {
         Self {
             driver,
@@ -30,7 +30,7 @@ impl DobjdCraftOps {
     }
 }
 
-impl CraftOps for DobjdCraftOps {
+impl DobjOps for DobjdOps {
     fn list_inventory(&self) -> anyhow::Result<Vec<mcp::InventoryObject>> {
         // Driver returns the basic `ObjectSummary`; the inventory wire
         // shape folds in per-class metadata (emoji, description) so

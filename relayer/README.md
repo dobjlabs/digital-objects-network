@@ -1,6 +1,6 @@
 # Relayer
 
-Service that accepts zk-craft proof payloads over HTTP and relays them to Ethereum as EIP-4844 blob transactions.
+Service that accepts Digital Objects Network proof payloads over HTTP and relays them to Ethereum as EIP-4844 blob transactions.
 
 ## What it does
 

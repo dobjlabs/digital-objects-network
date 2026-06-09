@@ -1,6 +1,6 @@
 # pexe
 
-The `.pexe` archive format plus tooling for bitcraft plugins.
+The `.pexe` archive format plus tooling for Digital Objects Network plugins.
 
 A **pexe** is a zip with exactly two entries:
 
@@ -45,18 +45,18 @@ Compiles one or more plugin source directories into `.pexe` archives.
 
 ```bash
 # Build into target/pexe/*.pexe (default)
-cargo run -p pexe --release -- build plugins/*
+cargo run -p pexe --release -- build examples/*
 
 # Build and install into ~/.dobj/actions/
-cargo run -p pexe --release -- build --install plugins/*
+cargo run -p pexe --release -- build --install examples/*
 
 # Install into a custom directory
 cargo run -p pexe --release -- build --install \
-    --install-dir /path/to/actions plugins/craft-basics
+    --install-dir /path/to/actions examples/craft-basics
 
 # Fail if manifest module_hash doesn't match compiled hash
 # (by default the source manifest gets rewritten to match)
-cargo run -p pexe --release -- build --check plugins/*
+cargo run -p pexe --release -- build --check examples/*
 ```
 
 Each build step:
@@ -115,7 +115,7 @@ list.
 use pexe::{pack, unpack, PluginSource, compile_module_hash};
 
 // Read a plugin from disk.
-let source = PluginSource::read("plugins/craft-basics")?;
+let source = PluginSource::read("examples/craft-basics")?;
 let manifest = source.parse_manifest()?;
 
 // Check what hash the script actually produces.

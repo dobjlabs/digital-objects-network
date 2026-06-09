@@ -230,7 +230,7 @@ jobs:
           mkdir -p ~/.dobj/bin ~/.dobj/actions
           tar -xzf "artifacts/dobjd-$TARGET.tar.gz" -C ~/.dobj/bin
           tar -xzf "artifacts/dobj-$TARGET.tar.gz"  -C ~/.dobj/bin
-          chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj ~/.dobj/bin/bitcraft-mcp-proxy
+          chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj ~/.dobj/bin/dobj-mcp-proxy
           PEXE=$(find artifacts -maxdepth 1 -name 'craft-basics*.pexe' | head -1)
           cp "$PEXE" ~/.dobj/actions/craft-basics.pexe
 
