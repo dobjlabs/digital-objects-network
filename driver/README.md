@@ -102,9 +102,9 @@ Current settings are intentionally small:
 
 ## Catalog
 
-The shipped catalog is the built-in crafting world implemented in [`src/builtin.rs`](src/builtin.rs).
+The shipped catalog is `PexeCatalog` ([`src/pexe_catalog.rs`](src/pexe_catalog.rs)), which loads `.pexe` plugin archives from `~/.dobj/actions/`.
 
-The catalog surface is abstracted behind `ActionCatalog` in [`src/catalog.rs`](src/catalog.rs), so another source such as `.pexe` files can be added later without changing the `Driver` API.
+The catalog surface is abstracted behind `ActionCatalog` in [`src/catalog.rs`](src/catalog.rs), so an alternative source can be substituted without changing the `Driver` API.
 
 ## Network Clients
 

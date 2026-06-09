@@ -1,7 +1,7 @@
 //! Routes for inspecting the action catalog's class definitions.
 //!
 //! `list_objects` (under `/objects`) folds objects + actions together
-//! for the gameplay-style UIs, but classes are independently useful for
+//! for object-browser UIs, but classes are independently useful for
 //! introspection — predicate sources, related actions, live counts. These
 //! handlers expose `Driver::list_classes` and `Driver::get_class` directly
 //! for the CLI, the website, and any other client that wants the full
