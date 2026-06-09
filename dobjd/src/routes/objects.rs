@@ -54,9 +54,7 @@ pub async fn import_object(
 /// `GET /objects` — local objects synced against the chain. The action
 /// catalog comes from `GET /actions` separately, so clients can fetch the
 /// two in parallel.
-pub async fn load_objects(
-    State(state): State<AppState>,
-) -> ApiResult<Json<Vec<ObjectListing>>> {
+pub async fn load_objects(State(state): State<AppState>) -> ApiResult<Json<Vec<ObjectListing>>> {
     let driver = state.driver.clone();
     let objects = tokio::task::spawn_blocking(move || -> Result<Vec<ObjectListing>> {
         let classes = driver

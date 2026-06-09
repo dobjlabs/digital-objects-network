@@ -412,7 +412,11 @@ mod tests {
         let info = service.get_info();
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
-        assert!(info.instructions.unwrap().contains("Digital Objects Network MCP Server"));
+        assert!(
+            info.instructions
+                .unwrap()
+                .contains("Digital Objects Network MCP Server")
+        );
     }
 
     #[test]
