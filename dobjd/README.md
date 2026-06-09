@@ -38,7 +38,7 @@ All routes return JSON unless noted; errors come back as
 
 | Method | Path                            | Driver call                                                  |
 | ------ | ------------------------------- | ------------------------------------------------------------ |
-| `GET`  | `/inventory`                    | `sync_inventory` (with fallback to `list_objects`)           |
+| `GET`  | `/objects`                      | `sync_objects` (with fallback to `list_objects`)             |
 | `GET`  | `/actions`                      | `list_actions`                                               |
 | `GET`  | `/state-root`                   | `get_state_root`                                             |
 | `GET`  | `/objects/dir`                  | `paths().objects_dir`                                        |

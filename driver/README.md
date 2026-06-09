@@ -19,8 +19,8 @@ It is intentionally a library, not a daemon and not a CLI.
 - opening the default local store
 - listing and reading `.dobj` files
 - listing actions and classes from the built-in world
-- checking whether an action is feasible with the current local inventory
-- syncing local inventory state against the synchronizer
+- checking whether an action is feasible with the current local objects
+- syncing local objects state against the synchronizer
 - importing an external `.dobj` (one not produced by this driver) — validates
   class identity + on-chain grounding, then files it under a canonical name
   derived from its commitment
@@ -55,7 +55,7 @@ Core read APIs:
 - `list_objects(query)`
 - `read_object(selector)`
 - `read_object_file(path)`
-- `sync_inventory(query)`
+- `sync_objects(query)`
 - `list_actions(query)`
 - `list_classes()`
 - `get_class(name)`
@@ -144,8 +144,8 @@ use driver::{Driver, ExecuteActionInput, ObjectSelector};
 fn main() -> anyhow::Result<()> {
     let driver = Driver::open_default()?;
 
-    let inventory = driver.list_objects(None)?;
-    println!("objects: {}", inventory.len());
+    let objects = driver.list_objects(None)?;
+    println!("objects: {}", objects.len());
 
     let report = driver.check_action("CraftWood")?;
     println!("feasible: {}", report.feasible);

@@ -147,7 +147,7 @@ fn resume_start_index(headers: &HeaderMap) -> usize {
 
 /// `GET /actions` — full catalog of every action the loaded plugins
 /// declare. Pure local state; no synchronizer round-trip. Use this
-/// instead of `/inventory` when you only need the action list.
+/// instead of `/objects` when you only need the action list.
 pub async fn list_actions(State(state): State<AppState>) -> ApiResult<Json<Vec<ActionSummary>>> {
     let driver = state.driver.clone();
     let actions = tokio::task::spawn_blocking(move || driver.list_actions(None))
@@ -170,7 +170,7 @@ pub async fn inspect_action(
     Ok(Json(action))
 }
 
-/// `GET /actions/{id}/feasibility` — does the local inventory have what
+/// `GET /actions/{id}/feasibility` — does the local objects have what
 /// this action needs? Returns the report shape `Driver::check_action`
 /// produces: `feasible` flag, the candidate objects we'd use, and any
 /// missing input class names. `id` is the canonical `plugin::name` form.

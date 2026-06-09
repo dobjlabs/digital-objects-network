@@ -13,7 +13,6 @@ mod actions;
 mod classes;
 mod events;
 mod health;
-mod inventory;
 mod objects;
 mod settings;
 mod state;
@@ -31,7 +30,7 @@ pub fn router(app_state: AppState) -> Router {
         .route("/healthz", get(health::healthz))
         .route("/events", get(events::stream))
         .route("/actions/runs/{run_id}/events", get(actions::run_events))
-        .route("/inventory", get(inventory::load_inventory))
+        .route("/objects", get(objects::load_objects))
         .route("/state-root", get(state::get_state_root))
         .route("/objects/dir", get(objects::get_objects_dir))
         .route("/objects/import", post(objects::import_object))

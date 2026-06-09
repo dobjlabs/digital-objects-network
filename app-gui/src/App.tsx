@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ContextPanel } from "./features/context/ContextPanel";
 import { ActionGrid } from "./features/actions/ActionGrid";
-import { InventoryPanel } from "./features/inventory/InventoryPanel";
+import { ObjectsPanel } from "./features/objects/ObjectsPanel";
 import { ProofRunnerPanel } from "./features/proof-runner/ProofRunnerPanel";
 import { SettingsModal } from "./features/settings/SettingsModal";
 import {
@@ -17,7 +17,7 @@ import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/layout.css";
 import "./styles/shared.css";
-import "./features/inventory/InventoryPanel.css";
+import "./features/objects/ObjectsPanel.css";
 import "./features/context/ContextPanel.css";
 import "./features/proof-runner/ProofRunnerPanel.css";
 import "./features/actions/ActionGrid.css";
@@ -27,7 +27,7 @@ function App() {
   const [objectsDirPath, setObjectsDirPath] = useState("~/.dobj/objects");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [initialHydrationPending, setInitialHydrationPending] = useState(true);
-  const inventory = useStore((state) => state.inventory);
+  const objects = useStore((state) => state.objects);
   const actions = useStore((state) => state.actions);
   const activeObjectContentHash = useStore(
     (state) => state.activeObjectContentHash,
@@ -52,7 +52,7 @@ function App() {
       state.proof.status === "summary",
   );
   const selectedObject =
-    inventory.find(
+    objects.find(
       (object) => object.contentHash === activeObjectContentHash,
     ) ?? null;
 
@@ -60,7 +60,7 @@ function App() {
     let cancelled = false;
     hydrateData()
       .catch((error) => {
-        console.error("Failed to load GUI inventory:", error);
+        console.error("Failed to load GUI objects:", error);
       })
       .finally(() => {
         if (!cancelled) {
@@ -238,8 +238,8 @@ function App() {
     <>
       <div className="app-frame">
         <main className="app-shell" aria-busy={initialHydrationPending}>
-          <InventoryPanel
-            inventory={inventory}
+          <ObjectsPanel
+            objects={objects}
             objectsDirPath={objectsDirPath}
             activeObjectContentHash={activeObjectContentHash}
             showNullifiedItems={showNullifiedItems}
@@ -252,7 +252,7 @@ function App() {
           <div className="main-column">
             <ContextPanel
               selection={contextSelection}
-              inventory={inventory}
+              objects={objects}
               objectsDirPath={objectsDirPath}
               actions={actions}
               onRunProof={runProof}

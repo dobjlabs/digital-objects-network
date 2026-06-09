@@ -3,7 +3,7 @@ import type { DragEvent } from "react";
 import type {
   ActionPayload as Action,
   ClassRefPayload,
-  InventoryObjectPayload as InventoryObject,
+  ObjectListingPayload as ObjectListing,
   QualifiedNamePayload,
 } from "../../shared/api/wireTypes";
 import { pickDobjFilePath, readDobjFile } from "../../shared/api/tauriClient";
@@ -21,7 +21,7 @@ import type { ContextSelection } from "../../shared/state/store";
 
 interface ContextPanelProps {
   selection: ContextSelection;
-  inventory: InventoryObject[];
+  objects: ObjectListing[];
   objectsDirPath: string;
   actions: Action[];
   onClearSelection: () => void;
@@ -43,7 +43,7 @@ interface BoundArg {
 
 export function ContextPanel({
   selection,
-  inventory,
+  objects,
   objectsDirPath,
   actions,
   onClearSelection,
@@ -402,7 +402,7 @@ export function ContextPanel({
       );
     })();
 
-  const displayThingPath = (object: InventoryObject) => {
+  const displayThingPath = (object: ObjectListing) => {
     const absolutePath = joinObjectsDirPath(objectsDirPath, object.fileName, {
       nullified: isNullifiedObject(object),
     });
@@ -455,7 +455,7 @@ export function ContextPanel({
     };
   };
 
-  const renderObjectData = (object: InventoryObject) => {
+  const renderObjectData = (object: ObjectListing) => {
     const normalizedObject = normalizePod2Value(object.fields);
     const entries = isRecord(normalizedObject)
       ? Object.entries(normalizedObject).sort(([left], [right]) =>
@@ -498,7 +498,7 @@ export function ContextPanel({
   }
 
   if (selection.kind === "object") {
-    const object = inventory.find(
+    const object = objects.find(
       (candidate) => candidate.contentHash === selection.contentHash,
     );
     if (!object)

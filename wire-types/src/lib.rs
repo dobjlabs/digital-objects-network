@@ -177,13 +177,13 @@ pub struct ObjectSummary {
     pub fields: HashMap<String, serde_json::Value>,
 }
 
-/// Inventory row served by `GET /inventory`. Folds class metadata (emoji,
+/// Object row served by `GET /objects`. Folds class metadata (emoji,
 /// description) into the object summary so GUI clients can render rows
 /// without a second `/classes` round-trip.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct InventoryObject {
+pub struct ObjectListing {
     pub content_hash: String,
     pub file_name: String,
     pub class: QualifiedName,
@@ -200,7 +200,7 @@ pub struct InventoryObject {
 /// `POST /objects/import` body — the raw JSON contents of an external `.dobj`
 /// file, one not produced by this driver (e.g. from outside `~/.dobj/`). The driver
 /// validates the object's class identity and on-chain grounding, then files
-/// it into local inventory under a canonical name derived from its
+/// it into the local object store under a canonical name derived from its
 /// commitment. Consumers handle their own file I/O and pass the bytes as a
 /// string. The import result is a plain [`ObjectSummary`] whose `status`
 /// reflects grounding (`live` if the source tx is canonical, else `unknown`).
@@ -268,7 +268,7 @@ pub struct CheckActionReport {
     pub feasible: bool,
     pub action: QualifiedName,
     pub available_inputs: Vec<CheckActionCandidate>,
-    /// Slots that had no eligible live object in inventory.
+    /// Slots that had no eligible live object in the local objects.
     pub missing_inputs: Vec<ClassRef>,
 }
 

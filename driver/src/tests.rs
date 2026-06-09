@@ -373,7 +373,7 @@ fn test_execute_keeps_files_after_relayer_accepts() {
 
     // The relayer accepted the job but wait_for_tx_hash failed, so outputs
     // stay as Unknown (Pending requires a tx_hash). Files are kept so the
-    // next sync_inventory can reconcile.
+    // next sync_objects can reconcile.
     let remaining = load_object_files(&paths).unwrap();
     assert_eq!(remaining.len(), 2);
     let input = remaining
@@ -529,7 +529,7 @@ fn test_import_duplicate_is_rejected() {
     driver.import_object(&json).unwrap();
     let err = driver.import_object(&json).unwrap_err();
     assert!(
-        err.to_string().contains("already in inventory"),
+        err.to_string().contains("already present"),
         "expected duplicate error, got: {err}"
     );
 }

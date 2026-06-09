@@ -41,7 +41,7 @@ impl<T: DobjOps> DobjMcpService<T> {
 pub struct InspectObjectParams {
     /// The `.dobj` file name (e.g. `craft-basics__wood_0xabc….dobj`) to
     /// inspect. Must be a basename in `~/.dobj/objects/` — use
-    /// `list_inventory` to see what's available.
+    /// `list_objects` to see what's available.
     pub file_name: String,
 }
 
@@ -94,12 +94,12 @@ pub struct ReadDocParams {
 #[tool_router]
 impl<T: DobjOps> DobjMcpService<T> {
     #[tool(
-        description = "List all objects in the inventory with their types, fields, and liveness status"
+        description = "List all objects held by this driver with their types, fields, and liveness status"
     )]
-    fn list_inventory(&self) -> Result<Json<InventoryList>, String> {
+    fn list_objects(&self) -> Result<Json<ObjectList>, String> {
         self.ops
-            .list_inventory()
-            .map(|objects| Json(InventoryList { objects }))
+            .list_objects()
+            .map(|objects| Json(ObjectList { objects }))
             .map_err(|e| e.to_string())
     }
 
@@ -114,7 +114,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "List all known object classes with live inventory counts and which actions produce/consume each class"
+        description = "List all known object classes with live object counts and which actions produce/consume each class"
     )]
     fn list_classes(&self) -> Result<Json<ClassList>, String> {
         self.ops
@@ -132,7 +132,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Inspect an object by file name: full detail including fields, class, liveness, and predicate source. The file_name is a `.dobj` basename from list_inventory (e.g. `craft-basics__wood_0xabc….dobj`)."
+        description = "Inspect an object by file name: full detail including fields, class, liveness, and predicate source. The file_name is a `.dobj` basename from list_objects (e.g. `craft-basics__wood_0xabc….dobj`)."
     )]
     fn inspect_object(
         &self,
@@ -200,7 +200,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Check whether an action can be executed with the current inventory. Reports available and missing inputs."
+        description = "Check whether an action can be executed with the current objects. Reports available and missing inputs."
     )]
     fn check_feasibility(
         &self,
@@ -213,7 +213,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Import an external .dobj object — one not produced by this driver — into local inventory. Pass `path`, a local filesystem path (on the machine running dobjd) to the .dobj file; dobjd reads it. If you only have the object's JSON inline, write it to a temp file first and pass that path. Validates the object's class identity and on-chain grounding, files it under a canonical name, and returns its summary (status is `live` if grounded, otherwise `unknown`). Errors if the object is already in inventory or already spent on-chain."
+        description = "Import an external .dobj object — one not produced by this driver — into the local object store. Pass `path`, a local filesystem path (on the machine running dobjd) to the .dobj file; dobjd reads it. If you only have the object's JSON inline, write it to a temp file first and pass that path. Validates the object's class identity and on-chain grounding, files it under a canonical name, and returns its summary (status is `live` if grounded, otherwise `unknown`). Errors if the object is already present or already spent on-chain."
     )]
     fn import_object_file(
         &self,
@@ -388,7 +388,7 @@ mod tests {
             .keys()
             .map(|k| k.to_string())
             .collect();
-        assert!(tools.contains(&"list_inventory".to_string()));
+        assert!(tools.contains(&"list_objects".to_string()));
         assert!(tools.contains(&"list_actions".to_string()));
         assert!(tools.contains(&"get_state_root".to_string()));
         assert!(tools.contains(&"inspect_object".to_string()));
@@ -416,9 +416,9 @@ mod tests {
     }
 
     #[test]
-    fn test_list_inventory_returns_structured() {
+    fn test_list_objects_returns_structured() {
         let service = make_service();
-        let Json(list) = service.list_inventory().unwrap();
+        let Json(list) = service.list_objects().unwrap();
         assert!(!list.objects.is_empty());
         assert!(list.objects.iter().any(|o| o.class.name == "Log"));
     }
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_check_feasibility_infeasible() {
-        let mock = MockDobjOps::new().with_inventory(vec![]);
+        let mock = MockDobjOps::new().with_objects(vec![]);
         let service = DobjMcpService::new(Arc::new(mock));
         let Json(report) = service
             .check_feasibility(Parameters(CheckFeasibilityParams {

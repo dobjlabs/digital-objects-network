@@ -26,7 +26,7 @@ A single **driver daemon** (`dobjd`) on the user's machine owns
   REST/SSE API on `:7717` and the MCP server on `:7718`. Owns the
   plugin loader, RocksDB, and the in-memory state
   every client shares.
-- **`dobj`** ([cli/](cli)) — terminal CLI. Subcommands for inventory,
+- **`dobj`** ([cli/](cli)) — terminal CLI. Subcommands for objects,
   inspecting objects/classes, running actions, watching the event bus,
   and managing the daemon (`start`/`stop`/`status`/`logs`).
 - **Desktop / web** ([app-gui/](app-gui)) — React UI bundled either as a
@@ -105,19 +105,19 @@ Run individual pieces standalone with `just sync`, `just relayer`,
 
 ## Workspace map
 
-| Crate                                                                       | Role                                                                                                                      |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| [`driver/`](driver)                                                         | the core Rust library — opens `~/.dobj/`, runs actions, queries inventory. Single entry point for any in-process consumer |
-| [`dobjd/`](dobjd)                                                           | HTTP + MCP daemon wrapping the driver. Long-running, owns the broadcast hub                                               |
-| [`cli/`](cli)                                                               | terminal CLI client for dobjd (binary: `dobj`)                                                                            |
-| [`mcp/`](mcp)                                                               | MCP server library + `dobj-mcp-proxy` stdio bridge                                                                        |
-| [`app-gui/`](app-gui)                                                       | React frontend + thin Tauri shell. Fetches from dobjd over HTTP/SSE                                                       |
-| [`synchronizer/`](synchronizer), [`relayer/`](relayer)                      | chain-side services (Postgres-backed)                                                                                     |
-| [`txlib/`](txlib)                                                           | transaction builder — event hash chain, `TxFinalized` predicate, nullifier derivation                                     |
-| [`sdk/`](sdk)                                                               | higher-level helpers used inside plugin actions                                                                           |
-| [`pexe/`](pexe)                                                             | plugin packager — bundles `manifest.toml` + `plugin.rhai` into `.pexe` archives                                           |
-| [`examples/craft-basics/`](examples/craft-basics)                           | the bundled crafting plugin (Log, Wood, Stone, sticks, picks…)                                                            |
-| [`common/`](common), [`pod2utils/`](pod2utils), [`intro_pods/`](intro_pods) | shared utilities + intro proof-of-work / VDF pods                                                                         |
+| Crate                                                                       | Role                                                                                                                    |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| [`driver/`](driver)                                                         | the core Rust library — opens `~/.dobj/`, runs actions, queries objects. Single entry point for any in-process consumer |
+| [`dobjd/`](dobjd)                                                           | HTTP + MCP daemon wrapping the driver. Long-running, owns the broadcast hub                                             |
+| [`cli/`](cli)                                                               | terminal CLI client for dobjd (binary: `dobj`)                                                                          |
+| [`mcp/`](mcp)                                                               | MCP server library + `dobj-mcp-proxy` stdio bridge                                                                      |
+| [`app-gui/`](app-gui)                                                       | React frontend + thin Tauri shell. Fetches from dobjd over HTTP/SSE                                                     |
+| [`synchronizer/`](synchronizer), [`relayer/`](relayer)                      | chain-side services (Postgres-backed)                                                                                   |
+| [`txlib/`](txlib)                                                           | transaction builder — event hash chain, `TxFinalized` predicate, nullifier derivation                                   |
+| [`sdk/`](sdk)                                                               | higher-level helpers used inside plugin actions                                                                         |
+| [`pexe/`](pexe)                                                             | plugin packager — bundles `manifest.toml` + `plugin.rhai` into `.pexe` archives                                         |
+| [`examples/craft-basics/`](examples/craft-basics)                           | the bundled crafting plugin (Log, Wood, Stone, sticks, picks…)                                                          |
+| [`common/`](common), [`pod2utils/`](pod2utils), [`intro_pods/`](intro_pods) | shared utilities + intro proof-of-work / VDF pods                                                                       |
 
 Built on **pod2** (0xPARC's predicate-of-data system) using `plonky2` —
 proofs are constant-size regardless of input count.

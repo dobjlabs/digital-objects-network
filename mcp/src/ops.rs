@@ -4,7 +4,7 @@ use crate::types::*;
 /// In production it's implemented by `DobjdOps` in the `dobjd` crate
 /// (one driver process serving HTTP + MCP). Tests use `MockDobjOps`.
 pub trait DobjOps: Send + Sync + 'static {
-    fn list_inventory(&self) -> anyhow::Result<Vec<InventoryObject>>;
+    fn list_objects(&self) -> anyhow::Result<Vec<ObjectListing>>;
     fn list_actions(&self) -> anyhow::Result<Vec<Action>>;
     fn list_classes(&self) -> anyhow::Result<Vec<ClassSummary>>;
     fn get_state_root(&self) -> anyhow::Result<String>;
@@ -19,7 +19,7 @@ pub trait DobjOps: Send + Sync + 'static {
     fn check_feasibility(&self, action: &QualifiedName) -> anyhow::Result<FeasibilityReport>;
 
     /// Import an external `.dobj` object — one not produced by this driver —
-    /// into local inventory by reading it from a local filesystem path.
+    /// into the local object store by reading it from a local filesystem path.
     /// Returns the filed object's summary.
     fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectDetail>;
 

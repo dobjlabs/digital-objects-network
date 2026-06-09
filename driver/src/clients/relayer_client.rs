@@ -275,8 +275,8 @@ impl RelayerClient for HttpRelayerClient {
             relayer_api_url.trim_end_matches('/')
         );
 
-        // Chunk so a large pending inventory still resolves in one
-        // `sync_inventory` call, just spread across a few HTTP requests.
+        // Chunk so a large pending objects still resolves in one
+        // `sync_objects` call, just spread across a few HTTP requests.
         for chunk in tx_finals.chunks(TX_HASH_BATCH_LIMIT) {
             let request = TxHashesByTxFinalRequest {
                 tx_finals: chunk.to_vec(),

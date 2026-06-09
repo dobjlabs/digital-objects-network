@@ -30,7 +30,7 @@ app-gui/
 
 Frontend panels (`src/features/`):
 
-- `InventoryPanel` — local live/nullified objects, drag source, `+ Import .dobj` button
+- `ObjectsPanel` — local live/nullified objects, drag source, `+ Import .dobj` button
 - `ActionGrid` — action catalog + search/filter
 - `ContextPanel` — selected object/action details, input binding, run button
 - `ProofRunnerPanel` — proof-run status, CPU stats, state root
@@ -47,7 +47,7 @@ provides things the browser fundamentally can't do.
 
 | Surface                              | Route                                      |
 | ------------------------------------ | ------------------------------------------ |
-| `loadInventory`                      | `GET /inventory`                           |
+| `loadObjects`                        | `GET /objects`                             |
 | `loadActions`                        | `GET /actions`                             |
 | `getStateRoot`                       | `GET /state-root`                          |
 | `getObjectsDir`                      | `GET /objects/dir`                         |
@@ -58,7 +58,7 @@ provides things the browser fundamentally can't do.
 | `listenRunActionProgress`            | `GET /events` firehose (SSE)               |
 | `listenRunActionProgressForRun`      | `GET /actions/runs/{id}/events` (SSE)      |
 
-`hydrateData` calls `loadInventory` + `loadActions` in parallel via
+`hydrateData` calls `loadObjects` + `loadActions` in parallel via
 `Promise.all`.
 
 `runAction` returns immediately with a `runId` (the proof + commit run in the

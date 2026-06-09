@@ -31,7 +31,7 @@ pub fn list() -> Vec<Resource> {
                 .with_description(
                     "Worked example of a Digital Object's lifecycle: creation, \
                      mutation, consumption, nullifiers, and what each step \
-                     looks like in the inventory.",
+                     looks like among the objects.",
                 )
                 .with_mime_type("text/markdown"),
             None,

@@ -1,6 +1,6 @@
 // Frontend client for the driver.
 //
-// All driver-related operations (inventory, actions, run_action, state-root,
+// All driver-related operations (objects, actions, run_action, state-root,
 // settings, /events) go to a single `dobjd` process over HTTP, regardless of
 // whether the page is loaded inside Tauri or a plain browser. The driver
 // lives in exactly one process; every client is thin.
@@ -22,7 +22,7 @@ import type {
   ActionPayload,
   AppSettingsPayload,
   CpuSample,
-  InventoryObjectPayload,
+  ObjectListingPayload,
   ObjectRecordPayload,
   ObjectSummaryPayload,
   RunAccepted,
@@ -35,7 +35,7 @@ export type {
   ActionPayload,
   AppSettingsPayload,
   CpuSample,
-  InventoryObjectPayload,
+  ObjectListingPayload,
   ObjectRecordPayload,
   ObjectSummaryPayload,
   QualifiedNamePayload,
@@ -106,10 +106,10 @@ async function httpJson<T>(res: Response): Promise<T> {
 
 // === Driver-backed operations: always HTTP ==================================
 
-// Inventory and the action catalog are independent reads; callers run them
+// Objects and the action catalog are independent reads; callers run them
 // in parallel via Promise.all rather than letting one block the other.
-export function loadInventory(): Promise<InventoryObjectPayload[]> {
-  return dobjdFetch("/inventory").then(httpJson<InventoryObjectPayload[]>);
+export function loadObjects(): Promise<ObjectListingPayload[]> {
+  return dobjdFetch("/objects").then(httpJson<ObjectListingPayload[]>);
 }
 
 export function loadActions(): Promise<ActionPayload[]> {

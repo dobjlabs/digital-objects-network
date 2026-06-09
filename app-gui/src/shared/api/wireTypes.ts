@@ -23,7 +23,7 @@ export interface QualifiedNamePayload {
   name: string;
 }
 
-export interface InventoryObjectPayload {
+export interface ObjectListingPayload {
   contentHash: string;
   fileName: string;
   class: QualifiedNamePayload;
@@ -37,7 +37,7 @@ export interface InventoryObjectPayload {
 }
 
 /** The `ObjectSummary` wire shape returned by `/objects/{name}` and
- * `/objects/import` — like `InventoryObjectPayload` but without the
+ * `/objects/import` — like `ObjectListingPayload` but without the
  * folded-in class emoji/description. */
 export interface ObjectSummaryPayload {
   contentHash: string;
