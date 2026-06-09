@@ -496,8 +496,7 @@ impl Driver {
             .deps
             .synchronizer
             .fetch_grounding_witness(&settings.synchronizer_api_url, &input_commitments)?;
-        let old_root_hash = grounding_witness.state_header.hash();
-        let old_root = old_root_hash;
+        let old_root = grounding_witness.state_header.hash();
 
         reporter.on_step(ExecutionPhase::GenerateProof, "Generating proof", &no_ctx);
         let execution_inputs = resolved_inputs
@@ -520,7 +519,7 @@ impl Driver {
         let payload_bytes = self
             .deps
             .payload_builder
-            .build_payload(&old_root_hash, &spendable_outputs)?;
+            .build_payload(&old_root, &spendable_outputs)?;
         // A tx has landed once the union of its effects is committed: every
         // produced object commitment in the created set and every nullifier in
         // the nullifier set. Collect both for the confirmation poll below.
