@@ -34,10 +34,8 @@ const TARGET_TRIPLE: &str = env!("DOBJ_TARGET_TRIPLE");
 /// `dobj` is last: the update is orchestrated by the running `dobj`, and
 /// keeping its on-disk file consistent with the executing code until
 /// everything else has landed keeps rollback reasoning simple.
-const ARTIFACTS: &[(&str, &[&str])] = &[
-    ("dobjd", &["dobjd", "dobj-mcp-proxy"]),
-    ("dobj", &["dobj"]),
-];
+const ARTIFACTS: &[(&str, &[&str])] =
+    &[("dobjd", &["dobjd", "dobj-mcp-proxy"]), ("dobj", &["dobj"])];
 
 pub async fn run(
     client: &DobjdClient,
