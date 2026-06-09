@@ -375,7 +375,7 @@ fn load_plugin_from_bytes(path: PathBuf, bytes: &[u8]) -> Result<Plugin> {
 /// the `::` qualified-id separator), every path-significant character
 /// (`/`, `\`, `.`), whitespace, and any reserved/control characters that
 /// would otherwise leak into filenames or split qualified ids unexpectedly.
-fn validate_plugin_name(name: &str) -> Result<()> {
+pub(crate) fn validate_plugin_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(anyhow!("plugin name must be non-empty"));
     }

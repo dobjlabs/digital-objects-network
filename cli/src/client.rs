@@ -68,6 +68,20 @@ impl DobjdClient {
             .with_context(|| format!("PUT {url}"))?;
         decode_json(res).await
     }
+
+    /// POST raw bytes (e.g. a `.pexe` archive) and decode the JSON response.
+    pub async fn post_bytes<T: DeserializeOwned>(&self, path: &str, bytes: Vec<u8>) -> Result<T> {
+        let url = self.url(path);
+        let res = self
+            .http
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(bytes)
+            .send()
+            .await
+            .with_context(|| format!("POST {url}"))?;
+        decode_json(res).await
+    }
 }
 
 async fn decode_json<T: DeserializeOwned>(res: reqwest::Response) -> Result<T> {

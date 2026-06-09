@@ -1,5 +1,6 @@
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{get, post},
 };
 use tower_http::cors::CorsLayer;
@@ -41,6 +42,14 @@ pub fn router(app_state: AppState) -> Router {
         )
         .route("/actions", get(actions::list_actions))
         .route("/actions/run", post(actions::run_action))
+        // Raw `.pexe` bytes; raise the body cap from axum's 2 MiB default to
+        // the pexe limit so larger plugins aren't rejected before the daemon
+        // can validate them.
+        .route(
+            "/actions/install",
+            post(actions::install_plugin)
+                .layer(DefaultBodyLimit::max(driver::MAX_PEXE_BYTES as usize)),
+        )
         .route("/actions/{id}", get(actions::inspect_action))
         .route("/actions/{id}/feasibility", get(actions::check_feasibility))
         .route("/events", get(events::stream))

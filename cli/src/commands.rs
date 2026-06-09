@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde_json::Value;
@@ -461,6 +461,64 @@ pub async fn feasibility(client: &DobjdClient, action_id: String, json: bool) ->
         }
     }
     Ok(())
+}
+
+/// Install a plugin from a local path or an http(s) URL. The bytes are sent to
+/// dobjd, which writes the `.pexe` into `~/.dobj/actions/` and hot-reloads the
+/// catalog so the plugin is usable immediately (no restart).
+pub async fn install(client: &DobjdClient, source: String, json: bool) -> Result<()> {
+    let bytes = read_or_download(&source).await?;
+    let plugin: String = client.post_bytes("/actions/install", bytes).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({ "plugin": plugin }))?
+        );
+    } else {
+        println!("installed plugin '{plugin}' - run `dobj actions` to see what it added");
+    }
+    Ok(())
+}
+
+/// Mirror of `pexe::MAX_PEXE_BYTES`, to avoid pulling in pexe's dependency tree.
+const MAX_PEXE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Resolve the install source: an http(s) URL is downloaded, anything else is
+/// read as a local file path. Both are bounded by `MAX_PEXE_BYTES` so an
+/// over-large source fails before the whole thing is buffered in memory.
+async fn read_or_download(source: &str) -> Result<Vec<u8>> {
+    let is_url = reqwest::Url::parse(source)
+        .map(|u| matches!(u.scheme(), "http" | "https"))
+        .unwrap_or(false);
+    if is_url {
+        let mut res = reqwest::get(source)
+            .await
+            .with_context(|| format!("GET {source}"))?
+            .error_for_status()
+            .with_context(|| format!("download failed: {source}"))?;
+        let mut buf = Vec::new();
+        while let Some(chunk) = res
+            .chunk()
+            .await
+            .with_context(|| format!("reading from {source}"))?
+        {
+            if buf.len() as u64 + chunk.len() as u64 > MAX_PEXE_BYTES {
+                bail!("{source} exceeds the {MAX_PEXE_BYTES}-byte plugin limit");
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        Ok(buf)
+    } else {
+        // Check size before reading so a wrong path can't pull a huge file
+        // into memory.
+        let len = std::fs::metadata(source)
+            .with_context(|| format!("reading {source}"))?
+            .len();
+        if len > MAX_PEXE_BYTES {
+            bail!("{source} ({len} bytes) exceeds the {MAX_PEXE_BYTES}-byte plugin limit");
+        }
+        std::fs::read(source).with_context(|| format!("reading {source}"))
+    }
 }
 
 fn short_hex(hex: &str) -> String {
