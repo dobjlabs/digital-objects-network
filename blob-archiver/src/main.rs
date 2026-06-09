@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     let last_header = Arc::new(RwLock::new(None));
     let api_state = api::ApiState {
         config: Arc::new(api::Config {
-            filter_address: node.config.filter_address.clone(),
+            filter_address: node.config.filter_address,
         }),
         store: Arc::new(node.store.clone()),
         header: last_header.clone(),

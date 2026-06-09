@@ -37,8 +37,7 @@ fn blob_file_name(index: usize, vh: &B256) -> String {
 fn parse_blob_file_name(file_name: &str) -> Result<Option<(usize, B256)>> {
     let index_versioned_hash_opt_str = file_name
         .strip_prefix("blob-")
-        .map(|s| s.strip_suffix(".bin"))
-        .flatten();
+        .and_then(|s| s.strip_suffix(".bin"));
     if let Some(index_versioned_hash_str) = index_versioned_hash_opt_str {
         // TODO: Error handling
         let [index_str, versioned_hash_str] = index_versioned_hash_str
@@ -62,9 +61,9 @@ fn slot_dir_from(base: &PathBuf, slot: u32) -> PathBuf {
     let slot_lo = slot - slot_hi * 1_000_000 - slot_mid * 1_000;
     let mut slot_dir = base.clone();
     slot_dir.push("by_slot");
-    slot_dir.push(&format!("{:03}", slot_hi));
-    slot_dir.push(&format!("{:03}", slot_mid));
-    slot_dir.push(&format!("{:03}", slot_lo));
+    slot_dir.push(format!("{:03}", slot_hi));
+    slot_dir.push(format!("{:03}", slot_mid));
+    slot_dir.push(format!("{:03}", slot_lo));
     slot_dir
 }
 
@@ -75,9 +74,9 @@ fn root_dir_from(base: &PathBuf, root: &B256) -> PathBuf {
     let root_lo = &root_str[8..];
     let mut root_dir = base.clone();
     root_dir.push("by_root");
-    root_dir.push(&format!("{:03}", root_hi));
-    root_dir.push(&format!("{:03}", root_mid));
-    root_dir.push(&format!("{:03}", root_lo));
+    root_dir.push(format!("{:03}", root_hi));
+    root_dir.push(format!("{:03}", root_mid));
+    root_dir.push(format!("{:03}", root_lo));
     root_dir
 }
 
@@ -88,10 +87,10 @@ pub struct Store {
 
 impl Store {
     pub(crate) fn delete_block_data(&self, slot_path: &Path) -> Result<()> {
-        if !fs::exists(&slot_path)? {
+        if !fs::exists(slot_path)? {
             return Ok(());
         }
-        let mut root_path = fs::canonicalize(&slot_path)?; // Resolve symlink
+        let mut root_path = fs::canonicalize(slot_path)?; // Resolve symlink
         if fs::exists(&root_path)? {
             // Remove at highest intermediate directory that only has one entry
             for _level in 0..DIR_LEVELS - 1 {
@@ -107,14 +106,14 @@ impl Store {
             fs::remove_dir_all(&root_path)?;
         }
         info!("Removing stale symlink at {:?}", slot_path);
-        fs::remove_file(&slot_path)?;
+        fs::remove_file(slot_path)?;
         Ok(())
     }
 
     // Find the latest valid processed block header (and deleting stale ones if found)
     pub(crate) fn last_header(&self) -> Result<Option<BlockHeader>> {
         fn read_file(path: &Path) -> Result<Vec<u8>, io::Error> {
-            let mut file = File::open(&path)?;
+            let mut file = File::open(path)?;
             let mut data = Vec::new();
             file.read_to_end(&mut data)?;
             Ok(data)
@@ -162,7 +161,7 @@ impl Store {
             return Ok(Some(header));
         }
         // No block found
-        return Ok(None);
+        Ok(None)
     }
 
     pub(crate) fn slot_dir(&self, slot: u32) -> PathBuf {
@@ -449,7 +448,7 @@ impl Node {
                 missing_blobs.push((index, vh, blob));
             }
             self.store
-                .store_blobs_disk(&beacon_block_header, &missing_blobs)
+                .store_blobs_disk(beacon_block_header, &missing_blobs)
                 .await?;
             result.extend(missing_blobs.into_iter());
         }

@@ -67,7 +67,7 @@ async fn get_header(
     if let Some(header) = header {
         Ok(Json(header))
     } else {
-        Err((StatusCode::TOO_EARLY, format!("no header yet")))
+        Err((StatusCode::TOO_EARLY, "no header yet".to_string()))
     }
 }
 
