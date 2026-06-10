@@ -1,14 +1,15 @@
-# Self-host stack for the synchronizer and relayer: pulls the published GHCR
-# images and runs each as a single instance with a bundled Postgres. Run both,
-# or just the synchronizer to verify network state from chain data yourself:
+# Self-host stack for the synchronizer, relayer, and archiver: pulls the
+# published GHCR images and runs each as a single instance with a bundled
+# Postgres. Run the full stack, or just the synchronizer to verify network state
+# from chain data yourself (its archiver comes along via depends_on):
 #
 #   cp deploy/.env.example deploy/.env    # fill in your endpoints
 #   docker compose -f deploy/compose.yaml up -d
 #   docker compose -f deploy/compose.yaml up -d synchronizer postgres   # verify-only
 #
-# The images must be published (or built locally - see README.md). Both services
-# are singletons: never scale either past one replica per database. For hardened
-# production (managed Postgres, secret-store key) see README.md.
+# The images must be published (or built locally - see README.md). Each service
+# is a singleton: never scale one past a single replica per database/volume. For
+# hardened production (managed Postgres, secret-store key) see README.md.
 name: don
 
 services:
@@ -41,6 +42,9 @@ services:
       # Bundled Postgres by default; set SYNC_METADATA_DB_URL in .env to override
       # (e.g. a managed/external Postgres).
       SYNC_METADATA_DB_URL: ${SYNC_METADATA_DB_URL:-postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/synchronizer}
+      # Historical blobs (older than the chain's ~18-day retention) are read from
+      # the archiver. Defaults to the bundled one; override to use an external one.
+      ARCHIVER_URL: ${ARCHIVER_URL:-http://archiver:3001}
     volumes:
       - syncdata:/var/lib/don
     ports:
@@ -48,6 +52,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      archiver:
+        condition: service_started
 
   relayer:
     image: ghcr.io/dobjlabs/digital-objects-network/relayer:${IMAGE_TAG:-latest}
@@ -64,9 +70,27 @@ services:
       postgres:
         condition: service_healthy
 
+  archiver:
+    image: ghcr.io/dobjlabs/digital-objects-network/archiver:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      HTTP_BIND: 0.0.0.0:3001
+      BLOBS_PATH: /var/lib/don/blobs
+      # The archiver filters blobs by their L1 destination; this is the same
+      # address the other services call TO_ADDRESS. RPC_URL, BEACON_URL, and
+      # INIT_START_SLOT come from .env via env_file above.
+      FILTER_ADDRESS: ${TO_ADDRESS}
+    volumes:
+      - archiverdata:/var/lib/don
+    ports:
+      - "3001:3001"
+
 volumes:
   pgdata:
   syncdata:
+  archiverdata:
 
 configs:
   init-databases:
