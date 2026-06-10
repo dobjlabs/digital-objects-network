@@ -1,22 +1,22 @@
 [workspace]
 members = [
-    "app-gui/src-tauri",
-    "common",
-    "eth-clients",
-    "driver",
-    "pod2utils",
-    "synchronizer",
-    "relayer",
-    "archiver",
-    "txlib",
-    "sdk",
-    "pexe",
-    "intro_pods/vdfpod",
-    "intro_pods/lt_eq_u256_pod",
-    "mcp",
-    "dobjd",
-    "cli",
-    "wire-types",
+    "services/dobjd",
+    "services/synchronizer",
+    "services/relayer",
+    "services/archiver",
+    "interfaces/cli",
+    "interfaces/gui/src-tauri",
+    "interfaces/mcp",
+    "libs/driver",
+    "libs/sdk",
+    "libs/txlib",
+    "libs/payload",
+    "libs/wire-types",
+    "libs/pod2utils",
+    "libs/pexe",
+    "libs/eth-clients",
+    "libs/intro-pods/vdfpod",
+    "libs/intro-pods/lt_eq_u256_pod",
 ]
 resolver = "2"
 
@@ -61,4 +61,4 @@ tracing-log = "0.1.1"
 time = { version = "0.3.44", features = ["formatting", "local-offset"] }
 rand = { version = "0.9.2", features = ["std_rng"] }
 thiserror = "2.0.18"
-wire-types = { path = "wire-types" }
+wire-types = { path = "libs/wire-types" }
