@@ -1,11 +1,11 @@
 # Digital Objects Network justfile
 # Install just: https://github.com/casey/just
 
-# Run the synchronizer (loads env from synchronizer/.env if present)
+# Run the synchronizer (loads env from services/synchronizer/.env if present)
 sync:
     RUST_LOG=info cargo run -p synchronizer --release
 
-# Run the relayer (loads env from relayer/.env if present)
+# Run the relayer (loads env from services/relayer/.env if present)
 relayer:
     RUST_LOG=info cargo run -p relayer --release
 

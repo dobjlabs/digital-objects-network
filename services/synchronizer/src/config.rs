@@ -42,7 +42,7 @@ pub struct AppConfig {
 }
 
 pub fn load_config() -> Result<AppConfig> {
-    let _ = dotenvy::from_filename("synchronizer/.env");
+    let _ = dotenvy::from_filename("services/synchronizer/.env");
 
     let app_state_db_path =
         dotenvy::var("APP_STATE_DB_PATH").unwrap_or_else(|_| DEFAULT_APP_STATE_DB_PATH.to_string());
