@@ -3,7 +3,7 @@ use std::time::Duration;
 use alloy::eips::eip4844::HeapBlob;
 use eth_clients::beacon::{
     self,
-    types::{Block, BlockHeader, BlockId, KzgCommitment},
+    types::{BlockHeader, BlockId, KzgCommitment},
     BeaconClient,
 };
 use itertools::zip_eq;
@@ -26,7 +26,7 @@ use alloy::{
 use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::config::Config;
 
@@ -311,28 +311,6 @@ impl Node {
         Ok(())
     }
 
-    /// Fetch a block body whose header we already hold. At the chain head the
-    /// body can lag the header, so the beacon returns 404 (mapped to None) for a
-    /// slot that is not empty. Treat that miss as transient and retry; returning
-    /// early would let the caller commit the slot with no blobs and drop its
-    /// data-availability blobs permanently.
-    async fn fetch_block_body(&self, root: B256, slot: u32) -> Result<Block> {
-        const MAX_RETRIES: usize = 10;
-        const RETRY_DELAY: Duration = Duration::from_secs(4);
-        for attempt in 1..=MAX_RETRIES {
-            if let Some(block) = self.beacon_cli.get_block(BlockId::Hash(root)).await? {
-                return Ok(block);
-            }
-            warn!("block body for slot {slot} root {root} not available yet (attempt {attempt}/{MAX_RETRIES})");
-            if attempt < MAX_RETRIES {
-                tokio::time::sleep(RETRY_DELAY).await;
-            }
-        }
-        Err(anyhow!(
-            "block body for slot {slot} root {root} still unavailable after {MAX_RETRIES} retries"
-        ))
-    }
-
     pub(crate) async fn process_beacon_block_blobs(
         &self,
         beacon_block_header: &BlockHeader,
@@ -340,9 +318,18 @@ impl Node {
         let beacon_block_root = beacon_block_header.root;
         let slot = beacon_block_header.slot;
 
-        let beacon_block = self.fetch_block_body(beacon_block_root, slot).await?;
+        // We already hold this slot's header, so a None body is a transient miss
+        // at the head, not an empty slot. Fail instead of committing the slot with
+        // no blobs; the restart reprocesses it once the body lands.
+        let beacon_block = self
+            .beacon_cli
+            .get_block(BlockId::Hash(beacon_block_root))
+            .await?
+            .ok_or_else(|| {
+                anyhow!("Beacon header exists for slot {slot} but full block {beacon_block_root} was not found")
+            })?;
         let execution_payload = beacon_block.execution_payload.ok_or_else(|| {
-            anyhow!("slot {slot} root {beacon_block_root} has a block but no execution payload")
+            anyhow!("Beacon block {beacon_block_root} for slot {slot} had no execution payload")
         })?;
         debug!(
             "slot {} has execution block {} at height {}",
