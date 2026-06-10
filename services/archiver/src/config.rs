@@ -17,7 +17,7 @@ pub struct Config {
 }
 
 pub fn load_config() -> Result<Config> {
-    let _ = dotenvy::from_filename("archiver/.env");
+    let _ = dotenvy::from_filename("services/archiver/.env");
 
     let http_bind = dotenvy::var("HTTP_BIND").unwrap_or_else(|_| DEFAULT_HTTP_BIND.to_string());
     let http_bind: SocketAddr = http_bind.parse()?;

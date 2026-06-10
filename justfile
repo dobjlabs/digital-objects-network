@@ -9,7 +9,7 @@ sync:
 relayer:
     RUST_LOG=info cargo run -p relayer --release
 
-# Run the archiver (loads env from archiver/.env if present)
+# Run the archiver (loads env from services/archiver/.env if present)
 archiver:
     RUST_LOG=info cargo run -p archiver --release
 
