@@ -29,6 +29,8 @@ mod state;
 pub fn router(app_state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(health::healthz))
+        .route("/events", get(events::stream))
+        .route("/actions/runs/{run_id}/events", get(actions::run_events))
         .route("/inventory", get(inventory::load_inventory))
         .route("/state-root", get(state::get_state_root))
         .route("/objects/dir", get(objects::get_objects_dir))
@@ -50,9 +52,9 @@ pub fn router(app_state: AppState) -> Router {
             post(actions::install_plugin)
                 .layer(DefaultBodyLimit::max(driver::MAX_PEXE_BYTES as usize)),
         )
+        .route("/actions/runs/{run_id}", get(actions::get_run))
         .route("/actions/{id}", get(actions::inspect_action))
         .route("/actions/{id}/feasibility", get(actions::check_feasibility))
-        .route("/events", get(events::stream))
         .with_state(app_state)
         .layer(CorsLayer::permissive())
         .layer(

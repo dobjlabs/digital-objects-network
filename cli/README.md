@@ -32,7 +32,7 @@ Two flavors of commands.
 | `import <path>`                                 | `POST /objects/import` (reads the `.dobj` file locally, sends contents)    |
 | `settings get`                                  | `GET /settings`                                                            |
 | `settings set --synchronizer URL --relayer URL` | `PUT /settings` (omitted flags left unchanged)                             |
-| `run <action> [paths...]`                       | `POST /actions/run` + filters `/events` for matching `run-action-progress` |
+| `run <action> [paths...]`                       | `POST /actions/run`, then follows `/actions/runs/{id}/events` and polls `/actions/runs/{id}` to the terminal result |
 | `events`                                        | `GET /events` SSE — prints every event as JSON lines                       |
 
 Each command renders human-friendly output by default. Pass `--json`
@@ -94,8 +94,10 @@ dobj status
 dobj actions
 dobj inventory
 
-# run an action and see its progress streamed
+# run an action: POST returns a run handle immediately, then the CLI
+# follows the run's SSE stream and polls it to the terminal result
 dobj run craft-basics::FindLog
+# run id:   3f8c…
 # [generateProof/running] Verifying Inputs
 # [generateProof/done]   Proof generation complete
 # [commit/running]       Awaiting blob landing

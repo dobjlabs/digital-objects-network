@@ -78,6 +78,12 @@ pub struct ImportObjectFileParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetRunParams {
+    /// The `runId` returned by `run_action`.
+    pub run_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadDocParams {
     /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "txlib.podlang", "time.podlang"
     pub name: String,
@@ -165,18 +171,30 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Execute a crafting action. Blocks until proof generation completes. Multiple actions can run concurrently."
+        description = "Start a crafting action. Returns immediately with a runId and status=queued; proof generation and commit run in the background. Poll get_run(runId) until status is succeeded or failed (then read result / error). Multiple actions run concurrently."
     )]
-    async fn run_action(
+    fn run_action(
         &self,
         Parameters(params): Parameters<RunActionInput>,
-    ) -> Result<Json<RunActionResult>, String> {
-        // Run on the blocking thread pool so we don't starve the async runtime
-        // while proof generation, relayer submission, and sync polling happen.
-        let ops = self.ops.clone();
-        tokio::task::spawn_blocking(move || ops.run_action(params))
-            .await
-            .map_err(|e| format!("action task failed: {e}"))?
+    ) -> Result<Json<RunAccepted>, String> {
+        // Returns as soon as the run is registered + spawned; the heavy work
+        // happens on a background task, so this tool call never holds the
+        // connection open for the proof.
+        self.ops
+            .run_action(params)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Get the current state of a run started by run_action. Returns its status (queued, generateProof, committing, succeeded, failed), the result (old/new root + output and nullified files) once succeeded, an error message if failed, and the ordered progress log. Poll this after run_action."
+    )]
+    fn get_run(
+        &self,
+        Parameters(params): Parameters<GetRunParams>,
+    ) -> Result<Json<RunState>, String> {
+        self.ops
+            .get_run(&params.run_id)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -377,6 +395,7 @@ mod tests {
         assert!(tools.contains(&"inspect_class".to_string()));
         assert!(tools.contains(&"inspect_action".to_string()));
         assert!(tools.contains(&"run_action".to_string()));
+        assert!(tools.contains(&"get_run".to_string()));
         assert!(tools.contains(&"check_feasibility".to_string()));
         assert!(tools.contains(&"list_classes".to_string()));
         assert!(tools.contains(&"read_doc".to_string()));
@@ -384,7 +403,7 @@ mod tests {
         assert!(tools.contains(&"write_settings".to_string()));
         assert!(tools.contains(&"get_objects_dir".to_string()));
         assert!(tools.contains(&"import_object_file".to_string()));
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 15);
     }
 
     #[test]
@@ -479,40 +498,28 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn test_run_action_via_handler() {
+    #[test]
+    fn test_run_action_via_handler() {
         let service = make_service();
-        let Json(result) = service
+        let Json(accepted) = service
             .run_action(Parameters(RunActionInput {
                 action: craft_basics("FindLog"),
                 input_object_paths: vec![],
-                run_id: None,
             }))
-            .await
             .unwrap();
-        assert!(result.success);
+        assert!(!accepted.run_id.is_empty());
     }
 
-    #[tokio::test]
-    async fn test_run_action_concurrent() {
-        let service = Arc::new(make_service());
-        let mut handles = Vec::new();
-        for _ in 0..3 {
-            let svc = service.clone();
-            handles.push(tokio::spawn(async move {
-                svc.run_action(Parameters(RunActionInput {
-                    action: craft_basics("FindLog"),
-                    input_object_paths: vec![],
-                    run_id: None,
-                }))
-                .await
-            }));
-        }
-        for handle in handles {
-            let result = handle.await.unwrap();
-            assert!(result.is_ok());
-            assert!(result.unwrap().0.success);
-        }
+    #[test]
+    fn test_get_run_via_handler() {
+        let service = make_service();
+        let Json(state) = service
+            .get_run(Parameters(GetRunParams {
+                run_id: "run-1".to_string(),
+            }))
+            .unwrap();
+        assert_eq!(state.run_id, "run-1");
+        assert_eq!(state.status, RunStatus::Succeeded);
     }
 
     #[test]

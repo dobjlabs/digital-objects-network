@@ -1,5 +1,14 @@
 export type ProofPhase = "generateProof" | "commit";
-export type ProofProgressStatus = "running" | "done";
+export type ProofProgressStatus = "running" | "done" | "failed";
+
+/** Lifecycle state of a run in the daemon's run registry. Mirrors
+ * `wire_types::RunStatus` (camelCase). */
+export type RunStatus =
+  | "queued"
+  | "generateProof"
+  | "committing"
+  | "succeeded"
+  | "failed";
 
 export type ObjectStatus = "unknown" | "pending" | "live" | "nullified";
 
@@ -63,7 +72,6 @@ export interface ActionPayload {
 export interface RunActionInput {
   action: QualifiedNamePayload;
   inputObjectPaths: string[];
-  runId: string;
 }
 
 export interface RunActionResult {
@@ -72,6 +80,23 @@ export interface RunActionResult {
   newRoot: string;
   outputFiles: string[];
   nullifiedFiles: string[];
+}
+
+/** `POST /actions/run` response: the run was accepted and is executing in the
+ * background. Follow it via `getRun` (poll) or the run's SSE stream. */
+export interface RunAccepted {
+  runId: string;
+  status: RunStatus;
+}
+
+/** `GET /actions/runs/{runId}` response: current state of a run. */
+export interface RunState {
+  runId: string;
+  action: QualifiedNamePayload;
+  status: RunStatus;
+  result: RunActionResult | null;
+  error: string | null;
+  progress: RunActionProgress[];
 }
 
 export interface ObjectRecordPayload {

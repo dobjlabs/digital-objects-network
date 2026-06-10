@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use common::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES;
 use pod2::middleware::Hash;
@@ -10,7 +10,12 @@ use wire_types::relayer::{
     TxHashesByTxFinalRequest, TxHashesByTxFinalResponse,
 };
 
-pub const RELAYER_POLL_TIMEOUT_SECS: u64 = 180;
+/// Deadline for the relayer to broadcast the tx and expose a tx_hash.
+pub const RELAYER_TX_HASH_TIMEOUT_SECS: u64 = 180;
+/// Deadline for the broadcast tx to reach `Confirmed`. Tracked separately
+/// from the tx-hash wait so the two sequential phases each have an explicit
+/// budget rather than silently sharing (and doubling) one constant.
+pub const RELAYER_CONFIRM_TIMEOUT_SECS: u64 = 180;
 pub const RELAYER_POLL_INTERVAL_MS: u64 = 1500;
 
 /// Per-request cap on `tx_finals` sent to the relayer's `tx-hashes` endpoint.
@@ -56,23 +61,39 @@ pub trait RelayerClient: Send + Sync {
     ) -> Result<HashMap<Hash, String>>;
 }
 
-#[derive(Debug, Default)]
-pub struct HttpRelayerClient;
+#[derive(Debug, Clone)]
+pub struct HttpRelayerClient {
+    client: reqwest::blocking::Client,
+}
+
+impl Default for HttpRelayerClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl HttpRelayerClient {
+    pub fn new() -> Self {
+        Self {
+            client: super::build_http_client(),
+        }
+    }
+
     fn fetch_job_status(&self, relayer_api_url: &str, job_id: &str) -> Result<JobStatusResponse> {
         let endpoint = format!(
             "{}/api/v1/proofs/{job_id}",
             relayer_api_url.trim_end_matches('/')
         );
-        let client = reqwest::blocking::Client::new();
-        let response = client
+        let response = self
+            .client
             .get(&endpoint)
             .send()
-            .map_err(|err| anyhow!("failed to query relayer job at {endpoint}: {err}"))?;
+            .with_context(|| format!("failed to query relayer job at {endpoint}"))?;
 
         let status = response.status();
-        let body = response.text().unwrap_or_default();
+        let body = response
+            .text()
+            .with_context(|| format!("failed to read relayer status response from {endpoint}"))?;
         if !status.is_success() {
             return Err(anyhow!(
                 "relayer status failed with {} {}: {}",
@@ -108,8 +129,8 @@ impl RelayerClient for HttpRelayerClient {
             client_ref,
         };
 
-        let client = reqwest::blocking::Client::new();
-        let response = client
+        let response = self
+            .client
             .post(&endpoint)
             .json(&request)
             .send()
@@ -142,7 +163,21 @@ impl RelayerClient for HttpRelayerClient {
         let start = Instant::now();
 
         loop {
-            let status = self.fetch_job_status(relayer_api_url, job_id)?;
+            let status = match self.fetch_job_status(relayer_api_url, job_id) {
+                Ok(status) => status,
+                Err(err) if super::is_retryable_request_error(&err) => {
+                    if start.elapsed() >= timeout {
+                        return Err(anyhow!(
+                            "timed out waiting for tx hash on relayer job {} after {}s; last status query failed: {err:#}",
+                            job_id,
+                            timeout_secs
+                        ));
+                    }
+                    std::thread::sleep(poll_interval);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             if let Some(tx_hash) = status.tx_hash {
                 return Ok(tx_hash);
             }
@@ -178,7 +213,21 @@ impl RelayerClient for HttpRelayerClient {
         let start = Instant::now();
 
         loop {
-            let status = self.fetch_job_status(relayer_api_url, job_id)?;
+            let status = match self.fetch_job_status(relayer_api_url, job_id) {
+                Ok(status) => status,
+                Err(err) if super::is_retryable_request_error(&err) => {
+                    if start.elapsed() >= timeout {
+                        return Err(anyhow!(
+                            "timed out waiting for relayer job {} after {}s; last status query failed: {err:#}",
+                            job_id,
+                            timeout_secs
+                        ));
+                    }
+                    std::thread::sleep(poll_interval);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             match status.status {
                 JobStatus::Confirmed => {
                     return Ok(RelayerConfirmation {
@@ -225,7 +274,6 @@ impl RelayerClient for HttpRelayerClient {
             "{}/api/v1/proofs/tx-hashes",
             relayer_api_url.trim_end_matches('/')
         );
-        let client = reqwest::blocking::Client::new();
 
         // Chunk so a large pending inventory still resolves in one
         // `sync_inventory` call, just spread across a few HTTP requests.
@@ -233,7 +281,8 @@ impl RelayerClient for HttpRelayerClient {
             let request = TxHashesByTxFinalRequest {
                 tx_finals: chunk.to_vec(),
             };
-            let response = client
+            let response = self
+                .client
                 .post(&endpoint)
                 .json(&request)
                 .send()

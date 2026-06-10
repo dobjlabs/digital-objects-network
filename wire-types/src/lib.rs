@@ -279,11 +279,6 @@ pub struct CheckActionReport {
 pub struct RunActionInput {
     pub action: QualifiedName,
     pub input_object_paths: Vec<String>,
-    /// Client-generated correlation id for filtering progress events on
-    /// `/events`. Optional on the wire so clients that don't care about
-    /// correlation can omit it — dobjd mints one if missing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
 }
 
 /// Wrapper to keep parity with the legacy Tauri command shape
@@ -299,13 +294,62 @@ pub struct RunActionRequest {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RunActionResult {
-    /// Correlation id used for `run-action-progress` events. Echoed
-    /// from the request when supplied, otherwise a freshly-minted UUID v4.
+    /// Daemon-assigned id for this run (also the key for
+    /// `GET /actions/runs/{run_id}` and the scope of its `run-action-progress`
+    /// events).
     pub run_id: String,
     pub old_root: String,
     pub new_root: String,
     pub output_files: Vec<String>,
     pub nullified_files: Vec<String>,
+}
+
+/// Lifecycle state of a run tracked in the daemon's run registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum RunStatus {
+    /// Accepted, not yet started executing.
+    Queued,
+    /// Building the local ZK proof.
+    GenerateProof,
+    /// Submitting the proof, then waiting for on-chain confirmation + sync.
+    Committing,
+    /// Finished successfully; `RunState::result` is populated.
+    Succeeded,
+    /// Finished with an error; `RunState::error` is populated.
+    Failed,
+}
+
+/// `POST /actions/run` response. The run was accepted and now executes in the
+/// background; follow it via `GET /actions/runs/{runId}` (poll) or
+/// `GET /actions/runs/{runId}/events` (SSE, replayable via `Last-Event-ID`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RunAccepted {
+    pub run_id: String,
+    pub status: RunStatus,
+}
+
+/// `GET /actions/runs/{runId}` response: the current state of a run. The
+/// poll-and-recover counterpart to the SSE stream — a client that lost its
+/// connection re-reads the outcome here for as long as the run is retained.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RunState {
+    pub run_id: String,
+    pub action: QualifiedName,
+    pub status: RunStatus,
+    /// Populated once `status` is `succeeded`.
+    pub result: Option<RunActionResult>,
+    /// Populated once `status` is `failed`.
+    pub error: Option<String>,
+    /// Every progress event emitted so far, in order. Each entry's index is
+    /// its SSE event id, so a poller sees the same history a `Last-Event-ID`
+    /// SSE reconnect would replay.
+    pub progress: Vec<RunActionProgress>,
 }
 
 // ===========================================================================
@@ -449,16 +493,5 @@ mod tests {
             "\"live\""
         );
         assert_eq!(ObjectStatus::Pending.to_string(), "pending");
-    }
-
-    #[test]
-    fn run_action_input_serializes_without_run_id_when_none() {
-        let input = RunActionInput {
-            action: QualifiedName::new("craft-basics", "FindLog"),
-            input_object_paths: vec![],
-            run_id: None,
-        };
-        let json = serde_json::to_string(&input).unwrap();
-        assert!(!json.contains("runId"), "got: {json}");
     }
 }

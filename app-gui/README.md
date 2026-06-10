@@ -53,11 +53,19 @@ provides things the browser fundamentally can't do.
 | `getObjectsDir`                      | `GET /objects/dir`                         |
 | `getAppSettings` / `saveAppSettings` | `GET` / `PUT /settings`                    |
 | `importObject`                       | `POST /objects/import`                     |
-| `runAction`                          | `POST /actions/run`                        |
-| `listenRunActionProgress`            | `GET /events` (SSE, `run-action-progress`) |
+| `runAction`                          | `POST /actions/run` (returns a run handle) |
+| `getRun`                             | `GET /actions/runs/{id}`                   |
+| `listenRunActionProgress`            | `GET /events` firehose (SSE)               |
+| `listenRunActionProgressForRun`      | `GET /actions/runs/{id}/events` (SSE)      |
 
 `hydrateData` calls `loadInventory` + `loadActions` in parallel via
 `Promise.all`.
+
+`runAction` returns immediately with a `runId` (the proof + commit run in the
+background on dobjd). `runProof` follows that run's replayable SSE stream
+(`listenRunActionProgressForRun`) for live progress and polls `getRun` until
+the run is terminal for the authoritative result. The shared `/events` stream
+remains a firehose used for refresh triggers.
 
 **Tauri commands** (desktop-only, declared in `src-tauri/src/lib.rs`):
 

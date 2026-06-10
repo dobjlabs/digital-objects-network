@@ -8,22 +8,25 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ::driver::ExecuteActionInput;
 use craft_mcp::ops::CraftOps;
 use craft_mcp::types as mcp;
-use wire_types::RunActionResult as RunActionInner;
 
 use crate::events::EventTx;
-use crate::progress::SseProgressReporter;
+use crate::runs::RunRegistry;
 
 pub struct DobjdCraftOps {
     driver: Arc<::driver::Driver>,
     events: EventTx,
+    runs: RunRegistry,
 }
 
 impl DobjdCraftOps {
-    pub fn new(driver: Arc<::driver::Driver>, events: EventTx) -> Self {
-        Self { driver, events }
+    pub fn new(driver: Arc<::driver::Driver>, events: EventTx, runs: RunRegistry) -> Self {
+        Self {
+            driver,
+            events,
+            runs,
+        }
     }
 }
 
@@ -87,54 +90,32 @@ impl CraftOps for DobjdCraftOps {
         self.driver.get_action(action)
     }
 
-    fn run_action(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::RunActionResult> {
-        // Pass strings through verbatim — the driver extracts basenames
-        // via `Path::file_name`, so an absolute path or a bare basename
-        // resolve to the same managed file.
+    fn run_action(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::RunAccepted> {
+        // Pass strings through verbatim — the driver extracts basenames via
+        // `Path::file_name`, so an absolute path or a bare basename resolve to
+        // the same managed file.
         let input_objects: Vec<String> = input
             .input_object_paths
             .iter()
             .map(|path| path.trim().to_string())
             .collect();
 
-        // Use the client-supplied run id if present, otherwise mint one.
-        // Same convention as the HTTP `/actions/run` route.
-        let run_id = input
-            .run_id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let action_qname = input.action.clone();
-        let reporter = SseProgressReporter::new(self.events.clone(), run_id.clone());
-        let result = match self.driver.execute_with_reporter(
-            ExecuteActionInput {
-                action: action_qname.clone(),
-                input_objects,
-            },
-            &reporter,
-        ) {
-            Ok(result) => result,
-            Err(err) => {
-                reporter.commit_failed(err.to_string());
-                return Err(err);
-            }
-        };
+        // The run shares the same registry as the HTTP routes, so the GUI and
+        // an agent can both follow the daemon-assigned run id.
+        Ok(crate::runs::spawn_run(
+            &self.runs,
+            self.driver.clone(),
+            self.events.clone(),
+            input.action,
+            input_objects,
+        ))
+    }
 
-        Ok(mcp::RunActionResult {
-            success: true,
-            message: format!(
-                "Action {} completed. Old root: {}, New root: {}",
-                action_qname,
-                common::encode_hash_hex(&result.old_root),
-                common::encode_hash_hex(&result.new_root)
-            ),
-            result: RunActionInner {
-                run_id,
-                old_root: common::encode_hash_hex(&result.old_root),
-                new_root: common::encode_hash_hex(&result.new_root),
-                output_files: result.output_files,
-                nullified_files: result.nullified_files,
-            },
-        })
+    fn get_run(&self, run_id: &str) -> anyhow::Result<mcp::RunState> {
+        self.runs
+            .get(run_id)
+            .map(|entry| entry.snapshot())
+            .ok_or_else(|| anyhow::anyhow!("unknown run: {run_id}"))
     }
 
     fn check_feasibility(

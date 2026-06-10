@@ -1,16 +1,57 @@
 import { create } from "zustand";
 import {
+  getRun,
   importObject as importObjectApi,
   loadActions,
   loadInventory,
+  listenRunActionProgressForRun,
   runAction,
   type ActionPayload as Action,
   type InventoryObjectPayload as InventoryObject,
   type QualifiedNamePayload,
   type RunActionProgress,
+  type RunState,
 } from "../api/tauriClient";
 import { normalizeErrorMessage } from "../error";
 import { qualifiedEq } from "../objectUtils";
+
+const MAX_CONSECUTIVE_RUN_POLL_ERRORS = 5;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Poll a run until it reaches a terminal state. Local HTTP, and the daemon's
+ * supervisor guarantees every run reaches a terminal state while dobjd stays
+ * up. Transient follow-up polling failures are tolerated so a momentary HTTP
+ * hiccup is not reported as an action failure. */
+async function pollRunToTerminal(runId: string): Promise<RunState> {
+  let consecutiveErrors = 0;
+  for (;;) {
+    try {
+      const state = await getRun(runId);
+      consecutiveErrors = 0;
+      if (state.status === "succeeded" || state.status === "failed") {
+        return state;
+      }
+      await sleep(1000);
+    } catch (error) {
+      consecutiveErrors += 1;
+      const message =
+        error instanceof Error ? error.message : String(error ?? "unknown");
+      if (consecutiveErrors >= MAX_CONSECUTIVE_RUN_POLL_ERRORS) {
+        throw new Error(
+          `Lost contact while following run ${runId}; it may still complete. Sync inventory to reconcile. Last error: ${message}`,
+        );
+      }
+      console.warn(
+        `Failed to poll run ${runId} (${consecutiveErrors}/${MAX_CONSECUTIVE_RUN_POLL_ERRORS}); retrying`,
+        error,
+      );
+      await sleep(Math.min(1000 * consecutiveErrors, 5000));
+    }
+  }
+}
 
 type ProofStatus = "idle" | "generating" | "committing" | "summary" | "error";
 type StepStatus = "pending" | "running" | "done";
@@ -231,6 +272,19 @@ export const useStore = create<AppState>((set, get) => ({
     set((prev) => {
       if (prev.proof.runActionId !== event.runId) return prev;
 
+      // Terminal failure arrives as its own event now; surface it on the
+      // panel immediately rather than waiting for the poll to catch up.
+      if (event.status === "failed") {
+        return {
+          ...prev,
+          proof: {
+            ...prev.proof,
+            status: "error",
+            error: event.message,
+          },
+        };
+      }
+
       const nextSteps = prev.proof.steps.map((step) => ({ ...step }));
       const updateStep = (stepId: string, patch: Partial<ProofStep>) => {
         const index = nextSteps.findIndex((step) => step.id === stepId);
@@ -343,19 +397,29 @@ export const useStore = create<AppState>((set, get) => ({
       inputBindings.length > 0
         ? inputBindings.map((binding) => binding.label)
         : ["(no inputs)"];
-
-    // Mint a per-run id up front so progress events streaming back during
-    // the action can be matched against this run before runAction returns.
-    // Two concurrent runs of the same action would collide on action alone.
-    const runId = crypto.randomUUID();
-    get().initProofPanel({ runId, action, args: verifyTargets });
+    let stopRunEvents: (() => void) | null = null;
 
     try {
-      const result = await runAction({
+      // dobjd assigns the run id and returns it immediately; the proof +
+      // commit run on a background worker. Initialize the panel against that
+      // id, then subscribe to the run's replayable SSE before polling for the
+      // authoritative terminal result.
+      const { runId } = await runAction({
         action,
         inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
-        runId,
       });
+      get().initProofPanel({ runId, action, args: verifyTargets });
+      stopRunEvents = await listenRunActionProgressForRun(runId, (event) => {
+        get().applyRunActionProgress(event);
+      });
+
+      const finalState = await pollRunToTerminal(runId);
+      if (finalState.status !== "succeeded" || !finalState.result) {
+        throw new Error(
+          finalState.error ?? `Run ended in state: ${finalState.status}`,
+        );
+      }
+      const result = finalState.result;
 
       set((prev) => {
         if (prev.proof.runActionId !== runId) return prev;
@@ -398,6 +462,8 @@ export const useStore = create<AppState>((set, get) => ({
           stats: prev.proof.stats,
         },
       }));
+    } finally {
+      stopRunEvents?.();
     }
   },
 }));

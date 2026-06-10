@@ -25,9 +25,10 @@ import type {
   InventoryObjectPayload,
   ObjectRecordPayload,
   ObjectSummaryPayload,
+  RunAccepted,
   RunActionInput,
   RunActionProgress,
-  RunActionResult,
+  RunState,
 } from "./wireTypes";
 
 export type {
@@ -38,9 +39,12 @@ export type {
   ObjectRecordPayload,
   ObjectSummaryPayload,
   QualifiedNamePayload,
+  RunAccepted,
   RunActionInput,
   RunActionProgress,
   RunActionResult,
+  RunState,
+  RunStatus,
 } from "./wireTypes";
 
 declare global {
@@ -62,8 +66,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 // failure modes into actionable messages: a killed daemon (fetch rejects
 // with TypeError) and a hung daemon (fetch never resolves, surfaced via
 // AbortSignal.timeout). Pass `timeoutMs: null` for endpoints that
-// legitimately block — notably `/actions/run`, which doesn't return
-// until proof generation + commit finish.
+// legitimately block.
 async function dobjdFetch(
   path: string,
   init: RequestInit & { timeoutMs?: number | null } = {},
@@ -117,15 +120,25 @@ export function getStateRoot(): Promise<string> {
   return dobjdFetch("/state-root").then(httpJson<string>);
 }
 
-export function runAction(input: RunActionInput): Promise<RunActionResult> {
+// Start a run. dobjd registers it and returns immediately with a handle
+// (runId + status); proof generation + commit happen on a background worker.
+// Follow progress via the per-run SSE stream and read the terminal outcome
+// with `getRun`, so a dropped connection can't lose the result.
+export function runAction(input: RunActionInput): Promise<RunAccepted> {
   return dobjdFetch("/actions/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input }),
-    // Proof generation + commit can take much longer than the default
-    // read timeout. SSE progress events are how we detect hangs here.
-    timeoutMs: null,
-  }).then(httpJson<RunActionResult>);
+  }).then(httpJson<RunAccepted>);
+}
+
+// Current state of a run by id: status, the result once it succeeds, an error
+// if it fails, and the progress log. Polled to detect completion and to
+// recover the outcome if live progress was missed.
+export function getRun(runId: string): Promise<RunState> {
+  return dobjdFetch(`/actions/runs/${encodeURIComponent(runId)}`).then(
+    httpJson<RunState>,
+  );
 }
 
 // Import an external `.dobj` (one not produced by this driver). The body
@@ -190,9 +203,11 @@ export function sampleAppCpu(): Promise<CpuSample> {
 
 // === Event subscriptions ====================================================
 //
-// Driver events (`run-action-progress`) always come from dobjd over a single
-// SSE connection. The `open-settings` event comes from the Tauri native menu
-// and is desktop-only.
+// The global `/events` stream is a firehose used for coarse refresh triggers.
+// The active proof panel follows its own replayable `/actions/runs/{id}/events`
+// stream so it cannot miss early progress emitted before the frontend learned
+// the daemon-assigned run id. The `open-settings` event comes from the Tauri
+// native menu and is desktop-only.
 
 type Handler<T> = (payload: T) => void;
 
@@ -243,6 +258,43 @@ export function listenRunActionProgress(
   handler: (event: RunActionProgress) => void,
 ): Promise<UnlistenFn> {
   return subscribeHttp<RunActionProgress>("run-action-progress", handler);
+}
+
+function isTerminalRunProgress(event: RunActionProgress): boolean {
+  return (
+    event.status === "failed" ||
+    (event.phase === "commit" && event.status === "done")
+  );
+}
+
+export function listenRunActionProgressForRun(
+  runId: string,
+  handler: (event: RunActionProgress) => void,
+): Promise<UnlistenFn> {
+  const source = new EventSource(
+    `${HTTP_BASE}/actions/runs/${encodeURIComponent(runId)}/events`,
+  );
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    source.close();
+  };
+  source.onmessage = (event) => {
+    let parsed: RunActionProgress;
+    try {
+      parsed = JSON.parse(event.data) as RunActionProgress;
+    } catch {
+      return;
+    }
+    handler(parsed);
+    if (isTerminalRunProgress(parsed)) close();
+  };
+  source.onerror = () => {
+    // EventSource auto-reconnects, resending Last-Event-ID so the daemon can
+    // replay from the run's buffered progress log.
+  };
+  return Promise.resolve(close);
 }
 
 export function listenOpenSettings(handler: () => void): Promise<UnlistenFn> {

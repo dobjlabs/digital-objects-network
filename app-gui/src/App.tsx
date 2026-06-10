@@ -43,10 +43,6 @@ function App() {
   const toggleNullified = useStore((state) => state.toggleNullified);
   const recordCpuSample = useStore((state) => state.recordCpuSample);
   const setStateRoot = useStore((state) => state.setStateRoot);
-  const applyRunActionProgress = useStore(
-    (state) => state.applyRunActionProgress,
-  );
-  const resetProofPanel = useStore((state) => state.resetProofPanel);
   const runProof = useStore((state) => state.runProof);
   const proofStatus = useStore((state) => state.proof.status);
   const proofRunning = useStore(
@@ -93,7 +89,6 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    const resetTimers = new Set<number>();
     let refreshTimer: number | null = null;
     const scheduleRefresh = () => {
       if (cancelled) return;
@@ -116,19 +111,11 @@ function App() {
 
     listenRunActionProgress((event) => {
       if (!cancelled) {
-        applyRunActionProgress(event);
         if (
           (event.outputFiles?.length ?? 0) > 0 ||
           (event.phase === "commit" && event.status === "done")
         ) {
           scheduleRefresh();
-        }
-        if (event.phase === "commit" && event.status === "done") {
-          const timer = window.setTimeout(() => {
-            resetTimers.delete(timer);
-            if (!cancelled) resetProofPanel(event.runId);
-          }, 2800);
-          resetTimers.add(timer);
         }
       }
     })
@@ -146,10 +133,9 @@ function App() {
     return () => {
       cancelled = true;
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
-      for (const timer of resetTimers) window.clearTimeout(timer);
       if (unlisten) unlisten();
     };
-  }, [applyRunActionProgress, hydrateData, resetProofPanel]);
+  }, [hydrateData]);
 
   useEffect(() => {
     let cancelled = false;

@@ -11,9 +11,9 @@ use txlib::object_nullifier_hash;
 
 use crate::catalog::{ActionCatalog, CatalogClass};
 use crate::clients::{
-    HttpRelayerClient, HttpSynchronizerClient, RELAYER_POLL_INTERVAL_MS, RELAYER_POLL_TIMEOUT_SECS,
-    RelayerClient, SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS,
-    SynchronizerClient,
+    HttpRelayerClient, HttpSynchronizerClient, RELAYER_CONFIRM_TIMEOUT_SECS,
+    RELAYER_POLL_INTERVAL_MS, RELAYER_TX_HASH_TIMEOUT_SECS, RelayerClient,
+    SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS, SynchronizerClient,
 };
 use crate::error::DriverError;
 use crate::execute::{
@@ -82,8 +82,8 @@ impl DriverDeps {
         }
         Ok(Self {
             catalog: Arc::new(RwLock::new(Arc::new(catalog))),
-            synchronizer: Arc::new(HttpSynchronizerClient),
-            relayer: Arc::new(HttpRelayerClient),
+            synchronizer: Arc::new(HttpSynchronizerClient::new()),
+            relayer: Arc::new(HttpRelayerClient::new()),
             payload_builder: Arc::new(DefaultPayloadBuilder),
         })
     }
@@ -635,7 +635,7 @@ impl Driver {
         let eth_tx_hash = self.deps.relayer.wait_for_tx_hash(
             &settings.relayer_api_url,
             &submit_response.job_id,
-            RELAYER_POLL_TIMEOUT_SECS,
+            RELAYER_TX_HASH_TIMEOUT_SECS,
             RELAYER_POLL_INTERVAL_MS,
         )?;
         update_output_files(
@@ -654,7 +654,7 @@ impl Driver {
         let confirmation = self.deps.relayer.wait_for_confirmation(
             &settings.relayer_api_url,
             &submit_response.job_id,
-            RELAYER_POLL_TIMEOUT_SECS,
+            RELAYER_CONFIRM_TIMEOUT_SECS,
             RELAYER_POLL_INTERVAL_MS,
         )?;
 

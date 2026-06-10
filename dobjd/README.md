@@ -36,34 +36,53 @@ dev, Tauri's webview for the desktop app).
 All routes return JSON unless noted; errors come back as
 `{"error": "..."}` with an appropriate status code.
 
-| Method | Path                        | Driver call                                           |
-| ------ | --------------------------- | ----------------------------------------------------- |
-| `GET`  | `/inventory`                | `sync_inventory` (with fallback to `list_objects`)    |
-| `GET`  | `/actions`                  | `list_actions`                                        |
-| `GET`  | `/state-root`               | `get_state_root`                                      |
-| `GET`  | `/objects/dir`              | `paths().objects_dir`                                 |
-| `POST` | `/objects/import`           | `import_object` (body: `{ "dobj": "<json>" }`)        |
-| `GET`  | `/objects/{file_name}`      | `read_object(&Path)` (basename in `~/.dobj/objects/`) |
-| `GET`  | `/classes`                  | `list_classes`                                        |
-| `GET`  | `/classes/{name}`           | `get_class`                                           |
-| `GET`  | `/settings`                 | `load_settings`                                       |
-| `PUT`  | `/settings`                 | `save_settings`                                       |
-| `POST` | `/actions/run`              | `execute_with_reporter`                               |
-| `GET`  | `/actions/{id}`             | `get_action`                                          |
-| `GET`  | `/actions/{id}/feasibility` | `check_action`                                        |
-| `GET`  | `/events`                   | broadcast hub stream (SSE)                            |
+| Method | Path                            | Driver call                                                  |
+| ------ | ------------------------------- | ------------------------------------------------------------ |
+| `GET`  | `/inventory`                    | `sync_inventory` (with fallback to `list_objects`)           |
+| `GET`  | `/actions`                      | `list_actions`                                               |
+| `GET`  | `/state-root`                   | `get_state_root`                                             |
+| `GET`  | `/objects/dir`                  | `paths().objects_dir`                                        |
+| `POST` | `/objects/import`               | `import_object` (body: `{ "dobj": "<json>" }`)               |
+| `GET`  | `/objects/{file_name}`          | `read_object(&Path)` (basename in `~/.dobj/objects/`)        |
+| `GET`  | `/classes`                      | `list_classes`                                               |
+| `GET`  | `/classes/{name}`               | `get_class`                                                  |
+| `GET`  | `/settings`                     | `load_settings`                                              |
+| `PUT`  | `/settings`                     | `save_settings`                                              |
+| `POST` | `/actions/run`                  | starts a run, returns `202 { runId, status }` (non-blocking) |
+| `GET`  | `/actions/runs/{run_id}`        | run status + result/error + progress log (poll)              |
+| `GET`  | `/actions/runs/{run_id}/events` | per-run SSE: replays buffered progress then tails live       |
+| `GET`  | `/actions/{id}`                 | `get_action`                                                 |
+| `GET`  | `/actions/{id}/feasibility`     | `check_action`                                               |
+| `GET`  | `/events`                       | global broadcast hub stream (SSE)                            |
 
-The `/events` payload is a JSON object with a `type` discriminator.
-Variants: `run-action-progress`.
+### Runs are non-blocking
+
+`POST /actions/run` registers the run, kicks off a background worker, and
+returns a `runId` immediately; the proof + commit pipeline runs on the worker.
+The worker records the run's status, ordered progress log, and terminal
+result/error in an in-memory registry. Follow a run either way:
+
+- **Poll** `GET /actions/runs/{run_id}` for the current state (the
+  disconnect-recovery path — a client that lost its connection re-reads the
+  outcome here).
+- **Stream** `GET /actions/runs/{run_id}/events`, which replays the buffered
+  progress (honoring `Last-Event-ID` on reconnect) then tails live events
+  until the run is terminal.
+
+Each `POST` mints a fresh `runId`; clients don't choose it. Terminal runs are
+retained for a short TTL then reaped; runs are in-memory only (on-chain state
+and local `.dobj` files reconcile via sync regardless). The global `/events`
+stream carries every run's progress (`type: run-action-progress`) for firehose
+subscribers.
 
 ## MCP integration
 
-The `mcp` module ([`src/mcp.rs`](src/mcp.rs)) is the glue between this
-crate and [`mcp/`](../mcp). Its `DobjdCraftOps` overrides
-`run_action_with_progress` to fan execution events to **both** the SSE
-event hub (so the desktop GUI / website / `dobj watch` see progress) and
-the MCP-supplied `ProgressReporter` callback (so the agent that
-triggered the action gets `notifications/progress`).
+The `mcp` module ([`src/mcp.rs`](src/mcp.rs)) is the glue between this crate
+and [`mcp/`](../mcp). `DobjdCraftOps` implements `CraftOps` against the same
+`Arc<Driver>` and run registry the HTTP routes use, so `run_action` starts a
+run (returning a `runId`) and `get_run` polls it — an MCP-driven action is the
+same run object the desktop GUI / website / `dobj` CLI can follow, and its
+progress fans out over the shared SSE hub in real time.
 
 ## Build and run
 

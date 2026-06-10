@@ -170,7 +170,7 @@ impl CraftOps for MockCraftOps {
         Ok(action_summary.clone())
     }
 
-    fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunActionResult> {
+    fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunAccepted> {
         if !self.actions.iter().any(|a| a.action == input.action) {
             bail!(
                 "unknown action: {}::{}",
@@ -179,24 +179,30 @@ impl CraftOps for MockCraftOps {
             );
         }
 
-        Ok(RunActionResult {
-            success: true,
-            message: format!(
-                "Action {}::{} completed successfully",
-                input.action.plugin_name, input.action.name
-            ),
-            result: RunActionInner {
-                // Static fixture so tests can assert on it without depending
-                // on wall-clock or randomness. Real `DobjdCraftOps` mints a
-                // UUID v4 (or echoes the client-supplied id).
-                run_id: input
-                    .run_id
-                    .unwrap_or_else(|| "00000000-0000-4000-8000-000000000000".to_string()),
+        Ok(RunAccepted {
+            // Static fixture so tests can assert on it without depending on
+            // wall-clock or randomness. Real `DobjdCraftOps` mints a UUID v4.
+            run_id: "00000000-0000-4000-8000-000000000000".to_string(),
+            status: RunStatus::Queued,
+        })
+    }
+
+    fn get_run(&self, run_id: &str) -> anyhow::Result<RunState> {
+        // The mock has no registry; report a completed run so the tool
+        // wiring (and any client that polls to completion) can be exercised.
+        Ok(RunState {
+            run_id: run_id.to_string(),
+            action: qname("CraftWood"),
+            status: RunStatus::Succeeded,
+            result: Some(RunActionInner {
+                run_id: run_id.to_string(),
                 old_root: "0xmockoldroot".to_string(),
                 new_root: "0xmocknewroot".to_string(),
                 output_files: vec!["craft-basics__wood_0xnew.dobj".to_string()],
-                nullified_files: input.input_object_paths,
-            },
+                nullified_files: vec![],
+            }),
+            error: None,
+            progress: vec![],
         })
     }
 
@@ -585,14 +591,23 @@ mod tests {
     #[test]
     fn test_run_action_success() {
         let mock = MockCraftOps::new();
-        let result = mock
+        let accepted = mock
             .run_action(RunActionInput {
                 action: qname("CraftWood"),
                 input_object_paths: vec!["craft-basics__log_0xabc1.dobj".to_string()],
-                run_id: None,
             })
             .unwrap();
-        assert!(result.success);
+        assert!(!accepted.run_id.is_empty());
+        assert_eq!(accepted.status, RunStatus::Queued);
+    }
+
+    #[test]
+    fn test_get_run_reports_completed() {
+        let mock = MockCraftOps::new();
+        let state = mock.get_run("run-abc").unwrap();
+        assert_eq!(state.run_id, "run-abc");
+        assert_eq!(state.status, RunStatus::Succeeded);
+        assert!(state.result.is_some());
     }
 
     #[test]
@@ -606,7 +621,6 @@ mod tests {
                     mock.run_action(RunActionInput {
                         action: qname("FindLog"),
                         input_object_paths: vec![],
-                        run_id: None,
                     })
                 })
             })
@@ -614,7 +628,7 @@ mod tests {
         for handle in handles {
             let result = handle.join().unwrap();
             assert!(result.is_ok());
-            assert!(result.unwrap().success);
+            assert_eq!(result.unwrap().status, RunStatus::Queued);
         }
     }
 
@@ -624,7 +638,6 @@ mod tests {
         let result = mock.run_action(RunActionInput {
             action: qname("CraftDiamond"),
             input_object_paths: vec![],
-            run_id: None,
         });
         assert!(result.is_err());
     }
