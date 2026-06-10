@@ -14,10 +14,10 @@ mod time_utils;
 mod worker;
 
 use api::run_api_server;
-use payload::proof::{BlobParser, ProofParser};
 use config::load_config;
 use db::Db;
 use eth::{EthClient, EthGateway};
+use payload::proof::{BlobParser, ProofParser};
 use worker::{run_worker, WorkerConfig};
 
 /// Boot relayer dependencies, then run API server and background worker together.
