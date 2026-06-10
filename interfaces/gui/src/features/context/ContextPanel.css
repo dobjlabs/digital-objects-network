@@ -80,6 +80,7 @@
   font-size: 9px;
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--text-bright);
+  min-width: 0;
 }
 
 .context-inline-hash {
@@ -106,6 +107,7 @@
 .context-inline-path {
   color: var(--text-dim);
   font-size: 10px;
+  overflow-wrap: anywhere;
 }
 
 .context-desc {
