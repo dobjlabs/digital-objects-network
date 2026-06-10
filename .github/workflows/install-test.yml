@@ -108,10 +108,6 @@ jobs:
       # `secrets` context isn't available in a workflow-level `env` block.
       RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
       BEACON_URL: ${{ secrets.SEPOLIA_BEACON_URL }}
-      # The synchronizer reads historical blobs from an archiver. The archiver is
-      # a drop-in beacon-blobs source, so a beacon endpoint serves the recent
-      # blobs this test produces - point ARCHIVER_URL at the same Sepolia beacon.
-      ARCHIVER_URL: ${{ secrets.SEPOLIA_BEACON_URL }}
       TO_ADDRESS: ${{ secrets.SEPOLIA_TO_ADDRESS }}
       # Per-matrix key (see the matrix comment) — dynamic secrets indexing
       # by the name carried in `matrix.pk_secret`.
@@ -321,7 +317,6 @@ jobs:
           INITIAL_START_SLOT="$INITIAL_START_SLOT" \
           RPC_URL="$RPC_URL" \
           BEACON_URL="$BEACON_URL" \
-          ARCHIVER_URL="$ARCHIVER_URL" \
           TO_ADDRESS="$TO_ADDRESS" \
           RPC_RETRIES=10 \
           RPC_RETRY_MS=4000 \
@@ -399,8 +394,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
           # Launch the servers HERE (see the note above) so they stay alive
-          # through `dobj run`. RPC_URL/BEACON_URL/ARCHIVER_URL/TO_ADDRESS/PRIVATE_KEY
-          # are job-level env; INITIAL_START_SLOT is inherited from the resolve
+          # through `dobj run`. RPC_URL/BEACON_URL/TO_ADDRESS/PRIVATE_KEY are
+          # job-level env; INITIAL_START_SLOT is inherited from the resolve
           # step via GITHUB_ENV. Both Start-Process children inherit all of
           # those plus the per-server vars set inline below.
           $env:SYNC_METADATA_DB_URL = "postgres://postgres:root@127.0.0.1:5432/synchronizer"

@@ -2,7 +2,7 @@ use std::{net::SocketAddr, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::Result;
-use tracing::warn;
+use tracing::{info, warn};
 
 const DEFAULT_APP_STATE_DB_PATH: &str = "data/synchronizer-db";
 const DEFAULT_SYNC_METADATA_DB_URL: &str = "postgres://postgres@localhost:5432/synchronizer";
@@ -94,7 +94,14 @@ pub fn load_config() -> Result<AppConfig> {
 
     let rpc_url: String = dotenvy::var("RPC_URL")?;
     let beacon_url: String = dotenvy::var("BEACON_URL")?;
-    let archiver_url: String = dotenvy::var("ARCHIVER_URL")?;
+    // Blob source. An archiver serves blobs via the same getBlobs API as a beacon
+    // node, so when ARCHIVER_URL is unset we read blobs straight from the beacon.
+    // The beacon only retains recent blobs, so syncing history older than its
+    // retention window still requires an archiver.
+    let archiver_url: String = dotenvy::var("ARCHIVER_URL").unwrap_or_else(|_| {
+        info!("ARCHIVER_URL not set; reading blobs from BEACON_URL (recent blobs only)");
+        beacon_url.clone()
+    });
     let to_address: Address = Address::from_str(&dotenvy::var("TO_ADDRESS")?)?;
 
     Ok(AppConfig {

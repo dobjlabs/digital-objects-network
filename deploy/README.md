@@ -31,9 +31,10 @@ locally first - see "Building the images yourself" below.)
 
 ### Just a synchronizer (verify-only)
 
-A synchronizer needs an execution RPC, a beacon endpoint, Postgres, and an
-**archiver** (for blobs older than the chain's ~18-day retention) - no wallet
-key. Compose pulls the archiver in automatically via `depends_on`:
+A synchronizer needs an execution RPC, a beacon endpoint, and Postgres - no
+wallet key. With just those it reads blobs from the beacon (recent blobs only).
+To sync history older than the beacon's ~18-day retention, also run an
+**archiver** and point `ARCHIVER_URL` at it. The bundled compose includes one:
 
 ```bash
 docker compose -f deploy/compose.yaml up -d synchronizer postgres
@@ -41,8 +42,8 @@ docker compose -f deploy/compose.yaml up -d synchronizer postgres
 
 Or fully standalone against your own Postgres, no compose. Create the
 `synchronizer` database first - the service creates its tables, but not the
-database. The synchronizer requires `ARCHIVER_URL`; point it at an archiver you
-run or a hosted one:
+database. `ARCHIVER_URL` is optional: unset, the synchronizer reads blobs from
+`BEACON_URL` (recent blobs only); set it to an archiver for older history:
 
 ```bash
 psql "postgres://user:pass@host:5432/postgres" -c 'CREATE DATABASE synchronizer'
@@ -51,7 +52,6 @@ docker run -d --name synchronizer -p 3000:3000 \
   -e RPC_URL=https://your-execution-rpc \
   -e BEACON_URL=https://your-beacon-api \
   -e TO_ADDRESS=0x... \
-  -e ARCHIVER_URL=http://your-archiver:3001 \
   -e SYNC_METADATA_DB_URL=postgres://user:pass@host:5432/synchronizer \
   -v don_data:/var/lib/don \
   ghcr.io/dobjlabs/digital-objects-network/synchronizer:latest
@@ -83,7 +83,7 @@ Set via `.env` (compose) or `-e` flags (`docker run`). Image defaults:
 | `TO_ADDRESS`           | all                    | yes           | L1 target address; must match across services (archiver reads `FILTER_ADDRESS`) |
 | `INIT_START_SLOT`      | archiver               | archiver only | Beacon slot the archiver starts archiving from                             |
 | `PRIVATE_KEY`          | relayer                | relayer only  | Hot wallet that signs/pays for blob txs                                    |
-| `ARCHIVER_URL`         | synchronizer           | no            | Archiver for historical blobs; compose defaults to the bundled archiver     |
+| `ARCHIVER_URL`         | synchronizer           | no            | Blobs older than beacon retention; unset, falls back to `BEACON_URL`        |
 | `SYNC_METADATA_DB_URL` | synchronizer           | no            | Defaults to the bundled Postgres; set to point at an external one          |
 | `DB_URL`               | relayer                | no            | Defaults to the bundled Postgres; set to point at an external one          |
 | `BLOBS_PATH`           | archiver               | no            | On-disk blob store path; mount a volume here                               |
