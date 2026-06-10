@@ -116,12 +116,12 @@ dobj events
 
 ## Relationship to other crates
 
-| Crate                   | Role                                                           |
-| ----------------------- | -------------------------------------------------------------- |
-| [`dobjd`](../../services/dobjd)     | the daemon this CLI talks to                                   |
+| Crate                           | Role                                                           |
+| ------------------------------- | -------------------------------------------------------------- |
+| [`dobjd`](../../services/dobjd) | the daemon this CLI talks to                                   |
 | [`driver`](../../libs/driver)   | the underlying Rust library `dobjd` wraps                      |
-| [`mcp`](../mcp)         | MCP server (also in `dobjd`); the CLI doesn't speak MCP itself |
-| [`gui`](../gui) | React frontend that hits the same dobjd HTTP API               |
+| [`mcp`](../mcp)                 | MCP server (also in `dobjd`); the CLI doesn't speak MCP itself |
+| [`gui`](../gui)                 | React frontend that hits the same dobjd HTTP API               |
 
 Adding a new dobjd HTTP route generally means adding a corresponding
 CLI subcommand here and the matching MCP tool in [`mcp/`](../mcp). The
