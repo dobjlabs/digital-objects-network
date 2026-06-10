@@ -1,0 +1,88 @@
+---
+title: Applications
+description: Applications ship as .pexe plugins - object classes plus proof-backed actions. Two examples are available today, and anyone can publish their own.
+---
+
+# Applications
+
+Applications on the Digital Objects Network ship as **plugins**: `.pexe`
+archives the driver loads from `~/.dobj/actions/` at startup. A `.pexe` is a
+zip of two files:
+
+- **`manifest.toml`** — the plugin's name and version, its **classes** (the
+  object types it defines, with emoji and descriptions), its **actions**, and
+  the `module_hash` that pins the exact proof logic the script compiles to.
+- **`plugin.rhai`** — the action logic as a Rhai script. The SDK compiles it
+  into pod2 predicates, so the same script defines both what an action does
+  and what its zero-knowledge proof must show.
+
+Two example applications live in the repo under
+[`examples/`](https://github.com/dobjlabs/digital-objects-network/tree/main/examples):
+
+| Application | What it is | Classes | Actions | Distribution |
+| ----------- | ---------- | ------- | ------- | ------------ |
+| ⛏️ **[craft-basics](/applications/craft-basics)** | Survival-crafting starter | 6 | 9 | bundled with the installer |
+| 🚀 **[craft-rocket](/applications/craft-rocket)** | Factory tech tree with a rocket win condition | 53 | 84 | build from source |
+
+## Installing a plugin
+
+Place the `.pexe` in `~/.dobj/actions/` and restart the daemon (plugins load
+at startup):
+
+```bash
+# download or copy the archive
+cp my-plugin.pexe ~/.dobj/actions/
+
+# restart the daemon
+~/.dobj/bin/dobj stop && ~/.dobj/bin/dobj start
+
+# confirm the new actions are in the catalog
+~/.dobj/bin/dobj actions
+```
+
+### From source
+
+The [`pexe`](https://github.com/dobjlabs/digital-objects-network/tree/main/libs/pexe)
+CLI builds plugin sources into archives and can install them in one step:
+
+```bash
+git clone https://github.com/dobjlabs/digital-objects-network
+cd digital-objects-network
+
+just install-plugins   # build + install every plugin under examples/
+
+# or a single plugin:
+cargo run -p pexe --release -- build --install examples/craft-rocket
+```
+
+`pexe build` also rewrites the `module_hash` in each manifest to match the
+hash the compiled script actually produces, so the manifest always matches
+what the driver will accept.
+
+:::warning
+An action's proof logic is pinned by its `module_hash`, and class and action
+**names are part of that identity**. Renaming a class or action in a published
+plugin invalidates every existing object and recorded proof of that type —
+treat published names as frozen.
+:::
+
+## Publish your own
+
+Copy an example under `examples/`, edit `plugin.rhai` and `manifest.toml`, and
+install it locally to play. When it's ready to share, add it to this page:
+
+<a
+  href="https://github.com/dobjlabs/digital-objects-network/edit/main/docs/pages/applications/index.mdx"
+  style={{
+    display: 'inline-block',
+    marginTop: '8px',
+    padding: '10px 20px',
+    borderRadius: '8px',
+    fontWeight: 500,
+    textDecoration: 'none',
+    color: 'var(--vocs-color_backgroundAccentText, #ffffff)',
+    backgroundColor: 'var(--vocs-color_backgroundAccent, #0e7490)',
+  }}
+>
+  Submit your application — open a GitHub PR →
+</a>

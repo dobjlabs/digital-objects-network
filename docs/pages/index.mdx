@@ -1,0 +1,97 @@
+---
+layout: landing
+title: Digital Objects Network
+description: The Digital Objects Network is live. Install the driver, point it at public infrastructure, and start creating objects.
+---
+
+import { HomePage } from 'vocs/components'
+
+<HomePage.Root>
+  <img src="/logo.png" alt="Digital Objects Network" style={{ height: '72px', width: '72px', borderRadius: '16px' }} />
+  <HomePage.Tagline>The Digital Objects Network is live 🟢</HomePage.Tagline>
+  <HomePage.Description>
+    Privately-held, fully programmable objects you can create, mutate, and pass
+    to people who don't trust you — integrity proved with zero-knowledge
+    proofs, consistency anchored to Ethereum blobspace, contents never leaving
+    your machine.
+  </HomePage.Description>
+  <HomePage.Buttons>
+    <HomePage.Button href="/install" variant="accent">Install the driver</HomePage.Button>
+    <HomePage.Button href="/network">What is it?</HomePage.Button>
+    <HomePage.Button href="https://github.com/dobjlabs/digital-objects-network">GitHub</HomePage.Button>
+  </HomePage.Buttons>
+</HomePage.Root>
+
+<div style={{ maxWidth: '724px', margin: '0 auto', padding: '48px 24px 96px' }}>
+
+## Join the network
+
+One line installs the driver daemon (`dobjd`), the `dobj` CLI, and the
+[craft-basics](/applications/craft-basics) starter application into `~/.dobj/`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dobjlabs/zk-craft-releases/main/install.sh | sh
+```
+
+Windows, agent-driven setup, and manual instructions: **[Install the driver →](/install)**
+
+## Public infrastructure
+
+Fresh installs come pre-pointed at these hosted services, so the network works
+out of the box:
+
+| Service | Endpoint | Role |
+| ------------ | ------------------------------------ | ---- |
+| Synchronizer | [`sync.don.pateldhvani.com`](https://sync.don.pateldhvani.com/healthz) | Rebuilds canonical network state from Ethereum blobs; answers live / consumed queries |
+| Relayer | [`relay.don.pateldhvani.com`](https://relay.don.pateldhvani.com/healthz) | Submits proof payloads to Ethereum as EIP-4844 blob transactions |
+
+Your driver is free to point elsewhere — edit `~/.dobj/settings.json` and
+restart the daemon:
+
+```json
+{
+  "synchronizerApiUrl": "https://sync.don.pateldhvani.com",
+  "relayerApiUrl": "https://relay.don.pateldhvani.com"
+}
+```
+
+### Run your own — and list it here
+
+Synchronizers and relayers are permissionless: anyone can run one against
+their own Ethereum endpoints, any number can operate concurrently, and running
+one confers no special network privileges — it just makes the network more
+available. See the [architecture page](/architecture#network-architecture) for
+what each service does.
+
+Operating a public endpoint others can use? Add it to the table above:
+
+<a
+  href="https://github.com/dobjlabs/digital-objects-network/edit/main/docs/pages/index.mdx"
+  style={{
+    display: 'inline-block',
+    marginTop: '8px',
+    padding: '10px 20px',
+    borderRadius: '8px',
+    fontWeight: 500,
+    textDecoration: 'none',
+    color: 'var(--vocs-color_backgroundAccentText, #ffffff)',
+    backgroundColor: 'var(--vocs-color_backgroundAccent, #0e7490)',
+  }}
+>
+  Submit your endpoint — open a GitHub PR →
+</a>
+
+## Applications
+
+Objects and the proof-backed actions that govern them ship as plugins
+(`.pexe` archives). Two examples are available today:
+
+- ⛏️ **[craft-basics](/applications/craft-basics)** — a survival-crafting
+  starter: find logs, refine wood, craft picks, mine stone. Bundled with the
+  installer.
+- 🚀 **[craft-rocket](/applications/craft-rocket)** — a 53-class factory tech
+  tree across five tiers, culminating in a provable rocket. Built from source.
+
+[Browse applications and learn how to install →](/applications)
+
+</div>
