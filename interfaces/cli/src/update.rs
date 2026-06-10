@@ -1,5 +1,5 @@
 //! `dobj update`: replace the installed bundle (dobj, dobjd,
-//! dobj-mcp-proxy) with another release from the public releases repo.
+//! dobj-mcp-proxy) with another release from the project's GitHub releases.
 //!
 //! The bundle updates as a unit: every binary comes from one release tag and
 //! the swap is all-or-nothing (two-phase rename with rollback). Plugins under
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::client::DobjdClient;
 use crate::daemon;
 
-const RELEASES_REPO: &str = "dobjlabs/zk-craft-releases";
+const RELEASES_REPO: &str = "dobjlabs/digital-objects-network";
 
 /// Release tag this binary was stamped with ("dev" outside a release build).
 const CURRENT_TAG: &str = env!("DOBJ_RELEASE_TAG");
@@ -768,7 +768,7 @@ mod tests {
 
     #[test]
     fn extracts_tag_from_redirect_location() {
-        let loc = "https://github.com/dobjlabs/zk-craft-releases/releases/tag/v0.1.0-rc.33";
+        let loc = "https://github.com/dobjlabs/digital-objects-network/releases/tag/v0.1.0-rc.33";
         assert_eq!(parse_tag_from_location(loc).unwrap(), "v0.1.0-rc.33");
     }
 

@@ -16,10 +16,6 @@ name: Install test
 # Required repo secrets (Settings → Secrets and variables → Actions). When
 # invoked via `workflow_call` with `secrets: inherit`, the caller passes
 # these down automatically — no need to redeclare them here:
-#   RELEASES_REPO_TOKEN  — fine-grained PAT, contents read/write on the
-#                          public releases repo (see RELEASES_REPO in
-#                          release.yml). Used to download DRAFT release
-#                          assets from that repo.
 #   SEPOLIA_RPC_URL      — JSON-RPC endpoint (public is fine but
 #                          rate-limited; Alchemy/Infura recommended for
 #                          parallel matrix jobs hitting it simultaneously)
@@ -93,10 +89,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     permissions:
-      # Artifacts are downloaded from the public releases repo using
-      # RELEASES_REPO_TOKEN (see the download step); the job's own token
-      # is not used for anything, so keep it read-only.
-      contents: read
+      # When this runs from release.yml the release is still a DRAFT, and
+      # draft assets are only visible to tokens with push access — read is
+      # not enough for `gh release download`.
+      contents: write
 
     env:
       # Supplied by workflow_call (from release.yml) or workflow_dispatch.
@@ -198,18 +194,15 @@ jobs:
 
       - name: Download release artifacts
         env:
-          # Fine-grained PAT with contents read/write on the releases repo
-          # (must match RELEASES_REPO in release.yml). Needed even though
-          # that repo is public: the release is still a DRAFT when this
-          # runs, and drafts are invisible without push access there. The
-          # job's own GITHUB_TOKEN has no access to another repo's drafts.
-          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
+          # --repo is required: this workflow never checks out the source,
+          # so gh has no local git remote to infer the repo from.
           gh release download "$TAG" \
-            --repo dobjlabs/zk-craft-releases \
+            --repo "$GITHUB_REPOSITORY" \
             --pattern "dobjd-$TARGET.tar.gz" \
             --pattern "dobj-$TARGET.tar.gz" \
             --pattern "synchronizer-$TARGET.tar.gz" \

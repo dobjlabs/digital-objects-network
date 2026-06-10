@@ -49,18 +49,10 @@ env:
   # notes via envsubst. Change here, both move together.
   DEFAULT_SYNCHRONIZER_API_URL: https://sync.don.pateldhvani.com
   DEFAULT_RELAYER_API_URL: https://relay.don.pateldhvani.com
-  # Public repo hosting the release artifacts. This source repo is private
-  # and GitHub has no public-releases-on-private-repo option, so releases
-  # are published over there: end users download without auth, and the
-  # draft-then-publish gate still applies (drafts on a public repo are
-  # invisible until published). Uploading cross-repo needs
-  # RELEASES_REPO_TOKEN, a fine-grained PAT with contents read/write on
-  # that one repo. Publishing a release creates the tag in that repo
-  # (pointing at its README commit); the source tag lives only here.
-  RELEASES_REPO: dobjlabs/zk-craft-releases
 
-# Release uploads go to RELEASES_REPO via RELEASES_REPO_TOKEN, so the
-# workflow's own token only needs checkout access.
+# Releases are drafts on this repo until manually published (drafts are
+# invisible to the public until then). Top-level stays read-only; the jobs
+# that touch the draft release request contents: write individually.
 permissions:
   contents: read
 
@@ -134,6 +126,10 @@ jobs:
             exe_suffix: ".exe"
 
     runs-on: ${{ matrix.os }}
+
+    # Creating/updating the draft release needs write on contents.
+    permissions:
+      contents: write
 
     # Apple secrets used across signing/notarize steps. Job-level (not
     # per-step) so they're declared once. Linux steps don't reference
@@ -375,8 +371,6 @@ jobs:
       - name: Upload to draft release
         uses: softprops/action-gh-release@v2
         with:
-          repository: ${{ env.RELEASES_REPO }}
-          token: ${{ secrets.RELEASES_REPO_TOKEN }}
           files: |
             dobjd-${{ matrix.target }}.tar.gz
             dobj-${{ matrix.target }}.tar.gz
@@ -390,6 +384,8 @@ jobs:
   plugin:
     needs: validate
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -427,8 +423,6 @@ jobs:
       - name: Upload to draft release
         uses: softprops/action-gh-release@v2
         with:
-          repository: ${{ env.RELEASES_REPO }}
-          token: ${{ secrets.RELEASES_REPO_TOKEN }}
           files: ${{ steps.find.outputs.pexe }}
           tag_name: ${{ env.RELEASE_TAG }}
           draft: true
@@ -440,6 +434,11 @@ jobs:
     # both binary + plugin uploads land in the draft release, so the test
     # can fetch them via `gh release download`.
     needs: [dobjd, plugin]
+    # The called workflow downloads DRAFT release assets, which are only
+    # visible to tokens with push access. A called workflow can't hold more
+    # permission than its caller, so the upgrade has to happen here.
+    permissions:
+      contents: write
     uses: ./.github/workflows/install-test.yml
     with:
       # Same expression as the RELEASE_TAG env var — inlined because the
