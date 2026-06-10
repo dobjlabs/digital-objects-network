@@ -21,20 +21,20 @@ Two example applications live in the repo under
 
 | Application | What it is | Classes | Actions | Distribution |
 | ----------- | ---------- | ------- | ------- | ------------ |
-| ⛏️ **[craft-basics](/applications/craft-basics)** | Survival-crafting starter | 6 | 9 | bundled with the installer |
+| ⛏️ **[craft-basics](/applications/craft-basics)** | Survival-crafting starter | 6 | 9 | one `dobj install` |
 | 🚀 **[craft-rocket](/applications/craft-rocket)** | Factory tech tree with a rocket win condition | 53 | 84 | build from source |
 
 ## Installing a plugin
 
-Place the `.pexe` in `~/.dobj/actions/` and restart the daemon (plugins load
-at startup):
+`dobj install` takes a local `.pexe` path or an http(s) URL, validates it, and
+hot-reloads the running daemon's catalog — no restart needed:
 
 ```bash
-# download or copy the archive
-cp my-plugin.pexe ~/.dobj/actions/
+# from a published release URL...
+~/.dobj/bin/dobj install https://example.com/my-plugin.pexe
 
-# restart the daemon
-~/.dobj/bin/dobj stop && ~/.dobj/bin/dobj start
+# ...or a local file
+~/.dobj/bin/dobj install ./my-plugin.pexe
 
 # confirm the new actions are in the catalog
 ~/.dobj/bin/dobj actions

@@ -19,7 +19,7 @@ import { HomePage } from 'vocs/components'
   </HomePage.Buttons>
 </HomePage.Root>
 
-<div style={{ maxWidth: '724px', margin: '0 auto', padding: '48px 24px 96px' }}>
+<div className="don-home" style={{ maxWidth: '724px', margin: '0 auto', padding: '48px 24px 96px' }}>
 
 ## Network status
 
@@ -35,13 +35,15 @@ Objects, proofs, and state here are for testing only and may be reset.
 ## Join the network
 
 One line installs the driver daemon (`dobjd`), the `dobj` CLI, and the
-[craft-basics](/applications/craft-basics) starter application into `~/.dobj/`:
+`dobj-mcp-proxy` bridge into `~/.dobj/bin/`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dobjlabs/zk-craft-releases/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/install.sh | sh
 ```
 
-Windows, agent-driven setup, and manual instructions: **[Install the driver →](/install)**
+Then start the daemon and add [craft-basics](/applications/craft-basics) with a
+single `dobj install`. Full walkthrough — Windows, agent-driven setup, manual
+install: **[Install the driver →](/install)**
 
 ## Public infrastructure
 
@@ -54,45 +56,18 @@ out of the box:
 | Relayer | [`relayer.don.pateldhvani.com`](https://relayer.don.pateldhvani.com/healthz) | Submits proof payloads to Ethereum as EIP-4844 blob transactions |
 | Archiver | [`archiver.don.pateldhvani.com`](https://archiver.don.pateldhvani.com/healthz) | Stores historical blobs durably so synchronizers can bootstrap beyond Ethereum's retention window |
 
-Your driver is free to point elsewhere — write `~/.dobj/settings.json` and
-restart the daemon:
+Your driver is free to point elsewhere — set the endpoints with the `dobj`
+CLI; it applies immediately, no restart:
 
 ```bash
-printf '{"synchronizerApiUrl":"https://synchronizer.don.pateldhvani.com","relayerApiUrl":"https://relayer.don.pateldhvani.com"}\n' > ~/.dobj/settings.json
+dobj settings set \
+  --synchronizer https://synchronizer.don.pateldhvani.com \
+  --relayer https://relayer.don.pateldhvani.com
 ```
 
-The driver only talks to a synchronizer and a relayer; the archiver is consumed
-by synchronizers (to fetch historical blobs), so it isn't configured here.
-
-### Run your own — and list it here
-
-Synchronizers and relayers are permissionless: anyone can run one against
-their own Ethereum endpoints, any number can operate concurrently, and running
-one confers no special network privileges — it just makes the network more
-available. See the [architecture page](/architecture#network-architecture) for
-what each service does.
-
-To derive the same canonical state, match the [network parameters above](#network-status):
-point your synchronizer at Sepolia, start from slot `10449449`, and watch blob
-address `0x4343434343434343434343434343434343434343`.
-
-Operating a public endpoint others can use? Add it to the table above:
-
-<a
-  href="https://github.com/dobjlabs/digital-objects-network/edit/main/docs/pages/index.mdx"
-  style={{
-    display: 'inline-block',
-    marginTop: '8px',
-    padding: '10px 20px',
-    borderRadius: '8px',
-    fontWeight: 500,
-    textDecoration: 'none',
-    color: 'var(--vocs-color_backgroundAccentText, #ffffff)',
-    backgroundColor: 'var(--vocs-color_backgroundAccent, #0e7490)',
-  }}
->
-  Submit your endpoint — open a GitHub PR →
-</a>
+Check the current values with `dobj settings get`. The driver only talks to a
+synchronizer and a relayer; the archiver is consumed by synchronizers (to fetch
+historical blobs), so it isn't configured here.
 
 ## Applications
 
@@ -100,8 +75,8 @@ Objects and the proof-backed actions that govern them ship as plugins
 (`.pexe` archives). Two examples are available today:
 
 - ⛏️ **[craft-basics](/applications/craft-basics)** — a survival-crafting
-  starter: find logs, refine wood, craft picks, mine stone. Bundled with the
-  installer.
+  starter: find logs, refine wood, craft picks, mine stone. Added with a single
+  `dobj install`.
 - 🚀 **[craft-rocket](/applications/craft-rocket)** — a 53-class factory tech
   tree across five tiers, culminating in a provable rocket. Built from source.
 

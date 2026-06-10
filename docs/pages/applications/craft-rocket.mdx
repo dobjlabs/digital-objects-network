@@ -69,15 +69,15 @@ with a catalyst.
 
 ## Install
 
-craft-rocket is not bundled with the installer; build it from a checkout of
-the repo:
+craft-rocket ships only as source — build it from a checkout of the repo,
+then install the archive (`dobj install` hot-reloads, no restart):
 
 ```bash
 git clone https://github.com/dobjlabs/digital-objects-network
 cd digital-objects-network
 
-cargo run -p pexe --release -- build --install examples/craft-rocket
-~/.dobj/bin/dobj stop && ~/.dobj/bin/dobj start
+cargo run -p pexe --release -- build examples/craft-rocket   # -> target/pexe/craft-rocket.pexe
+~/.dobj/bin/dobj install target/pexe/craft-rocket.pexe
 ~/.dobj/bin/dobj actions   # MineIron, FarmWater, CraftIngot, ... CraftRocket
 ```
 

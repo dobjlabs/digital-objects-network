@@ -1,11 +1,12 @@
 ---
 title: craft-basics
-description: The starter survival-crafting application - find logs, refine wood, craft picks, mine stone. Six classes, nine actions, bundled with the installer.
+description: The starter survival-crafting application - find logs, refine wood, craft picks, mine stone. Six classes, nine actions, added with one dobj install.
 ---
 
 # craft-basics ⛏️
 
-The starter application, bundled with the [installer](/install). A miniature
+The starter application — add it to your driver with a single `dobj install`
+(see [Install](/install)). A miniature
 survival-game loop: discover raw material with verifiable work, refine it,
 assemble tools, and spend tool durability to mine harder material. Every item
 is a Digital Object; every craft is a zero-knowledge-proved action.
@@ -58,21 +59,18 @@ MineStoneWithStonePick   ⛏️ wear -1      → 🪨 Stone
 
 ## Install
 
-Bundled with the [driver installer](/install). To add it to an existing
-setup:
+Install the [driver](/install) first, then add this plugin — `dobj install`
+hot-reloads the catalog, so no restart is needed:
 
 ```bash
-mkdir -p ~/.dobj/actions
-curl -fsSL https://github.com/dobjlabs/zk-craft-releases/releases/latest/download/craft-basics.pexe \
-  -o ~/.dobj/actions/craft-basics.pexe
-~/.dobj/bin/dobj stop && ~/.dobj/bin/dobj start
+~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-basics.pexe
 ```
 
-Or from a checkout of the repo:
+Or build it from a checkout of the repo, then install the archive:
 
 ```bash
-cargo run -p pexe --release -- build --install examples/craft-basics
-~/.dobj/bin/dobj stop && ~/.dobj/bin/dobj start
+cargo run -p pexe --release -- build examples/craft-basics   # -> target/pexe/craft-basics.pexe
+~/.dobj/bin/dobj install target/pexe/craft-basics.pexe
 ```
 
 Source:
