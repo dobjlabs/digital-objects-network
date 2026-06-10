@@ -309,7 +309,7 @@ jobs:
       # (dotenvy falls through when there's no .env file in cwd).
       # =====================================================================
 
-      - name: Start synchronizer + relayer (Unix)
+      - name: Start archiver + synchronizer + relayer (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
