@@ -22,23 +22,23 @@ A single **driver daemon** (`dobjd`) on the user's machine owns
                                               + relayer
 ```
 
-- **`dobjd`** ([dobjd/](dobjd)) — long-running driver process. Serves the
+- **`dobjd`** ([services/dobjd/](services/dobjd)) — long-running driver process. Serves the
   REST/SSE API on `:7717` and the MCP server on `:7718`. Owns the
   plugin loader, RocksDB, and the in-memory state
   every client shares.
-- **`dobj`** ([cli/](cli)) — terminal CLI. Subcommands for objects,
+- **`dobj`** ([interfaces/cli/](interfaces/cli)) — terminal CLI. Subcommands for objects,
   inspecting objects/classes, running actions, watching the event bus,
   and managing the daemon (`start`/`stop`/`status`/`logs`).
-- **Desktop / web** ([app-gui/](app-gui)) — React UI bundled either as a
+- **Desktop / web** ([interfaces/gui/](interfaces/gui)) — React UI bundled either as a
   Tauri shell or served from Vite. Both modes call dobjd over HTTP/SSE.
-- **MCP** — `dobj-mcp-proxy` (in [mcp/](mcp)) bridges Claude Desktop's
+- **MCP** — `dobj-mcp-proxy` (in [interfaces/mcp/](interfaces/mcp)) bridges Claude Desktop's
   stdio transport to dobjd's HTTP MCP server. Claude Code connects to
   `http://127.0.0.1:7718/mcp` directly via `claude mcp add`.
 - **Hosted synchronizer + relayer** — public endpoints the daemon points
   at by default. The synchronizer maintains the Merkle trees
   of transactions + nullifiers; the relayer submits proof payloads as
   EIP-4844 blobs. Both are independent Rust services
-  ([synchronizer/](synchronizer), [relayer/](relayer)) that can also
+  ([services/synchronizer/](services/synchronizer), [services/relayer/](services/relayer)) that can also
   run locally for development.
 
 ## Install (end user)
@@ -76,7 +76,7 @@ git clone https://github.com/dobjlabs/digital-objects-network
 cd digital-objects-network
 
 # install GUI deps
-cd app-gui && pnpm install && cd ..
+cd interfaces/gui && pnpm install && cd ../..
 
 # copy env templates if you want to run synchronizer/relayer locally
 cp synchronizer/.env.example synchronizer/.env
@@ -105,19 +105,19 @@ Run individual pieces standalone with `just sync`, `just relayer`,
 
 ## Workspace map
 
-| Crate                                                                       | Role                                                                                                                    |
-| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| [`driver/`](driver)                                                         | the core Rust library — opens `~/.dobj/`, runs actions, queries objects. Single entry point for any in-process consumer |
-| [`dobjd/`](dobjd)                                                           | HTTP + MCP daemon wrapping the driver. Long-running, owns the broadcast hub                                             |
-| [`cli/`](cli)                                                               | terminal CLI client for dobjd (binary: `dobj`)                                                                          |
-| [`mcp/`](mcp)                                                               | MCP server library + `dobj-mcp-proxy` stdio bridge                                                                      |
-| [`app-gui/`](app-gui)                                                       | React frontend + thin Tauri shell. Fetches from dobjd over HTTP/SSE                                                     |
-| [`synchronizer/`](synchronizer), [`relayer/`](relayer)                      | chain-side services (Postgres-backed)                                                                                   |
-| [`txlib/`](txlib)                                                           | transaction builder — event hash chain, `TxFinalized` predicate, nullifier derivation                                   |
-| [`sdk/`](sdk)                                                               | higher-level helpers used inside plugin actions                                                                         |
-| [`pexe/`](pexe)                                                             | plugin packager — bundles `manifest.toml` + `plugin.rhai` into `.pexe` archives                                         |
-| [`examples/craft-basics/`](examples/craft-basics)                           | the bundled crafting plugin (Log, Wood, Stone, sticks, picks…)                                                          |
-| [`common/`](common), [`pod2utils/`](pod2utils), [`intro_pods/`](intro_pods) | shared utilities + intro proof-of-work / VDF pods                                                                       |
+| Crate                                                                                                       | Role                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| [`libs/driver/`](libs/driver)                                                                               | the core Rust library — opens `~/.dobj/`, runs actions, queries objects. Single entry point for any in-process consumer |
+| [`services/dobjd/`](services/dobjd)                                                                         | HTTP + MCP daemon wrapping the driver. Long-running, owns the broadcast hub                                             |
+| [`interfaces/cli/`](interfaces/cli)                                                                         | terminal CLI client for dobjd (binary: `dobj`)                                                                          |
+| [`interfaces/mcp/`](interfaces/mcp)                                                                         | MCP server library + `dobj-mcp-proxy` stdio bridge                                                                      |
+| [`interfaces/gui/`](interfaces/gui)                                                                         | React frontend + thin Tauri shell. Fetches from dobjd over HTTP/SSE                                                     |
+| [`services/synchronizer/`](services/synchronizer), [`services/relayer/`](services/relayer)                  | chain-side services (Postgres-backed)                                                                                   |
+| [`libs/txlib/`](libs/txlib)                                                                                 | transaction builder — event hash chain, `TxFinalized` predicate, nullifier derivation                                   |
+| [`libs/sdk/`](libs/sdk)                                                                                     | higher-level helpers used inside plugin actions                                                                         |
+| [`libs/pexe/`](libs/pexe)                                                                                   | plugin packager — bundles `manifest.toml` + `plugin.rhai` into `.pexe` archives                                         |
+| [`examples/craft-basics/`](examples/craft-basics)                                                           | the bundled crafting plugin (Log, Wood, Stone, sticks, picks…)                                                          |
+| [`libs/payload/`](libs/payload), [`libs/pod2utils/`](libs/pod2utils), [`libs/intro-pods/`](libs/intro-pods) | shared utilities + intro proof-of-work / VDF pods                                                                       |
 
 Built on **pod2** (0xPARC's predicate-of-data system) using `plonky2` —
 proofs are constant-size regardless of input count.
@@ -130,7 +130,7 @@ from `~/.dobj/actions/`. Each plugin zips together:
 - `manifest.toml` — name, version, class descriptions, action names, module hash
 - `plugin.rhai` — the action logic as a Rhai script
 
-Plugin sources live under [examples/](plugins). The [pexe](pexe) crate
+Plugin sources live under [examples/](examples). The [pexe](libs/pexe) crate
 provides a CLI:
 
 ```bash

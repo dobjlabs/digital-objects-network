@@ -41,7 +41,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 # ---- cook: compile the shared dependency graph once ----
 # pod2 + plonky2 + rocksdb + alloy dominate build time. Cooking them here makes
 # a cached layer both services reuse, which only changes when a dependency
-# changes. The -p scope also keeps the Tauri desktop crate (app-gui/src-tauri,
+# changes. The -p scope also keeps the Tauri desktop crate (interfaces/gui/src-tauri,
 # which needs GTK/WebKit) out of the build entirely.
 FROM chef AS cook
 COPY --from=planner /app/recipe.json recipe.json

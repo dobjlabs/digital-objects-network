@@ -1,0 +1,28 @@
+[package]
+name = "sdk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+pod2 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+plonky2 = { workspace = true }
+env_logger = { workspace = true }
+itertools = { workspace = true }
+toml = { workspace = true }
+time = "0.3.46"
+tinytemplate = "1.2.1"
+rhai = { version = "1.24.0" }
+pod2utils = { path = "../pod2utils" }
+txlib = { path = "../txlib" }
+vdfpod = { path = "../intro-pods/vdfpod" }
+lt-eq-u256-pod = { path = "../intro-pods/lt-eq-u256-pod" }
+
+[dev-dependencies]
+payload = { path = "../payload", features = ["test-utils"] }
