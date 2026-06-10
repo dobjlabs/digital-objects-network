@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
-use crate::clients::beacon::types::{BlockHeader, HeadEventData, Topic};
 use anyhow::{anyhow, Result};
+use eth_clients::beacon::types::{BlockHeader, HeadEventData, Topic};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
 use tokio::sync::watch;

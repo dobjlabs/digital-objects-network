@@ -27,7 +27,7 @@ use alloy::{consensus::Bytes48, eips::eip4844::HeapBlob, primitives::B256};
 use serde::{Deserialize, Serialize, Serializer};
 
 use super::BeaconClient;
-use crate::clients::common::ClientError;
+use crate::common::ClientError;
 
 pub type KzgCommitment = Bytes48;
 
@@ -109,7 +109,7 @@ pub struct BlockResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Blob {
+pub struct BlobSidecar {
     #[serde(deserialize_with = "deserialize_u32", serialize_with = "serialize_u32")]
     pub index: u32,
     pub kzg_commitment: KzgCommitment,
@@ -118,8 +118,13 @@ pub struct Blob {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct BlobsSidecarsResponse {
+    pub data: Vec<BlobSidecar>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct BlobsResponse {
-    pub data: Vec<Blob>,
+    pub data: Vec<HeapBlob>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -127,7 +132,7 @@ pub struct BlockHeaderResponse {
     pub data: BlockHeaderData,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BlockHeader {
     pub root: B256,
     pub parent_root: B256,
