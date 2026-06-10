@@ -965,6 +965,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "archiver"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "axum",
+ "axum-extra",
+ "backoff",
+ "chrono",
+ "common",
+ "dotenvy",
+ "eth-clients",
+ "futures-util",
+ "hex",
+ "itertools 0.14.0",
+ "reqwest 0.12.28",
+ "reqwest-eventsource",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "ark-ff"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1625,34 +1653,6 @@ dependencies = [
  "radium",
  "tap",
  "wyz",
-]
-
-[[package]]
-name = "blob-archiver"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "axum",
- "axum-extra",
- "backoff",
- "chrono",
- "common",
- "dotenvy",
- "eth-clients",
- "futures-util",
- "hex",
- "itertools 0.14.0",
- "reqwest 0.12.28",
- "reqwest-eventsource",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
 ]
 
 [[package]]

@@ -9,6 +9,10 @@ sync:
 relayer:
     RUST_LOG=info cargo run -p relayer --release
 
+# Run the archiver (loads env from archiver/.env if present)
+archiver:
+    RUST_LOG=info cargo run -p archiver --release
+
 # Run the desktop app standalone (Tauri spawns its own Vite on :1420).
 # Use this when you only want the desktop window. Inside `just dev` we use
 # `desktop-shell` instead so a shared Vite serves both desktop and browser.

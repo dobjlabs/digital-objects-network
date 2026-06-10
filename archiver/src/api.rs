@@ -29,7 +29,7 @@ pub async fn run_api_server(state: ApiState, bind_addr: SocketAddr) -> Result<()
         .route("/healthz", get(healthz))
         .route("/header", get(get_header))
         .route("/config", get(get_config))
-        .route("/v1/beacon/blobs/{block_id}", get(get_blobs))
+        .route("/eth/v1/beacon/blobs/{block_id}", get(get_blobs))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
 

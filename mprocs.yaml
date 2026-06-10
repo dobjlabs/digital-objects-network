@@ -4,8 +4,10 @@
 # opens only once its Vite server on :1420 is up). Ports are the service
 # defaults (synchronizer :3000, relayer :3200, dobjd :7717).
 procs:
+  archiver:
+    shell: just archiver
   synchronizer:
-    shell: just sync
+    shell: just wait-health http://127.0.0.1:3001/healthz && just sync
   relayer:
     shell: just wait-health http://127.0.0.1:3000/healthz && just relayer
   dobjd:
