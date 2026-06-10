@@ -938,24 +938,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "app-gui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "common",
- "driver",
- "env_logger",
- "rfd",
- "serde",
- "serde_json",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1994,26 +1976,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "common"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "dotenvy",
- "hex",
- "itertools 0.14.0",
- "log",
- "plonky2",
- "pod2",
- "serde",
- "serde_json",
- "time",
- "tracing",
- "tracing-subscriber",
- "txlib",
-]
-
-[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2698,11 +2660,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "common",
  "dobj-mcp",
  "driver",
  "futures-util",
  "log",
+ "payload",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2758,12 +2720,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "common",
  "dirs",
  "env_logger",
  "hex",
  "log",
  "lt_eq_u256_pod",
+ "payload",
  "pexe",
  "plonky2",
  "pod2",
@@ -3706,6 +3668,24 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "gui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "driver",
+ "env_logger",
+ "payload",
+ "rfd",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5530,6 +5510,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
+name = "payload"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "dotenvy",
+ "hex",
+ "itertools 0.14.0",
+ "log",
+ "plonky2",
+ "pod2",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
+ "tracing-subscriber",
+ "txlib",
+]
+
+[[package]]
 name = "pem-rfc7468"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6608,9 +6608,9 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "common",
  "dotenvy",
  "hex",
+ "payload",
  "pod2",
  "serde",
  "serde_json",
@@ -7112,12 +7112,12 @@ name = "sdk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "common",
  "env_logger",
  "hex",
  "itertools 0.14.0",
  "log",
  "lt_eq_u256_pod",
+ "payload",
  "plonky2",
  "pod2",
  "pod2utils",
@@ -8070,10 +8070,10 @@ dependencies = [
  "axum",
  "backoff",
  "chrono",
- "common",
  "dotenvy",
  "futures-util",
  "hex",
+ "payload",
  "plonky2",
  "pod2",
  "pod2utils",

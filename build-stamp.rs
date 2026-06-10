@@ -1,5 +1,5 @@
 // Shared build-script logic for `cli/build.rs` and `dobjd/build.rs`, each of
-// which pulls this in with `include!("../build-stamp.rs")`. Kept as an included
+// which pulls this in with `include!("../../build-stamp.rs")`. Kept as an included
 // file rather than a build-dependency crate to avoid the workspace + Cargo
 // plumbing for ~10 lines; the crates aren't published, so the out-of-package
 // `include!` path is fine.
@@ -11,7 +11,7 @@ fn stamp_build_version() {
     println!("cargo:rerun-if-env-changed=DOBJ_RELEASE_TAG");
     // This file lives outside the crate dir, so cargo's default package-change
     // detection wouldn't notice edits to it; track it explicitly.
-    println!("cargo:rerun-if-changed=../build-stamp.rs");
+    println!("cargo:rerun-if-changed=../../build-stamp.rs");
     let tag = std::env::var("DOBJ_RELEASE_TAG").unwrap_or_else(|_| "dev".to_string());
     // TARGET is set by cargo for every build script run; it is the triple
     // being compiled *for* (not the host), so cross-compiled binaries stamp

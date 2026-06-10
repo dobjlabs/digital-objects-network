@@ -1,0 +1,37 @@
+[package]
+name = "driver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+pod2 = { workspace = true }
+plonky2 = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+payload = { path = "../payload" }
+sdk = { path = "../sdk" }
+pexe = { path = "../pexe" }
+pod2utils = { path = "../pod2utils" }
+# `chain` feature pulls in pod2 so we can use the proof-bearing
+# synchronizer response types (SourceTxProofResponse,
+# GroundingWitnessResponse). Wire-types is cross-platform — keeps the
+# driver build off rocksdb/sqlx/alloy so dobjd compiles cleanly on
+# Windows where the synchronizer/relayer server crates wouldn't.
+wire-types = { workspace = true, features = ["chain"] }
+txlib = { path = "../txlib" }
+vdfpod = { path = "../intro-pods/vdfpod" }
+lt_eq_u256_pod = { path = "../intro-pods/lt_eq_u256_pod" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+base64 = "0.22"
+dirs = "6.0.0"
+
+[dev-dependencies]
+payload = { path = "../payload", features = ["test-utils"] }
+tempfile = "3"
+toml = { workspace = true }

@@ -13,19 +13,19 @@ relayer:
 # Use this when you only want the desktop window. Inside `just dev` we use
 # `desktop-shell` instead so a shared Vite serves both desktop and browser.
 desktop:
-    cd app-gui && RUST_BACKTRACE=1 RUST_LOG=info pnpm tauri dev --release
+    cd interfaces/gui && RUST_BACKTRACE=1 RUST_LOG=info pnpm tauri dev --release
 
 # Run the Tauri shell pointing at an *already-running* Vite at :1420.
 # Skips Tauri's `beforeDevCommand` so it doesn't fight the standalone web
 # pane for the port. Pair with `just web`.
 desktop-shell:
-    cd app-gui && RUST_LOG=info pnpm tauri dev --release -c '{"build":{"beforeDevCommand":""}}'
+    cd interfaces/gui && RUST_LOG=info pnpm tauri dev --release -c '{"build":{"beforeDevCommand":""}}'
 
 # Run the Vite dev server alone on :1420. Reachable from any browser tab
 # or from the Tauri shell. Talks to dobjd at :7717 over HTTP for everything
 # driver-related.
 web:
-    cd app-gui && pnpm dev
+    cd interfaces/gui && pnpm dev
 
 # Run the headless HTTP server that exposes the driver API to every client
 # (desktop window, browser tab, MCP, dobj CLI).
