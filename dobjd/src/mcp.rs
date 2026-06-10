@@ -36,7 +36,7 @@ impl DobjOps for DobjdOps {
         self.driver.sync_objects(None)
     }
 
-    fn list_actions(&self) -> anyhow::Result<Vec<mcp::Action>> {
+    fn list_actions(&self) -> anyhow::Result<Vec<mcp::ActionSummary>> {
         self.driver.list_actions(None)
     }
 
@@ -48,15 +48,15 @@ impl DobjOps for DobjdOps {
         Ok(common::encode_hash_hex(&self.driver.get_state_root()?))
     }
 
-    fn inspect_object(&self, file_name: &str) -> anyhow::Result<mcp::ObjectDetail> {
+    fn inspect_object(&self, file_name: &str) -> anyhow::Result<mcp::ObjectSummary> {
         self.driver.read_object(std::path::Path::new(file_name))
     }
 
-    fn inspect_class(&self, class: &mcp::QualifiedName) -> anyhow::Result<mcp::ClassDetail> {
+    fn inspect_class(&self, class: &mcp::QualifiedName) -> anyhow::Result<mcp::ClassSummary> {
         self.driver.get_class(class)
     }
 
-    fn inspect_action(&self, action: &mcp::QualifiedName) -> anyhow::Result<mcp::ActionDetail> {
+    fn inspect_action(&self, action: &mcp::QualifiedName) -> anyhow::Result<mcp::ActionSummary> {
         self.driver.get_action(action)
     }
 
@@ -95,7 +95,7 @@ impl DobjOps for DobjdOps {
         self.driver.check_action(action)
     }
 
-    fn import_object_file(&self, path: &str) -> anyhow::Result<mcp::ObjectDetail> {
+    fn import_object_file(&self, path: &str) -> anyhow::Result<mcp::ObjectSummary> {
         // MCP runs in-process with the driver on the user's machine, so it
         // reads the file here and hands the contents to the same validation
         // core the HTTP route uses. Arbitrary path is fine: the agent already

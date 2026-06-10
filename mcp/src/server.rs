@@ -137,7 +137,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     fn inspect_object(
         &self,
         Parameters(params): Parameters<InspectObjectParams>,
-    ) -> Result<Json<ObjectDetail>, String> {
+    ) -> Result<Json<ObjectSummary>, String> {
         self.ops
             .inspect_object(&params.file_name)
             .map(Json)
@@ -150,7 +150,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     fn inspect_class(
         &self,
         Parameters(params): Parameters<InspectClassParams>,
-    ) -> Result<Json<ClassDetail>, String> {
+    ) -> Result<Json<ClassSummary>, String> {
         self.ops
             .inspect_class(&params.class)
             .map(Json)
@@ -163,7 +163,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     fn inspect_action(
         &self,
         Parameters(params): Parameters<InspectActionParams>,
-    ) -> Result<Json<ActionDetail>, String> {
+    ) -> Result<Json<ActionSummary>, String> {
         self.ops
             .inspect_action(&params.action)
             .map(Json)
@@ -218,7 +218,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     fn import_object_file(
         &self,
         Parameters(params): Parameters<ImportObjectFileParams>,
-    ) -> Result<Json<ObjectDetail>, String> {
+    ) -> Result<Json<ObjectSummary>, String> {
         self.ops
             .import_object_file(&params.path)
             .map(Json)
