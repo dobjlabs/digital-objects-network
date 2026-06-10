@@ -367,28 +367,11 @@
   animation: blink-green 1.8s ease-in-out infinite;
 }
 
-.root-dot.nullified {
-  background: var(--danger);
-  animation: blink-red 1.8s ease-in-out infinite;
-}
-
 @keyframes blink-green {
   0%,
   100% {
     opacity: 1;
     box-shadow: 0 0 3px var(--good);
-  }
-  50% {
-    opacity: 0.3;
-    box-shadow: none;
-  }
-}
-
-@keyframes blink-red {
-  0%,
-  100% {
-    opacity: 1;
-    box-shadow: 0 0 3px var(--danger);
   }
   50% {
     opacity: 0.3;
