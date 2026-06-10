@@ -47,8 +47,8 @@ env:
   # Hosted defaults baked into dobjd at compile time (see
   # driver/src/settings.rs::default_settings) AND surfaced in the release
   # notes via envsubst. Change here, both move together.
-  DEFAULT_SYNCHRONIZER_API_URL: https://sync.don.pateldhvani.com
-  DEFAULT_RELAYER_API_URL: https://relay.don.pateldhvani.com
+  DEFAULT_SYNCHRONIZER_API_URL: https://synchronizer.don.pateldhvani.com
+  DEFAULT_RELAYER_API_URL: https://relayer.don.pateldhvani.com
 
 # Releases are drafts on this repo until manually published (drafts are
 # invisible to the public until then). Top-level stays read-only; the jobs
