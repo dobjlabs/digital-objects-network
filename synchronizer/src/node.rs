@@ -2,13 +2,16 @@ use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
 use eth_clients::beacon::{
     self,
-    types::{BlobSidecar, Block, BlockHeader, BlockId, Spec},
+    types::{Block, BlockHeader, BlockId, KzgCommitment, Spec},
     BeaconClient,
 };
 
 use alloy::{
     consensus::Transaction,
-    eips::{self as alloy_eips, eip4844::kzg_to_versioned_hash},
+    eips::{
+        self as alloy_eips,
+        eip4844::{kzg_to_versioned_hash, HeapBlob},
+    },
     network as alloy_network,
     primitives::B256,
     providers as alloy_provider,
@@ -30,6 +33,7 @@ use crate::sync_db::{CommittedSlotRecord, SyncDb};
 /// pure state derivation (`StateMachine`), and sync metadata (`SyncDb`).
 pub struct Node {
     pub beacon_cli: BeaconClient,
+    pub archiver_cli: BeaconClient,
     pub rpc_cli: RootProvider,
     pub config: AppConfig,
     pub state_machine: Arc<StateMachine>,
@@ -43,7 +47,7 @@ struct SlotContext {
     execution_block_hash: B256,
     execution_block_number: u32,
     execution_timestamp: u64,
-    has_blob_commitments: bool,
+    kzg_blob_commitments: Vec<(B256, KzgCommitment)>,
 }
 
 /// Outcome of processing one beacon slot, ready to be committed.
@@ -78,13 +82,19 @@ impl Node {
         let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
         let beacon_cli_cfg = beacon::Config {
             base_url: cfg.beacon_url.clone(),
+            exp_backoff: exp_backoff.clone(),
+        };
+        let beacon_cli = BeaconClient::try_with_client(http_cli.clone(), beacon_cli_cfg)?;
+        let archiver_cli_cfg = beacon::Config {
+            base_url: cfg.archiver_url.clone(),
             exp_backoff,
         };
-        let beacon_cli = BeaconClient::try_with_client(http_cli, beacon_cli_cfg)?;
+        let archiver_cli = BeaconClient::try_with_client(http_cli, archiver_cli_cfg)?;
         let rpc_cli = RootProvider::<Ethereum>::new_http(cfg.rpc_url.parse()?);
 
         Ok(Self {
             beacon_cli,
+            archiver_cli,
             rpc_cli,
             config: cfg,
             state_machine,
@@ -180,30 +190,32 @@ impl Node {
     async fn get_blobs(
         &self,
         slot: u32,
+        beacon_block_root: &B256,
+        block_kzg_blob_commitments: &[(B256, KzgCommitment)],
         versioned_hashes: &[B256],
-    ) -> Result<HashMap<B256, BlobSidecar>> {
+    ) -> Result<HashMap<B256, HeapBlob>> {
         let blobs = self
             .retry_rpc("beacon blob sidecars", format!("slot {slot}"), || async {
-                let blobs = self.beacon_cli.get_blob_sidecars(slot.into()).await?;
-                let blobs: HashMap<_, _> = blobs
-                    .into_iter()
-                    .filter_map(|blob| {
-                        let versioned_hash = kzg_to_versioned_hash(blob.kzg_commitment.as_ref());
-                        versioned_hashes
-                            .contains(&versioned_hash)
-                            .then_some((versioned_hash, blob))
-                    })
-                    .collect();
-
-                for vh in versioned_hashes {
-                    if !blobs.contains_key(vh) {
-                        return Err(anyhow!(
-                            "Missing requested blob in beacon response: slot={slot}, versioned_hash={vh}"
-                        ));
+                let mut blobs = self
+                    .archiver_cli
+                    .get_blobs((*beacon_block_root).into(), versioned_hashes)
+                    .await?;
+                if blobs.len() != versioned_hashes.len() {
+                    return Err(anyhow!(
+                        "Fetched {} blobs, but got {}",
+                        versioned_hashes.len(),
+                        blobs.len()
+                    ));
+                }
+                blobs.reverse();
+                let mut blob_map = HashMap::new();
+                for (vh, _) in block_kzg_blob_commitments {
+                    if versioned_hashes.contains(vh) {
+                        blob_map.insert(*vh, blobs.pop().expect("not empty"));
                     }
                 }
 
-                Ok(blobs)
+                Ok(blob_map)
             })
             .await?;
         debug!(slot, blob_count = blobs.len(), "Fetched blobs from beacon");
@@ -277,10 +289,13 @@ impl Node {
             anyhow!("Beacon block {beacon_block_root} for slot {slot} had no execution payload")
         })?;
 
-        let has_blob_commitments = beacon_block
-            .blob_kzg_commitments
-            .as_ref()
-            .is_some_and(|commitments| !commitments.is_empty());
+        let kzg_blob_commitments = match beacon_block.blob_kzg_commitments.clone() {
+            Some(commitments) => commitments
+                .into_iter()
+                .map(|c| (kzg_to_versioned_hash(c.as_ref()), c))
+                .collect(),
+            None => Vec::new(),
+        };
 
         Ok(SlotContext {
             slot,
@@ -289,7 +304,7 @@ impl Node {
             execution_block_hash: execution_payload.block_hash,
             execution_block_number: execution_payload.block_number,
             execution_timestamp: execution_payload.timestamp,
-            has_blob_commitments,
+            kzg_blob_commitments,
         })
     }
 
@@ -380,7 +395,7 @@ impl Node {
             .map(|n| n.saturating_sub(MAX_STATE_ROOT_AGE_BLOCKS as u32));
         let recent_state_roots = self.sync_db.recent_state_roots(min_block_number).await?;
 
-        if !slot_ctx.has_blob_commitments {
+        if slot_ctx.kzg_blob_commitments.is_empty() {
             debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
             let derived = self
                 .derive_slot(
@@ -478,7 +493,12 @@ impl Node {
             .cloned()
             .collect();
         let blobs = self
-            .get_blobs(slot_ctx.slot, &blob_versioned_hashes)
+            .get_blobs(
+                slot_ctx.slot,
+                &slot_ctx.beacon_block_root,
+                &slot_ctx.kzg_blob_commitments,
+                &blob_versioned_hashes,
+            )
             .await?;
 
         for (_tx_index, tx) in indexed_do_blob_txs {
@@ -490,22 +510,26 @@ impl Node {
                 .blob_versioned_hashes()
                 .expect("tx has blobs")
                 .iter()
-                .map(|vh| &blobs[vh])
+                .map(|vh| (*vh, &blobs[vh]))
                 .collect();
             trace!(?hash, ?from, ?to);
 
-            for blob in tx_blobs.iter() {
-                let bytes =
-                    common::blob::decode_simple_blob(blob.blob.inner()).with_context(|| {
-                        format!(
-                            "Invalid byte encoding in blob at slot {}, blob_index {}",
-                            slot_ctx.slot, blob.index
-                        )
-                    })?;
-                blob_payloads.push((blob.index, bytes));
+            for (vh, blob) in tx_blobs.iter() {
+                let blob_index = slot_ctx
+                    .kzg_blob_commitments
+                    .iter()
+                    .position(|(vh0, _)| vh0 == vh)
+                    .expect("vh exists");
+                let bytes = common::blob::decode_simple_blob(blob.inner()).with_context(|| {
+                    format!(
+                        "Invalid byte encoding in blob at slot {}, blob_index {}",
+                        slot_ctx.slot, blob_index
+                    )
+                })?;
+                blob_payloads.push((blob_index as u32, bytes));
                 info!(
                     slot = slot_ctx.slot,
-                    blob_index = blob.index,
+                    blob_index = blob_index,
                     tx_hash = ?hash,
                     "Decoded target blob"
                 );

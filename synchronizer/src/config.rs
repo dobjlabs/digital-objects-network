@@ -37,6 +37,7 @@ pub struct AppConfig {
     pub initial_start_slot: Option<u32>,
     pub rpc_url: String,
     pub beacon_url: String,
+    pub archiver_url: String,
     pub to_address: Address,
 }
 
@@ -93,6 +94,7 @@ pub fn load_config() -> Result<AppConfig> {
 
     let rpc_url: String = dotenvy::var("RPC_URL")?;
     let beacon_url: String = dotenvy::var("BEACON_URL")?;
+    let archiver_url: String = dotenvy::var("ARCHIVER_URL")?;
     let to_address: Address = Address::from_str(&dotenvy::var("TO_ADDRESS")?)?;
 
     Ok(AppConfig {
@@ -106,6 +108,7 @@ pub fn load_config() -> Result<AppConfig> {
         initial_start_slot,
         rpc_url,
         beacon_url,
+        archiver_url,
         to_address,
     })
 }
