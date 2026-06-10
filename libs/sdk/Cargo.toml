@@ -22,7 +22,7 @@ rhai = { version = "1.24.0" }
 pod2utils = { path = "../pod2utils" }
 txlib = { path = "../txlib" }
 vdfpod = { path = "../intro-pods/vdfpod" }
-lt_eq_u256_pod = { path = "../intro-pods/lt_eq_u256_pod" }
+lt-eq-u256-pod = { path = "../intro-pods/lt-eq-u256-pod" }
 
 [dev-dependencies]
 payload = { path = "../payload", features = ["test-utils"] }

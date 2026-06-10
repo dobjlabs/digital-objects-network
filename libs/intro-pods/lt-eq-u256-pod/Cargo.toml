@@ -1,5 +1,5 @@
 [package]
-name = "lt_eq_u256_pod"
+name = "lt-eq-u256-pod"
 version = "0.1.0"
 edition = "2024"
 
