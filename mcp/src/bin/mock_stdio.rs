@@ -1,15 +1,15 @@
-use craft_mcp::mock::MockCraftOps;
-use craft_mcp::server::CraftMcpService;
+use dobj_mcp::mock::MockDobjOps;
+use dobj_mcp::server::DobjMcpService;
 use rmcp::ServiceExt;
 use rmcp::transport::io::stdio;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    craft_mcp::logging::init_stderr();
+    dobj_mcp::logging::init_stderr();
 
-    tracing::info!("bitcraft MCP mock server starting (stdio transport)");
+    tracing::info!("Digital Objects MCP mock server starting (stdio transport)");
 
-    let service = CraftMcpService::new(std::sync::Arc::new(MockCraftOps::new()));
+    let service = DobjMcpService::new(std::sync::Arc::new(MockDobjOps::new()));
     let running = service.serve(stdio()).await?;
     running.waiting().await?;
 

@@ -3,7 +3,7 @@ import type { DragEvent } from "react";
 import type {
   ActionPayload as Action,
   ClassRefPayload,
-  InventoryObjectPayload as InventoryObject,
+  ObjectSummaryPayload as ObjectSummary,
   QualifiedNamePayload,
 } from "../../shared/api/wireTypes";
 import { pickDobjFilePath, readDobjFile } from "../../shared/api/tauriClient";
@@ -21,7 +21,7 @@ import type { ContextSelection } from "../../shared/state/store";
 
 interface ContextPanelProps {
   selection: ContextSelection;
-  inventory: InventoryObject[];
+  objects: ObjectSummary[];
   objectsDirPath: string;
   actions: Action[];
   onClearSelection: () => void;
@@ -43,7 +43,7 @@ interface BoundArg {
 
 export function ContextPanel({
   selection,
-  inventory,
+  objects,
   objectsDirPath,
   actions,
   onClearSelection,
@@ -109,8 +109,8 @@ export function ContextPanel({
     event.preventDefault();
     event.stopPropagation();
     const raw =
-      event.dataTransfer.getData("application/x-zkcraft-object") ||
-      event.dataTransfer.getData("application/x-zkcraft-item") ||
+      event.dataTransfer.getData("application/x-dobj-object") ||
+      event.dataTransfer.getData("application/x-dobj-object") ||
       event.dataTransfer.getData("text/plain") ||
       event.dataTransfer.getData("text");
     if (!raw) return;
@@ -402,7 +402,7 @@ export function ContextPanel({
       );
     })();
 
-  const displayThingPath = (object: InventoryObject) => {
+  const displayObjectPath = (object: ObjectSummary) => {
     const absolutePath = joinObjectsDirPath(objectsDirPath, object.fileName, {
       nullified: isNullifiedObject(object),
     });
@@ -455,7 +455,7 @@ export function ContextPanel({
     };
   };
 
-  const renderObjectData = (object: InventoryObject) => {
+  const renderObjectData = (object: ObjectSummary) => {
     const normalizedObject = normalizePod2Value(object.fields);
     const entries = isRecord(normalizedObject)
       ? Object.entries(normalizedObject).sort(([left], [right]) =>
@@ -498,7 +498,7 @@ export function ContextPanel({
   }
 
   if (selection.kind === "object") {
-    const object = inventory.find(
+    const object = objects.find(
       (candidate) => candidate.contentHash === selection.contentHash,
     );
     if (!object)
@@ -542,7 +542,7 @@ export function ContextPanel({
           {renderMetaRow(
             "Path",
             <span className="context-inline-path">
-              {displayThingPath(object)}
+              {displayObjectPath(object)}
             </span>,
           )}
         </div>

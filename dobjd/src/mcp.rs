@@ -5,22 +5,21 @@
 //! aliases for the same `wire-types` definitions the HTTP routes use, so
 //! there's nothing to convert.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use craft_mcp::ops::CraftOps;
-use craft_mcp::types as mcp;
+use dobj_mcp::ops::DobjOps;
+use dobj_mcp::types as mcp;
 
 use crate::events::EventTx;
 use crate::runs::RunRegistry;
 
-pub struct DobjdCraftOps {
+pub struct DobjdOps {
     driver: Arc<::driver::Driver>,
     events: EventTx,
     runs: RunRegistry,
 }
 
-impl DobjdCraftOps {
+impl DobjdOps {
     pub fn new(driver: Arc<::driver::Driver>, events: EventTx, runs: RunRegistry) -> Self {
         Self {
             driver,
@@ -30,43 +29,14 @@ impl DobjdCraftOps {
     }
 }
 
-impl CraftOps for DobjdCraftOps {
-    fn list_inventory(&self) -> anyhow::Result<Vec<mcp::InventoryObject>> {
-        // Driver returns the basic `ObjectSummary`; the inventory wire
-        // shape folds in per-class metadata (emoji, description) so
-        // clients can render rows without a `/classes` round-trip. Same
-        // logic as `routes::inventory::load_inventory`.
-        let classes = self
-            .driver
-            .list_classes()?
-            .into_iter()
-            .map(|c| (c.class.clone(), c))
-            .collect::<HashMap<_, _>>();
-
-        Ok(self
-            .driver
-            .sync_inventory(None)?
-            .into_iter()
-            .map(|object| {
-                let class_info = classes.get(&object.class);
-                mcp::InventoryObject {
-                    content_hash: object.content_hash,
-                    file_name: object.file_name,
-                    class: object.class.clone(),
-                    class_hash: object.class_hash,
-                    emoji: class_info
-                        .map(|c| c.emoji.clone())
-                        .unwrap_or_else(|| "📦".to_string()),
-                    status: object.status,
-                    tx_hash: object.tx_hash,
-                    description: class_info.map(|c| c.description.clone()),
-                    fields: object.fields,
-                }
-            })
-            .collect())
+impl DobjOps for DobjdOps {
+    fn list_objects(&self) -> anyhow::Result<Vec<mcp::ObjectSummary>> {
+        // The driver folds each object's class metadata (emoji, description)
+        // into the summary, so clients need no `/classes` round-trip.
+        self.driver.sync_objects(None)
     }
 
-    fn list_actions(&self) -> anyhow::Result<Vec<mcp::Action>> {
+    fn list_actions(&self) -> anyhow::Result<Vec<mcp::ActionSummary>> {
         self.driver.list_actions(None)
     }
 
@@ -78,15 +48,15 @@ impl CraftOps for DobjdCraftOps {
         Ok(common::encode_hash_hex(&self.driver.get_state_root()?))
     }
 
-    fn inspect_object(&self, file_name: &str) -> anyhow::Result<mcp::ObjectDetail> {
+    fn inspect_object(&self, file_name: &str) -> anyhow::Result<mcp::ObjectSummary> {
         self.driver.read_object(std::path::Path::new(file_name))
     }
 
-    fn inspect_class(&self, class: &mcp::QualifiedName) -> anyhow::Result<mcp::ClassDetail> {
+    fn inspect_class(&self, class: &mcp::QualifiedName) -> anyhow::Result<mcp::ClassSummary> {
         self.driver.get_class(class)
     }
 
-    fn inspect_action(&self, action: &mcp::QualifiedName) -> anyhow::Result<mcp::ActionDetail> {
+    fn inspect_action(&self, action: &mcp::QualifiedName) -> anyhow::Result<mcp::ActionSummary> {
         self.driver.get_action(action)
     }
 
@@ -125,7 +95,7 @@ impl CraftOps for DobjdCraftOps {
         self.driver.check_action(action)
     }
 
-    fn import_object_file(&self, path: &str) -> anyhow::Result<mcp::ObjectDetail> {
+    fn import_object_file(&self, path: &str) -> anyhow::Result<mcp::ObjectSummary> {
         // MCP runs in-process with the driver on the user's machine, so it
         // reads the file here and hands the contents to the same validation
         // core the HTTP route uses. Arbitrary path is fine: the agent already

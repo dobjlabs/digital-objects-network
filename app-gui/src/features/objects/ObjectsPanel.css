@@ -1,4 +1,4 @@
-.inventory-panel {
+.objects-panel {
   display: flex;
   flex-direction: column;
   border-right: 2px solid var(--col-border);
@@ -6,7 +6,7 @@
   min-width: 0;
 }
 
-.inventory-list {
+.objects-list {
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -14,7 +14,7 @@
   overflow-y: auto;
 }
 
-.inventory-item,
+.objects-item,
 .nullified-toggle {
   border: 0;
   background: transparent;
@@ -29,7 +29,7 @@
     color 0.12s;
 }
 
-.inventory-item {
+.objects-item {
   display: flex;
   gap: 6px;
   align-items: center;
@@ -38,7 +38,7 @@
   margin-bottom: 2px;
 }
 
-.inventory-emoji {
+.objects-emoji {
   position: relative;
   z-index: 1;
   flex-shrink: 0;
@@ -47,7 +47,7 @@
   font-size: 11px;
 }
 
-.inventory-file-icon {
+.objects-file-icon {
   width: 22px;
   height: 26px;
   flex-shrink: 0;
@@ -57,7 +57,7 @@
   justify-content: center;
 }
 
-.inventory-file-icon::before {
+.objects-file-icon::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -66,7 +66,7 @@
   clip-path: polygon(0 0, 70% 0, 100% 30%, 100% 100%, 0 100%);
 }
 
-.inventory-file-icon::after {
+.objects-file-icon::after {
   content: "";
   position: absolute;
   top: 0;
@@ -79,7 +79,7 @@
   clip-path: polygon(0 0, 100% 100%, 100% 0);
 }
 
-.inventory-main {
+.objects-main {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -87,7 +87,7 @@
   gap: 2px;
 }
 
-.inventory-name {
+.objects-name {
   color: var(--text);
   font-size: 10px;
   line-height: 1.2;
@@ -96,7 +96,7 @@
   text-overflow: ellipsis;
 }
 
-.inventory-hash {
+.objects-hash {
   color: var(--text-dim);
   font-size: 8px;
   line-height: 1.2;
@@ -106,7 +106,7 @@
   text-overflow: ellipsis;
 }
 
-.inventory-dot {
+.objects-dot {
   width: 6px;
   height: 6px;
   border-radius: 999px;
@@ -114,41 +114,41 @@
   flex-shrink: 0;
 }
 
-.inventory-dot.unknown {
+.objects-dot.unknown {
   background: var(--text-dim);
 }
 
-.inventory-dot.pending {
+.objects-dot.pending {
   background: var(--warn);
 }
 
-.inventory-dot.live {
+.objects-dot.live {
   background: var(--good);
 }
 
-.inventory-dot.nullified {
+.objects-dot.nullified {
   background: var(--danger);
 }
 
-.inventory-item.active {
+.objects-item.active {
   color: var(--text-bright);
   background: var(--panel-alt);
 }
 
-.inventory-item.active .inventory-name {
+.objects-item.active .objects-name {
   color: var(--text-bright);
 }
 
-.inventory-item:hover,
+.objects-item:hover,
 .nullified-toggle:hover {
   background: var(--panel-alt);
 }
 
-.inventory-item:hover {
+.objects-item:hover {
   border-color: var(--border);
 }
 
-.inventory-item:active {
+.objects-item:active {
   cursor: grabbing;
 }
 
@@ -176,7 +176,7 @@
   color: inherit;
 }
 
-.inventory-import {
+.objects-import {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -184,7 +184,7 @@
   border-bottom: 1px solid var(--col-border);
 }
 
-.inventory-import-button {
+.objects-import-button {
   border: 1px solid var(--border);
   background: var(--panel-alt);
   color: var(--text);
@@ -199,18 +199,18 @@
     border-color 0.12s;
 }
 
-.inventory-import-button:hover:not(:disabled) {
+.objects-import-button:hover:not(:disabled) {
   background: var(--panel);
   color: var(--text-bright);
   border-color: var(--text-dim);
 }
 
-.inventory-import-button:disabled {
+.objects-import-button:disabled {
   opacity: 0.6;
   cursor: default;
 }
 
-.inventory-import-error {
+.objects-import-error {
   color: var(--danger);
   font-size: 8px;
   line-height: 1.3;

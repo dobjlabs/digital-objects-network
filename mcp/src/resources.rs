@@ -1,8 +1,8 @@
 use rmcp::model::{Annotated, RawResource, ReadResourceResult, Resource, ResourceContents};
 
-const PODLANG_REFERENCE_URI: &str = "bitcraft://docs/podlang-reference";
-const TXLIB_PREDICATES_URI: &str = "bitcraft://source/txlib.podlang";
-const OBJECT_LIFECYCLE_URI: &str = "bitcraft://docs/object-lifecycle";
+const PODLANG_REFERENCE_URI: &str = "dobj://docs/podlang-reference";
+const TXLIB_PREDICATES_URI: &str = "dobj://source/txlib.podlang";
+const OBJECT_LIFECYCLE_URI: &str = "dobj://docs/object-lifecycle";
 
 pub fn list() -> Vec<Resource> {
     vec![
@@ -31,7 +31,7 @@ pub fn list() -> Vec<Resource> {
                 .with_description(
                     "Worked example of a Digital Object's lifecycle: creation, \
                      mutation, consumption, nullifiers, and what each step \
-                     looks like in the inventory.",
+                     looks like among the objects.",
                 )
                 .with_mime_type("text/markdown"),
             None,

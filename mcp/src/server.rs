@@ -12,12 +12,12 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::ops::CraftOps;
+use crate::ops::DobjOps;
 use crate::types::*;
 
-/// MCP server service that exposes bitcraft operations as tools.
+/// MCP server service that exposes Digital Objects Network operations as tools.
 #[derive(Clone)]
-pub struct CraftMcpService<T: CraftOps> {
+pub struct DobjMcpService<T: DobjOps> {
     ops: Arc<T>,
     /// Used by the `#[tool_handler]` macro at request-dispatch time and by
     /// the test below. Plain dead-code analysis can't see the macro
@@ -26,7 +26,7 @@ pub struct CraftMcpService<T: CraftOps> {
     tool_router: ToolRouter<Self>,
 }
 
-impl<T: CraftOps> CraftMcpService<T> {
+impl<T: DobjOps> DobjMcpService<T> {
     pub fn new(ops: Arc<T>) -> Self {
         Self {
             ops,
@@ -41,7 +41,7 @@ impl<T: CraftOps> CraftMcpService<T> {
 pub struct InspectObjectParams {
     /// The `.dobj` file name (e.g. `craft-basics__wood_0xabc….dobj`) to
     /// inspect. Must be a basename in `~/.dobj/objects/` — use
-    /// `list_inventory` to see what's available.
+    /// `list_objects` to see what's available.
     pub file_name: String,
 }
 
@@ -92,19 +92,19 @@ pub struct ReadDocParams {
 // -- Tool implementations --
 
 #[tool_router]
-impl<T: CraftOps> CraftMcpService<T> {
+impl<T: DobjOps> DobjMcpService<T> {
     #[tool(
-        description = "List all objects in the inventory with their types, fields, and liveness status"
+        description = "List all objects held by this driver with their types, fields, and liveness status"
     )]
-    fn list_inventory(&self) -> Result<Json<InventoryList>, String> {
+    fn list_objects(&self) -> Result<Json<ObjectList>, String> {
         self.ops
-            .list_inventory()
-            .map(|objects| Json(InventoryList { objects }))
+            .list_objects()
+            .map(|objects| Json(ObjectList { objects }))
             .map_err(|e| e.to_string())
     }
 
     #[tool(
-        description = "List all available crafting actions with input/output class requirements and CPU cost"
+        description = "List all available actions with input/output class requirements and CPU cost"
     )]
     fn list_actions(&self) -> Result<Json<ActionList>, String> {
         self.ops
@@ -114,7 +114,7 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "List all known object classes with live inventory counts and which actions produce/consume each class"
+        description = "List all known object classes with live object counts and which actions produce/consume each class"
     )]
     fn list_classes(&self) -> Result<Json<ClassList>, String> {
         self.ops
@@ -132,12 +132,12 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Inspect an object by file name: full detail including fields, class, liveness, and predicate source. The file_name is a `.dobj` basename from list_inventory (e.g. `craft-basics__wood_0xabc….dobj`)."
+        description = "Inspect an object by file name: full detail including fields, class, liveness, and predicate source. The file_name is a `.dobj` basename from list_objects (e.g. `craft-basics__wood_0xabc….dobj`)."
     )]
     fn inspect_object(
         &self,
         Parameters(params): Parameters<InspectObjectParams>,
-    ) -> Result<Json<ObjectDetail>, String> {
+    ) -> Result<Json<ObjectSummary>, String> {
         self.ops
             .inspect_object(&params.file_name)
             .map(Json)
@@ -150,7 +150,7 @@ impl<T: CraftOps> CraftMcpService<T> {
     fn inspect_class(
         &self,
         Parameters(params): Parameters<InspectClassParams>,
-    ) -> Result<Json<ClassDetail>, String> {
+    ) -> Result<Json<ClassSummary>, String> {
         self.ops
             .inspect_class(&params.class)
             .map(Json)
@@ -163,7 +163,7 @@ impl<T: CraftOps> CraftMcpService<T> {
     fn inspect_action(
         &self,
         Parameters(params): Parameters<InspectActionParams>,
-    ) -> Result<Json<ActionDetail>, String> {
+    ) -> Result<Json<ActionSummary>, String> {
         self.ops
             .inspect_action(&params.action)
             .map(Json)
@@ -171,7 +171,7 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Start a crafting action. Returns immediately with a runId and status=queued; proof generation and commit run in the background. Poll get_run(runId) until status is succeeded or failed (then read result / error). Multiple actions run concurrently."
+        description = "Start an action. Returns immediately with a runId and status=queued; proof generation and commit run in the background. Poll get_run(runId) until status is succeeded or failed (then read result / error). Multiple actions run concurrently."
     )]
     fn run_action(
         &self,
@@ -200,7 +200,7 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Check whether an action can be executed with the current inventory. Reports available and missing inputs."
+        description = "Check whether an action can be executed with the current objects. Reports available and missing inputs."
     )]
     fn check_feasibility(
         &self,
@@ -213,12 +213,12 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Import an external .dobj object — one not produced by this driver — into local inventory. Pass `path`, a local filesystem path (on the machine running dobjd) to the .dobj file; dobjd reads it. If you only have the object's JSON inline, write it to a temp file first and pass that path. Validates the object's class identity and on-chain grounding, files it under a canonical name, and returns its summary (status is `live` if grounded, otherwise `unknown`). Errors if the object is already in inventory or already spent on-chain."
+        description = "Import an external .dobj object — one not produced by this driver — into the local object store. Pass `path`, a local filesystem path (on the machine running dobjd) to the .dobj file; dobjd reads it. If you only have the object's JSON inline, write it to a temp file first and pass that path. Validates the object's class identity and on-chain grounding, files it under a canonical name, and returns its summary (status is `live` if grounded, otherwise `unknown`). Errors if the object is already present or already spent on-chain."
     )]
     fn import_object_file(
         &self,
         Parameters(params): Parameters<ImportObjectFileParams>,
-    ) -> Result<Json<ObjectDetail>, String> {
+    ) -> Result<Json<ObjectSummary>, String> {
         self.ops
             .import_object_file(&params.path)
             .map(Json)
@@ -257,7 +257,7 @@ impl<T: CraftOps> CraftMcpService<T> {
     }
 
     #[tool(
-        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes in this game). Pass \"list\" to see all available documents."
+        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes). Pass \"list\" to see all available documents."
     )]
     fn read_doc(&self, Parameters(params): Parameters<ReadDocParams>) -> String {
         match params.name.as_str() {
@@ -275,17 +275,17 @@ impl<T: CraftOps> CraftMcpService<T> {
                     })
                     .collect();
                 lines.push(
-                    "- generated.podlang\n  Generated podlang source for all actions and IsClassName predicates in this game instance."
+                    "- generated.podlang\n  Generated podlang source for all actions and IsClassName predicates."
                         .to_string(),
                 );
                 lines.join("\n")
             }
             _ => {
                 let uri = match params.name.as_str() {
-                    "podlang-reference" => "bitcraft://docs/podlang-reference",
-                    "object-lifecycle" => "bitcraft://docs/object-lifecycle",
-                    "txlib.podlang" => "bitcraft://source/txlib.podlang",
-                    "time.podlang" => "bitcraft://source/time.podlang",
+                    "podlang-reference" => "dobj://docs/podlang-reference",
+                    "object-lifecycle" => "dobj://docs/object-lifecycle",
+                    "txlib.podlang" => "dobj://source/txlib.podlang",
+                    "time.podlang" => "dobj://source/time.podlang",
                     "generated.podlang" => {
                         return self
                             .ops
@@ -328,7 +328,7 @@ const INSTRUCTIONS: &str = include_str!("../docs/instructions.md");
 // -- ServerHandler --
 
 #[tool_handler]
-impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
+impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
             ServerCapabilities::builder()
@@ -365,11 +365,11 @@ impl<T: CraftOps> ServerHandler for CraftMcpService<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mock::MockCraftOps;
+    use crate::mock::MockDobjOps;
     use rmcp::handler::server::wrapper::Json;
 
-    fn make_service() -> CraftMcpService<MockCraftOps> {
-        CraftMcpService::new(Arc::new(MockCraftOps::new()))
+    fn make_service() -> DobjMcpService<MockDobjOps> {
+        DobjMcpService::new(Arc::new(MockDobjOps::new()))
     }
 
     fn craft_basics(name: &str) -> QualifiedName {
@@ -388,7 +388,7 @@ mod tests {
             .keys()
             .map(|k| k.to_string())
             .collect();
-        assert!(tools.contains(&"list_inventory".to_string()));
+        assert!(tools.contains(&"list_objects".to_string()));
         assert!(tools.contains(&"list_actions".to_string()));
         assert!(tools.contains(&"get_state_root".to_string()));
         assert!(tools.contains(&"inspect_object".to_string()));
@@ -412,13 +412,17 @@ mod tests {
         let info = service.get_info();
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
-        assert!(info.instructions.unwrap().contains("bitcraft MCP Server"));
+        assert!(
+            info.instructions
+                .unwrap()
+                .contains("Digital Objects Network MCP Server")
+        );
     }
 
     #[test]
-    fn test_list_inventory_returns_structured() {
+    fn test_list_objects_returns_structured() {
         let service = make_service();
-        let Json(list) = service.list_inventory().unwrap();
+        let Json(list) = service.list_objects().unwrap();
         assert!(!list.objects.is_empty());
         assert!(list.objects.iter().any(|o| o.class.name == "Log"));
     }
@@ -536,8 +540,8 @@ mod tests {
 
     #[test]
     fn test_check_feasibility_infeasible() {
-        let mock = MockCraftOps::new().with_inventory(vec![]);
-        let service = CraftMcpService::new(Arc::new(mock));
+        let mock = MockDobjOps::new().with_objects(vec![]);
+        let service = DobjMcpService::new(Arc::new(mock));
         let Json(report) = service
             .check_feasibility(Parameters(CheckFeasibilityParams {
                 action: craft_basics("CraftWoodPick"),
@@ -557,7 +561,7 @@ mod tests {
         let config = McpConfig {
             cancellation_token: ct.clone(),
         };
-        let server = McpServer::new(MockCraftOps::new(), config);
+        let server = McpServer::new(MockDobjOps::new(), config);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 

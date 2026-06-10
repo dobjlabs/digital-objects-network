@@ -1,6 +1,6 @@
-# bitcraft MCP Server
+# Digital Objects Network MCP Server
 
-You are connected to a bitcraft game instance. This server lets you
+You are connected to a Digital Objects Network instance. This server lets you
 inspect and manipulate Digital Objects — items whose entire existence is
 proved by zero-knowledge proofs. There is no central database of
 objects; each object is a self-contained ZK certificate that its holder
@@ -29,7 +29,7 @@ and what each action requires.
 **Nullifiers and liveness.** When an action consumes an object, it
 publishes a nullifier (a hash derived from the object's key). This
 prevents double-spending. An object is "live" if its nullifier has not
-been published. Dead objects remain in inventory for reference but
+been published. Dead objects remain in objects for reference but
 cannot be used as inputs.
 
 **State root.** A state root is a hash of all published
@@ -41,12 +41,12 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ### Inspection
 
-- `list_inventory` — every object the user holds, with class + liveness
-- `list_actions` — every available crafting action with its required inputs
+- `list_objects` — every object the user holds, with class + liveness
+- `list_actions` — every available action with its required inputs
 - `list_classes` — every known object class with live counts and producing/consuming actions
 - `inspect_object(file_name)` — full detail on one object: fields, status, predicate source
 - `inspect_class(class_name)` — predicate definition + which actions produce/consume the class
-- `check_feasibility(action_id)` — does the user's inventory have what this action needs?
+- `check_feasibility(action_id)` — does the user's objects have what this action needs?
 - `get_state_root` — current state root from the synchronizer
 - `read_doc(name)` — reference docs (`podlang-reference`, `object-lifecycle`, `txlib.podlang`,
   `time.podlang`, `generated.podlang`, or `list` to enumerate)
@@ -66,10 +66,10 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ## Recommended workflow
 
-- Start with `list_inventory` and `list_actions` to understand what's available.
+- Start with `list_objects` and `list_actions` to understand what's available.
 - Use `check_feasibility` before `run_action` to verify inputs exist (and to confirm the action's required input classes).
 - Use `inspect_object` / `inspect_class` to understand state and predicates.
-- After a run reaches `succeeded`, call `list_inventory` again to see the updated state.
+- After a run reaches `succeeded`, call `list_objects` again to see the updated state.
 
 ## Running actions
 
@@ -88,7 +88,7 @@ the user which step a run is on while it's still `generateProof` or
 `runId` independently.
 
 Pass `input_object_paths` explicitly (one per the action's required input
-classes, in order); resolve them from `list_inventory` / `check_feasibility`
+classes, in order); resolve them from `list_objects` / `check_feasibility`
 first. An input count that doesn't match the action makes the run fail.
 
 ## Podlang predicates

@@ -9,7 +9,7 @@
 # The images must be published (or built locally - see README.md). Both services
 # are singletons: never scale either past one replica per database. For hardened
 # production (managed Postgres, secret-store key) see README.md.
-name: zkcraft
+name: don
 
 services:
   postgres:
@@ -31,18 +31,18 @@ services:
       retries: 10
 
   synchronizer:
-    image: ghcr.io/dobjlabs/zk-craft/synchronizer:${IMAGE_TAG:-latest}
+    image: ghcr.io/dobjlabs/digital-objects-network/synchronizer:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env
     environment:
       RUST_LOG: ${RUST_LOG:-info}
       HTTP_BIND: 0.0.0.0:3000
-      APP_STATE_DB_PATH: /var/lib/zkcraft/synchronizer-db
+      APP_STATE_DB_PATH: /var/lib/don/synchronizer-db
       # Bundled Postgres by default; set SYNC_METADATA_DB_URL in .env to override
       # (e.g. a managed/external Postgres).
       SYNC_METADATA_DB_URL: ${SYNC_METADATA_DB_URL:-postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/synchronizer}
     volumes:
-      - syncdata:/var/lib/zkcraft
+      - syncdata:/var/lib/don
     ports:
       - "3000:3000"
     depends_on:
@@ -50,7 +50,7 @@ services:
         condition: service_healthy
 
   relayer:
-    image: ghcr.io/dobjlabs/zk-craft/relayer:${IMAGE_TAG:-latest}
+    image: ghcr.io/dobjlabs/digital-objects-network/relayer:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env
     environment:

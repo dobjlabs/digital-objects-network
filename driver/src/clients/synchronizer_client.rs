@@ -18,11 +18,11 @@ pub const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
 /// Per-request cap on `tx_hashes.len() + nullifiers.len()` accepted by the
 /// synchronizer's `POST /v1/state/membership` endpoint. MUST stay at or
 /// below the server's `MAX_HASH_QUERY_ITEMS` (synchronizer/src/api.rs).
-/// Above that, the server returns 400 and `sync_inventory` falls back to
+/// Above that, the server returns 400 and `sync_objects` falls back to
 /// stale local listing without on-chain reconciliation.
 ///
 /// We chunk client-side at this value so inventories with hundreds of
-/// objects still reconcile in a single `sync_inventory` call (just spread
+/// objects still reconcile in a single `sync_objects` call (just spread
 /// across multiple HTTP requests).
 const HASH_BATCH_LIMIT: usize = 256;
 

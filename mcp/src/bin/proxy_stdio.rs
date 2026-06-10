@@ -1,4 +1,4 @@
-/// Stdio-to-HTTP proxy for the bitcraft MCP server.
+/// Stdio-to-HTTP proxy for the Digital Objects Network MCP server.
 ///
 /// Claude Desktop only speaks stdio MCP. This binary reads JSON-RPC from
 /// stdin, forwards it to dobjd's streamable HTTP MCP endpoint
@@ -14,10 +14,10 @@ use tokio::sync::{Notify, RwLock, mpsc};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    craft_mcp::logging::init_stderr();
+    dobj_mcp::logging::init_stderr();
 
     let url = parse_url_from_args();
-    tracing::info!("bitcraft MCP proxy connecting to {url}");
+    tracing::info!("Digital Objects MCP proxy connecting to {url}");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
@@ -191,11 +191,11 @@ fn parse_url_from_args() -> String {
                 // (right architecture, deps present, not Gatekeeper-blocked);
                 // it just needs a clean exit. The proxy isn't release-stamped,
                 // so this reports the crate version rather than the bundle tag.
-                println!("bitcraft-mcp-proxy {}", env!("CARGO_PKG_VERSION"));
+                println!("dobj-mcp-proxy {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             "--help" | "-h" => {
-                println!("usage: bitcraft-mcp-proxy [--url <url> | --port <num>]");
+                println!("usage: dobj-mcp-proxy [--url <url> | --port <num>]");
                 std::process::exit(0);
             }
             other => die(&format!("unknown argument: {other}")),
@@ -204,12 +204,12 @@ fn parse_url_from_args() -> String {
     if let Some(url) = url {
         return url;
     }
-    let port = port.unwrap_or_else(|| craft_mcp::DEFAULT_PORT.to_string());
+    let port = port.unwrap_or_else(|| dobj_mcp::DEFAULT_PORT.to_string());
     format!("http://127.0.0.1:{port}/mcp")
 }
 
 fn die(msg: &str) -> ! {
-    eprintln!("bitcraft-mcp-proxy: {msg}");
-    eprintln!("usage: bitcraft-mcp-proxy [--url <url> | --port <num>]");
+    eprintln!("dobj-mcp-proxy: {msg}");
+    eprintln!("usage: dobj-mcp-proxy [--url <url> | --port <num>]");
     std::process::exit(2);
 }

@@ -45,13 +45,13 @@
   opacity: 1;
 }
 
-.inventory-list::-webkit-scrollbar,
+.objects-list::-webkit-scrollbar,
 .context-panel::-webkit-scrollbar,
 .proof-panel::-webkit-scrollbar {
   width: 3px;
 }
 
-.inventory-list::-webkit-scrollbar-thumb,
+.objects-list::-webkit-scrollbar-thumb,
 .context-panel::-webkit-scrollbar-thumb,
 .proof-panel::-webkit-scrollbar-thumb {
   background: var(--border);

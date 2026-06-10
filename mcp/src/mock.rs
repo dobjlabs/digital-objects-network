@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, bail};
 
-use crate::ops::CraftOps;
+use crate::ops::DobjOps;
 use crate::types::{RunActionInner, *};
 
 const PLUGIN: &str = "craft-basics";
@@ -21,43 +21,43 @@ fn class_ref(name: &str) -> ClassRef {
     }
 }
 
-/// Mock implementation of CraftOps for testing.
-/// Returns realistic fixtures matching the bitcraft game.
+/// Mock implementation of DobjOps for testing.
+/// Returns realistic fixtures for tests.
 /// Multiple actions can run concurrently.
-pub struct MockCraftOps {
-    inventory: Vec<InventoryObject>,
-    actions: Vec<Action>,
+pub struct MockDobjOps {
+    objects: Vec<ObjectSummary>,
+    actions: Vec<ActionSummary>,
     state_root: String,
 }
 
-impl MockCraftOps {
+impl MockDobjOps {
     pub fn new() -> Self {
         Self {
-            inventory: default_inventory(),
+            objects: default_objects(),
             actions: default_actions(),
             state_root: "0x9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b".to_string(),
         }
     }
 
-    /// Create a mock with a custom inventory.
-    pub fn with_inventory(mut self, inventory: Vec<InventoryObject>) -> Self {
-        self.inventory = inventory;
+    /// Create a mock with a custom objects.
+    pub fn with_objects(mut self, objects: Vec<ObjectSummary>) -> Self {
+        self.objects = objects;
         self
     }
 }
 
-impl Default for MockCraftOps {
+impl Default for MockDobjOps {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CraftOps for MockCraftOps {
-    fn list_inventory(&self) -> anyhow::Result<Vec<InventoryObject>> {
-        Ok(self.inventory.clone())
+impl DobjOps for MockDobjOps {
+    fn list_objects(&self) -> anyhow::Result<Vec<ObjectSummary>> {
+        Ok(self.objects.clone())
     }
 
-    fn list_actions(&self) -> anyhow::Result<Vec<Action>> {
+    fn list_actions(&self) -> anyhow::Result<Vec<ActionSummary>> {
         Ok(self.actions.clone())
     }
 
@@ -67,7 +67,7 @@ impl CraftOps for MockCraftOps {
             .map(|&name| {
                 let class = qname(name);
                 let live_count = self
-                    .inventory
+                    .objects
                     .iter()
                     .filter(|o| o.class == class && o.status == ObjectStatus::Live)
                     .count();
@@ -103,27 +103,18 @@ impl CraftOps for MockCraftOps {
         Ok(self.state_root.clone())
     }
 
-    fn inspect_object(&self, file_name: &str) -> anyhow::Result<ObjectDetail> {
+    fn inspect_object(&self, file_name: &str) -> anyhow::Result<ObjectSummary> {
         let obj = self
-            .inventory
+            .objects
             .iter()
             .find(|o| o.file_name == file_name)
             .ok_or_else(|| anyhow!("object file not found: {file_name}"))?;
 
-        // ObjectDetail is now an alias for wire_types::ObjectSummary —
-        // the basic summary shape (no embedded predicate source).
-        Ok(ObjectDetail {
-            content_hash: obj.content_hash.clone(),
-            file_name: obj.file_name.clone(),
-            class: obj.class.clone(),
-            class_hash: obj.class_hash.clone(),
-            status: obj.status,
-            tx_hash: obj.tx_hash.clone(),
-            fields: obj.fields.clone(),
-        })
+        // Same shape stored in the mock object list; return it directly.
+        Ok(obj.clone())
     }
 
-    fn inspect_class(&self, class: &QualifiedName) -> anyhow::Result<ClassDetail> {
+    fn inspect_class(&self, class: &QualifiedName) -> anyhow::Result<ClassSummary> {
         if class.plugin_name != PLUGIN || !is_known_class(&class.name) {
             bail!("unknown class: {}::{}", class.plugin_name, class.name);
         }
@@ -140,13 +131,12 @@ impl CraftOps for MockCraftOps {
             .map(|a| a.action.clone())
             .collect();
         let live_count = self
-            .inventory
+            .objects
             .iter()
             .filter(|o| o.class == *class && o.status == ObjectStatus::Live)
             .count();
 
-        // ClassDetail is now an alias for wire_types::ClassSummary.
-        Ok(ClassDetail {
+        Ok(ClassSummary {
             class: class.clone(),
             emoji: emoji_for(&class.name).to_string(),
             hash: format!("0x{}", "0".repeat(64)),
@@ -158,15 +148,14 @@ impl CraftOps for MockCraftOps {
         })
     }
 
-    fn inspect_action(&self, action: &QualifiedName) -> anyhow::Result<ActionDetail> {
+    fn inspect_action(&self, action: &QualifiedName) -> anyhow::Result<ActionSummary> {
         let action_summary = self
             .actions
             .iter()
             .find(|a| a.action == *action)
             .ok_or_else(|| anyhow!("unknown action: {}::{}", action.plugin_name, action.name))?;
 
-        // ActionDetail is now an alias for wire_types::ActionSummary —
-        // we already have one, just clone it.
+        // We already have the matching summary; just clone it.
         Ok(action_summary.clone())
     }
 
@@ -181,7 +170,7 @@ impl CraftOps for MockCraftOps {
 
         Ok(RunAccepted {
             // Static fixture so tests can assert on it without depending on
-            // wall-clock or randomness. Real `DobjdCraftOps` mints a UUID v4.
+            // wall-clock or randomness. Real `DobjdOps` mints a UUID v4.
             run_id: "00000000-0000-4000-8000-000000000000".to_string(),
             status: RunStatus::Queued,
         })
@@ -218,7 +207,7 @@ impl CraftOps for MockCraftOps {
 
         for required in &action_summary.total_inputs {
             if let Some(obj) = self
-                .inventory
+                .objects
                 .iter()
                 .find(|o| o.class == required.class && o.status == ObjectStatus::Live)
             {
@@ -240,17 +229,19 @@ impl CraftOps for MockCraftOps {
         })
     }
 
-    fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectDetail> {
+    fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectSummary> {
         if path.trim().is_empty() {
             bail!("empty .dobj path");
         }
-        Ok(ObjectDetail {
+        Ok(ObjectSummary {
             content_hash: "0ximported0000000000".to_string(),
             file_name: "craft-basics__log_0ximported.dobj".to_string(),
             class: qname("Log"),
             class_hash: format!("0x{}", "0".repeat(64)),
+            emoji: emoji_for("Log").to_string(),
             status: ObjectStatus::Live,
             tx_hash: Some("0xmocktximported".to_string()),
+            description: Some("Mock Log".to_string()),
             fields: HashMap::from([(
                 "blueprint".to_string(),
                 serde_json::Value::String("Log".to_string()),
@@ -282,7 +273,7 @@ fn make_obj(
     tx_hash: &str,
     status: ObjectStatus,
     extra: Vec<(&str, serde_json::Value)>,
-) -> InventoryObject {
+) -> ObjectSummary {
     let mut fields = HashMap::from([(
         "key".to_string(),
         serde_json::Value::String(content_hash.to_string()),
@@ -290,7 +281,7 @@ fn make_obj(
     for (k, v) in extra {
         fields.insert(k.to_string(), v);
     }
-    InventoryObject {
+    ObjectSummary {
         content_hash: content_hash.to_string(),
         file_name: file_name.to_string(),
         class: qname(class_name),
@@ -314,7 +305,7 @@ fn emoji_for(class_name: &str) -> &'static str {
     }
 }
 
-fn default_inventory() -> Vec<InventoryObject> {
+fn default_objects() -> Vec<ObjectSummary> {
     vec![
         make_obj(
             "0xabc1111111111111",
@@ -368,9 +359,8 @@ fn default_inventory() -> Vec<InventoryObject> {
     ]
 }
 
-fn make_action(name: &str, description: &str, inputs: &[&str], outputs: &[&str]) -> Action {
-    // Action is now wire_types::ActionSummary — same shape as everywhere.
-    Action {
+fn make_action(name: &str, description: &str, inputs: &[&str], outputs: &[&str]) -> ActionSummary {
+    ActionSummary {
         action: qname(name),
         emoji: action_emoji_for(name).to_string(),
         hash: format!("0x{}", "0".repeat(64)),
@@ -392,7 +382,7 @@ fn action_emoji_for(action_name: &str) -> &'static str {
     }
 }
 
-fn default_actions() -> Vec<Action> {
+fn default_actions() -> Vec<ActionSummary> {
     vec![
         make_action(
             "FindLog",
@@ -500,9 +490,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_inventory_has_all_classes() {
-        let mock = MockCraftOps::new();
-        let inv = mock.list_inventory().unwrap();
+    fn test_default_objects_has_all_classes() {
+        let mock = MockDobjOps::new();
+        let inv = mock.list_objects().unwrap();
         let names: Vec<&str> = inv.iter().map(|o| o.class.name.as_str()).collect();
         assert!(names.contains(&"Log"));
         assert!(names.contains(&"Wood"));
@@ -513,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_inspect_object_found() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let detail = mock
             .inspect_object("craft-basics__log_0xabc1.dobj")
             .unwrap();
@@ -523,13 +513,13 @@ mod tests {
 
     #[test]
     fn test_inspect_object_not_found() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         assert!(mock.inspect_object("nonexistent.dobj").is_err());
     }
 
     #[test]
     fn test_inspect_class() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let detail = mock.inspect_class(&qname("Wood")).unwrap();
         assert!(detail.produced_by.contains(&qname("CraftWood")));
         assert!(detail.consumed_by.contains(&qname("CraftSticks")));
@@ -539,13 +529,13 @@ mod tests {
 
     #[test]
     fn test_inspect_unknown_class() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         assert!(mock.inspect_class(&qname("Diamond")).is_err());
     }
 
     #[test]
     fn test_inspect_action() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let detail = mock.inspect_action(&qname("CraftWoodPick")).unwrap();
         assert_eq!(detail.action.name, "CraftWoodPick");
         assert!(detail.total_inputs.iter().any(|r| r.class.name == "Wood"));
@@ -561,13 +551,13 @@ mod tests {
 
     #[test]
     fn test_inspect_unknown_action() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         assert!(mock.inspect_action(&qname("CraftDiamond")).is_err());
     }
 
     #[test]
     fn test_check_feasibility_feasible() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let report = mock.check_feasibility(&qname("CraftWoodPick")).unwrap();
         assert!(report.feasible);
         assert!(report.missing_inputs.is_empty());
@@ -576,7 +566,7 @@ mod tests {
 
     #[test]
     fn test_check_feasibility_missing() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let report = mock.check_feasibility(&qname("CraftStonePick")).unwrap();
         // We have Stone and Stick, so this should be feasible
         assert!(report.feasible);
@@ -584,13 +574,13 @@ mod tests {
 
     #[test]
     fn test_check_feasibility_unknown_action() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         assert!(mock.check_feasibility(&qname("CraftDiamond")).is_err());
     }
 
     #[test]
     fn test_run_action_success() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let accepted = mock
             .run_action(RunActionInput {
                 action: qname("CraftWood"),
@@ -603,7 +593,7 @@ mod tests {
 
     #[test]
     fn test_get_run_reports_completed() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let state = mock.get_run("run-abc").unwrap();
         assert_eq!(state.run_id, "run-abc");
         assert_eq!(state.status, RunStatus::Succeeded);
@@ -613,7 +603,7 @@ mod tests {
     #[test]
     fn test_run_action_concurrent() {
         use std::sync::Arc;
-        let mock = Arc::new(MockCraftOps::new());
+        let mock = Arc::new(MockDobjOps::new());
         let handles: Vec<_> = (0..3)
             .map(|_| {
                 let mock = mock.clone();
@@ -634,7 +624,7 @@ mod tests {
 
     #[test]
     fn test_run_action_unknown() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let result = mock.run_action(RunActionInput {
             action: qname("CraftDiamond"),
             input_object_paths: vec![],
@@ -644,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_get_state_root() {
-        let mock = MockCraftOps::new();
+        let mock = MockDobjOps::new();
         let root = mock.get_state_root().unwrap();
         assert!(root.starts_with("0x"));
     }

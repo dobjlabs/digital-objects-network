@@ -10,7 +10,7 @@
 //! - process CPU sample for the desktop app's status bar
 //! - native menu (incl. `Cmd+,` settings shortcut)
 //!
-//! Every call that touches `~/.dobj/` state — inventory, run_action, settings,
+//! Every call that touches `~/.dobj/` state — objects, run_action, settings,
 //! state-root, MCP — lives in [`dobjd`]. The user must
 //! start `dobjd` separately for the desktop app's webview to function.
 
@@ -26,7 +26,7 @@ use settings::{build_app_menu, handle_settings_menu_event};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if let Err(err) = common::load_dotenv() {
-        eprintln!("bitcraft: failed to load app-gui env: {err}");
+        eprintln!("failed to load app-gui env: {err}");
     }
     let _ = env_logger::builder().try_init();
 

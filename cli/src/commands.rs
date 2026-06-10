@@ -10,8 +10,8 @@ use tokio::time::sleep;
 use crate::client::DobjdClient;
 use wire_types::{
     ActionSummary, CheckActionReport, ClassRef, ClassSummary, DriverSettings, ImportObjectRequest,
-    InventoryObject, ObjectSummary, ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput,
-    RunActionRequest, RunState, RunStatus,
+    ObjectSummary, ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput, RunActionRequest,
+    RunState, RunStatus,
 };
 
 const MAX_CONSECUTIVE_RUN_POLL_ERRORS: usize = 5;
@@ -40,13 +40,13 @@ fn render_outputs(refs: &[ClassRef]) -> String {
         .join(", ")
 }
 
-pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
-    let inventory: Vec<InventoryObject> = client.get_json("/inventory").await?;
+pub async fn objects(client: &DobjdClient, json: bool) -> Result<()> {
+    let objects: Vec<ObjectSummary> = client.get_json("/objects").await?;
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(
-                &inventory
+                &objects
                     .iter()
                     .map(|o| serde_json::json!({
                         "contentHash": o.content_hash, "fileName": o.file_name, "class": o.class,
@@ -58,11 +58,11 @@ pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    if inventory.is_empty() {
-        println!("(no objects in inventory)");
+    if objects.is_empty() {
+        println!("(no objects)");
         return Ok(());
     }
-    for obj in &inventory {
+    for obj in &objects {
         println!(
             "[{:<10}] {} {:<28} content_hash={}",
             obj.status,
@@ -76,7 +76,7 @@ pub async fn inventory(client: &DobjdClient, json: bool) -> Result<()> {
 
 pub async fn actions(client: &DobjdClient, json: bool) -> Result<()> {
     // `/actions` is a pure-local read of the plugin catalog — no
-    // synchronizer round-trip, unlike `/inventory`.
+    // synchronizer round-trip, unlike `/objects`.
     let actions: Vec<ActionSummary> = client.get_json("/actions").await?;
     if json {
         println!(
@@ -299,7 +299,7 @@ async fn poll_run_to_terminal(client: &DobjdClient, run_id: &str, quiet: bool) -
                 consecutive_errors += 1;
                 if consecutive_errors >= MAX_CONSECUTIVE_RUN_POLL_ERRORS {
                     return Err(anyhow!(
-                        "lost contact while following run {run_id}; it may still complete. Run `dobj inventory` to reconcile. Last error: {err:#}"
+                        "lost contact while following run {run_id}; it may still complete. Run `dobj objects` to reconcile. Last error: {err:#}"
                     ));
                 }
                 if !quiet {

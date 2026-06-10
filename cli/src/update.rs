@@ -1,5 +1,5 @@
 //! `dobj update`: replace the installed bundle (dobj, dobjd,
-//! bitcraft-mcp-proxy) with another release from the public releases repo.
+//! dobj-mcp-proxy) with another release from the public releases repo.
 //!
 //! The bundle updates as a unit: every binary comes from one release tag and
 //! the swap is all-or-nothing (two-phase rename with rollback). Plugins under
@@ -34,10 +34,8 @@ const TARGET_TRIPLE: &str = env!("DOBJ_TARGET_TRIPLE");
 /// `dobj` is last: the update is orchestrated by the running `dobj`, and
 /// keeping its on-disk file consistent with the executing code until
 /// everything else has landed keeps rollback reasoning simple.
-const ARTIFACTS: &[(&str, &[&str])] = &[
-    ("dobjd", &["dobjd", "bitcraft-mcp-proxy"]),
-    ("dobj", &["dobj"]),
-];
+const ARTIFACTS: &[(&str, &[&str])] =
+    &[("dobjd", &["dobjd", "dobj-mcp-proxy"]), ("dobj", &["dobj"])];
 
 pub async fn run(
     client: &DobjdClient,
@@ -163,7 +161,7 @@ pub async fn run(
 
     let _ = fs::remove_dir_all(&staging);
     println!(
-        "updated {CURRENT_TAG} -> {target_tag} (dobj, dobjd, bitcraft-mcp-proxy){}",
+        "updated {CURRENT_TAG} -> {target_tag} (dobj, dobjd, dobj-mcp-proxy){}",
         if was_running {
             ""
         } else {

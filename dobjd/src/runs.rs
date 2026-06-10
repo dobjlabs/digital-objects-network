@@ -9,7 +9,7 @@
 //! Entries are kept in memory only. A terminal run is retained for
 //! [`RUN_RETENTION`] so a disconnected client can still read its result, then
 //! reaped. The work itself (and its on-chain / `.dobj` effects) never depends
-//! on this state surviving -- `sync_inventory` reconciles those independently.
+//! on this state surviving -- `sync_objects` reconciles those independently.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};

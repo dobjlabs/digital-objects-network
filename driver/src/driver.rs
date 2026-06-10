@@ -207,7 +207,7 @@ impl Driver {
     /// Resolve an object by either a bare basename (`Wood.dobj`) or an
     /// absolute path. Only the file name is consulted, so user-pasted
     /// paths work the same as basenames, and `..` segments can't
-    /// escape the inventory.
+    /// escape the object store.
     ///
     /// Missing files produce [`DriverError::ObjectFileNotFound`] (HTTP
     /// 404), not a generic 500.
@@ -234,7 +234,7 @@ impl Driver {
         }
     }
 
-    pub fn sync_inventory(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
+    pub fn sync_objects(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
         let mut entries = load_object_files(&self.paths)?;
         let settings = self.load_settings()?;
         let object_commitments = entries
@@ -417,7 +417,7 @@ impl Driver {
     }
 
     /// Import an external `.dobj` object — one not produced by this driver
-    /// (e.g. a file from outside `~/.dobj/`) — into local inventory.
+    /// (e.g. a file from outside `~/.dobj/`) — into the local object store.
     ///
     /// `dobj_json` is the raw JSON contents of a `.dobj` file. The object is
     /// filed under a name derived from its commitment — the file's
@@ -427,11 +427,11 @@ impl Driver {
     /// - the `class` must be one this driver's catalog knows, and the object's
     ///   committed `obj["type"]` predicate hash must equal that class's hash
     ///   (the same belt-and-suspenders check `execute` runs on its inputs);
-    /// - the object must not already be in inventory (live or nullified);
+    /// - the object must not already be present (live or nullified);
     /// - the object's nullifier must not already be spent on-chain.
     ///
     /// Status is decided by grounding: `Live` if the source tx is committed,
-    /// otherwise `Unknown` (a later `sync_inventory` promotes it). If the
+    /// otherwise `Unknown` (a later `sync_objects` promotes it). If the
     /// synchronizer is unreachable the object is imported as `Unknown` rather
     /// than failing, so the flow still works offline.
     pub fn import_object(&self, dobj_json: &str) -> Result<ObjectSummary> {
@@ -483,7 +483,7 @@ impl Driver {
             .any(|entry| entry.record.content_hash == commitment || entry.file_name == file_name)
         {
             return Err(
-                DriverError::Conflict(format!("object already in inventory: {file_name}")).into(),
+                DriverError::Conflict(format!("object already present: {file_name}")).into(),
             );
         }
 
@@ -694,7 +694,7 @@ impl Driver {
             Err(err) => {
                 // Sync failed or timed out — revert outputs to Unknown but
                 // keep the txHash so the chain submission can be inspected.
-                // The next sync_inventory will reconcile if the tx lands later.
+                // The next sync_objects will reconcile if the tx lands later.
                 update_output_files(
                     &self.paths,
                     &saved.output_files,
@@ -743,18 +743,22 @@ impl Driver {
     }
 
     fn object_summary(&self, entry: &ObjectFileEntry) -> ObjectSummary {
-        let class_hash = self
-            .catalog()
-            .get_class(&entry.record.class)
-            .map(|c| c.hash)
-            .unwrap_or_default();
+        let class_info = self.catalog().get_class(&entry.record.class);
         ObjectSummary {
             content_hash: encode_hash_hex(&entry.record.content_hash),
             file_name: entry.file_name.clone(),
             class: entry.record.class.clone(),
-            class_hash,
+            class_hash: class_info
+                .as_ref()
+                .map(|c| c.hash.clone())
+                .unwrap_or_default(),
+            emoji: class_info
+                .as_ref()
+                .map(|c| c.emoji.clone())
+                .unwrap_or_else(|| "📦".to_string()),
             status: entry.record.status,
             tx_hash: entry.record.tx_hash.clone(),
+            description: class_info.as_ref().map(|c| c.description.clone()),
             fields: entry.record.fields_map(),
         }
     }
