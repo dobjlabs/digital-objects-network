@@ -2,7 +2,7 @@ use std::{net::SocketAddr, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::warn;
 
 const DEFAULT_APP_STATE_DB_PATH: &str = "data/synchronizer-db";
 const DEFAULT_SYNC_METADATA_DB_URL: &str = "postgres://postgres@localhost:5432/synchronizer";
@@ -100,7 +100,7 @@ pub fn load_config() -> Result<AppConfig> {
     // The beacon only retains recent blobs, so syncing history older than its
     // retention window still requires an archiver.
     let archiver_url: String = dotenvy::var("ARCHIVER_URL").unwrap_or_else(|_| {
-        info!("ARCHIVER_URL not set; reading blobs from BEACON_URL (recent blobs only)");
+        warn!("ARCHIVER_URL not set; reading blobs from BEACON_URL (recent blobs only)");
         beacon_url.clone()
     });
     let to_address: Address = Address::from_str(&dotenvy::var("TO_ADDRESS")?)?;
