@@ -1,0 +1,85 @@
+---
+title: craft-rocket
+description: A full factory tech tree - 53 classes and 84 actions across five tiers, machines and stations as level gates, ending in a provable rocket.
+---
+
+# craft-rocket 🚀
+
+A factory-builder tech tree in the spirit of automation games: mine and farm
+raw resources, refine them through five tiers of processing, unlock machines
+and stations, and assemble the final **Rocket** — the win condition. 53
+classes and 84 actions, all proof-backed.
+
+```
+  PoW mines                     VDF farms
+  🪨 Iron   🟧 Copper   🛢️ Oil   💧 Water   🌾 Cane   🌿 Hemp   🟡 Sulfur
+      │                             │
+      ▼  t1 — smelt / mash / refine ▼
+  🧱 Ingot   🟫 Plate   🧻 Pulp   🧵 Fiber   🧪 Acid   (+ ⬛ Tar  ⛽ Fuel  💨 Gas)
+      │
+      ▼  t2 — forge / draw / weave / press
+  ⚙️ Steel   ➰ Wire   🧶 Cloth   🪪 Board   🛞 Rubber   🧫 Extract   ⚙ Gear   🌀 Coil
+      │
+      ▼  t3 — requires 🤖 MachineI
+  🔘 Bearing   🔌 Circuit   🪡 Canvas   🟦 Panel   🛠️ Pistons   🧴 Resin
+      │
+      ▼  t4 — requires 🤖 MachineII
+  🚂 Engine   🚀 Casing   📦 Payload
+      │
+      ▼  t5
+  🚀 Rocket — the win condition
+```
+
+## Mechanics
+
+- **Machines are level gates.** `MachineI` unlocks tier-3 recipes and station
+  builds; `MachineII` unlocks tiers 4 and 5. Recipes prove _possession_ of a
+  machine (a hidden `Touch*` subaction) without consuming it.
+- **Stations unlock better recipes.** `BlastFurnace`, `CircuitFab`,
+  `CrackingUnit`, and `ReactionChamber` each enable faster or higher-yield
+  variants of existing recipes.
+- **Tools deplete.** `DrillBit`, `SolderingIron`, and `PressureValve` carry
+  durability that recipe variants consume — spend tool wear to skip grinding.
+- **Recipe variants trade time, risk, and yield.** Many products have a
+  `Flash` variant (PoW-only gamble for throughput), a `Crude` variant (slower
+  but recovers inputs), and a station-gated deterministic variant alongside
+  the standard recipe.
+- **Byproducts loop back.** Slag becomes flux for double-yield smelting; tar
+  refines into wax and grease; sludge feeds catalysts and binders.
+
+## Machines and stations
+
+| Class | | Description |
+| ----- | --- | ----------- |
+| `MachineI` | 🤖 | Tier-1 assembler. Unlocks t3 recipes and station builds. |
+| `MachineII` | 🤖 | Tier-2 assembler. Unlocks t4 and t5 recipes. |
+| `BlastFurnace` | 🏭 | Blast furnace. Enables faster steel and cast gears. |
+| `CircuitFab` | 🏭 | Circuit fabrication station. Produces circuits in bulk. |
+| `CrackingUnit` | 🏭 | Cracking unit. Refinery yields more product per oil. |
+| `ReactionChamber` | 🏭 | Reaction chamber. Stable variants of extract, resin, engine, rocket. |
+
+## The final assembly
+
+```
+CraftRocket:  🚂 Engine + 🚀 Casing + 📦 Payload + 🧴 Resin x2  →  🚀 Rocket
+```
+
+Or `CraftRocketCat` — the deterministic variant, run in the reaction chamber
+with a catalyst.
+
+## Install
+
+craft-rocket is not bundled with the installer; build it from a checkout of
+the repo:
+
+```bash
+git clone https://github.com/dobjlabs/digital-objects-network
+cd digital-objects-network
+
+cargo run -p pexe --release -- build --install examples/craft-rocket
+~/.dobj/bin/dobj stop && ~/.dobj/bin/dobj start
+~/.dobj/bin/dobj actions   # MineIron, FarmWater, CraftIngot, ... CraftRocket
+```
+
+Source:
+[`examples/craft-rocket/`](https://github.com/dobjlabs/digital-objects-network/tree/main/examples/craft-rocket)

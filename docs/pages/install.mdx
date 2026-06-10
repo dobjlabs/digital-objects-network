@@ -1,0 +1,132 @@
+---
+title: Install the driver
+description: Set up the Digital Objects driver - one line for the binaries, one for the starter plugin, and the daemon is running.
+---
+
+# Install the driver
+
+The driver is the only component that ever touches your objects. Installing it
+puts three binaries and a starter application under `~/.dobj/`:
+
+| What | Where |
+| ---- | ----- |
+| `dobjd` — driver daemon (REST/SSE on `:7717`, MCP on `:7718`) | `~/.dobj/bin/` |
+| `dobj` — terminal CLI | `~/.dobj/bin/` |
+| `dobj-mcp-proxy` — stdio bridge for Claude Desktop | `~/.dobj/bin/` |
+| `craft-basics.pexe` — starter application | `~/.dobj/actions/` |
+
+Release binaries are baked with the
+[hosted synchronizer and relayer endpoints](/#public-infrastructure), so a
+fresh install needs no configuration.
+
+## Let an agent install it
+
+Paste this prompt into any MCP-aware agent (Claude Code, Cursor, ...):
+
+> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/SKILL.md and set up the Digital Objects driver.
+
+The skill walks the agent through every step below and registers the driver's
+MCP server with the agent at the end. Setup takes a couple of minutes.
+
+## Install by hand
+
+::::steps
+
+### Install the binaries
+
+Downloads the latest release into `~/.dobj/bin` and prints a PATH hint. To pin
+a version, set `DOBJ_VERSION` (bash) / `$env:DOBJ_VERSION` (PowerShell) to a
+release tag first.
+
+:::code-group
+
+```bash [macOS / Linux]
+curl -fsSL https://raw.githubusercontent.com/dobjlabs/zk-craft-releases/main/install.sh | sh
+```
+
+```powershell [Windows]
+irm https://raw.githubusercontent.com/dobjlabs/zk-craft-releases/main/install.ps1 | iex
+```
+
+:::
+
+### Install the starter application
+
+The daemon starts with an empty action catalog and loads plugins at startup,
+so install [craft-basics](/applications/craft-basics) before starting it.
+
+:::code-group
+
+```bash [macOS / Linux]
+mkdir -p ~/.dobj/actions
+curl -fsSL https://github.com/dobjlabs/zk-craft-releases/releases/latest/download/craft-basics.pexe \
+  -o ~/.dobj/actions/craft-basics.pexe
+```
+
+```powershell [Windows]
+$DOBJ = "$env:USERPROFILE\.dobj"
+New-Item -ItemType Directory -Force -Path "$DOBJ\actions" | Out-Null
+curl.exe -fsSL https://github.com/dobjlabs/zk-craft-releases/releases/latest/download/craft-basics.pexe -o "$DOBJ\actions\craft-basics.pexe"
+```
+
+:::
+
+### Start the daemon
+
+:::code-group
+
+```bash [macOS / Linux]
+~/.dobj/bin/dobj start
+```
+
+```powershell [Windows]
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" start
+```
+
+:::
+
+:::info
+The first start builds ZK circuits and can take a few minutes. Later starts
+take seconds.
+:::
+
+### Verify
+
+:::code-group
+
+```bash [macOS / Linux]
+~/.dobj/bin/dobj status      # pid + HTTP healthcheck
+~/.dobj/bin/dobj actions     # the craft-basics actions, e.g. FindLog, CraftWood
+~/.dobj/bin/dobj state-root  # 64-hex root: the hosted synchronizer is reachable
+```
+
+```powershell [Windows]
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" status
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" actions
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" state-root
+```
+
+:::
+
+### Connect a client
+
+Every client talks to the same daemon:
+
+- **CLI** — `~/.dobj/bin/dobj` (add `~/.dobj/bin` to your PATH)
+- **Claude Code / MCP agents** — `claude mcp add --transport http dobj http://127.0.0.1:7718/mcp`
+- **Claude Desktop** — point it at `~/.dobj/bin/dobj-mcp-proxy` (stdio bridge)
+
+::::
+
+## Manual install
+
+Prefer to download the archives yourself? Step-by-step instructions live in
+the public releases repo:
+[dobjlabs/zk-craft-releases](https://github.com/dobjlabs/zk-craft-releases#install).
+
+## Point at different infrastructure
+
+The hosted endpoints are defaults, not requirements. See
+[public infrastructure](/#public-infrastructure) for how to point
+`~/.dobj/settings.json` at any synchronizer / relayer pair — including your
+own.
