@@ -197,6 +197,14 @@ jobs:
         # No rocksdb (sqlx + alloy only), so this builds clean everywhere.
         run: cargo build --release --locked -p relayer --target ${{ matrix.target }}
 
+      - name: Build archiver
+        # Server binary used by install-test on Linux/macOS only. The archiver
+        # indexes blobs on disk via Unix symlinks, so it does not compile on
+        # Windows; install-test's Windows leg leaves ARCHIVER_URL unset and the
+        # synchronizer reads blobs from the beacon instead.
+        if: runner.os != 'Windows'
+        run: cargo build --release --locked -p archiver --target ${{ matrix.target }}
+
       - name: Stage tarball directories
         run: |
           set -euo pipefail
@@ -255,6 +263,16 @@ jobs:
           } >> "$GITHUB_ENV"
           ls -la "$SYNCHRONIZER_STAGE" "$RELAYER_STAGE"
 
+          # Archiver builds on Linux/macOS only (see the build step). Stage it
+          # under the same staging/ root so the macOS notarize bundle picks it up.
+          if [[ "$RUNNER_OS" != "Windows" ]]; then
+            ARCHIVER_STAGE="$GITHUB_WORKSPACE/staging/archiver"
+            mkdir -p "$ARCHIVER_STAGE"
+            cp "$OUT/archiver${{ matrix.exe_suffix }}" "$ARCHIVER_STAGE/"
+            echo "ARCHIVER_STAGE=$ARCHIVER_STAGE" >> "$GITHUB_ENV"
+            ls -la "$ARCHIVER_STAGE"
+          fi
+
       # ---------- macOS codesign + notarize -----------------------------------
 
       - name: Validate macOS signing secrets
@@ -312,11 +330,14 @@ jobs:
             --options runtime --timestamp "$DOBJ_STAGE/dobj"
 
           # Server binaries (used by install-test only) — sign them too
-          # so notarization below doesn't reject the bundle.
+          # so notarization below doesn't reject the bundle. The archiver is
+          # built on macOS (non-Windows), so its stage dir is present here.
           codesign --force --sign "$IDENTITY" \
             --options runtime --timestamp "$SYNCHRONIZER_STAGE/synchronizer"
           codesign --force --sign "$IDENTITY" \
             --options runtime --timestamp "$RELAYER_STAGE/relayer"
+          codesign --force --sign "$IDENTITY" \
+            --options runtime --timestamp "$ARCHIVER_STAGE/archiver"
 
           # Verify each one. `codesign --verify` exits non-zero if anything's
           # off — we want the workflow to fail loudly here rather than ship
@@ -326,6 +347,7 @@ jobs:
           codesign --verify --verbose=2 "$DOBJ_STAGE/dobj"
           codesign --verify --verbose=2 "$SYNCHRONIZER_STAGE/synchronizer"
           codesign --verify --verbose=2 "$RELAYER_STAGE/relayer"
+          codesign --verify --verbose=2 "$ARCHIVER_STAGE/archiver"
 
       - name: Notarize macOS binaries
         if: runner.os == 'macOS'
@@ -358,6 +380,10 @@ jobs:
           tar -czf "dobj-${{ matrix.target }}.tar.gz"         -C "$DOBJ_STAGE"         .
           tar -czf "synchronizer-${{ matrix.target }}.tar.gz" -C "$SYNCHRONIZER_STAGE" .
           tar -czf "relayer-${{ matrix.target }}.tar.gz"      -C "$RELAYER_STAGE"      .
+          # Archiver tarball on Linux/macOS only (no archiver build on Windows).
+          if [[ "$RUNNER_OS" != "Windows" ]]; then
+            tar -czf "archiver-${{ matrix.target }}.tar.gz" -C "$ARCHIVER_STAGE" .
+          fi
 
       - name: Render release notes
         # Substitute DEFAULT_*_URL into the template so the body shown on
@@ -386,6 +412,20 @@ jobs:
           draft: true
           fail_on_unmatched_files: true
           body_path: release-notes.md
+
+      - name: Upload archiver to draft release
+        # Separate step rather than another line in the files: block above:
+        # the archiver tarball exists only on Linux/macOS, and that step sets
+        # fail_on_unmatched_files: true.
+        if: runner.os != 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.RELEASES_REPO }}
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
+          files: archiver-${{ matrix.target }}.tar.gz
+          tag_name: ${{ env.RELEASE_TAG }}
+          draft: true
+          fail_on_unmatched_files: true
 
   plugin:
     needs: validate

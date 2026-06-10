@@ -208,13 +208,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
+          # The archiver ships on Linux/macOS only (it can't compile on Windows);
+          # the Windows leg skips it and the synchronizer falls back to the beacon.
+          patterns=(
+            --pattern "dobjd-$TARGET.tar.gz"
+            --pattern "dobj-$TARGET.tar.gz"
+            --pattern "synchronizer-$TARGET.tar.gz"
+            --pattern "relayer-$TARGET.tar.gz"
+            --pattern "craft-basics*.pexe"
+          )
+          if [[ "$RUNNER_OS" != "Windows" ]]; then
+            patterns+=(--pattern "archiver-$TARGET.tar.gz")
+          fi
           gh release download "$TAG" \
             --repo dobjlabs/zk-craft-releases \
-            --pattern "dobjd-$TARGET.tar.gz" \
-            --pattern "dobj-$TARGET.tar.gz" \
-            --pattern "synchronizer-$TARGET.tar.gz" \
-            --pattern "relayer-$TARGET.tar.gz" \
-            --pattern "craft-basics*.pexe" \
+            "${patterns[@]}" \
             --dir artifacts
           ls -la artifacts
 
@@ -239,8 +247,11 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/server-bin"
           tar -xzf "artifacts/synchronizer-$TARGET.tar.gz" -C "$GITHUB_WORKSPACE/server-bin"
           tar -xzf "artifacts/relayer-$TARGET.tar.gz"      -C "$GITHUB_WORKSPACE/server-bin"
+          # Archiver on Linux/macOS only (this whole step is Unix-gated).
+          tar -xzf "artifacts/archiver-$TARGET.tar.gz"     -C "$GITHUB_WORKSPACE/server-bin"
           chmod +x "$GITHUB_WORKSPACE/server-bin/synchronizer" \
-                   "$GITHUB_WORKSPACE/server-bin/relayer"
+                   "$GITHUB_WORKSPACE/server-bin/relayer" \
+                   "$GITHUB_WORKSPACE/server-bin/archiver"
 
           # dobjd talks to the local stack on loopback. The synchronizer
           # listens on :3000, relayer on :3200 (their defaults).
@@ -314,9 +325,25 @@ jobs:
           set -euo pipefail
           mkdir -p logs
 
+          # Archiver (Linux/macOS only; it can't run on Windows). Start it before
+          # the synchronizer so it has a head start indexing toward chain head,
+          # then point the synchronizer's ARCHIVER_URL at it. On Windows there is
+          # no archiver and ARCHIVER_URL is unset, so the synchronizer reads blobs
+          # from BEACON_URL instead.
+          INIT_START_SLOT="$INITIAL_START_SLOT" \
+          RPC_URL="$RPC_URL" \
+          BEACON_URL="$BEACON_URL" \
+          FILTER_ADDRESS="$TO_ADDRESS" \
+          BLOBS_PATH="$GITHUB_WORKSPACE/archiver-blobs" \
+          HTTP_BIND=127.0.0.1:3001 \
+            nohup "$GITHUB_WORKSPACE/server-bin/archiver" \
+              > logs/archiver.log 2>&1 &
+          echo "archiver pid: $!"
+
           INITIAL_START_SLOT="$INITIAL_START_SLOT" \
           RPC_URL="$RPC_URL" \
           BEACON_URL="$BEACON_URL" \
+          ARCHIVER_URL="http://127.0.0.1:3001" \
           TO_ADDRESS="$TO_ADDRESS" \
           RPC_RETRIES=10 \
           RPC_RETRY_MS=4000 \
@@ -338,7 +365,7 @@ jobs:
 
           # Wait for both HTTP listeners. /healthz on each returns 200 once
           # the server is bound + initialized.
-          for endpoint in http://127.0.0.1:3000/healthz http://127.0.0.1:3200/healthz; do
+          for endpoint in http://127.0.0.1:3001/healthz http://127.0.0.1:3000/healthz http://127.0.0.1:3200/healthz; do
             ok=0
             for i in $(seq 1 90); do
               if curl -fsSL --max-time 2 "$endpoint" >/dev/null 2>&1; then
@@ -471,7 +498,7 @@ jobs:
         if: failure() && runner.os != 'Windows'
         shell: bash
         run: |
-          for name in synchronizer relayer; do
+          for name in archiver synchronizer relayer; do
             echo "--- logs/$name.log (tail 300) ---"
             tail -300 "logs/$name.log" 2>/dev/null || echo "(no log)"
           done
