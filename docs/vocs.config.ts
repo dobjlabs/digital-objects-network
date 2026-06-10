@@ -1,11 +1,16 @@
 import { defineConfig } from 'vocs'
 
+// Injected by the Pages deploy workflow ("/<repo>" on <owner>.github.io);
+// unset for local dev and custom domains.
+const basePath = process.env.BASE_PATH || undefined
+
 export default defineConfig({
   rootDir: '.',
+  basePath,
   title: 'Digital Objects Network',
   description:
     'Privately-held, fully programmable stateful objects, exchanged between mutually untrusting users and anchored to Ethereum blob data availability.',
-  iconUrl: '/icon.png',
+  iconUrl: `${basePath ?? ''}/icon.png`,
   banner: {
     dismissable: true,
     content:

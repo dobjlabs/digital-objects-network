@@ -5,9 +5,10 @@ description: The Digital Objects Network is live. Install the driver, point it a
 ---
 
 import { HomePage } from 'vocs/components'
+import logoSrc from '../assets/logo.png'
 
 <HomePage.Root>
-  <img src="/logo.png" alt="Digital Objects Network" style={{ height: '72px', width: '72px', borderRadius: '16px' }} />
+  <img src={logoSrc} alt="Digital Objects Network" style={{ height: '72px', width: '72px', borderRadius: '16px' }} />
   <HomePage.Tagline>The Digital Objects Network is live 🟢</HomePage.Tagline>
   <HomePage.Description>
     Privately-held, fully programmable objects you can create, mutate, and pass
