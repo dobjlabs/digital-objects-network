@@ -3,7 +3,7 @@ use std::time::Duration;
 use alloy::eips::eip4844::HeapBlob;
 use eth_clients::beacon::{
     self,
-    types::{BlockHeader, BlockId, KzgCommitment},
+    types::{Block, BlockHeader, BlockId, KzgCommitment},
     BeaconClient,
 };
 use itertools::zip_eq;
@@ -26,7 +26,7 @@ use alloy::{
 use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::config::Config;
 
@@ -92,9 +92,13 @@ impl Store {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e.into()),
         }
+        // Canonicalize the base too: blobs_path can be relative or sit under a
+        // symlinked prefix, so comparing it raw against a resolved path would
+        // reject legitimate in-store paths.
+        let blobs_root = fs::canonicalize(&self.blobs_path)?;
         let mut root_path = fs::canonicalize(slot_path)?; // Resolve symlink
         assert!(
-            root_path.starts_with(&self.blobs_path),
+            root_path.starts_with(&blobs_root),
             "root_path outside of blobs_path, removal is dangerous"
         );
         if fs::exists(&root_path)? {
@@ -143,8 +147,9 @@ impl Store {
                 } else {
                     break 'outer;
                 };
-                // Next level
-                slot_path.push(last);
+                // `entries` holds full paths, so descend by adopting the deepest
+                // directly; pushing a relative entry would append, not replace.
+                slot_path = last.clone();
             }
             // See if that block was completed, if not delete it and try again
             let mut header_path = slot_path.clone();
@@ -306,6 +311,28 @@ impl Node {
         Ok(())
     }
 
+    /// Fetch a block body whose header we already hold. At the chain head the
+    /// body can lag the header, so the beacon returns 404 (mapped to None) for a
+    /// slot that is not empty. Treat that miss as transient and retry; returning
+    /// early would let the caller commit the slot with no blobs and drop its
+    /// data-availability blobs permanently.
+    async fn fetch_block_body(&self, root: B256, slot: u32) -> Result<Block> {
+        const MAX_RETRIES: usize = 10;
+        const RETRY_DELAY: Duration = Duration::from_secs(4);
+        for attempt in 1..=MAX_RETRIES {
+            if let Some(block) = self.beacon_cli.get_block(BlockId::Hash(root)).await? {
+                return Ok(block);
+            }
+            warn!("block body for slot {slot} root {root} not available yet (attempt {attempt}/{MAX_RETRIES})");
+            if attempt < MAX_RETRIES {
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+        }
+        Err(anyhow!(
+            "block body for slot {slot} root {root} still unavailable after {MAX_RETRIES} retries"
+        ))
+    }
+
     pub(crate) async fn process_beacon_block_blobs(
         &self,
         beacon_block_header: &BlockHeader,
@@ -313,24 +340,10 @@ impl Node {
         let beacon_block_root = beacon_block_header.root;
         let slot = beacon_block_header.slot;
 
-        let beacon_block = match self
-            .beacon_cli
-            .get_block(BlockId::Hash(beacon_block_root))
-            .await?
-        {
-            Some(block) => block,
-            None => {
-                debug!("slot {} has empty block", slot);
-                return Ok(());
-            }
-        };
-        let execution_payload = match beacon_block.execution_payload {
-            Some(payload) => payload,
-            None => {
-                debug!("slot {} has no execution payload", slot);
-                return Ok(());
-            }
-        };
+        let beacon_block = self.fetch_block_body(beacon_block_root, slot).await?;
+        let execution_payload = beacon_block.execution_payload.ok_or_else(|| {
+            anyhow!("slot {slot} root {beacon_block_root} has a block but no execution payload")
+        })?;
         debug!(
             "slot {} has execution block {} at height {}",
             slot, execution_payload.block_hash, execution_payload.block_number
