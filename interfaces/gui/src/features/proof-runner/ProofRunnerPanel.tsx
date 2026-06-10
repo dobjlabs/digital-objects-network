@@ -125,16 +125,7 @@ export function ProofRunnerPanel() {
           <div className="root-row">
             <span className="root-row-left">
               <span className="root-dot live" />
-              <span className="root-label">Global Valid State Roots</span>
-            </span>
-            <span className="root-hash" title={stateRootRaw || undefined}>
-              {globalRootDisplay}
-            </span>
-          </div>
-          <div className="root-row">
-            <span className="root-row-left">
-              <span className="root-dot nullified" />
-              <span className="root-label">Global Nullified State Roots</span>
+              <span className="root-label">Global State Root</span>
             </span>
             <span className="root-hash" title={stateRootRaw || undefined}>
               {globalRootDisplay}
