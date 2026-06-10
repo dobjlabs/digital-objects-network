@@ -14,7 +14,7 @@ members = [
     "libs/pod2utils",
     "libs/pexe",
     "libs/intro-pods/vdfpod",
-    "libs/intro-pods/lt_eq_u256_pod",
+    "libs/intro-pods/lt-eq-u256-pod",
 ]
 resolver = "2"
 
