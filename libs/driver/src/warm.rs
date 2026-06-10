@@ -4,8 +4,8 @@
 //! action. This module forces those builds/loads up front so `dobjd` does them
 //! at boot instead.
 
-use payload::shrink::ShrunkMainPodSetup;
 use lt_eq_u256_pod::STANDARD_LT_EQ_U256_VD_HASH;
+use payload::shrink::ShrunkMainPodSetup;
 use pod2::backends::plonky2::basetypes::DEFAULT_VD_SET;
 use pod2::backends::plonky2::emptypod::EmptyPod;
 use pod2::backends::plonky2::mainpod::cache_get_rec_main_pod_common_hash;
