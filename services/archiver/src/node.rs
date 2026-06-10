@@ -279,7 +279,12 @@ impl Node {
         &self,
         beacon_block_header: &BlockHeader,
     ) -> Result<()> {
-        // Create the path with the symlink to the yet to be created block dir, indexed by slot
+        // Create the block dir where the filtered blobs and header will be stored, indexed by
+        // block root
+        let root_dir = self.store.root_dir(&beacon_block_header.root);
+        create_dir_all(&root_dir)?;
+
+        // Create the path with the symlink to the block dir, indexed by slot
         let slot_path = self.store.slot_dir(beacon_block_header.slot);
         let mut slot_mid_path = slot_path.clone();
         slot_mid_path.pop();
@@ -290,10 +295,6 @@ impl Node {
         );
         unix::fs::symlink(&root_dir_rel, slot_path)?;
 
-        // Create the block dir where the filtered blobs and header will be stored, indexed by
-        // block root
-        let root_dir = self.store.root_dir(&beacon_block_header.root);
-        create_dir_all(&root_dir)?;
         // We store the header as a tmp file, and only rename after successfully processing the
         // beacon block.  This way seeing the `header.json` without the `.tmp` guarantees that the
         // stored block data is valid.
