@@ -52,11 +52,9 @@ The skill installs `dobjd`, `dobj`, `dobj-mcp-proxy`, and the
 URLs are baked into the binaries), starts the daemon, and registers MCP
 with the agent. End-to-end install is a couple of minutes.
 
-Prefer to install by hand? The driver and its installer scripts live in
-the public releases repo,
-[dobjlabs/zk-craft-releases](https://github.com/dobjlabs/zk-craft-releases#install):
-a `curl ... | sh` one-liner (macOS / Linux), an `irm ... | iex` line
-(Windows), and step-by-step manual instructions. The agent skill above is
+Prefer to install by hand? See [INSTALL.md](INSTALL.md): a `curl ... | sh`
+one-liner (macOS / Linux), an `irm ... | iex` line (Windows), and
+step-by-step manual instructions. The agent skill above is
 [SKILL.md](SKILL.md).
 
 ## Develop (from source)

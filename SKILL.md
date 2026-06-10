@@ -32,45 +32,23 @@ Windows.
 ### 1. Install the binaries
 
 Downloads the latest release of `dobjd`, `dobj`, and `dobj-mcp-proxy`
-from the public releases repo into `~/.dobj/bin`. The installer detects the
+from the project's GitHub releases into `~/.dobj/bin`. The installer detects the
 platform and prints a PATH hint. To pin a version, set `DOBJ_VERSION` (bash)
 / `$env:DOBJ_VERSION` (PowerShell) to a release tag first.
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dobjlabs/zk-craft-releases/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/dobjlabs/zk-craft-releases/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/install.ps1 | iex
 ```
 
-### 2. Install the craft-basics plugin
-
-The driver starts with an empty action catalog; the crafting demo's actions ship as
-the `craft-basics` plugin. Download it into `~/.dobj/actions/` before
-starting the daemon (the daemon loads plugins at startup).
-
-**macOS / Linux:**
-
-```bash
-mkdir -p ~/.dobj/actions
-curl -fsSL https://github.com/dobjlabs/zk-craft-releases/releases/latest/download/craft-basics.pexe \
-  -o ~/.dobj/actions/craft-basics.pexe
-```
-
-**Windows (PowerShell):**
-
-```powershell
-$DOBJ = "$env:USERPROFILE\.dobj"
-New-Item -ItemType Directory -Force -Path "$DOBJ\actions" | Out-Null
-curl.exe -fsSL https://github.com/dobjlabs/zk-craft-releases/releases/latest/download/craft-basics.pexe -o "$DOBJ\actions\craft-basics.pexe"
-```
-
-### 3. Start the daemon
+### 2. Start the daemon
 
 The first start builds ZK circuits and can take a few minutes; later starts
 are seconds. Idempotent - if dobjd is already up, it reports the existing pid.
@@ -87,13 +65,32 @@ are seconds. Idempotent - if dobjd is already up, it reports the existing pid.
 & "$env:USERPROFILE\.dobj\bin\dobj.exe" start
 ```
 
+### 3. Install the craft-basics plugin
+
+The driver starts with an empty action catalog; the crafting demo's actions
+ship as the `craft-basics` plugin. `dobj install` downloads the `.pexe`,
+validates it, and hot-reloads the running daemon's catalog - no restart
+needed. Re-running replaces the installed copy.
+
+**macOS / Linux:**
+
+```bash
+~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-basics.pexe
+```
+
+**Windows (PowerShell):**
+
+```powershell
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-basics.pexe
+```
+
 ### 4. Verify
 
 **macOS / Linux:**
 
 ```bash
 ~/.dobj/bin/dobj status      # pid + HTTP healthcheck
-~/.dobj/bin/dobj actions     # ~7 actions, e.g. FindLog, CraftWood
+~/.dobj/bin/dobj actions     # 9 actions, e.g. FindLog, CraftWood
 ~/.dobj/bin/dobj state-root  # 64-hex root: hosted synchronizer reachable
 ```
 
