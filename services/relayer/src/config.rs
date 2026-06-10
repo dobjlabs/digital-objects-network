@@ -31,7 +31,7 @@ pub struct AppConfig {
 }
 
 pub fn load_config() -> Result<AppConfig> {
-    let _ = dotenvy::from_filename("relayer/.env");
+    let _ = dotenvy::from_filename("services/relayer/.env");
     let _ = dotenvy::dotenv();
 
     let bind = dotenvy::var("HTTP_BIND").unwrap_or_else(|_| DEFAULT_HTTP_BIND.to_string());
