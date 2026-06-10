@@ -118,6 +118,12 @@ enum Inst {
         /// Pre-mutation dict for Mutate (Some), None for Input/Output.
         /// Populated at exe time inside `obj_io`; left None at Load.
         original: Option<Dictionary>,
+        /// Post-set Object dict snapshot for Input (Some) (after all kvs inserted), None for
+        /// Input/Mutate.
+        /// Some at Execute, None at Load.
+        final_dict: Option<Dictionary>,
+        /// Key-values to be set for Output.
+        kvs: Vec<(String, Ref)>,
     },
     Update {
         obj: String,
@@ -127,13 +133,6 @@ enum Inst {
         old_dict: Option<Dictionary>,
         /// Post-update Object dict snapshot. Some at Execute, None at Load.
         new_dict: Option<Dictionary>,
-    },
-    Set {
-        obj: String,
-        kvs: Vec<(String, Ref)>,
-        /// Post-set Object dict snapshot (after all kvs inserted).
-        /// Some at Execute, None at Load.
-        final_dict: Option<Dictionary>,
     },
     Statement {
         pred: NativePredicate,
@@ -472,27 +471,40 @@ impl ActionHandle {
             "key" => exe_ctx.rand_value()
         })
     }
-    fn obj_io(self, io: ObjectIO, class: String) -> RuntimeResult<ArgHandle> {
+    fn obj_io(
+        self,
+        io: ObjectIO,
+        class: String,
+        kvs: Vec<(String, Ref)>,
+    ) -> RuntimeResult<ArgHandle> {
         if let Err(msg) = validate_class_name(&class) {
             return Err(msg.into());
         }
         let arg = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
         let mut ctx = self.0.borrow_mut();
         let mut original: Option<Dictionary> = None;
+        let mut final_dict: Option<Dictionary> = None;
         if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
             let mut exe_ctx = exe_rc.borrow_mut();
+            let mut arg = arg.borrow_mut();
             match io {
                 ObjectIO::Output => {
-                    arg.borrow_mut()
-                        .set_value(Value::from(Self::new_obj(&exe_ctx, &class)));
+                    arg.set_value(Value::from(Self::new_obj(&exe_ctx, &class)));
+                    for (key, value) in &kvs {
+                        let value = value.borrow().as_value().clone();
+                        arg.mut_dict(|obj| {
+                            obj.insert(&StrKey::from(key), &value).expect("TODO");
+                        });
+                    }
+                    final_dict = Some(arg.to_dict());
                 }
                 ObjectIO::Input => {
                     let obj = exe_ctx.inputs.pop().expect("exists");
-                    arg.borrow_mut().set_value(Value::from(obj));
+                    arg.set_value(Value::from(obj));
                 }
                 ObjectIO::Mutate => {
                     let obj = exe_ctx.inputs.pop().expect("exists");
-                    arg.borrow_mut().set_value(Value::from(obj.clone()));
+                    arg.set_value(Value::from(obj.clone()));
                     original = Some(obj);
                 }
             }
@@ -502,6 +514,8 @@ impl ActionHandle {
             obj: arg.clone(),
             class,
             original,
+            final_dict,
+            kvs,
         });
         ctx.inc_t_var("chain").expect("chain exists");
         Ok(ArgHandle::new(self.clone(), arg))
@@ -766,6 +780,7 @@ impl ActionHandle {
                     obj,
                     class,
                     original,
+                    ..
                 } = inst
                 {
                     let varname = obj.borrow().var_name().to_string();
@@ -915,7 +930,26 @@ impl ActionHandle {
             let ctx = self.0.borrow();
             for (i, inst) in ctx.insts.iter().enumerate() {
                 match inst {
-                    Inst::Object { .. } => {}
+                    Inst::Object {
+                        io: ObjectIO::Output,
+                        obj,
+                        kvs,
+                        final_dict,
+                        ..
+                    } => {
+                        let dict = final_dict.clone().expect("Set final_dict captured at Rhai");
+                        let ts = *current_ts.get(obj.borrow().var_name()).unwrap_or(&0);
+                        let dict_arg = anchor_or_literal(obj.borrow().var_name(), &dict, ts);
+                        for (key, value) in kvs {
+                            let v = value.borrow().as_value().clone();
+                            let st = exe_ctx
+                                .bld
+                                .builder
+                                .priv_op(Operation::dict_contains(dict_arg.clone(), key.clone(), v))
+                                .unwrap();
+                            body_sts.push(st);
+                        }
+                    }
                     Inst::Statement { pred, args } => {
                         let op = native_pred_to_op(*pred);
                         let op_type = OperationType::Native(op);
@@ -971,24 +1005,6 @@ impl ActionHandle {
                         };
                         body_sts.push(st);
                     }
-                    Inst::Set {
-                        obj,
-                        kvs,
-                        final_dict,
-                    } => {
-                        let dict = final_dict.clone().expect("Set final_dict captured at Rhai");
-                        let ts = *current_ts.get(obj).unwrap_or(&0);
-                        let dict_arg = anchor_or_literal(obj, &dict, ts);
-                        for (key, value) in kvs {
-                            let v = value.borrow().as_value().clone();
-                            let st = exe_ctx
-                                .bld
-                                .builder
-                                .priv_op(Operation::dict_contains(dict_arg.clone(), key.clone(), v))
-                                .unwrap();
-                            body_sts.push(st);
-                        }
-                    }
                     Inst::Update {
                         obj,
                         key,
@@ -1013,6 +1029,7 @@ impl ActionHandle {
                             *t = ts_after;
                         }
                     }
+                    _ => {}
                 }
             }
         }
@@ -1084,14 +1101,15 @@ impl ActionHandle {
     //
     // Exposed methods
     //
-    fn output(self, class: String) -> RuntimeResult<ArgHandle> {
-        self.obj_io(ObjectIO::Output, class)
+    fn output(self, class: String, kvs: Dynamic) -> RuntimeResult<ArgHandle> {
+        let kvs = dynamic_to_kvs(kvs)?;
+        self.obj_io(ObjectIO::Output, class, kvs)
     }
     fn input(self, class: String) -> RuntimeResult<ArgHandle> {
-        self.obj_io(ObjectIO::Input, class)
+        self.obj_io(ObjectIO::Input, class, vec![])
     }
     fn mutate(self, class: String) -> RuntimeResult<ArgHandle> {
-        self.obj_io(ObjectIO::Mutate, class)
+        self.obj_io(ObjectIO::Mutate, class, vec![])
     }
     /// Reference another action as a sub-action. At Execute time we
     /// open a nested action scope, run the sub-action's rhai body
@@ -1315,32 +1333,6 @@ impl ArgHandle {
     fn literal(ctx: ActionHandle, value: Value) -> Self {
         let arg = Rc::new(RefCell::new(VarOrValue::value(value)));
         Self::new(ctx, arg)
-    }
-    fn set(self, kvs: Dynamic) -> RuntimeResult<()> {
-        type_check_args([(&self, Type::Dict)])?;
-        let kvs = dynamic_to_kvs(kvs)?;
-        let mut arg = self.arg.borrow_mut();
-        if let VarOrValue::Var(var) = &*arg {
-            let var_name = var.name.clone();
-            let mut ctx = self.ctx.0.borrow_mut();
-            ctx.assert_unsafe(false)?;
-            let mut final_dict: Option<Dictionary> = None;
-            if ctx.exe_ctx.is_some() {
-                for (key, value) in &kvs {
-                    let value = value.borrow().as_value().clone();
-                    arg.mut_dict(|obj| {
-                        obj.insert(&StrKey::from(key), &value).expect("TODO");
-                    });
-                }
-                final_dict = Some(arg.to_dict());
-            }
-            ctx.insts.push(Inst::Set {
-                obj: var_name,
-                kvs,
-                final_dict,
-            });
-        }
-        Ok(())
     }
     fn get(self, _key: String) -> RuntimeResult<ArgHandle> {
         todo!();
@@ -1764,7 +1756,23 @@ fn compute_wildcard_needs(
 
     for inst in &ctx.insts {
         match inst {
-            Inst::Object { .. } | Inst::SubAction { .. } => {}
+            Inst::Object {
+                io: ObjectIO::Output,
+                kvs,
+                ..
+            } => {
+                for (_k, v) in kvs {
+                    check(
+                        v,
+                        false,
+                        &current_ts,
+                        &mut needs_in,
+                        &mut needs_out,
+                        &mut blocks_initials_pack,
+                    );
+                }
+            }
+            Inst::SubAction { .. } => {}
             Inst::Update { obj, value, .. } => {
                 check(
                     value,
@@ -1776,18 +1784,6 @@ fn compute_wildcard_needs(
                 );
                 if let Some(ts) = current_ts.get_mut(obj) {
                     *ts += 1;
-                }
-            }
-            Inst::Set { kvs, .. } => {
-                for (_k, v) in kvs {
-                    check(
-                        v,
-                        false,
-                        &current_ts,
-                        &mut needs_in,
-                        &mut needs_out,
-                        &mut blocks_initials_pack,
-                    );
                 }
             }
             Inst::Statement { args, .. } => {
@@ -1814,6 +1810,7 @@ fn compute_wildcard_needs(
                     );
                 }
             }
+            _ => {}
         }
     }
 
@@ -2448,7 +2445,6 @@ fn new_engine() -> Engine {
         .register_fn("pow_obj_grind", ActionHandle::pow_obj_grind)
         .register_fn("top_limb_u256", ActionHandle::top_limb_u256)
         .register_type_with_name::<ArgHandle>("ArgContext")
-        .register_fn("set", ArgHandle::set)
         .register_fn("get", ArgHandle::get)
         .register_fn("update", ArgHandle::update)
         .register_fn(

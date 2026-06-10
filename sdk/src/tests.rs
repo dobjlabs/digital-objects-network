@@ -33,14 +33,14 @@ fn test_sdk_1() {
     let _ = env_logger::builder().is_test(true).try_init();
     let craft_src = r#"
         fn FindLog(action) {
-            var log = action.output("Log");
+            var log = action.output("Log", []);
             var work = action.intro_vdf(3, log);
             log.update("work", work);
         }
 
         fn CraftWood(action) {
             var log = action.input("Log");
-            var wood = action.output("Wood");
+            var wood = action.output("Wood", []);
             let target = action.top_limb_u256(9007199254740992);
             var key = action.pow_obj_grind(wood, target);
             wood.update("key", key);
@@ -49,15 +49,14 @@ fn test_sdk_1() {
 
         fn CraftSticks(action) {
             var wood = action.input("Wood");
-            var stick_a = action.output("Stick");
-            var stick_b = action.output("Stick");
+            var stick_a = action.output("Stick", []);
+            var stick_b = action.output("Stick", []);
         }
 
         fn CraftWoodPick(action) {
             var wood = action.input("Wood");
             var stick = action.input("Stick");
-            var pick = action.output("WoodPick");
-            pick.set([["durability", 100]]);
+            var pick = action.output("WoodPick", [["durability", 100]]);
         }
 
         fn use_pick(action, pick, vdf_iters) {
@@ -78,7 +77,7 @@ fn test_sdk_1() {
 
         fn MineStoneWithWoodPick(action) {
             var pick = action.subaction("UseWoodPick");
-            var stone = action.output("Stone");
+            var stone = action.output("Stone", []);
         }
 "#;
 
