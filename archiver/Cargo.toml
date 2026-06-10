@@ -23,9 +23,6 @@ axum = { version = "0.8.6", features = ["macros"] }
 axum-extra = { version = "0.12.6", features = ["query"] }
 tower-http = { version = "0.6", features = ["cors"] }
 futures-util = "0.3.31"
-rocksdb = "0.23.0"
-sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres"] }
-tempfile = "3"
 common = { path = "../common" }
 eth-clients = { path = "../eth-clients" }
 itertools = { workspace = true }

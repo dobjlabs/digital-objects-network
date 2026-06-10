@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
     let mut slot = prev_beacon_block_header
         .as_ref()
         .map(|h| h.slot + 1)
-        .unwrap_or(node.config.init_slot);
+        .unwrap_or(node.config.init_start_slot);
     loop {
         debug!("checking slot {}", slot);
         let some_beacon_block_header = if slot <= head.slot {
@@ -92,8 +92,13 @@ async fn main() -> Result<()> {
                     "reorg: slot {} ({}) has different parent than us",
                     beacon_block_header.slot, beacon_block_header.root
                 );
-                slot = prev.slot;
                 node.store.delete_block_data(&node.store.slot_dir(slot))?;
+                prev_beacon_block_header = node.store.last_header()?;
+                slot = prev_beacon_block_header
+                    .as_ref()
+                    .map(|h| h.slot + 1)
+                    .unwrap_or(node.config.init_start_slot);
+                *last_header.write().await = prev_beacon_block_header.clone();
                 continue;
             }
         }

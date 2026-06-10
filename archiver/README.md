@@ -2,7 +2,7 @@
 
 A service that archives blobs filtered by destination address.
 
-The node connects to an Ethereum and Beacon RPC nodes to follow beacon blocks and donwnload the blobs that were sent via transactions if they match the configured destination address.  At the same time the node offers an http API to serve the stored blobs.
+The node connects to an Ethereum and Beacon RPC nodes to follow beacon blocks and downloads the blobs that were sent via transactions if they match the configured destination address.  At the same time the node offers an http API to serve the stored blobs.
 
 ## API endpoints
 
@@ -13,9 +13,11 @@ The node connects to an Ethereum and Beacon RPC nodes to follow beacon blocks an
   - Returns the filtering address
 - `/v1/beacon/blobs/{block_id}` with query array via `versioned_hashes` -> `{ data: Vec<Blob> }`
   - Follows the same API as the [Ethereum Beacon Node
-    API](https://ethereum.github.io/beacon-APIs/#/Beacon/getBlobs).  This way
-    the archiver can be use as a drop-in replacement of a beacon node for
-    getting blobs.
+    API](https://ethereum.github.io/beacon-APIs/#/Beacon/getBlobs) with two
+    limitations: only <hex encoded blockRoot with 0x prefix> is supported for
+    `block_id` and passing `versioned_hashes` is mandatory.
+    This way the archiver can be use as a drop-in replacement of a beacon node for
+    getting blobs by their block root and versioned hashes.
 
 ## Data structure
 

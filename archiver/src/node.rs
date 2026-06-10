@@ -87,10 +87,16 @@ pub struct Store {
 
 impl Store {
     pub(crate) fn delete_block_data(&self, slot_path: &Path) -> Result<()> {
-        if !fs::exists(slot_path)? {
-            return Ok(());
+        match fs::symlink_metadata(slot_path) {
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
         }
         let mut root_path = fs::canonicalize(slot_path)?; // Resolve symlink
+        assert!(
+            root_path.starts_with(&self.blobs_path),
+            "root_path outside of blobs_path, removal is dangerous"
+        );
         if fs::exists(&root_path)? {
             // Remove at highest intermediate directory that only has one entry
             for _level in 0..DIR_LEVELS - 1 {
@@ -124,11 +130,9 @@ impl Store {
             // Find the highest slot number path
             for _level in 0..DIR_LEVELS {
                 let read_dir = match fs::read_dir(&slot_path) {
-                    Err(e) => match e.kind() {
-                        io::ErrorKind::NotFound => break 'outer,
-                        _ => return Err(e.into()),
-                    },
                     Ok(entries) => entries,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => break 'outer,
+                    Err(e) => return Err(e.into()),
                 };
                 let mut entries = read_dir
                     .map(|res| res.map(|e| e.path()))
@@ -146,16 +150,14 @@ impl Store {
             let mut header_path = slot_path.clone();
             header_path.push("header.json");
             let header_data = match read_file(&header_path) {
-                Err(e) => match e.kind() {
-                    io::ErrorKind::NotFound => {
-                        // The node didn't complete processing this block, remove the stale data in
-                        // reverse order of creation.
-                        self.delete_block_data(&slot_path)?;
-                        continue 'outer;
-                    }
-                    _ => return Err(e.into()),
-                },
                 Ok(data) => data,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    // The node didn't complete processing this block, remove the stale data in
+                    // reverse order of creation.
+                    self.delete_block_data(&slot_path)?;
+                    continue 'outer;
+                }
+                Err(e) => return Err(e.into()),
             };
             let header: BlockHeader = serde_json::from_slice(&header_data)?;
             return Ok(Some(header));
@@ -181,14 +183,9 @@ impl Store {
     ) -> Result<Vec<(usize, B256, HeapBlob)>> {
         let root_dir = self.root_dir(root);
         let rd = match read_dir(&root_dir) {
-            Err(e) => {
-                if e.kind() == io::ErrorKind::NotFound {
-                    return Ok(Vec::new());
-                } else {
-                    return Err(e.into());
-                }
-            }
             Ok(rd) => rd,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
         };
         info!("loading blobs of slot root {} from {:?}", root, root_dir);
         let mut blobs = Vec::new();

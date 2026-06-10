@@ -9,7 +9,7 @@ const DEFAULT_HTTP_BIND: &str = "127.0.0.1:3001";
 pub struct Config {
     pub blobs_path: String,
     pub http_bind: SocketAddr,
-    pub init_slot: u32,
+    pub init_start_slot: u32,
     pub rpc_url: String,
     pub beacon_url: String,
     // Only store blobs from transactions with this destination
@@ -17,13 +17,13 @@ pub struct Config {
 }
 
 pub fn load_config() -> Result<Config> {
-    let _ = dotenvy::from_filename("synchronizer/.env");
+    let _ = dotenvy::from_filename("archiver/.env");
 
     let http_bind = dotenvy::var("HTTP_BIND").unwrap_or_else(|_| DEFAULT_HTTP_BIND.to_string());
     let http_bind: SocketAddr = http_bind.parse()?;
 
     let blobs_path = dotenvy::var("BLOBS_PATH").unwrap();
-    let init_slot = dotenvy::var("INIT_SLOT")
+    let init_start_slot = dotenvy::var("INIT_START_SLOT")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap();
@@ -35,7 +35,7 @@ pub fn load_config() -> Result<Config> {
     Ok(Config {
         blobs_path,
         http_bind,
-        init_slot,
+        init_start_slot,
         rpc_url,
         beacon_url,
         filter_address,

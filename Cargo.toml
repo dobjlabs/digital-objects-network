@@ -7,7 +7,7 @@ members = [
     "pod2utils",
     "synchronizer",
     "relayer",
-    "blob-archiver",
+    "archiver",
     "txlib",
     "sdk",
     "pexe",
