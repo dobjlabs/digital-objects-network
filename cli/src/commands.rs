@@ -10,8 +10,8 @@ use tokio::time::sleep;
 use crate::client::DobjdClient;
 use wire_types::{
     ActionSummary, CheckActionReport, ClassRef, ClassSummary, DriverSettings, ImportObjectRequest,
-    ObjectSummary, ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput,
-    RunActionRequest, RunState, RunStatus,
+    ObjectSummary, ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput, RunActionRequest,
+    RunState, RunStatus,
 };
 
 const MAX_CONSECUTIVE_RUN_POLL_ERRORS: usize = 5;
