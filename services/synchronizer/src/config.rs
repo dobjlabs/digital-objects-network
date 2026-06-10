@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 const DEFAULT_APP_STATE_DB_PATH: &str = "data/synchronizer-db";
@@ -34,7 +34,7 @@ pub struct AppConfig {
     pub rpc_retries: u32,
     pub rpc_retry_delay: Duration,
     pub catchup_batch_size: usize,
-    pub initial_start_slot: Option<u32>,
+    pub init_start_slot: u32,
     pub rpc_url: String,
     pub beacon_url: String,
     pub archiver_url: String,
@@ -88,9 +88,10 @@ pub fn load_config() -> Result<AppConfig> {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_RPC_RETRY_MS);
-    let initial_start_slot = dotenvy::var("INITIAL_START_SLOT")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok());
+    let init_start_slot: u32 = dotenvy::var("INIT_START_SLOT")
+        .context("INIT_START_SLOT must be set (beacon slot to start syncing from)")?
+        .parse()
+        .context("INIT_START_SLOT must be a valid u32 beacon slot")?;
 
     let rpc_url: String = dotenvy::var("RPC_URL")?;
     let beacon_url: String = dotenvy::var("BEACON_URL")?;
@@ -112,7 +113,7 @@ pub fn load_config() -> Result<AppConfig> {
         rpc_retries,
         rpc_retry_delay: Duration::from_millis(rpc_retry_ms),
         catchup_batch_size,
-        initial_start_slot,
+        init_start_slot,
         rpc_url,
         beacon_url,
         archiver_url,

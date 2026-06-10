@@ -39,6 +39,8 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
       HTTP_BIND: 0.0.0.0:3000
       APP_STATE_DB_PATH: /var/lib/don/synchronizer-db
+      # INIT_START_SLOT (first-run start slot) comes from .env via env_file above,
+      # shared with the archiver so both start from the same slot.
       # Bundled Postgres by default; set SYNC_METADATA_DB_URL in .env to override
       # (e.g. a managed/external Postgres).
       SYNC_METADATA_DB_URL: ${SYNC_METADATA_DB_URL:-postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/synchronizer}

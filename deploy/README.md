@@ -76,21 +76,21 @@ Set via `.env` (compose) or `-e` flags (`docker run`). Image defaults:
 `HTTP_BIND=0.0.0.0:<port>`, and the synchronizer's
 `APP_STATE_DB_PATH=/var/lib/don/synchronizer-db`.
 
-| Variable               | Service                | Required      | Notes                                                                       |
-| ---------------------- | ---------------------- | ------------- | --------------------------------------------------------------------------- |
-| `RPC_URL`              | all                    | yes           | Execution-layer RPC                                                         |
-| `BEACON_URL`           | synchronizer, archiver | yes           | Beacon API with blob sidecars                                              |
-| `TO_ADDRESS`           | all                    | yes           | L1 target address; must match across services (archiver reads `FILTER_ADDRESS`) |
-| `INIT_START_SLOT`      | archiver               | archiver only | Beacon slot the archiver starts archiving from                             |
-| `PRIVATE_KEY`          | relayer                | relayer only  | Hot wallet that signs/pays for blob txs                                    |
-| `ARCHIVER_URL`         | synchronizer           | no            | Blobs older than beacon retention; unset, falls back to `BEACON_URL`        |
-| `SYNC_METADATA_DB_URL` | synchronizer           | no            | Defaults to the bundled Postgres; set to point at an external one          |
-| `DB_URL`               | relayer                | no            | Defaults to the bundled Postgres; set to point at an external one          |
-| `BLOBS_PATH`           | archiver               | no            | On-disk blob store path; mount a volume here                               |
-| `IMAGE_TAG`            | compose                | no            | Image tag to run; pin to a release                                         |
-| `APP_STATE_DB_PATH`    | synchronizer           | no            | RocksDB cache path; mount a volume here                                    |
-| `HTTP_BIND`            | all                    | no            | Defaults to `0.0.0.0:3000` / `:3200` / `:3001`                             |
-| `RUST_LOG`             | all                    | no            | e.g. `info`                                                                |
+| Variable               | Service                | Required     | Notes                                                                           |
+| ---------------------- | ---------------------- | ------------ | ------------------------------------------------------------------------------- |
+| `RPC_URL`              | all                    | yes          | Execution-layer RPC                                                             |
+| `BEACON_URL`           | synchronizer, archiver | yes          | Beacon API with blob sidecars                                                   |
+| `TO_ADDRESS`           | all                    | yes          | L1 target address; must match across services (archiver reads `FILTER_ADDRESS`) |
+| `INIT_START_SLOT`      | synchronizer, archiver | yes          | Beacon slot both services start from on first run                               |
+| `PRIVATE_KEY`          | relayer                | relayer only | Hot wallet that signs/pays for blob txs                                         |
+| `ARCHIVER_URL`         | synchronizer           | no           | Blobs older than beacon retention; unset, falls back to `BEACON_URL`            |
+| `SYNC_METADATA_DB_URL` | synchronizer           | no           | Defaults to the bundled Postgres; set to point at an external one               |
+| `DB_URL`               | relayer                | no           | Defaults to the bundled Postgres; set to point at an external one               |
+| `BLOBS_PATH`           | archiver               | no           | On-disk blob store path; mount a volume here                                    |
+| `IMAGE_TAG`            | compose                | no           | Image tag to run; pin to a release                                              |
+| `APP_STATE_DB_PATH`    | synchronizer           | no           | RocksDB cache path; mount a volume here                                         |
+| `HTTP_BIND`            | all                    | no           | Defaults to `0.0.0.0:3000` / `:3200` / `:3001`                                  |
+| `RUST_LOG`             | all                    | no           | e.g. `info`                                                                     |
 
 The synchronizer's `/var/lib/don` holds RocksDB - a rebuildable cache (the
 authoritative state lives in Postgres), but mounting a volume avoids a slow cold

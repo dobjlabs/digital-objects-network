@@ -292,7 +292,7 @@ jobs:
             | python3 -c "import sys, json; print(json.load(sys.stdin)['data']['header']['message']['slot'])")
           START=$((HEAD - 5))
           echo "synchronizer start slot: $START (head $HEAD)"
-          echo "INITIAL_START_SLOT=$START" >> "$GITHUB_ENV"
+          echo "INIT_START_SLOT=$START" >> "$GITHUB_ENV"
 
       - name: Resolve recent Sepolia head slot (Windows)
         if: runner.os == 'Windows'
@@ -302,7 +302,7 @@ jobs:
           $start = [int]$head - 5
           Write-Host "synchronizer start slot: $start (head $head)"
           # -Encoding ascii avoids any BOM that would break the GITHUB_ENV parser.
-          "INITIAL_START_SLOT=$start" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          "INIT_START_SLOT=$start" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
 
       # =====================================================================
       # Start the local stack. Both binaries read config from process env
@@ -321,7 +321,7 @@ jobs:
           # then point the synchronizer's ARCHIVER_URL at it. On Windows there is
           # no archiver and ARCHIVER_URL is unset, so the synchronizer reads blobs
           # from BEACON_URL instead.
-          INIT_START_SLOT="$INITIAL_START_SLOT" \
+          INIT_START_SLOT="$INIT_START_SLOT" \
           RPC_URL="$RPC_URL" \
           BEACON_URL="$BEACON_URL" \
           FILTER_ADDRESS="$TO_ADDRESS" \
@@ -331,7 +331,7 @@ jobs:
               > logs/archiver.log 2>&1 &
           echo "archiver pid: $!"
 
-          INITIAL_START_SLOT="$INITIAL_START_SLOT" \
+          INIT_START_SLOT="$INIT_START_SLOT" \
           RPC_URL="$RPC_URL" \
           BEACON_URL="$BEACON_URL" \
           ARCHIVER_URL="http://127.0.0.1:3001" \
@@ -413,7 +413,7 @@ jobs:
 
           # Launch the servers HERE (see the note above) so they stay alive
           # through `dobj run`. RPC_URL/BEACON_URL/TO_ADDRESS/PRIVATE_KEY are
-          # job-level env; INITIAL_START_SLOT is inherited from the resolve
+          # job-level env; INIT_START_SLOT is inherited from the resolve
           # step via GITHUB_ENV. Both Start-Process children inherit all of
           # those plus the per-server vars set inline below.
           $env:SYNC_METADATA_DB_URL = "postgres://postgres:root@127.0.0.1:5432/synchronizer"
