@@ -1,20 +1,16 @@
 ---
 layout: landing
 title: Digital Objects Network
-description: The Digital Objects Network is live. Install the driver, point it at public infrastructure, and start creating objects.
+description: The Digital Objects Network testnet is live on Ethereum Sepolia. Install the driver, point it at public infrastructure, and start creating objects.
 ---
 
 import { HomePage } from 'vocs/components'
-import logoSrc from '../assets/logo.png'
 
 <HomePage.Root>
-  <img src={logoSrc} alt="Digital Objects Network" style={{ height: '72px', width: '72px', borderRadius: '16px' }} />
-  <HomePage.Tagline>The Digital Objects Network is live 🟢</HomePage.Tagline>
+  <HomePage.Tagline>The Digital Objects Network — Sepolia testnet 🟢</HomePage.Tagline>
   <HomePage.Description>
-    Privately-held, fully programmable objects you can create, mutate, and pass
-    to people who don't trust you — integrity proved with zero-knowledge
-    proofs, consistency anchored to Ethereum blobspace, contents never leaving
-    your machine.
+    The Digital Objects Network is a decentralized network that facilitates the
+    creation, execution, and exchange of Digital Objects.
   </HomePage.Description>
   <HomePage.Buttons>
     <HomePage.Button href="/install" variant="accent">Install the driver</HomePage.Button>
@@ -24,6 +20,17 @@ import logoSrc from '../assets/logo.png'
 </HomePage.Root>
 
 <div style={{ maxWidth: '724px', margin: '0 auto', padding: '48px 24px 96px' }}>
+
+## Network status
+
+This is a **testnet** deployment, anchored to the Ethereum **Sepolia** testnet.
+Objects, proofs, and state here are for testing only and may be reset.
+
+| Parameter | Value |
+| --------- | ----- |
+| Network | Sepolia (Ethereum testnet) |
+| Start slot | `10449449` — the beacon slot the network began ingesting blobs from |
+| Blob address | `0x4343434343434343434343434343434343434343` — the address blob transactions are posted to |
 
 ## Join the network
 
@@ -43,18 +50,19 @@ out of the box:
 
 | Service | Endpoint | Role |
 | ------------ | ------------------------------------ | ---- |
-| Synchronizer | [`sync.don.pateldhvani.com`](https://sync.don.pateldhvani.com/healthz) | Rebuilds canonical network state from Ethereum blobs; answers live / consumed queries |
-| Relayer | [`relay.don.pateldhvani.com`](https://relay.don.pateldhvani.com/healthz) | Submits proof payloads to Ethereum as EIP-4844 blob transactions |
+| Synchronizer | [`synchronizer.don.pateldhvani.com`](https://synchronizer.don.pateldhvani.com/healthz) | Rebuilds canonical network state from Ethereum blobs; answers live / consumed queries |
+| Relayer | [`relayer.don.pateldhvani.com`](https://relayer.don.pateldhvani.com/healthz) | Submits proof payloads to Ethereum as EIP-4844 blob transactions |
+| Archiver | [`archiver.don.pateldhvani.com`](https://archiver.don.pateldhvani.com/healthz) | Stores historical blobs durably so synchronizers can bootstrap beyond Ethereum's retention window |
 
-Your driver is free to point elsewhere — edit `~/.dobj/settings.json` and
+Your driver is free to point elsewhere — write `~/.dobj/settings.json` and
 restart the daemon:
 
-```json
-{
-  "synchronizerApiUrl": "https://sync.don.pateldhvani.com",
-  "relayerApiUrl": "https://relay.don.pateldhvani.com"
-}
+```bash
+printf '{"synchronizerApiUrl":"https://synchronizer.don.pateldhvani.com","relayerApiUrl":"https://relayer.don.pateldhvani.com"}\n' > ~/.dobj/settings.json
 ```
+
+The driver only talks to a synchronizer and a relayer; the archiver is consumed
+by synchronizers (to fetch historical blobs), so it isn't configured here.
 
 ### Run your own — and list it here
 
@@ -63,6 +71,10 @@ their own Ethereum endpoints, any number can operate concurrently, and running
 one confers no special network privileges — it just makes the network more
 available. See the [architecture page](/architecture#network-architecture) for
 what each service does.
+
+To derive the same canonical state, match the [network parameters above](#network-status):
+point your synchronizer at Sepolia, start from slot `10449449`, and watch blob
+address `0x4343434343434343434343434343434343434343`.
 
 Operating a public endpoint others can use? Add it to the table above:
 

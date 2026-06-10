@@ -14,7 +14,7 @@ export default defineConfig({
   banner: {
     dismissable: true,
     content:
-      'The Digital Objects Network is live - [install the driver](/install) to join.',
+      'Testnet on Ethereum Sepolia - [install the driver](/install) to join.',
   },
   theme: {
     accentColor: {
