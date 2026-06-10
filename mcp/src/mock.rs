@@ -26,7 +26,7 @@ fn class_ref(name: &str) -> ClassRef {
 /// Multiple actions can run concurrently.
 pub struct MockDobjOps {
     objects: Vec<ObjectSummary>,
-    actions: Vec<Action>,
+    actions: Vec<ActionSummary>,
     state_root: String,
 }
 
@@ -57,7 +57,7 @@ impl DobjOps for MockDobjOps {
         Ok(self.objects.clone())
     }
 
-    fn list_actions(&self) -> anyhow::Result<Vec<Action>> {
+    fn list_actions(&self) -> anyhow::Result<Vec<ActionSummary>> {
         Ok(self.actions.clone())
     }
 
@@ -103,19 +103,18 @@ impl DobjOps for MockDobjOps {
         Ok(self.state_root.clone())
     }
 
-    fn inspect_object(&self, file_name: &str) -> anyhow::Result<ObjectDetail> {
+    fn inspect_object(&self, file_name: &str) -> anyhow::Result<ObjectSummary> {
         let obj = self
             .objects
             .iter()
             .find(|o| o.file_name == file_name)
             .ok_or_else(|| anyhow!("object file not found: {file_name}"))?;
 
-        // ObjectDetail is an alias for wire_types::ObjectSummary, the same
-        // shape stored in the mock object list — return it directly.
+        // Same shape stored in the mock object list; return it directly.
         Ok(obj.clone())
     }
 
-    fn inspect_class(&self, class: &QualifiedName) -> anyhow::Result<ClassDetail> {
+    fn inspect_class(&self, class: &QualifiedName) -> anyhow::Result<ClassSummary> {
         if class.plugin_name != PLUGIN || !is_known_class(&class.name) {
             bail!("unknown class: {}::{}", class.plugin_name, class.name);
         }
@@ -137,8 +136,7 @@ impl DobjOps for MockDobjOps {
             .filter(|o| o.class == *class && o.status == ObjectStatus::Live)
             .count();
 
-        // ClassDetail is now an alias for wire_types::ClassSummary.
-        Ok(ClassDetail {
+        Ok(ClassSummary {
             class: class.clone(),
             emoji: emoji_for(&class.name).to_string(),
             hash: format!("0x{}", "0".repeat(64)),
@@ -150,15 +148,14 @@ impl DobjOps for MockDobjOps {
         })
     }
 
-    fn inspect_action(&self, action: &QualifiedName) -> anyhow::Result<ActionDetail> {
+    fn inspect_action(&self, action: &QualifiedName) -> anyhow::Result<ActionSummary> {
         let action_summary = self
             .actions
             .iter()
             .find(|a| a.action == *action)
             .ok_or_else(|| anyhow!("unknown action: {}::{}", action.plugin_name, action.name))?;
 
-        // ActionDetail is now an alias for wire_types::ActionSummary —
-        // we already have one, just clone it.
+        // We already have the matching summary; just clone it.
         Ok(action_summary.clone())
     }
 
@@ -232,11 +229,11 @@ impl DobjOps for MockDobjOps {
         })
     }
 
-    fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectDetail> {
+    fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectSummary> {
         if path.trim().is_empty() {
             bail!("empty .dobj path");
         }
-        Ok(ObjectDetail {
+        Ok(ObjectSummary {
             content_hash: "0ximported0000000000".to_string(),
             file_name: "craft-basics__log_0ximported.dobj".to_string(),
             class: qname("Log"),
@@ -362,9 +359,8 @@ fn default_objects() -> Vec<ObjectSummary> {
     ]
 }
 
-fn make_action(name: &str, description: &str, inputs: &[&str], outputs: &[&str]) -> Action {
-    // Action is now wire_types::ActionSummary — same shape as everywhere.
-    Action {
+fn make_action(name: &str, description: &str, inputs: &[&str], outputs: &[&str]) -> ActionSummary {
+    ActionSummary {
         action: qname(name),
         emoji: action_emoji_for(name).to_string(),
         hash: format!("0x{}", "0".repeat(64)),
@@ -386,7 +382,7 @@ fn action_emoji_for(action_name: &str) -> &'static str {
     }
 }
 
-fn default_actions() -> Vec<Action> {
+fn default_actions() -> Vec<ActionSummary> {
     vec![
         make_action(
             "FindLog",

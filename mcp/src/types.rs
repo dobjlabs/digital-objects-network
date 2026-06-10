@@ -11,10 +11,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub use wire_types::{
-    ActionSummary as Action, ActionSummary as ActionDetail,
+    ActionSummary,
     CheckActionCandidate as FeasibilityInput, CheckActionReport as FeasibilityReport, ClassRef,
-    ClassSummary, ClassSummary as ClassDetail, DriverSettings, ObjectStatus, ObjectSummary,
-    ObjectSummary as ObjectDetail, ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput,
+    ClassSummary, DriverSettings, ObjectStatus, ObjectSummary,
+    ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput,
     RunActionResult as RunActionInner, RunState, RunStatus,
 };
 
@@ -31,7 +31,7 @@ pub struct ObjectList {
 #[serde(rename_all = "camelCase")]
 pub struct ActionList {
     /// All available actions.
-    pub actions: Vec<Action>,
+    pub actions: Vec<ActionSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

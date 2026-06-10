@@ -5,12 +5,12 @@ use crate::types::*;
 /// (one driver process serving HTTP + MCP). Tests use `MockDobjOps`.
 pub trait DobjOps: Send + Sync + 'static {
     fn list_objects(&self) -> anyhow::Result<Vec<ObjectSummary>>;
-    fn list_actions(&self) -> anyhow::Result<Vec<Action>>;
+    fn list_actions(&self) -> anyhow::Result<Vec<ActionSummary>>;
     fn list_classes(&self) -> anyhow::Result<Vec<ClassSummary>>;
     fn get_state_root(&self) -> anyhow::Result<String>;
-    fn inspect_object(&self, file_name: &str) -> anyhow::Result<ObjectDetail>;
-    fn inspect_class(&self, class: &QualifiedName) -> anyhow::Result<ClassDetail>;
-    fn inspect_action(&self, action: &QualifiedName) -> anyhow::Result<ActionDetail>;
+    fn inspect_object(&self, file_name: &str) -> anyhow::Result<ObjectSummary>;
+    fn inspect_class(&self, class: &QualifiedName) -> anyhow::Result<ClassSummary>;
+    fn inspect_action(&self, action: &QualifiedName) -> anyhow::Result<ActionSummary>;
     /// Start a run in the background and return its handle immediately. The
     /// proof + commit pipeline runs asynchronously; follow it with `get_run`.
     fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunAccepted>;
@@ -21,7 +21,7 @@ pub trait DobjOps: Send + Sync + 'static {
     /// Import an external `.dobj` object — one not produced by this driver —
     /// into the local object store by reading it from a local filesystem path.
     /// Returns the filed object's summary.
-    fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectDetail>;
+    fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectSummary>;
 
     /// Read the driver's current configuration (synchronizer + relayer URLs).
     fn read_settings(&self) -> anyhow::Result<DriverSettings>;
