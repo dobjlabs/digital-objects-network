@@ -211,6 +211,7 @@ Hashes in request and response bodies are pod2 `Hash` values, serialized as lowe
 - `RPC_URL`
 - `BEACON_URL`
 - `TO_ADDRESS`
+- `INIT_START_SLOT` (beacon slot to start syncing from on first run; resumed from stored progress afterward)
 
 ## Optional env vars
 
@@ -219,7 +220,6 @@ Hashes in request and response bodies are pod2 `Hash` values, serialized as lowe
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
 - `RPC_RETRIES` (default: `6`)
 - `RPC_RETRY_MS` (default: `1000`)
-- `INITIAL_START_SLOT` (default: unset, meaning start from current head on first run)
 - `SYNC_DELAY_MS` (default: derived from RPC rate limit, currently `173`) — delay in ms between slots when at head. Override with caution to avoid exceeding the RPC rate limit.
 - `CATCHUP_BATCH_SIZE` (default: derived from RPC rate limit, currently `7`) — number of slots fetched concurrently during catch-up. Override with caution to avoid exceeding the RPC rate limit.
 

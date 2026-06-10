@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, str::FromStr};
 
 use alloy::primitives::Address;
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1:3001";
 
@@ -23,10 +23,10 @@ pub fn load_config() -> Result<Config> {
     let http_bind: SocketAddr = http_bind.parse()?;
 
     let blobs_path = dotenvy::var("BLOBS_PATH").unwrap();
-    let init_start_slot = dotenvy::var("INIT_START_SLOT")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap();
+    let init_start_slot: u32 = dotenvy::var("INIT_START_SLOT")
+        .context("INIT_START_SLOT must be set (beacon slot to start archiving from)")?
+        .parse()
+        .context("INIT_START_SLOT must be a valid u32 beacon slot")?;
 
     let rpc_url: String = dotenvy::var("RPC_URL")?;
     let beacon_url: String = dotenvy::var("BEACON_URL")?;

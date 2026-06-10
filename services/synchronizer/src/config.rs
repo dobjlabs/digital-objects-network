@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::warn;
 
 const DEFAULT_APP_STATE_DB_PATH: &str = "data/synchronizer-db";
@@ -34,7 +34,7 @@ pub struct AppConfig {
     pub rpc_retries: u32,
     pub rpc_retry_delay: Duration,
     pub catchup_batch_size: usize,
-    pub initial_start_slot: Option<u32>,
+    pub init_start_slot: u32,
     pub rpc_url: String,
     pub beacon_url: String,
     pub archiver_url: String,
@@ -88,13 +88,21 @@ pub fn load_config() -> Result<AppConfig> {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_RPC_RETRY_MS);
-    let initial_start_slot = dotenvy::var("INITIAL_START_SLOT")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok());
+    let init_start_slot: u32 = dotenvy::var("INIT_START_SLOT")
+        .context("INIT_START_SLOT must be set (beacon slot to start syncing from)")?
+        .parse()
+        .context("INIT_START_SLOT must be a valid u32 beacon slot")?;
 
     let rpc_url: String = dotenvy::var("RPC_URL")?;
     let beacon_url: String = dotenvy::var("BEACON_URL")?;
-    let archiver_url: String = dotenvy::var("ARCHIVER_URL")?;
+    // Blob source. An archiver serves blobs via the same getBlobs API as a beacon
+    // node, so when ARCHIVER_URL is unset we read blobs straight from the beacon.
+    // The beacon only retains recent blobs, so syncing history older than its
+    // retention window still requires an archiver.
+    let archiver_url: String = dotenvy::var("ARCHIVER_URL").unwrap_or_else(|_| {
+        warn!("ARCHIVER_URL not set; reading blobs from BEACON_URL (recent blobs only)");
+        beacon_url.clone()
+    });
     let to_address: Address = Address::from_str(&dotenvy::var("TO_ADDRESS")?)?;
 
     Ok(AppConfig {
@@ -105,7 +113,7 @@ pub fn load_config() -> Result<AppConfig> {
         rpc_retries,
         rpc_retry_delay: Duration::from_millis(rpc_retry_ms),
         catchup_batch_size,
-        initial_start_slot,
+        init_start_slot,
         rpc_url,
         beacon_url,
         archiver_url,

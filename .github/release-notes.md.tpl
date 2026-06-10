@@ -26,9 +26,10 @@ rollback) and leaves your plugins under `~/.dobj/actions/` untouched.
 - **`craft-basics.pexe`** — the bundled crafting plugin (Log,
   Wood, Stone, sticks, picks…).
 
-Plus `synchronizer-{target}.tar.gz` and `relayer-{target}.tar.gz` —
-server binaries used by the install-test CI workflow. End users don't
-need these; the installer doesn't fetch them.
+Plus `synchronizer-{target}.tar.gz`, `relayer-{target}.tar.gz`, and
+(Linux/macOS only) `archiver-{target}.tar.gz` — server binaries used by
+the install-test CI workflow. End users don't need these; the installer
+doesn't fetch them.
 
 Targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
 `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`.

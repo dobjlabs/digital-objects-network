@@ -40,7 +40,7 @@ dobjd:
 # shell — all backed by one dobjd process. Open http://localhost:1420 in a
 # browser to use the website client; the desktop window opens automatically.
 # https://github.com/pvolok/mprocs
-dev: ensure-db ensure-plugins ensure-mcp
+dev: ensure-db ensure-start-slot ensure-plugins ensure-mcp
     mprocs --config mprocs.yaml
 
 # Like `just dev`, but without spawning the local synchronizer + relayer —
@@ -70,7 +70,7 @@ wait-health URL:
 # Idempotently point ~/.dobj/settings.json at the hosted synchronizer + relayer
 ensure-remote-settings:
     @mkdir -p ~/.dobj
-    @printf '{"synchronizerApiUrl":"https://sync.don.pateldhvani.com","relayerApiUrl":"https://relay.don.pateldhvani.com"}\n' > ~/.dobj/settings.json
+    @printf '{"synchronizerApiUrl":"https://synchronizer.don.pateldhvani.com","relayerApiUrl":"https://relayer.don.pateldhvani.com"}\n' > ~/.dobj/settings.json
     @echo "~/.dobj/settings.json → hosted sync + relayer"
 
 # Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
@@ -104,13 +104,83 @@ ensure-db:
     @psql postgres://postgres@localhost:5432/postgres -tAc "SELECT 1 FROM pg_database WHERE datname='synchronizer'" | grep -q 1 || psql postgres://postgres@localhost:5432/postgres -c 'CREATE DATABASE synchronizer'
     @psql postgres://postgres@localhost:5432/postgres -tAc "SELECT 1 FROM pg_database WHERE datname='relayer'" | grep -q 1 || psql postgres://postgres@localhost:5432/postgres -c 'CREATE DATABASE relayer'
 
-# Wipe local state (RocksDB + local Postgres DBs + objects)
+# Point the synchronizer + archiver at the current chain head on a *fresh* start.
+# Both require INIT_START_SLOT but use it only when their store is empty (they
+# resume from on-disk progress otherwise), so we rewrite a service's .env to the
+# current beacon head when its db is absent, or when INIT_START_SLOT is unset (the
+# var is required, so a resumed service still needs *some* value). Runs as part of
+# `just dev`; a no-op once each db exists and the var is set.
+ensure-start-slot:
+    #!/usr/bin/env bash
+    set -uo pipefail
+
+    read_env() {  # <file> <KEY> -> value (uncommented only, quotes/space stripped)
+        local file="$1" key="$2" line
+        [ -f "$file" ] || return 0
+        line="$(grep -E "^[[:space:]]*${key}=" "$file" | tail -n1 || true)"
+        [ -n "$line" ] || return 0
+        printf '%s' "${line#*=}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//"
+    }
+
+    set_env() {  # <file> <KEY> <VALUE> -> upsert, dropping any prior commented/plain line
+        local file="$1" key="$2" val="$3" tmp
+        tmp="$(mktemp)"
+        grep -vE "^[[:space:]]*#?[[:space:]]*${key}=" "$file" > "$tmp" 2>/dev/null || true
+        echo "${key}=${val}" >> "$tmp"
+        mv "$tmp" "$file"
+    }
+
+    head_slot() {  # <beacon_url> -> head slot number
+        local beacon="${1%/}" json
+        json="$(curl -fsSL "${beacon}/eth/v1/beacon/headers/head")" || return 1
+        if command -v jq >/dev/null 2>&1; then
+            printf '%s' "$json" | jq -r '.data.header.message.slot'
+        else
+            printf '%s' "$json" | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['header']['message']['slot'])"
+        fi
+    }
+
+    ensure_slot() {  # <label> <env_file> <fresh:true|false>
+        local label="$1" env="$2" fresh="$3" cur beacon slot
+        if [ ! -f "$env" ]; then echo "$label: $env missing; skipping"; return 0; fi
+        cur="$(read_env "$env" INIT_START_SLOT)"
+        if [ "$fresh" = "false" ] && [ -n "$cur" ]; then
+            echo "$label: resuming; INIT_START_SLOT=$cur unchanged"; return 0
+        fi
+        beacon="$(read_env "$env" BEACON_URL)"
+        if [ -z "$beacon" ]; then echo "$label: no BEACON_URL in $env; leaving INIT_START_SLOT as-is"; return 0; fi
+        slot="$(head_slot "$beacon" 2>/dev/null || true)"
+        if [[ "$slot" =~ ^[0-9]+$ ]]; then
+            set_env "$env" INIT_START_SLOT "$slot"
+            echo "$label: INIT_START_SLOT -> $slot (head)"
+        else
+            echo "$label: could not resolve beacon head; leaving INIT_START_SLOT as-is"
+        fi
+    }
+
+    sync_db="$(read_env services/synchronizer/.env APP_STATE_DB_PATH)"; sync_db="${sync_db:-data/synchronizer-db}"
+    [ -d "$sync_db" ] && sync_fresh=false || sync_fresh=true
+    ensure_slot synchronizer services/synchronizer/.env "$sync_fresh"
+
+    blobs="$(read_env services/archiver/.env BLOBS_PATH)"; blobs="${blobs:-/tmp/blobs/}"
+    [ -d "${blobs%/}/by_slot" ] && arch_fresh=false || arch_fresh=true
+    ensure_slot archiver services/archiver/.env "$arch_fresh"
+
+# Wipe local state (RocksDB + local Postgres DBs + objects + archiver blobs)
 reset:
-    @[ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
+    #!/usr/bin/env bash
+    set -uo pipefail
+    [ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
-    @command -v claude >/dev/null 2>&1 && claude mcp remove dobj 2>/dev/null && echo "removed: dobj MCP registration" || true
-    psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;'
-    psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;'
+    command -v claude >/dev/null 2>&1 && claude mcp remove dobj 2>/dev/null && echo "removed: dobj MCP registration" || true
+    psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;' || true
+    psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;' || true
+    blobs="$(sed -n 's/^[[:space:]]*BLOBS_PATH=//p' services/archiver/.env 2>/dev/null | tail -n1 | tr -d '"' | sed 's/[[:space:]]*$//')"
+    blobs="${blobs:-/tmp/blobs/}"
+    case "$blobs" in
+        /|"") echo "refusing to rm blobs path '$blobs'" ;;
+        *) rm -rf "$blobs" && echo "removed archiver blobs: $blobs" ;;
+    esac
 
 # Run all tests (except ignored)
 test:

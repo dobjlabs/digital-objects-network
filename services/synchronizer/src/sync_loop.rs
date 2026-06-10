@@ -290,24 +290,21 @@ async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
     ))
 }
 
-pub(crate) async fn initialize_sync(
-    node: &Node,
-    initial_start_slot: Option<u32>,
-) -> Result<SyncStart> {
+pub(crate) async fn initialize_sync(node: &Node, init_start_slot: u32) -> Result<SyncStart> {
     let spec = node.get_beacon_spec_with_retry().await?;
     info!(?spec, "Loaded beacon spec");
 
     let head = node.get_beacon_head_header_with_retry().await?;
     info!(head_slot = head.slot, head_root = ?head.root, "Fetched initial beacon head");
 
-    let bootstrap_start_slot = initial_start_slot.unwrap_or(head.slot);
+    let bootstrap_start_slot = init_start_slot;
     let bootstrap_slot = bootstrap_start_slot.checked_sub(1).ok_or_else(|| {
         anyhow!("bootstrap start slot must be > 0 to insert initial bootstrap row")
     })?;
 
     if bootstrap_slot > head.slot {
         return Err(anyhow!(
-            "INITIAL_START_SLOT {bootstrap_start_slot} is ahead of current beacon head {}; cannot bootstrap slot {}",
+            "INIT_START_SLOT {bootstrap_start_slot} is ahead of current beacon head {}; cannot bootstrap slot {}",
             head.slot,
             bootstrap_slot
         ));

@@ -1,13 +1,14 @@
 # syntax=docker/dockerfile:1
 
-# Builds the two headless server binaries into separate, minimal images that
-# share one cooked dependency layer. Build either one independently:
+# Builds the three headless server binaries into separate, minimal images that
+# share one cooked dependency layer. Build any one independently:
 #
 #   docker build --target synchronizer -t don/synchronizer .
 #   docker build --target relayer      -t don/relayer .
+#   docker build --target archiver     -t don/archiver .
 #
-# --target synchronizer compiles only the synchronizer binary (and vice versa);
-# the expensive dependency compile is cooked once and reused by both.
+# --target synchronizer compiles only the synchronizer binary (and so on); the
+# expensive dependency compile is cooked once and reused by all three.
 
 # ---- chef: pinned toolchain + cargo-chef, shared by every build stage ----
 # Build and run on the same Debian release so the binary's glibc, libssl, and
@@ -40,13 +41,13 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 # ---- cook: compile the shared dependency graph once ----
 # pod2 + plonky2 + rocksdb + alloy dominate build time. Cooking them here makes
-# a cached layer both services reuse, which only changes when a dependency
+# a cached layer all three services reuse, which only changes when a dependency
 # changes. The -p scope also keeps the Tauri desktop crate (interfaces/gui/src-tauri,
 # which needs GTK/WebKit) out of the build entirely.
 FROM chef AS cook
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json \
-      -p synchronizer -p relayer
+      -p synchronizer -p relayer -p archiver
 
 # ---- per-service builds: each target compiles only its own binary ----
 # Each logs the binary's dynamic deps so a dependency bump that pulls in a new
@@ -61,12 +62,17 @@ COPY . .
 RUN cargo build --release --locked -p relayer
 RUN echo "--- relayer ldd ---" && ldd target/release/relayer || true
 
+FROM cook AS build-archiver
+COPY . .
+RUN cargo build --release --locked -p archiver
+RUN echo "--- archiver ldd ---" && ldd target/release/archiver || true
+
 # ---- runtime base: shared minimal runtime, non-root user ----
-# Runtime libraries both binaries dynamically link, confirmed via the ldd output
-# above: TLS (libssl3 provides libssl + libcrypto), zlib and zstd (rocksdb and
-# others), and libgcc. ca-certificates verifies TLS to the Ethereum endpoints
+# Runtime libraries the service binaries dynamically link, confirmed via the ldd
+# output above: TLS (libssl3 provides libssl + libcrypto), zlib and zstd (rocksdb
+# and others), and libgcc. ca-certificates verifies TLS to the Ethereum endpoints
 # and Postgres. All of these package names exist on amd64 and arm64. The service
-# user gets a fixed uid/gid so the synchronizer volume's ownership survives image
+# user gets a fixed uid/gid so the mounted volumes' ownership survives image
 # rebuilds and upgrades.
 FROM debian:trixie-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
@@ -103,3 +109,20 @@ ENV HTTP_BIND=0.0.0.0:3200
 USER don
 EXPOSE 3200
 ENTRYPOINT ["/usr/local/bin/relayer"]
+
+# ---- archiver image ----
+# Like the relayer, the archiver links no C++ runtime (it pulls in neither
+# rocksdb nor any other C++ dependency), so the shared runtime base is enough.
+# But it keeps a durable on-disk blob store instead of using Postgres, so it
+# mounts a volume the way the synchronizer does.
+FROM runtime AS archiver
+COPY --from=build-archiver /app/target/release/archiver /usr/local/bin/archiver
+RUN mkdir -p /var/lib/don && chown -R don:don /var/lib/don
+# BLOBS_PATH lives under the mounted volume so the archive survives restarts
+# instead of re-downloading from the chain on every boot.
+ENV HTTP_BIND=0.0.0.0:3001 \
+    BLOBS_PATH=/var/lib/don/blobs
+VOLUME ["/var/lib/don"]
+USER don
+EXPOSE 3001
+ENTRYPOINT ["/usr/local/bin/archiver"]

@@ -1,12 +1,13 @@
 name: Images
 
-# Builds the synchronizer and relayer container images and pushes them to GHCR.
+# Builds the synchronizer, relayer, and archiver container images and pushes them
+# to GHCR.
 #
 # Production runs amd64 (most container hosts) and GitHub's
 # Linux runners are amd64, so the build is native - no QEMU emulation. The
 # whole compile happens inside the Dockerfile's debian builder, scoped to
-# `-p synchronizer -p relayer`, so unlike the Rust CI workflows this needs no
-# Tauri/GTK packages on the runner - it only drives buildx.
+# `-p synchronizer -p relayer -p archiver`, so unlike the Rust CI workflows this
+# needs no Tauri/GTK packages on the runner - it only drives buildx.
 
 on:
   push:
@@ -100,6 +101,33 @@ jobs:
           push: true
           tags: ${{ steps.meta-relayer.outputs.tags }}
           labels: ${{ steps.meta-relayer.outputs.labels }}
+          provenance: false
+          cache-from: type=gha,scope=don-build
+          cache-to: type=gha,scope=don-build,mode=max
+
+      - name: Archiver image metadata
+        id: meta-archiver
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/archiver
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
+
+      - name: Build and push archiver
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: archiver
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta-archiver.outputs.tags }}
+          labels: ${{ steps.meta-archiver.outputs.labels }}
           provenance: false
           cache-from: type=gha,scope=don-build
           cache-to: type=gha,scope=don-build,mode=max

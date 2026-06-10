@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db_url).await?);
     let state_machine = Arc::new(StateMachine::new(app_db, Arc::new(ProofParser::new()?)));
     let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine), Arc::clone(&sync_db)).await?);
-    let sync_start = initialize_sync(&node, node.config.initial_start_slot).await?;
+    let sync_start = initialize_sync(&node, node.config.init_start_slot).await?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let server_task = tokio::spawn(run_api_server(
