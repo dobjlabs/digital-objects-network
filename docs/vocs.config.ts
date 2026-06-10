@@ -26,6 +26,7 @@ export default defineConfig({
     { text: 'The network', link: '/network' },
     { text: 'Install', link: '/install' },
     { text: 'Applications', link: '/applications' },
+    { text: 'GitHub', link: 'https://github.com/dobjlabs/digital-objects-network' },
   ],
   sidebar: [
     { text: 'Network status', link: '/' },
@@ -47,12 +48,6 @@ export default defineConfig({
         { text: 'craft-basics', link: '/applications/craft-basics' },
         { text: 'craft-rocket', link: '/applications/craft-rocket' },
       ],
-    },
-  ],
-  socials: [
-    {
-      icon: 'github',
-      link: 'https://github.com/dobjlabs/digital-objects-network',
     },
   ],
   editLink: {

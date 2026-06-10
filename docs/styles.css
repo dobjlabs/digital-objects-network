@@ -1,0 +1,40 @@
+/* Global style overrides, imported from the MDX pages so Vite bundles them.
+   (Vocs 1.4 has no _root.css / user-stylesheet convention.) */
+
+/* Vocs spaces top-level blocks via margin-bottom on direct children of
+   .vocs_Content; the landing page nests its content in .don-home, so those
+   blocks miss that rhythm -- restore it here. */
+.don-home > *:not(:last-child) {
+  margin-bottom: var(--vocs-space_24);
+}
+
+/* Extra breathing room above tables and code blocks so they don't crowd the
+   paragraph that introduces them. Direct-child scope keeps code-group tabs
+   (nested blocks) from being pushed apart. */
+:is(.vocs_Content, .don-home) > .vocs_Table,
+:is(.vocs_Content, .don-home) > .vocs_CodeBlock {
+  margin-top: 2rem !important;
+}
+
+/* Top nav: by default Vocs parks the logo in the left gutter and aligns the
+   search box to the centered content column, leaving a wide gap between them.
+   Pack the logo, search, and nav into normal flow: title + search on the left,
+   nav links pushed to the right. */
+.vocs_DesktopTopNav {
+  justify-content: flex-start !important;
+  gap: var(--vocs-space_24) !important;
+}
+.vocs_DesktopTopNav_withLogo {
+  padding-left: var(--vocs-space_16) !important;
+}
+.vocs_DesktopTopNav_logoWrapper {
+  position: static !important;
+  width: auto !important;
+  justify-content: flex-start !important;
+}
+.vocs_DesktopTopNav_logo {
+  width: auto !important;
+}
+.vocs_DesktopTopNav_section:last-child {
+  margin-left: auto !important;
+}
