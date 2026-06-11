@@ -8,10 +8,16 @@ import { vocs } from 'vocs/vite'
 export default defineConfig({
   plugins: [react(), vocs()],
   optimizeDeps: {
-    // mermaid pulls in dayjs (CJS). Without pre-bundling, the dev server throws
-    // "dayjs.min.js does not provide an export named 'default'" and the diagram
-    // fails to render. dayjs is a transitive dep (under mermaid), so use Vite's
-    // "owner > dep" form -- a bare 'dayjs' fails to resolve from the project root.
-    include: ['mermaid > dayjs'],
+    // mermaid lazy-loads several CJS deps; without pre-bundling, the dev server
+    // throws "... does not provide an export named ..." and the diagram fails to
+    // render (the production build is unaffected). They are transitive (under
+    // mermaid), so use Vite's "owner > dep" form -- a bare name fails to resolve.
+    include: [
+      'mermaid > dayjs',
+      'mermaid > @braintree/sanitize-url',
+      'mermaid > dompurify',
+      'mermaid > khroma',
+      'mermaid > cytoscape',
+    ],
   },
 })
