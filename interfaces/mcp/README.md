@@ -219,7 +219,3 @@ cargo run -p dobj-mcp --bin dobj-mcp-stdio --release
 Add a `Builtin` entry in `prompts.rs` with a body under `docs/<name>.md`. It is
 then reserved automatically, listed by `help`, loadable via `get_command`, and
 available as the prompt `/mcp__dobj__<name>`.
-
-```
-
-```

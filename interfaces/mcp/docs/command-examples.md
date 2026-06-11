@@ -57,8 +57,9 @@ trailing "Arguments: ..." line), read it instead of prompting.
 
 For a command whose job is to reach a target class: walk the recipe backwards,
 reuse what is already live, and run only the missing actions. Running an action
-is async -- `run_action` returns a `runId`; poll `get_run(runId)` until
-`succeeded`, then read produced object paths from its `result`.
+is async -- `run_action` returns a `runId`; poll
+`get_run({ run_id: <runId> })` until `succeeded`, then read produced object
+paths from its `result`.
 
 Two rules that keep it fast and correct:
 

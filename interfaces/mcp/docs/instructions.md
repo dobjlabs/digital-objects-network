@@ -54,9 +54,10 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 - `list_objects` — every object the user holds, with class + liveness
 - `list_actions` — every available action with its required inputs
 - `list_classes` — every known object class with live counts and producing/consuming actions
-- `inspect_object(file_name)` — full detail on one object: fields, status, predicate source
-- `inspect_class(class_name)` — predicate definition + which actions produce/consume the class
-- `check_feasibility(action_id)` — does the user's objects have what this action needs?
+- `inspect_object({ file_name })` — full detail on one object: fields, status, predicate source
+- `inspect_class({ class: { pluginName, name } })` — predicate definition + which actions produce/consume the class
+- `inspect_action({ action: { pluginName, name } })` — predicate definition + input/output classes
+- `check_feasibility({ action: { pluginName, name } })` — does the user's objects have what this action needs?
 - `get_state_root` — current state root from the synchronizer
 - `read_doc(name)` — reference docs (`podlang-reference`, `object-lifecycle`,
   `how-it-works`, `command-examples`, `txlib.podlang`, `generated.podlang`, or
@@ -64,10 +65,10 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ### Mutation
 
-- `run_action(action_id, inputObjectPaths)` — start an action; returns a
+- `run_action({ action: { pluginName, name }, inputObjectPaths })` — start an action; returns a
   `runId` immediately (the proof + commit run in the background). See
   "running actions" below.
-- `get_run(run_id)` — poll a run's status, result/error, and progress log.
+- `get_run({ run_id })` — poll a run's status, result/error, and progress log.
 
 ### Configuration
 
@@ -88,7 +89,7 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 `status: queued`; proof generation and the commit run in the background
 (seconds to minutes).
 
-To wait for the result, poll `get_run(run_id)` until `status` is terminal:
+To wait for the result, poll `get_run({ run_id })` until `status` is terminal:
 
 - `succeeded` → read `result` (old/new state root, output and nullified files)
 - `failed` → read `error`
