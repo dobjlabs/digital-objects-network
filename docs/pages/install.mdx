@@ -12,7 +12,7 @@ it puts three binaries under `~/.dobj/bin/`:
 | ---- | ----- |
 | `dobjd` — driver daemon (REST/SSE on `:7717`, MCP on `:7718`) | `~/.dobj/bin/` |
 | `dobj` — terminal CLI | `~/.dobj/bin/` |
-| `dobj-mcp-proxy` — stdio bridge for Claude Desktop | `~/.dobj/bin/` |
+| `dobj-mcp-proxy` — stdio bridge for agents that only speak stdio (e.g. Claude Desktop) | `~/.dobj/bin/` |
 
 The driver installs with an **empty action catalog** — applications ship
 separately as plugins (`.pexe` files). The steps below install the binaries,
@@ -119,7 +119,7 @@ Every client talks to the same daemon:
 
 - **CLI** — `~/.dobj/bin/dobj` (add `~/.dobj/bin` to your PATH)
 - **Claude Code / MCP agents** — `claude mcp add --transport http dobj http://127.0.0.1:7718/mcp`
-- **Claude Desktop** — point it at `~/.dobj/bin/dobj-mcp-proxy` (stdio bridge)
+- **Stdio-only agents (e.g. Claude Desktop)** — point them at `~/.dobj/bin/dobj-mcp-proxy`
 
 ::::
 
