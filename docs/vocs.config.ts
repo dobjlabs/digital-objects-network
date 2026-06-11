@@ -6,6 +6,9 @@ const basePath = process.env.BASE_PATH || undefined
 
 export default defineConfig({
   basePath,
+  // GitHub Pages serves static files only; pre-render every route to HTML.
+  // v2 defaults to a server (dynamic) build, which would emit no page HTML.
+  renderStrategy: 'full-static',
   // vocs cannot resolve an anchor on the home page (index route) to a file, so a
   // relative link like (../#public-infrastructure) is flagged as a false-positive
   // deadlink even though it renders correctly. Warn instead of failing the build.

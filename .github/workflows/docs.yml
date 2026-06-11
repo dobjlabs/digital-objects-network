@@ -47,9 +47,11 @@ jobs:
         env:
           BASE_PATH: ${{ steps.pages.outputs.base_path }}
 
+      # Vocs v2 full-static build emits the deployable site under dist/public
+      # (dist/ also holds server/preview bundles that static hosting ignores).
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/dist
+          path: docs/dist/public
 
   deploy:
     needs: build
