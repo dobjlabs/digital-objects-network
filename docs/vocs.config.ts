@@ -17,7 +17,8 @@ export default defineConfig({
     dismissable: true,
     backgroundColor: "#0e7490",
     textColor: "white",
-    content: `Testnet on Ethereum Sepolia - [install the driver](${basePath ?? ""}/install) to join.`,
+    content:
+      "Testnet on Ethereum Sepolia - [install the driver](/install) to join.",
   },
   topNav: [
     { text: "Network", link: "/network" },
