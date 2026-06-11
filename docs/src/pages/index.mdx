@@ -1,22 +1,28 @@
 ---
-layout: landing
+layout: full
 showAskAi: false
 title: Digital Objects Network
 description: The Digital Objects Network testnet is live on Ethereum Sepolia. Install the driver, point it at public infrastructure, and start creating objects.
 ---
 
-import { HomePage } from 'vocs'
+import { HomePage } from "vocs";
 
 <HomePage.Root>
-  <HomePage.Tagline>The Digital Objects Network — Sepolia testnet 🟢</HomePage.Tagline>
+  <HomePage.Tagline>
+    The Digital Objects Network — Sepolia testnet 🟢
+  </HomePage.Tagline>
   <HomePage.Description>
     The Digital Objects Network is a decentralized network that facilitates the
     creation, execution, and exchange of Digital Objects.
   </HomePage.Description>
   <HomePage.Buttons>
-    <HomePage.Button href="/install" variant="accent">Install the driver</HomePage.Button>
+    <HomePage.Button href="/install" variant="accent">
+      Install the driver
+    </HomePage.Button>
     <HomePage.Button href="/network">What is it?</HomePage.Button>
-    <HomePage.Button href="https://github.com/dobjlabs/digital-objects-network">GitHub</HomePage.Button>
+    <HomePage.Button href="https://github.com/dobjlabs/digital-objects-network">
+      GitHub
+    </HomePage.Button>
   </HomePage.Buttons>
 </HomePage.Root>
 
@@ -27,10 +33,10 @@ import { HomePage } from 'vocs'
 This is a **testnet** deployment, anchored to the Ethereum **Sepolia** testnet.
 Objects, proofs, and state here are for testing only and may be reset.
 
-| Parameter | Value |
-| --------- | ----- |
-| Network | Sepolia (Ethereum testnet) |
-| Start slot | `10449449` — the beacon slot the network began ingesting blobs from |
+| Parameter    | Value                                                                                      |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| Network      | Sepolia (Ethereum testnet)                                                                 |
+| Start slot   | `10449449` — the beacon slot the network began ingesting blobs from                        |
 | Blob address | `0x4343434343434343434343434343434343434343` — the address blob transactions are posted to |
 
 ## Join the network
@@ -51,11 +57,11 @@ install: **[Install the driver →](/install)**
 Fresh installs come pre-pointed at these hosted services, so the network works
 out of the box:
 
-| Service | Endpoint | Role |
-| ------------ | ------------------------------------ | ---- |
-| Synchronizer | [`synchronizer.don.pateldhvani.com`](https://synchronizer.don.pateldhvani.com/healthz) | Rebuilds canonical network state from Ethereum blobs; answers live / consumed queries |
-| Relayer | [`relayer.don.pateldhvani.com`](https://relayer.don.pateldhvani.com/healthz) | Submits proof payloads to Ethereum as EIP-4844 blob transactions |
-| Archiver | [`archiver.don.pateldhvani.com`](https://archiver.don.pateldhvani.com/healthz) | Stores historical blobs durably so synchronizers can bootstrap beyond Ethereum's retention window |
+| Service      | Endpoint                                                                               | Role                                                                                              |
+| ------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Synchronizer | [`synchronizer.don.pateldhvani.com`](https://synchronizer.don.pateldhvani.com/healthz) | Rebuilds canonical network state from Ethereum blobs; answers live / consumed queries             |
+| Relayer      | [`relayer.don.pateldhvani.com`](https://relayer.don.pateldhvani.com/healthz)           | Submits proof payloads to Ethereum as EIP-4844 blob transactions                                  |
+| Archiver     | [`archiver.don.pateldhvani.com`](https://archiver.don.pateldhvani.com/healthz)         | Stores historical blobs durably so synchronizers can bootstrap beyond Ethereum's retention window |
 
 Your driver is free to point elsewhere — set the endpoints with the `dobj`
 CLI; it applies immediately, no restart:

@@ -9,10 +9,10 @@ description: Set up the Digital Objects driver - install the binaries, start the
 The driver is a service that manages the digital objects themselves. Installing
 it puts three binaries under `~/.dobj/bin/`:
 
-| What | Where |
-| ---- | ----- |
-| `dobjd` — driver daemon (REST/SSE on `:7717`, MCP on `:7718`) | `~/.dobj/bin/` |
-| `dobj` — terminal CLI | `~/.dobj/bin/` |
+| What                                                                                   | Where          |
+| -------------------------------------------------------------------------------------- | -------------- |
+| `dobjd` — driver daemon (REST/SSE on `:7717`, MCP on `:7718`)                          | `~/.dobj/bin/` |
+| `dobj` — terminal CLI                                                                  | `~/.dobj/bin/` |
 | `dobj-mcp-proxy` — stdio bridge for agents that only speak stdio (e.g. Claude Desktop) | `~/.dobj/bin/` |
 
 The driver installs with an **empty action catalog** — applications ship
