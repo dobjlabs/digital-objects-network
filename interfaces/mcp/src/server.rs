@@ -134,6 +134,12 @@ pub struct DeleteCommandParams {
     pub name: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetCommandParams {
+    /// The command name to load -- a built-in or a saved command.
+    pub name: String,
+}
+
 // -- Tool implementations --
 
 #[tool_router]
@@ -402,6 +408,23 @@ impl<T: DobjOps> DobjMcpService<T> {
             Err(err) => err.to_string(),
         }
     }
+
+    #[tool(
+        description = "Load a command's full body so you can follow it: a built-in (help, create-command, consult-docs, view) or a saved command. Call this when the user types a command's name, then follow the returned body. Returns name, description, and body."
+    )]
+    fn get_command(
+        &self,
+        Parameters(params): Parameters<GetCommandParams>,
+    ) -> Result<Json<UserCommand>, String> {
+        if let Some(builtin) = crate::prompts::builtin_command(&params.name) {
+            return Ok(Json(builtin));
+        }
+        let store = self.command_store().map_err(|e| e.to_string())?;
+        store
+            .get(&params.name)
+            .map(Json)
+            .ok_or_else(|| format!("no such command: {}", params.name))
+    }
 }
 
 // -- Instructions --
@@ -529,7 +552,8 @@ mod tests {
         assert!(tools.contains(&"define_command".to_string()));
         assert!(tools.contains(&"list_commands".to_string()));
         assert!(tools.contains(&"delete_command".to_string()));
-        assert_eq!(tools.len(), 18);
+        assert!(tools.contains(&"get_command".to_string()));
+        assert_eq!(tools.len(), 19);
     }
 
     #[test]

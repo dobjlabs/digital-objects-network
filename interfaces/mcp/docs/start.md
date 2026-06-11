@@ -19,8 +19,12 @@ exactly one installed command. Built-in phrase mappings:
 - `view stop`, `close dashboard`, `hide dashboard` -> view (pass `stop`)
 
 A saved command matches when the user types its name, or a phrase its
-description clearly refers to. Run the matching command: follow its body, and
-let the command's own output rules govern formatting.
+description clearly refers to.
+
+To run a matched command (built-in or saved), call `get_command` with its name
+to load its full body, then follow that body exactly -- it governs which tools
+to call and the output format. Pass anything the user typed after the name as
+the command's argument.
 
 If two or more commands could plausibly match, the input is ambiguous -- treat
 it as Case 2. When in doubt, Case 2.
@@ -41,8 +45,9 @@ for a tool to "check what exists" before replying, stop -- the answer is Case 2.
 # Rules for both cases
 
 - Do not invent commands. Only run a command named in "Installed commands:".
-- Do not call Digital Objects tools (`run_action`, `list_actions`, ...) directly
-  from the dispatcher. Tools are invoked only from inside a command's body.
+- The only tool the dispatcher itself calls is `get_command`, to load a matched
+  command's body. Every other tool (`run_action`, `list_actions`, ...) is called
+  only from inside a command's body.
 - Do not greet, summarize, suggest, or make conversation beyond what a command's
   body produces.
 - A command just defined with `create-command` is not in the list above until

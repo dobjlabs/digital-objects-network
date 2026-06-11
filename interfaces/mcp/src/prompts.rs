@@ -89,6 +89,21 @@ pub fn get(name: &str, arguments: Option<&Map<String, Value>>) -> Option<GetProm
     Some(GetPromptResult::new(messages).with_description(builtin.description))
 }
 
+/// The full definition of a built-in command, for the dispatcher or the server
+/// instructions to load and follow when the user types its name -- the
+/// skill-style "load the body on trigger" behavior. `start` is the entry, not a
+/// routable command, so it is excluded.
+pub fn builtin_command(name: &str) -> Option<UserCommand> {
+    BUILTINS
+        .iter()
+        .find(|builtin| builtin.name == name)
+        .map(|builtin| UserCommand {
+            name: builtin.name.to_string(),
+            description: builtin.description.to_string(),
+            body: builtin.body.to_string(),
+        })
+}
+
 /// Compose the `start` dispatcher: its rules, the live command catalog, and an
 /// optional first command. Needs the store's commands, so the server calls it.
 pub fn start_result(
@@ -190,6 +205,14 @@ mod tests {
     fn get_returns_builtin_body() {
         assert!(get("help", None).is_some());
         assert!(get("view", None).is_some());
+    }
+
+    #[test]
+    fn builtin_command_loads_body_excluding_start() {
+        assert!(builtin_command("help").is_some());
+        assert!(builtin_command("create-command").is_some());
+        assert!(builtin_command("start").is_none());
+        assert!(builtin_command("nope").is_none());
     }
 
     #[test]

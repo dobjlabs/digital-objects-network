@@ -6,6 +6,19 @@ proved by zero-knowledge proofs. There is no central database of
 objects; each object is a self-contained ZK certificate that its holder
 stores locally.
 
+## Commands
+
+This server also offers **commands** -- named, reusable flows. Built-ins: `help`
+(the menu), `create-command` (define a new one), `consult-docs` (answer from the
+reference docs), and `view` (open or close the live dashboard). The user may
+define their own; `list_commands` lists those.
+
+When the user types a command's name -- or a short phrase that clearly refers to
+exactly one command -- call `get_command(name)` to load its full body, then
+follow that body exactly: it governs which tools to call and the output format.
+Pass anything typed after the name as the command's argument. For a focused,
+strict command session, the user can run the `start` prompt.
+
 ## Core concepts
 
 **Digital Objects.** Each object is a key-value dictionary (fields like
