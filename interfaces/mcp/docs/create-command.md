@@ -43,19 +43,28 @@ Tools the command will call (discover exact shapes by calling them):
 
 ## Steps
 
-1. Output exactly `name?` and wait. The reply must match `^[a-z0-9][a-z0-9-]*$`
-   (lowercase letters, digits, hyphens; no leading hyphen). `start`, `help`,
-   `create-command`, `consult-docs`, and `view` are reserved. If invalid or
-   reserved, output `invalid name` and stop. Save as `<name>`.
+1. Output exactly `name?` and wait. Save the reply as `<name>`. It must match
+   `^[a-z0-9]([a-z0-9-]{0,63})$` -- lowercase letters and digits, optionally with
+   hyphens, up to 64 chars, no leading hyphen. Single words like `ideas` are
+   valid; hyphens are not required. Valid: `ideas`, `chop-log`, `mine-stone-x10`,
+   `notes2`. Invalid: `Ideas` (uppercase), `chop_log` (underscore), `-foo`
+   (leading hyphen), empty. If it does not match, output exactly
+   `invalid name (lowercase letters, digits, optional hyphens; max 64 chars; no leading hyphen)`
+   and stop. The names `start`, `help`, `create-command`, `consult-docs`, and
+   `view` are reserved; if the reply is one of those, output exactly
+   `'<name>' is reserved -- pick another` and stop.
 
 2. Output exactly `what should it do?` and wait. Save the reply as `<intent>` --
    this is intent, not the body.
 
 3. Derive `<description>`: one concrete imperative sentence (e.g.
    `Refine one Log into a Wood.`), not the user's prose. Design the body from
-   the primitives: which tools, in what order, the exact output lines, error
-   handling, and any prompts (each with the exit handling above). Output the
-   draft as a single fenced block in this shape:
+   the primitives. Decide: which tools and in what order; arguments vs. an
+   interactive prompt; the exact output lines; error handling; any prompts (each
+   with the exit handling above); whether to chain another saved command by
+   name; and whether any step is long or needs a library (if so, put it in a
+   sibling script rather than prose). Output the draft as a single fenced block
+   in this shape:
 
    ```
    ---
