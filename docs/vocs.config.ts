@@ -7,6 +7,10 @@ const basePath = process.env.BASE_PATH || undefined
 export default defineConfig({
   rootDir: '.',
   basePath,
+  // vocs cannot resolve an anchor on the home page (index route) to a file, so a
+  // relative link like (../#public-infrastructure) is flagged as a false-positive
+  // deadlink even though it renders correctly. Warn instead of failing the build.
+  checkDeadlinks: 'warn',
   title: 'Digital Objects Network',
   description:
     'Privately-held, fully programmable stateful objects, exchanged between mutually untrusting users and anchored to Ethereum blob data availability.',
