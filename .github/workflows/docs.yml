@@ -47,6 +47,15 @@ jobs:
         env:
           BASE_PATH: ${{ steps.pages.outputs.base_path }}
 
+      # GitHub Pages 301-redirects clean URLs (/foo -> /foo/) for directory-style
+      # output, and vocs emits clean (no-trailing-slash) links, so every cross-page
+      # nav hits that redirect. Write a flat <route>.html beside each
+      # <route>/index.html so /foo serves directly with no redirect.
+      - run: |
+          find dist/public -mindepth 2 -name index.html ! -path '*.d/*' | while read -r f; do
+            cp "$f" "${f%/index.html}.html"
+          done
+
       # Vocs v2 full-static build emits the deployable site under dist/public
       # (dist/ also holds server/preview bundles that static hosting ignores).
       - uses: actions/upload-pages-artifact@v3
