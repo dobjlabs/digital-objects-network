@@ -2,8 +2,9 @@
 //! baking command logic into the tools or the always-on server instructions. A
 //! client invokes `start` to enter the dispatcher; framework commands (help,
 //! create-command, consult-docs, dashboard) are built in here, and user-authored
-//! commands come from [`crate::commands`]. Both are surfaced as MCP prompts, so
-//! this works in any MCP client.
+//! commands come from [`crate::commands`]. A built-in and a saved command are
+//! the same shape (name/description/body), so they share one prompt builder and
+//! one body-injection path.
 
 use rmcp::model::{GetPromptResult, Prompt, PromptArgument, PromptMessage, PromptMessageRole};
 use serde_json::{Map, Value};
@@ -48,6 +49,30 @@ const BUILTINS: &[Builtin] = &[
     },
 ];
 
+fn builtin_to_command(builtin: &Builtin) -> UserCommand {
+    UserCommand {
+        name: builtin.name.to_string(),
+        description: builtin.description.to_string(),
+        body: builtin.body.to_string(),
+    }
+}
+
+/// Whether `name` is the `start` entry or a built-in command -- a name a saved
+/// command may not take. The single source of truth for reserved names.
+pub fn is_reserved(name: &str) -> bool {
+    name == START || BUILTINS.iter().any(|builtin| builtin.name == name)
+}
+
+/// The built-in command of this name, as a [`UserCommand`] (the dispatcher and
+/// `get_command` load it to follow when the user types the name). `start` is the
+/// entry, not a routable command, so it is excluded.
+pub fn builtin_command(name: &str) -> Option<UserCommand> {
+    BUILTINS
+        .iter()
+        .find(|builtin| builtin.name == name)
+        .map(builtin_to_command)
+}
+
 /// The prompts advertised to clients: the `start` entry plus every builtin.
 /// User-authored commands are appended by the server (it owns the store).
 pub fn list() -> Vec<Prompt> {
@@ -63,45 +88,12 @@ pub fn list() -> Vec<Prompt> {
                 .with_required(false),
         ]),
     )];
-    for builtin in BUILTINS {
-        prompts.push(Prompt::new(
-            builtin.name,
-            Some(builtin.description),
-            Some(vec![
-                PromptArgument::new("args")
-                    .with_description("Optional arguments for the command.")
-                    .with_required(false),
-            ]),
-        ));
-    }
+    prompts.extend(
+        BUILTINS
+            .iter()
+            .map(|builtin| command_prompt(&builtin_to_command(builtin))),
+    );
     prompts
-}
-
-/// Resolve a builtin command by name. `start` is intentionally excluded -- it is
-/// composed server-side by [`start_result`] -- as are user commands.
-pub fn get(name: &str, arguments: Option<&Map<String, Value>>) -> Option<GetPromptResult> {
-    let builtin = BUILTINS.iter().find(|builtin| builtin.name == name)?;
-    let mut messages = vec![PromptMessage::new_text(
-        PromptMessageRole::User,
-        builtin.body,
-    )];
-    append_args(&mut messages, arguments);
-    Some(GetPromptResult::new(messages).with_description(builtin.description))
-}
-
-/// The full definition of a built-in command, for the dispatcher or the server
-/// instructions to load and follow when the user types its name -- the
-/// skill-style "load the body on trigger" behavior. `start` is the entry, not a
-/// routable command, so it is excluded.
-pub fn builtin_command(name: &str) -> Option<UserCommand> {
-    BUILTINS
-        .iter()
-        .find(|builtin| builtin.name == name)
-        .map(|builtin| UserCommand {
-            name: builtin.name.to_string(),
-            description: builtin.description.to_string(),
-            body: builtin.body.to_string(),
-        })
 }
 
 /// Compose the `start` dispatcher: its rules, the live command catalog, and an
@@ -146,22 +138,9 @@ fn catalog_message(stored: &[UserCommand]) -> String {
     out
 }
 
-fn append_args(messages: &mut Vec<PromptMessage>, arguments: Option<&Map<String, Value>>) {
-    if let Some(args) = arguments
-        .and_then(|args| args.get("args"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|args| !args.is_empty())
-    {
-        messages.push(PromptMessage::new_text(
-            PromptMessageRole::User,
-            format!("Arguments: {args}"),
-        ));
-    }
-}
-
-/// Build the dynamic prompt entry for a user-authored command.
-pub fn user_command_prompt(command: &UserCommand) -> Prompt {
+/// The prompt entry for a command (built-in or saved): name, description, and an
+/// optional `args` string.
+pub fn command_prompt(command: &UserCommand) -> Prompt {
     Prompt::new(
         command.name.clone(),
         Some(command.description.clone()),
@@ -173,8 +152,9 @@ pub fn user_command_prompt(command: &UserCommand) -> Prompt {
     )
 }
 
-/// Inject a user-authored command's body, with any caller arguments appended.
-pub fn user_command_result(
+/// Inject a command's body (built-in or saved) to follow, with any caller
+/// arguments appended.
+pub fn command_result(
     command: &UserCommand,
     arguments: Option<&Map<String, Value>>,
 ) -> GetPromptResult {
@@ -182,7 +162,17 @@ pub fn user_command_result(
         PromptMessageRole::User,
         command.body.clone(),
     )];
-    append_args(&mut messages, arguments);
+    if let Some(args) = arguments
+        .and_then(|args| args.get("args"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|args| !args.is_empty())
+    {
+        messages.push(PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!("Arguments: {args}"),
+        ));
+    }
     GetPromptResult::new(messages).with_description(command.description.clone())
 }
 
@@ -202,28 +192,19 @@ mod tests {
     }
 
     #[test]
-    fn get_returns_builtin_body() {
-        assert!(get("help", None).is_some());
-        assert!(get("dashboard", None).is_some());
-    }
-
-    #[test]
     fn builtin_command_loads_body_excluding_start() {
         assert!(builtin_command("help").is_some());
         assert!(builtin_command("create-command").is_some());
+        assert!(builtin_command("dashboard").is_some());
         assert!(builtin_command("start").is_none());
         assert!(builtin_command("nope").is_none());
     }
 
     #[test]
-    fn get_start_is_not_a_plain_builtin() {
-        // `start` is composed server-side (it needs the command store).
-        assert!(get(START, None).is_none());
-    }
-
-    #[test]
-    fn get_unknown_prompt_is_none() {
-        assert!(get("nope", None).is_none());
+    fn is_reserved_covers_start_and_builtins() {
+        assert!(is_reserved("start"));
+        assert!(is_reserved("dashboard"));
+        assert!(!is_reserved("my-command"));
     }
 
     #[test]
@@ -239,6 +220,15 @@ mod tests {
         args.insert("command".to_string(), Value::String("help".to_string()));
         let result = start_result(&[], Some(&args));
         assert_eq!(result.messages.len(), 3);
+    }
+
+    #[test]
+    fn command_result_appends_args() {
+        let command = builtin_command("help").unwrap();
+        let mut args = Map::new();
+        args.insert("args".to_string(), Value::String("now".to_string()));
+        assert_eq!(command_result(&command, Some(&args)).messages.len(), 2);
+        assert_eq!(command_result(&command, None).messages.len(), 1);
     }
 
     #[test]

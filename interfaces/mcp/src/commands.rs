@@ -11,17 +11,6 @@ use anyhow::{Result, anyhow};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-/// Names a user command may not take: the `start` entry plus the built-in
-/// commands (help, create-command, consult-docs, dashboard). Keeps saved
-/// commands from shadowing the framework surface.
-const RESERVED_NAMES: [&str; 5] = [
-    "start",
-    "help",
-    "create-command",
-    "consult-docs",
-    "dashboard",
-];
-
 /// The instruction file inside each command's directory.
 const README: &str = "README.md";
 
@@ -180,7 +169,7 @@ pub fn normalize_name(raw: &str) -> Result<String> {
     if slug.is_empty() {
         return Err(anyhow!("command name must contain a letter or digit"));
     }
-    if RESERVED_NAMES.contains(&slug.as_str()) {
+    if crate::prompts::is_reserved(&slug) {
         return Err(anyhow!("'{slug}' is a reserved command name"));
     }
     Ok(slug)

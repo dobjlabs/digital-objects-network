@@ -19,6 +19,13 @@ pub const DEFAULT_PORT: u16 = 7718;
 /// MCP server, independent of the React GUI.
 const DASHBOARD_HTML: &str = include_str!("../dashboard/index.html");
 
+/// The `~/.dobj` root, derived from the driver's objects dir (its parent).
+pub(crate) fn dobj_root(objects_dir: &str) -> std::path::PathBuf {
+    let mut root = std::path::PathBuf::from(objects_dir);
+    root.pop();
+    root
+}
+
 use std::sync::Arc;
 
 use ops::DobjOps;
@@ -80,9 +87,7 @@ impl<T: DobjOps> McpServer<T> {
         // file server launched by the `dashboard` command can serve it;
         // best-effort.
         if let Ok(objects_dir) = self.ops.get_objects_dir() {
-            let mut dir = std::path::PathBuf::from(objects_dir);
-            dir.pop();
-            dir.push("dashboard");
+            let dir = dobj_root(&objects_dir).join("dashboard");
             if std::fs::create_dir_all(&dir).is_ok() {
                 let _ = std::fs::write(dir.join("index.html"), DASHBOARD_HTML);
             }

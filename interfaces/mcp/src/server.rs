@@ -53,10 +53,15 @@ impl<T: DobjOps> DobjMcpService<T> {
         if let Some(dir) = &self.command_dir {
             return Ok(crate::commands::CommandStore::new(dir.clone()));
         }
-        let mut dir = PathBuf::from(self.ops.get_objects_dir()?);
-        dir.pop();
-        dir.push("commands");
+        let dir = crate::dobj_root(&self.ops.get_objects_dir()?).join("commands");
         Ok(crate::commands::CommandStore::new(dir))
+    }
+
+    /// Resolve a command name to its definition -- a built-in or a saved one.
+    /// Shared by the `get_command` tool and the prompt dispatcher.
+    fn resolve_command(&self, name: &str) -> Option<UserCommand> {
+        crate::prompts::builtin_command(name)
+            .or_else(|| self.command_store().ok().and_then(|store| store.get(name)))
     }
 }
 
@@ -110,7 +115,7 @@ pub struct GetRunParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadDocParams {
-    /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "how-it-works", "command-examples", "txlib.podlang", "time.podlang"
+    /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "how-it-works", "command-examples", "txlib.podlang"
     pub name: String,
 }
 
@@ -308,7 +313,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"how-it-works\" (generic framing for working with Digital Objects), \"command-examples\" (worked templates for create-command bodies), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes). Pass \"list\" to see all available documents."
+        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"how-it-works\" (generic framing for working with Digital Objects), \"command-examples\" (worked templates for create-command bodies), \"txlib.podlang\" (core transaction predicates source), \"generated.podlang\" (generated podlang for all actions and classes). Pass \"list\" to see all available documents."
     )]
     fn read_doc(&self, Parameters(params): Parameters<ReadDocParams>) -> String {
         match params.name.as_str() {
@@ -338,7 +343,6 @@ impl<T: DobjOps> DobjMcpService<T> {
                     "how-it-works" => "dobj://docs/how-it-works",
                     "command-examples" => "dobj://docs/command-examples",
                     "txlib.podlang" => "dobj://source/txlib.podlang",
-                    "time.podlang" => "dobj://source/time.podlang",
                     "generated.podlang" => {
                         return self
                             .ops
@@ -416,12 +420,7 @@ impl<T: DobjOps> DobjMcpService<T> {
         &self,
         Parameters(params): Parameters<GetCommandParams>,
     ) -> Result<Json<UserCommand>, String> {
-        if let Some(builtin) = crate::prompts::builtin_command(&params.name) {
-            return Ok(Json(builtin));
-        }
-        let store = self.command_store().map_err(|e| e.to_string())?;
-        store
-            .get(&params.name)
+        self.resolve_command(&params.name)
             .map(Json)
             .ok_or_else(|| format!("no such command: {}", params.name))
     }
@@ -475,7 +474,7 @@ impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
     ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
         let mut prompts = crate::prompts::list();
         if let Ok(store) = self.command_store() {
-            prompts.extend(store.list().iter().map(crate::prompts::user_command_prompt));
+            prompts.extend(store.list().iter().map(crate::prompts::command_prompt));
         }
         std::future::ready(Ok(ListPromptsResult::with_all_items(prompts)))
     }
@@ -493,14 +492,9 @@ impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
                 .unwrap_or_default();
             return std::future::ready(Ok(crate::prompts::start_result(&stored, arguments)));
         }
-        if let Some(result) = crate::prompts::get(&request.name, arguments) {
-            return std::future::ready(Ok(result));
-        }
         let result = self
-            .command_store()
-            .ok()
-            .and_then(|store| store.get(&request.name))
-            .map(|command| crate::prompts::user_command_result(&command, arguments))
+            .resolve_command(&request.name)
+            .map(|command| crate::prompts::command_result(&command, arguments))
             .ok_or_else(|| {
                 McpError::invalid_params(format!("unknown prompt: {}", request.name), None)
             });

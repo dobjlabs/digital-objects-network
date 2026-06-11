@@ -8,16 +8,13 @@ stores locally.
 
 ## Commands
 
-This server also offers **commands** -- named, reusable flows. Built-ins: `help`
-(the menu), `create-command` (define a new one), `consult-docs` (answer from the
-reference docs), and `dashboard` (open or close the live dashboard). The user may
-define their own; `list_commands` lists those.
-
-When the user types a command's name -- or a short phrase that clearly refers to
-exactly one command -- call `get_command(name)` to load its full body, then
-follow that body exactly: it governs which tools to call and the output format.
-Pass anything typed after the name as the command's argument. For a focused,
-strict command session, the user can run the `start` prompt.
+Beyond the tools, this server offers **commands** -- named, reusable flows (some
+built in, plus any the user has defined). When the user types a command's name,
+or a short phrase that clearly refers to one, call `get_command(name)` to load
+its full body and follow it exactly: the body governs which tools to call and
+the output format, and anything typed after the name is its argument. Run the
+`help` command for the list, `list_commands` for saved ones, and the `start`
+prompt for a focused command session.
 
 ## Core concepts
 
@@ -61,8 +58,9 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 - `inspect_class(class_name)` — predicate definition + which actions produce/consume the class
 - `check_feasibility(action_id)` — does the user's objects have what this action needs?
 - `get_state_root` — current state root from the synchronizer
-- `read_doc(name)` — reference docs (`podlang-reference`, `object-lifecycle`, `txlib.podlang`,
-  `time.podlang`, `generated.podlang`, or `list` to enumerate)
+- `read_doc(name)` — reference docs (`podlang-reference`, `object-lifecycle`,
+  `how-it-works`, `command-examples`, `txlib.podlang`, `generated.podlang`, or
+  `list` to enumerate)
 
 ### Mutation
 

@@ -226,7 +226,7 @@
       .badge.pending {
         color: var(--warn);
       }
-      .badge.dead,
+      .badge.unknown,
       .badge.nullified {
         color: var(--text-3);
       }
@@ -480,7 +480,7 @@
       }
 
       async function pollUniverse() {
-        if (!syncUrl) await getSettings();
+        await getSettings();
         const gsrEl = document.getElementById("u-gsr");
         if (!syncUrl) {
           setDot("sync-dot", "bad");
@@ -592,6 +592,7 @@
             } catch {
               d = { raw: e.data };
             }
+            if (d.type && d.type !== "run-action-progress") return;
             const list = ensureList();
             const ts = fmtTime();
             const runId = d.runId ? shortHash(d.runId, 5, 4) : "—";
@@ -615,12 +616,18 @@
       }
 
       tickClock();
-      pollUniverse();
-      pollObjects();
-      startEvents();
       setInterval(tickClock, 1000);
-      setInterval(pollUniverse, 5000);
-      setInterval(pollObjects, 2000);
+      startEvents();
+
+      // Self-scheduling so a slow response never overlaps the next poll.
+      (async function loopUniverse() {
+        await pollUniverse();
+        setTimeout(loopUniverse, 5000);
+      })();
+      (async function loopObjects() {
+        await pollObjects();
+        setTimeout(loopObjects, 2000);
+      })();
     </script>
   </body>
 </html>
