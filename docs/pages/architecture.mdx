@@ -5,9 +5,6 @@ description: The components of the Digital Objects Network - driver, relayer, sy
 
 # DON Architecture
 
-What is DON: [Digital Objects Network](/network) (original write-up on
-[HackMD](https://hackmd.io/@gubsheep/rJKUDi-2bl))
-
 This document outlines the overall architecture of the network and how
 operationally you can realize the guarantees outlined in the
 [network overview](/network).
@@ -27,19 +24,15 @@ A **Digital Object** (DO) is a file with four parts:
 
 Five components together make the network work.
 
-```
-Digital Object files ◄────► Driver ◄──────────────────────────────┐
-                              │                                   │
-                              │ submit update                     │ canonical state
-                              ▼                                   │
-                           Relayer                                │
-                              │ publish blob                      │
-                              ▼                                   │
-                       Ethereum blobs ───────────────────► Synchronizer
-                              │         read recent blobs         ▲
-                              │ persist blobs                     │ serve historical blobs
-                              ▼                                   │
-                           Archiver ──────────────────────────────┘
+```mermaid
+flowchart TB
+    Files[("Digital Object files")] <--> Driver["Driver"]
+    Driver -- "submit update" --> Relayer["Relayer"]
+    Relayer -- "publish blob" --> Blobs[("Ethereum blobs")]
+    Blobs -- "read recent blobs" --> Sync["Synchronizer"]
+    Blobs -- "persist blobs" --> Archiver["Archiver"]
+    Archiver -- "serve historical blobs" --> Sync
+    Sync -- "canonical state" --> Driver
 ```
 
 ### Ethereum Blobs

@@ -10,7 +10,6 @@ export default defineConfig({
   title: 'Digital Objects Network',
   description:
     'Privately-held, fully programmable stateful objects, exchanged between mutually untrusting users and anchored to Ethereum blob data availability.',
-  iconUrl: `${basePath ?? ''}/icon.png`,
   banner: {
     dismissable: true,
     content:
@@ -23,15 +22,14 @@ export default defineConfig({
     },
   },
   topNav: [
-    { text: 'The network', link: '/network' },
+    { text: 'Network', link: '/network' },
     { text: 'Install', link: '/install' },
     { text: 'Applications', link: '/applications' },
     { text: 'GitHub', link: 'https://github.com/dobjlabs/digital-objects-network' },
   ],
   sidebar: [
-    { text: 'Network status', link: '/' },
     {
-      text: 'The network',
+      text: 'Network',
       items: [
         { text: 'Digital Objects Network', link: '/network' },
         { text: 'Architecture', link: '/architecture' },

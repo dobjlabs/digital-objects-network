@@ -16,24 +16,9 @@
   margin-top: 2rem !important;
 }
 
-/* Top nav: by default Vocs parks the logo in the left gutter and aligns the
-   search box to the centered content column, leaving a wide gap between them.
-   Pack the logo, search, and nav into normal flow: title + search on the left,
-   nav links pushed to the right. */
 .vocs_DesktopTopNav {
   justify-content: flex-start !important;
   gap: var(--vocs-space_24) !important;
-}
-.vocs_DesktopTopNav_withLogo {
-  padding-left: var(--vocs-space_16) !important;
-}
-.vocs_DesktopTopNav_logoWrapper {
-  position: static !important;
-  width: auto !important;
-  justify-content: flex-start !important;
-}
-.vocs_DesktopTopNav_logo {
-  width: auto !important;
 }
 .vocs_DesktopTopNav_section:last-child {
   margin-left: auto !important;
