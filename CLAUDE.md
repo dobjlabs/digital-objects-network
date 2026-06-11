@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-This repository is the reference implementation of the Digital Objects Network: a decentralized network for creating, executing, and exchanging Digital Objects -- fully programmable state machines owned and operated by Internet users, that can be passed between mutually untrusting users (for example over email) while keeping their integrity and consistency, without relying on any central trusted authority. Objects are privately held files on disk; their state transitions are proved with POD2/Plonky2 and anchored to Ethereum blob data availability, so the chain sees only opaque commitments.
+This repository is the reference implementation of the Digital Objects Network: a decentralized network for creating, executing, and exchanging Digital Objects -- fully programmable state machines owned and operated by Internet users, that can be passed between mutually untrusting users while keeping their integrity and consistency, without relying on any central trusted authority. Objects are privately held files on disk; their state transitions are proved with POD2/Plonky2 and anchored to Ethereum blob data availability, so the chain sees only opaque commitments.
 
 The repo ships a headless daemon (`dobjd`) that owns all driver state, several clients that drive it over HTTP/SSE/MCP (a React GUI servable in a browser or wrapped in a Tauri shell, the `dobj` CLI, an MCP server for AI agents), and the chain-side services that anchor and sync objects. The bundled `craft-basics` plugin (a small crafting game) is the demonstrated end-to-end flow.
 
