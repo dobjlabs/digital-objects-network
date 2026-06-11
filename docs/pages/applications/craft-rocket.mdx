@@ -69,16 +69,18 @@ with a catalyst.
 
 ## Install
 
-craft-rocket ships only as source — build it from a checkout of the repo,
-then install the archive (`dobj install` hot-reloads, no restart):
+Install the [driver](/install) first, then add this plugin — `dobj install`
+hot-reloads the catalog, so no restart is needed:
 
 ```bash
-git clone https://github.com/dobjlabs/digital-objects-network
-cd digital-objects-network
+~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-rocket.pexe
+```
 
+Or build it from a checkout of the repo, then install the archive:
+
+```bash
 cargo run -p pexe --release -- build examples/craft-rocket   # -> target/pexe/craft-rocket.pexe
 ~/.dobj/bin/dobj install target/pexe/craft-rocket.pexe
-~/.dobj/bin/dobj actions   # MineIron, FarmWater, CraftIngot, ... CraftRocket
 ```
 
 Source:

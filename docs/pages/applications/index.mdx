@@ -1,6 +1,6 @@
 ---
 title: Applications
-description: Applications ship as .pexe plugins - object classes plus proof-backed actions. Two examples are available today, and anyone can publish their own.
+description: Applications ship as .pexe plugins - object classes plus proof-backed actions. Two examples are available today.
 ---
 
 # Applications
@@ -19,10 +19,10 @@ zip of two files:
 Two example applications live in the repo under
 [`examples/`](https://github.com/dobjlabs/digital-objects-network/tree/main/examples):
 
-| Application | What it is | Classes | Actions | Distribution |
-| ----------- | ---------- | ------- | ------- | ------------ |
-| ⛏️ **[craft-basics](/applications/craft-basics)** | Survival-crafting starter | 6 | 9 | one `dobj install` |
-| 🚀 **[craft-rocket](/applications/craft-rocket)** | Factory tech tree with a rocket win condition | 53 | 84 | build from source |
+| Application | What it is | Classes | Actions |
+| ----------- | ---------- | ------- | ------- |
+| ⛏️ **[craft-basics](/applications/craft-basics)** | Survival-crafting starter | 6 | 9 |
+| 🚀 **[craft-rocket](/applications/craft-rocket)** | Factory tech tree with a rocket win condition | 53 | 84 |
 
 ## Installing a plugin
 
@@ -65,24 +65,3 @@ An action's proof logic is pinned by its `module_hash`, and class and action
 plugin invalidates every existing object and recorded proof of that type —
 treat published names as frozen.
 :::
-
-## Publish your own
-
-Copy an example under `examples/`, edit `plugin.rhai` and `manifest.toml`, and
-install it locally to play. When it's ready to share, add it to this page:
-
-<a
-  href="https://github.com/dobjlabs/digital-objects-network/edit/main/docs/pages/applications/index.mdx"
-  style={{
-    display: 'inline-block',
-    marginTop: '8px',
-    padding: '10px 20px',
-    borderRadius: '8px',
-    fontWeight: 500,
-    textDecoration: 'none',
-    color: 'var(--vocs-color_backgroundAccentText, #ffffff)',
-    backgroundColor: 'var(--vocs-color_backgroundAccent, #0e7490)',
-  }}
->
-  Submit your application — open a GitHub PR →
-</a>
