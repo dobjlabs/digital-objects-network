@@ -23,6 +23,9 @@
 .vocs_DesktopTopNav_withLogo {
   padding-left: var(--vocs-space_16) !important;
 }
+.vocs_DesktopTopNav:not(.vocs_DesktopTopNav_withLogo) > .vocs_DesktopTopNav_logoWrapper {
+  display: none !important;
+}
 .vocs_DesktopTopNav_logoWrapper {
   order: -1 !important;
   position: static !important;
