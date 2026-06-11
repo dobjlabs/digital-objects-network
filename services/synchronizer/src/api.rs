@@ -11,11 +11,12 @@ use pod2::{backends::plonky2::primitives::merkletree::MerkleProof, middleware::H
 use tokio::sync::watch;
 use tracing::info;
 use wire_types::synchronizer::{
-    GroundingWitnessRequest, GroundingWitnessResponse, HealthResponse, MembershipRequest,
-    MembershipResponse, NullifierContainsEntry, NullifierContainsRequest,
-    NullifierContainsResponse, ObjectContainsEntry, ObjectContainsRequest, ObjectContainsResponse,
-    ObjectProofResponse, StateHeadResponse, SyncProgressResponse,
+    GroundingWitnessRequest, GroundingWitnessResponse, MembershipRequest, MembershipResponse,
+    NullifierContainsEntry, NullifierContainsRequest, NullifierContainsResponse,
+    ObjectContainsEntry, ObjectContainsRequest, ObjectContainsResponse, ObjectProofResponse,
+    StateHeadResponse, SyncProgressResponse,
 };
+use wire_types::HealthResponse;
 
 use crate::{
     app_db::AppDb,
@@ -118,8 +119,13 @@ pub async fn run_api_server(
     Ok(())
 }
 
+/// Release tag stamped by build.rs ("dev" outside a release build).
+const RELEASE_TAG: &str = env!("DOBJ_RELEASE_TAG");
+/// Target triple stamped by build.rs.
+const TARGET_TRIPLE: &str = env!("DOBJ_TARGET_TRIPLE");
+
 async fn healthz() -> Json<HealthResponse> {
-    Json(HealthResponse { ok: true })
+    Json(HealthResponse::stamped(RELEASE_TAG, TARGET_TRIPLE))
 }
 
 async fn get_sync_progress(
