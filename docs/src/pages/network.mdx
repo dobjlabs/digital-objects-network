@@ -1,0 +1,50 @@
+---
+title: Digital Objects Network
+showAskAi: false
+description: A decentralized network for creating, executing, and exchanging fully programmable Digital Objects across trust boundaries, without a central authority.
+---
+
+# Digital Objects Network
+
+The **Digital Objects Network** is a decentralized network that facilitates the creation, execution, and exchange of **Digital Objects**. Digital Objects are fully programmable state machines that are owned and operated by Internet users, and that can be passed between mutually untrusting Internet users (for example via email) while maintaining their _integrity_ and _consistency_, without relying on any central trusted authority.
+
+The Digital Objects Network is a very general platform that many valuable applications could be built on. Concretely, Digital Objects can be used to represent many different things: a record in a distributed database; an entire database; a unit of monetary value; an access permission; an attestation; the status of or a lock on another Digital Object or group of Objects; and more. Because Digital Objects are fully programmable and maintain their integrity and consistency across trust boundaries, a large class of valuable applications that were previously prohibitively expensive to run (in trust, operational overhead, or other dimensions) because they would involve data and procedures to execute smoothly across multiple untrusting entities can now be operated relatively easily on top of the Digital Objects Network. For example, transferring residency records between multiple countries or states with heterogeneous systems of record can be implemented as a single atomic action if Digital Objects exist to represent "ports" into each individual system. Likewise with money moving between different financial networks, or records on multiple different ERPs that a business would like to ensure update atomically.
+
+As a first application, we propose to build a **Digital Objects World**: an MMO sandbox game where players create various kinds of Digital Objects, explore interactions between Objects and between each other, and ultimately construct emergent structures like communities, economies, collective objectives and collective meaning, etc. of their own design based around the capabilities of Digital Objects.
+
+## Core Digital Objects Network Concepts
+
+### Digital Objects
+
+_Digital Objects_ are arbitrarily programmable state machines that can be passed around between Internet users. Concretely, they exist as files containing data and code, in any encoding. The data encodes an arbitrary state (with arbitrary hierarchical structure and of arbitrary size), and the code specifies a set of state transition functions that are allowed for this particular object--i.e. rules that govern how this particular object came to be, and how it can and cannot be modified from its current state. The "type" of a Digital Object is uniquely identified by its state transition function.
+
+The rules governing one DO may also express its allowed relations to other types of DOs--for example, one DO might specify that its creation requires the consumption/deletion of other DOs of certain types; a DO may also specify that it may only update in a certain way if simultaneously another DO of a related type is updated in a specific way in lockstep.
+
+Every Digital Object is uniquely identified by an ID, and at any given time has a single canonical state. A mechanism exists such that, if there is ever a dispute between two users on the network on the state of a particular object, that dispute can always be unambiguously resolved from an objective network-level point of view requiring and leaking no special permissions or information, within about sixty seconds.
+
+For a Digital Object to be live and usable, it is sufficient that _a single person_ on the network possesses its contents--its current state and state transition function. Furthermore, any such person who possesses the contents of a Digital Object can modify it according to those rules; and any person who does not possess the contents of a Digital Object does not know anything about the Object (its contents, its type, or its state transition function) other than the fact that an Object of that ID exists on the network somewhere.
+
+### User Capabilities
+
+Any digital entity--a person, a business, a bot, an LLM agent--can be a user of the Digital Objects Network. Specifically, a user can access the network and interact with Digital Objects so long as they have the capability to perform a handful of specific cryptographic operations (mostly hashing and zero-knowledge proofs, which can be performed in seconds on a modern consumer laptop), and an Internet connection.
+
+Concretely, any users who satisfies those requirements can:
+
+- **Create** a new Digital Object.
+- **Execute** the state transition function of a Digital Object (or a group of Digital Objects, if their state transition functions specify that they may only mutate via a multi-Object transaction).
+- **Destroy** a Digital Object, provided that they meet the conditions for destruction according to the Object's code.
+- **Receive** a Digital Object, meaning that they may receive an encoding of the state and code for a particular Object from another user. Once the receiver possesses a copy of the Object, they themselves now have the ability to Execute, Destroy, and Send this Object--notably, they may now have the ability to revoke those permissions from the original sender.
+- **Send** a Digital Object, meaning that they may send to another user the state and code for a particular Object.
+- **Resolve** a Digital Object, meaning that they can check a Digital Object that they possess for _integrity_ (its state transition function has always been correctly executed in the past leading up to this point) and _consistency_ (that its particular state at this point in time is valid and canonical according to an objective network-level view).
+- **Present** a Digital Object, meaning that they can respond to queries from others about an Object they possess, with cryptographically verifiable correctness.
+
+Additionally, users who don't have the ability to perform cryptographic operations, or who don't have an Internet connection, can still participate partially. For example, users without an Internet connection can still Create and Present new Digital Objects in a limited fashion, and users without access to certain cryptographic capabilities may still Receive and Resolve a Digital Object from other users.
+
+### Network Requirements
+
+For the network to remain live and operational, the following two requirements must be met:
+
+- The Ethereum Data Availability network must be live. (The network makes use of Ethereum _blobspace_ as a publicly-accessible broadcast channel)
+- At all times, at least one Digital Objects Network user with access to upper-end consumer-grade hardware must be operating a piece of software infrastructure called a _synchronizer_.
+  - Operating a synchronizer is not a permissioned role and confers no special network privileges. It's roughly analogous to how a file on the Bittorrent network is available if there is at least one seeder
+  - Many people can operate synchronizers, and this will not cause any conflicts.

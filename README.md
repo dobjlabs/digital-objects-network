@@ -31,8 +31,8 @@ A single **driver daemon** (`dobjd`) on the user's machine owns
   and managing the daemon (`start`/`stop`/`status`/`logs`).
 - **Desktop / web** ([interfaces/gui/](interfaces/gui)) — React UI bundled either as a
   Tauri shell or served from Vite. Both modes call dobjd over HTTP/SSE.
-- **MCP** — `dobj-mcp-proxy` (in [interfaces/mcp/](interfaces/mcp)) bridges Claude Desktop's
-  stdio transport to dobjd's HTTP MCP server. Claude Code connects to
+- **MCP** — `dobj-mcp-proxy` (in [interfaces/mcp/](interfaces/mcp)) bridges
+  agents that only speak stdio (e.g. Claude Desktop) to dobjd's HTTP MCP server. Claude Code connects to
   `http://127.0.0.1:7718/mcp` directly via `claude mcp add`.
 - **Hosted synchronizer + relayer** — public endpoints the daemon points
   at by default. The synchronizer maintains the Merkle trees

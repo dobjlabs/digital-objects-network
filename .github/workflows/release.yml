@@ -175,10 +175,9 @@ jobs:
         run: cargo build --release --locked -p cli --target ${{ matrix.target }}
 
       - name: Build dobj-mcp-proxy
-        # Stdio↔HTTP bridge that Claude Desktop launches as a child process
-        # to reach dobjd's MCP endpoint. Ships in the dobjd tarball because
-        # it's a companion to the MCP server inside dobjd — anyone running
-        # the daemon can wire it into Claude Desktop without also needing
+        # Stdio-to-HTTP bridge for agents that only speak stdio (e.g. Claude
+        # Desktop). Ships in the dobjd tarball because it's a companion to
+        # the MCP server inside dobjd, so stdio-only agents do not also need
         # the dobj CLI.
         run: cargo build --release --locked -p dobj-mcp --bin dobj-mcp-proxy --features proxy --target ${{ matrix.target }}
 

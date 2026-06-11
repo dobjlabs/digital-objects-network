@@ -1,0 +1,25 @@
+{
+  "name": "don-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vocs build",
+    "preview": "vocs preview"
+  },
+  "dependencies": {
+    "mermaid": "^11",
+    "react": "^19",
+    "react-dom": "^19",
+    "vocs": "^2.0.12",
+    "waku": "1.0.0-beta.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6",
+    "typescript": "^5.7.2",
+    "vite": "^8"
+  }
+}
