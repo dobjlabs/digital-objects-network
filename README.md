@@ -3,15 +3,13 @@
 The Digital Objects Network is a decentralized network that facilitates the
 creation, execution, and exchange of Digital Objects. Digital Objects are fully
 programmable state machines that are owned and operated by Internet users, and
-that can be passed between mutually untrusting Internet users (for example via
-email) while maintaining their integrity and consistency, without relying on any
-central trusted authority.
+that can be passed between mutually untrusting Internet users while maintaining their integrity and consistency, without relying on any central trusted authority.
 
 ## Getting started
 
 - **Install (end user):** [INSTALL.md](INSTALL.md), or point an MCP-aware agent at [SKILL.md](SKILL.md).
 - **Develop from source:** [CONTRIBUTING.md](CONTRIBUTING.md).
-- **Self-host the chain-side services:** [deploy/](deploy/README.md).
+- **Self-host the services:** [deploy/](deploy/README.md).
 
 ## Repository map
 
