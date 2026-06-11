@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod logging;
 pub mod mock;
 pub mod ops;

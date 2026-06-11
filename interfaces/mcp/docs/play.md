@@ -15,6 +15,7 @@ the generic tools, then play from what they return:
 - `check_feasibility(action)` -- whether a command can run now, plus which
   inputs are missing.
 - `inspect_action` / `inspect_class` / `inspect_object` -- detail on demand.
+- `list_commands` -- the player's own saved commands (macros they defined).
 
 Bootstrap by calling `list_actions`, `list_classes`, and `list_objects` once
 before your first reply, and refresh after any action that changes inventory.
@@ -27,15 +28,22 @@ The exact verbs depend on the plugin; common shapes:
 - `look`, `l` -> a short scene: a few notable items you hold and a few things
   you could make right now (from check_feasibility).
 - `inventory`, `inv`, `i` -> live objects grouped by class.
-- `commands`, `help`, `?` -> the action list as a command menu.
+- `commands`, `help`, `?` -> the menu: the plugin's actions plus the player's
+  saved commands.
 - `<verb> <thing>` like `craft wood`, `mine stone`, `find log` -> match to one
   action and run it.
+- a saved command's name -> follow that command's steps (read its body from
+  `list_commands`); it may chain several actions.
+- `create a command`, `define a command` -> interview for a name, description,
+  and steps, then save with the `define_command` tool. `delete <name>` removes
+  one.
 - `examine <thing>`, `x <thing>` -> inspect the class or a held object.
 
-Matching: choose the single action whose name or produced/consumed class best
-fits the words. If two or more fit equally, do not guess -- show a short
-numbered menu and let the player pick. If nothing fits, reply with exactly one
-line: `huh? type 'commands' to see what you can do.` and make no tool calls.
+Matching: choose the single action or saved command whose name or
+produced/consumed class best fits the words. If two or more fit equally, do not
+guess -- show a short numbered menu and let the player pick. If nothing fits,
+reply with exactly one line: `huh? type 'commands' to see what you can do.` and
+make no tool calls.
 
 ## Running a command
 

@@ -7,19 +7,25 @@
 use rmcp::model::{GetPromptResult, Prompt, PromptArgument, PromptMessage, PromptMessageRole};
 use serde_json::{Map, Value};
 
+use crate::commands::UserCommand;
+
 const PLAY: &str = "play";
 const HELP: &str = "help";
+const CREATE: &str = "create-command";
 
 /// The persona injected when a client invokes the `play` prompt. Generic over
 /// whatever plugin is loaded -- it tells the model to discover commands via the
 /// generic tools rather than naming any specific action or class.
 const PLAY_PERSONA: &str = include_str!("../docs/play.md");
 
-const HELP_TEXT: &str = "Show the command menu for the loaded plugin, in game style. \
-Call `list_actions` (and `list_classes` for context), then print each action as a command \
-line: a short verb form of its name plus what it consumes and produces. Put actions that need \
-no inputs first. Plain text, aligned, no markdown. Finish with one line: \
-type a command, or 'exit' to leave.";
+const HELP_TEXT: &str = "Show the command menu, in game style. Call `list_actions` (and \
+`list_classes` for context) for the plugin's built-in commands, and `list_commands` for the \
+player's saved commands. Print each as a command line: a short verb form of the name plus what \
+it consumes and produces. Put actions that need no inputs first, then saved commands. Plain \
+text, aligned, no markdown. Finish with one line: type a command, or 'exit' to leave.";
+
+/// Guided authoring flow injected by the `create-command` prompt.
+const CREATE_FLOW: &str = include_str!("../docs/create-command.md");
 
 pub fn list() -> Vec<Prompt> {
     vec![
@@ -41,8 +47,14 @@ pub fn list() -> Vec<Prompt> {
         Prompt::new(
             HELP,
             Some(
-                "Show the command menu for the loaded plugin (its available actions), in game style.",
+                "Show the command menu: the loaded plugin's actions plus your saved commands, in \
+                 game style.",
             ),
+            None,
+        ),
+        Prompt::new(
+            CREATE,
+            Some("Define a new reusable command (a macro of steps) and save it."),
             None,
         ),
     ]
@@ -75,8 +87,51 @@ pub fn get(name: &str, arguments: Option<&Map<String, Value>>) -> Option<GetProm
             )])
             .with_description("Command menu"),
         ),
+        CREATE => Some(
+            GetPromptResult::new(vec![PromptMessage::new_text(
+                PromptMessageRole::User,
+                CREATE_FLOW,
+            )])
+            .with_description("Define a command"),
+        ),
         _ => None,
     }
+}
+
+/// Build the dynamic prompt entry for a user-authored command.
+pub fn user_command_prompt(command: &UserCommand) -> Prompt {
+    Prompt::new(
+        command.name.clone(),
+        Some(command.description.clone()),
+        Some(vec![
+            PromptArgument::new("args")
+                .with_description("Optional arguments passed to the command.")
+                .with_required(false),
+        ]),
+    )
+}
+
+/// Inject a user-authored command's body, with any caller arguments appended.
+pub fn user_command_result(
+    command: &UserCommand,
+    arguments: Option<&Map<String, Value>>,
+) -> GetPromptResult {
+    let mut messages = vec![PromptMessage::new_text(
+        PromptMessageRole::User,
+        command.body.clone(),
+    )];
+    if let Some(args) = arguments
+        .and_then(|args| args.get("args"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|args| !args.is_empty())
+    {
+        messages.push(PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!("Arguments: {args}"),
+        ));
+    }
+    GetPromptResult::new(messages).with_description(command.description.clone())
 }
 
 #[cfg(test)]
@@ -84,10 +139,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn list_exposes_play_and_help() {
+    fn list_exposes_builtin_prompts() {
         let names: Vec<String> = list().into_iter().map(|prompt| prompt.name).collect();
         assert!(names.iter().any(|name| name == PLAY));
         assert!(names.iter().any(|name| name == HELP));
+        assert!(names.iter().any(|name| name == CREATE));
     }
 
     #[test]

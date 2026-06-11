@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use rmcp::ErrorData as McpError;
@@ -12,6 +13,7 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::commands::{CommandList, UserCommand};
 use crate::ops::DobjOps;
 use crate::types::*;
 
@@ -24,6 +26,9 @@ pub struct DobjMcpService<T: DobjOps> {
     /// expansion, so silence the warning.
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
+    /// Overrides the user-command store directory; `None` derives a `commands`
+    /// sibling of the driver's objects dir (under `~/.dobj`). Set in tests.
+    command_dir: Option<PathBuf>,
 }
 
 impl<T: DobjOps> DobjMcpService<T> {
@@ -31,7 +36,27 @@ impl<T: DobjOps> DobjMcpService<T> {
         Self {
             ops,
             tool_router: Self::tool_router(),
+            command_dir: None,
         }
+    }
+
+    /// Point the user-command store at an explicit directory (tests).
+    pub fn with_command_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.command_dir = Some(dir.into());
+        self
+    }
+
+    /// The user-command store. By default it lives in a `commands` directory
+    /// beside the driver's objects dir, so definitions land under
+    /// `~/.dobj/commands/` without the driver needing to know about them.
+    fn command_store(&self) -> anyhow::Result<crate::commands::CommandStore> {
+        if let Some(dir) = &self.command_dir {
+            return Ok(crate::commands::CommandStore::new(dir.clone()));
+        }
+        let mut dir = PathBuf::from(self.ops.get_objects_dir()?);
+        dir.pop();
+        dir.push("commands");
+        Ok(crate::commands::CommandStore::new(dir))
     }
 }
 
@@ -86,6 +111,26 @@ pub struct GetRunParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadDocParams {
     /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "how-to-play", "txlib.podlang", "time.podlang"
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DefineCommandParams {
+    /// Command name; slugified to lowercase-dashed (e.g. "Build Rocket" ->
+    /// "build-rocket"). The names "play", "help", and "create-command" are
+    /// reserved.
+    pub name: String,
+    /// One-line description shown in the command menu.
+    pub description: String,
+    /// The steps to run when the command is invoked: plain instructions over
+    /// the loaded plugin's actions (and other saved commands) that the model
+    /// follows in order.
+    pub body: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteCommandParams {
+    /// Name of the command to remove.
     pub name: String,
 }
 
@@ -320,6 +365,42 @@ impl<T: DobjOps> DobjMcpService<T> {
             }
         }
     }
+
+    #[tool(
+        description = "Define a reusable command: a named macro of steps over the loaded plugin's actions. Persists it so it appears in the command menu and as its own prompt; running its name follows the steps. Slugifies the name and rejects the reserved names play/help/create-command. Overwrites an existing command with the same slug."
+    )]
+    fn define_command(
+        &self,
+        Parameters(params): Parameters<DefineCommandParams>,
+    ) -> Result<Json<UserCommand>, String> {
+        let store = self.command_store().map_err(|e| e.to_string())?;
+        store
+            .save(&params.name, &params.description, &params.body)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "List the player's saved commands (defined via define_command), with their descriptions and bodies."
+    )]
+    fn list_commands(&self) -> Result<Json<CommandList>, String> {
+        let store = self.command_store().map_err(|e| e.to_string())?;
+        Ok(Json(CommandList {
+            commands: store.list(),
+        }))
+    }
+
+    #[tool(description = "Delete a saved command by name.")]
+    fn delete_command(&self, Parameters(params): Parameters<DeleteCommandParams>) -> String {
+        match self.command_store() {
+            Ok(store) => match store.delete(&params.name) {
+                Ok(true) => format!("deleted: {}", params.name),
+                Ok(false) => format!("no such command: {}", params.name),
+                Err(err) => err.to_string(),
+            },
+            Err(err) => err.to_string(),
+        }
+    }
 }
 
 // -- Instructions --
@@ -368,9 +449,11 @@ impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
-        std::future::ready(Ok(
-            ListPromptsResult::with_all_items(crate::prompts::list()),
-        ))
+        let mut prompts = crate::prompts::list();
+        if let Ok(store) = self.command_store() {
+            prompts.extend(store.list().iter().map(crate::prompts::user_command_prompt));
+        }
+        std::future::ready(Ok(ListPromptsResult::with_all_items(prompts)))
     }
 
     fn get_prompt(
@@ -378,11 +461,19 @@ impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
-        std::future::ready(
-            crate::prompts::get(&request.name, request.arguments.as_ref()).ok_or_else(|| {
+        let arguments = request.arguments.as_ref();
+        if let Some(result) = crate::prompts::get(&request.name, arguments) {
+            return std::future::ready(Ok(result));
+        }
+        let result = self
+            .command_store()
+            .ok()
+            .and_then(|store| store.get(&request.name))
+            .map(|command| crate::prompts::user_command_result(&command, arguments))
+            .ok_or_else(|| {
                 McpError::invalid_params(format!("unknown prompt: {}", request.name), None)
-            }),
-        )
+            });
+        std::future::ready(result)
     }
 }
 
@@ -427,7 +518,10 @@ mod tests {
         assert!(tools.contains(&"write_settings".to_string()));
         assert!(tools.contains(&"get_objects_dir".to_string()));
         assert!(tools.contains(&"import_object_file".to_string()));
-        assert_eq!(tools.len(), 15);
+        assert!(tools.contains(&"define_command".to_string()));
+        assert!(tools.contains(&"list_commands".to_string()));
+        assert!(tools.contains(&"delete_command".to_string()));
+        assert_eq!(tools.len(), 18);
     }
 
     #[test]
@@ -448,6 +542,57 @@ mod tests {
         let service = make_service();
         let info = service.get_info();
         assert!(info.capabilities.prompts.is_some());
+    }
+
+    #[test]
+    fn test_define_and_list_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = make_service().with_command_dir(dir.path());
+        let Json(saved) = service
+            .define_command(Parameters(DefineCommandParams {
+                name: "Stock Up".to_string(),
+                description: "gather raw materials".to_string(),
+                body: "run the mining actions a few times".to_string(),
+            }))
+            .unwrap();
+        assert_eq!(saved.name, "stock-up");
+        let Json(list) = service.list_commands().unwrap();
+        assert_eq!(list.commands.len(), 1);
+        assert_eq!(list.commands[0].name, "stock-up");
+    }
+
+    #[test]
+    fn test_delete_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = make_service().with_command_dir(dir.path());
+        service
+            .define_command(Parameters(DefineCommandParams {
+                name: "temp".to_string(),
+                description: "t".to_string(),
+                body: "do a thing".to_string(),
+            }))
+            .unwrap();
+        assert!(
+            service
+                .delete_command(Parameters(DeleteCommandParams {
+                    name: "temp".to_string(),
+                }))
+                .contains("deleted")
+        );
+        let Json(list) = service.list_commands().unwrap();
+        assert!(list.commands.is_empty());
+    }
+
+    #[test]
+    fn test_define_command_rejects_reserved_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = make_service().with_command_dir(dir.path());
+        let result = service.define_command(Parameters(DefineCommandParams {
+            name: "play".to_string(),
+            description: "x".to_string(),
+            body: "y".to_string(),
+        }));
+        assert!(result.is_err());
     }
 
     #[test]
