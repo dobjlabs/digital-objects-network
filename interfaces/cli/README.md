@@ -62,7 +62,7 @@ The daemon-lifecycle commands also resolve the `dobjd` binary in this
 order:
 
 1. `$DOBJD_BIN` (explicit override)
-2. `~/.dobj/bin/dobjd` (where SKILL.md installs it)
+2. `~/.dobj/bin/dobjd` (where the installer puts it)
 3. `dobjd` next to the running `dobj` (works for `cargo install`)
 4. Bare `dobjd` in `$PATH`
 

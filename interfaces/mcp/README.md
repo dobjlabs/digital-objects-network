@@ -148,7 +148,7 @@ Make sure dobjd is running, then point the client at
 claude mcp add --transport http dobj http://127.0.0.1:7718/mcp
 ```
 
-This is what [SKILL.md](../../SKILL.md) automates as part of end-user install.
+This is covered by the agent path in [INSTALL.md](../../INSTALL.md).
 
 ### Stdio-only agents (e.g. Claude Desktop)
 
