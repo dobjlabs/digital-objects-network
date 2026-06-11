@@ -51,7 +51,7 @@ Tools the command will call (discover exact shapes by calling them):
    (leading hyphen), empty. If it does not match, output exactly
    `invalid name (lowercase letters, digits, optional hyphens; max 64 chars; no leading hyphen)`
    and stop. The names `start`, `help`, `create-command`, `consult-docs`, and
-   `view` are reserved; if the reply is one of those, output exactly
+   `dashboard` are reserved; if the reply is one of those, output exactly
    `'<name>' is reserved -- pick another` and stop.
 
 2. Output exactly `what should it do?` and wait. Save the reply as `<intent>` --

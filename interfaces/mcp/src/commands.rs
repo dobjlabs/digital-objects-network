@@ -12,9 +12,15 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 /// Names a user command may not take: the `start` entry plus the built-in
-/// commands (help, create-command, consult-docs, view). Keeps saved commands
-/// from shadowing the framework surface.
-const RESERVED_NAMES: [&str; 5] = ["start", "help", "create-command", "consult-docs", "view"];
+/// commands (help, create-command, consult-docs, dashboard). Keeps saved
+/// commands from shadowing the framework surface.
+const RESERVED_NAMES: [&str; 5] = [
+    "start",
+    "help",
+    "create-command",
+    "consult-docs",
+    "dashboard",
+];
 
 /// The instruction file inside each command's directory.
 const README: &str = "README.md";
@@ -257,7 +263,7 @@ mod tests {
         assert!(store.save("help", "x", "step").is_err());
         assert!(store.save("create-command", "x", "step").is_err());
         assert!(store.save("consult-docs", "x", "step").is_err());
-        assert!(store.save("view", "x", "step").is_err());
+        assert!(store.save("dashboard", "x", "step").is_err());
         assert!(store.save("!!!", "x", "step").is_err());
         // path separators never survive normalization
         assert_eq!(normalize_name("../etc/passwd").unwrap(), "etc-passwd");

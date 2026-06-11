@@ -10,7 +10,7 @@ stores locally.
 
 This server also offers **commands** -- named, reusable flows. Built-ins: `help`
 (the menu), `create-command` (define a new one), `consult-docs` (answer from the
-reference docs), and `view` (open or close the live dashboard). The user may
+reference docs), and `dashboard` (open or close the live dashboard). The user may
 define their own; `list_commands` lists those.
 
 When the user types a command's name -- or a short phrase that clearly refers to

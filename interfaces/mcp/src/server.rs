@@ -118,7 +118,7 @@ pub struct ReadDocParams {
 pub struct DefineCommandParams {
     /// Command name; slugified to lowercase-dashed (e.g. "Build Rocket" ->
     /// "build-rocket"). The names "start", "help", "create-command",
-    /// "consult-docs", and "view" are reserved.
+    /// "consult-docs", and "dashboard" are reserved.
     pub name: String,
     /// One-line description shown in the command menu.
     pub description: String,
@@ -410,7 +410,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Load a command's full body so you can follow it: a built-in (help, create-command, consult-docs, view) or a saved command. Call this when the user types a command's name, then follow the returned body. Returns name, description, and body."
+        description = "Load a command's full body so you can follow it: a built-in (help, create-command, consult-docs, dashboard) or a saved command. Call this when the user types a command's name, then follow the returned body. Returns name, description, and body."
     )]
     fn get_command(
         &self,

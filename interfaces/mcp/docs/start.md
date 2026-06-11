@@ -15,8 +15,8 @@ exactly one installed command. Built-in phrase mappings:
 - `help`, `commands`, `menu`, `what can I do` -> help
 - `create a command`, `define a command`, `new command`, `make a command` -> create-command
 - `consult docs`, `ask docs`, `look up <X>`, `what does <X> mean` -> consult-docs (pass the question as the argument)
-- `view`, `dashboard`, `open dashboard`, `show dashboard` -> view
-- `view stop`, `close dashboard`, `hide dashboard` -> view (pass `stop`)
+- `dashboard`, `open dashboard`, `show dashboard` -> dashboard
+- `dashboard stop`, `close dashboard`, `hide dashboard` -> dashboard (pass `stop`)
 
 A saved command matches when the user types its name, or a phrase its
 description clearly refers to.

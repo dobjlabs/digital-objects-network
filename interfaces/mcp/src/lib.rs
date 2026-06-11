@@ -14,8 +14,8 @@ pub const DEFAULT_PORT: u16 = 7718;
 
 /// The bundled live dashboard. A single self-contained page that polls the
 /// daemon's REST API for objects, the synchronizer head, and an action-log SSE.
-/// On startup it is written to `~/.dobj/view/index.html` so a static file
-/// server (launched by the `view` command) can serve it -- it ships with the
+/// On startup it is written to `~/.dobj/dashboard/index.html` so a static file
+/// server (launched by the `dashboard` command) can serve it -- it ships with the
 /// MCP server, independent of the React GUI.
 const DASHBOARD_HTML: &str = include_str!("../dashboard/index.html");
 
@@ -76,12 +76,13 @@ impl<T: DobjOps> McpServer<T> {
     /// Serve the MCP server on the given TCP listener.
     /// Blocks until the cancellation token is cancelled or Ctrl+C.
     pub async fn serve(self, listener: tokio::net::TcpListener) -> anyhow::Result<()> {
-        // Write the bundled dashboard to `~/.dobj/view/` so the static file
-        // server launched by the `view` command can serve it; best-effort.
+        // Write the bundled dashboard to `~/.dobj/dashboard/` so the static
+        // file server launched by the `dashboard` command can serve it;
+        // best-effort.
         if let Ok(objects_dir) = self.ops.get_objects_dir() {
             let mut dir = std::path::PathBuf::from(objects_dir);
             dir.pop();
-            dir.push("view");
+            dir.push("dashboard");
             if std::fs::create_dir_all(&dir).is_ok() {
                 let _ = std::fs::write(dir.join("index.html"), DASHBOARD_HTML);
             }

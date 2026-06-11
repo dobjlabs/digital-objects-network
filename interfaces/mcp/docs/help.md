@@ -11,7 +11,7 @@
 
    create-command -- define a new command
    consult-docs -- answer a question from the reference docs
-   view -- open or close the live dashboard (pass `stop` to close)
+   dashboard -- open or close the live dashboard (pass `stop` to close)
    help -- show this menu
 
 2. Call `list_commands`. Print each saved command on its own line as

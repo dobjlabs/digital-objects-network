@@ -1,7 +1,7 @@
 //! Opt-in MCP prompts that layer a command UX over the generic tools, without
 //! baking command logic into the tools or the always-on server instructions. A
 //! client invokes `start` to enter the dispatcher; framework commands (help,
-//! create-command, consult-docs, view) are built in here, and user-authored
+//! create-command, consult-docs, dashboard) are built in here, and user-authored
 //! commands come from [`crate::commands`]. Both are surfaced as MCP prompts, so
 //! this works in any MCP client.
 
@@ -42,9 +42,9 @@ const BUILTINS: &[Builtin] = &[
         body: include_str!("../docs/consult-docs.md"),
     },
     Builtin {
-        name: "view",
+        name: "dashboard",
         description: "Open or close the live dashboard (a pane in Claude Code, otherwise opens the file). Pass `stop` to close.",
-        body: include_str!("../docs/view.md"),
+        body: include_str!("../docs/dashboard.md"),
     },
 ];
 
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn list_exposes_start_and_builtins() {
         let names: Vec<String> = list().into_iter().map(|prompt| prompt.name).collect();
-        for expected in [START, "help", "create-command", "consult-docs", "view"] {
+        for expected in [START, "help", "create-command", "consult-docs", "dashboard"] {
             assert!(
                 names.iter().any(|name| name == expected),
                 "missing {expected}"
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn get_returns_builtin_body() {
         assert!(get("help", None).is_some());
-        assert!(get("view", None).is_some());
+        assert!(get("dashboard", None).is_some());
     }
 
     #[test]
