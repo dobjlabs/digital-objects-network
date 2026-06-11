@@ -98,7 +98,7 @@ Tools the command will call (discover exact shapes by calling them):
 6. Output exactly two lines and stop:
 
    defined: <name>
-   restart the session (re-run start) to run it by name.
+   run it any time by typing its name.
 
 7. On any tool error during step 5, output the error message verbatim and stop.
 

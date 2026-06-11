@@ -15,6 +15,10 @@ use crate::commands::UserCommand;
 /// store) via [`start_result`], so it is not a plain builtin.
 pub const START: &str = "start";
 
+/// The built-in whose body is generated, not static: its menu is rendered live
+/// from [`BUILTINS`] + the saved commands via [`help_command`].
+pub const HELP: &str = "help";
+
 /// Dispatcher rules injected when a session starts.
 const START_PERSONA: &str = include_str!("../docs/start.md");
 
@@ -27,11 +31,6 @@ struct Builtin {
 }
 
 const BUILTINS: &[Builtin] = &[
-    Builtin {
-        name: "help",
-        description: "Show the command menu: built-ins plus saved commands.",
-        body: include_str!("../docs/help.md"),
-    },
     Builtin {
         name: "create-command",
         description: "Define a new reusable command (a macro of steps) and save it.",
@@ -46,6 +45,13 @@ const BUILTINS: &[Builtin] = &[
         name: "dashboard",
         description: "Open or close the live dashboard (a pane in Claude Code, otherwise opens the file). Pass `stop` to close.",
         body: include_str!("../docs/dashboard.md"),
+    },
+    // `help`'s body here is just the output framing; the menu is appended live
+    // by `help_command`, so the built-in descriptions are not duplicated.
+    Builtin {
+        name: HELP,
+        description: "Show the command menu: built-ins plus saved commands.",
+        body: include_str!("../docs/help.md"),
     },
 ];
 
@@ -125,17 +131,53 @@ pub fn start_result(
     GetPromptResult::new(messages).with_description("Command session")
 }
 
-/// The "Installed commands:" block the dispatcher routes against: builtins
-/// first, then saved commands.
+/// Every routable command as `(name, description)`: builtins first, then saved.
+/// The single source for both the `start` catalog and the `help` menu, so a
+/// built-in's description is written once (in [`BUILTINS`]).
+fn command_menu(stored: &[UserCommand]) -> Vec<(String, String)> {
+    BUILTINS
+        .iter()
+        .map(|builtin| (builtin.name.to_string(), builtin.description.to_string()))
+        .chain(
+            stored
+                .iter()
+                .map(|command| (command.name.clone(), command.description.clone())),
+        )
+        .collect()
+}
+
+/// The "Installed commands:" menu the dispatcher matches against at session
+/// start: builtins first, then saved commands.
 fn catalog_message(stored: &[UserCommand]) -> String {
     let mut out = String::from("Installed commands:\n");
-    for builtin in BUILTINS {
-        out.push_str(&format!("- {} -- {}\n", builtin.name, builtin.description));
-    }
-    for command in stored {
-        out.push_str(&format!("- {} -- {}\n", command.name, command.description));
+    for (name, description) in command_menu(stored) {
+        out.push_str(&format!("- {name} -- {description}\n"));
     }
     out
+}
+
+/// The `help` command, with its menu rendered live from [`BUILTINS`] + the
+/// saved commands. The built-in body supplies only the output framing; the
+/// descriptions live in [`BUILTINS`] alone, so there is nothing for the doc to
+/// keep in sync. The server resolves `help` through this instead of the static
+/// builtin so the menu reflects commands saved earlier this session.
+pub fn help_command(stored: &[UserCommand]) -> UserCommand {
+    let builtin = BUILTINS.iter().find(|builtin| builtin.name == HELP);
+    let framing = builtin.map(|builtin| builtin.body).unwrap_or_default();
+    let description = builtin
+        .map(|builtin| builtin.description)
+        .unwrap_or_default();
+    let mut body = framing.trim_end().to_string();
+    body.push_str("\n\n");
+    for (name, desc) in command_menu(stored) {
+        body.push_str(&format!("{name} -- {desc}\n"));
+    }
+    body.push_str("\ntype a command, or 'create-command' to add one");
+    UserCommand {
+        name: HELP.to_string(),
+        description: description.to_string(),
+        body,
+    }
 }
 
 /// The prompt entry for a command (built-in or saved): name, description, and an
@@ -242,5 +284,24 @@ mod tests {
         assert!(catalog.contains("help"));
         assert!(catalog.contains("create-command"));
         assert!(catalog.contains("stock-up"));
+    }
+
+    #[test]
+    fn help_command_renders_live_menu_from_builtins() {
+        let stored = vec![UserCommand {
+            name: "stock-up".to_string(),
+            description: "gather inputs".to_string(),
+            body: "step".to_string(),
+        }];
+        let help = help_command(&stored);
+        assert_eq!(help.name, HELP);
+        // Built-in descriptions are sourced from BUILTINS, not re-typed in the
+        // doc, so the rendered line matches the catalog verbatim.
+        assert!(
+            help.body
+                .contains("create-command -- Define a new reusable command")
+        );
+        // Saved commands appear too, so the menu matches what routing resolves.
+        assert!(help.body.contains("stock-up -- gather inputs"));
     }
 }

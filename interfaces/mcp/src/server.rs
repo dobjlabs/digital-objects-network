@@ -58,8 +58,17 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     /// Resolve a command name to its definition -- a built-in or a saved one.
-    /// Shared by the `get_command` tool and the prompt dispatcher.
+    /// Shared by the `get_command` tool and the prompt dispatcher. `help` is
+    /// special: its menu is rendered live from the current saved commands, so a
+    /// command saved earlier this session shows up without a restart.
     fn resolve_command(&self, name: &str) -> Option<UserCommand> {
+        if name == crate::prompts::HELP {
+            let stored = self
+                .command_store()
+                .map(|store| store.list())
+                .unwrap_or_default();
+            return Some(crate::prompts::help_command(&stored));
+        }
         crate::prompts::builtin_command(name)
             .or_else(|| self.command_store().ok().and_then(|store| store.get(name)))
     }

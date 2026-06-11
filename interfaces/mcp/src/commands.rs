@@ -78,7 +78,7 @@ impl CommandStore {
         }
         let command = UserCommand {
             name,
-            description: description.trim().to_string(),
+            description: single_line(description),
             body: body.to_string(),
         };
         let dir = self.dir.join(&command.name);
@@ -126,6 +126,14 @@ fn render_readme(command: &UserCommand) -> String {
         "---\nname: {}\ndescription: {}\n---\n\n{}\n",
         command.name, command.description, command.body
     )
+}
+
+/// Collapse `text` to one line. The frontmatter keeps the description on a
+/// single `description:` line, so an embedded newline -- especially a `\n---\n`
+/// -- would otherwise close the frontmatter early and swallow part of the body
+/// on the next read. Runs of whitespace become a single space.
+fn single_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Split a leading `---\n...\n---\n` YAML frontmatter block from the body.
@@ -262,5 +270,19 @@ mod tests {
     fn empty_body_rejected() {
         let (_dir, store) = store();
         assert!(store.save("ok", "x", "   ").is_err());
+    }
+
+    #[test]
+    fn description_collapsed_to_one_line_keeps_body_intact() {
+        let (_dir, store) = store();
+        // A newline -- even a frontmatter delimiter -- in the description must
+        // not terminate the frontmatter early or bleed into the body.
+        let saved = store
+            .save("danger", "line one\n---\nline two", "the real body")
+            .unwrap();
+        assert_eq!(saved.description, "line one --- line two");
+        let reloaded = store.get("danger").unwrap();
+        assert_eq!(reloaded.description, "line one --- line two");
+        assert_eq!(reloaded.body, "the real body");
     }
 }
