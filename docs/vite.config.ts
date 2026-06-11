@@ -1,6 +1,6 @@
-import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
-import { vocs } from 'vocs/vite'
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+import { vocs } from "vocs/vite";
 
 // Used only by `pnpm dev` (which runs Vite directly). `vocs build`/`vocs preview`
 // run Vite with `configFile: false` and ignore this file, so the production build
@@ -13,11 +13,11 @@ export default defineConfig({
     // render (the production build is unaffected). They are transitive (under
     // mermaid), so use Vite's "owner > dep" form -- a bare name fails to resolve.
     include: [
-      'mermaid > dayjs',
-      'mermaid > @braintree/sanitize-url',
-      'mermaid > dompurify',
-      'mermaid > khroma',
-      'mermaid > cytoscape',
+      "mermaid > dayjs",
+      "mermaid > @braintree/sanitize-url",
+      "mermaid > dompurify",
+      "mermaid > khroma",
+      "mermaid > cytoscape",
     ],
   },
-})
+});
