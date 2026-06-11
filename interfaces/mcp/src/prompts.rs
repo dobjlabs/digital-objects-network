@@ -54,8 +54,8 @@ pub fn list() -> Vec<Prompt> {
     let mut prompts = vec![Prompt::new(
         PLAY,
         Some(
-            "Enter bitcraft: a terse command game over the loaded plugin's Digital Objects. \
-             Opt-in; type 'exit' to leave.",
+            "Enter interactive play: a terse command game over the loaded plugin's Digital \
+             Objects. Opt-in; type 'exit' to leave.",
         ),
         Some(vec![
             PromptArgument::new("command")
@@ -110,7 +110,7 @@ pub fn play_result(
             format!("First command: {command}"),
         ));
     }
-    GetPromptResult::new(messages).with_description("Interactive play (bitcraft)")
+    GetPromptResult::new(messages).with_description("Interactive play")
 }
 
 /// The "Installed commands:" block the dispatcher routes against: builtins
