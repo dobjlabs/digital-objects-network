@@ -15,7 +15,7 @@ e.g. **craft-basics**, a small crafting demo built on the network.
 Installing via an agent? Paste this to Claude Code, Cursor, or any
 MCP-aware agent instead of following this page by hand:
 
-> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/SKILL.md and set up the Digital Objects driver.
+> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/INSTALL.md and set up the Digital Objects driver.
 
 ## Install
 
