@@ -69,12 +69,10 @@ Two rules that keep it fast and correct:
   `list_objects` between steps (it is slower and races with the chain you are
   building).
 
-  ***
-
+  ---
   name: make-woodpick
   description: Make a WoodPick -- reuse inventory, find/craft missing inputs end to end.
-
-  ***
+  ---
 
   # make-woodpick
 

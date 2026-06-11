@@ -471,7 +471,8 @@
           const r = await fetch(DOBJD + "/settings");
           if (!r.ok) throw new Error("status " + r.status);
           const s = await r.json();
-          syncUrl = s.synchronizerApiUrl ?? s.synchronizer_api_url;
+          const url = s.synchronizerApiUrl ?? s.synchronizer_api_url;
+          syncUrl = url ? url.replace(/\/+$/, "") : url;
           setText("u-url", syncUrl || "(unset)");
         } catch (e) {
           syncUrl = null;
