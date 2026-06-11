@@ -169,7 +169,7 @@
         font-family: var(--sans);
       }
 
-      /* List rows (inventory + events) */
+      /* List rows (objects + events) */
 
       .list {
         list-style: none;
@@ -185,7 +185,7 @@
         border-bottom: 0;
       }
 
-      /* Inventory row */
+      /* Objects row */
 
       .inv-row {
         display: grid;
@@ -354,7 +354,7 @@
             <dd id="u-gsr">—</dd>
             <dt>block</dt>
             <dd id="u-block" class="sans">—</dd>
-            <dt>txs</dt>
+            <dt>created</dt>
             <dd id="u-tx" class="sans">—</dd>
             <dt>nullifiers</dt>
             <dd id="u-null" class="sans">—</dd>
@@ -370,11 +370,11 @@
 
       <section>
         <div class="section-head">
-          <span class="dot" id="inv-dot"></span>
-          <h2>inventory</h2>
-          <span class="meta" id="inv-meta">—</span>
+          <span class="dot" id="obj-dot"></span>
+          <h2>objects</h2>
+          <span class="meta" id="obj-meta">—</span>
         </div>
-        <div class="card" id="inv-card">
+        <div class="card" id="obj-card">
           <div class="empty">loading…</div>
         </div>
       </section>
@@ -496,14 +496,14 @@
           const pick = (...keys) =>
             keys.map((k) => j[k]).find((v) => v !== undefined);
           gsrEl.className = "";
-          gsrEl.textContent = pick("current_gsr", "currentGsr") ?? "—";
+          gsrEl.textContent = pick("current_state_root", "currentStateRoot") ?? "—";
           setText(
             "u-block",
             fmtNum(pick("current_block_number", "currentBlockNumber")),
           );
-          setText("u-tx", fmtNum(pick("tx_count", "txCount")));
+          setText("u-tx", fmtNum(pick("created_count", "createdCount")));
           setText("u-null", fmtNum(pick("nullifier_count", "nullifierCount")));
-          setText("u-gsrcount", fmtNum(pick("gsr_count", "gsrCount")));
+          setText("u-gsrcount", fmtNum(pick("state_root_count", "stateRootCount")));
           setText(
             "u-slot",
             fmtNum(pick("last_processed_slot", "lastProcessedSlot")),
@@ -518,15 +518,15 @@
         }
       }
 
-      async function pollInventory() {
-        const card = document.getElementById("inv-card");
+      async function pollObjects() {
+        const card = document.getElementById("obj-card");
         try {
           const r = await fetch(DOBJD + "/objects");
           if (!r.ok) throw new Error("status " + r.status);
           const objects = await r.json();
-          setDot("inv-dot", "ok");
+          setDot("obj-dot", "ok");
           setText(
-            "inv-meta",
+            "obj-meta",
             `${objects.length} object${objects.length === 1 ? "" : "s"}`,
           );
           if (!objects.length) {
@@ -555,8 +555,8 @@
             .join("");
           card.innerHTML = `<ul class="list">${rows}</ul>`;
         } catch (e) {
-          setDot("inv-dot", "bad");
-          setText("inv-meta", "unreachable");
+          setDot("obj-dot", "bad");
+          setText("obj-meta", "unreachable");
           card.innerHTML = `<div class="empty err">${escapeHtml(e.message || "unreachable")}</div>`;
         }
       }
@@ -616,11 +616,11 @@
 
       tickClock();
       pollUniverse();
-      pollInventory();
+      pollObjects();
       startEvents();
       setInterval(tickClock, 1000);
       setInterval(pollUniverse, 5000);
-      setInterval(pollInventory, 2000);
+      setInterval(pollObjects, 2000);
     </script>
   </body>
 </html>
