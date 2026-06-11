@@ -225,7 +225,9 @@ impl<T: DobjOps> DobjMcpService<T> {
             .map_err(|e| e.to_string())
     }
 
-    #[tool(description = "Read the driver's current configuration: synchronizer + relayer URLs.")]
+    #[tool(
+        description = "Read the daemon's current configuration: synchronizer + relayer URLs and the MCP server toggle."
+    )]
     fn read_settings(&self) -> Result<Json<DriverSettings>, String> {
         self.ops
             .read_settings()
@@ -234,11 +236,11 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Update the driver's configuration. Both synchronizer and relayer URLs are required — pass the current value for whichever you don't want to change. Most callers will read_settings first, mutate, then write_settings."
+        description = "Update the daemon's configuration. Send only the fields you want to change; any field you omit keeps its current value. Setting mcpEnabled to false shuts down the MCP server you are connected through."
     )]
     fn write_settings(
         &self,
-        Parameters(params): Parameters<DriverSettings>,
+        Parameters(params): Parameters<DriverSettingsPatch>,
     ) -> Result<Json<DriverSettings>, String> {
         self.ops
             .write_settings(params)

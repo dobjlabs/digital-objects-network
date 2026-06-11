@@ -98,7 +98,8 @@ enum Cmd {
         /// Path to a `.pexe` file, or an http(s) URL to download one from.
         source: String,
     },
-    /// Read or write driver settings (synchronizer / relayer URLs).
+    /// Read or write daemon settings (synchronizer / relayer URLs, MCP
+    /// toggle).
     #[command(subcommand)]
     Settings(SettingsCmd),
     /// Execute an action. Streams progress to stderr; result on stdout.
@@ -150,12 +151,16 @@ enum Cmd {
 enum SettingsCmd {
     /// Print current settings.
     Get,
-    /// Update one or both URLs. Omitted flags are left unchanged.
+    /// Update any subset of settings. Omitted flags are left unchanged.
     Set {
         #[arg(long)]
         synchronizer: Option<String>,
         #[arg(long)]
         relayer: Option<String>,
+        /// Serve MCP on the port adjacent to the HTTP port (on/off).
+        /// Takes effect immediately.
+        #[arg(long, value_name = "ON|OFF", value_parser = clap::builder::BoolishValueParser::new())]
+        mcp: Option<bool>,
     },
 }
 
@@ -199,7 +204,8 @@ async fn main() -> Result<()> {
         Cmd::Settings(SettingsCmd::Set {
             synchronizer,
             relayer,
-        }) => commands::settings_set(&client, synchronizer, relayer).await,
+            mcp,
+        }) => commands::settings_set(&client, synchronizer, relayer, mcp).await,
         Cmd::Run {
             qualified_id,
             inputs,

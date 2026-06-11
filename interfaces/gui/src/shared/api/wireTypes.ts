@@ -119,4 +119,6 @@ export interface CpuSample {
 export interface AppSettingsPayload {
   synchronizerApiUrl: string;
   relayerApiUrl: string;
+  /** Whether dobjd serves MCP on the adjacent port (default off). */
+  mcpEnabled: boolean;
 }

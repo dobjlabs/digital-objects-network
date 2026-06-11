@@ -144,13 +144,21 @@ pub async fn import(client: &DobjdClient, path: PathBuf, json: bool) -> Result<(
     Ok(())
 }
 
+fn print_settings(settings: &DriverSettings) {
+    println!("synchronizer = {}", settings.synchronizer_api_url);
+    println!("relayer      = {}", settings.relayer_api_url);
+    println!(
+        "mcp          = {}",
+        if settings.mcp_enabled { "on" } else { "off" }
+    );
+}
+
 pub async fn settings_get(client: &DobjdClient, json: bool) -> Result<()> {
     let settings: DriverSettings = client.get_json("/settings").await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&settings)?);
     } else {
-        println!("synchronizer = {}", settings.synchronizer_api_url);
-        println!("relayer      = {}", settings.relayer_api_url);
+        print_settings(&settings);
     }
     Ok(())
 }
@@ -159,6 +167,7 @@ pub async fn settings_set(
     client: &DobjdClient,
     synchronizer: Option<String>,
     relayer: Option<String>,
+    mcp: Option<bool>,
 ) -> Result<()> {
     let mut current: DriverSettings = client.get_json("/settings").await?;
     if let Some(s) = synchronizer {
@@ -167,9 +176,11 @@ pub async fn settings_set(
     if let Some(r) = relayer {
         current.relayer_api_url = r;
     }
+    if let Some(m) = mcp {
+        current.mcp_enabled = m;
+    }
     let saved: DriverSettings = client.put_json("/settings", &current).await?;
-    println!("synchronizer = {}", saved.synchronizer_api_url);
-    println!("relayer      = {}", saved.relayer_api_url);
+    print_settings(&saved);
     Ok(())
 }
 

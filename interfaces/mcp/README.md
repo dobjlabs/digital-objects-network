@@ -68,7 +68,7 @@ production implementation lives in
 | `run_action`                       | Start an action; returns a `runId` immediately (non-blocking)  |
 | `get_run`                          | Poll a run's status, result/error, and progress log by `runId` |
 | `check_feasibility`                | Whether an action can run with current objects                 |
-| `read_settings` / `write_settings` | Synchronizer + relayer URLs                                    |
+| `read_settings` / `write_settings` | Synchronizer + relayer URLs and the `mcpEnabled` toggle (partial writes merge) |
 | `get_objects_dir`                  | Path to `~/.dobj/objects/`                                     |
 | `read_doc`                         | Reference docs (podlang, object-lifecycle, generated podlang)  |
 
