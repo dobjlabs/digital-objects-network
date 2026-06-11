@@ -27,3 +27,19 @@
 :root[data-vocs-theme="dark"] a.vocs\:bg-accent {
   color: #18181b;
 }
+
+/* vocs makes the <pre> itself the horizontal scroll container, with the copy and
+   word-wrap buttons absolutely positioned inside it -- so on a long command they
+   track the scrolled content and drift over the code. Wrap long lines instead of
+   scrolling (vocs's own word-wrap behavior): with no horizontal scroll the buttons
+   stay pinned at the right edge. Reserve room so wrapped text clears the button. */
+pre[data-v] {
+  overflow-x: hidden;
+}
+pre[data-v] > code > .line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+pre[data-v] > code {
+  padding-inline-end: 2.25rem;
+}
