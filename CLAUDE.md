@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-This repository is the reference implementation of the Digital Objects Network: a way for mutually untrusting users to create, mutate, and exchange privately-held stateful objects whose proofs are anchored to Ethereum blob data availability. It ships as a Tauri desktop app demonstrating crafting a chain of objects via POD2/Plonky2 proofs plus the headless services that anchor and sync them.
+This repository is the reference implementation of the Digital Objects Network: a decentralized network for creating, executing, and exchanging Digital Objects -- fully programmable state machines owned and operated by Internet users, that can be passed between mutually untrusting users (for example over email) while keeping their integrity and consistency, without relying on any central trusted authority. Objects are privately held files on disk; their state transitions are proved with POD2/Plonky2 and anchored to Ethereum blob data availability, so the chain sees only opaque commitments.
+
+The repo ships a headless daemon (`dobjd`) that owns all driver state, several clients that drive it over HTTP/SSE/MCP (a React GUI servable in a browser or wrapped in a Tauri shell, the `dobj` CLI, an MCP server for AI agents), and the chain-side services that anchor and sync objects. The bundled `craft-basics` plugin (a small crafting game) is the demonstrated end-to-end flow.
 
 This file focuses on navigating the code, building/testing, and gotchas.
 
@@ -12,55 +14,64 @@ This file focuses on navigating the code, building/testing, and gotchas.
 
 The workspace is declared in `Cargo.toml`. Crate-by-crate:
 
-| Crate                         | Role                                                                                                               |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `dobjd`                       | **The daemon.** Headless HTTP server on `:7717` wrapping the driver. Every client talks to it.                     |
-| `cli`                         | `dobj` CLI binary. Thin HTTP/SSE client of dobjd. No `Driver` of its own.                                          |
-| `interfaces/gui/src-tauri`           | Tauri 2 shell. Holds **no** driver state — webview talks to dobjd over HTTP. Native conveniences only.             |
-| `interfaces/gui/src` (TS)            | React/Vite frontend. Component-based: `features/{actions,objects,context,proof-runner,settings}`.                  |
-| `driver`                      | Headless Rust orchestration library. **The core.** Owns `~/.dobj/`, runs actions end-to-end.                       |
-| `sdk`                         | Rhai engine + two-phase Loader/Executor that compiles plugin scripts into pod2 modules.                            |
-| `txlib`                       | Transaction state machine: `StateHeader`, `GroundingWitness`, `Tx`, `TxBuilder` + `TxFinalized` rule.              |
-| `synchronizer`                | Long-running service: ingests Ethereum blobs, maintains Merkle state, serves HTTP queries.                         |
-| `relayer`                     | HTTP service that wraps proofs as EIP-4844 blob txs and submits them.                                              |
-| `payload`                      | Cross-crate types: blob payload encoding, plonky2 proof shrink wrapper, `BlobParser`.                              |
-| `wire-types`                  | Pure-data types crossing process boundaries (HTTP/MCP/SSE/CLI). Dependency-light — no pod2/plonky2.                |
-| `pod2utils`                   | Macros (`st_custom!`, `dict!`, `set!`, `op!`, …) and `BuildContext` for loading podlang modules.                   |
-| `pexe`                        | `.pexe` plugin archive format (zip of `manifest.toml` + `plugin.rhai`) and the `pexe` CLI.                         |
-| `mcp` (crate name `dobj-mcp`) | MCP server exposing driver as tools to AI agents. Embedded by dobjd on the adjacent port.                          |
-| `libs/intro-pods/vdfpod`           | VDF intro pod (PoW gating via iterated hashing).                                                                   |
-| `libs/intro-pods/lt_eq_u256_pod`   | 256-bit `<=` intro pod (PoW difficulty checks).                                                                    |
-| `examples/*`                  | Example plugin sources: `craft-basics` (Log, Wood, Stick, Stone, WoodPick, StonePick + 9 actions) and `craft-rocket`. |
+| Crate                            | Role                                                                                                                                                                                                 |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dobjd`                          | **The daemon.** Headless HTTP server on `:7717` wrapping the driver. Every client talks to it.                                                                                                       |
+| `cli`                            | `dobj` CLI binary. Thin HTTP/SSE client of dobjd. No `Driver` of its own.                                                                                                                            |
+| `interfaces/gui/src-tauri`       | Tauri 2 shell. Holds **no** driver state — webview talks to dobjd over HTTP. Native conveniences only.                                                                                               |
+| `interfaces/gui/src` (TS)        | React/Vite frontend. Component-based: `features/{actions,objects,context,proof-runner,settings}`.                                                                                                    |
+| `driver`                         | Headless Rust orchestration library. **The core.** Owns `~/.dobj/`, runs actions end-to-end.                                                                                                         |
+| `sdk`                            | Rhai engine + two-phase Loader/Executor that compiles plugin scripts into pod2 modules.                                                                                                              |
+| `txlib`                          | Transaction state machine: `StateHeader`, `GroundingWitness`, `Tx`, `TxBuilder` + `TxFinalized` rule.                                                                                                |
+| `synchronizer`                   | Long-running service: ingests Ethereum blobs, maintains Merkle state, serves HTTP queries.                                                                                                           |
+| `relayer`                        | HTTP service that wraps proofs as EIP-4844 blob txs and submits them.                                                                                                                                |
+| `archiver`                       | Service that follows beacon blocks and archives blobs filtered by destination address to the filesystem (no DB). Serves them via a beacon-compatible HTTP API; the synchronizer reads blobs from it. |
+| `eth-clients`                    | Partial Ethereum Beacon client API (adapted from Blobscan, MIT). Used by `archiver`/`synchronizer` to follow the chain.                                                                              |
+| `payload`                        | Cross-crate types: blob payload encoding, plonky2 proof shrink wrapper, `BlobParser`.                                                                                                                |
+| `wire-types`                     | Pure-data types crossing process boundaries (HTTP/MCP/SSE/CLI). Dependency-light — no pod2/plonky2.                                                                                                  |
+| `pod2utils`                      | Macros (`st_custom!`, `dict!`, `set!`, `op!`, …) and `BuildContext` for loading podlang modules.                                                                                                     |
+| `pexe`                           | `.pexe` plugin archive format (zip of `manifest.toml` + `plugin.rhai`) and the `pexe` CLI.                                                                                                           |
+| `mcp` (crate name `dobj-mcp`)    | MCP server exposing driver as tools to AI agents. Embedded by dobjd on the adjacent port.                                                                                                            |
+| `libs/intro-pods/vdfpod`         | VDF intro pod (PoW gating via iterated hashing).                                                                                                                                                     |
+| `libs/intro-pods/lt-eq-u256-pod` | 256-bit `<=` intro pod (PoW difficulty checks). Crate name `lt-eq-u256-pod`.                                                                                                                         |
+| `examples/*`                     | Example plugin sources: `craft-basics` (Log, Wood, Stick, Stone, WoodPick, StonePick + 9 actions) and `craft-rocket`.                                                                                |
 
 ## Build / test / dev
 
 Use `just` (recipes in `justfile`):
 
-| Recipe                 | What it does                                                                                                                                                                                          |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `just dev`             | Brings up synchronizer + relayer + **dobjd** + Vite + Tauri shell via `mprocs.yaml`. Depends on `ensure-plugins` + `ensure-mcp`. Open `http://localhost:1420` in a browser or use the desktop window. |
-| `just sync`            | Runs the synchronizer (loads `services/synchronizer/.env`).                                                                                                                                                    |
-| `just relayer`         | Runs the relayer (loads `services/relayer/.env`).                                                                                                                                                              |
-| `just dobjd`           | Runs the headless HTTP daemon. Default port `7717` (override via `DOBJD_PORT`).                                                                                                                       |
-| `just desktop`         | Standalone Tauri window — Tauri spawns its own Vite on `:1420`.                                                                                                                                       |
-| `just desktop-shell`   | Tauri shell pointing at an already-running Vite (used inside `just dev`). Skips `beforeDevCommand`.                                                                                                   |
-| `just web`             | Vite dev server alone on `:1420`. Talks to `dobjd` at `:7717`.                                                                                                                                        |
-| `just ensure-plugins`  | Installs `craft-basics.pexe` to `~/.dobj/actions/` if none present.                                                                                                                                   |
-| `just ensure-mcp`      | Registers/refreshes the dobj MCP at `http://127.0.0.1:7718/mcp` with Claude Code, project scope. Idempotent; no-op if the `claude` CLI is missing.                                                    |
-| `just install-plugins` | Builds + installs all `examples/*` via the `pexe` CLI.                                                                                                                                                |
-| `just pack-plugins`    | Builds plugins to `target/pexe/*.pexe` (no install).                                                                                                                                                  |
-| `just reset`           | Stops the dobj daemon, wipes `data/` + `~/.dobj/`, drops the `synchronizer` + `relayer` DBs, and removes the dobj MCP registration.                                                                   |
-| `just test`            | `cargo test --workspace --release`.                                                                                                                                                                   |
-| `just test-ignored`    | Runs `--ignored` tests with `--nocapture`.                                                                                                                                                            |
-| `just test-e2e`        | Runs `synchronizer::test_e2e_real_proof` (slow, full real-proof flow).                                                                                                                                |
-| `just build`           | `cargo build --workspace`.                                                                                                                                                                            |
+| Recipe                   | What it does                                                                                                                                                                                                                                                                                  |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `just dev`               | Brings up archiver + synchronizer + relayer + **dobjd** + Vite + Tauri shell via `mprocs.yaml`, each gated on the previous one's health. Depends on `ensure-db` + `ensure-start-slot` + `ensure-plugins` + `ensure-mcp`. Open `http://localhost:1420` in a browser or use the desktop window. |
+| `just dev-remote`        | Like `just dev` but skips the local archiver/synchronizer/relayer and points dobjd at the hosted public endpoints (via `ensure-remote-settings`). Uses `mprocs.remote.yaml`. No local Postgres needed.                                                                                        |
+| `just sync`              | Runs the synchronizer (loads `services/synchronizer/.env`).                                                                                                                                                                                                                                   |
+| `just relayer`           | Runs the relayer (loads `services/relayer/.env`).                                                                                                                                                                                                                                             |
+| `just archiver`          | Runs the archiver (loads `services/archiver/.env`).                                                                                                                                                                                                                                           |
+| `just dobjd`             | Runs the headless HTTP daemon. Default port `7717` (override via `DOBJD_PORT`).                                                                                                                                                                                                               |
+| `just desktop`           | Standalone Tauri window — Tauri spawns its own Vite on `:1420`.                                                                                                                                                                                                                               |
+| `just desktop-shell`     | Tauri shell pointing at an already-running Vite (used inside `just dev`). Skips `beforeDevCommand`.                                                                                                                                                                                           |
+| `just web`               | Vite dev server alone on `:1420`. Talks to `dobjd` at `:7717`.                                                                                                                                                                                                                                |
+| `just ensure-db`         | Creates the local `synchronizer` + `relayer` Postgres DBs if absent. Idempotent. Run before `just sync` / `just relayer` standalone.                                                                                                                                                          |
+| `just ensure-start-slot` | Rewrites a fresh synchronizer/archiver `.env` `INIT_START_SLOT` to the current beacon head (no-op once the store exists and the var is set).                                                                                                                                                  |
+| `just ensure-plugins`    | Installs `craft-basics.pexe` to `~/.dobj/actions/` if none present.                                                                                                                                                                                                                           |
+| `just ensure-mcp`        | Registers/refreshes the dobj MCP at `http://127.0.0.1:7718/mcp` with Claude Code, project scope. Idempotent; no-op if the `claude` CLI is missing.                                                                                                                                            |
+| `just install-plugins`   | Builds + installs all `examples/*` via the `pexe` CLI.                                                                                                                                                                                                                                        |
+| `just pack-plugins`      | Builds plugins to `target/pexe/*.pexe` (no install).                                                                                                                                                                                                                                          |
+| `just pexe *ARGS`        | Runs the `pexe` CLI with arbitrary args (e.g. `just pexe inspect plan --action CraftWood examples/craft-basics`).                                                                                                                                                                             |
+| `just cli *ARGS`         | Runs the `dobj` CLI with arbitrary args (e.g. `just cli inspect-action craft-basics::FindLog`).                                                                                                                                                                                               |
+| `just reset`             | Stops the dobj daemon, wipes `data/` + `~/.dobj/`, drops the `synchronizer` + `relayer` DBs, removes the archiver blobs dir, and removes the dobj MCP registration.                                                                                                                           |
+| `just test`              | `cargo test --workspace --release`.                                                                                                                                                                                                                                                           |
+| `just test-ignored`      | Runs `--ignored` tests with `--nocapture`.                                                                                                                                                                                                                                                    |
+| `just test-e2e`          | Runs `synchronizer::test_e2e_real_proof` (slow, full real-proof flow).                                                                                                                                                                                                                        |
+| `just build`             | `cargo build --workspace`.                                                                                                                                                                                                                                                                    |
 
 **Infrastructure required for `just dev`:**
 
-- Postgres on `localhost:5432` (user `postgres`). Synchronizer + relayer create their own DBs.
-- An Ethereum beacon + execution endpoint (configure in `services/synchronizer/.env`, `services/relayer/.env`).
-- RocksDB stores under `data/` and `~/.dobj/` are created on first run.
+- Postgres on `localhost:5432` (user `postgres`). `just ensure-db` creates the `synchronizer` + `relayer` DBs.
+- An Ethereum beacon + execution endpoint (configure in `services/synchronizer/.env`, `services/relayer/.env`, `services/archiver/.env`).
+- RocksDB stores under `data/` and `~/.dobj/` are created on first run; the archiver writes blobs to its `BLOBS_PATH` (filesystem, no DB).
 - `dobjd` binds **two adjacent ports**: HTTP on `DOBJD_PORT` (default `7717`) and MCP on `DOBJD_PORT + 1` (default `7718`). Both must be free or startup fails fast.
+- `just dev-remote` skips the local chain-side services and points dobjd at the hosted synchronizer + relayer, so no local Postgres / beacon is needed.
 
 **Always run tests with `--release`** — proof generation is impractically slow in debug. Use `MockProver` (not the real Prover) in unit tests; gate real-proof tests with `#[ignore]`. Use `assert!`, not `debug_assert!`, since tests run `--release`.
 
@@ -83,9 +94,12 @@ Use `just` (recipes in `justfile`):
                            │
                            ▼
                          relayer  ────────► Ethereum L1 (EIP-4844 blob)
-                                                ▲
                                                 │
-                                           synchronizer (ingests blobs, builds state roots)
+                                                ▼
+                                           archiver (follows beacon blocks, stores blobs)
+                                                │
+                                                ▼
+                                           synchronizer (reads blobs, builds state roots)
 ```
 
 `dobjd` is the **single owner of `Arc<Driver>`** in the running system. Desktop, browser, MCP, and CLI all talk to it over HTTP/SSE; the Tauri shell holds no driver state of its own.
