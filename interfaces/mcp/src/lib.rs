@@ -1,6 +1,7 @@
 pub mod logging;
 pub mod mock;
 pub mod ops;
+pub mod prompts;
 pub mod resources;
 pub mod server;
 pub mod types;

@@ -4,8 +4,8 @@ use rmcp::ErrorData as McpError;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{
-    ListResourcesResult, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
-    ServerInfo,
+    GetPromptRequestParams, GetPromptResult, ListPromptsResult, ListResourcesResult,
+    ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
@@ -85,7 +85,7 @@ pub struct GetRunParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadDocParams {
-    /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "txlib.podlang", "time.podlang"
+    /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "how-to-play", "txlib.podlang", "time.podlang"
     pub name: String,
 }
 
@@ -257,7 +257,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes). Pass \"list\" to see all available documents."
+        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"how-to-play\" (generic framing for playing a Digital Objects world), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes). Pass \"list\" to see all available documents."
     )]
     fn read_doc(&self, Parameters(params): Parameters<ReadDocParams>) -> String {
         match params.name.as_str() {
@@ -284,6 +284,7 @@ impl<T: DobjOps> DobjMcpService<T> {
                 let uri = match params.name.as_str() {
                     "podlang-reference" => "dobj://docs/podlang-reference",
                     "object-lifecycle" => "dobj://docs/object-lifecycle",
+                    "how-to-play" => "dobj://docs/how-to-play",
                     "txlib.podlang" => "dobj://source/txlib.podlang",
                     "time.podlang" => "dobj://source/time.podlang",
                     "generated.podlang" => {
@@ -334,6 +335,7 @@ impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
+                .enable_prompts()
                 .build(),
         )
         .with_instructions(INSTRUCTIONS)
@@ -359,6 +361,28 @@ impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
         std::future::ready(crate::resources::read(&request.uri).ok_or_else(|| {
             McpError::resource_not_found(format!("unknown resource: {}", request.uri), None)
         }))
+    }
+
+    fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
+        std::future::ready(Ok(
+            ListPromptsResult::with_all_items(crate::prompts::list()),
+        ))
+    }
+
+    fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+        std::future::ready(
+            crate::prompts::get(&request.name, request.arguments.as_ref()).ok_or_else(|| {
+                McpError::invalid_params(format!("unknown prompt: {}", request.name), None)
+            }),
+        )
     }
 }
 
@@ -417,6 +441,13 @@ mod tests {
                 .unwrap()
                 .contains("Digital Objects Network MCP Server")
         );
+    }
+
+    #[test]
+    fn test_get_info_has_prompts_capability() {
+        let service = make_service();
+        let info = service.get_info();
+        assert!(info.capabilities.prompts.is_some());
     }
 
     #[test]
