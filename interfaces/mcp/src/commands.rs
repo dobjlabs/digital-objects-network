@@ -14,7 +14,15 @@ use serde::{Deserialize, Serialize};
 /// Names a user command may not take: the `play` entry, the built-in commands,
 /// and `start` (a dispatcher alias for the menu). Keeps saved commands from
 /// shadowing the framework surface.
-const RESERVED_NAMES: [&str; 5] = ["play", "help", "create-command", "consult-docs", "start"];
+const RESERVED_NAMES: [&str; 7] = [
+    "play",
+    "help",
+    "create-command",
+    "consult-docs",
+    "start",
+    "preview",
+    "preview-stop",
+];
 
 /// A user-authored command: a named, reusable block of instructions the model
 /// follows when the command is invoked.
@@ -194,6 +202,8 @@ mod tests {
         assert!(store.save("create-command", "x", "step").is_err());
         assert!(store.save("consult-docs", "x", "step").is_err());
         assert!(store.save("start", "x", "step").is_err());
+        assert!(store.save("preview", "x", "step").is_err());
+        assert!(store.save("preview-stop", "x", "step").is_err());
         assert!(store.save("!!!", "x", "step").is_err());
         // path separators never survive normalization
         assert_eq!(normalize_name("../etc/passwd").unwrap(), "etc-passwd");

@@ -15,6 +15,8 @@ to exactly one installed command. Built-in phrase mappings:
 - `help`, `commands`, `menu`, `start`, `begin`, `what can I do` -> help
 - `create a command`, `define a command`, `new command`, `make a command` -> create-command
 - `consult docs`, `ask docs`, `look up <X>`, `what does <X> mean` -> consult-docs (pass the question as the argument)
+- `preview`, `dashboard`, `show dashboard`, `open dashboard` -> preview
+- `preview stop`, `close dashboard`, `hide dashboard`, `stop preview` -> preview-stop
 
 A saved command matches when the player types its name, or a phrase its
 description clearly refers to. Run the matching command: follow its body, and

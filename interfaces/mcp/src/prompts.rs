@@ -41,6 +41,16 @@ const BUILTINS: &[Builtin] = &[
         description: "Answer a question about Digital Objects from the reference docs.",
         body: include_str!("../docs/consult-docs.md"),
     },
+    Builtin {
+        name: "preview",
+        description: "Open the live dashboard (a pane in Claude Code, otherwise a URL to visit).",
+        body: include_str!("../docs/preview.md"),
+    },
+    Builtin {
+        name: "preview-stop",
+        description: "Close the dashboard preview pane.",
+        body: include_str!("../docs/preview-stop.md"),
+    },
 ];
 
 /// The prompts advertised to clients: the `play` entry plus every builtin.
@@ -173,7 +183,14 @@ mod tests {
     #[test]
     fn list_exposes_play_and_builtins() {
         let names: Vec<String> = list().into_iter().map(|prompt| prompt.name).collect();
-        for expected in [PLAY, "help", "create-command", "consult-docs"] {
+        for expected in [
+            PLAY,
+            "help",
+            "create-command",
+            "consult-docs",
+            "preview",
+            "preview-stop",
+        ] {
             assert!(
                 names.iter().any(|name| name == expected),
                 "missing {expected}"

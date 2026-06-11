@@ -12,6 +12,12 @@ pub mod types;
 /// output. dobjd derives custom MCP ports as `DOBJD_PORT + 1`.
 pub const DEFAULT_PORT: u16 = 7718;
 
+/// The bundled live dashboard, served at the MCP server root (`GET /`). A single
+/// self-contained page that polls the daemon's REST API for objects, classes,
+/// and the state root. It ships with the MCP server so the dashboard is
+/// available wherever the daemon runs, independent of the React GUI.
+const DASHBOARD_HTML: &str = include_str!("../dashboard/index.html");
+
 use std::sync::Arc;
 
 use ops::DobjOps;
@@ -63,7 +69,12 @@ impl<T: DobjOps> McpServer<T> {
             StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
         );
 
-        axum::Router::new().nest_service("/mcp", service)
+        axum::Router::new()
+            .route(
+                "/",
+                axum::routing::get(|| async { axum::response::Html(DASHBOARD_HTML) }),
+            )
+            .nest_service("/mcp", service)
     }
 
     /// Serve the MCP server on the given TCP listener.

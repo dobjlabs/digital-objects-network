@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Digital Objects</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --inset: #0d1117; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+    --live: #3fb950; --pending: #d29922; --unknown: #8b949e; --nullified: #f85149;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 2; background: var(--panel);
+    border-bottom: 1px solid var(--border); padding: 12px 20px;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 15px; margin: 0; font-family: var(--mono); letter-spacing: .5px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--unknown);
+    display: inline-block; margin-right: 6px; vertical-align: middle; }
+  .dot.on { background: var(--live); }
+  .dot.off { background: var(--nullified); }
+  .stat { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  .stat b { color: var(--text); }
+  .grow { flex: 1; }
+  button {
+    background: #21262d; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-family: var(--mono);
+  }
+  button:hover { border-color: var(--accent); }
+  .offline {
+    display: none; background: #2d1416; border-bottom: 1px solid var(--nullified);
+    color: #ffb4ab; padding: 10px 20px; font-family: var(--mono); font-size: 13px;
+  }
+  .offline.show { display: block; }
+  main { padding: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1100px; margin: 0 auto; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  section h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); margin: 0 0 10px; font-weight: 600;
+  }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .emoji { font-size: 20px; width: 26px; text-align: center; flex: none; }
+  .title { font-family: var(--mono); font-weight: 600; }
+  .sub { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  .pill {
+    font-size: 11px; font-family: var(--mono); padding: 1px 7px; border-radius: 10px;
+    border: 1px solid; text-transform: lowercase;
+  }
+  .pill.live { color: var(--live); border-color: var(--live); }
+  .pill.pending { color: var(--pending); border-color: var(--pending); }
+  .pill.unknown { color: var(--unknown); border-color: var(--unknown); }
+  .pill.nullified { color: var(--nullified); border-color: var(--nullified); }
+  .card.nullified .title { text-decoration: line-through; opacity: .6; }
+  .fields { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .field { background: var(--inset); border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px; font-family: var(--mono); font-size: 12px; }
+  .field .k { color: var(--muted); }
+  .field .v { color: var(--accent); }
+  .count { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Digital Objects</h1>
+    <span class="stat"><span id="dot" class="dot"></span><span id="status">connecting...</span></span>
+    <span class="stat">root <b id="root">--</b></span>
+    <span class="grow"></span>
+    <span class="stat" id="counts"></span>
+    <button id="refresh">refresh</button>
+  </header>
+  <div class="offline" id="offline"></div>
+  <main>
+    <section>
+      <h2>Inventory <span id="invcount"></span></h2>
+      <div id="inventory"><div class="empty">loading...</div></div>
+    </section>
+    <section>
+      <h2>Universe</h2>
+      <div id="universe"><div class="empty">loading...</div></div>
+    </section>
+  </main>
+<script>
+  // Served from the MCP server (:7718); the daemon's REST API is on :7717.
+  // Same host, different port -- the daemon sends permissive CORS so this works.
+  const API = "http://" + (location.hostname || "127.0.0.1") + ":7717";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const shorten = (h) => {
+    h = String(h);
+    return h.length > 14 ? h.slice(0, 8) + "..." + h.slice(-4) : h;
+  };
+
+  async function getJSON(path) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3500);
+    try {
+      const res = await fetch(API + path, { signal: ctrl.signal });
+      if (!res.ok) throw new Error(path + " -> " + res.status);
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function fieldsHtml(fields) {
+    const keys = Object.keys(fields || {}).filter((k) => k !== "type" && k !== "identity");
+    if (!keys.length) return "";
+    const items = keys.map((k) => {
+      let v = fields[k];
+      if (v !== null && typeof v === "object") v = JSON.stringify(v);
+      v = String(v);
+      if (v.length > 18) v = v.slice(0, 8) + "..." + v.slice(-4);
+      return '<span class="field"><span class="k">' + esc(k) + '</span> <span class="v">' + esc(v) + "</span></span>";
+    });
+    return '<div class="fields">' + items.join("") + "</div>";
+  }
+
+  function renderObjects(objs) {
+    $("invcount").textContent = "(" + objs.length + ")";
+    const live = objs.filter((o) => o.status === "live").length;
+    $("counts").innerHTML = "<b>" + live + "</b> live / <b>" + objs.length + "</b> objects";
+    if (!objs.length) {
+      $("inventory").innerHTML = '<div class="empty">no objects yet</div>';
+      return;
+    }
+    const rank = (s) => (s === "live" ? 0 : s === "pending" ? 1 : s === "unknown" ? 2 : 3);
+    objs.sort((a, b) => rank(a.status) - rank(b.status));
+    $("inventory").innerHTML = objs.map((o) => {
+      const st = o.status || "unknown";
+      const name = o.class ? o.class.name : "unknown";
+      const qualified = o.class ? o.class.pluginName + "::" + o.class.name : "unknown";
+      return '<div class="card ' + st + '">' +
+        '<div class="row">' +
+          '<span class="emoji">' + esc(o.emoji || "?") + "</span>" +
+          "<span><div class=\"title\">" + esc(name) + "</div>" +
+            '<div class="sub">' + esc(qualified) + " &middot; " + esc(shorten(o.contentHash)) + "</div></span>" +
+          '<span class="count"><span class="pill ' + st + '">' + esc(st) + "</span></span>" +
+        "</div>" +
+        fieldsHtml(o.fields) +
+      "</div>";
+    }).join("");
+  }
+
+  function renderClasses(classes) {
+    if (!classes.length) {
+      $("universe").innerHTML = '<div class="empty">no classes</div>';
+      return;
+    }
+    $("universe").innerHTML = classes.map((c) => {
+      const name = c.class ? c.class.name : "?";
+      return '<div class="card">' +
+        '<div class="row">' +
+          '<span class="emoji">' + esc(c.emoji || "?") + "</span>" +
+          "<span><div class=\"title\">" + esc(name) + "</div>" +
+            '<div class="sub">' + esc(c.description || "") + "</div></span>" +
+          '<span class="count">' + (c.liveCount || 0) + " live</span>" +
+        "</div>" +
+      "</div>";
+    }).join("");
+  }
+
+  async function tick() {
+    try {
+      const [root, objs, classes] = await Promise.all([
+        getJSON("/state-root"),
+        getJSON("/objects"),
+        getJSON("/classes"),
+      ]);
+      $("root").textContent = shorten(root);
+      $("dot").className = "dot on";
+      $("status").textContent = "online";
+      $("offline").classList.remove("show");
+      renderObjects(Array.isArray(objs) ? objs : []);
+      renderClasses(Array.isArray(classes) ? classes : []);
+    } catch (err) {
+      $("dot").className = "dot off";
+      $("status").textContent = "offline";
+      $("offline").textContent = "daemon not reachable at " + API + " -- is dobjd running? (" + err.message + ")";
+      $("offline").classList.add("show");
+    }
+  }
+
+  $("refresh").addEventListener("click", tick);
+  tick();
+  setInterval(tick, 5000);
+</script>
+</body>
+</html>
