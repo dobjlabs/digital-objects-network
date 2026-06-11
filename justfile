@@ -29,7 +29,11 @@ desktop-shell:
 # or from the Tauri shell. Talks to dobjd at :7717 over HTTP for everything
 # driver-related.
 web:
-    cd interfaces/gui && pnpm dev
+    cd interfaces/gui && pnpm install && pnpm dev
+
+# Run the documentation site (Vocs dev server) with hot reload
+docs:
+    cd docs && pnpm install && pnpm dev
 
 # Run the headless HTTP server that exposes the driver API to every client
 # (desktop window, browser tab, MCP, dobj CLI).

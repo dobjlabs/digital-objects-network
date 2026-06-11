@@ -24,8 +24,8 @@ broadcast hub, so an action kicked off via MCP shows real-time progress in
 the desktop window or browser tab.
 
 Clients that speak streamable HTTP MCP (Claude Code, Cursor, Continue, …)
-connect to dobjd directly. Claude Desktop only speaks stdio MCP, so it
-launches `dobj-mcp-proxy` as a child process; the proxy bridges its
+connect to dobjd directly. Agents that only speak stdio (e.g. Claude Desktop)
+launch `dobj-mcp-proxy` as a child process; the proxy bridges their
 stdin/stdout to dobjd's HTTP endpoint.
 
 ### Crate structure
@@ -88,9 +88,9 @@ claude mcp add --transport http dobj http://127.0.0.1:7718/mcp
 
 This is what [SKILL.md](../../SKILL.md) automates as part of end-user install.
 
-### Claude Desktop (stdio only)
+### Stdio-only agents (e.g. Claude Desktop)
 
-Claude Desktop launches `dobj-mcp-proxy` as a child process. The proxy
+Stdio-only agents launch `dobj-mcp-proxy` as a child process. The proxy
 connects to dobjd's HTTP MCP endpoint over loopback. Edit
 `claude_desktop_config.json`:
 

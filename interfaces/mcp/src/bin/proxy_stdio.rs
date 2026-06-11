@@ -1,6 +1,6 @@
 /// Stdio-to-HTTP proxy for the Digital Objects Network MCP server.
 ///
-/// Claude Desktop only speaks stdio MCP. This binary reads JSON-RPC from
+/// Some agents only speak stdio MCP. This binary reads JSON-RPC from
 /// stdin, forwards it to dobjd's streamable HTTP MCP endpoint
 /// (`http://127.0.0.1:7718/mcp` by default), and writes the response back
 /// to stdout.

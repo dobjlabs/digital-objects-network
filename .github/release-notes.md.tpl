@@ -23,8 +23,8 @@ rollback) and leaves your plugins under `~/.dobj/actions/` untouched.
 - **`dobjd-{target}.tar.gz`** — the daemon (HTTP API on `:7717`,
   MCP on `:7718`). Bundles `dobj-mcp-proxy` alongside.
 - **`dobj-{target}.tar.gz`** — terminal CLI for the daemon.
-- **`craft-basics.pexe`** — the bundled crafting plugin (Log,
-  Wood, Stone, sticks, picks…).
+- **`*.pexe`** — the example plugins, one archive per plugin under
+  `examples/` (e.g. `craft-basics.pexe`, `craft-rocket.pexe`).
 
 Plus `synchronizer-{target}.tar.gz`, `relayer-{target}.tar.gz`, and
 (Linux/macOS only) `archiver-{target}.tar.gz` — server binaries used by
