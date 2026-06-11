@@ -168,9 +168,13 @@ pub fn help_command(stored: &[UserCommand]) -> UserCommand {
         .map(|builtin| builtin.description)
         .unwrap_or_default();
     let mut body = framing.trim_end().to_string();
-    body.push_str("\n\n");
+    body.push_str("\n\n| Command | Description |\n| --- | --- |\n");
     for (name, desc) in command_menu(stored) {
-        body.push_str(&format!("{name} -- {desc}\n"));
+        body.push_str(&format!(
+            "| {} | {} |\n",
+            escape_cell(&name),
+            escape_cell(&desc)
+        ));
     }
     body.push_str("\ntype a command, or 'create-command' to add one");
     UserCommand {
@@ -178,6 +182,11 @@ pub fn help_command(stored: &[UserCommand]) -> UserCommand {
         description: description.to_string(),
         body,
     }
+}
+
+/// Escape a value for a one-line Markdown table cell.
+fn escape_cell(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', " ")
 }
 
 /// The prompt entry for a command (built-in or saved): name, description, and an
@@ -295,13 +304,14 @@ mod tests {
         }];
         let help = help_command(&stored);
         assert_eq!(help.name, HELP);
+        assert!(help.body.contains("| Command | Description |"));
         // Built-in descriptions are sourced from BUILTINS, not re-typed in the
-        // doc, so the rendered line matches the catalog verbatim.
+        // doc, so the rendered row matches the catalog verbatim.
         assert!(
             help.body
-                .contains("create-command -- Define a new reusable command")
+                .contains("| create-command | Define a new reusable command")
         );
         // Saved commands appear too, so the menu matches what routing resolves.
-        assert!(help.body.contains("stock-up -- gather inputs"));
+        assert!(help.body.contains("| stock-up | gather inputs |"));
     }
 }
