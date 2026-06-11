@@ -1,11 +1,10 @@
-import { defineConfig } from 'vocs'
+import { defineConfig } from 'vocs/config'
 
 // Injected by the Pages deploy workflow ("/<repo>" on <owner>.github.io);
 // unset for local dev and custom domains.
 const basePath = process.env.BASE_PATH || undefined
 
 export default defineConfig({
-  rootDir: '.',
   basePath,
   // vocs cannot resolve an anchor on the home page (index route) to a file, so a
   // relative link like (../#public-infrastructure) is flagged as a false-positive
@@ -14,16 +13,10 @@ export default defineConfig({
   title: 'Digital Objects Network',
   description:
     'Privately-held, fully programmable stateful objects, exchanged between mutually untrusting users and anchored to Ethereum blob data availability.',
+  accentColor: 'light-dark(#0e7490, #22d3ee)',
   banner: {
     dismissable: true,
-    content:
-      `Testnet on Ethereum Sepolia - [install the driver](${basePath ?? ''}/install) to join.`,
-  },
-  theme: {
-    accentColor: {
-      light: '#0e7490',
-      dark: '#22d3ee',
-    },
+    content: `Testnet on Ethereum Sepolia - [install the driver](${basePath ?? ''}/install) to join.`,
   },
   topNav: [
     { text: 'Network', link: '/network' },
@@ -53,8 +46,6 @@ export default defineConfig({
     },
   ],
   editLink: {
-    pattern:
-      'https://github.com/dobjlabs/digital-objects-network/edit/main/docs/pages/:path',
-    text: 'Suggest changes to this page',
+    link: 'https://github.com/dobjlabs/digital-objects-network/edit/main/docs/src/pages/:path',
   },
 })

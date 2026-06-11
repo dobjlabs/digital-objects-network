@@ -1,0 +1,8 @@
+/* Global stylesheet, auto-loaded by Vocs from src/pages/_root.css. */
+
+/* The landing page nests its body in a .don-home wrapper (see index.mdx) that
+   sits outside Vocs's content container, so it misses the container's block
+   spacing. Restore vertical rhythm between the wrapper's direct children. */
+.don-home > *:not(:last-child) {
+  margin-bottom: 1.5rem;
+}

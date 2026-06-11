@@ -38,8 +38,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm exec playwright install --with-deps chromium
-
       - uses: actions/configure-pages@v5
         id: pages
 

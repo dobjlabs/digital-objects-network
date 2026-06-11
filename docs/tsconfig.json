@@ -1,13 +1,18 @@
 {
   "compilerOptions": {
     "target": "ESNext",
+    "lib": ["DOM", "DOM.Iterable", "ESNext"],
     "module": "ESNext",
-    "moduleResolution": "Bundler",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
     "jsx": "react-jsx",
     "strict": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "resolveJsonModule": true
+    "noUncheckedSideEffectImports": true
   },
-  "include": ["vocs.config.ts", "pages/**/*"]
+  "include": ["src", "vocs.config.ts"],
+  "exclude": ["src/pages.gen.ts"]
 }
