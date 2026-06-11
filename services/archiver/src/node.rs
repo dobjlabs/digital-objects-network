@@ -132,7 +132,7 @@ impl Store {
             let mut slot_path = PathBuf::from(&self.blobs_path);
             slot_path.push("by_slot");
             // Find the highest slot number path
-            for _level in 0..DIR_LEVELS {
+            for level in 0..DIR_LEVELS {
                 let read_dir = match fs::read_dir(&slot_path) {
                     Ok(entries) => entries,
                     Err(e) if e.kind() == io::ErrorKind::NotFound => break 'outer,
@@ -142,10 +142,20 @@ impl Store {
                     .map(|res| res.map(|e| e.path()))
                     .collect::<Result<Vec<_>, io::Error>>()?;
                 entries.sort();
-                let last = if let Some(last) = entries.last() {
-                    last
-                } else {
-                    break 'outer;
+                let last = match entries.last() {
+                    Some(last) => last,
+                    None => {
+                        // An empty directory below the root would otherwise
+                        // abandon the valid blocks under lower-numbered siblings:
+                        // drop it and retry so the descent falls back to one
+                        // instead of giving up. An empty root just means the
+                        // store holds no blocks.
+                        if level == 0 {
+                            break 'outer;
+                        }
+                        fs::remove_dir(&slot_path)?;
+                        continue 'outer;
+                    }
                 };
                 // `entries` holds full paths, so descend by adopting the deepest
                 // directly; pushing a relative entry would append, not replace.
