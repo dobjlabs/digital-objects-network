@@ -16,6 +16,8 @@ export default defineConfig({
   accentColor: 'light-dark(#0e7490, #22d3ee)',
   banner: {
     dismissable: true,
+    backgroundColor: '#0e7490',
+    textColor: 'white',
     content: `Testnet on Ethereum Sepolia - [install the driver](${basePath ?? ''}/install) to join.`,
   },
   topNav: [
@@ -23,6 +25,9 @@ export default defineConfig({
     { text: 'Install', link: '/install' },
     { text: 'Applications', link: '/applications' },
     { text: 'GitHub', link: 'https://github.com/dobjlabs/digital-objects-network' },
+  ],
+  socials: [
+    { icon: 'github', link: 'https://github.com/dobjlabs/digital-objects-network' },
   ],
   sidebar: [
     {
