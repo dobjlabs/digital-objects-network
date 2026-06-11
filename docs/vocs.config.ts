@@ -13,7 +13,7 @@ export default defineConfig({
   banner: {
     dismissable: true,
     content:
-      'Testnet on Ethereum Sepolia - [install the driver](/install) to join.',
+      `Testnet on Ethereum Sepolia - [install the driver](${basePath ?? ''}/install) to join.`,
   },
   theme: {
     accentColor: {

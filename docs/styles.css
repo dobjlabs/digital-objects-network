@@ -18,7 +18,21 @@
 
 .vocs_DesktopTopNav {
   justify-content: flex-start !important;
-  gap: var(--vocs-space_24) !important;
+  gap: var(--vocs-space_16) !important;
+}
+.vocs_DesktopTopNav_withLogo {
+  padding-left: var(--vocs-space_16) !important;
+}
+.vocs_DesktopTopNav_logoWrapper {
+  order: -1 !important;
+  position: static !important;
+  width: auto !important;
+  justify-content: flex-start !important;
+}
+.vocs_DesktopTopNav_logo {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  width: auto !important;
 }
 .vocs_DesktopTopNav_section:last-child {
   margin-left: auto !important;
