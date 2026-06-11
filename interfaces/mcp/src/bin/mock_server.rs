@@ -9,6 +9,7 @@ async fn main() -> anyhow::Result<()> {
     let ct = tokio_util::sync::CancellationToken::new();
     let config = McpConfig {
         cancellation_token: ct.clone(),
+        dobj_port: dobj_mcp::DEFAULT_DOBJD_PORT,
     };
     let server = McpServer::new(MockDobjOps::new(), config);
     let listener = tokio::net::TcpListener::bind(&bind_address).await?;

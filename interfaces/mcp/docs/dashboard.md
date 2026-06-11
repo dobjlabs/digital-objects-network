@@ -20,8 +20,8 @@ else (including no argument) -> START.
    the absolute home directory path:
 
    { "name": "dobj-dashboard", "runtimeExecutable": "python3",
-     "runtimeArgs": ["-m", "http.server", "7719", "--directory", "<HOME>/.dobj/dashboard"],
-     "port": 7719 }
+   "runtimeArgs": ["-m", "http.server", "7719", "--directory", "<HOME>/.dobj/dashboard"],
+   "port": 7719 }
 
 2. Call `preview_start` with `{name: "dobj-dashboard"}`.
 3. Output exactly one line: `dashboard -> http://127.0.0.1:7719/  (pane open)`.

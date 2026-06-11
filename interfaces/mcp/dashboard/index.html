@@ -397,7 +397,7 @@
       const DOBJD = (() => {
         const explicit = _params.get("dobjd");
         if (explicit) return explicit.replace(/\/+$/, "");
-        const port = _params.get("port") || "7717";
+        const port = _params.get("port") || "__DOBJD_PORT__";
         return `http://127.0.0.1:${port}`;
       })();
       // Surface the active dobjd URL in the page title so it's obvious which
@@ -496,14 +496,18 @@
           const pick = (...keys) =>
             keys.map((k) => j[k]).find((v) => v !== undefined);
           gsrEl.className = "";
-          gsrEl.textContent = pick("current_state_root", "currentStateRoot") ?? "—";
+          gsrEl.textContent =
+            pick("current_state_root", "currentStateRoot") ?? "—";
           setText(
             "u-block",
             fmtNum(pick("current_block_number", "currentBlockNumber")),
           );
           setText("u-tx", fmtNum(pick("created_count", "createdCount")));
           setText("u-null", fmtNum(pick("nullifier_count", "nullifierCount")));
-          setText("u-gsrcount", fmtNum(pick("state_root_count", "stateRootCount")));
+          setText(
+            "u-gsrcount",
+            fmtNum(pick("state_root_count", "stateRootCount")),
+          );
           setText(
             "u-slot",
             fmtNum(pick("last_processed_slot", "lastProcessedSlot")),

@@ -88,7 +88,9 @@ async fn main() -> Result<()> {
     let mcp_driver = driver.clone();
     let mcp_runs = runs.clone();
     tokio::spawn(async move {
-        if let Err(err) = start_mcp_server(mcp_driver, mcp_event_tx, mcp_runs, mcp_listener).await {
+        if let Err(err) =
+            start_mcp_server(mcp_driver, mcp_event_tx, mcp_runs, port, mcp_listener).await
+        {
             tracing::error!("MCP server crashed after startup: {err:#}");
             std::process::exit(1);
         }
@@ -119,10 +121,14 @@ async fn start_mcp_server(
     driver: Arc<Driver>,
     events: events::EventTx,
     runs: RunRegistry,
+    http_port: u16,
     listener: tokio::net::TcpListener,
 ) -> Result<()> {
     let ops = mcp::DobjdOps::new(driver, events, runs);
-    let config = dobj_mcp::McpConfig::default();
+    let config = dobj_mcp::McpConfig {
+        dobj_port: http_port,
+        ..dobj_mcp::McpConfig::default()
+    };
     let server = dobj_mcp::McpServer::new(ops, config);
     server.serve(listener).await?;
     Ok(())

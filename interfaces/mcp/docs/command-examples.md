@@ -68,39 +68,42 @@ Two rules that keep it fast and correct:
   `list_objects` between steps (it is slower and races with the chain you are
   building).
 
-    ---
-    name: make-woodpick
-    description: Make a WoodPick -- reuse inventory, find/craft missing inputs end to end.
-    ---
+  ***
 
-    # make-woodpick
+  name: make-woodpick
+  description: Make a WoodPick -- reuse inventory, find/craft missing inputs end to end.
 
-    ## Output rules
-    - Plain text. One plan line per class, one execution line per run
-      (`<Action> -> <output>`). No markdown.
+  ***
 
-    ## Recipe chain (from `list_actions`; pluginName is `craft-basics` here)
-    | Target   | action        | Inputs           | Outputs    |
-    |----------|---------------|------------------|------------|
-    | Log      | FindLog       | (none)           | 1 Log      |
-    | Wood     | CraftWood     | 1 Log            | 1 Wood     |
-    | Stick    | CraftSticks   | 1 Wood           | 2 Stick    |
-    | WoodPick | CraftWoodPick | 1 Wood + 1 Stick | 1 WoodPick |
+  # make-woodpick
 
-    ## Steps
-    1. Call `list_objects`; collect the live paths for Wood, Stick, and Log.
-    2. Plan backwards: 1 WoodPick needs 1 live Wood + 1 live Stick; a Stick comes
-       from CraftSticks (1 Wood -> 2 Stick); a Wood from 1 Log; a Log from
-       FindLog. Count what is live and compute how many of each to make. Print
-       one `<Class> have:<N> need:<M>` line per class.
-    3. Run `FindLog` for each Log needed; after each, poll `get_run` and append
-       the new Log path. Output `FindLog -> <Log>` per run.
-    4. Run `CraftWood` for each Wood needed, consuming a Log each time; track the
-       outputs. Output `CraftWood -> <Wood>` per run.
-    5. If a Stick is needed, run `CraftSticks` with one Wood (yields 2 Stick);
-       track the outputs. Output `CraftSticks -> <Stick> x2`.
-    6. Run `CraftWoodPick` with one Wood + one Stick. Output `CraftWoodPick -> <WoodPick>`.
-    7. On any failed run, output its error and stop.
+  ## Output rules
+  - Plain text. One plan line per class, one execution line per run
+    (`<Action> -> <output>`). No markdown.
+
+  ## Recipe chain (from `list_actions`; pluginName is `craft-basics` here)
+
+  | Target   | action        | Inputs           | Outputs    |
+  | -------- | ------------- | ---------------- | ---------- |
+  | Log      | FindLog       | (none)           | 1 Log      |
+  | Wood     | CraftWood     | 1 Log            | 1 Wood     |
+  | Stick    | CraftSticks   | 1 Wood           | 2 Stick    |
+  | WoodPick | CraftWoodPick | 1 Wood + 1 Stick | 1 WoodPick |
+
+  ## Steps
+  1. Call `list_objects`; collect the live paths for Wood, Stick, and Log.
+  2. Plan backwards: 1 WoodPick needs 1 live Wood + 1 live Stick; a Stick comes
+     from CraftSticks (1 Wood -> 2 Stick); a Wood from 1 Log; a Log from
+     FindLog. Count what is live and compute how many of each to make. Print
+     one `<Class> have:<N> need:<M>` line per class.
+  3. Run `FindLog` for each Log needed; after each, poll `get_run` and append
+     the new Log path. Output `FindLog -> <Log>` per run.
+  4. Run `CraftWood` for each Wood needed, consuming a Log each time; track the
+     outputs. Output `CraftWood -> <Wood>` per run.
+  5. If a Stick is needed, run `CraftSticks` with one Wood (yields 2 Stick);
+     track the outputs. Output `CraftSticks -> <Stick> x2`.
+  6. Run `CraftWoodPick` with one Wood + one Stick. Output `CraftWoodPick -> <WoodPick>`.
+  7. On any failed run, output its error and stop.
 
 For deeper targets, extend the recipe table downward and add a have/need + run
 loop per intermediate class, in dependency order (leaves first).

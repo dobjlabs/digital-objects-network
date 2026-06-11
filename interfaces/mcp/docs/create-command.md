@@ -19,17 +19,17 @@ tool calls and exact output -- never echo their prose into the body.
 
 Tools the command will call (discover exact shapes by calling them):
 
-| Tool | Use |
-|---|---|
-| `list_objects` | the user's objects: class, fields, liveness, `fileName` |
-| `list_actions` | available actions, each a `{pluginName, name}` with input/output classes |
-| `list_classes` | object classes and which actions produce/consume them |
-| `inspect_object` / `inspect_class` / `inspect_action` | detail on one of each |
-| `check_feasibility(action)` | whether an action can run now; missing inputs |
-| `run_action(action, input_objects)` | start an action; returns a `runId` |
-| `get_run(runId)` | poll until `status` is `succeeded`/`failed`, then read `result` |
-| `get_state_root` / `read_settings` / `get_objects_dir` | chain head / config / objects path |
-| `read_doc(name)` | reference docs (`read_doc("list")` for the index) |
+| Tool                                                   | Use                                                                      |
+| ------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `list_objects`                                         | the user's objects: class, fields, liveness, `fileName`                  |
+| `list_actions`                                         | available actions, each a `{pluginName, name}` with input/output classes |
+| `list_classes`                                         | object classes and which actions produce/consume them                    |
+| `inspect_object` / `inspect_class` / `inspect_action`  | detail on one of each                                                    |
+| `check_feasibility(action)`                            | whether an action can run now; missing inputs                            |
+| `run_action(action, inputObjectPaths)`                 | start an action; returns a `runId`                                       |
+| `get_run(runId)`                                       | poll until `status` is `succeeded`/`failed`, then read `result`          |
+| `get_state_root` / `read_settings` / `get_objects_dir` | chain head / config / objects path                                       |
+| `read_doc(name)`                                       | reference docs (`read_doc("list")` for the index)                        |
 
 - Qualified action names: `run_action`'s `action` is `{pluginName, name}`. Take
   `pluginName` from `list_actions` -- do not guess it (it is the plugin's name,

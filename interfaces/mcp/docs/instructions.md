@@ -64,7 +64,7 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ### Mutation
 
-- `run_action(action_id, input_object_paths)` — start an action; returns a
+- `run_action(action_id, inputObjectPaths)` — start an action; returns a
   `runId` immediately (the proof + commit run in the background). See
   "running actions" below.
 - `get_run(run_id)` — poll a run's status, result/error, and progress log.
@@ -98,7 +98,7 @@ the user which step a run is on while it's still `generateProof` or
 `committing`. Multiple runs proceed concurrently — start several and poll each
 `runId` independently.
 
-Pass `input_object_paths` explicitly (one per the action's required input
+Pass `inputObjectPaths` explicitly (one per the action's required input
 classes, in order); resolve them from `list_objects` / `check_feasibility`
 first. An input count that doesn't match the action makes the run fail.
 

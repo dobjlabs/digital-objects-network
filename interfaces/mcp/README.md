@@ -133,8 +133,9 @@ driver).
 A self-contained live dashboard (`dashboard/index.html`, no build step). dobjd
 writes it to `~/.dobj/dashboard/index.html` when the MCP server starts; the
 `dashboard` prompt serves it — in Claude Code, a preview pane backed by a local static
-server on `:7719`; otherwise it points the user at the file. The page polls the
-REST API on `:7717` for objects, the synchronizer head, and an action-log SSE.
+server on `:7719`; otherwise it points the user at the file. The generated page
+polls the active dobjd REST API port for objects, the synchronizer head, and an
+action-log SSE.
 
 ## Setup
 
