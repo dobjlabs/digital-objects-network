@@ -462,6 +462,13 @@ impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
         let arguments = request.arguments.as_ref();
+        if request.name == crate::prompts::PLAY {
+            let stored = self
+                .command_store()
+                .map(|store| store.list())
+                .unwrap_or_default();
+            return std::future::ready(Ok(crate::prompts::play_result(&stored, arguments)));
+        }
         if let Some(result) = crate::prompts::get(&request.name, arguments) {
             return std::future::ready(Ok(result));
         }

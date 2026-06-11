@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// Prompt names the server reserves for built-ins; a user command may not
 /// shadow them. Kept in sync with the built-ins in [`crate::prompts`].
-const RESERVED_NAMES: [&str; 3] = ["play", "help", "create-command"];
+const RESERVED_NAMES: [&str; 5] = ["play", "help", "create-command", "consult-docs", "start"];
 
 /// A user-authored command: a named, reusable block of instructions the model
 /// follows when the command is invoked.
@@ -191,6 +191,8 @@ mod tests {
         assert!(store.save("play", "x", "step").is_err());
         assert!(store.save("help", "x", "step").is_err());
         assert!(store.save("create-command", "x", "step").is_err());
+        assert!(store.save("consult-docs", "x", "step").is_err());
+        assert!(store.save("start", "x", "step").is_err());
         assert!(store.save("!!!", "x", "step").is_err());
         // path separators never survive normalization
         assert_eq!(normalize_name("../etc/passwd").unwrap(), "etc-passwd");
