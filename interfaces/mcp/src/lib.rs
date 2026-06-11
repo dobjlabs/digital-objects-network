@@ -12,10 +12,11 @@ pub mod types;
 /// output. dobjd derives custom MCP ports as `DOBJD_PORT + 1`.
 pub const DEFAULT_PORT: u16 = 7718;
 
-/// The bundled live dashboard, served at the MCP server root (`GET /`). A single
-/// self-contained page that polls the daemon's REST API for objects, classes,
-/// and the state root. It ships with the MCP server so the dashboard is
-/// available wherever the daemon runs, independent of the React GUI.
+/// The bundled live dashboard. A single self-contained page that polls the
+/// daemon's REST API for objects, the synchronizer head, and an action-log SSE.
+/// On startup it is written to `~/.dobj/view/index.html` so a static file
+/// server (launched by the `view` command) can serve it -- it ships with the
+/// MCP server, independent of the React GUI.
 const DASHBOARD_HTML: &str = include_str!("../dashboard/index.html");
 
 use std::sync::Arc;
@@ -69,17 +70,23 @@ impl<T: DobjOps> McpServer<T> {
             StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
         );
 
-        axum::Router::new()
-            .route(
-                "/",
-                axum::routing::get(|| async { axum::response::Html(DASHBOARD_HTML) }),
-            )
-            .nest_service("/mcp", service)
+        axum::Router::new().nest_service("/mcp", service)
     }
 
     /// Serve the MCP server on the given TCP listener.
     /// Blocks until the cancellation token is cancelled or Ctrl+C.
     pub async fn serve(self, listener: tokio::net::TcpListener) -> anyhow::Result<()> {
+        // Write the bundled dashboard to `~/.dobj/view/` so the static file
+        // server launched by the `view` command can serve it; best-effort.
+        if let Ok(objects_dir) = self.ops.get_objects_dir() {
+            let mut dir = std::path::PathBuf::from(objects_dir);
+            dir.pop();
+            dir.push("view");
+            if std::fs::create_dir_all(&dir).is_ok() {
+                let _ = std::fs::write(dir.join("index.html"), DASHBOARD_HTML);
+            }
+        }
+
         let ct = self.config.cancellation_token.clone();
         let router = self.router();
 

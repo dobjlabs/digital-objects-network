@@ -1,37 +1,33 @@
-Open or close the live Digital Objects dashboard. The daemon serves it at
-http://127.0.0.1:7718/.
+Open or close the live Digital Objects dashboard. The daemon writes the
+dashboard files to `~/.dobj/view/` on startup.
 
-Choose the action from the input/argument:
-- "stop", "close", "hide", "off" -> STOP
-- anything else, including no argument (e.g. "start", "open", "show") -> START
+Decide from the argument: "stop", "close", or "off" -> STOP; anything else
+(including no argument) -> START.
 
 ## START
 
-The daemon already serves the dashboard at http://127.0.0.1:7718/.
+1. Merge this configuration into the project-local `.claude/launch.json` (create
+   the file if absent; keep any existing configurations). Replace `<HOME>` with
+   the absolute home directory path:
 
-If the Claude Preview tool (`mcp__Claude_Preview__preview_start`) is available
-(Claude Code):
+   {
+     "name": "dobj-view",
+     "runtimeExecutable": "python3",
+     "runtimeArgs": ["-m", "http.server", "7719", "--directory", "<HOME>/.dobj/view"],
+     "port": 7719
+   }
 
-1. Ensure a project-local `.claude/launch.json` has a configuration named
-   `dobj-view` with `"port": 7718` and a harmless keep-alive command suited to
-   the OS -- on macOS/Linux, runtimeExecutable `"sh"`, runtimeArgs
-   `["-c", "while :; do sleep 3600; done"]`. Merge into any existing
-   configurations; do not clobber them.
-2. Call `preview_start` with `{name: "dobj-view"}` to open the pane onto it.
-3. On success reply with one line: `view -> http://127.0.0.1:7718/  (pane open)`.
-   On any error, fall through to the line below.
+2. Call `preview_start` with `{name: "dobj-view"}`. This launches the static
+   server and opens the pane at http://127.0.0.1:7719/.
+3. Reply with one line: `view -> http://127.0.0.1:7719/  (pane open)`.
 
-Otherwise reply with exactly one line and stop:
+If the Claude Preview tool is unavailable, or `preview_start` errors, reply with
+exactly one line and stop:
 
-view -> http://127.0.0.1:7718/  (open this in your browser)
+view -> open ~/.dobj/view/index.html in your browser
 
 ## STOP
 
-If the Claude Preview tool is available: call `preview_list`, find the entry
-named `dobj-view`, and call `preview_stop` with its `serverId`. The daemon keeps
-serving the dashboard; this only closes the pane. Reply with one line:
-`view stopped`.
-
-Otherwise, or if there is no such pane, reply with exactly one line:
-
-no view to stop
+Call `preview_list`, find the entry named `dobj-view`, and call `preview_stop`
+with its `serverId`. Reply with one line: `view stopped`. If there is no such
+entry, reply: `no view to stop`.
