@@ -1,5 +1,5 @@
 //! File-backed store for user-authored commands ("macros"): named instruction
-//! blocks the player defines at runtime via the `define_command` tool. They are
+//! blocks the user defines at runtime via the `define_command` tool. They are
 //! plain text, not driver state -- no objects, proofs, or chain -- so the MCP
 //! server owns them directly (a `commands/` dir beside the driver's objects
 //! dir, i.e. `~/.dobj/commands/`), surfaces each as a dynamic MCP prompt, and
@@ -11,18 +11,10 @@ use anyhow::{Result, anyhow};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Names a user command may not take: the `play` entry, the built-in commands,
-/// and `start` (a dispatcher alias for the menu). Keeps saved commands from
-/// shadowing the framework surface.
-const RESERVED_NAMES: [&str; 7] = [
-    "play",
-    "help",
-    "create-command",
-    "consult-docs",
-    "start",
-    "preview",
-    "preview-stop",
-];
+/// Names a user command may not take: the `start` entry plus the built-in
+/// commands (help, create-command, consult-docs, view). Keeps saved commands
+/// from shadowing the framework surface.
+const RESERVED_NAMES: [&str; 5] = ["start", "help", "create-command", "consult-docs", "view"];
 
 /// A user-authored command: a named, reusable block of instructions the model
 /// follows when the command is invoked.
@@ -197,13 +189,11 @@ mod tests {
     #[test]
     fn reserved_empty_and_traversal_names_are_handled() {
         let (_dir, store) = store();
-        assert!(store.save("play", "x", "step").is_err());
+        assert!(store.save("start", "x", "step").is_err());
         assert!(store.save("help", "x", "step").is_err());
         assert!(store.save("create-command", "x", "step").is_err());
         assert!(store.save("consult-docs", "x", "step").is_err());
-        assert!(store.save("start", "x", "step").is_err());
-        assert!(store.save("preview", "x", "step").is_err());
-        assert!(store.save("preview-stop", "x", "step").is_err());
+        assert!(store.save("view", "x", "step").is_err());
         assert!(store.save("!!!", "x", "step").is_err());
         // path separators never survive normalization
         assert_eq!(normalize_name("../etc/passwd").unwrap(), "etc-passwd");

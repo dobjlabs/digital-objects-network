@@ -3,7 +3,7 @@ use rmcp::model::{Annotated, RawResource, ReadResourceResult, Resource, Resource
 const PODLANG_REFERENCE_URI: &str = "dobj://docs/podlang-reference";
 const TXLIB_PREDICATES_URI: &str = "dobj://source/txlib.podlang";
 const OBJECT_LIFECYCLE_URI: &str = "dobj://docs/object-lifecycle";
-const HOW_TO_PLAY_URI: &str = "dobj://docs/how-to-play";
+const HOW_IT_WORKS_URI: &str = "dobj://docs/how-it-works";
 
 pub fn list() -> Vec<Resource> {
     vec![
@@ -38,10 +38,10 @@ pub fn list() -> Vec<Resource> {
             None,
         ),
         Annotated::new(
-            RawResource::new(HOW_TO_PLAY_URI, "How to Play")
+            RawResource::new(HOW_IT_WORKS_URI, "How It Works")
                 .with_description(
-                    "Generic, plugin-agnostic framing for playing a Digital \
-                     Objects world: the gather/refine loop, why proofs and \
+                    "Generic, plugin-agnostic framing for working with Digital \
+                     Objects: the create/transform loop, why proofs and \
                      nullifiers, and object liveness.",
                 )
                 .with_mime_type("text/markdown"),
@@ -55,7 +55,7 @@ pub fn read(uri: &str) -> Option<ReadResourceResult> {
         PODLANG_REFERENCE_URI => (PODLANG_REFERENCE, "text/markdown"),
         TXLIB_PREDICATES_URI => (TXLIB_PREDICATES, "text/plain"),
         OBJECT_LIFECYCLE_URI => (OBJECT_LIFECYCLE, "text/markdown"),
-        HOW_TO_PLAY_URI => (HOW_TO_PLAY, "text/markdown"),
+        HOW_IT_WORKS_URI => (HOW_IT_WORKS, "text/markdown"),
         _ => return None,
     };
     Some(ReadResourceResult::new(vec![
@@ -65,5 +65,5 @@ pub fn read(uri: &str) -> Option<ReadResourceResult> {
 
 const PODLANG_REFERENCE: &str = include_str!("../docs/podlang-reference.md");
 const OBJECT_LIFECYCLE: &str = include_str!("../docs/object-lifecycle.md");
-const HOW_TO_PLAY: &str = include_str!("../docs/how-to-play.md");
+const HOW_IT_WORKS: &str = include_str!("../docs/how-it-works.md");
 const TXLIB_PREDICATES: &str = include_str!("../../../libs/txlib/src/predicates/txlib.podlang");

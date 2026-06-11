@@ -110,15 +110,15 @@ pub struct GetRunParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadDocParams {
-    /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "how-to-play", "txlib.podlang", "time.podlang"
+    /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "how-it-works", "txlib.podlang", "time.podlang"
     pub name: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DefineCommandParams {
     /// Command name; slugified to lowercase-dashed (e.g. "Build Rocket" ->
-    /// "build-rocket"). The names "play", "help", and "create-command" are
-    /// reserved.
+    /// "build-rocket"). The names "start", "help", "create-command",
+    /// "consult-docs", and "view" are reserved.
     pub name: String,
     /// One-line description shown in the command menu.
     pub description: String,
@@ -302,7 +302,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"how-to-play\" (generic framing for playing a Digital Objects world), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes). Pass \"list\" to see all available documents."
+        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"how-it-works\" (generic framing for working with Digital Objects), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes). Pass \"list\" to see all available documents."
     )]
     fn read_doc(&self, Parameters(params): Parameters<ReadDocParams>) -> String {
         match params.name.as_str() {
@@ -329,7 +329,7 @@ impl<T: DobjOps> DobjMcpService<T> {
                 let uri = match params.name.as_str() {
                     "podlang-reference" => "dobj://docs/podlang-reference",
                     "object-lifecycle" => "dobj://docs/object-lifecycle",
-                    "how-to-play" => "dobj://docs/how-to-play",
+                    "how-it-works" => "dobj://docs/how-it-works",
                     "txlib.podlang" => "dobj://source/txlib.podlang",
                     "time.podlang" => "dobj://source/time.podlang",
                     "generated.podlang" => {
@@ -367,7 +367,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Define a reusable command: a named macro of steps over the loaded plugin's actions. Persists it so it appears in the command menu and as its own prompt; running its name follows the steps. Slugifies the name and rejects the reserved names play/help/create-command. Overwrites an existing command with the same slug."
+        description = "Define a reusable command: a named macro of steps over the loaded plugin's actions. Persists it so it appears in the command menu and as its own prompt; running its name follows the steps. Slugifies the name and rejects the reserved framework command names. Overwrites an existing command with the same slug."
     )]
     fn define_command(
         &self,
@@ -381,7 +381,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "List the player's saved commands (defined via define_command), with their descriptions and bodies."
+        description = "List the saved commands (defined via define_command), with their descriptions and bodies."
     )]
     fn list_commands(&self) -> Result<Json<CommandList>, String> {
         let store = self.command_store().map_err(|e| e.to_string())?;
@@ -462,12 +462,12 @@ impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
         let arguments = request.arguments.as_ref();
-        if request.name == crate::prompts::PLAY {
+        if request.name == crate::prompts::START {
             let stored = self
                 .command_store()
                 .map(|store| store.list())
                 .unwrap_or_default();
-            return std::future::ready(Ok(crate::prompts::play_result(&stored, arguments)));
+            return std::future::ready(Ok(crate::prompts::start_result(&stored, arguments)));
         }
         if let Some(result) = crate::prompts::get(&request.name, arguments) {
             return std::future::ready(Ok(result));
@@ -595,7 +595,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let service = make_service().with_command_dir(dir.path());
         let result = service.define_command(Parameters(DefineCommandParams {
-            name: "play".to_string(),
+            name: "start".to_string(),
             description: "x".to_string(),
             body: "y".to_string(),
         }));

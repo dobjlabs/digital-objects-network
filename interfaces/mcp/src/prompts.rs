@@ -1,7 +1,7 @@
-//! Opt-in MCP prompts that layer a text-game UX over the generic tools, without
-//! baking game logic into the tools or the always-on server instructions. A
-//! client invokes `play` to enter the dispatcher; framework commands (help,
-//! create-command, consult-docs, start) are built in here, and user-authored
+//! Opt-in MCP prompts that layer a command UX over the generic tools, without
+//! baking command logic into the tools or the always-on server instructions. A
+//! client invokes `start` to enter the dispatcher; framework commands (help,
+//! create-command, consult-docs, view) are built in here, and user-authored
 //! commands come from [`crate::commands`]. Both are surfaced as MCP prompts, so
 //! this works in any MCP client.
 
@@ -11,11 +11,11 @@ use serde_json::{Map, Value};
 use crate::commands::UserCommand;
 
 /// The dispatcher entry prompt. Composed server-side (it needs the command
-/// store) via [`play_result`], so it is not a plain builtin.
-pub const PLAY: &str = "play";
+/// store) via [`start_result`], so it is not a plain builtin.
+pub const START: &str = "start";
 
-/// Dispatcher rules injected when the player enters `play`.
-const PLAY_PERSONA: &str = include_str!("../docs/play.md");
+/// Dispatcher rules injected when a session starts.
+const START_PERSONA: &str = include_str!("../docs/start.md");
 
 /// A framework command baked into the server: a Case 1 target the dispatcher
 /// can route to without any install.
@@ -28,7 +28,7 @@ struct Builtin {
 const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "help",
-        description: "Show the command menu: built-ins plus the player's saved commands.",
+        description: "Show the command menu: built-ins plus saved commands.",
         body: include_str!("../docs/help.md"),
     },
     Builtin {
@@ -42,25 +42,20 @@ const BUILTINS: &[Builtin] = &[
         body: include_str!("../docs/consult-docs.md"),
     },
     Builtin {
-        name: "preview",
-        description: "Open the live dashboard (a pane in Claude Code, otherwise a URL to visit).",
-        body: include_str!("../docs/preview.md"),
-    },
-    Builtin {
-        name: "preview-stop",
-        description: "Close the dashboard preview pane.",
-        body: include_str!("../docs/preview-stop.md"),
+        name: "view",
+        description: "Open or close the live dashboard (a pane in Claude Code, otherwise a URL). Pass `stop` to close.",
+        body: include_str!("../docs/view.md"),
     },
 ];
 
-/// The prompts advertised to clients: the `play` entry plus every builtin.
+/// The prompts advertised to clients: the `start` entry plus every builtin.
 /// User-authored commands are appended by the server (it owns the store).
 pub fn list() -> Vec<Prompt> {
     let mut prompts = vec![Prompt::new(
-        PLAY,
+        START,
         Some(
-            "Enter interactive play: a terse command game over the loaded plugin's Digital \
-             Objects. Opt-in; type 'exit' to leave.",
+            "Start a command session over the loaded plugin's Digital Objects. Opt-in; type \
+             'exit' to leave.",
         ),
         Some(vec![
             PromptArgument::new("command")
@@ -82,8 +77,8 @@ pub fn list() -> Vec<Prompt> {
     prompts
 }
 
-/// Resolve a builtin command by name. `play` is intentionally excluded -- it is
-/// composed server-side by [`play_result`] -- as are user commands.
+/// Resolve a builtin command by name. `start` is intentionally excluded -- it is
+/// composed server-side by [`start_result`] -- as are user commands.
 pub fn get(name: &str, arguments: Option<&Map<String, Value>>) -> Option<GetPromptResult> {
     let builtin = BUILTINS.iter().find(|builtin| builtin.name == name)?;
     let mut messages = vec![PromptMessage::new_text(
@@ -94,14 +89,14 @@ pub fn get(name: &str, arguments: Option<&Map<String, Value>>) -> Option<GetProm
     Some(GetPromptResult::new(messages).with_description(builtin.description))
 }
 
-/// Compose the `play` dispatcher: its rules, the live command catalog, and an
+/// Compose the `start` dispatcher: its rules, the live command catalog, and an
 /// optional first command. Needs the store's commands, so the server calls it.
-pub fn play_result(
+pub fn start_result(
     stored: &[UserCommand],
     arguments: Option<&Map<String, Value>>,
 ) -> GetPromptResult {
     let mut messages = vec![
-        PromptMessage::new_text(PromptMessageRole::User, PLAY_PERSONA),
+        PromptMessage::new_text(PromptMessageRole::User, START_PERSONA),
         PromptMessage::new_text(PromptMessageRole::User, catalog_message(stored)),
     ];
     if let Some(command) = arguments
@@ -117,10 +112,10 @@ pub fn play_result(
     } else {
         messages.push(PromptMessage::new_text(
             PromptMessageRole::User,
-            "The player just entered. Run the `help` command to show the menu.",
+            "The session just started. Run the `help` command to show the menu.",
         ));
     }
-    GetPromptResult::new(messages).with_description("Interactive play")
+    GetPromptResult::new(messages).with_description("Command session")
 }
 
 /// The "Installed commands:" block the dispatcher routes against: builtins
@@ -181,16 +176,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn list_exposes_play_and_builtins() {
+    fn list_exposes_start_and_builtins() {
         let names: Vec<String> = list().into_iter().map(|prompt| prompt.name).collect();
-        for expected in [
-            PLAY,
-            "help",
-            "create-command",
-            "consult-docs",
-            "preview",
-            "preview-stop",
-        ] {
+        for expected in [START, "help", "create-command", "consult-docs", "view"] {
             assert!(
                 names.iter().any(|name| name == expected),
                 "missing {expected}"
@@ -201,13 +189,13 @@ mod tests {
     #[test]
     fn get_returns_builtin_body() {
         assert!(get("help", None).is_some());
-        assert!(get("consult-docs", None).is_some());
+        assert!(get("view", None).is_some());
     }
 
     #[test]
-    fn get_play_is_not_a_plain_builtin() {
-        // `play` is composed server-side (it needs the command store).
-        assert!(get(PLAY, None).is_none());
+    fn get_start_is_not_a_plain_builtin() {
+        // `start` is composed server-side (it needs the command store).
+        assert!(get(START, None).is_none());
     }
 
     #[test]
@@ -216,17 +204,17 @@ mod tests {
     }
 
     #[test]
-    fn play_result_shows_menu_on_bare_entry() {
+    fn start_result_shows_menu_on_bare_entry() {
         // persona + catalog + the "run help" entry directive
-        let result = play_result(&[], None);
+        let result = start_result(&[], None);
         assert_eq!(result.messages.len(), 3);
     }
 
     #[test]
-    fn play_result_runs_first_command_when_given() {
+    fn start_result_runs_first_command_when_given() {
         let mut args = Map::new();
         args.insert("command".to_string(), Value::String("help".to_string()));
-        let result = play_result(&[], Some(&args));
+        let result = start_result(&[], Some(&args));
         assert_eq!(result.messages.len(), 3);
     }
 
@@ -234,7 +222,7 @@ mod tests {
     fn catalog_lists_builtins_and_stored() {
         let stored = vec![UserCommand {
             name: "stock-up".to_string(),
-            description: "gather raw materials".to_string(),
+            description: "gather inputs".to_string(),
             body: "step".to_string(),
         }];
         let catalog = catalog_message(&stored);
