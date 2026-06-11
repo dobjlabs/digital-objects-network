@@ -18,5 +18,5 @@ time:
 When you have all three, call the `define_command` tool with
 `{ name, description, body }`. On success, confirm in one line:
 `defined: <name>`. It appears in `help` immediately; to run it by name from the
-dispatcher, type `start` to refresh the command list first. To remove one later,
-call `delete_command`.
+dispatcher, re-enter play (re-run the play prompt) to refresh the command list
+first. To remove one later, call `delete_command`.

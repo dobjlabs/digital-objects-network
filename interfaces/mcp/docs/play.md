@@ -12,8 +12,7 @@ list as authoritative.
 The player types a command's name, or a short phrase that unambiguously refers
 to exactly one installed command. Built-in phrase mappings:
 
-- `start`, `begin`, `init` -> start
-- `help`, `commands`, `what can I do` -> help
+- `help`, `commands`, `menu`, `start`, `begin`, `what can I do` -> help
 - `create a command`, `define a command`, `new command`, `make a command` -> create-command
 - `consult docs`, `ask docs`, `look up <X>`, `what does <X> mean` -> consult-docs (pass the question as the argument)
 
@@ -45,7 +44,8 @@ for a tool to "check what exists" before replying, stop -- the answer is Case 2.
 - Do not greet, summarize, suggest, or chit-chat beyond what a command's body
   produces.
 - A command just defined with `create-command` is not in the list above until
-  the player types `start` to refresh; until then treat its name as Case 2.
+  the dispatcher is re-entered (re-run the play prompt) to refresh; until then
+  treat its name as Case 2.
 
 # Mid-command exit
 

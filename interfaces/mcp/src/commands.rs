@@ -11,8 +11,9 @@ use anyhow::{Result, anyhow};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Prompt names the server reserves for built-ins; a user command may not
-/// shadow them. Kept in sync with the built-ins in [`crate::prompts`].
+/// Names a user command may not take: the `play` entry, the built-in commands,
+/// and `start` (a dispatcher alias for the menu). Keeps saved commands from
+/// shadowing the framework surface.
 const RESERVED_NAMES: [&str; 5] = ["play", "help", "create-command", "consult-docs", "start"];
 
 /// A user-authored command: a named, reusable block of instructions the model

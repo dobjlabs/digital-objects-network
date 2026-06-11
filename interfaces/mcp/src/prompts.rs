@@ -41,11 +41,6 @@ const BUILTINS: &[Builtin] = &[
         description: "Answer a question about Digital Objects from the reference docs.",
         body: include_str!("../docs/consult-docs.md"),
     },
-    Builtin {
-        name: "start",
-        description: "Begin a session: a short welcome, then the command menu.",
-        body: include_str!("../docs/start.md"),
-    },
 ];
 
 /// The prompts advertised to clients: the `play` entry plus every builtin.
@@ -59,7 +54,7 @@ pub fn list() -> Vec<Prompt> {
         ),
         Some(vec![
             PromptArgument::new("command")
-                .with_description("Optional first command to run on entering, e.g. \"start\".")
+                .with_description("Optional first command to run on entering, e.g. \"help\".")
                 .with_required(false),
         ]),
     )];
@@ -108,6 +103,11 @@ pub fn play_result(
         messages.push(PromptMessage::new_text(
             PromptMessageRole::User,
             format!("First command: {command}"),
+        ));
+    } else {
+        messages.push(PromptMessage::new_text(
+            PromptMessageRole::User,
+            "The player just entered. Run the `help` command to show the menu.",
         ));
     }
     GetPromptResult::new(messages).with_description("Interactive play")
@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn list_exposes_play_and_builtins() {
         let names: Vec<String> = list().into_iter().map(|prompt| prompt.name).collect();
-        for expected in [PLAY, "help", "create-command", "consult-docs", "start"] {
+        for expected in [PLAY, "help", "create-command", "consult-docs"] {
             assert!(
                 names.iter().any(|name| name == expected),
                 "missing {expected}"
@@ -199,15 +199,16 @@ mod tests {
     }
 
     #[test]
-    fn play_result_has_persona_and_catalog() {
+    fn play_result_shows_menu_on_bare_entry() {
+        // persona + catalog + the "run help" entry directive
         let result = play_result(&[], None);
-        assert_eq!(result.messages.len(), 2);
+        assert_eq!(result.messages.len(), 3);
     }
 
     #[test]
-    fn play_result_appends_first_command() {
+    fn play_result_runs_first_command_when_given() {
         let mut args = Map::new();
-        args.insert("command".to_string(), Value::String("start".to_string()));
+        args.insert("command".to_string(), Value::String("help".to_string()));
         let result = play_result(&[], Some(&args));
         assert_eq!(result.messages.len(), 3);
     }
