@@ -1,161 +1,58 @@
-# Digital Objects
+# Digital Objects Network
 
-The reference implementation of the **Digital Objects** network: privately-held,
-stateful objects each backed by a recursive zero-knowledge proof. Items are `.dobj` JSON files on disk;
-their validity is anchored to Ethereum via EIP-4844 blobs. The chain
-sees only opaque commitments — an observer can't tell what an object is
-or who holds it.
+The Digital Objects Network is a decentralized network that facilitates the
+creation, execution, and exchange of Digital Objects. Digital Objects are fully
+programmable state machines that are owned and operated by Internet users, and
+that can be passed between mutually untrusting Internet users while maintaining their integrity and consistency, without relying on any central trusted authority.
 
-## Architecture
+## Getting started
 
-A single **driver daemon** (`dobjd`) on the user's machine owns
-`~/.dobj/`. Every client talks to it the same way:
+- **Install (end user):** [INSTALL.md](INSTALL.md), or point an MCP-aware agent at [SKILL.md](SKILL.md).
+- **Develop from source:** [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Self-host the services:** [deploy/](deploy/README.md).
 
-```
-        ┌─ desktop app (Tauri webview shell) ─┐
-        ├─ website (browser tab) ─────────────┤   HTTP/SSE
-        ├─ `dobj` terminal CLI ───────────────┼──────────►  dobjd  ──►  ~/.dobj/
-        └─ MCP agents (Claude, Cursor, …) ────┘            (one process)
-                                                              │
-                                              hosted ─────────┤
-                                              synchronizer ◄──┘
-                                              + relayer
-```
+## Repository map
 
-- **`dobjd`** ([services/dobjd/](services/dobjd)) — long-running driver process. Serves the
-  REST/SSE API on `:7717` and the MCP server on `:7718`. Owns the
-  plugin loader, RocksDB, and the in-memory state
-  every client shares.
-- **`dobj`** ([interfaces/cli/](interfaces/cli)) — terminal CLI. Subcommands for objects,
-  inspecting objects/classes, running actions, watching the event bus,
-  and managing the daemon (`start`/`stop`/`status`/`logs`).
-- **Desktop / web** ([interfaces/gui/](interfaces/gui)) — React UI bundled either as a
-  Tauri shell or served from Vite. Both modes call dobjd over HTTP/SSE.
-- **MCP** — `dobj-mcp-proxy` (in [interfaces/mcp/](interfaces/mcp)) bridges
-  agents that only speak stdio (e.g. Claude Desktop) to dobjd's HTTP MCP server. Claude Code connects to
-  `http://127.0.0.1:7718/mcp` directly via `claude mcp add`.
-- **Hosted synchronizer + relayer** — public endpoints the daemon points
-  at by default. The synchronizer maintains the Merkle trees
-  of transactions + nullifiers; the relayer submits proof payloads as
-  EIP-4844 blobs. Both are independent Rust services
-  ([services/synchronizer/](services/synchronizer), [services/relayer/](services/relayer)) that can also
-  run locally for development.
+Each directory has its own README with the details.
 
-## Install (end user)
+### Services
 
-Paste this prompt to any MCP-aware agent (Claude Code, Cursor, etc.):
+| Directory                                                 | Role                                                                                                                                   |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| [services/dobjd/](services/dobjd/README.md)               | The daemon. Owns all driver state; serves the REST/SSE API on `:7717` and an embedded MCP server on `:7718`. Every client talks to it. |
+| [services/synchronizer/](services/synchronizer/README.md) | Reads blobs from the chain, maintains the Merkle state, and serves grounding/membership queries.                                       |
+| [services/relayer/](services/relayer/README.md)           | Wraps proof payloads as EIP-4844 blob transactions and submits them to Ethereum.                                                       |
+| [services/archiver/](services/archiver/README.md)         | Follows beacon blocks and archives blobs filtered by destination address, serving them over a beacon-compatible API.                   |
 
-> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/SKILL.md and set up the Digital Objects driver.
+### Interfaces
 
-The skill installs `dobjd`, `dobj`, `dobj-mcp-proxy`, and the
-`craft-basics` plugin into `~/.dobj/` (the hosted synchronizer + relayer
-URLs are baked into the binaries), starts the daemon, and registers MCP
-with the agent. End-to-end install is a couple of minutes.
+| Directory                                   | Role                                                                                                     |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [interfaces/cli/](interfaces/cli/README.md) | The `dobj` terminal CLI. A thin HTTP/SSE client of dobjd.                                                |
+| [interfaces/gui/](interfaces/gui/README.md) | React frontend, runnable in a browser or wrapped in a Tauri desktop shell. Talks to dobjd over HTTP/SSE. |
+| [interfaces/mcp/](interfaces/mcp/README.md) | MCP server library exposing the driver as tools to AI agents, plus the `dobj-mcp-proxy` stdio bridge.    |
 
-Prefer to install by hand? See [INSTALL.md](INSTALL.md): a `curl ... | sh`
-one-liner (macOS / Linux), an `irm ... | iex` line (Windows), and
-step-by-step manual instructions. The agent skill above is
-[SKILL.md](SKILL.md).
+### Libraries
 
-## Develop (from source)
+| Directory                                       | Role                                                                                      |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [libs/driver/](libs/driver/README.md)           | The core orchestration library. Owns `~/.dobj/` and runs actions end-to-end.              |
+| [libs/sdk/](libs/sdk/README.md)                 | Rhai engine and two-phase loader/executor that compiles plugin scripts into pod2 modules. |
+| [libs/txlib/](libs/txlib/README.md)             | Transaction state machine: event hash chain, grounding, and the `TxFinalized` predicate.  |
+| [libs/payload/](libs/payload)                   | Blob payload encoding and the plonky2 proof shrink wrapper.                               |
+| [libs/pexe/](libs/pexe/README.md)               | The `.pexe` plugin archive format and its packaging CLI.                                  |
+| [libs/pod2utils/](libs/pod2utils)               | Macros and helpers for loading podlang modules.                                           |
+| [libs/wire-types/](libs/wire-types)             | Dependency-light data types crossing process boundaries (HTTP/MCP/SSE/CLI).               |
+| [libs/eth-clients/](libs/eth-clients/README.md) | Partial Ethereum Beacon client API used by the chain-side services.                       |
+| [libs/intro-pods/](libs/intro-pods)             | Intro pods for proof-of-work gating (`vdfpod`, `lt-eq-u256-pod`).                         |
 
-Prerequisites:
+### Examples & deploy
 
-- Rust toolchain (nightly pin in [rust-toolchain.toml](rust-toolchain.toml))
-- Node.js + `pnpm`
-- PostgreSQL running locally (only needed if you also run the
-  synchronizer/relayer locally — the default config points at hosted
-  endpoints)
-- [`just`](https://github.com/casey/just) and
-  [`mprocs`](https://github.com/pvolok/mprocs)
+| Directory                   | Role                                                                                    |
+| --------------------------- | --------------------------------------------------------------------------------------- |
+| [examples/](examples)       | Example plugin sources: `craft-basics` (the bundled crafting demo) and `craft-rocket`.  |
+| [deploy/](deploy/README.md) | Container images and Compose stack for running the synchronizer, relayer, and archiver. |
 
-```bash
-git clone https://github.com/dobjlabs/digital-objects-network
-cd digital-objects-network
-
-# install GUI deps
-cd interfaces/gui && pnpm install && cd ../..
-
-# copy env templates if you want to run synchronizer/relayer locally
-cp synchronizer/.env.example synchronizer/.env
-cp relayer/.env.example relayer/.env
-# fill in RPC_URL, BEACON_URL, TO_ADDRESS, PRIVATE_KEY as needed
-
-just dev
-```
-
-`just dev` brings up five panes via mprocs:
-
-| Pane           | Purpose                                             |
-| -------------- | --------------------------------------------------- |
-| `synchronizer` | rebuilds state from chain data (Postgres-backed)    |
-| `relayer`      | submits proof payloads as EIP-4844 blobs            |
-| `dobjd`        | the driver daemon — HTTP on `:7717`, MCP on `:7718` |
-| `web`          | Vite on `:1420`, hot-reload for the React app       |
-| `desktop`      | Tauri shell pointing at the standalone Vite         |
-
-The desktop window opens automatically. Open `http://localhost:1420` in
-any browser to use the website client. MCP-aware agents can connect via
-`claude mcp add --transport http dobj http://127.0.0.1:7718/mcp`.
-
-Run individual pieces standalone with `just sync`, `just relayer`,
-`just dobjd`, `just web`, `just desktop`.
-
-## Workspace map
-
-| Crate                                                                                                       | Role                                                                                                                    |
-| ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| [`libs/driver/`](libs/driver)                                                                               | the core Rust library — opens `~/.dobj/`, runs actions, queries objects. Single entry point for any in-process consumer |
-| [`services/dobjd/`](services/dobjd)                                                                         | HTTP + MCP daemon wrapping the driver. Long-running, owns the broadcast hub                                             |
-| [`interfaces/cli/`](interfaces/cli)                                                                         | terminal CLI client for dobjd (binary: `dobj`)                                                                          |
-| [`interfaces/mcp/`](interfaces/mcp)                                                                         | MCP server library + `dobj-mcp-proxy` stdio bridge                                                                      |
-| [`interfaces/gui/`](interfaces/gui)                                                                         | React frontend + thin Tauri shell. Fetches from dobjd over HTTP/SSE                                                     |
-| [`services/synchronizer/`](services/synchronizer), [`services/relayer/`](services/relayer)                  | chain-side services (Postgres-backed)                                                                                   |
-| [`libs/txlib/`](libs/txlib)                                                                                 | transaction builder — event hash chain, `TxFinalized` predicate, nullifier derivation                                   |
-| [`libs/sdk/`](libs/sdk)                                                                                     | higher-level helpers used inside plugin actions                                                                         |
-| [`libs/pexe/`](libs/pexe)                                                                                   | plugin packager — bundles `manifest.toml` + `plugin.rhai` into `.pexe` archives                                         |
-| [`examples/craft-basics/`](examples/craft-basics)                                                           | the bundled crafting plugin (Log, Wood, Stone, sticks, picks…)                                                          |
-| [`libs/payload/`](libs/payload), [`libs/pod2utils/`](libs/pod2utils), [`libs/intro-pods/`](libs/intro-pods) | shared utilities + intro proof-of-work / VDF pods                                                                       |
-
-Built on **pod2** (0xPARC's predicate-of-data system) using `plonky2` —
-proofs are constant-size regardless of input count.
-
-## Plugins
-
-Actions and classes come from plugin archives (`.pexe` files) loaded
-from `~/.dobj/actions/`. Each plugin zips together:
-
-- `manifest.toml` — name, version, class descriptions, action names, module hash
-- `plugin.rhai` — the action logic as a Rhai script
-
-Plugin sources live under [examples/](examples). The [pexe](libs/pexe) crate
-provides a CLI:
-
-```bash
-just pack-plugins       # build plugins into target/pexe/*.pexe
-just install-plugins    # same, then copy to ~/.dobj/actions/
-```
-
-`install-plugins` also rewrites the `module_hash` line in each plugin's
-manifest to match the hash the compiled pod2 module actually produces,
-so the committed manifest always matches what the driver will accept.
-
-To add or modify a plugin, edit the files under `examples/<name>/` and
-re-run `just install-plugins`. Restart dobjd to pick up the new catalog.
-
-## Reset
-
-Wipe local state and start fresh:
-
-```bash
-just reset
-```
-
-Clears local RocksDB, local object files (`~/.dobj/objects/`), local
-plugin installs (`~/.dobj/actions/`), and the local Postgres databases
-used by the synchronizer and relayer. The next `just dev` re-creates the
-databases (via `just ensure-db`) and re-installs plugins automatically.
-
-If you're not using the default local `postgres` role/admin database,
-either adjust the `just reset` command or drop the `synchronizer` and
-`relayer` databases manually.
+Built on [pod2](https://github.com/0xPARC/pod2) (0xPARC's predicate-of-data
+system) over `plonky2`: proofs are constant-size regardless of input count, and
+the chain sees only opaque commitments.
