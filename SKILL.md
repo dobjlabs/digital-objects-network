@@ -172,6 +172,14 @@ Windows) and reopen.
 For **other agents** (Cursor, Aider, Continue, ...), point their MCP config
 at `http://127.0.0.1:7718/mcp`.
 
+### 6. Try it
+
+With the MCP connected, drive Digital Objects in plain language - or use the
+built-in command UX. In Claude Code, run `/mcp__dobj__start` (or just type
+`start`) to open it; other clients invoke the `start` prompt the same way. From
+there: `help` lists the commands, `create-command` defines your own, `dashboard`
+opens a live view, and `consult-docs` answers questions from the reference docs.
+
 ## Managing the daemon
 
 Prefix with `~/.dobj/bin/`, or add that directory to your PATH (the
