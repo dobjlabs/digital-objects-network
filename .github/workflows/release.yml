@@ -2,8 +2,8 @@ name: Release
 
 # Single workflow producing every Digital Objects Network release artifact: the daemon
 # (`dobjd`), CLI (`dobj`), Claude Desktop stdio bridge (`dobj-mcp-proxy`),
-# and the bundled `craft-basics` plugin. Triggered on `v*` tags or via the
-# Actions UI with a tag name.
+# and every example plugin under `examples/` packaged as a `.pexe`.
+# Triggered on `v*` tags or via the Actions UI with a tag name.
 #
 # On macOS, every native binary is codesigned + notarized so users get an
 # online verification on first run instead of the "could not verify is free
@@ -432,20 +432,29 @@ jobs:
           # toolchain version comes from rust-toolchain.toml.
           cache-shared-key: plugin
 
-      - name: Build craft-basics.pexe
-        run: cargo run --release --locked -p pexe -- build examples/craft-basics
+      - name: Build every example plugin
+        run: cargo run --release --locked -p pexe -- build examples/*
 
-      - name: Locate artifact
+      - name: Collect artifacts
         id: find
         run: |
           set -euo pipefail
-          PEXE=$(find target -path '*pexe*' -name 'craft-basics*.pexe' | head -1)
-          if [ -z "$PEXE" ]; then
-            echo "::error::craft-basics.pexe not produced"
+          # Gather every .pexe the build produced into one flat dir so the
+          # upload step can glob them without depending on pexe's output layout.
+          DEST="$GITHUB_WORKSPACE/release-plugins"
+          mkdir -p "$DEST"
+          found=0
+          while IFS= read -r pexe; do
+            cp "$pexe" "$DEST/"
+            echo "found: $pexe"
+            found=$((found + 1))
+          done < <(find target -path '*pexe*' -name '*.pexe')
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no .pexe plugins produced"
             exit 1
           fi
-          echo "pexe=$PEXE" >> "$GITHUB_OUTPUT"
-          echo "found: $PEXE"
+          echo "collected $found plugin(s)"
+          ls -la "$DEST"
 
       - name: Render release notes
         run: |
@@ -460,7 +469,7 @@ jobs:
       - name: Upload to draft release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.find.outputs.pexe }}
+          files: release-plugins/*.pexe
           tag_name: ${{ env.RELEASE_TAG }}
           draft: true
           fail_on_unmatched_files: true
