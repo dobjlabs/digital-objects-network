@@ -1,30 +1,31 @@
-//! File-backed store for user-authored commands ("macros"): named instruction
-//! blocks the user defines at runtime via the `define_command` tool. They are
-//! plain text, not driver state -- no objects, proofs, or chain -- so the MCP
-//! server owns them directly (a `commands/` dir beside the driver's objects
-//! dir, i.e. `~/.dobj/commands/`), surfaces each as a dynamic MCP prompt, and
-//! never involves the driver.
+//! File-backed store for user-authored commands: one directory per command,
+//! `~/.dobj/commands/<name>/`, holding a `README.md` (YAML frontmatter `name`
+//! and `description`, then the instruction body the model follows) plus any
+//! sibling scripts the command runs. The MCP server owns this directory; the
+//! driver is not involved. Commands are surfaced as MCP prompts, so they work
+//! in any MCP client; sibling scripts run in clients that have a shell.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Names a user command may not take: the `start` entry plus the built-in
 /// commands (help, create-command, consult-docs, view). Keeps saved commands
 /// from shadowing the framework surface.
 const RESERVED_NAMES: [&str; 5] = ["start", "help", "create-command", "consult-docs", "view"];
 
+/// The instruction file inside each command's directory.
+const README: &str = "README.md";
+
 /// A user-authored command: a named, reusable block of instructions the model
-/// follows when the command is invoked.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// follows when the command is invoked. The `name` is the directory slug; the
+/// `description` and `body` come from its `README.md`.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct UserCommand {
-    /// Slug name (lowercase, dash-separated), e.g. `build-rocket`.
     pub name: String,
-    /// One-line summary shown in the command menu.
     pub description: String,
-    /// The steps the model follows when the command runs.
     pub body: String,
 }
 
@@ -34,7 +35,7 @@ pub struct CommandList {
     pub commands: Vec<UserCommand>,
 }
 
-/// A directory of `<name>.json` command definitions.
+/// A directory of `<name>/README.md` command definitions (plus their scripts).
 #[derive(Debug, Clone)]
 pub struct CommandStore {
     dir: PathBuf,
@@ -46,8 +47,8 @@ impl CommandStore {
     }
 
     /// All stored commands, sorted by name. A missing directory yields an empty
-    /// list; unreadable or malformed files are skipped rather than failing the
-    /// whole listing.
+    /// list; entries without a readable `README.md` are skipped rather than
+    /// failing the whole listing.
     pub fn list(&self) -> Vec<UserCommand> {
         let mut commands = Vec::new();
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
@@ -55,12 +56,8 @@ impl CommandStore {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            if let Some(command) = std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|text| serde_json::from_str::<UserCommand>(&text).ok())
+            if path.is_dir()
+                && let Some(command) = read_command(&path)
             {
                 commands.push(command);
             }
@@ -71,13 +68,13 @@ impl CommandStore {
 
     pub fn get(&self, name: &str) -> Option<UserCommand> {
         let name = normalize_name(name).ok()?;
-        let text = std::fs::read_to_string(self.path_for(&name)).ok()?;
-        serde_json::from_str(&text).ok()
+        read_command(&self.dir.join(name))
     }
 
-    /// Validate and persist a command, overwriting any existing one with the
-    /// same slug. The raw `name` is normalized to a slug; the stored and
-    /// returned command carries the normalized name.
+    /// Validate and persist a command. The raw `name` is normalized to a slug;
+    /// the body and description land in `<name>/README.md`. Re-saving an
+    /// existing command rewrites its README and leaves any sibling scripts in
+    /// place.
     pub fn save(&self, name: &str, description: &str, body: &str) -> Result<UserCommand> {
         let name = normalize_name(name)?;
         let body = body.trim();
@@ -89,36 +86,78 @@ impl CommandStore {
             description: description.trim().to_string(),
             body: body.to_string(),
         };
-        std::fs::create_dir_all(&self.dir)
-            .map_err(|err| anyhow!("failed to create command dir {}: {err}", self.dir.display()))?;
-        let json = serde_json::to_string_pretty(&command)?;
-        std::fs::write(self.path_for(&command.name), json)
+        let dir = self.dir.join(&command.name);
+        std::fs::create_dir_all(&dir)
+            .map_err(|err| anyhow!("failed to create command dir {}: {err}", dir.display()))?;
+        std::fs::write(dir.join(README), render_readme(&command))
             .map_err(|err| anyhow!("failed to write command {}: {err}", command.name))?;
         Ok(command)
     }
 
-    /// Remove a command. Returns whether a command of that name existed.
+    /// Remove a command and its directory (README + any scripts). Returns
+    /// whether a command of that name existed.
     pub fn delete(&self, name: &str) -> Result<bool> {
         let name = normalize_name(name)?;
-        let path = self.path_for(&name);
-        if !path.exists() {
+        let dir = self.dir.join(name);
+        if !dir.exists() {
             return Ok(false);
         }
-        std::fs::remove_file(&path)
-            .map_err(|err| anyhow!("failed to delete command {name}: {err}"))?;
+        std::fs::remove_dir_all(&dir)
+            .map_err(|err| anyhow!("failed to delete command {}: {err}", dir.display()))?;
         Ok(true)
     }
+}
 
-    fn path_for(&self, normalized_name: &str) -> PathBuf {
-        self.dir.join(format!("{normalized_name}.json"))
+/// Read `<dir>/README.md` into a command. The name is the directory's own name,
+/// so renaming the directory renames the command; the description comes from
+/// the frontmatter and the body is everything after it.
+fn read_command(dir: &Path) -> Option<UserCommand> {
+    let name = dir.file_name()?.to_str()?.to_string();
+    let text = std::fs::read_to_string(dir.join(README)).ok()?;
+    let (frontmatter, body) = split_frontmatter(&text);
+    let description = frontmatter
+        .and_then(|front| field(front, "description"))
+        .unwrap_or_default();
+    Some(UserCommand {
+        name,
+        description,
+        body: body.trim().to_string(),
+    })
+}
+
+/// Render a command's `README.md`: YAML frontmatter, then the body.
+fn render_readme(command: &UserCommand) -> String {
+    format!(
+        "---\nname: {}\ndescription: {}\n---\n\n{}\n",
+        command.name, command.description, command.body
+    )
+}
+
+/// Split a leading `---\n...\n---\n` YAML frontmatter block from the body.
+/// Returns `(frontmatter, body)`; frontmatter is `None` when absent.
+fn split_frontmatter(text: &str) -> (Option<&str>, &str) {
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return (None, text);
+    };
+    match rest.split_once("\n---\n") {
+        Some((frontmatter, body)) => (Some(frontmatter), body),
+        None => (None, text),
     }
+}
+
+/// The value of the first `key: value` line in simple frontmatter.
+fn field(frontmatter: &str, key: &str) -> Option<String> {
+    frontmatter.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        (name.trim() == key).then(|| value.trim().to_string())
+    })
 }
 
 /// Normalize a raw command name to a filesystem-safe slug, rejecting empty and
 /// reserved names. Lowercases, collapses each run of non-alphanumeric
 /// characters into a single dash, and trims leading/trailing dashes -- so the
 /// result is always a bare `[a-z0-9-]` token with no path separators, which is
-/// what makes `path_for` traversal-safe.
+/// what keeps the directory joins traversal-safe.
 pub fn normalize_name(raw: &str) -> Result<String> {
     let mut slug = String::new();
     let mut prev_dash = false;
@@ -158,7 +197,7 @@ mod tests {
             .save(
                 "Build Rocket",
                 "assemble the finished rocket",
-                "run the craft-rocket steps",
+                "run the steps",
             )
             .unwrap();
         assert_eq!(saved.name, "build-rocket");
@@ -168,11 +207,36 @@ mod tests {
     }
 
     #[test]
-    fn list_is_sorted_and_skips_non_json() {
+    fn save_writes_readme_with_frontmatter() {
+        let (dir, store) = store();
+        store.save("greet", "say hi", "say hello").unwrap();
+        let readme = std::fs::read_to_string(dir.path().join("greet").join("README.md")).unwrap();
+        assert!(readme.starts_with("---\nname: greet\ndescription: say hi\n---\n"));
+        assert!(readme.contains("say hello"));
+    }
+
+    #[test]
+    fn resave_keeps_scripts_and_delete_removes_them() {
+        let (dir, store) = store();
+        store.save("tool", "first", "body").unwrap();
+        let script = dir.path().join("tool").join("run.py");
+        std::fs::write(&script, "print('hi')").unwrap();
+        // re-saving rewrites the README but leaves the script
+        store.save("tool", "second", "body2").unwrap();
+        assert!(script.exists());
+        assert_eq!(store.get("tool").unwrap().description, "second");
+        // delete takes the whole directory
+        assert!(store.delete("tool").unwrap());
+        assert!(!script.exists());
+    }
+
+    #[test]
+    fn list_is_sorted_and_skips_dirs_without_readme() {
         let (dir, store) = store();
         store.save("zeta", "z", "step").unwrap();
         store.save("alpha", "a", "step").unwrap();
-        std::fs::write(dir.path().join("notes.txt"), "ignore me").unwrap();
+        std::fs::create_dir_all(dir.path().join("empty")).unwrap(); // no README
+        std::fs::write(dir.path().join("notes.txt"), "ignore").unwrap(); // not a dir
         let names: Vec<String> = store.list().into_iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["alpha", "zeta"]);
     }

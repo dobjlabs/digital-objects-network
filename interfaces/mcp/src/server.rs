@@ -110,7 +110,7 @@ pub struct GetRunParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadDocParams {
-    /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "how-it-works", "txlib.podlang", "time.podlang"
+    /// Document name. Use "list" to see available documents. Available: "podlang-reference", "object-lifecycle", "how-it-works", "command-examples", "txlib.podlang", "time.podlang"
     pub name: String,
 }
 
@@ -302,7 +302,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"how-it-works\" (generic framing for working with Digital Objects), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes). Pass \"list\" to see all available documents."
+        description = "Read reference documentation. Available docs: \"podlang-reference\" (full podlang language reference), \"object-lifecycle\" (how Digital Objects are created, mutated, consumed), \"how-it-works\" (generic framing for working with Digital Objects), \"command-examples\" (worked templates for create-command bodies), \"txlib.podlang\" (core transaction predicates source), \"time.podlang\" (time/locking predicates source), \"generated.podlang\" (generated podlang for all actions and classes). Pass \"list\" to see all available documents."
     )]
     fn read_doc(&self, Parameters(params): Parameters<ReadDocParams>) -> String {
         match params.name.as_str() {
@@ -330,6 +330,7 @@ impl<T: DobjOps> DobjMcpService<T> {
                     "podlang-reference" => "dobj://docs/podlang-reference",
                     "object-lifecycle" => "dobj://docs/object-lifecycle",
                     "how-it-works" => "dobj://docs/how-it-works",
+                    "command-examples" => "dobj://docs/command-examples",
                     "txlib.podlang" => "dobj://source/txlib.podlang",
                     "time.podlang" => "dobj://source/time.podlang",
                     "generated.podlang" => {
@@ -367,7 +368,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Define a reusable command: a named macro of steps over the loaded plugin's actions. Persists it so it appears in the command menu and as its own prompt; running its name follows the steps. Slugifies the name and rejects the reserved framework command names. Overwrites an existing command with the same slug."
+        description = "Define a reusable command: a named macro of steps over the loaded plugin's actions. Writes ~/.dobj/commands/<name>/README.md (frontmatter + body); you may add sibling scripts in that directory and reference them by absolute path in the body. It then appears in the command menu and as its own prompt; running its name follows the steps. Slugifies the name and rejects the reserved framework command names. Re-saving rewrites the README and keeps any sibling scripts."
     )]
     fn define_command(
         &self,
