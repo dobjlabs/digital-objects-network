@@ -108,6 +108,16 @@
         color: var(--text-3);
         font-variant-numeric: tabular-nums;
       }
+      .section-head .filter {
+        font-family: var(--sans);
+        font-size: 11px;
+        color: var(--text-2);
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 1px 4px;
+        cursor: pointer;
+      }
       .dot {
         width: 6px;
         height: 6px;
@@ -233,7 +243,8 @@
 
       /* Event row */
 
-      .ev-list {
+      .ev-list,
+      .obj-list {
         max-height: 360px;
         overflow-y: auto;
       }
@@ -288,13 +299,16 @@
 
       /* Scrollbar (subtle) */
 
-      .ev-list::-webkit-scrollbar {
+      .ev-list::-webkit-scrollbar,
+      .obj-list::-webkit-scrollbar {
         width: 6px;
       }
-      .ev-list::-webkit-scrollbar-track {
+      .ev-list::-webkit-scrollbar-track,
+      .obj-list::-webkit-scrollbar-track {
         background: transparent;
       }
-      .ev-list::-webkit-scrollbar-thumb {
+      .ev-list::-webkit-scrollbar-thumb,
+      .obj-list::-webkit-scrollbar-thumb {
         background: var(--border);
         border-radius: 3px;
       }
@@ -372,6 +386,13 @@
         <div class="section-head">
           <span class="dot" id="obj-dot"></span>
           <h2>objects</h2>
+          <select class="filter" id="obj-filter" aria-label="filter objects by status">
+            <option value="all">all</option>
+            <option value="live">live</option>
+            <option value="pending">pending</option>
+            <option value="nullified">nullified</option>
+            <option value="unknown">unknown</option>
+          </select>
           <span class="meta" id="obj-meta">—</span>
         </div>
         <div class="card" id="obj-card">
@@ -462,8 +483,13 @@
         );
       }
 
-      function tickClock() {
+      // The whole update model: fetch on load and on every dobj event, nothing
+      // else. When idle no events fire, so the page stays put; reload it to
+      // force a fresh read. `header-time` shows when the panels last updated.
+      function refresh() {
         setText("header-time", fmtTime());
+        pollUniverse();
+        pollObjects();
       }
 
       async function getSettings() {
@@ -524,9 +550,8 @@
       }
 
       // The objects card's last-rendered markup. /objects triggers a full sync
-      // on the daemon (relayer + synchronizer), so we both poll it sparingly
-      // (see the scheduler below) and skip the DOM write when the markup is
-      // unchanged -- the usual case between actions.
+      // on the daemon (relayer + synchronizer); skip the DOM write when the
+      // markup is unchanged -- the usual case when an event didn't touch objects.
       let lastObjCardHtml = null;
       function renderObjCard(html) {
         if (html === lastObjCardHtml) return;
@@ -534,75 +559,73 @@
         lastObjCardHtml = html;
       }
 
+      // The most recent /objects response, kept so the status filter can
+      // re-render without re-fetching.
+      let lastObjects = [];
+      function objFilter() {
+        const el = document.getElementById("obj-filter");
+        return el ? el.value : "all";
+      }
+
+      function renderObjects() {
+        const filter = objFilter();
+        const total = lastObjects.length;
+        const shown =
+          filter === "all"
+            ? lastObjects
+            : lastObjects.filter(
+                (o) => (o.status || "live").toLowerCase() === filter,
+              );
+        setText(
+          "obj-meta",
+          filter === "all"
+            ? `${total} object${total === 1 ? "" : "s"}`
+            : `${shown.length} of ${total}`,
+        );
+        if (!total) {
+          renderObjCard('<div class="empty">no objects yet</div>');
+          return;
+        }
+        if (!shown.length) {
+          renderObjCard(
+            `<div class="empty">no ${escapeHtml(filter)} objects</div>`,
+          );
+          return;
+        }
+        const rows = shown
+          .map((o) => {
+            const status = (o.status || "live").toLowerCase();
+            const className = (o.class && o.class.name) || "?";
+            const name = escapeHtml((o.emoji ? o.emoji + " " : "") + className);
+            const id = escapeHtml(shortFile(o.fileName));
+            const title = escapeHtml(o.fileName || "");
+            return (
+              `<li title="${title}">` +
+              `<div class="inv-row">` +
+              `<span class="name">${name}</span>` +
+              `<span class="badge ${status}">${escapeHtml(status)}</span>` +
+              `<span class="id">${id}</span>` +
+              `</div>` +
+              `</li>`
+            );
+          })
+          .join("");
+        renderObjCard(`<ul class="list obj-list">${rows}</ul>`);
+      }
+
       async function pollObjects() {
         try {
           const r = await fetch(DOBJD + "/objects");
           if (!r.ok) throw new Error("status " + r.status);
-          const objects = await r.json();
+          lastObjects = await r.json();
           setDot("obj-dot", "ok");
-          setText(
-            "obj-meta",
-            `${objects.length} object${objects.length === 1 ? "" : "s"}`,
-          );
-          if (!objects.length) {
-            renderObjCard('<div class="empty">no objects yet</div>');
-            return;
-          }
-          const rows = objects
-            .map((o) => {
-              const status = (o.status || "live").toLowerCase();
-              const className = (o.class && o.class.name) || "?";
-              const name = escapeHtml(
-                (o.emoji ? o.emoji + " " : "") + className,
-              );
-              const id = escapeHtml(shortFile(o.fileName));
-              const title = escapeHtml(o.fileName || "");
-              return (
-                `<li title="${title}">` +
-                `<div class="inv-row">` +
-                `<span class="name">${name}</span>` +
-                `<span class="badge ${status}">${escapeHtml(status)}</span>` +
-                `<span class="id">${id}</span>` +
-                `</div>` +
-                `</li>`
-              );
-            })
-            .join("");
-          renderObjCard(`<ul class="list">${rows}</ul>`);
+          renderObjects();
         } catch (e) {
           setDot("obj-dot", "bad");
           setText("obj-meta", "unreachable");
           renderObjCard(
             `<div class="empty err">${escapeHtml(e.message || "unreachable")}</div>`,
           );
-        }
-      }
-
-      // /objects is expensive, and objects only change when a run commits --
-      // which the event stream announces. So poll on a slow fallback (catches
-      // pending->live and out-of-band changes) and refresh promptly, debounced,
-      // on a commit. The in-flight guard keeps two syncs from overlapping.
-      const OBJECTS_FALLBACK_MS = 15000;
-      const OBJECTS_REFRESH_DEBOUNCE_MS = 800;
-      let objectsTimer = null;
-      let objectsInFlight = false;
-
-      function scheduleObjects(delayMs) {
-        if (objectsTimer) clearTimeout(objectsTimer);
-        objectsTimer = setTimeout(runObjects, delayMs);
-      }
-      async function runObjects() {
-        objectsTimer = null;
-        if (objectsInFlight) {
-          scheduleObjects(OBJECTS_REFRESH_DEBOUNCE_MS);
-          return;
-        }
-        objectsInFlight = true;
-        try {
-          await pollObjects();
-        } finally {
-          objectsInFlight = false;
-          if (!objectsTimer) scheduleObjects(OBJECTS_FALLBACK_MS);
         }
       }
 
@@ -656,26 +679,21 @@
             list.prepend(li);
             while (list.children.length > 60) list.removeChild(list.lastChild);
 
-            // A committed run is the only event that changes objects; refresh
-            // then (debounced) rather than polling /objects on a short timer.
-            if (status === "done" && phase === "commit") {
-              scheduleObjects(OBJECTS_REFRESH_DEBOUNCE_MS);
-            }
+            // Any run event refreshes the panels; nothing polls in the background.
+            refresh();
           };
         }
         connect();
       }
 
-      tickClock();
-      setInterval(tickClock, 1000);
-      startEvents();
+      // Re-render (no fetch) when the status filter changes.
+      document
+        .getElementById("obj-filter")
+        .addEventListener("change", renderObjects);
 
-      // Self-scheduling so a slow response never overlaps the next poll.
-      (async function loopUniverse() {
-        await pollUniverse();
-        setTimeout(loopUniverse, 5000);
-      })();
-      scheduleObjects(0);
+      // Fetch once on load, then only when an event arrives; reload to refresh.
+      startEvents();
+      refresh();
     </script>
   </body>
 </html>
