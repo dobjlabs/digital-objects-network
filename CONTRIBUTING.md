@@ -8,6 +8,7 @@ start with [INSTALL.md](INSTALL.md) instead.
 - Rust toolchain (nightly pin in [rust-toolchain.toml](rust-toolchain.toml))
 - Node.js + [`pnpm`](https://pnpm.io/)
 - [`just`](https://github.com/casey/just) and [`mprocs`](https://github.com/pvolok/mprocs)
+- [`jq`](https://jqlang.github.io/jq/) (used by a couple of `just` setup recipes)
 - PostgreSQL running locally, only if you also run the chain-side services
   (synchronizer / relayer / archiver) locally. With `just dev-remote` you can
   point at the hosted endpoints instead and skip Postgres entirely.

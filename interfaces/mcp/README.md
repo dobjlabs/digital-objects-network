@@ -94,8 +94,7 @@ works in any MCP client with no skills, hooks, or client-specific config.
 - `help` — the command menu.
 - `create-command` — a guided interview that saves a new command.
 - `consult-docs` — answer a question from the reference docs, quoted verbatim.
-- `dashboard` — open or close the live dashboard (a pane in Claude Code,
-  otherwise a URL). Pass `stop` to close.
+- `dashboard` — open or close the live dashboard. Pass `stop` to close.
 - one dynamic prompt per user-authored command.
 
 When the user types a command's name, the model calls `get_command(name)` to

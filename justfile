@@ -105,20 +105,16 @@ ensure-mcp:
 # setting that defaults off, so without this a fresh ~/.dobj would boot with MCP
 # disabled. Read-modify-write: keep any existing synchronizer/relayer URLs (both
 # are required fields, so the file must stay complete) and seed the local-dev
-# defaults when the file is absent. Idempotent. Prefers jq; falls back to python3.
+# defaults when the file is absent. Idempotent.
 ensure-mcp-enabled:
     #!/usr/bin/env bash
-    set -uo pipefail
+    set -euo pipefail
     f="$HOME/.dobj/settings.json"
     mkdir -p "$HOME/.dobj"
-    if command -v jq >/dev/null 2>&1; then
-        cur="{}"; [ -f "$f" ] && cur="$(jq '.' "$f" 2>/dev/null || echo '{}')"
-        printf '%s' "$cur" | jq '{synchronizerApiUrl:"http://127.0.0.1:3000", relayerApiUrl:"http://127.0.0.1:3200"} + . + {mcpEnabled:true}' > "$f.tmp" \
-            && mv "$f.tmp" "$f" && echo "~/.dobj/settings.json -> mcpEnabled=true" || rm -f "$f.tmp"
-    else
-        python3 -c "import json,pathlib; p=pathlib.Path.home()/'.dobj'/'settings.json'; d=(json.loads(p.read_text()) if p.exists() else {}); d.setdefault('synchronizerApiUrl','http://127.0.0.1:3000'); d.setdefault('relayerApiUrl','http://127.0.0.1:3200'); d.__setitem__('mcpEnabled',True); p.write_text(json.dumps(d))" \
-            && echo "~/.dobj/settings.json -> mcpEnabled=true"
-    fi
+    cur="{}"; [ -f "$f" ] && cur="$(jq '.' "$f" 2>/dev/null || echo '{}')"
+    printf '%s' "$cur" | jq '{synchronizerApiUrl:"http://127.0.0.1:3000", relayerApiUrl:"http://127.0.0.1:3200"} + . + {mcpEnabled:true}' > "$f.tmp"
+    mv "$f.tmp" "$f"
+    echo "~/.dobj/settings.json -> mcpEnabled=true"
 
 # Ensure the local Postgres databases the synchronizer + relayer expect exist.
 # `just dev` runs this automatically; run it yourself before `just sync` /
@@ -156,11 +152,7 @@ ensure-start-slot:
     head_slot() {  # <beacon_url> -> head slot number
         local beacon="${1%/}" json
         json="$(curl -fsSL "${beacon}/eth/v1/beacon/headers/head")" || return 1
-        if command -v jq >/dev/null 2>&1; then
-            printf '%s' "$json" | jq -r '.data.header.message.slot'
-        else
-            printf '%s' "$json" | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['header']['message']['slot'])"
-        fi
+        printf '%s' "$json" | jq -r '.data.header.message.slot'
     }
 
     ensure_slot() {  # <label> <env_file> <fresh:true|false>

@@ -30,6 +30,18 @@ pub struct CommandList {
     pub commands: Vec<UserCommand>,
 }
 
+/// A change-key for one command directory: its slug plus the README's mtime and
+/// size. [`CommandStore::fingerprint`] collects one per command; an unchanged
+/// collection means a cached listing is still current. mtime+size is the usual
+/// cheap heuristic -- the one (vanishingly rare) change it can miss is a
+/// same-size rewrite within the filesystem's mtime resolution.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CommandStamp {
+    name: String,
+    readme_mtime_nanos: u128,
+    readme_len: u64,
+}
+
 /// A directory of `<name>/README.md` command definitions (plus their scripts).
 #[derive(Debug, Clone)]
 pub struct CommandStore {
@@ -59,6 +71,46 @@ impl CommandStore {
         }
         commands.sort_by(|a, b| a.name.cmp(&b.name));
         commands
+    }
+
+    /// A cheap change-key over the whole store: one [`CommandStamp`] per command
+    /// directory, sorted. A directory scan plus a stat per command -- recompute
+    /// it to decide whether a cached [`list`](Self::list) is stale. It differs
+    /// when a command is added, removed, redefined, or edited on disk.
+    pub fn fingerprint(&self) -> Vec<CommandStamp> {
+        let mut stamps = Vec::new();
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return stamps;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let Ok(meta) = std::fs::metadata(path.join(README)) else {
+                continue;
+            };
+            let readme_mtime_nanos = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            stamps.push(CommandStamp {
+                name,
+                readme_mtime_nanos,
+                readme_len: meta.len(),
+            });
+        }
+        stamps.sort();
+        stamps
     }
 
     pub fn get(&self, name: &str) -> Option<UserCommand> {

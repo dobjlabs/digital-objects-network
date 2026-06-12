@@ -43,7 +43,7 @@ const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "dashboard",
-        description: "Open or close the live dashboard (a pane in Claude Code, otherwise opens the file). Pass `stop` to close.",
+        description: "Open or close the live dashboard. Pass `stop` to close.",
         body: include_str!("../docs/dashboard.md"),
     },
     // `help`'s body here is just the output framing; the menu is appended live

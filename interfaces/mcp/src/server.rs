@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -13,9 +13,18 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::commands::{CommandList, UserCommand};
+use crate::commands::{CommandList, CommandStamp, UserCommand};
 use crate::ops::DobjOps;
 use crate::types::*;
+
+/// Memoized [`CommandStore::list`](crate::commands::CommandStore::list) output,
+/// reused while the store's fingerprint is unchanged. `stamps` is the
+/// change-key it was built from.
+#[derive(Default)]
+struct CommandListCache {
+    stamps: Vec<CommandStamp>,
+    commands: Vec<UserCommand>,
+}
 
 /// MCP server service that exposes Digital Objects Network operations as tools.
 #[derive(Clone)]
@@ -29,6 +38,10 @@ pub struct DobjMcpService<T: DobjOps> {
     /// Overrides the user-command store directory; `None` derives a `commands`
     /// sibling of the driver's objects dir (under `~/.dobj`). Set in tests.
     command_dir: Option<PathBuf>,
+    /// Caches the saved-command listing for the hot read paths (`list_prompts`,
+    /// the `start`/`help` menus, `list_commands`), refreshed only when the store
+    /// changes on disk. `Arc<Mutex<_>>` so all clones share one cache.
+    command_cache: Arc<Mutex<CommandListCache>>,
 }
 
 impl<T: DobjOps> DobjMcpService<T> {
@@ -37,6 +50,7 @@ impl<T: DobjOps> DobjMcpService<T> {
             ops,
             tool_router: Self::tool_router(),
             command_dir: None,
+            command_cache: Arc::new(Mutex::new(CommandListCache::default())),
         }
     }
 
@@ -63,14 +77,30 @@ impl<T: DobjOps> DobjMcpService<T> {
     /// command saved earlier this session shows up without a restart.
     fn resolve_command(&self, name: &str) -> Option<UserCommand> {
         if name == crate::prompts::HELP {
-            let stored = self
-                .command_store()
-                .map(|store| store.list())
-                .unwrap_or_default();
-            return Some(crate::prompts::help_command(&stored));
+            return Some(crate::prompts::help_command(&self.list_commands_cached()));
         }
         crate::prompts::builtin_command(name)
             .or_else(|| self.command_store().ok().and_then(|store| store.get(name)))
+    }
+
+    /// The saved commands, served from an in-memory cache that refreshes only
+    /// when the on-disk store changes. Recomputing the change-key is a directory
+    /// scan plus a stat per command -- far cheaper than re-reading and parsing
+    /// every README, which the hot paths would otherwise do on each call.
+    fn list_commands_cached(&self) -> Vec<UserCommand> {
+        let Ok(store) = self.command_store() else {
+            return Vec::new();
+        };
+        let stamps = store.fingerprint();
+        let mut cache = self
+            .command_cache
+            .lock()
+            .expect("command cache mutex poisoned");
+        if stamps != cache.stamps {
+            cache.commands = store.list();
+            cache.stamps = stamps;
+        }
+        cache.commands.clone()
     }
 }
 
@@ -406,9 +436,8 @@ impl<T: DobjOps> DobjMcpService<T> {
         description = "List the saved commands (defined via define_command), with their descriptions and bodies."
     )]
     fn list_commands(&self) -> Result<Json<CommandList>, String> {
-        let store = self.command_store().map_err(|e| e.to_string())?;
         Ok(Json(CommandList {
-            commands: store.list(),
+            commands: self.list_commands_cached(),
         }))
     }
 
@@ -484,9 +513,11 @@ impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
         let mut prompts = crate::prompts::list();
-        if let Ok(store) = self.command_store() {
-            prompts.extend(store.list().iter().map(crate::prompts::command_prompt));
-        }
+        prompts.extend(
+            self.list_commands_cached()
+                .iter()
+                .map(crate::prompts::command_prompt),
+        );
         std::future::ready(Ok(ListPromptsResult::with_all_items(prompts)))
     }
 
@@ -497,10 +528,7 @@ impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
     ) -> impl std::future::Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
         let arguments = request.arguments.as_ref();
         if request.name == crate::prompts::START {
-            let stored = self
-                .command_store()
-                .map(|store| store.list())
-                .unwrap_or_default();
+            let stored = self.list_commands_cached();
             return std::future::ready(Ok(crate::prompts::start_result(&stored, arguments)));
         }
         let result = self
@@ -630,6 +658,50 @@ mod tests {
             body: "y".to_string(),
         }));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_list_commands_cache_tracks_disk_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = make_service().with_command_dir(dir.path());
+        let define = |name: &str, desc: &str| {
+            service
+                .define_command(Parameters(DefineCommandParams {
+                    name: name.to_string(),
+                    description: desc.to_string(),
+                    body: "do the steps".to_string(),
+                }))
+                .unwrap();
+        };
+
+        define("alpha", "first");
+        let Json(list) = service.list_commands().unwrap();
+        assert_eq!(list.commands.len(), 1);
+        assert_eq!(list.commands[0].description, "first");
+
+        // Redefining rewrites the same README in place; the changed size (and
+        // mtime) must invalidate the cache rather than serving the stale entry.
+        define("alpha", "second revision");
+        let Json(list) = service.list_commands().unwrap();
+        assert_eq!(list.commands.len(), 1);
+        assert_eq!(list.commands[0].description, "second revision");
+
+        // Adding a command changes the directory set.
+        define("beta", "b");
+        let Json(list) = service.list_commands().unwrap();
+        assert_eq!(list.commands.len(), 2);
+
+        // Deleting is reflected too.
+        assert!(
+            service
+                .delete_command(Parameters(DeleteCommandParams {
+                    name: "alpha".to_string(),
+                }))
+                .contains("deleted")
+        );
+        let Json(list) = service.list_commands().unwrap();
+        assert_eq!(list.commands.len(), 1);
+        assert_eq!(list.commands[0].name, "beta");
     }
 
     #[test]

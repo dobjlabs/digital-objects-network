@@ -523,8 +523,18 @@
         }
       }
 
+      // The objects card's last-rendered markup. /objects triggers a full sync
+      // on the daemon (relayer + synchronizer), so we both poll it sparingly
+      // (see the scheduler below) and skip the DOM write when the markup is
+      // unchanged -- the usual case between actions.
+      let lastObjCardHtml = null;
+      function renderObjCard(html) {
+        if (html === lastObjCardHtml) return;
+        document.getElementById("obj-card").innerHTML = html;
+        lastObjCardHtml = html;
+      }
+
       async function pollObjects() {
-        const card = document.getElementById("obj-card");
         try {
           const r = await fetch(DOBJD + "/objects");
           if (!r.ok) throw new Error("status " + r.status);
@@ -535,7 +545,7 @@
             `${objects.length} object${objects.length === 1 ? "" : "s"}`,
           );
           if (!objects.length) {
-            card.innerHTML = '<div class="empty">no objects yet</div>';
+            renderObjCard('<div class="empty">no objects yet</div>');
             return;
           }
           const rows = objects
@@ -558,11 +568,41 @@
               );
             })
             .join("");
-          card.innerHTML = `<ul class="list">${rows}</ul>`;
+          renderObjCard(`<ul class="list">${rows}</ul>`);
         } catch (e) {
           setDot("obj-dot", "bad");
           setText("obj-meta", "unreachable");
-          card.innerHTML = `<div class="empty err">${escapeHtml(e.message || "unreachable")}</div>`;
+          renderObjCard(
+            `<div class="empty err">${escapeHtml(e.message || "unreachable")}</div>`,
+          );
+        }
+      }
+
+      // /objects is expensive, and objects only change when a run commits --
+      // which the event stream announces. So poll on a slow fallback (catches
+      // pending->live and out-of-band changes) and refresh promptly, debounced,
+      // on a commit. The in-flight guard keeps two syncs from overlapping.
+      const OBJECTS_FALLBACK_MS = 15000;
+      const OBJECTS_REFRESH_DEBOUNCE_MS = 800;
+      let objectsTimer = null;
+      let objectsInFlight = false;
+
+      function scheduleObjects(delayMs) {
+        if (objectsTimer) clearTimeout(objectsTimer);
+        objectsTimer = setTimeout(runObjects, delayMs);
+      }
+      async function runObjects() {
+        objectsTimer = null;
+        if (objectsInFlight) {
+          scheduleObjects(OBJECTS_REFRESH_DEBOUNCE_MS);
+          return;
+        }
+        objectsInFlight = true;
+        try {
+          await pollObjects();
+        } finally {
+          objectsInFlight = false;
+          if (!objectsTimer) scheduleObjects(OBJECTS_FALLBACK_MS);
         }
       }
 
@@ -615,6 +655,12 @@
               `</div>`;
             list.prepend(li);
             while (list.children.length > 60) list.removeChild(list.lastChild);
+
+            // A committed run is the only event that changes objects; refresh
+            // then (debounced) rather than polling /objects on a short timer.
+            if (status === "done" && phase === "commit") {
+              scheduleObjects(OBJECTS_REFRESH_DEBOUNCE_MS);
+            }
           };
         }
         connect();
@@ -629,10 +675,7 @@
         await pollUniverse();
         setTimeout(loopUniverse, 5000);
       })();
-      (async function loopObjects() {
-        await pollObjects();
-        setTimeout(loopObjects, 2000);
-      })();
+      scheduleObjects(0);
     </script>
   </body>
 </html>
