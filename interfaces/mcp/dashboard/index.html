@@ -483,13 +483,15 @@
         );
       }
 
-      // The whole update model: fetch on load and on every dobj event, nothing
-      // else. When idle no events fire, so the page stays put; reload it to
-      // force a fresh read. `header-time` shows when the panels last updated.
-      function refresh() {
+      // Objects refresh on load and on every dobj event. The universe refreshes
+      // on each event too, and also polls on its own ~10s cadence since the
+      // chain advances every Ethereum block independent of dobj activity. Reload
+      // the page to force a full re-read.
+      const UNIVERSE_POLL_MS = 10000;
+
+      // Wall-clock in the header, ticking once a second.
+      function tickClock() {
         setText("header-time", fmtTime());
-        pollUniverse();
-        pollObjects();
       }
 
       async function getSettings() {
@@ -679,8 +681,10 @@
             list.prepend(li);
             while (list.children.length > 60) list.removeChild(list.lastChild);
 
-            // Any run event refreshes the panels; nothing polls in the background.
-            refresh();
+            // Any run event refreshes both panels right away; the universe also
+            // keeps its own ~10s poll below.
+            pollObjects();
+            pollUniverse();
           };
         }
         connect();
@@ -691,9 +695,19 @@
         .getElementById("obj-filter")
         .addEventListener("change", renderObjects);
 
-      // Fetch once on load, then only when an event arrives; reload to refresh.
+      tickClock();
+      setInterval(tickClock, 1000);
+
+      // Objects: fetch on load, then only when an event arrives.
       startEvents();
-      refresh();
+      pollObjects();
+
+      // Universe: its own ~10s cadence (chain advances every Ethereum block);
+      // self-scheduling so a slow read never overlaps the next.
+      (async function universeLoop() {
+        await pollUniverse();
+        setTimeout(universeLoop, UNIVERSE_POLL_MS);
+      })();
     </script>
   </body>
 </html>
