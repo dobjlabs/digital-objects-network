@@ -10,12 +10,13 @@ Installing the driver gives you:
 
 The driver installs with an **empty action catalog** — applications ship as
 plugins (`.pexe` files). See [Next steps](#next-steps) for installing one,
-e.g. **craft-basics**, a small crafting demo built on the network.
+e.g. **craft-basics**, a small crafting demo, or **craft-rocket**, a larger
+factory tech tree.
 
 Installing via an agent? Paste this to Claude Code, Cursor, or any
 MCP-aware agent instead of following this page by hand:
 
-> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/INSTALL.md and set up the Digital Objects driver.
+> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/INSTALL.md, install and start the Digital Objects driver, install the craft-rocket plugin, and configure MCP for this agent if supported.
 
 ## Install
 
@@ -56,23 +57,38 @@ anyway**.
 
 ## Next steps
 
-### Install a plugin
+### Install example plugins
 
 `dobj install` takes a local `.pexe` path or an http(s) URL and hot-reloads
-the daemon's action catalog — no restart needed. For example, **craft-basics**
-(a small crafting demo) ships with each release:
+the daemon's action catalog — no restart needed. Two example plugins ship with
+each release:
+
+- **craft-basics** — a small crafting demo.
+- **craft-rocket** — a larger factory tech tree with a rocket win condition.
+
+Install either example, or run both commands to load both.
 
 **macOS / Linux:**
 
 ```bash
+# Starter demo:
 ~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-basics.pexe
-~/.dobj/bin/dobj actions   # 9 actions, e.g. FindLog, CraftWood
+
+# Larger factory demo:
+~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-rocket.pexe
+
+~/.dobj/bin/dobj actions
 ```
 
 **Windows:**
 
 ```powershell
+# Starter demo:
 & "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-basics.pexe
+
+# Larger factory demo:
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-rocket.pexe
+
 & "$env:USERPROFILE\.dobj\bin\dobj.exe" actions
 ```
 
@@ -203,7 +219,8 @@ Then continue from [Start and verify](#start-and-verify).
 
 - **`dobjd-{target}.tar.gz`** — the daemon. Bundles `dobj-mcp-proxy` alongside.
 - **`dobj-{target}.tar.gz`** — terminal CLI for the daemon.
-- **`craft-basics.pexe`** — the starter crafting plugin (optional; see Next steps).
+- **`craft-basics.pexe`** and **`craft-rocket.pexe`** — example plugins
+  (optional; see Next steps).
 
 Plus `synchronizer-{target}.tar.gz` and `relayer-{target}.tar.gz` — server
 binaries used by the install-test CI workflow. End users don't need these.

@@ -17,8 +17,9 @@ it puts three binaries under `~/.dobj/bin/`:
 
 The driver installs with an **empty action catalog** — applications ship
 separately as plugins (`.pexe` files). The steps below install the binaries,
-start the daemon, and add [craft-basics](/applications/craft-basics), a small
-crafting demo.
+start the daemon, and add an example plugin such as
+[craft-basics](/applications/craft-basics) or
+[craft-rocket](/applications/craft-rocket).
 
 Release binaries are baked with the
 [hosted synchronizer and relayer endpoints](/#public-infrastructure), so a
@@ -28,7 +29,7 @@ fresh install needs no configuration.
 
 Paste this prompt into any MCP-aware agent (Claude Code, Cursor, ...):
 
-> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/INSTALL.md and set up the Digital Objects driver.
+> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/INSTALL.md, install and start the Digital Objects driver, install the craft-rocket plugin, and configure MCP for this agent if supported.
 
 The guide walks the agent through every step below and includes instructions
 for plugin install and MCP connection. Setup takes a couple of minutes.
@@ -79,19 +80,34 @@ The first start builds ZK circuits and can take a few minutes. Later starts
 take seconds.
 :::
 
-### Install the starter application
+### Install example applications
 
 `dobj install` takes a local `.pexe` path or an http(s) URL, validates it, and
 hot-reloads the running daemon's catalog — no restart needed.
 
+Two examples ship with each release:
+
+- [craft-basics](/applications/craft-basics) — a small crafting demo.
+- [craft-rocket](/applications/craft-rocket) — a larger factory tech tree.
+
+Install either example, or run both commands to load both.
+
 :::code-group
 
 ```bash [macOS / Linux]
+# Starter demo:
 ~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-basics.pexe
+
+# Larger factory demo:
+~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-rocket.pexe
 ```
 
 ```powershell [Windows]
+# Starter demo:
 & "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-basics.pexe
+
+# Larger factory demo:
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-rocket.pexe
 ```
 
 :::
@@ -102,7 +118,7 @@ hot-reloads the running daemon's catalog — no restart needed.
 
 ```bash [macOS / Linux]
 ~/.dobj/bin/dobj status      # pid + HTTP healthcheck
-~/.dobj/bin/dobj actions     # 9 craft-basics actions, e.g. FindLog, CraftWood
+~/.dobj/bin/dobj actions     # installed plugin actions
 ~/.dobj/bin/dobj state-root  # 64-hex root: the hosted synchronizer is reachable
 ```
 

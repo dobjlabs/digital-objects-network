@@ -2,11 +2,11 @@
 
 Paste this to Claude Code, Cursor, or any MCP-aware agent:
 
-> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/SKILL.md and set up the Digital Objects driver.
+> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/INSTALL.md, install and start the Digital Objects driver, install the craft-rocket plugin, and configure MCP for this agent if supported.
 
-The steps install `dobjd`, `dobj`, `dobj-mcp-proxy`, and the
-`craft-basics` plugin into `~/.dobj/` and register MCP with the
-agent so you can drive Digital Objects directly.
+The guide installs `dobjd`, `dobj`, and `dobj-mcp-proxy` into `~/.dobj/`.
+The prompt also asks the agent to install the `craft-rocket` plugin and
+register MCP so you can drive Digital Objects directly.
 
 ## Manual install
 
