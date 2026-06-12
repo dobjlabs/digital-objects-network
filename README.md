@@ -7,7 +7,7 @@ that can be passed between mutually untrusting Internet users while maintaining 
 
 ## Getting started
 
-- **Install (end user):** [INSTALL.md](INSTALL.md), or point an MCP-aware agent at [SKILL.md](SKILL.md).
+- **Install:** [INSTALL.md](INSTALL.md), for both humans and MCP-aware agents.
 - **Develop from source:** [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Self-host the services:** [deploy/](deploy/README.md).
 
