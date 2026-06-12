@@ -13,9 +13,10 @@ use tokio::sync::watch;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 use wire_types::relayer::{
-    HealthResponse, JobStatusResponse, SubmitProofRequest, SubmitProofResponse, TxHashEntry,
+    JobStatusResponse, SubmitProofRequest, SubmitProofResponse, TxHashEntry,
     TxHashesByTxFinalRequest, TxHashesByTxFinalResponse,
 };
+use wire_types::HealthResponse;
 
 use payload::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
 
@@ -112,8 +113,13 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Release tag stamped by build.rs ("dev" outside a release build).
+const RELEASE_TAG: &str = env!("DOBJ_RELEASE_TAG");
+/// Target triple stamped by build.rs.
+const TARGET_TRIPLE: &str = env!("DOBJ_TARGET_TRIPLE");
+
 async fn healthz() -> Json<HealthResponse> {
-    Json(HealthResponse { ok: true })
+    Json(HealthResponse::stamped(RELEASE_TAG, TARGET_TRIPLE))
 }
 
 /// Accept proof payload, verify/decode it, and enqueue idempotently by `tx_final`.

@@ -17,13 +17,6 @@ use pod2::middleware::Hash;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Liveness response for the synchronizer HTTP server.
-pub struct HealthResponse {
-    /// Whether the server is up and responding.
-    pub ok: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Synchronization progress returned by the synchronizer API.
 pub struct SyncProgressResponse {
     /// Last slot fully committed by the synchronizer.
