@@ -50,8 +50,8 @@ fn fmt_var_at(name: &str, ts: usize, max_ts: usize) -> String {
 
 /// Output Objects reserve one extra ts beyond the script's last
 /// DictUpdate to account for the update performed when TxInsert adds
-/// the `identity` entry to the object. This is always the final update
-/// to the object's state before output.
+/// the `stable_identifier` entry to the object. This is always the final
+/// update to the object's state before output.
 pub(crate) const fn output_max_ts(base_ts: usize, is_output: bool) -> usize {
     if is_output { base_ts + 1 } else { base_ts }
 }
@@ -562,8 +562,9 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // internally, so the guard predicate ref is passed as the last
     // arg to TxInsert / TxDelete / TxMutate (and pins both sides for
     // mutate, making the type-preservation check implicit).
-    // For Output, TxInsert produces a final state with an "identity"
-    // entry, so it takes the object in two forms. `obj_str` (the
+    // For Output, TxInsert produces a final state with a
+    // "stable_identifier" entry, so it takes the object in two forms.
+    // `obj_str` (the
     // script's final wildcard) is the pre-identity `initial` dict the
     // script built; `obj_with_id` (the same wildcard one ts later, the
     // extra ts that `output_max_ts` reserves) is the post-identity `new`

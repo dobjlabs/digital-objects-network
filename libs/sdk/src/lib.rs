@@ -20,7 +20,7 @@ use pod2::{
 };
 use pod2utils::{dict, macros::BuildContext, rand_raw_value};
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
-use txlib::{EventHandle, GroundingWitness, Tx, TxBuilder, with_identity};
+use txlib::{EventHandle, GroundingWitness, Tx, TxBuilder, with_stable_identifier};
 use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 
 mod error;
@@ -568,7 +568,7 @@ impl ActionHandle {
                     let obj = obj.borrow();
                     let varname = obj.var_name().to_string();
                     let raw_dict = obj.to_dict();
-                    stamped.insert(varname, with_identity(&raw_dict));
+                    stamped.insert(varname, with_stable_identifier(&raw_dict));
                     if has_initials {
                         raw.push(raw_dict);
                     }
