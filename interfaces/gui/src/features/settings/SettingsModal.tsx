@@ -19,6 +19,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [form, setForm] = useState<AppSettingsPayload>({
     synchronizerApiUrl: "",
     relayerApiUrl: "",
+    mcpEnabled: false,
   });
 
   useEffect(() => {
@@ -33,7 +34,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(normalizeErrorMessage(err, "Failed to save settings"));
+        setError(normalizeErrorMessage(err, "Failed to load settings"));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

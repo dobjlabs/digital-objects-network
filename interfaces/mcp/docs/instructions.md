@@ -72,8 +72,8 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ### Configuration
 
-- `read_settings` — current synchronizer + relayer URLs the daemon is using
-- `write_settings({ synchronizerApiUrl, relayerApiUrl })` — update both URLs (pass current values for fields you don't want to change)
+- `read_settings` — the daemon's current synchronizer + relayer URLs and its `mcpEnabled` toggle
+- `write_settings({ synchronizerApiUrl?, relayerApiUrl?, mcpEnabled? })` — update a subset of settings; any field you omit keeps its current value. Setting `mcpEnabled` to `false` shuts down the MCP server you are connected through.
 - `get_objects_dir` — filesystem path to `~/.dobj/objects/` (useful for showing the user where their objects live)
 
 ## Recommended workflow

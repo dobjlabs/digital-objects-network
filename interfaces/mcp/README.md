@@ -63,22 +63,22 @@ production implementation lives in
 
 ## Tools
 
-| Tool                                                  | Description                                                     |
-| ----------------------------------------------------- | --------------------------------------------------------------- |
-| `list_objects`                                        | All objects with class, fields, and liveness                    |
-| `list_actions`                                        | Available actions with input/output classes and cost            |
-| `list_classes`                                        | Object classes with live counts and producing/consuming actions |
-| `inspect_object` / `inspect_class` / `inspect_action` | Full detail on one object / class / action, with predicate      |
-| `check_feasibility`                                   | Whether an action can run with current objects; missing inputs  |
-| `run_action`                                          | Start an action; returns a `runId` immediately (non-blocking)   |
-| `get_run`                                             | Poll a run's status, result/error, and progress log by `runId`  |
-| `get_state_root`                                      | Current state root from the synchronizer                        |
-| `import_object_file`                                  | Adopt an external `.dobj` from a local path into objects        |
-| `read_settings` / `write_settings`                    | Synchronizer + relayer URLs                                     |
-| `get_objects_dir`                                     | Path to `~/.dobj/objects/`                                      |
-| `read_doc`                                            | Reference docs (see Resources)                                  |
-| `define_command` / `delete_command` / `list_commands` | Manage user-authored commands                                   |
-| `get_command`                                         | Load any command's full body (built-in or saved) to follow it   |
+| Tool                                                  | Description                                                                    |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `list_objects`                                        | All objects with class, fields, and liveness                                   |
+| `list_actions`                                        | Available actions with input/output classes and cost                           |
+| `list_classes`                                        | Object classes with live counts and producing/consuming actions                |
+| `inspect_object` / `inspect_class` / `inspect_action` | Full detail on one object / class / action, with predicate                     |
+| `check_feasibility`                                   | Whether an action can run with current objects; missing inputs                 |
+| `run_action`                                          | Start an action; returns a `runId` immediately (non-blocking)                  |
+| `get_run`                                             | Poll a run's status, result/error, and progress log by `runId`                 |
+| `get_state_root`                                      | Current state root from the synchronizer                                       |
+| `import_object_file`                                  | Adopt an external `.dobj` from a local path into objects                       |
+| `read_settings` / `write_settings`                    | Synchronizer + relayer URLs and the `mcpEnabled` toggle (partial writes merge) |
+| `get_objects_dir`                                     | Path to `~/.dobj/objects/`                                                     |
+| `read_doc`                                            | Reference docs (see Resources)                                                 |
+| `define_command` / `delete_command` / `list_commands` | Manage user-authored commands                                                  |
+| `get_command`                                         | Load any command's full body (built-in or saved) to follow it                  |
 
 All tools return structured content (`structuredContent` + `outputSchema`)
 for clients that support it, with a text fallback for older clients.

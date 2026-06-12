@@ -4,7 +4,7 @@ Set up the **Digital Objects driver** on this machine. After this runs you'll ha
 
 - `~/.dobj/bin/dobjd` (`dobjd.exe` on Windows) - the driver daemon, serving:
   - REST/SSE on `http://127.0.0.1:7717`
-  - MCP on `http://127.0.0.1:7718/mcp`
+  - MCP on `http://127.0.0.1:7718/mcp` (off by default; step 5 turns it on)
 - `~/.dobj/bin/dobj` - terminal CLI that talks to dobjd
 - `~/.dobj/bin/dobj-mcp-proxy` - stdio<->HTTP bridge for Claude Desktop
 - `~/.dobj/actions/craft-basics.pexe` - the bundled crafting plugin
@@ -107,8 +107,25 @@ You should see `dobjd is running (pid ...)`, the craft-basics actions, and a
 
 ### 5. Register MCP with the agent
 
-dobjd serves MCP at `http://127.0.0.1:7718/mcp` so this agent can drive
+dobjd can serve MCP at `http://127.0.0.1:7718/mcp` so this agent can drive
 Digital Objects directly (list objects, run actions, inspect classes).
+
+MCP is **off by default**, so first turn it on. This takes effect
+immediately - no daemon restart - and persists across restarts.
+
+macOS / Linux:
+
+```bash
+~/.dobj/bin/dobj settings set --mcp on
+```
+
+Windows (PowerShell):
+
+```powershell
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" settings set --mcp on
+```
+
+Then register the MCP client.
 
 **Claude Code** - if `claude` is on the PATH, register it now (idempotent):
 

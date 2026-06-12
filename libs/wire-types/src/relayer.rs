@@ -145,8 +145,3 @@ pub struct JobStatusResponse {
     /// State root hash claimed by the payload.
     pub state_root: Hash,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HealthResponse {
-    pub ok: bool,
-}

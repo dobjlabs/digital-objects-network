@@ -1,8 +1,8 @@
-// Shared build-script logic for `cli/build.rs` and `dobjd/build.rs`, each of
-// which pulls this in with `include!("../../build-stamp.rs")`. Kept as an included
-// file rather than a build-dependency crate to avoid the workspace + Cargo
-// plumbing for ~10 lines; the crates aren't published, so the out-of-package
-// `include!` path is fine.
+// Shared build-script logic pulled into each binary's `build.rs` with
+// `include!("../../build-stamp.rs")` (the CLI, dobjd, and the relayer,
+// synchronizer, and archiver services). Kept as an included file rather than a
+// build-dependency crate to avoid the workspace + Cargo plumbing for ~10 lines;
+// the crates aren't published, so the out-of-package `include!` path is fine.
 
 /// Stamp the release tag and target triple into the binary as the env vars
 /// `DOBJ_RELEASE_TAG` and `DOBJ_TARGET_TRIPLE` (read back via `env!`). The

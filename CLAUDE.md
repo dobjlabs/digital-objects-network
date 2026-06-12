@@ -70,7 +70,7 @@ Use `just` (recipes in `justfile`):
 - Postgres on `localhost:5432` (user `postgres`). `just ensure-db` creates the `synchronizer` + `relayer` DBs.
 - An Ethereum beacon + execution endpoint (configure in `services/synchronizer/.env`, `services/relayer/.env`, `services/archiver/.env`).
 - RocksDB stores under `data/` and `~/.dobj/` are created on first run; the archiver writes blobs to its `BLOBS_PATH` (filesystem, no DB).
-- `dobjd` binds **two adjacent ports**: HTTP on `DOBJD_PORT` (default `7717`) and MCP on `DOBJD_PORT + 1` (default `7718`). Both must be free or startup fails fast.
+- `dobjd` binds **two adjacent ports**: HTTP on `DOBJD_PORT` (default `7717`) and MCP on `DOBJD_PORT + 1` (default `7718`). A taken port fails startup fast. MCP serving is gated by the `mcpEnabled` setting (`dobj settings set --mcp on|off`, default **off**); toggling starts/stops the MCP server immediately, no restart.
 - `just dev-remote` skips the local chain-side services and points dobjd at the hosted synchronizer + relayer, so no local Postgres / beacon is needed.
 
 **Always run tests with `--release`** — proof generation is impractically slow in debug. Use `MockProver` (not the real Prover) in unit tests; gate real-proof tests with `#[ignore]`. Use `assert!`, not `debug_assert!`, since tests run `--release`.
@@ -119,7 +119,7 @@ Use `just` (recipes in `justfile`):
 - **`libs/payload/src/shrink.rs`** — Plonky2 wrapper circuit that re-proves a MainPod in a smaller circuit so it fits in a blob.
 - **`libs/payload/src/payload.rs`** — blob payload encoding (`PAYLOAD_MAGIC`, proof type, `tx_final`, state root, nullifiers, and the `live` object commitments).
 - **`interfaces/mcp/src/lib.rs`** — `DEFAULT_PORT = 7718`; crate is named `dobj-mcp` (depend on it as `dobj-mcp = { path = "../mcp" }`). dobjd runs MCP at `DOBJD_PORT + 1`.
-- **`services/dobjd/src/main.rs`** — daemon entry point. Binds HTTP + MCP listeners up-front (fail-fast if either port is taken), constructs `Arc<Driver>` once via `Driver::open_default()`, shares it with the embedded `dobj-mcp` server. `DEFAULT_HTTP_PORT = 7717`, override via `DOBJD_PORT`.
+- **`services/dobjd/src/main.rs`** — daemon entry point. Binds listeners up-front (fail-fast if a port is taken; MCP only when enabled), constructs `Arc<Driver>` once via `Driver::open_default()`, shares it with the embedded `dobj-mcp` server (start/stop lives in `src/mcp.rs::McpRuntime`). `DEFAULT_HTTP_PORT = 7717`, override via `DOBJD_PORT`.
 - **`services/dobjd/src/routes/mod.rs`** — axum routes: `/healthz`, `/objects`, `/state-root`, `/objects/{dir,file_name}`, `/classes[/{name}]`, `/settings`, `/actions[/run,/{id}[/feasibility]]`, `/actions/runs/{id}[/events]` (run-status poll + per-run replayable SSE), `/events` (SSE). dobjd is API-only; the UI is served separately.
 - **`services/dobjd/src/runs.rs`** — the run registry. `POST /actions/run` is non-blocking: it registers a run, spawns a background worker, and returns a `runId`. The worker records status + progress + terminal result/error into an in-memory, TTL-reaped registry that backs `/actions/runs/{id}` (poll) and its SSE. Shared by the HTTP routes and the MCP server.
 - **`services/dobjd/src/events.rs`** — broadcast hub behind SSE `/events`, shared with the MCP server so progress updates fan out to every client.

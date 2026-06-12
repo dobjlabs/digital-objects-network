@@ -25,4 +25,5 @@ tower-http = { version = "0.6", features = ["cors"] }
 futures-util = "0.3.31"
 payload = { path = "../../libs/payload" }
 eth-clients = { path = "../../libs/eth-clients" }
+wire-types = { workspace = true }
 itertools = { workspace = true }

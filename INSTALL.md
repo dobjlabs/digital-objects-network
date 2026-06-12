@@ -4,7 +4,7 @@ Installing the driver gives you:
 
 - `~/.dobj/bin/dobjd` (`dobjd.exe` on Windows) — long-running driver daemon serving:
   - REST/SSE on `http://127.0.0.1:7717`
-  - MCP on `http://127.0.0.1:7718/mcp`
+  - MCP on `http://127.0.0.1:7718/mcp` (off by default; see [Connect an agent](#connect-an-agent-mcp))
 - `~/.dobj/bin/dobj` — terminal CLI that talks to dobjd
 - `~/.dobj/bin/dobj-mcp-proxy` — stdio↔HTTP bridge for agents that only speak stdio (e.g. Claude Desktop)
 
@@ -78,8 +78,16 @@ the daemon's action catalog — no restart needed. For example, **craft-basics**
 
 ### Connect an agent (MCP)
 
-dobjd serves MCP at `http://127.0.0.1:7718/mcp`. Installing the binaries does
-not register it with any agent — do that per agent:
+dobjd can serve MCP at `http://127.0.0.1:7718/mcp`, but it's **off by
+default**. Turn it on first (takes effect immediately, persists across
+restarts):
+
+```bash
+dobj settings set --mcp on
+```
+
+Installing the binaries does not register MCP with any agent — do that per
+agent:
 
 **Claude Code** (idempotent, safe to re-run):
 

@@ -16,6 +16,7 @@ pub fn default_settings() -> DriverSettings {
         relayer_api_url: option_env!("DEFAULT_RELAYER_API_URL")
             .unwrap_or(DEFAULT_RELAYER_API_URL)
             .to_string(),
+        mcp_enabled: false,
     }
 }
 

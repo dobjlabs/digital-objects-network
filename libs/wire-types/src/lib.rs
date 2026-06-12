@@ -386,13 +386,50 @@ pub struct RunActionProgress {
 // Driver configuration
 // ===========================================================================
 
-/// The driver's persisted configuration: synchronizer + relayer URLs.
+/// The persisted configuration shared by the driver and dobjd:
+/// synchronizer + relayer URLs, plus the daemon's MCP server toggle.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct DriverSettings {
     pub synchronizer_api_url: String,
     pub relayer_api_url: String,
+    /// Whether dobjd serves MCP on the adjacent port (default off).
+    #[serde(default)]
+    pub mcp_enabled: bool,
+}
+
+/// Partial update for [`DriverSettings`], accepted by `PUT /settings`. Absent
+/// fields keep their current persisted value, so a caller can flip one
+/// setting without echoing the others. This is why the field type is
+/// `Option` rather than reusing `DriverSettings`: there, an omitted
+/// `mcpEnabled` would deserialize to `false` (`#[serde(default)]`, needed for
+/// reading older settings files) and silently stop the MCP server.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DriverSettingsPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synchronizer_api_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relayer_api_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_enabled: Option<bool>,
+}
+
+impl DriverSettingsPatch {
+    /// Overlay the present fields onto `base`, leaving absent fields untouched.
+    pub fn apply_to(self, base: &mut DriverSettings) {
+        if let Some(url) = self.synchronizer_api_url {
+            base.synchronizer_api_url = url;
+        }
+        if let Some(url) = self.relayer_api_url {
+            base.relayer_api_url = url;
+        }
+        if let Some(enabled) = self.mcp_enabled {
+            base.mcp_enabled = enabled;
+        }
+    }
 }
 
 /// Filesystem location of the local objects directory. Returned by
@@ -405,10 +442,10 @@ pub struct ObjectsDirInfo {
     pub path: String,
 }
 
-/// dobjd `/healthz` body. A superset of the relayer/synchronizer health shape:
-/// the shared `ok` liveness flag, plus the build stamp so a client can tell
-/// which dobjd build is serving. `version`/`target` are optional so a client
-/// can still parse a daemon built before they were added.
+/// Shared `/healthz` body for dobjd and the relayer, synchronizer, and
+/// archiver services: the `ok` liveness flag plus the build stamp so a client
+/// can tell which build is serving. `version`/`target` are optional so a
+/// client can still parse a server built before they were added.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -417,9 +454,22 @@ pub struct HealthResponse {
     /// Release tag this daemon was built from ("dev" outside a release).
     #[serde(default)]
     pub version: Option<String>,
-    /// Target triple this daemon was built for.
+    /// Target triple this daemon was built for (e.g. `aarch64-apple-darwin`),
+    /// so a client can confirm which platform's build is serving.
     #[serde(default)]
     pub target: Option<String>,
+}
+
+impl HealthResponse {
+    /// Liveness OK, stamped with the build the server shipped in (release tag
+    /// and target triple from its `build.rs`).
+    pub fn stamped(version: &str, target: &str) -> Self {
+        Self {
+            ok: true,
+            version: Some(version.to_string()),
+            target: Some(target.to_string()),
+        }
+    }
 }
 
 // ===========================================================================

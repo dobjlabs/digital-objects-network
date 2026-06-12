@@ -253,12 +253,15 @@ impl DobjOps for MockDobjOps {
         Ok(DriverSettings {
             synchronizer_api_url: "http://127.0.0.1:3000".to_string(),
             relayer_api_url: "http://127.0.0.1:3200".to_string(),
+            mcp_enabled: true,
         })
     }
 
-    fn write_settings(&self, settings: DriverSettings) -> anyhow::Result<DriverSettings> {
-        // Mock is read-only — just echo back what was passed in.
-        Ok(settings)
+    fn write_settings(&self, patch: DriverSettingsPatch) -> anyhow::Result<DriverSettings> {
+        // Mock has no persistence; merge onto the fixed base and echo back.
+        let mut merged = self.read_settings()?;
+        patch.apply_to(&mut merged);
+        Ok(merged)
     }
 
     fn get_objects_dir(&self) -> anyhow::Result<String> {
