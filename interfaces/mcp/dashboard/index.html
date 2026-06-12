@@ -1,0 +1,713 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Digital Objects</title>
+    <style>
+      :root {
+        --bg: #fafafa;
+        --panel: #ffffff;
+        --border: #e5e5e5;
+        --border-2: #f0f0f0;
+        --text: #171717;
+        --text-2: #525252;
+        --text-3: #a3a3a3;
+        --ok: #16a34a;
+        --bad: #dc2626;
+        --warn: #d97706;
+        --sans:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          system-ui, sans-serif;
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0a0a0a;
+          --panel: #111111;
+          --border: #1f1f1f;
+          --border-2: #161616;
+          --text: #f5f5f5;
+          --text-2: #a3a3a3;
+          --text-3: #525252;
+          --ok: #4ade80;
+          --bad: #f87171;
+          --warn: #fbbf24;
+          color-scheme: dark;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 13px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+
+      /* Header */
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding-bottom: 12px;
+        margin-bottom: 16px;
+        border-bottom: 1px solid var(--border);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      header .ts {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text-3);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Section */
+
+      section {
+        margin-bottom: 20px;
+      }
+      .section-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .section-head h2 {
+        margin: 0;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--text-2);
+      }
+      .section-head .meta {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--text-3);
+        font-variant-numeric: tabular-nums;
+      }
+      .section-head .filter {
+        font-family: var(--sans);
+        font-size: 11px;
+        color: var(--text-2);
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 1px 4px;
+        cursor: pointer;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--text-3);
+        flex-shrink: 0;
+      }
+      .dot.ok {
+        background: var(--ok);
+      }
+      .dot.bad {
+        background: var(--bad);
+      }
+
+      /* Card */
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+
+      /* Key-value rows (universe) */
+
+      .kv {
+        display: grid;
+        grid-template-columns: minmax(110px, 36%) 1fr;
+      }
+      .kv > * {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-2);
+        min-width: 0;
+      }
+      .kv > *:nth-last-child(-n + 2) {
+        border-bottom: 0;
+      }
+      .kv dt {
+        margin: 0;
+        color: var(--text-2);
+        font-size: 12px;
+      }
+      .kv dd {
+        margin: 0;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+        overflow-wrap: anywhere;
+        word-break: break-all;
+      }
+      .kv dd.sans {
+        font-family: var(--sans);
+        word-break: normal;
+      }
+      .kv dd.err {
+        color: var(--bad);
+        font-style: italic;
+        font-family: var(--sans);
+      }
+
+      /* List rows (objects + events) */
+
+      .list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .list li {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-2);
+        min-width: 0;
+      }
+      .list li:last-child {
+        border-bottom: 0;
+      }
+
+      /* Objects row */
+
+      .inv-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-rows: auto auto;
+        gap: 2px 8px;
+        align-items: baseline;
+      }
+      .inv-row .name {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text);
+      }
+      .inv-row .id {
+        grid-column: 1 / -1;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text-3);
+        overflow-wrap: anywhere;
+        word-break: break-all;
+      }
+      .badge {
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.02em;
+        padding: 2px 6px;
+        border-radius: 4px;
+        border: 1px solid currentColor;
+        line-height: 1.3;
+        text-transform: lowercase;
+        background: transparent;
+        flex-shrink: 0;
+      }
+      .badge.live {
+        color: var(--ok);
+      }
+      .badge.pending {
+        color: var(--warn);
+      }
+      .badge.unknown,
+      .badge.nullified {
+        color: var(--text-3);
+      }
+
+      /* Event row */
+
+      .ev-list,
+      .obj-list {
+        max-height: 360px;
+        overflow-y: auto;
+      }
+      .ev-row {
+        display: grid;
+        grid-template-columns: 70px 1fr auto;
+        gap: 4px 10px;
+        align-items: baseline;
+      }
+      .ev-row .ts {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text-3);
+        font-variant-numeric: tabular-nums;
+      }
+      .ev-row .phase {
+        font-size: 13px;
+        color: var(--text);
+      }
+      .ev-row .phase .run-id {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text-3);
+        margin-left: 6px;
+      }
+      .ev-row .badge.running {
+        color: var(--warn);
+      }
+      .ev-row .badge.done {
+        color: var(--ok);
+      }
+      .ev-row .badge.failed {
+        color: var(--bad);
+      }
+      .ev-row .msg {
+        grid-column: 2 / -1;
+        color: var(--text-2);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      /* Empty / error states */
+
+      .empty {
+        padding: 12px;
+        color: var(--text-3);
+        font-size: 12px;
+      }
+      .empty.err {
+        color: var(--bad);
+      }
+
+      /* Scrollbar (subtle) */
+
+      .ev-list::-webkit-scrollbar,
+      .obj-list::-webkit-scrollbar {
+        width: 6px;
+      }
+      .ev-list::-webkit-scrollbar-track,
+      .obj-list::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .ev-list::-webkit-scrollbar-thumb,
+      .obj-list::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 3px;
+      }
+
+      /* Narrow pane */
+
+      @media (max-width: 420px) {
+        main {
+          padding: 12px;
+        }
+        .kv {
+          grid-template-columns: 1fr;
+        }
+        .kv > * {
+          border-bottom: 0;
+          padding: 4px 12px;
+        }
+        .kv dt {
+          padding-top: 8px;
+          color: var(--text-3);
+          font-size: 11px;
+        }
+        .kv dd {
+          padding-bottom: 8px;
+          border-bottom: 1px solid var(--border-2);
+        }
+        .kv dd:last-child {
+          border-bottom: 0;
+        }
+        .ev-row {
+          grid-template-columns: 1fr;
+          gap: 2px;
+        }
+        .ev-row .msg {
+          grid-column: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Digital Objects</h1>
+        <span class="ts" id="header-dobjd">dobjd → —</span>
+        <span class="ts" id="header-time">—</span>
+      </header>
+
+      <section>
+        <div class="section-head">
+          <span class="dot" id="sync-dot"></span>
+          <h2>universe</h2>
+          <span class="meta" id="sync-meta">synchronizer</span>
+        </div>
+        <div class="card">
+          <dl class="kv">
+            <dt>state root</dt>
+            <dd id="u-gsr">—</dd>
+            <dt>block</dt>
+            <dd id="u-block" class="sans">—</dd>
+            <dt>created</dt>
+            <dd id="u-tx" class="sans">—</dd>
+            <dt>nullifiers</dt>
+            <dd id="u-null" class="sans">—</dd>
+            <dt>roots</dt>
+            <dd id="u-gsrcount" class="sans">—</dd>
+            <dt>last slot</dt>
+            <dd id="u-slot" class="sans">—</dd>
+            <dt>endpoint</dt>
+            <dd id="u-url">—</dd>
+          </dl>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <span class="dot" id="obj-dot"></span>
+          <h2>objects</h2>
+          <select class="filter" id="obj-filter" aria-label="filter objects by status">
+            <option value="all">all</option>
+            <option value="live">live</option>
+            <option value="pending">pending</option>
+            <option value="nullified">nullified</option>
+            <option value="unknown">unknown</option>
+          </select>
+          <span class="meta" id="obj-meta">—</span>
+        </div>
+        <div class="card" id="obj-card">
+          <div class="empty">loading…</div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <span class="dot" id="ev-dot"></span>
+          <h2>action log</h2>
+          <span class="meta" id="ev-meta">stream</span>
+        </div>
+        <div class="card" id="ev-card">
+          <div class="empty">no events yet</div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      // Dobjd URL is `?port=NNNN` or `?dobjd=http://host:NNNN`, default :7717.
+      const _params = new URLSearchParams(location.search);
+      const DOBJD = (() => {
+        const explicit = _params.get("dobjd");
+        if (explicit) return explicit.replace(/\/+$/, "");
+        const port = _params.get("port") || "__DOBJD_PORT__";
+        return `http://127.0.0.1:${port}`;
+      })();
+      // Surface the active dobjd URL in the page title so it's obvious which
+      // one you're looking at when multiple instances are running.
+      document.title = `Digital Objects — ${DOBJD.replace(/^https?:\/\//, "")}`;
+      const _hdrDobjd = document.getElementById("header-dobjd");
+      if (_hdrDobjd)
+        _hdrDobjd.textContent = `dobjd → ${DOBJD.replace(/^https?:\/\//, "")}`;
+
+      let syncUrl = null;
+
+      function shortHash(h, head = 6, tail = 4) {
+        if (!h) return "—";
+        return h.length > head + tail + 1
+          ? h.slice(0, head) + "…" + h.slice(-tail)
+          : h;
+      }
+      function shortFile(name) {
+        if (!name) return "—";
+        const m = name.match(/_0x([a-f0-9]+)\.dobj$/i);
+        if (m) {
+          const h = m[1];
+          return h.length > 12 ? h.slice(0, 6) + "…" + h.slice(-4) : h;
+        }
+        return name.length > 24
+          ? name.slice(0, 14) + "…" + name.slice(-6)
+          : name;
+      }
+      function fmtNum(n) {
+        if (n === undefined || n === null) return "—";
+        return Number(n).toLocaleString();
+      }
+      function fmtTime(d = new Date()) {
+        return d.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        });
+      }
+      function setDot(id, state) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.remove("ok", "bad");
+        if (state) el.classList.add(state);
+      }
+      function setText(id, text) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+      }
+      function escapeHtml(s) {
+        return String(s ?? "").replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+      }
+
+      // Objects refresh on load and on every dobj event. The universe refreshes
+      // on each event too, and also polls on its own ~10s cadence since the
+      // chain advances every Ethereum block independent of dobj activity. Reload
+      // the page to force a full re-read.
+      const UNIVERSE_POLL_MS = 10000;
+
+      // Wall-clock in the header, ticking once a second.
+      function tickClock() {
+        setText("header-time", fmtTime());
+      }
+
+      async function getSettings() {
+        try {
+          const r = await fetch(DOBJD + "/settings");
+          if (!r.ok) throw new Error("status " + r.status);
+          const s = await r.json();
+          const url = s.synchronizerApiUrl ?? s.synchronizer_api_url;
+          syncUrl = url ? url.replace(/\/+$/, "") : url;
+          setText("u-url", syncUrl || "(unset)");
+        } catch (e) {
+          syncUrl = null;
+          setText("u-url", "(dobjd /settings unreachable)");
+        }
+      }
+
+      async function pollUniverse() {
+        await getSettings();
+        const gsrEl = document.getElementById("u-gsr");
+        if (!syncUrl) {
+          setDot("sync-dot", "bad");
+          setText("sync-meta", "no endpoint");
+          gsrEl.className = "err";
+          gsrEl.textContent = "no synchronizer URL";
+          return;
+        }
+        try {
+          const r = await fetch(syncUrl + "/v1/state/head");
+          if (!r.ok) throw new Error("status " + r.status);
+          const j = await r.json();
+          const pick = (...keys) =>
+            keys.map((k) => j[k]).find((v) => v !== undefined);
+          gsrEl.className = "";
+          gsrEl.textContent =
+            pick("current_state_root", "currentStateRoot") ?? "—";
+          setText(
+            "u-block",
+            fmtNum(pick("current_block_number", "currentBlockNumber")),
+          );
+          setText("u-tx", fmtNum(pick("created_count", "createdCount")));
+          setText("u-null", fmtNum(pick("nullifier_count", "nullifierCount")));
+          setText(
+            "u-gsrcount",
+            fmtNum(pick("state_root_count", "stateRootCount")),
+          );
+          setText(
+            "u-slot",
+            fmtNum(pick("last_processed_slot", "lastProcessedSlot")),
+          );
+          setDot("sync-dot", "ok");
+          setText("sync-meta", "synchronizer");
+        } catch (e) {
+          setDot("sync-dot", "bad");
+          setText("sync-meta", "unreachable");
+          gsrEl.className = "err";
+          gsrEl.textContent = e.message || "unreachable";
+        }
+      }
+
+      // The objects card's last-rendered markup. /objects triggers a full sync
+      // on the daemon (relayer + synchronizer); skip the DOM write when the
+      // markup is unchanged -- the usual case when an event didn't touch objects.
+      let lastObjCardHtml = null;
+      function renderObjCard(html) {
+        if (html === lastObjCardHtml) return;
+        document.getElementById("obj-card").innerHTML = html;
+        lastObjCardHtml = html;
+      }
+
+      // The most recent /objects response, kept so the status filter can
+      // re-render without re-fetching.
+      let lastObjects = [];
+      function objFilter() {
+        const el = document.getElementById("obj-filter");
+        return el ? el.value : "all";
+      }
+
+      function renderObjects() {
+        const filter = objFilter();
+        const total = lastObjects.length;
+        const shown =
+          filter === "all"
+            ? lastObjects
+            : lastObjects.filter(
+                (o) => (o.status || "live").toLowerCase() === filter,
+              );
+        setText(
+          "obj-meta",
+          filter === "all"
+            ? `${total} object${total === 1 ? "" : "s"}`
+            : `${shown.length} of ${total}`,
+        );
+        if (!total) {
+          renderObjCard('<div class="empty">no objects yet</div>');
+          return;
+        }
+        if (!shown.length) {
+          renderObjCard(
+            `<div class="empty">no ${escapeHtml(filter)} objects</div>`,
+          );
+          return;
+        }
+        const rows = shown
+          .map((o) => {
+            const status = (o.status || "live").toLowerCase();
+            const className = (o.class && o.class.name) || "?";
+            const name = escapeHtml((o.emoji ? o.emoji + " " : "") + className);
+            const id = escapeHtml(shortFile(o.fileName));
+            const title = escapeHtml(o.fileName || "");
+            return (
+              `<li title="${title}">` +
+              `<div class="inv-row">` +
+              `<span class="name">${name}</span>` +
+              `<span class="badge ${status}">${escapeHtml(status)}</span>` +
+              `<span class="id">${id}</span>` +
+              `</div>` +
+              `</li>`
+            );
+          })
+          .join("");
+        renderObjCard(`<ul class="list obj-list">${rows}</ul>`);
+      }
+
+      async function pollObjects() {
+        try {
+          const r = await fetch(DOBJD + "/objects");
+          if (!r.ok) throw new Error("status " + r.status);
+          lastObjects = await r.json();
+          setDot("obj-dot", "ok");
+          renderObjects();
+        } catch (e) {
+          setDot("obj-dot", "bad");
+          setText("obj-meta", "unreachable");
+          renderObjCard(
+            `<div class="empty err">${escapeHtml(e.message || "unreachable")}</div>`,
+          );
+        }
+      }
+
+      function startEvents() {
+        const card = document.getElementById("ev-card");
+        let listEl = null;
+
+        function ensureList() {
+          if (!listEl) {
+            card.innerHTML = '<ul class="list ev-list" id="ev-ul"></ul>';
+            listEl = document.getElementById("ev-ul");
+          }
+          return listEl;
+        }
+
+        function connect() {
+          const es = new EventSource(DOBJD + "/events");
+          es.onopen = () => {
+            setDot("ev-dot", "ok");
+            setText("ev-meta", "connected");
+          };
+          es.onerror = () => {
+            setDot("ev-dot", "bad");
+            setText("ev-meta", "reconnecting");
+            es.close();
+            setTimeout(connect, 2000);
+          };
+          es.onmessage = (e) => {
+            let d;
+            try {
+              d = JSON.parse(e.data);
+            } catch {
+              d = { raw: e.data };
+            }
+            if (d.type && d.type !== "run-action-progress") return;
+            const list = ensureList();
+            const ts = fmtTime();
+            const runId = d.runId ? shortHash(d.runId, 5, 4) : "—";
+            const phase = d.phase ?? "—";
+            const status = (d.status ?? "—").toLowerCase();
+            const msg = d.message ?? "";
+
+            const li = document.createElement("li");
+            li.innerHTML =
+              `<div class="ev-row">` +
+              `<span class="ts">${escapeHtml(ts)}</span>` +
+              `<span class="phase">${escapeHtml(phase)}<span class="run-id">${escapeHtml(runId)}</span></span>` +
+              `<span class="badge ${status}">${escapeHtml(status)}</span>` +
+              (msg ? `<span class="msg">${escapeHtml(msg)}</span>` : "") +
+              `</div>`;
+            list.prepend(li);
+            while (list.children.length > 60) list.removeChild(list.lastChild);
+
+            // Any run event refreshes both panels right away; the universe also
+            // keeps its own ~10s poll below.
+            pollObjects();
+            pollUniverse();
+          };
+        }
+        connect();
+      }
+
+      // Re-render (no fetch) when the status filter changes.
+      document
+        .getElementById("obj-filter")
+        .addEventListener("change", renderObjects);
+
+      tickClock();
+      setInterval(tickClock, 1000);
+
+      // Objects: fetch on load, then only when an event arrives.
+      startEvents();
+      pollObjects();
+
+      // Universe: its own ~10s cadence (chain advances every Ethereum block);
+      // self-scheduling so a slow read never overlaps the next.
+      (async function universeLoop() {
+        await pollUniverse();
+        setTimeout(universeLoop, UNIVERSE_POLL_MS);
+      })();
+    </script>
+  </body>
+</html>

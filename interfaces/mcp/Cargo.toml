@@ -29,6 +29,7 @@ proxy = ["reqwest"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+tempfile = "3"
 
 [[bin]]
 name = "dobj-mcp-mock"

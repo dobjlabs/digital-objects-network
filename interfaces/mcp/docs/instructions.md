@@ -6,6 +6,16 @@ proved by zero-knowledge proofs. There is no central database of
 objects; each object is a self-contained ZK certificate that its holder
 stores locally.
 
+## Commands
+
+Beyond the tools, this server offers **commands** -- named, reusable flows (some
+built in, plus any the user has defined). When the user types a command's name,
+or a short phrase that clearly refers to one, call `get_command(name)` to load
+its full body and follow it exactly: the body governs which tools to call and
+the output format, and anything typed after the name is its argument. Run the
+`help` command for the list, `list_commands` for saved ones, and the `start`
+prompt for a focused command session.
+
 ## Core concepts
 
 **Digital Objects.** Each object is a key-value dictionary (fields like
@@ -44,19 +54,21 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 - `list_objects` — every object the user holds, with class + liveness
 - `list_actions` — every available action with its required inputs
 - `list_classes` — every known object class with live counts and producing/consuming actions
-- `inspect_object(file_name)` — full detail on one object: fields, status, predicate source
-- `inspect_class(class_name)` — predicate definition + which actions produce/consume the class
-- `check_feasibility(action_id)` — does the user's objects have what this action needs?
+- `inspect_object({ file_name })` — full detail on one object: fields, status, predicate source
+- `inspect_class({ class: { pluginName, name } })` — predicate definition + which actions produce/consume the class
+- `inspect_action({ action: { pluginName, name } })` — predicate definition + input/output classes
+- `check_feasibility({ action: { pluginName, name } })` — does the user's objects have what this action needs?
 - `get_state_root` — current state root from the synchronizer
-- `read_doc(name)` — reference docs (`podlang-reference`, `object-lifecycle`, `txlib.podlang`,
-  `time.podlang`, `generated.podlang`, or `list` to enumerate)
+- `read_doc(name)` — reference docs (`podlang-reference`, `object-lifecycle`,
+  `how-it-works`, `command-examples`, `txlib.podlang`, `generated.podlang`, or
+  `list` to enumerate)
 
 ### Mutation
 
-- `run_action(action_id, input_object_paths)` — start an action; returns a
+- `run_action({ action: { pluginName, name }, inputObjectPaths })` — start an action; returns a
   `runId` immediately (the proof + commit run in the background). See
   "running actions" below.
-- `get_run(run_id)` — poll a run's status, result/error, and progress log.
+- `get_run({ run_id })` — poll a run's status, result/error, and progress log.
 
 ### Configuration
 
@@ -77,7 +89,7 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 `status: queued`; proof generation and the commit run in the background
 (seconds to minutes).
 
-To wait for the result, poll `get_run(run_id)` until `status` is terminal:
+To wait for the result, poll `get_run({ run_id })` until `status` is terminal:
 
 - `succeeded` → read `result` (old/new state root, output and nullified files)
 - `failed` → read `error`
@@ -87,7 +99,7 @@ the user which step a run is on while it's still `generateProof` or
 `committing`. Multiple runs proceed concurrently — start several and poll each
 `runId` independently.
 
-Pass `input_object_paths` explicitly (one per the action's required input
+Pass `inputObjectPaths` explicitly (one per the action's required input
 classes, in order); resolve them from `list_objects` / `check_feasibility`
 first. An input count that doesn't match the action makes the run fail.
 

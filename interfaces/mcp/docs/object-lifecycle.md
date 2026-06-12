@@ -16,6 +16,7 @@ The resulting `.dobj` file contains the state dictionary and the proof. The proo
 ## 2. Inspection
 
 When you inspect a live object, you see:
+
 - **id**: a hash uniquely identifying this object state
 - **className**: determined by the predicate that certifies it
 - **fields**: the key-value pairs (durability, key, work, etc.)
@@ -56,8 +57,8 @@ Every action must reference a recent state root — a hash of all published tran
 
 ## Summary of what changes after each action
 
-| Before | Action | After |
-|--------|--------|-------|
-| Input objects: `live: true` | Action runs | Input objects: `live: false` (nullified) |
-| — | Proof generated | Output objects: `live: true` (new) |
-| Mutated objects: `live: true` | Action runs | Old state: `live: false`, New state: `live: true` |
+| Before                        | Action          | After                                             |
+| ----------------------------- | --------------- | ------------------------------------------------- |
+| Input objects: `live: true`   | Action runs     | Input objects: `live: false` (nullified)          |
+| —                             | Proof generated | Output objects: `live: true` (new)                |
+| Mutated objects: `live: true` | Action runs     | Old state: `live: false`, New state: `live: true` |

@@ -48,6 +48,7 @@ async fn main() -> Result<()> {
         event_tx.clone(),
         runs.clone(),
         format!("127.0.0.1:{mcp_port}"),
+        port,
     ));
 
     let state = AppState::new(

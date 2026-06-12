@@ -33,6 +33,7 @@ pub struct McpRuntime {
     events: EventTx,
     runs: RunRegistry,
     addr: String,
+    dobj_port: u16,
     running: tokio::sync::Mutex<Option<RunningServer>>,
     prebound: tokio::sync::Mutex<Option<tokio::net::TcpListener>>,
 }
@@ -48,12 +49,14 @@ impl McpRuntime {
         events: EventTx,
         runs: RunRegistry,
         addr: String,
+        dobj_port: u16,
     ) -> Self {
         Self {
             driver,
             events,
             runs,
             addr,
+            dobj_port,
             running: tokio::sync::Mutex::new(None),
             prebound: tokio::sync::Mutex::new(None),
         }
@@ -103,6 +106,7 @@ impl McpRuntime {
             let cancel = CancellationToken::new();
             let config = dobj_mcp::McpConfig {
                 cancellation_token: cancel.clone(),
+                dobj_port: self.dobj_port,
             };
             let server = dobj_mcp::McpServer::new(ops, config);
             let task = tokio::spawn(async move {

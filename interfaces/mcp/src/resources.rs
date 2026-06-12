@@ -3,6 +3,8 @@ use rmcp::model::{Annotated, RawResource, ReadResourceResult, Resource, Resource
 const PODLANG_REFERENCE_URI: &str = "dobj://docs/podlang-reference";
 const TXLIB_PREDICATES_URI: &str = "dobj://source/txlib.podlang";
 const OBJECT_LIFECYCLE_URI: &str = "dobj://docs/object-lifecycle";
+const HOW_IT_WORKS_URI: &str = "dobj://docs/how-it-works";
+const COMMAND_EXAMPLES_URI: &str = "dobj://docs/command-examples";
 
 pub fn list() -> Vec<Resource> {
     vec![
@@ -36,6 +38,26 @@ pub fn list() -> Vec<Resource> {
                 .with_mime_type("text/markdown"),
             None,
         ),
+        Annotated::new(
+            RawResource::new(HOW_IT_WORKS_URI, "How It Works")
+                .with_description(
+                    "Generic, plugin-agnostic framing for working with Digital \
+                     Objects: the create/transform loop, why proofs and \
+                     nullifiers, and object liveness.",
+                )
+                .with_mime_type("text/markdown"),
+            None,
+        ),
+        Annotated::new(
+            RawResource::new(COMMAND_EXAMPLES_URI, "Command Examples")
+                .with_description(
+                    "Worked templates for create-command bodies: interactive \
+                     picker, argument-based, multi-step planner, and an \
+                     anti-example.",
+                )
+                .with_mime_type("text/markdown"),
+            None,
+        ),
     ]
 }
 
@@ -44,6 +66,8 @@ pub fn read(uri: &str) -> Option<ReadResourceResult> {
         PODLANG_REFERENCE_URI => (PODLANG_REFERENCE, "text/markdown"),
         TXLIB_PREDICATES_URI => (TXLIB_PREDICATES, "text/plain"),
         OBJECT_LIFECYCLE_URI => (OBJECT_LIFECYCLE, "text/markdown"),
+        HOW_IT_WORKS_URI => (HOW_IT_WORKS, "text/markdown"),
+        COMMAND_EXAMPLES_URI => (COMMAND_EXAMPLES, "text/markdown"),
         _ => return None,
     };
     Some(ReadResourceResult::new(vec![
@@ -53,4 +77,6 @@ pub fn read(uri: &str) -> Option<ReadResourceResult> {
 
 const PODLANG_REFERENCE: &str = include_str!("../docs/podlang-reference.md");
 const OBJECT_LIFECYCLE: &str = include_str!("../docs/object-lifecycle.md");
+const HOW_IT_WORKS: &str = include_str!("../docs/how-it-works.md");
+const COMMAND_EXAMPLES: &str = include_str!("../docs/command-examples.md");
 const TXLIB_PREDICATES: &str = include_str!("../../../libs/txlib/src/predicates/txlib.podlang");
