@@ -44,14 +44,14 @@ dobjd:
 # shell — all backed by one dobjd process. Open http://localhost:1420 in a
 # browser to use the website client; the desktop window opens automatically.
 # https://github.com/pvolok/mprocs
-dev: ensure-db ensure-start-slot ensure-plugins ensure-mcp
+dev: ensure-db ensure-start-slot ensure-plugins ensure-mcp ensure-mcp-enabled
     mprocs --config mprocs.yaml
 
 # Like `just dev`, but without spawning the local synchronizer + relayer —
 # point dobjd at the hosted public endpoints instead. Faster spin-up when
 # you don't need to fork the chain locally and don't want a local Postgres.
 # Uses the standard 7717 default (same as `just dev`).
-dev-remote: ensure-remote-settings ensure-plugins ensure-mcp
+dev-remote: ensure-remote-settings ensure-plugins ensure-mcp ensure-mcp-enabled
     mprocs --config mprocs.remote.yaml
 
 # Block (up to ~5 min) until an HTTP endpoint responds, then return. mprocs
@@ -100,6 +100,25 @@ ensure-mcp:
     claude mcp remove dobj 2>/dev/null || true
     claude mcp add --transport http dobj http://127.0.0.1:7718/mcp \
         && echo "registered: dobj MCP (project scope, http://127.0.0.1:7718/mcp)"
+
+# Force the daemon's MCP toggle on for `just dev`. `mcpEnabled` is a persisted
+# setting that defaults off, so without this a fresh ~/.dobj would boot with MCP
+# disabled. Read-modify-write: keep any existing synchronizer/relayer URLs (both
+# are required fields, so the file must stay complete) and seed the local-dev
+# defaults when the file is absent. Idempotent. Prefers jq; falls back to python3.
+ensure-mcp-enabled:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    f="$HOME/.dobj/settings.json"
+    mkdir -p "$HOME/.dobj"
+    if command -v jq >/dev/null 2>&1; then
+        cur="{}"; [ -f "$f" ] && cur="$(jq '.' "$f" 2>/dev/null || echo '{}')"
+        printf '%s' "$cur" | jq '{synchronizerApiUrl:"http://127.0.0.1:3000", relayerApiUrl:"http://127.0.0.1:3200"} + . + {mcpEnabled:true}' > "$f.tmp" \
+            && mv "$f.tmp" "$f" && echo "~/.dobj/settings.json -> mcpEnabled=true" || rm -f "$f.tmp"
+    else
+        python3 -c "import json,pathlib; p=pathlib.Path.home()/'.dobj'/'settings.json'; d=(json.loads(p.read_text()) if p.exists() else {}); d.setdefault('synchronizerApiUrl','http://127.0.0.1:3000'); d.setdefault('relayerApiUrl','http://127.0.0.1:3200'); d.__setitem__('mcpEnabled',True); p.write_text(json.dumps(d))" \
+            && echo "~/.dobj/settings.json -> mcpEnabled=true"
+    fi
 
 # Ensure the local Postgres databases the synchronizer + relayer expect exist.
 # `just dev` runs this automatically; run it yourself before `just sync` /
