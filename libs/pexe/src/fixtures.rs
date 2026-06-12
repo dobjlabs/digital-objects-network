@@ -12,7 +12,7 @@ use anyhow::{Result, anyhow};
 use pod2::middleware::{EMPTY_HASH, EMPTY_VALUE, Hash, StrKey, Value, containers::Array};
 use pod2utils::{dict, rand_raw_value};
 use sdk::{SdkModule, SpendableObject};
-use txlib::{GroundingWitness, StateHeader, with_identity};
+use txlib::{GroundingWitness, StateHeader, with_stable_identifier};
 
 use crate::inspect::derive_class_signature;
 
@@ -82,11 +82,12 @@ fn mint_with_signature(
         d.insert(&StrKey::from(field_name.as_str()), &value)
             .map_err(|err| anyhow!("inserting {field_name}: {err}"))?;
     }
-    // A real chain object carries `identity = commitment(initial)`, stamped
-    // by TxInsert when it was first minted. Synthetic inputs stand in for
-    // chain objects, so they need the same field or a later mutate (which
-    // pins old.identity == new.identity) panics on the missing entry.
-    Ok(with_identity(&d))
+    // A real chain object carries `stable_identifier = commitment(initial)`,
+    // stamped by TxInsert when it was first minted. Synthetic inputs stand
+    // in for chain objects, so they need the same field or a later mutate
+    // (which pins old.stable_identifier == new.stable_identifier) panics on
+    // the missing entry.
+    Ok(with_stable_identifier(&d))
 }
 
 /// Result of fabricating a synthetic chain state that grounds a set of

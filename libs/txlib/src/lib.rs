@@ -255,18 +255,19 @@ pub fn new_obj() -> Dictionary {
 
 /// Field name TxInsert's DictInsert clause stamps onto every newly
 /// inserted object. Must stay in sync with `txlib.podlang`'s TxInsert
-/// body and TxMutate's `Equal(old.identity, new.identity)` clause.
-pub const IDENTITY_FIELD: &str = "identity";
+/// body and TxMutate's `Equal(old.stable_identifier, new.stable_identifier)`
+/// clause.
+pub const STABLE_IDENTIFIER_FIELD: &str = "stable_identifier";
 
-/// Stamp `identity = commitment(initial)` into the dict and return the
-/// materialized object. TxInsert's DictInsert clause proves the same
-/// relationship; callers that need the post-identity dict outside of
-/// `TxBuilder::insert` (e.g. tests, builders that pre-compute the
-/// finalized object) should go through this helper to stay consistent.
-pub fn with_identity(initial: &Dictionary) -> Dictionary {
-    let identity = Value::from(initial.commitment());
+/// Stamp `stable_identifier = commitment(initial)` into the dict and
+/// return the materialized object. TxInsert's DictInsert clause proves
+/// the same relationship; callers that need the post-identity dict
+/// outside of `TxBuilder::insert` (e.g. tests, builders that pre-compute
+/// the finalized object) should go through this helper to stay consistent.
+pub fn with_stable_identifier(initial: &Dictionary) -> Dictionary {
+    let stable_identifier = Value::from(initial.commitment());
     let mut new = initial.clone();
-    new.insert(&StrKey::from(IDENTITY_FIELD), &identity)
+    new.insert(&StrKey::from(STABLE_IDENTIFIER_FIELD), &stable_identifier)
         .unwrap();
     new
 }
@@ -279,9 +280,9 @@ pub(crate) enum ChainEvent {
     Insert {
         new: Dictionary,
         /// Pre-identity dict from which `new` was derived via
-        /// `with_identity`. Threaded into replay so TxInsert's `initial`
-        /// public arg (the dict the action constructed) can be bound at
-        /// replay time.
+        /// `with_stable_identifier`. Threaded into replay so TxInsert's
+        /// `initial` public arg (the dict the action constructed) can be
+        /// bound at replay time.
         initial: Dictionary,
         chain_after: Hash,
         /// The TxInsert statement emitted at record time. Replay
@@ -391,7 +392,7 @@ pub struct TxBuilder {
 // ============================================================================
 
 /// Fields to skip in compact display (noise for debugging).
-const DISPLAY_SKIP_FIELDS: &[&str] = &["type", "key", IDENTITY_FIELD];
+const DISPLAY_SKIP_FIELDS: &[&str] = &["type", "key", STABLE_IDENTIFIER_FIELD];
 
 /// Format a Dictionary as a compact summary: commitment + interesting fields.
 fn obj_summary(obj: &Dictionary) -> String {
@@ -625,10 +626,10 @@ impl TxBuilder {
     /// called inside an open action scope.
     ///
     /// `initial` is the pre-identity object state; the builder stamps
-    /// `identity = commitment(initial)` via [`with_identity`] and the
-    /// returned `Dictionary` is the post-identity `new` that the tx
-    /// records. Subsequent mutate/delete must reference the returned
-    /// dict, not `initial`.
+    /// `stable_identifer = commitment(initial)` and the returned
+    /// `Dictionary` is the post-identity `new` that the tx records.
+    /// Subsequent mutate/delete must reference the returned dict, not
+    /// `initial`.
     pub fn insert(
         &mut self,
         ctx: &mut BuildContext,
@@ -638,7 +639,7 @@ impl TxBuilder {
             !self.action_stack.is_empty(),
             "insert must be called inside an action scope",
         );
-        let new = with_identity(initial);
+        let new = with_stable_identifier(initial);
 
         let prev = self.chain;
         let event_hash = hash_values(&[Value::from(EMPTY_VALUE), Value::from(new.clone())]);
@@ -650,10 +651,15 @@ impl TxBuilder {
             .builder
             .priv_op(op!(DictContains(new, "type", new_type.clone())))
             .unwrap();
-        let identity = Value::from(initial.commitment());
+        let stable_identifier = Value::from(initial.commitment());
         let st_di = ctx
             .builder
-            .priv_op(op!(DictInsert(new, initial, IDENTITY_FIELD, identity)))
+            .priv_op(op!(DictInsert(
+                new,
+                initial,
+                STABLE_IDENTIFIER_FIELD,
+                stable_identifier
+            )))
             .unwrap();
         let st_h1 = ctx
             .builder
@@ -709,17 +715,21 @@ impl TxBuilder {
         let new_type = object_type(new);
         let old_type = object_type(old);
         assert_eq!(new_type, old_type, "mutate must preserve object type");
-        let new_identity = new
-            .get(&StrKey::from(IDENTITY_FIELD))
+        let new_stable_identifier = new
+            .get(&StrKey::from(STABLE_IDENTIFIER_FIELD))
             .expect("new dict lookup")
-            .expect("mutate target missing identity field (must come from TxBuilder::insert)");
-        let old_identity = old
-            .get(&StrKey::from(IDENTITY_FIELD))
+            .expect(
+                "mutate target missing stable identifier field (must come from TxBuilder::insert)",
+            );
+        let old_stable_identifier = old
+            .get(&StrKey::from(STABLE_IDENTIFIER_FIELD))
             .expect("old dict lookup")
-            .expect("mutate source missing identity field (must come from TxBuilder::insert)");
+            .expect(
+                "mutate source missing stable identifier field (must come from TxBuilder::insert)",
+            );
         assert_eq!(
-            new_identity, old_identity,
-            "mutate must preserve object identity"
+            new_stable_identifier, old_stable_identifier,
+            "mutate must preserve object stable identifier"
         );
         let st_dc_new = ctx
             .builder
@@ -729,9 +739,12 @@ impl TxBuilder {
             .builder
             .priv_op(op!(DictContains(old, "type", new_type.clone())))
             .unwrap();
-        let st_eq_identity = ctx
+        let st_eq_stable_identifier = ctx
             .builder
-            .priv_op(op!(Equal((old, IDENTITY_FIELD), (new, IDENTITY_FIELD))))
+            .priv_op(op!(Equal(
+                (old, STABLE_IDENTIFIER_FIELD),
+                (new, STABLE_IDENTIFIER_FIELD)
+            )))
             .unwrap();
         let st_h1 = ctx
             .builder
@@ -746,7 +759,7 @@ impl TxBuilder {
                 false,
                 "TxMutate",
                 map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "old" => old.clone(), "type" => new_type}),
-                vec![st_dc_new, st_dc_old, st_eq_identity, st_h1, st_h2],
+                vec![st_dc_new, st_dc_old, st_eq_stable_identifier, st_h1, st_h2],
             )
             .unwrap();
         record(&mut self.stats, "TxMutate");
