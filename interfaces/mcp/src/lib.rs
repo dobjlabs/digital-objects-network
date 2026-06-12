@@ -17,7 +17,9 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use server::DobjMcpService;
-use tokio_util::sync::CancellationToken;
+// Re-exported so embedders constructing an `McpConfig` name the exact type
+// this crate's tokio-util resolves to, without pinning their own copy.
+pub use tokio_util::sync::CancellationToken;
 
 /// Configuration for the MCP server.
 pub struct McpConfig {

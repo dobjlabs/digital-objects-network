@@ -23,11 +23,14 @@ pub trait DobjOps: Send + Sync + 'static {
     /// Returns the filed object's summary.
     fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectSummary>;
 
-    /// Read the driver's current configuration (synchronizer + relayer URLs).
+    /// Read the daemon's current configuration.
     fn read_settings(&self) -> anyhow::Result<DriverSettings>;
-    /// Persist updated driver configuration. Implementations should accept
-    /// only the URLs we expose — the schema is intentionally minimal.
-    fn write_settings(&self, settings: DriverSettings) -> anyhow::Result<DriverSettings>;
+    /// Apply a partial configuration update, merging the patch's present
+    /// fields onto the current settings and returning the saved result.
+    /// Absent fields are left unchanged, so a caller can flip one setting
+    /// without echoing the rest. `mcp_enabled` actuates: the host starts or
+    /// stops its MCP server to match.
+    fn write_settings(&self, patch: DriverSettingsPatch) -> anyhow::Result<DriverSettings>;
     /// Filesystem path to the objects directory (`~/.dobj/objects/`).
     fn get_objects_dir(&self) -> anyhow::Result<String>;
 

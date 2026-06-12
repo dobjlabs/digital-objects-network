@@ -31,7 +31,7 @@ Two flavors of commands.
 | `objects-dir`                                   | `GET /objects/dir`                                                                                                  |
 | `import <path>`                                 | `POST /objects/import` (reads the `.dobj` file locally, sends contents)                                             |
 | `settings get`                                  | `GET /settings`                                                                                                     |
-| `settings set --synchronizer URL --relayer URL` | `PUT /settings` (omitted flags left unchanged)                                                                      |
+| `settings set [--synchronizer URL] [--relayer URL] [--mcp on\|off]` | `PUT /settings` (omitted flags left unchanged; the MCP toggle starts/stops the server immediately) |
 | `run <action> [paths...]`                       | `POST /actions/run`, then follows `/actions/runs/{id}/events` and polls `/actions/runs/{id}` to the terminal result |
 | `events`                                        | `GET /events` SSE — prints every event as JSON lines                                                                |
 

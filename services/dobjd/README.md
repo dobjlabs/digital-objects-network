@@ -26,7 +26,9 @@ Two concurrent listeners:
 - **MCP on `127.0.0.1:7718`** (`DOBJD_PORT + 1`) — streamable-HTTP MCP server (from the
   [`dobj-mcp`](../../interfaces/mcp) crate) sharing the same `Arc<Driver>` as the
   HTTP routes, so an MCP-driven action shows up in real time on every
-  other connected client.
+  other connected client. Gated by the `mcpEnabled` setting (default
+  **off**); when off, the MCP port is not bound at all. See
+  [Settings](#settings) for toggle semantics.
 
 dobjd is API-only — the UI is served separately (Vite on `:1420` in
 dev, Tauri's webview for the desktop app).
@@ -123,10 +125,24 @@ Read on every `load_settings()` call from `~/.dobj/settings.json`:
 ```json
 {
   "synchronizerApiUrl": "https://synchronizer.don.pateldhvani.com",
-  "relayerApiUrl": "https://relayer.don.pateldhvani.com"
+  "relayerApiUrl": "https://relayer.don.pateldhvani.com",
+  "mcpEnabled": false
 }
 ```
 
 Compile-time defaults come from `DEFAULT_SYNCHRONIZER_API_URL` /
 `DEFAULT_RELAYER_API_URL` env vars at build time (set by the release
 workflow), overridden by anything in the settings file at runtime.
+
+Saving `mcpEnabled` through any settings write path (`PUT /settings`,
+`dobj settings set --mcp`, the MCP `write_settings` tool) starts or
+stops the embedded MCP server on the spot — no daemon restart. On the
+HTTP path, enabling fails (and nothing is persisted) if the adjacent
+port is already taken. The MCP tool instead persists first and
+reconciles in the background, so a self-disabling agent's final
+response can flush before the server stops.
+
+Both `PUT /settings` and the MCP `write_settings` tool take a partial
+body and merge it onto the current settings: any field you omit keeps
+its stored value, so a write that leaves out `mcpEnabled` will not stop
+a running MCP server.

@@ -36,6 +36,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use wire_types::DriverSettings;
 
 use crate::client::DobjdClient;
 
@@ -399,12 +400,25 @@ async fn start_dobjd(client: &DobjdClient, dobjd_bin: Option<OsString>) -> Resul
     drop(child);
 
     println!(
-        "starting dobjd (pid {pid}, http {}, mcp http://127.0.0.1:{mcp_port}/mcp, log {})…",
+        "starting dobjd (pid {pid}, http {}, log {})…",
         client.base_url(),
         paths.log_file.display(),
     );
     wait_until_ready(client, pid, READY_TIMEOUT).await?;
-    println!("dobjd is up");
+
+    // MCP is off by default and toggled via settings, so report what the
+    // daemon actually serves rather than assuming the adjacent port is live.
+    // dobjd binds (or skips) the MCP port before it answers HTTP, so by the
+    // time we're ready `/settings` reflects the running state.
+    match client.get_json::<DriverSettings>("/settings").await {
+        Ok(settings) if settings.mcp_enabled => {
+            println!("dobjd is up (mcp http://127.0.0.1:{mcp_port}/mcp)");
+        }
+        Ok(_) => {
+            println!("dobjd is up (mcp disabled; enable with `dobj settings set --mcp on`)");
+        }
+        Err(_) => println!("dobjd is up"),
+    }
     Ok(())
 }
 
