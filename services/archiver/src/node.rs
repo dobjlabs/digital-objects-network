@@ -92,13 +92,13 @@ impl Store {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e.into()),
         }
-        // Canonicalize the base too: blobs_path can be relative or sit under a
-        // symlinked prefix, so comparing it raw against a resolved path would
-        // reject legitimate in-store paths.
-        let blobs_root = fs::canonicalize(&self.blobs_path)?;
-        let mut root_path = fs::canonicalize(slot_path)?; // Resolve symlink
+        // `slot_path` points to `../../../by_root/{root_hi}/{root_med}/{root_lo}`, so we remove
+        // the first 3 components and manually build the `root_path`
+        let relative_root_path: PathBuf = fs::read_link(slot_path)?.iter().skip(3).collect();
+        let mut root_path = PathBuf::from(&self.blobs_path);
+        root_path.push(relative_root_path);
         assert!(
-            root_path.starts_with(&blobs_root),
+            root_path.starts_with(&self.blobs_path),
             "root_path outside of blobs_path, removal is dangerous"
         );
         if fs::exists(&root_path)? {
@@ -289,11 +289,6 @@ impl Node {
         &self,
         beacon_block_header: &BlockHeader,
     ) -> Result<()> {
-        // Create the block dir where the filtered blobs and header will be stored, indexed by
-        // block root
-        let root_dir = self.store.root_dir(&beacon_block_header.root);
-        create_dir_all(&root_dir)?;
-
         // Create the path with the symlink to the block dir, indexed by slot
         let slot_path = self.store.slot_dir(beacon_block_header.slot);
         let mut slot_mid_path = slot_path.clone();
@@ -304,6 +299,11 @@ impl Node {
             &beacon_block_header.root,
         );
         unix::fs::symlink(&root_dir_rel, slot_path)?;
+
+        // Create the block dir where the filtered blobs and header will be stored, indexed by
+        // block root
+        let root_dir = self.store.root_dir(&beacon_block_header.root);
+        create_dir_all(&root_dir)?;
 
         // We store the header as a tmp file, and only rename after successfully processing the
         // beacon block.  This way seeing the `header.json` without the `.tmp` guarantees that the
@@ -339,9 +339,7 @@ impl Node {
             .ok_or_else(|| {
                 anyhow!("Beacon header exists for slot {slot} but full block {beacon_block_root} was not found")
             })?;
-        let execution_payload = beacon_block.execution_payload.ok_or_else(|| {
-            anyhow!("Beacon block {beacon_block_root} for slot {slot} had no execution payload")
-        })?;
+        let execution_payload = beacon_block.execution_payload;
         debug!(
             "slot {} has execution block {} at height {}",
             slot, execution_payload.block_hash, execution_payload.block_number
@@ -354,13 +352,11 @@ impl Node {
                 .unwrap_or_default(),
         );
 
-        let kzg_blob_commitments = match beacon_block.blob_kzg_commitments {
-            Some(commitments) => commitments
-                .into_iter()
-                .map(|c| (kzg_to_versioned_hash(c.as_ref()), c))
-                .collect(),
-            None => Vec::new(),
-        };
+        let kzg_blob_commitments: Vec<_> = beacon_block
+            .blob_kzg_commitments
+            .into_iter()
+            .map(|c| (kzg_to_versioned_hash(c.as_ref()), c))
+            .collect();
         if kzg_blob_commitments.is_empty() {
             debug!("slot {} has no blobs", slot);
             return Ok(());

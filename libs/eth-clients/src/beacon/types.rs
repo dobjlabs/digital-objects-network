@@ -69,8 +69,10 @@ pub struct Spec {
 }
 #[derive(Deserialize, Debug)]
 pub struct Block {
-    pub blob_kzg_commitments: Option<Vec<KzgCommitment>>,
-    pub execution_payload: Option<ExecutionPayload>,
+    // Mandatory after "Deneb"
+    pub blob_kzg_commitments: Vec<KzgCommitment>,
+    // Mandatory after "Bellatrix/The Merge"
+    pub execution_payload: ExecutionPayload,
     pub parent_root: B256,
     #[serde(deserialize_with = "deserialize_u32")]
     pub slot: u32,
@@ -87,8 +89,10 @@ pub struct ExecutionPayload {
 
 #[derive(Deserialize, Debug)]
 pub struct BlockBody {
-    pub execution_payload: Option<ExecutionPayload>,
-    pub blob_kzg_commitments: Option<Vec<KzgCommitment>>,
+    // Mandatory after "Deneb"
+    pub execution_payload: ExecutionPayload,
+    // Mandatory after "Bellatrix/The Merge"
+    pub blob_kzg_commitments: Vec<KzgCommitment>,
 }
 #[derive(Deserialize, Debug)]
 pub struct BlockMessage {
