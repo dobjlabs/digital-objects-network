@@ -339,9 +339,7 @@ impl Node {
             .ok_or_else(|| {
                 anyhow!("Beacon header exists for slot {slot} but full block {beacon_block_root} was not found")
             })?;
-        let execution_payload = beacon_block.execution_payload.ok_or_else(|| {
-            anyhow!("Beacon block {beacon_block_root} for slot {slot} had no execution payload")
-        })?;
+        let execution_payload = beacon_block.execution_payload;
         debug!(
             "slot {} has execution block {} at height {}",
             slot, execution_payload.block_hash, execution_payload.block_number
@@ -354,13 +352,11 @@ impl Node {
                 .unwrap_or_default(),
         );
 
-        let kzg_blob_commitments = match beacon_block.blob_kzg_commitments {
-            Some(commitments) => commitments
-                .into_iter()
-                .map(|c| (kzg_to_versioned_hash(c.as_ref()), c))
-                .collect(),
-            None => Vec::new(),
-        };
+        let kzg_blob_commitments: Vec<_> = beacon_block
+            .blob_kzg_commitments
+            .into_iter()
+            .map(|c| (kzg_to_versioned_hash(c.as_ref()), c))
+            .collect();
         if kzg_blob_commitments.is_empty() {
             debug!("slot {} has no blobs", slot);
             return Ok(());
