@@ -5,6 +5,7 @@ name: Install test
 # relayer + dobjd — pointed at Ethereum Sepolia.
 # Then exercises the full action round-trip:
 # `dobj start → status → actions → run FindLog → objects → stop`.
+# Also verifies the shipped `pexe` binary runs and reports the release tag.
 #
 # Triggered:
 #   - automatically at the end of the Release workflow, which calls this as
@@ -204,6 +205,7 @@ jobs:
           patterns=(
             --pattern "dobjd-$TARGET.tar.gz"
             --pattern "dobj-$TARGET.tar.gz"
+            --pattern "pexe-$TARGET.tar.gz"
             --pattern "synchronizer-$TARGET.tar.gz"
             --pattern "relayer-$TARGET.tar.gz"
             --pattern "craft-basics*.pexe"
@@ -229,7 +231,8 @@ jobs:
           mkdir -p ~/.dobj/bin ~/.dobj/actions
           tar -xzf "artifacts/dobjd-$TARGET.tar.gz" -C ~/.dobj/bin
           tar -xzf "artifacts/dobj-$TARGET.tar.gz"  -C ~/.dobj/bin
-          chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj ~/.dobj/bin/dobj-mcp-proxy
+          tar -xzf "artifacts/pexe-$TARGET.tar.gz"  -C ~/.dobj/bin
+          chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj ~/.dobj/bin/dobj-mcp-proxy ~/.dobj/bin/pexe
           PEXE=$(find artifacts -maxdepth 1 -name 'craft-basics*.pexe' | head -1)
           cp "$PEXE" ~/.dobj/actions/craft-basics.pexe
 
@@ -261,6 +264,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$DOBJ\bin", "$DOBJ\actions" | Out-Null
           tar -xzf "artifacts\dobjd-$env:TARGET.tar.gz" -C "$DOBJ\bin"
           tar -xzf "artifacts\dobj-$env:TARGET.tar.gz"  -C "$DOBJ\bin"
+          tar -xzf "artifacts\pexe-$env:TARGET.tar.gz"  -C "$DOBJ\bin"
           $pexe = Get-ChildItem artifacts -Filter 'craft-basics*.pexe' | Select-Object -First 1
           Copy-Item $pexe.FullName -Destination "$DOBJ\actions\craft-basics.pexe"
 
@@ -275,6 +279,40 @@ jobs:
             "relayerApiUrl": "http://127.0.0.1:3200"
           }
           '@ | Set-Content -Path "$DOBJ\settings.json"
+
+      # =====================================================================
+      # Verify the shipped pexe binary. Independent of the daemon and the
+      # Sepolia round-trip, so it runs right after staging and fails fast on a
+      # broken artifact instead of after the multi-minute stack bringup.
+      # =====================================================================
+
+      - name: Verify pexe (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same check `dobj update` makes before committing a swap: confirm the
+          # cross-compiled, signed binary actually runs on this platform (right
+          # arch, deps present, not Gatekeeper-killed) and reports the tag it
+          # shipped in. Token match (not substring) so a superstring tag like
+          # v0.1.0-rc.5 can't satisfy a v0.1.0 target.
+          out=$(~/.dobj/bin/pexe --version)
+          echo "$out"
+          echo "$out" | tr ' ' '\n' | grep -qxF "$TAG" \
+            || { echo "::error::pexe --version reported '$out', expected the tag $TAG"; exit 1; }
+
+      - name: Verify pexe (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $pexe = "$env:USERPROFILE\.dobj\bin\pexe.exe"
+          $out = (& $pexe --version) -join ' '
+          if ($LASTEXITCODE -ne 0) { throw "pexe --version failed ($LASTEXITCODE)" }
+          Write-Host $out
+          # Token match against the release tag (see the Unix step's rationale).
+          if (($out -split '\s+') -notcontains $env:TAG) {
+              throw "pexe --version reported '$out', expected the tag $env:TAG"
+          }
 
       # =====================================================================
       # Resolve a recent Sepolia slot so the synchronizer doesn't waste

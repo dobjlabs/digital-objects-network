@@ -99,8 +99,8 @@ just dobjd
 DOBJD_PORT=7727 cargo run --release -p dobjd
 ```
 
-Released binaries are signed + notarized on macOS. The tarball is just
-the three executables (`dobjd`, `dobj`, `dobj-mcp-proxy`).
+Released binaries are signed + notarized on macOS. The bundle is just
+the four executables (`dobjd`, `dobj`, `dobj-mcp-proxy`, `pexe`).
 Windows binaries are not codesigned yet — first run shows a SmartScreen warning.
 
 ## Lifecycle

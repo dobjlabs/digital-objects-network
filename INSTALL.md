@@ -7,6 +7,7 @@ Installing the driver gives you:
   - MCP on `http://127.0.0.1:7718/mcp` (off by default; see [Connect an agent](#connect-an-agent-mcp))
 - `~/.dobj/bin/dobj` — terminal CLI that talks to dobjd
 - `~/.dobj/bin/dobj-mcp-proxy` — stdio↔HTTP bridge for agents that only speak stdio (e.g. Claude Desktop)
+- `~/.dobj/bin/pexe` — packaging tool for building and inspecting `.pexe` plugin archives
 
 The driver installs with an **empty action catalog** — applications ship as
 plugins (`.pexe` files). See [Next steps](#next-steps) for installing one,
@@ -197,13 +198,14 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "unsupported platform: $(uname -sm)"; exit 1 ;;
 esac
 
-# 2. Download and extract the two artifacts. Substitute a pinned tag for
+# 2. Download and extract the three artifacts. Substitute a pinned tag for
 #    `latest/download` -> `download/<tag>` if you don't want the newest.
 RELEASE=https://github.com/dobjlabs/digital-objects-network/releases/latest/download
 mkdir -p ~/.dobj/bin
 curl -fsSL "$RELEASE/dobjd-$TARGET.tar.gz" | tar -xz -C ~/.dobj/bin
 curl -fsSL "$RELEASE/dobj-$TARGET.tar.gz"  | tar -xz -C ~/.dobj/bin
-chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj ~/.dobj/bin/dobj-mcp-proxy
+curl -fsSL "$RELEASE/pexe-$TARGET.tar.gz"  | tar -xz -C ~/.dobj/bin
+chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj ~/.dobj/bin/dobj-mcp-proxy ~/.dobj/bin/pexe
 ```
 
 **Windows (PowerShell):**
@@ -213,7 +215,7 @@ $TARGET  = "x86_64-pc-windows-msvc"     # the only Windows target built
 $RELEASE = "https://github.com/dobjlabs/digital-objects-network/releases/latest/download"
 $DOBJ    = "$env:USERPROFILE\.dobj"
 New-Item -ItemType Directory -Force -Path "$DOBJ\bin" | Out-Null
-foreach ($name in @("dobjd", "dobj")) {
+foreach ($name in @("dobjd", "dobj", "pexe")) {
     $tmp = "$DOBJ\$name-$TARGET.tar.gz"
     curl.exe -fsSL "$RELEASE/$name-$TARGET.tar.gz" -o $tmp
     tar -xzf $tmp -C "$DOBJ\bin"
@@ -227,6 +229,7 @@ Then continue from [Start and verify](#start-and-verify).
 
 - **`dobjd-{target}.tar.gz`** — the daemon. Bundles `dobj-mcp-proxy` alongside.
 - **`dobj-{target}.tar.gz`** — terminal CLI for the daemon.
+- **`pexe-{target}.tar.gz`** — packaging tool for building and inspecting `.pexe` plugin archives.
 - **`craft-basics.pexe`** and **`craft-rocket.pexe`** — example plugins
   (optional; see Next steps).
 

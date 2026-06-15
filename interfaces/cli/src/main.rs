@@ -133,7 +133,7 @@ enum Cmd {
         #[arg(short = 'n', long, default_value_t = 100)]
         lines: usize,
     },
-    /// Update dobj, dobjd, and dobj-mcp-proxy to a newer release.
+    /// Update dobj, dobjd, dobj-mcp-proxy, and pexe to a newer release.
     Update {
         /// Report current and latest versions without changing anything.
         #[arg(long)]
