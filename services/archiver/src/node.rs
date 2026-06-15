@@ -12,7 +12,7 @@ use std::{
     fs::{self, create_dir_all, read_dir, rename, File},
     io,
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::{self, Path, PathBuf},
     str::FromStr,
 };
 
@@ -92,13 +92,13 @@ impl Store {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e.into()),
         }
-        // Canonicalize the base too: blobs_path can be relative or sit under a
-        // symlinked prefix, so comparing it raw against a resolved path would
-        // reject legitimate in-store paths.
-        let blobs_root = fs::canonicalize(&self.blobs_path)?;
-        let mut root_path = fs::canonicalize(slot_path)?; // Resolve symlink
+        // `slot_path` points to `../../../by_root/{root_hi}/{root_med}/{root_lo}`, so we remove
+        // the first 3 components and manually build the `root_path`
+        let relative_root_path: PathBuf = fs::read_link(slot_path)?.into_iter().skip(3).collect();
+        let mut root_path = PathBuf::from(&self.blobs_path);
+        root_path.push(relative_root_path);
         assert!(
-            root_path.starts_with(&blobs_root),
+            root_path.starts_with(&self.blobs_path),
             "root_path outside of blobs_path, removal is dangerous"
         );
         if fs::exists(&root_path)? {
@@ -289,11 +289,6 @@ impl Node {
         &self,
         beacon_block_header: &BlockHeader,
     ) -> Result<()> {
-        // Create the block dir where the filtered blobs and header will be stored, indexed by
-        // block root
-        let root_dir = self.store.root_dir(&beacon_block_header.root);
-        create_dir_all(&root_dir)?;
-
         // Create the path with the symlink to the block dir, indexed by slot
         let slot_path = self.store.slot_dir(beacon_block_header.slot);
         let mut slot_mid_path = slot_path.clone();
@@ -304,6 +299,11 @@ impl Node {
             &beacon_block_header.root,
         );
         unix::fs::symlink(&root_dir_rel, slot_path)?;
+
+        // Create the block dir where the filtered blobs and header will be stored, indexed by
+        // block root
+        let root_dir = self.store.root_dir(&beacon_block_header.root);
+        create_dir_all(&root_dir)?;
 
         // We store the header as a tmp file, and only rename after successfully processing the
         // beacon block.  This way seeing the `header.json` without the `.tmp` guarantees that the
