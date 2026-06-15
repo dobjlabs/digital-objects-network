@@ -92,7 +92,11 @@ impl Store {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e.into()),
         }
-        let mut root_path = fs::canonicalize(slot_path)?; // Resolve symlink
+        // `slot_path` points to `../../../by_root/{root_hi}/{root_med}/{root_lo}`, so we remove
+        // the first 3 components and manually build the `root_path`
+        let relative_root_path: PathBuf = fs::read_link(slot_path)?.iter().skip(3).collect();
+        let mut root_path = PathBuf::from(&self.blobs_path);
+        root_path.push(relative_root_path);
         assert!(
             root_path.starts_with(&self.blobs_path),
             "root_path outside of blobs_path, removal is dangerous"
@@ -128,7 +132,7 @@ impl Store {
             let mut slot_path = PathBuf::from(&self.blobs_path);
             slot_path.push("by_slot");
             // Find the highest slot number path
-            for _level in 0..DIR_LEVELS {
+            for level in 0..DIR_LEVELS {
                 let read_dir = match fs::read_dir(&slot_path) {
                     Ok(entries) => entries,
                     Err(e) if e.kind() == io::ErrorKind::NotFound => break 'outer,
@@ -138,13 +142,24 @@ impl Store {
                     .map(|res| res.map(|e| e.path()))
                     .collect::<Result<Vec<_>, io::Error>>()?;
                 entries.sort();
-                let last = if let Some(last) = entries.last() {
-                    last
-                } else {
-                    break 'outer;
+                let last = match entries.last() {
+                    Some(last) => last,
+                    None => {
+                        // An empty directory below the root would otherwise
+                        // abandon the valid blocks under lower-numbered siblings:
+                        // drop it and retry so the descent falls back to one
+                        // instead of giving up. An empty root just means the
+                        // store holds no blocks.
+                        if level == 0 {
+                            break 'outer;
+                        }
+                        fs::remove_dir(&slot_path)?;
+                        continue 'outer;
+                    }
                 };
-                // Next level
-                slot_path.push(last);
+                // `entries` holds full paths, so descend by adopting the deepest
+                // directly; pushing a relative entry would append, not replace.
+                slot_path = last.clone();
             }
             // See if that block was completed, if not delete it and try again
             let mut header_path = slot_path.clone();
@@ -274,7 +289,7 @@ impl Node {
         &self,
         beacon_block_header: &BlockHeader,
     ) -> Result<()> {
-        // Create the path with the symlink to the yet to be created block dir, indexed by slot
+        // Create the path with the symlink to the block dir, indexed by slot
         let slot_path = self.store.slot_dir(beacon_block_header.slot);
         let mut slot_mid_path = slot_path.clone();
         slot_mid_path.pop();
@@ -289,6 +304,7 @@ impl Node {
         // block root
         let root_dir = self.store.root_dir(&beacon_block_header.root);
         create_dir_all(&root_dir)?;
+
         // We store the header as a tmp file, and only rename after successfully processing the
         // beacon block.  This way seeing the `header.json` without the `.tmp` guarantees that the
         // stored block data is valid.
@@ -313,24 +329,17 @@ impl Node {
         let beacon_block_root = beacon_block_header.root;
         let slot = beacon_block_header.slot;
 
-        let beacon_block = match self
+        // We already hold this slot's header, so a None body is a transient miss
+        // at the head, not an empty slot. Fail instead of committing the slot with
+        // no blobs; the restart reprocesses it once the body lands.
+        let beacon_block = self
             .beacon_cli
             .get_block(BlockId::Hash(beacon_block_root))
             .await?
-        {
-            Some(block) => block,
-            None => {
-                debug!("slot {} has empty block", slot);
-                return Ok(());
-            }
-        };
-        let execution_payload = match beacon_block.execution_payload {
-            Some(payload) => payload,
-            None => {
-                debug!("slot {} has no execution payload", slot);
-                return Ok(());
-            }
-        };
+            .ok_or_else(|| {
+                anyhow!("Beacon header exists for slot {slot} but full block {beacon_block_root} was not found")
+            })?;
+        let execution_payload = beacon_block.execution_payload;
         debug!(
             "slot {} has execution block {} at height {}",
             slot, execution_payload.block_hash, execution_payload.block_number
@@ -343,13 +352,11 @@ impl Node {
                 .unwrap_or_default(),
         );
 
-        let kzg_blob_commitments = match beacon_block.blob_kzg_commitments {
-            Some(commitments) => commitments
-                .into_iter()
-                .map(|c| (kzg_to_versioned_hash(c.as_ref()), c))
-                .collect(),
-            None => Vec::new(),
-        };
+        let kzg_blob_commitments: Vec<_> = beacon_block
+            .blob_kzg_commitments
+            .into_iter()
+            .map(|c| (kzg_to_versioned_hash(c.as_ref()), c))
+            .collect();
         if kzg_blob_commitments.is_empty() {
             debug!("slot {} has no blobs", slot);
             return Ok(());

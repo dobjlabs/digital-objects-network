@@ -256,12 +256,7 @@ impl Node {
         let block = self
             .get_beacon_block_by_hash_with_retry(slot, header.root)
             .await?;
-        let execution_payload = block.execution_payload.as_ref().ok_or_else(|| {
-            anyhow!(
-                "Beacon block {} for slot {slot} had no execution payload",
-                header.root
-            )
-        })?;
+        let execution_payload = &block.execution_payload;
 
         Ok(CommittedSlotRecord {
             slot,
@@ -285,17 +280,14 @@ impl Node {
         let slot = beacon_block_header.slot;
         let beacon_block_root = beacon_block_header.root;
 
-        let execution_payload = beacon_block.execution_payload.as_ref().ok_or_else(|| {
-            anyhow!("Beacon block {beacon_block_root} for slot {slot} had no execution payload")
-        })?;
+        let execution_payload = &beacon_block.execution_payload;
 
-        let kzg_blob_commitments = match beacon_block.blob_kzg_commitments.clone() {
-            Some(commitments) => commitments
-                .into_iter()
-                .map(|c| (kzg_to_versioned_hash(c.as_ref()), c))
-                .collect(),
-            None => Vec::new(),
-        };
+        let kzg_blob_commitments = beacon_block
+            .blob_kzg_commitments
+            .clone()
+            .into_iter()
+            .map(|c| (kzg_to_versioned_hash(c.as_ref()), c))
+            .collect();
 
         Ok(SlotContext {
             slot,
