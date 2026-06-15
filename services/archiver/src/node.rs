@@ -12,7 +12,7 @@ use std::{
     fs::{self, create_dir_all, read_dir, rename, File},
     io,
     io::{Read, Write},
-    path::{self, Path, PathBuf},
+    path::{Path, PathBuf},
     str::FromStr,
 };
 
@@ -94,7 +94,7 @@ impl Store {
         }
         // `slot_path` points to `../../../by_root/{root_hi}/{root_med}/{root_lo}`, so we remove
         // the first 3 components and manually build the `root_path`
-        let relative_root_path: PathBuf = fs::read_link(slot_path)?.into_iter().skip(3).collect();
+        let relative_root_path: PathBuf = fs::read_link(slot_path)?.iter().skip(3).collect();
         let mut root_path = PathBuf::from(&self.blobs_path);
         root_path.push(relative_root_path);
         assert!(
