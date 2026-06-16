@@ -10,6 +10,21 @@ Run the full stack, or just a **synchronizer** (with its **archiver**) to
 independently verify the network's canonical state from Ethereum chain data
 without trusting anyone else's instance.
 
+## Minimum hardware requirements
+
+| Service        | CPU     | RAM    | Disk                                       |
+| -------------- | ------- | ------ | ------------------------------------------ |
+| `synchronizer` | 2 cores | 2 GB   | 20 GB (Postgres + RocksDB; grows with chain history) |
+| `relayer`      | 1 core  | 512 MB | 2 GB (Postgres relay job queue)            |
+| `archiver`     | 1 core  | 512 MB | 50 GB (grows at ~128 KB per archived blob) |
+
+These figures are for running each service. Running the full compose stack on a
+single host requires their combined resources. The archiver's disk usage grows
+proportionally with the number of blobs matching `FILTER_ADDRESS`; size the
+volume accordingly and monitor it. The synchronizer's RocksDB store
+(`APP_STATE_DB_PATH`) is a rebuildable cache, but mounting a volume for it
+avoids a slow cold re-sync on restart.
+
 ## Quick start
 
 ```bash

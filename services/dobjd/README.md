@@ -86,6 +86,14 @@ run (returning a `runId`) and `get_run` polls it — an MCP-driven action is the
 same run object the desktop GUI / website / `dobj` CLI can follow, and its
 progress fans out over the shared SSE hub in real time.
 
+## Hardware requirements
+
+| Resource | Minimum | Notes                                                                 |
+| -------- | ------- | --------------------------------------------------------------------- |
+| CPU      | 4 cores | plonky2 proof generation is parallel and benefits from multiple cores |
+| RAM      | 8 GB    | proof generation peaks at several GB; 16 GB recommended               |
+| Disk     | 2 GB    | `~/.dobj/` RocksDB store and object files                             |
+
 ## Build and run
 
 ```bash
