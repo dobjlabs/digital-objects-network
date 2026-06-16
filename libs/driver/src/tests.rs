@@ -92,6 +92,7 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
         tx_hash: None,
         obj: spendable.obj,
         tx_final: tx_hash(&source_tx),
+        tx_pod: None,
     };
     let mut state = TestState::default();
     apply_tx(&mut state, &source_tx);
@@ -318,6 +319,8 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
         .find(|e| e.file_name != "log_1.dobj")
         .unwrap();
     assert_eq!(output.record.status, ObjectStatus::Unknown);
+    // tx_pod is retained so the proof can be re-submitted without re-proving.
+    assert!(output.record.tx_pod.is_some());
 }
 
 /// A `.dobj` whose `class` text matches what an action expects must STILL
@@ -386,6 +389,9 @@ fn test_execute_keeps_files_after_relayer_accepts() {
         .find(|e| e.file_name != "log_1.dobj")
         .unwrap();
     assert_eq!(output.record.status, ObjectStatus::Unknown);
+    // tx_pod is retained: the relayer accepted the submission but we never
+    // got a tx_hash, so the proof might need to be re-submitted.
+    assert!(output.record.tx_pod.is_some());
 }
 
 // ---------------------------------------------------------------------------
@@ -412,6 +418,7 @@ fn make_importable_log() -> (String, Hash, Hash) {
         tx_hash: None,
         obj: spendable.obj,
         tx_final: outputs.tx.dict().commitment(),
+        tx_pod: None,
     };
     let json = serde_json::to_string(&record).unwrap();
     (json, commitment, nullifier)

@@ -249,6 +249,7 @@ pub(crate) fn save_results(
             tx_hash: None,
             obj: spendable.obj,
             tx_final,
+            tx_pod: Some(spendable_outputs.tx_pod.clone()),
         };
         write_object_file(paths, &live_record, &file_name)?;
     }
@@ -260,6 +261,8 @@ pub(crate) fn save_results(
 }
 
 /// Update the status and tx_hash of previously saved output files on disk.
+/// Also clears the stored `tx_pod`: by the time this is called the relayer
+/// has accepted the submission, so the local copy is no longer needed.
 pub(crate) fn update_output_files(
     paths: &DriverPaths,
     output_files: &[String],
@@ -274,6 +277,7 @@ pub(crate) fn update_output_files(
             .map_err(|err| anyhow!("failed to parse {file_name} for status update: {err}"))?;
         record.status = status;
         record.tx_hash = tx_hash.map(|s| s.to_string());
+        record.tx_pod = None;
         write_object_file(paths, &record, file_name)?;
     }
     Ok(())

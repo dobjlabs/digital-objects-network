@@ -1,3 +1,4 @@
+use pod2::frontend::MainPod;
 use pod2::middleware::{Hash, containers::Dictionary};
 use sdk::SpendableObject;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,12 @@ pub struct ObjectRecord {
     /// correlate with the relayer, resolving the current Ethereum tx hash
     /// across fee-bump replacements.
     pub tx_final: Hash,
+    /// The transaction pod that proved this object was created. Stored
+    /// immediately after proof generation so a relayer or daemon crash cannot
+    /// force a full re-proof. Cleared once the relayer has broadcast the
+    /// transaction (at which point the proof is in the relayer's hands).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_pod: Option<MainPod>,
 }
 
 impl ObjectRecord {

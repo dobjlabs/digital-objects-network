@@ -229,6 +229,7 @@ mod tests {
             tx_hash: None,
             obj: spendable.obj,
             tx_final,
+            tx_pod: None,
         }
     }
 
