@@ -76,17 +76,17 @@ These are the predicates available in podlang. Some are native to the backend ci
 
 ### Arithmetic
 
-- `SumOf(sum, a, b)` — `sum = a + b`.
-- `ProductOf(product, a, b)` — `product = a * b`.
-- `MaxOf(max, a, b)` — `max = max(a, b)`.
+- `Sum(a, b, sum)` — `sum = a + b`.
+- `Product(a, b, product)` — `product = a * b`.
+- `Max(a, b, max)` — `max = max(a, b)`.
 
 ### Hashing
 
-- `HashOf(hash, input1, input2)` — `hash` is the Poseidon hash of the two inputs.
+- `Hash(input1, input2, hash)` — `hash` is the Poseidon hash of the two inputs.
 
 ### Cryptographic
 
-- `PublicKeyOf(pubkey, secret)` — `pubkey` is the public key derived from `secret`.
+- `PublicKey(secret, pubkey)` — `pubkey` is the public key derived from `secret`.
 - `SignedBy(message, pubkey)` — `message` is signed by the holder of `pubkey`.
 
 ## Statement arguments
@@ -178,7 +178,7 @@ eth_dos_base(src, dst, distance) = AND(
 
 eth_dos_ind(src, dst, distance, private: shorter_distance, mid) = AND(
   eth_dos(src, mid, shorter_distance)
-  SumOf(distance, shorter_distance, 1)
+  Sum(shorter_distance, 1, distance)
   eth_friend(mid, dst)
 )
 

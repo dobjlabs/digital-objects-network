@@ -2,7 +2,7 @@
 name = "craft-rocket"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build examples/craft-rocket`.
-module_hash = "0b0ee84c9fd72ad55dcfdd8e92a9fdfeafe5aaa8a496685070d934eba60d4986"
+module_hash = "5942180a02b3ef97b482d1c17f0472c68b930ee99bf6ba3be924bee3b5f67dd6"
 
 # ── raw resources ────────────────────────────────────────────────────────────
 

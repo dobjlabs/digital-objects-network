@@ -1006,7 +1006,7 @@ impl ActionHandle {
                         let st = exe_ctx
                             .bld
                             .builder
-                            .priv_op(Operation::dict_update(new_arg, old_arg, key.clone(), v))
+                            .priv_op(Operation::dict_update(old_arg, key.clone(), v, new_arg))
                             .unwrap();
                         body_sts.push(st);
                         if let Some(t) = current_ts.get_mut(obj) {
@@ -1196,9 +1196,9 @@ impl ActionHandle {
         let [v0, v1] = validate_args([(v0, Type::Int), (v1, Type::Int)])?;
         self.native_st(NativePredicate::Gt, vec![v0, v1])
     }
-    fn st_sum_of(self, v0: Dynamic, v1: Dynamic, v2: Dynamic) -> RuntimeResult<()> {
+    fn st_sum(self, v0: Dynamic, v1: Dynamic, v2: Dynamic) -> RuntimeResult<()> {
         let [v0, v1, v2] = validate_args([(v0, Type::Int), (v1, Type::Int), (v2, Type::Int)])?;
-        self.native_st(NativePredicate::SumOf, vec![v0, v1, v2])
+        self.native_st(NativePredicate::Sum, vec![v0, v1, v2])
     }
     fn intro_vdf(self, n_iters: Dynamic, input: Dynamic) -> RuntimeResult<ArgHandle> {
         let [n_iters, input] = validate_args([(n_iters, Type::Int), (input, Type::Raw)])?;
@@ -2442,7 +2442,7 @@ fn new_engine() -> Engine {
         .register_fn("subaction", ActionHandle::subaction)
         .register_fn("random", ActionHandle::random)
         .register_fn("st_gt", ActionHandle::st_gt)
-        .register_fn("st_sum_of", ActionHandle::st_sum_of)
+        .register_fn("st_sum", ActionHandle::st_sum)
         .register_fn("intro_vdf", ActionHandle::intro_vdf)
         .register_fn("intro_lt_eq_u256", ActionHandle::intro_lt_eq_u256)
         .register_fn("pow_obj_grind", ActionHandle::pow_obj_grind)

@@ -21,7 +21,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "17177e055b56595c29e2588707da324fad7f5f36", default-features = false, features = [
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "0f8ff85c6ec79b66513b905d6caef3f7029014ca", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",

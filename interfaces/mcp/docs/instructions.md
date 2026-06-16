@@ -113,8 +113,8 @@ constraints:
 - `OR(...)` — any one branch must hold (used for state-machine patterns)
 - `DictContains(dict, "key", value)` — the dictionary contains this key-value pair
 - `DictInsert/DictUpdate/DictDelete` — dictionary mutation operations
-- `GtEq`, `Equal`, `SumOf` — arithmetic constraints
-- `HashOf` — hash computation
+- `GtEq`, `Equal`, `Sum` — arithmetic constraints
+- `Hash` — hash computation
 
 The top-level pattern is always
 `IsClassName(state) = OR(Action1(...), Action2(...))`, meaning the

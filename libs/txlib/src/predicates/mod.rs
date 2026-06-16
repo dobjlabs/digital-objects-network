@@ -73,7 +73,7 @@ mod tests {
         let module = events_module();
         assert_eq!(
             format!("{:#}", module.batch.id()),
-            "0xfaffb7c0a69b08a5b6058b04a787d750eeae6ac1a67871fb2646ccc465e35424",
+            "0x31caeb6211bb4c73c47de52d11ba49bd4f225b585a9381145393b797775501c0",
         );
     }
 

@@ -36,7 +36,7 @@ fn vdf_proof(action, obj, iters) {
 fn wear(action, tool) {
     action.st_gt(tool.durability, 0);
     var durability = unsafe { tool.durability - 1 };
-    action.st_sum_of(tool.durability, durability, 1);
+    action.st_sum(durability, 1, tool.durability);
     tool.update("durability", durability);
     var key = action.random();
     tool.update("key", key);

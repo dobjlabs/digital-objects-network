@@ -1371,19 +1371,19 @@ fn trace_state_chain(
 /// `DictInsert` etc. are syntactic sugar lowered during compilation.
 fn dict_transition(stmt: &StatementTmpl) -> Option<(StatementTmplArg, StatementTmplArg)> {
     let native = native_predicate(&stmt.pred_or_wc)?;
-    match native {
+    // Arg order is (old, key, value, new) for insert/update and
+    // (old, key, new) for delete: old root first, new root last.
+    let (old, new) = match native {
         NativePredicate::ContainerInsert
         | NativePredicate::ContainerUpdate
-        | NativePredicate::ContainerDelete
         | NativePredicate::DictInsert
-        | NativePredicate::DictUpdate
-        | NativePredicate::DictDelete => {
-            let new = stmt.args.first()?.clone();
-            let old = stmt.args.get(1)?.clone();
-            Some((new, old))
+        | NativePredicate::DictUpdate => (stmt.args.first()?.clone(), stmt.args.get(3)?.clone()),
+        NativePredicate::ContainerDelete | NativePredicate::DictDelete => {
+            (stmt.args.first()?.clone(), stmt.args.get(2)?.clone())
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+    Some((new, old))
 }
 
 fn native_predicate(pred_or_wc: &PredicateOrWildcard) -> Option<NativePredicate> {
@@ -1444,7 +1444,9 @@ fn collect_fields_into_scope(
             | NativePredicate::ContainerUpdate
             | NativePredicate::DictInsert
             | NativePredicate::DictUpdate => {
-                (stmt.args.first(), stmt.args.get(2), stmt.args.get(3))
+                // New order (old, key, value, new): new root last,
+                // key/value in the middle, old root first (checked below).
+                (stmt.args.get(3), stmt.args.get(1), stmt.args.get(2))
             }
             _ => continue,
         };
@@ -1461,7 +1463,7 @@ fn collect_fields_into_scope(
         let mut in_chain = chain.contains(state_arg);
         if !in_chain
             && is_transition
-            && let Some(old) = stmt.args.get(1)
+            && let Some(old) = stmt.args.first()
         {
             in_chain = chain.contains(old);
         }

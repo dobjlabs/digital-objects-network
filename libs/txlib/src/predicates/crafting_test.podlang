@@ -68,8 +68,8 @@ CraftWoodPick(wood_pick, chain_start, chain_end,
 UseWoodPick(wood_pick, chain_start, chain_end,
     private: wood_pick0, durability) = AND(
   Gt(wood_pick0.durability, 0)
-  SumOf(wood_pick0.durability, durability, 1)
-  DictUpdate(wood_pick, wood_pick0, "durability", durability)
+  Sum(durability, 1, wood_pick0.durability)
+  DictUpdate(wood_pick0, "durability", durability, wood_pick)
   tx::TxMutate(chain_end, chain_start, wood_pick, wood_pick0, @self_predicate(IsWoodPick))
 )
 

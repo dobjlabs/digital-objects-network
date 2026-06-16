@@ -42,8 +42,8 @@ use module 0xTX_EVENTS_MODULE_HASH as tx
 // In practice we inline this into ReplayNullify, but it's useful to have it
 // for third-party code that needs to compute nullifiers outside of replay.
 Nullify(nullifier, obj, private: obj_key_hash) = AND(
-  HashOf(obj_key_hash, obj, obj.key)
-  HashOf(nullifier, obj_key_hash, "txlib-nullifier-v1")
+  Hash(obj, obj.key, obj_key_hash)
+  Hash(obj_key_hash, "txlib-nullifier-v1", nullifier)
 )
 
 // ========================================================
@@ -91,8 +91,8 @@ ReplayContents(before_tx, after_tx, before_chain, after_chain) = OR(
 ReplayContentsStepInsert(before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain, ins, guard) = AND(
   tx::TxInsert(mid_chain, before_chain, ins.initial, ins.new, guard)
-  SetInsert(ins.new_live, before_tx.live, ins.new)
-  DictUpdate(mid_tx, before_tx, "live", ins.new_live)
+  SetInsert(before_tx.live, ins.new, ins.new_live)
+  DictUpdate(before_tx, "live", ins.new_live, mid_tx)
   guard(ins.new, before_tx.chain_start, before_tx.chain_end)
   ReplayContents(mid_tx, after_tx, mid_chain, after_chain)
 )
@@ -146,11 +146,11 @@ ReplayElement(before_tx, after_tx, before_chain, after_chain) = OR(
 // back to outer tx (which restores the parent's chain_start/chain_end).
 ReplayAction(before_tx, after_tx, before_chain, after_chain,
     private: scope_mid, inner_tx, end_tx, mid) = AND(
-  DictUpdate(scope_mid, before_tx, "chain_start", before_chain)
-  DictUpdate(inner_tx, scope_mid, "chain_end", after_chain)
+  DictUpdate(before_tx, "chain_start", before_chain, scope_mid)
+  DictUpdate(scope_mid, "chain_end", after_chain, inner_tx)
   ReplayContents(inner_tx, end_tx, before_chain, after_chain)
-  DictUpdate(mid, before_tx, "live", end_tx.live)
-  DictUpdate(after_tx, mid, "nullifiers", end_tx.nullifiers)
+  DictUpdate(before_tx, "live", end_tx.live, mid)
+  DictUpdate(mid, "nullifiers", end_tx.nullifiers, after_tx)
 )
 
 // Top-level walker: every event at the transaction's top level is
@@ -193,8 +193,8 @@ ReplayActionsStep(before_tx, after_tx, before_chain, after_chain,
 ReplayActionInsert(before_tx, after_tx, before_chain, after_chain,
     private: new, new_live, guard, initial) = AND(
   tx::TxInsert(after_chain, before_chain, initial, new, guard)
-  SetInsert(new_live, before_tx.live, new)
-  DictUpdate(after_tx, before_tx, "live", new_live)
+  SetInsert(before_tx.live, new, new_live)
+  DictUpdate(before_tx, "live", new_live, after_tx)
   guard(new, before_chain, after_chain)
 )
 
@@ -204,13 +204,13 @@ ReplayActionInsert(before_tx, after_tx, before_chain, after_chain,
 
 // Full insert replay: chain step (via TxInsert) + live update +
 // guard dispatch. Referencing TxInsert instead of re-proving the
-// HashOf equations lets the prover reuse the record-time statement
+// Hash equations lets the prover reuse the record-time statement
 // that it already built for the application's action predicate.
 ReplayInsert(before_tx, after_tx, before_chain, after_chain,
     private: new, new_live, guard, initial) = AND(
   tx::TxInsert(after_chain, before_chain, initial, new, guard)
-  SetInsert(new_live, before_tx.live, new)
-  DictUpdate(after_tx, before_tx, "live", new_live)
+  SetInsert(before_tx.live, new, new_live)
+  DictUpdate(before_tx, "live", new_live, after_tx)
   guard(new, before_tx.chain_start, before_tx.chain_end)
 )
 
@@ -223,19 +223,19 @@ ReplayInsert(before_tx, after_tx, before_chain, after_chain,
 // nullifier = H(H(obj, obj.key), "txlib-nullifier-v1")
 ReplayNullify(mid_tx, after_tx, old,
     private: obj_key_hash, nullifier, new_nullifiers) = AND(
-  HashOf(obj_key_hash, old, old.key)
-  HashOf(nullifier, obj_key_hash, "txlib-nullifier-v1")
-  SetInsert(new_nullifiers, mid_tx.nullifiers, nullifier)
-  DictUpdate(after_tx, mid_tx, "nullifiers", new_nullifiers)
+  Hash(old, old.key, obj_key_hash)
+  Hash(obj_key_hash, "txlib-nullifier-v1", nullifier)
+  SetInsert(mid_tx.nullifiers, nullifier, new_nullifiers)
+  DictUpdate(mid_tx, "nullifiers", new_nullifiers, after_tx)
 )
 
 // Live-set swap + nullifier accumulation. Chain/event-hash work is
 // delegated to TxMutate in the ReplayMutate parent.
 ReplayMutateEvent(before_tx, after_tx, old, new,
     private: new_live, live_mid, mid_tx) = AND(
-  SetDelete(live_mid, before_tx.live, old)
-  SetInsert(new_live, live_mid, new)
-  DictUpdate(mid_tx, before_tx, "live", new_live)
+  SetDelete(before_tx.live, old, live_mid)
+  SetInsert(live_mid, new, new_live)
+  DictUpdate(before_tx, "live", new_live, mid_tx)
   ReplayNullify(mid_tx, after_tx, old)
 )
 
@@ -258,8 +258,8 @@ ReplayMutate(before_tx, after_tx, before_chain, after_chain,
 ReplayDelete(before_tx, after_tx, before_chain, after_chain,
     private: old, guard, new_live, mid_tx) = AND(
   tx::TxDelete(after_chain, before_chain, old, guard)
-  SetDelete(new_live, before_tx.live, old)
-  DictUpdate(mid_tx, before_tx, "live", new_live)
+  SetDelete(before_tx.live, old, new_live)
+  DictUpdate(before_tx, "live", new_live, mid_tx)
   ReplayNullify(mid_tx, after_tx, old)
   guard(old, before_tx.chain_start, before_tx.chain_end)
 )
@@ -287,7 +287,7 @@ InputsGrounded(inputs, created) = OR(
 // InputsGrounded call.
 InputsGroundedSingle(inputs, created, private: input, index) = AND(
   ArrayContains(created, index, input)
-  SetInsert(inputs, {}, input)
+  SetInsert({}, input, inputs)
 )
 
 // Two-input fast path: both inputs grounded inline, no sub-predicate
@@ -295,9 +295,9 @@ InputsGroundedSingle(inputs, created, private: input, index) = AND(
 InputsGroundedPair(inputs, created,
     private: first_input, second_input, set_first, first_index, second_index) = AND(
   ArrayContains(created, first_index, first_input)
-  SetInsert(set_first, {}, first_input)
+  SetInsert({}, first_input, set_first)
   ArrayContains(created, second_index, second_input)
-  SetInsert(inputs, set_first, second_input)
+  SetInsert(set_first, second_input, inputs)
 )
 
 // 3+ inputs: ground two inputs, then recurse for the rest. The recursion
@@ -305,9 +305,9 @@ InputsGroundedPair(inputs, created,
 InputsGroundedRecursive(inputs, created,
     private: first_input, second_input, mid, prev_inputs, first_index, second_index) = AND(
   ArrayContains(created, first_index, first_input)
-  SetInsert(mid, prev_inputs, first_input)
+  SetInsert(prev_inputs, first_input, mid)
   ArrayContains(created, second_index, second_input)
-  SetInsert(inputs, mid, second_input)
+  SetInsert(mid, second_input, inputs)
   InputsGrounded(prev_inputs, created)
 )
 
@@ -346,8 +346,8 @@ TxFinalBindings(tx_final, nullifiers, live) = AND(
 TxFinalized(state_header StateHeader, tx_final, nullifiers, live,
      private: before_tx, chain_start, chain_final) = AND(
   InputsGrounded(before_tx.live, state_header.created)
-  HashOf(chain_start, before_tx.live, {})
-  DictInsert(before_tx, {"nullifiers": {}, "chain_start": {}, "chain_end": {}}, "live", before_tx.live)
+  Hash(before_tx.live, {}, chain_start)
+  DictInsert({"nullifiers": {}, "chain_start": {}, "chain_end": {}}, "live", before_tx.live, before_tx)
   TxFinalBindings(tx_final, nullifiers, live)
   ReplayActions(before_tx, tx_final, chain_start, chain_final)
 )

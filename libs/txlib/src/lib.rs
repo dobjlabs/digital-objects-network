@@ -655,19 +655,19 @@ impl TxBuilder {
         let st_di = ctx
             .builder
             .priv_op(op!(DictInsert(
-                new,
                 initial,
                 STABLE_IDENTIFIER_FIELD,
-                stable_identifier
+                stable_identifier,
+                new
             )))
             .unwrap();
         let st_h1 = ctx
             .builder
-            .priv_op(op!(HashOf(event_hash, EMPTY_VALUE, new)))
+            .priv_op(op!(Hash(EMPTY_VALUE, new, event_hash)))
             .unwrap();
         let st_h2 = ctx
             .builder
-            .priv_op(op!(HashOf(self.chain, prev, event_hash)))
+            .priv_op(op!(Hash(prev, event_hash, self.chain)))
             .unwrap();
         let st = ctx
             .apply_custom_pred(
@@ -748,11 +748,11 @@ impl TxBuilder {
             .unwrap();
         let st_h1 = ctx
             .builder
-            .priv_op(op!(HashOf(event_hash, old, new)))
+            .priv_op(op!(Hash(old, new, event_hash)))
             .unwrap();
         let st_h2 = ctx
             .builder
-            .priv_op(op!(HashOf(self.chain, prev, event_hash)))
+            .priv_op(op!(Hash(prev, event_hash, self.chain)))
             .unwrap();
         let st = ctx
             .apply_custom_pred(
@@ -798,11 +798,11 @@ impl TxBuilder {
             .unwrap();
         let st_h1 = ctx
             .builder
-            .priv_op(op!(HashOf(event_hash, old, EMPTY_VALUE)))
+            .priv_op(op!(Hash(old, EMPTY_VALUE, event_hash)))
             .unwrap();
         let st_h2 = ctx
             .builder
-            .priv_op(op!(HashOf(self.chain, prev, event_hash)))
+            .priv_op(op!(Hash(prev, event_hash, self.chain)))
             .unwrap();
         let st = ctx
             .apply_custom_pred(
@@ -881,12 +881,12 @@ impl TxBuilder {
             .unwrap();
         let st_hash = ctx
             .builder
-            .priv_op(op!(HashOf(self.chain_start, self.inputs_set, EMPTY_VALUE)))
+            .priv_op(op!(Hash(self.inputs_set, EMPTY_VALUE, self.chain_start)))
             .unwrap();
         let st_hash_rebound = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![None, Some((&before_tx, "live")), None],
+                vec![Some((&before_tx, "live")), None, None],
                 st_hash,
             ))
             .unwrap();
@@ -903,16 +903,16 @@ impl TxBuilder {
         let st_dict_insert_lit = ctx
             .builder
             .priv_op(op!(DictInsert(
-                before_tx,
                 scope_dict,
                 "live",
-                self.inputs_set
+                self.inputs_set,
+                before_tx
             )))
             .unwrap();
         let st_dict_insert = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![None, None, None, Some((&before_tx, "live"))],
+                vec![None, None, Some((&before_tx, "live")), None],
                 st_dict_insert_lit,
             ))
             .unwrap();
@@ -1014,7 +1014,7 @@ impl TxBuilder {
             let st_live = prove_input(ctx, obj);
             let st_single = st_custom!(
                 ctx,
-                InputsGroundedSingle() = (st_live, SetInsert(inputs_set, set!(), obj))
+                InputsGroundedSingle() = (st_live, SetInsert(set!(), obj, inputs_set))
             )
             .unwrap();
             record(&mut stats, "InputsGroundedSingle");
@@ -1037,9 +1037,9 @@ impl TxBuilder {
                 ctx,
                 InputsGroundedPair() = (
                     st_first,
-                    SetInsert(set_first, set!(), first),
+                    SetInsert(set!(), first, set_first),
                     st_second,
-                    SetInsert(inputs_pair, set_first, second)
+                    SetInsert(set_first, second, inputs_pair)
                 )
             )
             .unwrap();
@@ -1066,9 +1066,9 @@ impl TxBuilder {
                 ctx,
                 InputsGroundedRecursive() = (
                     st_first,
-                    SetInsert(mid, prev_set, first),
+                    SetInsert(prev_set, first, mid),
                     st_second,
-                    SetInsert(next_set, mid, second),
+                    SetInsert(mid, second, next_set),
                     st
                 )
             )
@@ -1360,11 +1360,11 @@ mod tests {
                 .unwrap();
             let op_sum = ctx
                 .builder
-                .priv_op(op!(SumOf((&pick, "durability"), 99_i64, 1_i64)))
+                .priv_op(op!(Sum(99_i64, 1_i64, (&pick, "durability"))))
                 .unwrap();
             let op_du = ctx
                 .builder
-                .priv_op(op!(DictUpdate(pick_new, pick, "durability", 99_i64)))
+                .priv_op(op!(DictUpdate(pick, "durability", 99_i64, pick_new)))
                 .unwrap();
             let st_action = ctx
                 .apply_custom_pred_simple(
