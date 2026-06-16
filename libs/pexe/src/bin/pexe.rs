@@ -16,13 +16,24 @@ use pexe::{
 const DRIVER_DOBJ_HOME_DIR: &str = ".dobj";
 const DRIVER_ACTIONS_DIR: &str = "actions";
 
+/// Release tag + target triple, stamped by build.rs ("dev" outside a release
+/// build). pexe ships in the same release bundle as dobj/dobjd and `dobj
+/// update` validates every bundled binary reports the release tag, so its
+/// `--version` must read the same stamp.
+const VERSION: &str = concat!(
+    env!("DOBJ_RELEASE_TAG"),
+    " (",
+    env!("DOBJ_TARGET_TRIPLE"),
+    ")"
+);
+
 fn default_install_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory"))?;
     Ok(home.join(DRIVER_DOBJ_HOME_DIR).join(DRIVER_ACTIONS_DIR))
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "pexe", about = "plugin packaging tool")]
+#[command(name = "pexe", about = "plugin packaging tool", version = VERSION)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,

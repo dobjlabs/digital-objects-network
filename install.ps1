@@ -2,8 +2,9 @@
 #
 #   irm https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/install.ps1 | iex
 #
-# Installs dobj.exe (CLI), dobjd.exe (daemon), and dobj-mcp-proxy.exe from
-# the latest published release into %USERPROFILE%\.dobj\bin. Pin a version:
+# Installs dobj.exe (CLI), dobjd.exe (daemon), dobj-mcp-proxy.exe, and
+# pexe.exe (the plugin packaging tool) from the latest published release into
+# %USERPROFILE%\.dobj\bin. Pin a version:
 #
 #   $env:DOBJ_VERSION = "v0.1.0"; irm ... | iex
 #
@@ -51,7 +52,7 @@ $Tmp = Join-Path $env:TEMP "dobj-install-$([System.IO.Path]::GetRandomFileName()
 New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
 
 try {
-    foreach ($name in @("dobjd", "dobj")) {
+    foreach ($name in @("dobjd", "dobj", "pexe")) {
         $url = "$Base/$name-$Target.tar.gz"
         Write-Host "  fetching $name-$Target.tar.gz ..."
         # curl.exe explicitly: bare `curl` is a PowerShell alias for
@@ -69,7 +70,7 @@ try {
 
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
-    foreach ($name in @("dobjd", "dobj")) {
+    foreach ($name in @("dobjd", "dobj", "pexe")) {
         Get-ChildItem "$Tmp\$name" -File | ForEach-Object {
             Move-Item -Force $_.FullName (Join-Path $BinDir $_.Name)
             Write-Host "  installed $BinDir\$($_.Name)"

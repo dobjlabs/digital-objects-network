@@ -1,5 +1,5 @@
 //! `dobj update`: replace the installed bundle (dobj, dobjd,
-//! dobj-mcp-proxy) with another release from the project's GitHub releases.
+//! dobj-mcp-proxy, pexe) with another release from the project's GitHub releases.
 //!
 //! The bundle updates as a unit: every binary comes from one release tag and
 //! the swap is all-or-nothing (two-phase rename with rollback). Plugins under
@@ -33,9 +33,15 @@ const TARGET_TRIPLE: &str = env!("DOBJ_TARGET_TRIPLE");
 /// Tarballs in a release and the binaries each must contain, in swap order.
 /// `dobj` is last: the update is orchestrated by the running `dobj`, and
 /// keeping its on-disk file consistent with the executing code until
-/// everything else has landed keeps rollback reasoning simple.
-const ARTIFACTS: &[(&str, &[&str])] =
-    &[("dobjd", &["dobjd", "dobj-mcp-proxy"]), ("dobj", &["dobj"])];
+/// everything else has landed keeps rollback reasoning simple. `pexe` is
+/// swapped like the rest, but it neither drives the update nor is read during
+/// it, so where it falls in the order doesn't matter; it goes before `dobj`
+/// only to keep `dobj` last.
+const ARTIFACTS: &[(&str, &[&str])] = &[
+    ("dobjd", &["dobjd", "dobj-mcp-proxy"]),
+    ("pexe", &["pexe"]),
+    ("dobj", &["dobj"]),
+];
 
 pub async fn run(
     client: &DobjdClient,
@@ -161,7 +167,7 @@ pub async fn run(
 
     let _ = fs::remove_dir_all(&staging);
     println!(
-        "updated {CURRENT_TAG} -> {target_tag} (dobj, dobjd, dobj-mcp-proxy){}",
+        "updated {CURRENT_TAG} -> {target_tag} (dobj, dobjd, dobj-mcp-proxy, pexe){}",
         if was_running {
             ""
         } else {
@@ -716,7 +722,7 @@ fn rollback(journal: &[SwapEntry]) {
 /// Binaries whose `--version` output carries the release tag (built with the
 /// stamping build.rs). The proxy isn't stamped, so it is validated only for
 /// runnability, not for a matching tag.
-const STAMPED_BINARIES: &[&str] = &["dobj", "dobjd"];
+const STAMPED_BINARIES: &[&str] = &["dobj", "dobjd", "pexe"];
 
 /// Spawn every freshly installed binary with `--version` and require it to
 /// run; stamped binaries must also report the target tag. This catches

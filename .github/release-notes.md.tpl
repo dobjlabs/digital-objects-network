@@ -4,9 +4,9 @@ Paste this to Claude Code, Cursor, or any MCP-aware agent:
 
 > Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/INSTALL.md, install and start the Digital Objects driver, install the craft-rocket plugin, and configure MCP for this agent if supported.
 
-The guide installs `dobjd`, `dobj`, and `dobj-mcp-proxy` into `~/.dobj/`.
-The prompt also asks the agent to install the `craft-rocket` plugin and
-register MCP so you can drive Digital Objects directly.
+The guide installs `dobjd`, `dobj`, `dobj-mcp-proxy`, and `pexe` into
+`~/.dobj/`. The prompt also asks the agent to install the `craft-rocket`
+plugin and register MCP so you can drive Digital Objects directly.
 
 ## Manual install
 
@@ -15,7 +15,7 @@ See [INSTALL.md](https://github.com/dobjlabs/digital-objects-network/blob/main/I
 ## Upgrading
 
 Already installed? Run `dobj update` to upgrade in place to this release. It
-swaps `dobj`, `dobjd`, and `dobj-mcp-proxy` as a unit (atomic, with
+swaps `dobj`, `dobjd`, `dobj-mcp-proxy`, and `pexe` as a unit (atomic, with
 rollback) and leaves your plugins under `~/.dobj/actions/` untouched.
 
 ## What's in the release
@@ -23,6 +23,9 @@ rollback) and leaves your plugins under `~/.dobj/actions/` untouched.
 - **`dobjd-{target}.tar.gz`** — the daemon (HTTP API on `:7717`,
   MCP on `:7718`). Bundles `dobj-mcp-proxy` alongside.
 - **`dobj-{target}.tar.gz`** — terminal CLI for the daemon.
+- **`pexe-{target}.tar.gz`** — packaging tool for building and inspecting
+  `.pexe` plugin archives. The installer drops it in `~/.dobj/bin` alongside
+  `dobj`; plugin authors use it to produce the `*.pexe` files below.
 - **`*.pexe`** — the example plugins, one archive per plugin under
   `examples/` (e.g. `craft-basics.pexe`, `craft-rocket.pexe`).
 

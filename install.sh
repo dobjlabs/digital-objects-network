@@ -3,8 +3,9 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/install.sh | sh
 #
-# Installs `dobj` (CLI), `dobjd` (daemon), and `dobj-mcp-proxy` from the
-# latest published release into ~/.dobj/bin. Pin a version with:
+# Installs `dobj` (CLI), `dobjd` (daemon), `dobj-mcp-proxy`, and `pexe` (the
+# plugin packaging tool) from the latest published release into ~/.dobj/bin.
+# Pin a version with:
 #
 #   DOBJ_VERSION=v0.1.0 curl -fsSL ... | sh
 #
@@ -50,7 +51,7 @@ fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
-for name in dobjd dobj; do
+for name in dobjd dobj pexe; do
   url="$BASE/$name-$TARGET.tar.gz"
   say "  fetching $name-$TARGET.tar.gz ..."
   curl -fsSL --retry 3 -o "$TMP/$name.tar.gz" "$url" || err "download failed: $url
@@ -73,7 +74,7 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; the
   say "  note: dobjd is running; restart it afterwards to use the new version"
 fi
 
-for name in dobjd dobj; do
+for name in dobjd dobj pexe; do
   for src in "$TMP/$name"/*; do
     base=$(basename "$src")
     cp "$src" "$BIN_DIR/.$base.new"
