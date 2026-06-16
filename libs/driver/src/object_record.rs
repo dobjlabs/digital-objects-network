@@ -27,8 +27,7 @@ pub struct ObjectRecord {
     pub tx_final: Hash,
     /// The transaction pod that proved this object was created. Stored
     /// immediately after proof generation so a relayer or daemon crash cannot
-    /// force a full re-proof. Cleared once the relayer has broadcast the
-    /// transaction (at which point the proof is in the relayer's hands).
+    /// force a full re-proof. Retained across all status updates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tx_pod: Option<MainPod>,
 }
