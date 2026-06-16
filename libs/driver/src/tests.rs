@@ -389,8 +389,7 @@ fn test_execute_keeps_files_after_relayer_accepts() {
         .find(|e| e.file_name != "log_1.dobj")
         .unwrap();
     assert_eq!(output.record.status, ObjectStatus::Unknown);
-    // tx_pod is retained: the relayer accepted the submission but we never
-    // got a tx_hash, so the proof might need to be re-submitted.
+    // tx_pod is retained so the proof can be re-submitted without re-proving.
     assert!(output.record.tx_pod.is_some());
 }
 
