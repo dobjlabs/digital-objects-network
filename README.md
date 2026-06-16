@@ -11,6 +11,21 @@ that can be passed between mutually untrusting Internet users while maintaining 
 - **Develop from source:** [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Self-host the services:** [deploy/](deploy/README.md).
 
+## Minimum hardware requirements
+
+| Service        | CPU     | RAM    | Disk                                      |
+| -------------- | ------- | ------ | ----------------------------------------- |
+| `dobjd`        | 4 cores | 8 GB   | 2 GB                                      |
+| `synchronizer` | 2 cores | 2 GB   | 20 GB (grows with chain history)          |
+| `relayer`      | 1 core  | 512 MB | 2 GB                                      |
+| `archiver`     | 1 core  | 512 MB | 50 GB (grows at ~128 KB per archived blob)|
+
+`dobjd` is compute-heavy: it generates ZK proofs locally using plonky2, which
+peaks at several GB of RAM and benefits from multiple cores. The chain-side
+services (`synchronizer`, `relayer`, `archiver`) are lightweight on CPU and
+RAM; the archiver's main constraint is disk, which grows proportionally with
+the volume of archived blob history.
+
 ## Repository map
 
 Each directory has its own README with the details.
