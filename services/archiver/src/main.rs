@@ -92,8 +92,18 @@ async fn main() -> Result<()> {
                     "reorg: slot {} ({}) has different parent than us",
                     beacon_block_header.slot, beacon_block_header.root
                 );
-                node.store.delete_block_data(&node.store.slot_dir(slot))?;
-                prev_beacon_block_header = node.store.last_header()?;
+                // `slot` has not been stored yet.  We delete the parent and retry
+                // from there
+                loop {
+                    slot -= 1;
+                    let deleted = node.store.delete_block_data(&node.store.slot_dir(slot))?;
+                    prev_beacon_block_header = node.store.last_header()?;
+                    // Make sure we either deleted a parent slot or our store is empty.  This
+                    // handles the case of reorgs with slots that have no blocks
+                    if deleted || prev_beacon_block_header.is_none() {
+                        break;
+                    }
+                }
                 slot = prev_beacon_block_header
                     .as_ref()
                     .map(|h| h.slot + 1)
