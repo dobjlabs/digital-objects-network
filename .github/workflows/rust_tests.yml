@@ -24,4 +24,4 @@ jobs:
           cache-shared-key: test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           cache-workspace-crates: true
       - name: Run tests
-        run: cargo test --release
+        run: cargo test --release --locked
