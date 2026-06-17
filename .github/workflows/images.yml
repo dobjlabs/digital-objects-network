@@ -31,12 +31,12 @@ jobs:
     name: Build and push images
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -44,7 +44,7 @@ jobs:
 
       - name: Synchronizer image metadata
         id: meta-synchronizer
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}/synchronizer
           # latest is pushed on every run via the explicit type=raw line below
@@ -60,7 +60,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push synchronizer
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: synchronizer
@@ -80,7 +80,7 @@ jobs:
 
       - name: Relayer image metadata
         id: meta-relayer
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}/relayer
           flavor: |
@@ -93,7 +93,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push relayer
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: relayer
@@ -107,7 +107,7 @@ jobs:
 
       - name: Archiver image metadata
         id: meta-archiver
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}/archiver
           flavor: |
@@ -120,7 +120,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push archiver
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: archiver

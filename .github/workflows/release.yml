@@ -148,7 +148,7 @@ jobs:
       APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -411,7 +411,7 @@ jobs:
             < .github/release-notes.md.tpl > release-notes.md
 
       - name: Upload to draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dobjd-${{ matrix.target }}.tar.gz
@@ -429,7 +429,7 @@ jobs:
         # the archiver tarball exists only on Linux/macOS, and that step sets
         # fail_on_unmatched_files: true.
         if: runner.os != 'Windows'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: archiver-${{ matrix.target }}.tar.gz
           tag_name: ${{ env.RELEASE_TAG }}
@@ -442,7 +442,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -485,7 +485,7 @@ jobs:
             < .github/release-notes.md.tpl > release-notes.md
 
       - name: Upload to draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: release-plugins/*.pexe
           tag_name: ${{ env.RELEASE_TAG }}
