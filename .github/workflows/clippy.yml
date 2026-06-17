@@ -25,4 +25,4 @@ jobs:
           cache-shared-key: clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           cache-workspace-crates: true
       - name: Check formatting
-        run: cargo clippy --release
+        run: cargo clippy --release --locked
