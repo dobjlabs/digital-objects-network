@@ -29,9 +29,9 @@
 // and TxInsert's identity-derivation clause.
 TxInsert(chain, prev_chain, initial, new, type, private: event_hash) = AND(
   DictContains(new, "type", type)
-  DictInsert(new, initial, "stable_identifier", initial)
-  HashOf(event_hash, {}, new)
-  HashOf(chain, prev_chain, event_hash)
+  DictInsert(initial, "stable_identifier", initial, new)
+  Hash({}, new, event_hash)
+  Hash(prev_chain, event_hash, chain)
 )
 
 // Mutate: chain = H(prev, H(old, new)). The shared `type` arg pins
@@ -43,14 +43,14 @@ TxMutate(chain, prev_chain, new, old, type, private: event_hash) = AND(
   DictContains(new, "type", type)
   DictContains(old, "type", type)
   Equal(old.stable_identifier, new.stable_identifier)
-  HashOf(event_hash, old, new)
-  HashOf(chain, prev_chain, event_hash)
+  Hash(old, new, event_hash)
+  Hash(prev_chain, event_hash, chain)
 )
 
 // Delete: chain = H(prev, H(old, {})). The `type` arg pins the
 // deleted object's type field for guard dispatch.
 TxDelete(chain, prev_chain, old, type, private: event_hash) = AND(
   DictContains(old, "type", type)
-  HashOf(event_hash, old, {})
-  HashOf(chain, prev_chain, event_hash)
+  Hash(old, {}, event_hash)
+  Hash(prev_chain, event_hash, chain)
 )

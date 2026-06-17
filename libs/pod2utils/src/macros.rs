@@ -147,45 +147,45 @@ macro_rules! op {
     (Gt($a:expr, $b:expr)) => {
         pod2::frontend::Operation::gt($a.clone(), $b.clone())
     };
-    (SumOf($sum:expr, $a:expr, $b:expr)) => {
-        pod2::frontend::Operation::sum_of($sum.clone(), $a.clone(), $b.clone())
+    (Sum($a:expr, $b:expr, $sum:expr)) => {
+        pod2::frontend::Operation::sum($a.clone(), $b.clone(), $sum.clone())
     };
-    (ProductOf($prod:expr, $a:expr, $b:expr)) => {
-        pod2::frontend::Operation::product_of($prod.clone(), $a.clone(), $b.clone())
+    (Product($a:expr, $b:expr, $prod:expr)) => {
+        pod2::frontend::Operation::product($a.clone(), $b.clone(), $prod.clone())
     };
-    (HashOf($hash:expr, $a:expr, $b:expr)) => {
-        pod2::frontend::Operation::hash_of($hash.clone(), $a.clone(), $b.clone())
+    (Hash($a:expr, $b:expr, $hash:expr)) => {
+        pod2::frontend::Operation::hash($a.clone(), $b.clone(), $hash.clone())
     };
     (DictContains($dict:expr, $key:expr, $value:expr)) => {
         pod2::frontend::Operation::dict_contains($dict.clone(), $key.clone(), $value.clone())
     };
-    (DictUpdate($dict:expr, $old_dict:expr, $key:expr, $value:expr)) => {
+    (DictUpdate($old_dict:expr, $key:expr, $value:expr, $dict:expr)) => {
         pod2::frontend::Operation::dict_update(
-            $dict.clone(),
             $old_dict.clone(),
             $key.clone(),
             $value.clone(),
+            $dict.clone(),
         )
     };
-    (DictInsert($dict:expr, $old_dict:expr, $key:expr, $value:expr)) => {
+    (DictInsert($old_dict:expr, $key:expr, $value:expr, $dict:expr)) => {
         pod2::frontend::Operation::dict_insert(
-            $dict.clone(),
             $old_dict.clone(),
             $key.clone(),
             $value.clone(),
+            $dict.clone(),
         )
     };
-    (DictDelete($dict:expr, $old_dict:expr, $key:expr)) => {
-        pod2::frontend::Operation::dict_delete($dict.clone(), $old_dict.clone(), $key.clone())
+    (DictDelete($old_dict:expr, $key:expr, $dict:expr)) => {
+        pod2::frontend::Operation::dict_delete($old_dict.clone(), $key.clone(), $dict.clone())
     };
     (SetContains($set:expr, $value:expr)) => {
         pod2::frontend::Operation::set_contains($set.clone(), $value.clone())
     };
-    (SetInsert($set:expr, $old_set:expr, $value:expr)) => {
-        pod2::frontend::Operation::set_insert($set.clone(), $old_set.clone(), $value.clone())
+    (SetInsert($old_set:expr, $value:expr, $set:expr)) => {
+        pod2::frontend::Operation::set_insert($old_set.clone(), $value.clone(), $set.clone())
     };
-    (SetDelete($set:expr, $old_set:expr, $value:expr)) => {
-        pod2::frontend::Operation::set_delete($set.clone(), $old_set.clone(), $value.clone())
+    (SetDelete($old_set:expr, $value:expr, $set:expr)) => {
+        pod2::frontend::Operation::set_delete($old_set.clone(), $value.clone(), $set.clone())
     };
     (GtEq($a:expr, $b:expr)) => {
         pod2::frontend::Operation::gt_eq($a.clone(), $b.clone())

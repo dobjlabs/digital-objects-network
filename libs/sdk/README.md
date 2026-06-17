@@ -123,11 +123,11 @@ The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
   - [ ] Lt
   - [ ] Contains
   - [ ] NotContains
-  - [x] SumOf
-  - [ ] ProductOf
-  - [ ] MaxOf
-  - [ ] HashOf
-  - [ ] PublicKeyOf
+  - [x] Sum
+  - [ ] Product
+  - [ ] Max
+  - [ ] Hash
+  - [ ] PublicKey
   - [ ] SignedBy
   - [ ] ContainerInsert
   - [ ] ContainerUpdate
@@ -212,11 +212,11 @@ CraftWoodPick(in CraftWoodPickIn, out CraftWoodPickOut, chain0, chain, private: 
 UseWoodPick(in UseWoodPickIn, out UseWoodPickOut, chain0, chain, private: wood_pick0, wood_pick1, wood_pick2, durability, key, work) = AND(
   ArrayContains(in, UseWoodPickIn::wood_pick, wood_pick0)
   Gt(wood_pick0.durability, 0)
-  SumOf(wood_pick0.durability, durability, 1)
-  DictUpdate(wood_pick1, wood_pick0, "durability", durability)
-  DictUpdate(wood_pick2, wood_pick1, "key", key)
+  Sum(durability, 1, wood_pick0.durability)
+  DictUpdate(wood_pick0, "durability", durability, wood_pick1)
+  DictUpdate(wood_pick1, "key", key, wood_pick2)
   Vdf(10, wood_pick2, work)
-  DictUpdate(out.wood_pick, wood_pick2, "work", work)
+  DictUpdate(wood_pick2, "work", work, out.wood_pick)
   tx::TxMutate(chain, chain0, out.wood_pick, wood_pick0, @self_predicate(IsWoodPick))
 )
 

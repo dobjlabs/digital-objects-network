@@ -551,12 +551,12 @@ impl<'a> Replayer<'a> {
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert(new_live, (&btx, "live"), new)))
+            .priv_op(op!(SetInsert((&btx, "live"), new, new_live)))
             .unwrap();
         let op_du = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(atx, btx, "live", new_live)))
+            .priv_op(op!(DictUpdate(btx, "live", new_live, atx)))
             .unwrap();
         let rebound_evidence = self
             .ctx
@@ -626,15 +626,15 @@ impl<'a> Replayer<'a> {
             .ctx
             .builder
             .priv_op(op!(SetInsert(
-                (&ins, "new_live"),
                 (&btx, "live"),
-                (&ins, "new")
+                (&ins, "new"),
+                (&ins, "new_live")
             )))
             .unwrap();
         let op_du = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(atx, btx, "live", (&ins, "new_live"))))
+            .priv_op(op!(DictUpdate(btx, "live", (&ins, "new_live"), atx)))
             .unwrap();
         // Re-anchor guard call's slot 0 (new) to ins.new, plus the existing
         // chain_start/chain_end anchors to btx.
@@ -720,26 +720,26 @@ impl<'a> Replayer<'a> {
         let op_h1 = self
             .ctx
             .builder
-            .priv_op(op!(HashOf(okh, old, (old, "key"))))
+            .priv_op(op!(Hash(old, (old, "key"), okh)))
             .unwrap();
         let op_h2 = self
             .ctx
             .builder
-            .priv_op(op!(HashOf(nul, okh, OBJECT_NULLIFIER_VERSION)))
+            .priv_op(op!(Hash(okh, OBJECT_NULLIFIER_VERSION, nul)))
             .unwrap();
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert(new_nullifiers, (mid_tx, "nullifiers"), nul)))
+            .priv_op(op!(SetInsert((mid_tx, "nullifiers"), nul, new_nullifiers)))
             .unwrap();
         let op_du_null = self
             .ctx
             .builder
             .priv_op(op!(DictUpdate(
-                after_tx,
                 mid_tx,
                 "nullifiers",
-                new_nullifiers
+                new_nullifiers,
+                after_tx
             )))
             .unwrap();
         let st = self
@@ -780,17 +780,17 @@ impl<'a> Replayer<'a> {
         let op_sd = self
             .ctx
             .builder
-            .priv_op(op!(SetDelete(live_minus_old, (btx, "live"), old)))
+            .priv_op(op!(SetDelete((btx, "live"), old, live_minus_old)))
             .unwrap();
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert(new_live, live_minus_old, new)))
+            .priv_op(op!(SetInsert(live_minus_old, new, new_live)))
             .unwrap();
         let op_du_live = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(m1, btx, "live", new_live)))
+            .priv_op(op!(DictUpdate(btx, "live", new_live, m1)))
             .unwrap();
         let st_event = self
             .ctx
@@ -883,12 +883,12 @@ impl<'a> Replayer<'a> {
         let op_sd = self
             .ctx
             .builder
-            .priv_op(op!(SetDelete(new_live, (&btx, "live"), old)))
+            .priv_op(op!(SetDelete((&btx, "live"), old, new_live)))
             .unwrap();
         let op_du_live = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(m1, btx, "live", new_live)))
+            .priv_op(op!(DictUpdate(btx, "live", new_live, m1)))
             .unwrap();
         let rebound_evidence = self
             .ctx
@@ -938,26 +938,26 @@ impl<'a> Replayer<'a> {
         let op_scope1 = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(ms, btx, "chain_start", chain)))
+            .priv_op(op!(DictUpdate(btx, "chain_start", chain, ms)))
             .unwrap();
         let op_scope2 = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(itx, ms, "chain_end", chain_after)))
+            .priv_op(op!(DictUpdate(ms, "chain_end", chain_after, itx)))
             .unwrap();
         let op_du1 = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(fm1, btx, "live", (&etx, "live"))))
+            .priv_op(op!(DictUpdate(btx, "live", (&etx, "live"), fm1)))
             .unwrap();
         let op_du2 = self
             .ctx
             .builder
             .priv_op(op!(DictUpdate(
-                atx,
                 fm1,
                 "nullifiers",
-                (&etx, "nullifiers")
+                (&etx, "nullifiers"),
+                atx
             )))
             .unwrap();
         let st = self
@@ -1015,12 +1015,12 @@ impl<'a> Replayer<'a> {
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert(new_live, (&btx, "live"), new)))
+            .priv_op(op!(SetInsert((&btx, "live"), new, new_live)))
             .unwrap();
         let op_du = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(atx, btx, "live", new_live)))
+            .priv_op(op!(DictUpdate(btx, "live", new_live, atx)))
             .unwrap();
         let st = self
             .ctx

@@ -6076,6 +6076,7 @@ dependencies = [
 [[package]]
 name = "pod2"
 version = "0.1.0"
+source = "git+https://github.com/0xPARC/pod2?rev=0f8ff85c6ec79b66513b905d6caef3f7029014ca#0f8ff85c6ec79b66513b905d6caef3f7029014ca"
 dependencies = [
  "annotate-snippets",
  "anyhow",

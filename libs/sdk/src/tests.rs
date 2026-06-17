@@ -63,7 +63,7 @@ fn test_sdk_1() {
         fn use_pick(action, pick, vdf_iters) {
             action.st_gt(pick.durability, 0);
             var durability = unsafe { pick.durability - 1 };
-            action.st_sum_of(pick.durability, durability, 1);
+            action.st_sum(durability, 1, pick.durability);
             pick.update("durability", durability);
             var key = action.random();
             pick.update("key", key);
@@ -248,7 +248,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "fd384904c207822bff580185d464d78e95df9c27042b80f2cbac85bcae8b985d"
+        module_hash = "6b23a055203bdb5edcf768cf197dc0480238f0a22440f06f65bf8f955e5c94e6"
 
         [[classes]]
         name = "Log"
@@ -372,7 +372,7 @@ record LogToWoodInitials = (wood)
 // Actions
 
 LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, wood0, key, initials LogToWoodInitials) = AND(
-  DictUpdate(initials.wood, wood0, "key", key)
+  DictUpdate(wood0, "key", key, initials.wood)
   tx::TxDelete(chain1, chain0, in.log, @self_predicate(IsLog))
   tx::TxInsert(chain, chain1, initials.wood, out.wood, @self_predicate(IsWood))
 )
@@ -420,7 +420,7 @@ fn test_records_form_subaction() {
             var foo = action.mutate("Foo");
             action.st_gt(foo.durability, 0);
             var dur = unsafe { foo.durability - 1 };
-            action.st_sum_of(foo.durability, dur, 1);
+            action.st_sum(dur, 1, foo.durability);
             foo.update("durability", dur);
         }
 
@@ -471,7 +471,7 @@ fn test_records_form_subaction() {
 ///   (double-anchoring isn't supported).
 /// - `out` entry collapses: `foo` (post-form) is only used whole-dict,
 ///   so no `foo` wildcard and body refs render as `out.foo`.
-/// - witness `dur` appears in the private list and in both SumOf and
+/// - witness `dur` appears in the private list and in both Sum and
 ///   DictUpdate body slots.
 #[test]
 fn test_records_form_mutate() {
@@ -480,7 +480,7 @@ fn test_records_form_mutate() {
             var foo = action.mutate("Foo");
             action.st_gt(foo.durability, 0);
             var dur = unsafe { foo.durability - 1 };
-            action.st_sum_of(foo.durability, dur, 1);
+            action.st_sum(dur, 1, foo.durability);
             foo.update("durability", dur);
         }
 "#;
@@ -497,8 +497,8 @@ record UseFooOut = (foo)
 UseFoo(in UseFooIn, out UseFooOut, chain0, chain, private: foo0, dur) = AND(
   ArrayContains(in, UseFooIn::foo, foo0)
   Gt(foo0.durability, 0)
-  SumOf(foo0.durability, dur, 1)
-  DictUpdate(out.foo, foo0, "durability", dur)
+  Sum(dur, 1, foo0.durability)
+  DictUpdate(foo0, "durability", dur, out.foo)
   tx::TxMutate(chain, chain0, out.foo, foo0, @self_predicate(IsFoo))
 )
 

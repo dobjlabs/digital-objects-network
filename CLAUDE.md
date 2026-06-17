@@ -152,7 +152,7 @@ The driver does not cache compiled modules between calls — every `Driver::exec
 
 **Host API** (registered via `register_fn` in `libs/sdk/src/lib.rs`):
 
-- On `action`: `input(class)`, `output(class)`, `mutate(class)`, `subaction(name)`, `random()`, `st_gt(a,b)`, `st_sum_of(a,b,c)`, `intro_vdf(iters, obj)`, `intro_lt_eq_u256(obj, target)`, `pow_obj_grind(obj, target)`, `top_limb_u256(n)`.
+- On `action`: `input(class)`, `output(class)`, `mutate(class)`, `subaction(name)`, `random()`, `st_gt(a,b)`, `st_sum(a,b,c)`, `intro_vdf(iters, obj)`, `intro_lt_eq_u256(obj, target)`, `pow_obj_grind(obj, target)`, `top_limb_u256(n)`.
 - On object handles: `set([[k,v],...])` (initializer for literals), `update(k,v)` (writes a witness-derived value), `get(k)`, indexer `obj.<field>`.
 
 **Constraint:** the event tree must be the same shape every run. Branching that emits _different events_ on different inputs is unsupported. Branching on wildcard values inside `unsafe { ... }` is fine.

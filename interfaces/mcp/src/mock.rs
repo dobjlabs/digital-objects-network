@@ -436,11 +436,11 @@ fn is_known_class(name: &str) -> bool {
 fn action_predicate_source_for(action_name: &str) -> String {
     match action_name {
         "FindLog" => {
-            "FindLog(log, chain0, chain, private: log0, work) = AND(\n  Vdf(3, log0, work)\n  DictUpdate(log, log0, \"work\", work)\n  DictContains(log, \"type\", @self_predicate(IsLog))\n  tx::TxInsert(chain, chain0, log)\n)"
+            "FindLog(log, chain0, chain, private: log0, work) = AND(\n  Vdf(3, log0, work)\n  DictUpdate(log0, \"work\", work, log)\n  DictContains(log, \"type\", @self_predicate(IsLog))\n  tx::TxInsert(chain, chain0, log)\n)"
                 .to_string()
         }
         "CraftWood" => {
-            "CraftWood(log, wood, chain0, chain, private: chain1, wood0, key) = AND(\n  DictUpdate(wood, wood0, \"key\", key)\n  LtEqU256(wood, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))\n  DictContains(log, \"type\", @self_predicate(IsLog))\n  tx::TxDelete(chain1, chain0, log)\n  DictContains(wood, \"type\", @self_predicate(IsWood))\n  tx::TxInsert(chain, chain1, wood)\n)"
+            "CraftWood(log, wood, chain0, chain, private: chain1, wood0, key) = AND(\n  DictUpdate(wood0, \"key\", key, wood)\n  LtEqU256(wood, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))\n  DictContains(log, \"type\", @self_predicate(IsLog))\n  tx::TxDelete(chain1, chain0, log)\n  DictContains(wood, \"type\", @self_predicate(IsWood))\n  tx::TxInsert(chain, chain1, wood)\n)"
                 .to_string()
         }
         "CraftSticks" => {

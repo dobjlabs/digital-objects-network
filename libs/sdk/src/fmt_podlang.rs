@@ -511,7 +511,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 };
                 writeln!(
                     w,
-                    r#"  DictUpdate({obj_next}, {obj_fmt}, "{key}", {value})"#,
+                    r#"  DictUpdate({obj_fmt}, "{key}", {value}, {obj_next})"#,
                 )?;
                 vars.get_mut(obj_name).expect("obj exists").inc();
             }
