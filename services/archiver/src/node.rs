@@ -86,10 +86,11 @@ pub struct Store {
 }
 
 impl Store {
-    pub(crate) fn delete_block_data(&self, slot_path: &Path) -> Result<()> {
+    /// Returns true if a slot path was deleted
+    pub(crate) fn delete_block_data(&self, slot_path: &Path) -> Result<bool> {
         match fs::symlink_metadata(slot_path) {
             Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(e.into()),
         }
         // `slot_path` points to `../../../by_root/{root_hi}/{root_med}/{root_lo}`, so we remove
@@ -117,7 +118,7 @@ impl Store {
         }
         info!("Removing stale symlink at {:?}", slot_path);
         fs::remove_file(slot_path)?;
-        Ok(())
+        Ok(true)
     }
 
     // Find the latest valid processed block header (and deleting stale ones if found)
