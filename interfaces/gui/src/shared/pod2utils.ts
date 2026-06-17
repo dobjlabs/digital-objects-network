@@ -113,7 +113,10 @@ function normalizePod2Value(value: unknown): unknown {
       );
     }
 
-    if (key === "inner") {
+    // `_raw` is the daemon's fallback wrapper for an object dictionary that
+    // serialized as a pod2 container sequence ([key, value] entries) rather
+    // than a plain object; unwrap it the same way as `inner`.
+    if (key === "inner" || key === "_raw") {
       return normalizePod2ContainerInner(inner);
     }
   }
