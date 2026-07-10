@@ -138,6 +138,26 @@ Claude Desktop.
 **Other agents** (Cursor, Aider, Continue, …): point their MCP configuration
 at `http://127.0.0.1:7718/mcp`.
 
+#### Optional command UX
+
+After connecting MCP and starting a fresh agent session, you can open the
+Digital Objects command menu in either client:
+
+**Codex:**
+
+```text
+Call dobj invoke_prompt with: {"name":"start","arguments":{"command":"help"}} Then follow the returned messages.
+```
+
+**Claude Code:**
+
+```text
+/mcp__dobj__start
+```
+
+This command interface is optional; all Digital Objects MCP tools remain
+available without starting it.
+
 ### Add `dobj` to your PATH
 
 **macOS / Linux:**
