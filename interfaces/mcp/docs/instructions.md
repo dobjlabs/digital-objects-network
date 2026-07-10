@@ -13,8 +13,10 @@ built in, plus any the user has defined). When the user types a command's name,
 or a short phrase that clearly refers to one, call `get_command(name)` to load
 its full body and follow it exactly: the body governs which tools to call and
 the output format, and anything typed after the name is its argument. Run the
-`help` command for the list, `list_commands` for saved ones, and the `start`
-prompt for a focused command session.
+`help` command for the list and `list_commands` for saved ones. When the client
+does not expose MCP prompts directly, call `invoke_prompt({ name, arguments? })`
+and follow the returned messages; use the `start` prompt for a focused command
+session.
 
 ## Core concepts
 

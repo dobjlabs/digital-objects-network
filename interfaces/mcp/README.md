@@ -79,6 +79,7 @@ production implementation lives in
 | `read_doc`                                            | Reference docs (see Resources)                                                 |
 | `define_command` / `delete_command` / `list_commands` | Manage user-authored commands                                                  |
 | `get_command`                                         | Load any command's full body (built-in or saved) to follow it                  |
+| `invoke_prompt`                                       | Invoke any prompt through a model-callable tool for clients such as Codex      |
 
 All tools return structured content (`structuredContent` + `outputSchema`)
 for clients that support it, with a text fallback for older clients.
@@ -111,6 +112,11 @@ plus any sibling scripts the command runs. The MCP server owns this directory;
 the driver is not involved. `define_command` writes the README, `create-command`
 is the guided authoring flow, and `list_commands` / `delete_command` manage them.
 Each saved command is also surfaced as its own prompt.
+
+Clients that support MCP tools but do not expose MCP prompts directly can call
+`invoke_prompt({ "name": "start" })` and follow the returned messages. Prompt
+arguments go in `arguments`, for example
+`invoke_prompt({ "name": "start", "arguments": { "command": "help" } })`.
 
 ## Resources
 
