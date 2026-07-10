@@ -138,6 +138,21 @@ Every client talks to the same daemon:
 - **Claude Code / MCP agents** — `claude mcp add --transport http dobj http://127.0.0.1:7718/mcp`
 - **Stdio-only agents (e.g. Claude Desktop)** — point them at `~/.dobj/bin/dobj-mcp-proxy`
 
+:::info
+**Optional command UX:** after connecting MCP and starting a fresh agent
+session, open the Digital Objects command menu with the appropriate client:
+
+```text [Codex]
+Call dobj invoke_prompt with: {"name":"start","arguments":{"command":"help"}} Then follow the returned messages.
+```
+
+```text [Claude Code]
+/mcp__dobj__start
+```
+
+All MCP tools remain available without starting the command interface.
+:::
+
 ::::
 
 ## Manual install

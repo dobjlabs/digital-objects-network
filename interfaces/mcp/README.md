@@ -79,6 +79,7 @@ production implementation lives in
 | `read_doc`                                            | Reference docs (see Resources)                                                 |
 | `define_command` / `delete_command` / `list_commands` | Manage user-authored commands                                                  |
 | `get_command`                                         | Load any command's full body (built-in or saved) to follow it                  |
+| `invoke_prompt`                                       | Invoke any prompt through a model-callable tool for clients such as Codex      |
 
 All tools return structured content (`structuredContent` + `outputSchema`)
 for clients that support it, with a text fallback for older clients.
@@ -112,6 +113,11 @@ the driver is not involved. `define_command` writes the README, `create-command`
 is the guided authoring flow, and `list_commands` / `delete_command` manage them.
 Each saved command is also surfaced as its own prompt.
 
+Clients that support MCP tools but do not expose MCP prompts directly can call
+`invoke_prompt({ "name": "start" })` and follow the returned messages. Prompt
+arguments go in `arguments`, for example
+`invoke_prompt({ "name": "start", "arguments": { "command": "help" } })`.
+
 ## Resources
 
 Reference docs, available both as MCP resources and through the `read_doc` tool:
@@ -131,10 +137,10 @@ driver).
 
 A self-contained live dashboard (`dashboard/index.html`, no build step). dobjd
 writes it to `~/.dobj/dashboard/index.html` when the MCP server starts; the
-`dashboard` prompt serves it — in Claude Code, a preview pane backed by a local static
-server on `:7719`; otherwise it points the user at the file. The generated page
-polls the active dobjd REST API port for objects, the synchronizer head, and an
-action-log SSE.
+`dashboard` prompt serves it in either the Codex in-app browser or a Claude Code
+preview pane, backed by a local static server on `:7719`; otherwise it points
+the user at the file. The generated page polls the active dobjd REST API port
+for objects, the synchronizer head, and an action-log SSE.
 
 ## Setup
 

@@ -15,9 +15,26 @@ else (including no argument) -> START.
 
 ### START
 
-1. Merge this configuration into the project-local `.claude/launch.json` (create
-   the file if absent; keep any existing configurations). Replace `<HOME>` with
-   the absolute home directory path:
+Use the first supported client path below.
+
+#### Codex in-app browser
+
+1. Start this command as a long-running background process, replacing `<HOME>`
+   with the absolute home directory path. If port 7719 is already serving the
+   dashboard, reuse it instead:
+
+   `python3 -m http.server 7719 --bind 127.0.0.1 --directory <HOME>/.dobj/dashboard`
+
+2. Open `http://127.0.0.1:7719/` in the Codex in-app browser, make the browser
+   visible, verify that the `Digital Objects` heading rendered, and leave the
+   dashboard tab open.
+3. Output exactly one line: `dashboard -> http://127.0.0.1:7719/  (pane open)`.
+
+#### Claude Preview
+
+1. Merge this configuration into the project-local `.claude/launch.json`
+   (create the file if absent; keep any existing configurations). Replace
+   `<HOME>` with the absolute home directory path:
 
    { "name": "dobj-dashboard", "runtimeExecutable": "python3",
    "runtimeArgs": ["-m", "http.server", "7719", "--directory", "<HOME>/.dobj/dashboard"],
@@ -25,12 +42,18 @@ else (including no argument) -> START.
 
 2. Call `preview_start` with `{name: "dobj-dashboard"}`.
 3. Output exactly one line: `dashboard -> http://127.0.0.1:7719/  (pane open)`.
-   If the Claude Preview tool is unavailable or `preview_start` errors, output
-   exactly one line instead: `dashboard -> open ~/.dobj/dashboard/index.html in your browser`.
+
+If neither client path is available, output exactly one line instead:
+`dashboard -> open ~/.dobj/dashboard/index.html in your browser`.
 
 ### STOP
 
-1. Call `preview_list`, find the entry named `dobj-dashboard`, and call
-   `preview_stop` with its `serverId`.
-2. Output exactly one line: `dashboard stopped` -- or `no dashboard to stop` if
-   there is no such entry.
+Use the active client's path:
+
+- Codex: close the in-app browser tab at `http://127.0.0.1:7719/` and stop the
+  background static server started by this command.
+- Claude Preview: call `preview_list`, find the entry named `dobj-dashboard`,
+  and call `preview_stop` with its `serverId`.
+
+Output exactly one line: `dashboard stopped` -- or `no dashboard to stop` if
+there is no open dashboard or server.

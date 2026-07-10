@@ -252,6 +252,14 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_command_supports_codex_and_claude_previews() {
+        let dashboard = builtin_command("dashboard").unwrap();
+        assert!(dashboard.body.contains("Codex in-app browser"));
+        assert!(dashboard.body.contains("Claude Preview"));
+        assert!(dashboard.body.contains("--bind 127.0.0.1"));
+    }
+
+    #[test]
     fn is_reserved_covers_start_and_builtins() {
         assert!(is_reserved("start"));
         assert!(is_reserved("dashboard"));

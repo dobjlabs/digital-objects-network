@@ -12,6 +12,7 @@ use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 use crate::commands::{CommandList, CommandStamp, UserCommand};
 use crate::ops::DobjOps;
@@ -81,6 +82,21 @@ impl<T: DobjOps> DobjMcpService<T> {
         }
         crate::prompts::builtin_command(name)
             .or_else(|| self.command_store().ok().and_then(|store| store.get(name)))
+    }
+
+    fn resolve_prompt(
+        &self,
+        name: &str,
+        arguments: Option<&Map<String, Value>>,
+    ) -> Option<GetPromptResult> {
+        if name == crate::prompts::START {
+            return Some(crate::prompts::start_result(
+                &self.list_commands_cached(),
+                arguments,
+            ));
+        }
+        self.resolve_command(name)
+            .map(|command| crate::prompts::command_result(&command, arguments))
     }
 
     /// The saved commands, served from an in-memory cache that refreshes only
@@ -182,6 +198,16 @@ pub struct DeleteCommandParams {
 pub struct GetCommandParams {
     /// The command name to load -- a built-in or a saved command.
     pub name: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InvokePromptParams {
+    /// Prompt name, such as "start", "help", or the name of a saved command.
+    pub name: String,
+    /// Optional prompt arguments. `start` accepts `command`; all command
+    /// prompts accept `args`.
+    #[serde(default)]
+    pub arguments: Option<Map<String, Value>>,
 }
 
 // -- Tool implementations --
@@ -464,6 +490,18 @@ impl<T: DobjOps> DobjMcpService<T> {
             .map(Json)
             .ok_or_else(|| format!("no such command: {}", params.name))
     }
+
+    #[tool(
+        description = "Invoke an MCP prompt by name and return the exact prompt messages to follow. Use this in clients such as Codex that can call MCP tools but do not expose MCP prompts directly. Supports start, built-ins, and saved commands; pass optional arguments.command for start or arguments.args for a command."
+    )]
+    fn invoke_prompt(
+        &self,
+        Parameters(params): Parameters<InvokePromptParams>,
+    ) -> Result<Json<GetPromptResult>, String> {
+        self.resolve_prompt(&params.name, params.arguments.as_ref())
+            .map(Json)
+            .ok_or_else(|| format!("unknown prompt: {}", params.name))
+    }
 }
 
 // -- Instructions --
@@ -526,14 +564,8 @@ impl<T: DobjOps> ServerHandler for DobjMcpService<T> {
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
-        let arguments = request.arguments.as_ref();
-        if request.name == crate::prompts::START {
-            let stored = self.list_commands_cached();
-            return std::future::ready(Ok(crate::prompts::start_result(&stored, arguments)));
-        }
         let result = self
-            .resolve_command(&request.name)
-            .map(|command| crate::prompts::command_result(&command, arguments))
+            .resolve_prompt(&request.name, request.arguments.as_ref())
             .ok_or_else(|| {
                 McpError::invalid_params(format!("unknown prompt: {}", request.name), None)
             });
@@ -586,7 +618,8 @@ mod tests {
         assert!(tools.contains(&"list_commands".to_string()));
         assert!(tools.contains(&"delete_command".to_string()));
         assert!(tools.contains(&"get_command".to_string()));
-        assert_eq!(tools.len(), 19);
+        assert!(tools.contains(&"invoke_prompt".to_string()));
+        assert_eq!(tools.len(), 20);
     }
 
     #[test]
@@ -607,6 +640,67 @@ mod tests {
         let service = make_service();
         let info = service.get_info();
         assert!(info.capabilities.prompts.is_some());
+    }
+
+    #[test]
+    fn test_invoke_start_prompt_with_first_command() {
+        let service = make_service();
+        let mut arguments = Map::new();
+        arguments.insert("command".to_string(), Value::String("help".to_string()));
+        let Json(result) = service
+            .invoke_prompt(Parameters(InvokePromptParams {
+                name: "start".to_string(),
+                arguments: Some(arguments),
+            }))
+            .unwrap();
+
+        assert_eq!(result.description.as_deref(), Some("Command session"));
+        assert_eq!(result.messages.len(), 3);
+        assert!(matches!(
+            &result.messages[2].content,
+            rmcp::model::PromptMessageContent::Text { text } if text == "First command: help"
+        ));
+    }
+
+    #[test]
+    fn test_invoke_saved_command_prompt_with_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = make_service().with_command_dir(dir.path());
+        service
+            .define_command(Parameters(DefineCommandParams {
+                name: "stock-up".to_string(),
+                description: "gather raw materials".to_string(),
+                body: "run the mining actions".to_string(),
+            }))
+            .unwrap();
+        let mut arguments = Map::new();
+        arguments.insert("args".to_string(), Value::String("three times".to_string()));
+        let Json(result) = service
+            .invoke_prompt(Parameters(InvokePromptParams {
+                name: "stock-up".to_string(),
+                arguments: Some(arguments),
+            }))
+            .unwrap();
+
+        assert_eq!(result.description.as_deref(), Some("gather raw materials"));
+        assert_eq!(result.messages.len(), 2);
+        assert!(matches!(
+            &result.messages[1].content,
+            rmcp::model::PromptMessageContent::Text { text } if text == "Arguments: three times"
+        ));
+    }
+
+    #[test]
+    fn test_invoke_unknown_prompt_returns_error() {
+        let service = make_service();
+        let result = service.invoke_prompt(Parameters(InvokePromptParams {
+            name: "missing".to_string(),
+            arguments: None,
+        }));
+        match result {
+            Err(error) => assert_eq!(error, "unknown prompt: missing"),
+            Ok(_) => panic!("unknown prompt should return an error"),
+        }
     }
 
     #[test]
