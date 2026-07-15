@@ -1318,8 +1318,8 @@ fn tx_producer_focused(
     if event_hash != *TX_INSERT_HASH && event_hash != *TX_MUTATE_HASH {
         return None;
     }
-    // TxInsert(chain, chain0, state, type_hash);
-    // TxMutate(chain, chain0, new_state, type_hash, old_state).
+    // TxInsert(chain0, chain, state, type_hash);
+    // TxMutate(chain0, chain, old_state, new_state, type_hash).
     // The third arg is always the focused-state for the producer event.
     let state = stmt.args.get(2)?.clone();
     let actual_class_hash = stmt.args.iter().find_map(|a| match a {

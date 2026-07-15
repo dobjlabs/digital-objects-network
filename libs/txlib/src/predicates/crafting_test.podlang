@@ -11,15 +11,15 @@ use module 0xTX_EVENTS_MODULE_HASH as tx
 // ========================================================
 
 DeleteLog(log, chain_start, chain_end) = AND(
-  tx::TxDelete(chain_end, chain_start, log, @self_predicate(IsLog))
+  tx::TxDelete(chain_start, chain_end, log, @self_predicate(IsLog))
 )
 
 DeleteWood(wood, chain_start, chain_end) = AND(
-  tx::TxDelete(chain_end, chain_start, wood, @self_predicate(IsWood))
+  tx::TxDelete(chain_start, chain_end, wood, @self_predicate(IsWood))
 )
 
 DeleteStick(stick, chain_start, chain_end) = AND(
-  tx::TxDelete(chain_end, chain_start, stick, @self_predicate(IsStick))
+  tx::TxDelete(chain_start, chain_end, stick, @self_predicate(IsStick))
 )
 
 // ========================================================
@@ -32,14 +32,14 @@ DeleteStick(stick, chain_start, chain_end) = AND(
 // public `initial` arg so identity = commitment(log0) is verifiable
 // against script-level DictUpdate/DictInsert chains.
 FindLog(log, chain_start, chain_end, private: log0) = AND(
-  tx::TxInsert(chain_end, chain_start, log0, log, @self_predicate(IsLog))
+  tx::TxInsert(chain_start,chain_end, log0, log, @self_predicate(IsLog))
 )
 
 // CraftWood: consumes a log, produces wood (simplified: no LtEqU256).
 CraftWood(wood, chain_start, chain_end,
     private: h0, log, wood0) = AND(
   DeleteLog(log, chain_start, h0)
-  tx::TxInsert(chain_end, h0, wood0, wood, @self_predicate(IsWood))
+  tx::TxInsert(h0, chain_end, wood0, wood, @self_predicate(IsWood))
 )
 
 // CraftSticks: consumes wood, produces two sticks. The two stick
@@ -50,8 +50,8 @@ CraftWood(wood, chain_start, chain_end,
 CraftSticks(stick_a, stick_b, chain_start, chain_end,
     private: h0, h1, wood, initials) = AND(
   DeleteWood(wood, chain_start, h0)
-  tx::TxInsert(h1, h0, initials.stick_a, stick_a, @self_predicate(IsStick))
-  tx::TxInsert(chain_end, h1, initials.stick_b, stick_b, @self_predicate(IsStick))
+  tx::TxInsert(h0, h1, initials.stick_a, stick_a, @self_predicate(IsStick))
+  tx::TxInsert(h1, chain_end, initials.stick_b, stick_b, @self_predicate(IsStick))
 )
 
 // CraftWoodPick: consumes wood + stick, produces wood pick.
@@ -60,7 +60,7 @@ CraftWoodPick(wood_pick, chain_start, chain_end,
   DeleteWood(wood, chain_start, h0)
   DeleteStick(stick, h0, h1)
   DictContains(wood_pick, "durability", 100)
-  tx::TxInsert(chain_end, h1, wood_pick0, wood_pick, @self_predicate(IsWoodPick))
+  tx::TxInsert(h1, chain_end, wood_pick0, wood_pick, @self_predicate(IsWoodPick))
 )
 
 // UseWoodPick: mutates a wood pick, decrementing durability.
@@ -70,20 +70,20 @@ UseWoodPick(wood_pick, chain_start, chain_end,
   Gt(wood_pick0.durability, 0)
   Sum(durability, 1, wood_pick0.durability)
   DictUpdate(wood_pick0, "durability", durability, wood_pick)
-  tx::TxMutate(chain_end, chain_start, wood_pick, wood_pick0, @self_predicate(IsWoodPick))
+  tx::TxMutate(chain_start, chain_end, wood_pick0, wood_pick, @self_predicate(IsWoodPick))
 )
 
 // MineStone: uses a wood pick to mine stone.
 MineStone(stone, chain_start, chain_end,
     private: h0, pick, stone0) = AND(
   UseWoodPick(pick, chain_start, h0)
-  tx::TxInsert(chain_end, h0, stone0, stone, @self_predicate(IsStone))
+  tx::TxInsert(h0, chain_end, stone0, stone, @self_predicate(IsStone))
 )
 
 // SpawnWoodPick: test-only action that creates a wood pick from nothing.
 SpawnWoodPick(wood_pick, chain_start, chain_end, private: wood_pick0) = AND(
   DictContains(wood_pick, "durability", 100)
-  tx::TxInsert(chain_end, chain_start, wood_pick0, wood_pick, @self_predicate(IsWoodPick))
+  tx::TxInsert(chain_start, chain_end, wood_pick0, wood_pick, @self_predicate(IsWoodPick))
 )
 
 // ========================================================
