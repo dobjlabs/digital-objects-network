@@ -34,6 +34,8 @@
 
 use module 0xTX_EVENTS_MODULE_HASH as tx
 
+record Context = (state_header, before_chain, after_chain)
+
 // ========================================================
 // Replay: Helpers
 // ========================================================
@@ -89,19 +91,14 @@ ReplayContents(state_header, before_tx, after_tx, before_chain, after_chain) = O
 // don't fit when inlined, so their step variants just call the
 // wrapping per-event predicate.
 ReplayContentsStepInsert(state_header, before_tx, after_tx, before_chain, after_chain,
-    private: mid_tx, mid_chain, ins, guard) = AND(
-  tx::TxInsert(mid_chain, before_chain, ins.initial, ins.new, guard)
-  SetInsert(before_tx.live, ins.new, ins.new_live)
-  DictUpdate(before_tx, "live", ins.new_live, mid_tx)
-  guard(ins.new, state_header, before_tx.chain_start, before_tx.chain_end)
+    private: mid_tx, mid_chain) = AND(
+  ReplayInsert(state_header, before_tx, mid_tx, before_chain, mid_chain)
   ReplayContents(state_header, mid_tx, after_tx, mid_chain, after_chain)
 )
 
 ReplayContentsStepMutate(state_header, before_tx, after_tx, before_chain, after_chain,
-    private: mid_tx, mid_chain, pair, guard) = AND(
-  tx::TxMutate(mid_chain, before_chain, pair.new, pair.old, guard)
-  ReplayMutateEvent(before_tx, mid_tx, pair.old, pair.new)
-  guard(pair.new, state_header, before_tx.chain_start, before_tx.chain_end)
+    private: mid_tx, mid_chain) = AND(
+  ReplayMutate(state_header, before_tx, mid_tx, before_chain, mid_chain)
   ReplayContents(state_header, mid_tx, after_tx, mid_chain, after_chain)
 )
 
@@ -145,12 +142,12 @@ ReplayElement(state_header, before_tx, after_tx, before_chain, after_chain) = OR
 // Set chain_start/chain_end in tx, replay contents, copy live/nullifiers
 // back to outer tx (which restores the parent's chain_start/chain_end).
 ReplayAction(state_header, before_tx, after_tx, before_chain, after_chain,
-    private: scope_mid, inner_tx, end_tx, mid) = AND(
-  DictUpdate(before_tx, "chain_start", before_chain, scope_mid)
-  DictUpdate(scope_mid, "chain_end", after_chain, inner_tx)
+    private: pair, inner_tx, end_tx) = AND(
+  DictUpdate(before_tx, "chain_start", before_chain, pair.scope_mid)
+  DictUpdate(pair.scope_mid, "chain_end", after_chain, inner_tx)
   ReplayContents(state_header, inner_tx, end_tx, before_chain, after_chain)
-  DictUpdate(before_tx, "live", end_tx.live, mid)
-  DictUpdate(mid, "nullifiers", end_tx.nullifiers, after_tx)
+  DictUpdate(before_tx, "live", end_tx.live, pair.mid)
+  DictUpdate(pair.mid, "nullifiers", end_tx.nullifiers, after_tx)
 )
 
 // Top-level walker: every event at the transaction's top level is
@@ -191,10 +188,10 @@ ReplayActionsStep(state_header, before_tx, after_tx, before_chain, after_chain,
 // inside a `ReplayAction`-materialized `inner_tx`. Skipping that
 // materialization is what saves the three intermediate statements.
 ReplayActionInsert(state_header, before_tx, after_tx, before_chain, after_chain,
-    private: new, new_live, guard, initial) = AND(
-  tx::TxInsert(after_chain, before_chain, initial, new, guard)
-  SetInsert(before_tx.live, new, new_live)
-  DictUpdate(before_tx, "live", new_live, after_tx)
+    private: new, pair, guard) = AND(
+  tx::TxInsert(after_chain, before_chain, pair.initial, new, guard)
+  SetInsert(before_tx.live, new, pair.new_live)
+  DictUpdate(before_tx, "live", pair.new_live, after_tx)
   guard(new, state_header, before_chain, after_chain)
 )
 
@@ -207,10 +204,10 @@ ReplayActionInsert(state_header, before_tx, after_tx, before_chain, after_chain,
 // Hash equations lets the prover reuse the record-time statement
 // that it already built for the application's action predicate.
 ReplayInsert(state_header, before_tx, after_tx, before_chain, after_chain,
-    private: new, new_live, guard, initial) = AND(
-  tx::TxInsert(after_chain, before_chain, initial, new, guard)
-  SetInsert(before_tx.live, new, new_live)
-  DictUpdate(before_tx, "live", new_live, after_tx)
+    private: new, pair, guard) = AND(
+  tx::TxInsert(after_chain, before_chain, pair.initial, new, guard)
+  SetInsert(before_tx.live, new, pair.new_live)
+  DictUpdate(before_tx, "live", pair.new_live, after_tx)
   guard(new, state_header, before_tx.chain_start, before_tx.chain_end)
 )
 
@@ -256,11 +253,11 @@ ReplayMutate(state_header, before_tx, after_tx, before_chain, after_chain,
 // Full delete replay: chain step (via TxDelete) + live-set removal
 // + nullifier accumulation + guard dispatch.
 ReplayDelete(state_header, before_tx, after_tx, before_chain, after_chain,
-    private: old, guard, new_live, mid_tx) = AND(
+    private: old, guard, pair) = AND(
   tx::TxDelete(after_chain, before_chain, old, guard)
-  SetDelete(before_tx.live, old, new_live)
-  DictUpdate(before_tx, "live", new_live, mid_tx)
-  ReplayNullify(mid_tx, after_tx, old)
+  SetDelete(before_tx.live, old, pair.new_live)
+  DictUpdate(before_tx, "live", pair.new_live, pair.mid_tx)
+  ReplayNullify(pair.mid_tx, after_tx, old)
   guard(old, state_header, before_tx.chain_start, before_tx.chain_end)
 )
 
