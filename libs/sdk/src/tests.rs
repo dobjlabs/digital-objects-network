@@ -248,7 +248,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "6b23a055203bdb5edcf768cf197dc0480238f0a22440f06f65bf8f955e5c94e6"
+        module_hash = "72e06615d0c218158641b9cf41b1e65ee2bc8054f96fbd766ddb344bc90397ce"
 
         [[classes]]
         name = "Log"
@@ -320,7 +320,7 @@ record JustOutputInitials = (x)
 // Actions
 
 JustOutput(out JustOutputOut, chain0, chain, private: initials JustOutputInitials) = AND(
-  tx::TxInsert(chain, chain0, initials.x, out.x, @self_predicate(IsFoo))
+  tx::TxInsert(chain0, chain, initials.x, out.x, @self_predicate(IsFoo))
 )
 
 // Bridges
@@ -373,8 +373,8 @@ record LogToWoodInitials = (wood)
 
 LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, wood0, key, initials LogToWoodInitials) = AND(
   DictUpdate(wood0, "key", key, initials.wood)
-  tx::TxDelete(chain1, chain0, in.log, @self_predicate(IsLog))
-  tx::TxInsert(chain, chain1, initials.wood, out.wood, @self_predicate(IsWood))
+  tx::TxDelete(chain0, chain1, in.log, @self_predicate(IsLog))
+  tx::TxInsert(chain1, chain, initials.wood, out.wood, @self_predicate(IsWood))
 )
 
 // Bridges
@@ -439,7 +439,7 @@ fn test_records_form_subaction() {
     // wildcard is dropped and body refs render as `out.bar`.
     let expected_parent = r#"MineBar(out MineBarOut, chain0, chain, private: chain1, _UseFoo_in_0 UseFooIn, _UseFoo_out_0 UseFooOut, initials MineBarInitials) = AND(
   UseFoo(_UseFoo_in_0, _UseFoo_out_0, chain0, chain1)
-  tx::TxInsert(chain, chain1, initials.bar, out.bar, @self_predicate(IsBar))
+  tx::TxInsert(chain1, chain, initials.bar, out.bar, @self_predicate(IsBar))
 )
 "#;
     assert!(
@@ -499,7 +499,7 @@ UseFoo(in UseFooIn, out UseFooOut, chain0, chain, private: foo0, dur) = AND(
   Gt(foo0.durability, 0)
   Sum(dur, 1, foo0.durability)
   DictUpdate(foo0, "durability", dur, out.foo)
-  tx::TxMutate(chain, chain0, out.foo, foo0, @self_predicate(IsFoo))
+  tx::TxMutate(chain0, chain, foo0, out.foo, @self_predicate(IsFoo))
 )
 
 // Bridges

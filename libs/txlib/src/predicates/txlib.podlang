@@ -90,7 +90,7 @@ ReplayContents(before_tx, after_tx, before_chain, after_chain) = OR(
 // wrapping per-event predicate.
 ReplayContentsStepInsert(before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain, ins, guard) = AND(
-  tx::TxInsert(mid_chain, before_chain, ins.initial, ins.new, guard)
+  tx::TxInsert(before_chain, mid_chain, ins.initial, ins.new, guard)
   SetInsert(before_tx.live, ins.new, ins.new_live)
   DictUpdate(before_tx, "live", ins.new_live, mid_tx)
   guard(ins.new, before_tx.chain_start, before_tx.chain_end)
@@ -99,7 +99,7 @@ ReplayContentsStepInsert(before_tx, after_tx, before_chain, after_chain,
 
 ReplayContentsStepMutate(before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain, pair, guard) = AND(
-  tx::TxMutate(mid_chain, before_chain, pair.new, pair.old, guard)
+  tx::TxMutate(before_chain, mid_chain, pair.old, pair.new, guard)
   ReplayMutateEvent(before_tx, mid_tx, pair.old, pair.new)
   guard(pair.new, before_tx.chain_start, before_tx.chain_end)
   ReplayContents(mid_tx, after_tx, mid_chain, after_chain)
@@ -176,10 +176,10 @@ ReplayActions(before_tx, after_tx, before_chain, after_chain) = OR(
 
 // One action, then a recursive tail. Used for transactions that
 // contain 2+ top-level actions.
-ReplayActionsStep(before_tx, after_tx, before_chain, after_chain,
+ReplayActionsStep(before_tx, after_tx, before_chain, chain_final,
     private: mid_tx, mid_chain) = AND(
   ReplayAction(before_tx, mid_tx, before_chain, mid_chain)
-  ReplayActions(mid_tx, after_tx, mid_chain, after_chain)
+  ReplayActions(mid_tx, after_tx, mid_chain, chain_final)
 )
 
 // K=1 fast path: a single-event action whose only event is an Insert.
@@ -192,7 +192,7 @@ ReplayActionsStep(before_tx, after_tx, before_chain, after_chain,
 // materialization is what saves the three intermediate statements.
 ReplayActionInsert(before_tx, after_tx, before_chain, after_chain,
     private: new, new_live, guard, initial) = AND(
-  tx::TxInsert(after_chain, before_chain, initial, new, guard)
+  tx::TxInsert(before_chain, after_chain, initial, new, guard)
   SetInsert(before_tx.live, new, new_live)
   DictUpdate(before_tx, "live", new_live, after_tx)
   guard(new, before_chain, after_chain)
@@ -208,7 +208,7 @@ ReplayActionInsert(before_tx, after_tx, before_chain, after_chain,
 // that it already built for the application's action predicate.
 ReplayInsert(before_tx, after_tx, before_chain, after_chain,
     private: new, new_live, guard, initial) = AND(
-  tx::TxInsert(after_chain, before_chain, initial, new, guard)
+  tx::TxInsert(before_chain, after_chain, initial, new, guard)
   SetInsert(before_tx.live, new, new_live)
   DictUpdate(before_tx, "live", new_live, after_tx)
   guard(new, before_tx.chain_start, before_tx.chain_end)
@@ -244,7 +244,7 @@ ReplayMutateEvent(before_tx, after_tx, old, new,
 // TxMutate's shared `type` arg already pins old.type == new.type.
 ReplayMutate(before_tx, after_tx, before_chain, after_chain,
     private: old, new, guard) = AND(
-  tx::TxMutate(after_chain, before_chain, new, old, guard)
+  tx::TxMutate(before_chain, after_chain, old, new, guard)
   ReplayMutateEvent(before_tx, after_tx, old, new)
   guard(new, before_tx.chain_start, before_tx.chain_end)
 )
@@ -257,7 +257,7 @@ ReplayMutate(before_tx, after_tx, before_chain, after_chain,
 // + nullifier accumulation + guard dispatch.
 ReplayDelete(before_tx, after_tx, before_chain, after_chain,
     private: old, guard, new_live, mid_tx) = AND(
-  tx::TxDelete(after_chain, before_chain, old, guard)
+  tx::TxDelete(before_chain, after_chain, old, guard)
   SetDelete(before_tx.live, old, new_live)
   DictUpdate(before_tx, "live", new_live, mid_tx)
   ReplayNullify(mid_tx, after_tx, old)

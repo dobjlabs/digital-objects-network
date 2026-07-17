@@ -186,27 +186,27 @@ record MineStoneWithWoodPickInitials = (stone)
 FindLog(out FindLogOut, chain0, chain, private: log0, work, initials FindLogInitials) = AND(
   Vdf(3, log0, work)
   DictUpdate(initials.log, log0, "work", work)
-  tx::TxInsert(chain, chain0, initials.log, out.log, @self_predicate(IsLog))
+  tx::TxInsert(chain0, chain, initials.log, out.log, @self_predicate(IsLog))
 )
 
 CraftWood(in CraftWoodIn, out CraftWoodOut, chain0, chain, private: chain1, wood0, wood1, key) = AND(
   DictUpdate(wood1, wood0, "key", key)
   LtEqU256(wood1, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))
-  tx::TxDelete(chain1, chain0, in.log, @self_predicate(IsLog))
-  tx::TxInsert(chain, chain1, wood1, out.wood, @self_predicate(IsWood))
+  tx::TxDelete(chain0, chain1, in.log, @self_predicate(IsLog))
+  tx::TxInsert(chain1, chain, wood1, out.wood, @self_predicate(IsWood))
 )
 
 CraftSticks(in CraftSticksIn, out CraftSticksOut, chain0, chain, private: chain_steps CraftSticksChain, initials CraftSticksInitials) = AND(
-  tx::TxDelete(chain_steps.step_0, chain0, in.wood, @self_predicate(IsWood))
-  tx::TxInsert(chain_steps.step_1, chain_steps.step_0, initials.stick_a, out.stick_a, @self_predicate(IsStick))
-  tx::TxInsert(chain, chain_steps.step_1, initials.stick_b, out.stick_b, @self_predicate(IsStick))
+  tx::TxDelete(chain0, chain_steps.step_0, in.wood, @self_predicate(IsWood))
+  tx::TxInsert(chain_steps.step_0, chain_steps.step_1, initials.stick_a, out.stick_a, @self_predicate(IsStick))
+  tx::TxInsert(chain_steps.step_1, chain, initials.stick_b, out.stick_b, @self_predicate(IsStick))
 )
 
 CraftWoodPick(in CraftWoodPickIn, out CraftWoodPickOut, chain0, chain, private: chain_steps CraftWoodPickChain, initials CraftWoodPickInitials) = AND(
   DictContains(initials.pick, "durability", 100)
-  tx::TxDelete(chain_steps.step_0, chain0, in.wood, @self_predicate(IsWood))
-  tx::TxDelete(chain_steps.step_1, chain_steps.step_0, in.stick, @self_predicate(IsStick))
-  tx::TxInsert(chain, chain_steps.step_1, initials.pick, out.pick, @self_predicate(IsWoodPick))
+  tx::TxDelete(chain0, chain_steps.step_0, in.wood, @self_predicate(IsWood))
+  tx::TxDelete(chain_steps.step_0,chain_steps.step_1,  in.stick, @self_predicate(IsStick))
+  tx::TxInsert(chain_steps.step_1, chain, initials.pick, out.pick, @self_predicate(IsWoodPick))
 )
 
 UseWoodPick(in UseWoodPickIn, out UseWoodPickOut, chain0, chain, private: wood_pick0, wood_pick1, wood_pick2, durability, key, work) = AND(
@@ -217,12 +217,12 @@ UseWoodPick(in UseWoodPickIn, out UseWoodPickOut, chain0, chain, private: wood_p
   DictUpdate(wood_pick1, "key", key, wood_pick2)
   Vdf(10, wood_pick2, work)
   DictUpdate(wood_pick2, "work", work, out.wood_pick)
-  tx::TxMutate(chain, chain0, out.wood_pick, wood_pick0, @self_predicate(IsWoodPick))
+  tx::TxMutate(chain0, chain, wood_pick0, out.wood_pick, @self_predicate(IsWoodPick))
 )
 
 MineStoneWithWoodPick(out MineStoneWithWoodPickOut, chain0, chain, private: chain1, _UseWoodPick_in_0 UseWoodPickIn, _UseWoodPick_out_0 UseWoodPickOut, initials MineStoneWithWoodPickInitials) = AND(
   UseWoodPick(_UseWoodPick_in_0, _UseWoodPick_out_0, chain0, chain1)
-  tx::TxInsert(chain, chain1, initials.stone, out.stone, @self_predicate(IsStone))
+  tx::TxInsert(chain1, chain, initials.stone, out.stone, @self_predicate(IsStone))
 )
 
 // Bridges

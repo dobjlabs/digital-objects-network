@@ -27,7 +27,7 @@
 // `initial` as a public arg lets the calling action predicate
 // share its body wildcard with both the script's DictUpdate chain
 // and TxInsert's identity-derivation clause.
-TxInsert(chain, prev_chain, initial, new, type, private: event_hash) = AND(
+TxInsert(prev_chain, chain, initial, new, type, private: event_hash) = AND(
   DictContains(new, "type", type)
   DictInsert(initial, "stable_identifier", initial, new)
   Hash({}, new, event_hash)
@@ -39,7 +39,7 @@ TxInsert(chain, prev_chain, initial, new, type, private: event_hash) = AND(
 // implicitly (no separate Equal needed). The Equal clause pins
 // old.stable_identifier == new.stable_identifier so the stable
 // identifier set by TxInsert survives every mutation.
-TxMutate(chain, prev_chain, new, old, type, private: event_hash) = AND(
+TxMutate(prev_chain, chain, old, new, type, private: event_hash) = AND(
   DictContains(new, "type", type)
   DictContains(old, "type", type)
   Equal(old.stable_identifier, new.stable_identifier)
@@ -49,7 +49,7 @@ TxMutate(chain, prev_chain, new, old, type, private: event_hash) = AND(
 
 // Delete: chain = H(prev, H(old, {})). The `type` arg pins the
 // deleted object's type field for guard dispatch.
-TxDelete(chain, prev_chain, old, type, private: event_hash) = AND(
+TxDelete(prev_chain, chain, old, type, private: event_hash) = AND(
   DictContains(old, "type", type)
   Hash(old, {}, event_hash)
   Hash(prev_chain, event_hash, chain)
