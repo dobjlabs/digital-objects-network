@@ -189,7 +189,7 @@ ReplayActionsStep(state_header, before_tx, after_tx, before_chain, after_chain,
 // materialization is what saves the three intermediate statements.
 ReplayActionInsert(state_header, before_tx, after_tx, before_chain, after_chain,
     private: new, pair, guard) = AND(
-  tx::TxInsert(after_chain, before_chain, pair.initial, new, guard)
+  tx::TxInsert(before_chain, after_chain, pair.initial, new, guard)
   SetInsert(before_tx.live, new, pair.new_live)
   DictUpdate(before_tx, "live", pair.new_live, after_tx)
   guard(new, state_header, before_chain, after_chain)
@@ -205,7 +205,7 @@ ReplayActionInsert(state_header, before_tx, after_tx, before_chain, after_chain,
 // that it already built for the application's action predicate.
 ReplayInsert(state_header, before_tx, after_tx, before_chain, after_chain,
     private: new, pair, guard) = AND(
-  tx::TxInsert(after_chain, before_chain, pair.initial, new, guard)
+  tx::TxInsert(before_chain, after_chain, pair.initial, new, guard)
   SetInsert(before_tx.live, new, pair.new_live)
   DictUpdate(before_tx, "live", pair.new_live, after_tx)
   guard(new, state_header, before_tx.chain_start, before_tx.chain_end)
@@ -241,7 +241,7 @@ ReplayMutateEvent(before_tx, after_tx, old, new,
 // TxMutate's shared `type` arg already pins old.type == new.type.
 ReplayMutate(state_header, before_tx, after_tx, before_chain, after_chain,
     private: old, new, guard) = AND(
-  tx::TxMutate(after_chain, before_chain, new, old, guard)
+  tx::TxMutate(before_chain, after_chain, old, new, guard)
   ReplayMutateEvent(before_tx, after_tx, old, new)
   guard(new, state_header, before_tx.chain_start, before_tx.chain_end)
 )
@@ -254,7 +254,7 @@ ReplayMutate(state_header, before_tx, after_tx, before_chain, after_chain,
 // + nullifier accumulation + guard dispatch.
 ReplayDelete(state_header, before_tx, after_tx, before_chain, after_chain,
     private: old, guard, pair) = AND(
-  tx::TxDelete(after_chain, before_chain, old, guard)
+  tx::TxDelete(before_chain, after_chain, old, guard)
   SetDelete(before_tx.live, old, pair.new_live)
   DictUpdate(before_tx, "live", pair.new_live, pair.mid_tx)
   ReplayNullify(pair.mid_tx, after_tx, old)

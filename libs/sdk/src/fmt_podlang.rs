@@ -579,13 +579,13 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         match o.io {
             ObjectIO::Input => writeln!(
                 w,
-                "  tx::TxDelete({chain_next}, {chain}, {obj_str}, @self_predicate(Is{class}))"
+                "  tx::TxDelete({chain}, {chain_next}, {obj_str}, @self_predicate(Is{class}))"
             )?,
             ObjectIO::Output => {
                 let obj_with_id = obj_str.next();
                 writeln!(
                     w,
-                    "  tx::TxInsert({chain_next}, {chain}, {obj_str}, {obj_with_id}, @self_predicate(Is{class}))"
+                    "  tx::TxInsert({chain}, {chain_next}, {obj_str}, {obj_with_id}, @self_predicate(Is{class}))"
                 )?;
             }
             ObjectIO::Mutate => {
@@ -593,7 +593,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 pre.ts = 0;
                 writeln!(
                     w,
-                    "  tx::TxMutate({chain_next}, {chain}, {obj_str}, {pre}, @self_predicate(Is{class}))"
+                    "  tx::TxMutate({chain}, {chain_next}, {pre}, {obj_str}, @self_predicate(Is{class}))"
                 )?;
             }
         }

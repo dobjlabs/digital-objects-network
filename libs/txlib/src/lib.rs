@@ -673,7 +673,7 @@ impl TxBuilder {
             .apply_custom_pred(
                 false,
                 "TxInsert",
-                map!({"chain" => self.chain, "prev_chain" => prev, "initial" => initial.clone(), "new" => new.clone(), "type" => new_type}),
+                map!({"prev_chain" => prev, "chain" => self.chain, "initial" => initial.clone(), "new" => new.clone(), "type" => new_type}),
                 vec![st_dc, st_di, st_h1, st_h2],
             )
             .unwrap();
@@ -758,7 +758,7 @@ impl TxBuilder {
             .apply_custom_pred(
                 false,
                 "TxMutate",
-                map!({"chain" => self.chain, "prev_chain" => prev, "new" => new.clone(), "old" => old.clone(), "type" => new_type}),
+                map!({"prev_chain" => prev, "chain" => self.chain, "old" => old.clone(), "new" => new.clone(), "type" => new_type}),
                 vec![st_dc_new, st_dc_old, st_eq_stable_identifier, st_h1, st_h2],
             )
             .unwrap();
@@ -808,7 +808,7 @@ impl TxBuilder {
             .apply_custom_pred(
                 false,
                 "TxDelete",
-                map!({"chain" => self.chain, "prev_chain" => prev, "old" => old.clone(), "type" => old_type}),
+                map!({"prev_chain" => prev, "chain" => self.chain, "old" => old.clone(), "type" => old_type}),
                 vec![st_dc, st_h1, st_h2],
             )
             .unwrap();
