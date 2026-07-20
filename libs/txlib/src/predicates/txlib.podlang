@@ -80,16 +80,9 @@ ReplayContents(state_header, before_tx, after_tx, before_chain, after_chain) = O
   ReplayContentsStepAction(state_header, before_tx, after_tx, before_chain, after_chain)
 )
 
-// The four specialised step variants. For Insert and Mutate the body
-// of `ReplayInsert`/`ReplayMutate` is inlined here -- both fit in 5
-// sub-statements alongside the recursive tail call. To stay within
-// pod2's 8-wildcard limit, head-event objects are packed into a small
-// private dict and accessed via anchored keys: `ins.new`/`ins.new_live`
-// for Insert, `pair.old`/`pair.new` for Mutate. Delete and Action
-// don't fit when inlined, so their step variants just call the
-// wrapping per-event predicate.
+// The four specialised step variants.
 ReplayContentsStepInsert(state_header, before_tx, after_tx, before_chain, after_chain,
-    private: mid_tx, mid_chain, ins, guard) = AND(
+    private: mid_tx, mid_chain, guard) = AND(
   ReplayInsert(state_header, before_tx, mid_tx, before_chain, mid_chain)
   ReplayContents(state_header, mid_tx, after_tx, mid_chain, after_chain)
 )
@@ -201,6 +194,10 @@ ReplayActionInsert(state_header, before_tx, after_tx, before_chain, after_chain,
 // guard dispatch. Referencing TxInsert instead of re-proving the
 // Hash equations lets the prover reuse the record-time statement
 // that it already built for the application's action predicate.
+// To stay within pod2's 8-wildcard limit, some private wildcards are packed
+// into a small private dict and accessed via anchored keys:
+// `pair.initial`/`pair.new_live` for Insert, `pair.new_live`/`pair.mid_tx` for
+// Delete.
 ReplayInsert(state_header, before_tx, after_tx, before_chain, after_chain,
     private: new, pair, guard) = AND(
   tx::TxInsert(before_chain, after_chain, pair.initial, new, guard)
