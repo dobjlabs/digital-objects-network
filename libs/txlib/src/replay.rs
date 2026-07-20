@@ -310,7 +310,7 @@ impl<'a> Replayer<'a> {
                     .ctx
                     .apply_custom_pred_simple(
                         false,
-                        "ReplayContentsStepDelete",
+                        "ReplayContentsStepInsert",
                         vec![st_head, st_rest],
                     )
                     .unwrap();
