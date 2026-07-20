@@ -288,19 +288,6 @@ impl<'a> Replayer<'a> {
                 let evidence = guard_evidence
                     .clone()
                     .expect("missing guard evidence for insert");
-                // let mut new_live = frame.live.clone();
-                // new_live.insert(&Value::from(new.clone())).unwrap();
-                // let (st_rest, final_chain, final_live, final_nulls) =
-                //     self.build_replay_contents(rest, *chain_after, frame.with_live(&new_live));
-                // let st = self.build_replay_step_insert(
-                //     initial,
-                //     new,
-                //     frame,
-                //     &new_live,
-                //     tx_stmt.clone(),
-                //     evidence,
-                //     st_rest,
-                // );
 
                 let (st_head, next_live) =
                     self.build_replay_insert(initial, new, frame, tx_stmt.clone(), evidence);
@@ -328,20 +315,6 @@ impl<'a> Replayer<'a> {
                 let evidence = guard_evidence
                     .clone()
                     .expect("missing guard evidence for mutate");
-                // let scratch = frame.mutate_scratch(old, new);
-                // let (st_rest, final_chain, final_live, final_nulls) = self.build_replay_contents(
-                //     rest,
-                //     *chain_after,
-                //     frame.advance(&scratch.new_live, &scratch.new_nullifiers),
-                // );
-                // let st = self.build_replay_step_mutate(
-                //     new,
-                //     old,
-                //     &scratch,
-                //     tx_stmt.clone(),
-                //     evidence,
-                //     st_rest,
-                // );
 
                 let (st_head, next_live, next_nulls) =
                     self.build_replay_mutate(new, old, frame, tx_stmt.clone(), evidence);
@@ -630,86 +603,6 @@ impl<'a> Replayer<'a> {
         (st, new_live)
     }
 
-    // /// Build a `ReplayContentsStepInsert` statement: the inlined body
-    // /// of `ReplayInsert` plus the recursive `ReplayContents` tail. The
-    // /// `new` object, the resulting `new_live` set, and the
-    // /// pre-identity `initial` are packed into a tiny `ins` dict so
-    // /// they share a single wildcard slot (keeps the predicate at 8
-    // /// wildcards). Body sub-statements anchor to `ins.new` /
-    // /// `ins.new_live` / `ins.initial` instead of using bare wildcards.
-    // /// `new_live` is `live + {new}`, supplied by the caller (which already
-    // /// needs it for the recursive tail).
-    // #[allow(clippy::too_many_arguments)]
-    // fn build_replay_step_insert(
-    //     &mut self,
-    //     initial: &Dictionary,
-    //     new: &Dictionary,
-    //     frame: ReplayFrame<'_>,
-    //     new_live: &Set,
-    //     tx_stmt: Statement,
-    //     guard_evidence: Statement,
-    //     st_rest: Statement,
-    // ) -> Statement {
-    //     let btx = frame.to_tx_dict();
-    //     let atx = tx_with(&btx, "live", Value::from(new_live.clone()));
-    //     let ins = dict!({
-    //         "new" => new.clone(),
-    //         "new_live" => new_live.clone(),
-    //         "initial" => initial.clone()
-    //     });
-
-    //     // Re-anchor TxInsert's `initial` slot (slot 2) and `new`
-    //     // slot (slot 3) from literals to `ins.initial` / `ins.new`.
-    //     let tx_stmt_wrapped = self
-    //         .ctx
-    //         .builder
-    //         .priv_op(Operation::replace_value_with_entry(
-    //             vec![
-    //                 None,
-    //                 None,
-    //                 Some((&ins, "initial")),
-    //                 Some((&ins, "new")),
-    //                 None,
-    //             ],
-    //             tx_stmt,
-    //         ))
-    //         .unwrap();
-    //     let op_si = self
-    //         .ctx
-    //         .builder
-    //         .priv_op(op!(SetInsert(
-    //             (&btx, "live"),
-    //             (&ins, "new"),
-    //             (&ins, "new_live")
-    //         )))
-    //         .unwrap();
-    //     let op_du = self
-    //         .ctx
-    //         .builder
-    //         .priv_op(op!(DictUpdate(btx, "live", (&ins, "new_live"), atx)))
-    //         .unwrap();
-    //     // Re-anchor guard call's slot 0 (new) to ins.new, plus the existing
-    //     // chain_start/chain_end anchors to btx.
-    //     let rebound_evidence = self
-    //         .ctx
-    //         .builder
-    //         .priv_op(Operation::replace_value_with_entry(
-    //             vec![
-    //                 Some((&ins, "new")),
-    //                 Some((&btx, "chain_start")),
-    //                 Some((&btx, "chain_end")),
-    //             ],
-    //             guard_evidence,
-    //         ))
-    //         .unwrap();
-    //     let st = self
-    //         .ctx
-    //         .apply_custom_pred_simple(false, "ReplayContentsStepInsert", vec![st_head, st_rest])
-    //         .unwrap();
-    //     self.record("ReplayContentsStepInsert");
-    //     st
-    // }
-
     fn build_replay_mutate(
         &mut self,
         new: &Dictionary,
@@ -852,63 +745,6 @@ impl<'a> Replayer<'a> {
         self.record("ReplayMutateEvent");
         st_event
     }
-
-    // /// Build a `ReplayContentsStepMutate` statement: the inlined body
-    // /// of `ReplayMutate` plus the recursive `ReplayContents` tail.
-    // /// `old` and `new` are packed into a `pair` dict so they share a
-    // /// single wildcard slot (keeps the predicate at 8 wildcards). The
-    // /// TxMutate and guard sub-statements are re-anchored to
-    // /// `pair.old` / `pair.new`. `scratch` is supplied by the caller
-    // /// (which already needs `new_live`/`new_nullifiers` for the recursive tail).
-    // fn build_replay_step_mutate(
-    //     &mut self,
-    //     new: &Dictionary,
-    //     old: &Dictionary,
-    //     scratch: &MutateScratch,
-    //     tx_stmt: Statement,
-    //     guard_evidence: Statement,
-    //     st_rest: Statement,
-    // ) -> Statement {
-    //     let pair = dict!({
-    //         "old" => old.clone(),
-    //         "new" => new.clone()
-    //     });
-
-    //     let st_event = self.build_replay_mutate_event(new, old, scratch);
-
-    //     // Re-anchor TxMutate's `new` (slot 2) and `old` (slot 3) to pair.
-    //     let tx_stmt_wrapped = self
-    //         .ctx
-    //         .builder
-    //         .priv_op(Operation::replace_value_with_entry(
-    //             vec![None, None, Some((&pair, "new")), Some((&pair, "old")), None],
-    //             tx_stmt,
-    //         ))
-    //         .unwrap();
-    //     // Re-anchor guard call's slot 0 (new) to pair.new.
-    //     let rebound_evidence = self
-    //         .ctx
-    //         .builder
-    //         .priv_op(Operation::replace_value_with_entry(
-    //             vec![
-    //                 Some((&pair, "new")),
-    //                 Some((&scratch.btx, "chain_start")),
-    //                 Some((&scratch.btx, "chain_end")),
-    //             ],
-    //             guard_evidence,
-    //         ))
-    //         .unwrap();
-    //     let st = self
-    //         .ctx
-    //         .apply_custom_pred_simple(
-    //             false,
-    //             "ReplayContentsStepMutate",
-    //             vec![tx_stmt_wrapped, st_event, rebound_evidence, st_rest],
-    //         )
-    //         .unwrap();
-    //     self.record("ReplayContentsStepMutate");
-    //     st
-    // }
 
     fn build_replay_delete(
         &mut self,
