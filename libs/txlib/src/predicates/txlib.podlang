@@ -34,8 +34,6 @@
 
 use module 0xTX_EVENTS_MODULE_HASH as tx
 
-record Context = (state_header, before_chain, after_chain)
-
 // ========================================================
 // Replay: Helpers
 // ========================================================
@@ -91,7 +89,7 @@ ReplayContents(state_header, before_tx, after_tx, before_chain, after_chain) = O
 // don't fit when inlined, so their step variants just call the
 // wrapping per-event predicate.
 ReplayContentsStepInsert(state_header, before_tx, after_tx, before_chain, after_chain,
-    private: mid_tx, mid_chain) = AND(
+    private: mid_tx, mid_chain, ins, guard) = AND(
   ReplayInsert(state_header, before_tx, mid_tx, before_chain, mid_chain)
   ReplayContents(state_header, mid_tx, after_tx, mid_chain, after_chain)
 )

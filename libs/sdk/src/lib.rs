@@ -865,21 +865,21 @@ impl ActionHandle {
                     ObjectIO::Output => {
                         let initial_anchor = initials_anchor(varname);
                         vec![
-                            chain_anchor,
                             prev_chain_anchor,
+                            chain_anchor,
                             initial_anchor,
                             new_anchor,
                             None,
                         ]
                     }
                     ObjectIO::Input => {
-                        vec![chain_anchor, prev_chain_anchor, old_anchor, None]
+                        vec![prev_chain_anchor, chain_anchor, old_anchor, None]
                     }
                     ObjectIO::Mutate => vec![
-                        chain_anchor,
                         prev_chain_anchor,
-                        new_anchor,
+                        chain_anchor,
                         old_anchor,
+                        new_anchor,
                         None,
                     ],
                 };
