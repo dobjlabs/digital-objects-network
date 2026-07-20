@@ -33,9 +33,9 @@ use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     frontend::Operation,
     middleware::{
-        EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
         containers::{Array, Dictionary, Set},
-        hash_values,
+        hash_values, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
+        EMPTY_VALUE,
     },
 };
 use pod2utils::{dict, macros::BuildContext, map, op, rand_raw_value, set, st_custom};
@@ -1129,7 +1129,7 @@ mod tests {
     use pod2::{
         backends::plonky2::mock::mainpod::MockProver,
         frontend::{MainPod, MultiPodBuilder},
-        middleware::{Params, Predicate, VDSet, containers::Array},
+        middleware::{containers::Array, Params, Predicate, VDSet},
     };
     use pod2utils::{macros::BuildContext, set};
 
@@ -1316,9 +1316,10 @@ mod tests {
             .apply_custom_pred_simple(false, "SpawnWoodPick", vec![op_dur, st_insert])
             .unwrap();
         let st_guard = ctx
-            .apply_custom_pred_simple(
+            .apply_custom_pred(
                 false,
                 "IsWoodPick",
+                map!({"state_header" => state.state_header().array()}),
                 vec![st_spawn.clone(), Statement::None, Statement::None],
             )
             .unwrap();
@@ -1374,9 +1375,10 @@ mod tests {
                 )
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(
+                .apply_custom_pred(
                     false,
                     "IsWoodPick",
+                    map!({"state_header" => state.state_header().array()}),
                     vec![Statement::None, Statement::None, st_action.clone()],
                 )
                 .unwrap();
@@ -1391,7 +1393,12 @@ mod tests {
             .apply_custom_pred_simple(false, "MineStone", vec![st_use_wp, st_stone_insert])
             .unwrap();
         let st_guard = ctx
-            .apply_custom_pred_simple(false, "IsStone", vec![st_mine.clone()])
+            .apply_custom_pred(
+                false,
+                "IsStone",
+                map!({"state_header" => state.state_header().array()}),
+                vec![st_mine.clone()],
+            )
             .unwrap();
         tx2.set_guard(h, st_guard);
         tx2.end_action(scope_outer);
@@ -1402,12 +1409,10 @@ mod tests {
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);
 
-        assert!(
-            tx_out
-                .nullifiers
-                .contains(&Value::from(compute_nullifier(&pick)))
-                .unwrap()
-        );
+        assert!(tx_out
+            .nullifiers
+            .contains(&Value::from(compute_nullifier(&pick)))
+            .unwrap());
     }
 
     /// Tx 1: FindLog (genesis insert).
@@ -1449,7 +1454,12 @@ mod tests {
             .apply_custom_pred_simple(false, "FindLog", vec![st_insert])
             .unwrap();
         let st_guard = ctx
-            .apply_custom_pred_simple(false, "IsLog", vec![st_find.clone(), Statement::None])
+            .apply_custom_pred(
+                false,
+                "IsLog",
+                map!({"state_header" => state.state_header().array()}),
+                vec![st_find.clone(), Statement::None],
+            )
             .unwrap();
         tx1.set_guard(h, st_guard);
         tx1.end_action(scope);
@@ -1486,7 +1496,12 @@ mod tests {
                 .apply_custom_pred_simple(false, "DeleteLog", vec![st_del])
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(false, "IsLog", vec![Statement::None, st_action.clone()])
+                .apply_custom_pred(
+                    false,
+                    "IsLog",
+                    map!({"state_header" => state.state_header().array()}),
+                    vec![Statement::None, st_action.clone()],
+                )
                 .unwrap();
             tx2.set_guard(h_sub, st_guard);
             tx2.end_action(scope_sub);
@@ -1499,9 +1514,10 @@ mod tests {
             .apply_custom_pred_simple(false, "CraftWood", vec![st_del_log, st_ins])
             .unwrap();
         let st_guard = ctx
-            .apply_custom_pred_simple(
+            .apply_custom_pred(
                 false,
                 "IsWood",
+                map!({"state_header" => state.state_header().array()}),
                 vec![st_craft_wood.clone(), Statement::None],
             )
             .unwrap();
@@ -1538,7 +1554,12 @@ mod tests {
                 .apply_custom_pred_simple(false, "DeleteWood", vec![st_del])
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(false, "IsWood", vec![Statement::None, st_action.clone()])
+                .apply_custom_pred(
+                    false,
+                    "IsWood",
+                    map!({"state_header" => state.state_header().array()}),
+                    vec![Statement::None, st_action.clone()],
+                )
                 .unwrap();
             tx3.set_guard(h_sub, st_guard);
             tx3.end_action(scope_sub);
@@ -1584,9 +1605,10 @@ mod tests {
 
         // stick_a: IsStick branch 2 = CraftSticks(obj, other, chain_start, chain_end)
         let st_is_stick_a = ctx
-            .apply_custom_pred_simple(
+            .apply_custom_pred(
                 false,
                 "IsStick",
+                map!({"state_header" => state.state_header().array()}),
                 vec![Statement::None, st_craft_sticks.clone(), Statement::None],
             )
             .unwrap();
@@ -1594,9 +1616,10 @@ mod tests {
 
         // stick_b: IsStick branch 3 = CraftSticks(other, obj, chain_start, chain_end)
         let st_is_stick_b = ctx
-            .apply_custom_pred_simple(
+            .apply_custom_pred(
                 false,
                 "IsStick",
+                map!({"state_header" => state.state_header().array()}),
                 vec![Statement::None, Statement::None, st_craft_sticks.clone()],
             )
             .unwrap();
@@ -1614,12 +1637,10 @@ mod tests {
         assert!(tx3_out.live.contains(&Value::from(stick_a)).unwrap());
         assert!(tx3_out.live.contains(&Value::from(stick_b)).unwrap());
         // Wood should be nullified
-        assert!(
-            tx3_out
-                .nullifiers
-                .contains(&Value::from(compute_nullifier(&wood)))
-                .unwrap()
-        );
+        assert!(tx3_out
+            .nullifiers
+            .contains(&Value::from(compute_nullifier(&wood)))
+            .unwrap());
     }
 
     /// Grounding three inputs exercises InputsGroundedRecursive (peel two per
@@ -1656,7 +1677,12 @@ mod tests {
                 .apply_custom_pred_simple(false, "FindLog", vec![st_insert])
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(false, "IsLog", vec![st_find, Statement::None])
+                .apply_custom_pred(
+                    false,
+                    "IsLog",
+                    map!({"state_header" => state.state_header().array()}),
+                    vec![st_find, Statement::None],
+                )
                 .unwrap();
             tx.set_guard(h, st_guard);
             tx.end_action(scope);
@@ -1683,7 +1709,12 @@ mod tests {
                 .apply_custom_pred_simple(false, "DeleteLog", vec![st_del])
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(false, "IsLog", vec![Statement::None, st_action])
+                .apply_custom_pred(
+                    false,
+                    "IsLog",
+                    map!({"state_header" => state.state_header().array()}),
+                    vec![Statement::None, st_action],
+                )
                 .unwrap();
             burn.set_guard(h, st_guard);
             burn.end_action(scope);
@@ -1696,12 +1727,10 @@ mod tests {
         solve_and_verify(ctx.builder);
 
         for log in &logs {
-            assert!(
-                burn_out
-                    .nullifiers
-                    .contains(&Value::from(compute_nullifier(log)))
-                    .unwrap()
-            );
+            assert!(burn_out
+                .nullifiers
+                .contains(&Value::from(compute_nullifier(log)))
+                .unwrap());
         }
     }
 }

@@ -6,6 +6,9 @@
 
 use module 0xTX_EVENTS_MODULE_HASH as tx
 
+// TODO: Support importing records via `use module`
+record StateHeader = (block_number, created, nullifiers, prior_state_history)
+
 // ========================================================
 // Deletion Sub-Actions
 // ========================================================
@@ -90,28 +93,28 @@ SpawnWoodPick(wood_pick, chain_start, chain_end, private: wood_pick0) = AND(
 // Type Guards
 // ========================================================
 
-IsLog(obj, chain_start, chain_end) = OR(
+IsLog(obj, state_header StateHeader, chain_start, chain_end) = OR(
   FindLog(obj, chain_start, chain_end)
   DeleteLog(obj, chain_start, chain_end)
 )
 
-IsWood(obj, chain_start, chain_end) = OR(
+IsWood(obj, state_header StateHeader, chain_start, chain_end) = OR(
   CraftWood(obj, chain_start, chain_end)
   DeleteWood(obj, chain_start, chain_end)
 )
 
-IsStick(obj, chain_start, chain_end, private: other) = OR(
+IsStick(obj, state_header StateHeader, chain_start, chain_end, private: other) = OR(
   DeleteStick(obj, chain_start, chain_end)
   CraftSticks(obj, other, chain_start, chain_end)
   CraftSticks(other, obj, chain_start, chain_end)
 )
 
-IsWoodPick(obj, chain_start, chain_end) = OR(
+IsWoodPick(obj, state_header StateHeader, chain_start, chain_end) = OR(
   SpawnWoodPick(obj, chain_start, chain_end)
   CraftWoodPick(obj, chain_start, chain_end)
   UseWoodPick(obj, chain_start, chain_end)
 )
 
-IsStone(obj, chain_start, chain_end) = OR(
+IsStone(obj, state_header StateHeader, chain_start, chain_end) = OR(
   MineStone(obj, chain_start, chain_end)
 )
