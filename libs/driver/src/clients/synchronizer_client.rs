@@ -118,6 +118,8 @@ impl SynchronizerClient for HttpSynchronizerClient {
 
         let state_header = StateHeader::new(
             payload.block_number,
+            payload.block_time,
+            payload.block_hash,
             payload.created_root,
             payload.nullifiers_root,
             payload.prior_state_history_root,

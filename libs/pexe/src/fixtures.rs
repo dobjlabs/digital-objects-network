@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
-use pod2::middleware::{EMPTY_HASH, EMPTY_VALUE, Hash, StrKey, Value, containers::Array};
+use anyhow::{anyhow, Result};
+use pod2::middleware::{containers::Array, Hash, StrKey, Value, EMPTY_HASH, EMPTY_VALUE};
 use pod2utils::{dict, rand_raw_value};
 use sdk::{SdkModule, SpendableObject};
-use txlib::{GroundingWitness, StateHeader, with_stable_identifier};
+use txlib::{with_stable_identifier, GroundingWitness, StateHeader};
 
 use crate::inspect::derive_class_signature;
 
@@ -118,7 +118,14 @@ pub fn build_synthetic_state(
         indices.insert(commitment, index);
     }
 
-    let state_header = StateHeader::new(1, created.commitment(), EMPTY_HASH, EMPTY_HASH);
+    let state_header = StateHeader::new(
+        1,
+        1,
+        EMPTY_HASH,
+        created.commitment(),
+        EMPTY_HASH,
+        EMPTY_HASH,
+    );
 
     let mut created_proofs: HashMap<Hash, _> = HashMap::with_capacity(objs.len());
     for obj in objs {

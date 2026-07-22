@@ -33,9 +33,9 @@ use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     frontend::Operation,
     middleware::{
-        EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
         containers::{Array, Dictionary, Set},
-        hash_values,
+        hash_values, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
+        EMPTY_VALUE,
     },
 };
 use pod2utils::{dict, macros::BuildContext, map, op, rand_raw_value, set, st_custom};
@@ -54,7 +54,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateHeader {
+    /// Execution block number
     pub block_number: i64,
+    /// Execution block time
+    pub block_time: i64,
+    /// Execution block hash
+    pub block_hash: Hash,
     /// Root of the global created-object set: the commitment of every object
     /// state ever created. Grounding proves an input is a member here.
     pub created_root: Hash,
@@ -65,12 +70,16 @@ pub struct StateHeader {
 impl StateHeader {
     pub fn new(
         block_number: i64,
+        block_time: i64,
+        block_hash: Hash,
         created_root: Hash,
         nullifiers_root: Hash,
         prior_state_history_root: Hash,
     ) -> Self {
         Self {
             block_number,
+            block_time,
+            block_hash,
             created_root,
             nullifiers_root,
             prior_state_history_root,
@@ -84,6 +93,8 @@ impl StateHeader {
     pub fn array(&self) -> Array {
         Array::new(vec![
             Value::from(self.block_number),
+            Value::from(self.block_time),
+            Value::from(self.block_hash),
             Value::from(self.created_root),
             Value::from(self.nullifiers_root),
             Value::from(self.prior_state_history_root),
@@ -99,9 +110,11 @@ impl StateHeader {
 /// Slot indices for the `StateHeader` record, matching the field order in
 /// the `record StateHeader` declaration in txlib.podlang.
 pub const STATE_HEADER_BLOCK_NUMBER_SLOT: usize = 0;
-pub const STATE_HEADER_CREATED_SLOT: usize = 1;
-pub const STATE_HEADER_NULLIFIERS_SLOT: usize = 2;
-pub const STATE_HEADER_PRIOR_STATE_HISTORY_SLOT: usize = 3;
+pub const STATE_HEADER_BLOCK_TIME_SLOT: usize = 1;
+pub const STATE_HEADER_BLOCK_HASH_SLOT: usize = 2;
+pub const STATE_HEADER_CREATED_SLOT: usize = 3;
+pub const STATE_HEADER_NULLIFIERS_SLOT: usize = 4;
+pub const STATE_HEADER_PRIOR_STATE_HISTORY_SLOT: usize = 5;
 
 /// Proof-bearing grounding data required to build a new transaction.
 ///
@@ -1133,7 +1146,7 @@ mod tests {
     use pod2::{
         backends::plonky2::mock::mainpod::MockProver,
         frontend::{MainPod, MultiPodBuilder},
-        middleware::{Params, Predicate, VDSet, containers::Array},
+        middleware::{containers::Array, Params, Predicate, VDSet},
     };
     use pod2utils::{macros::BuildContext, set};
 
@@ -1413,12 +1426,10 @@ mod tests {
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);
 
-        assert!(
-            tx_out
-                .nullifiers
-                .contains(&Value::from(compute_nullifier(&pick)))
-                .unwrap()
-        );
+        assert!(tx_out
+            .nullifiers
+            .contains(&Value::from(compute_nullifier(&pick)))
+            .unwrap());
     }
 
     /// Tx 1: FindLog (genesis insert).
@@ -1643,12 +1654,10 @@ mod tests {
         assert!(tx3_out.live.contains(&Value::from(stick_a)).unwrap());
         assert!(tx3_out.live.contains(&Value::from(stick_b)).unwrap());
         // Wood should be nullified
-        assert!(
-            tx3_out
-                .nullifiers
-                .contains(&Value::from(compute_nullifier(&wood)))
-                .unwrap()
-        );
+        assert!(tx3_out
+            .nullifiers
+            .contains(&Value::from(compute_nullifier(&wood)))
+            .unwrap());
     }
 
     /// Grounding three inputs exercises InputsGroundedRecursive (peel two per
@@ -1735,12 +1744,10 @@ mod tests {
         solve_and_verify(ctx.builder);
 
         for log in &logs {
-            assert!(
-                burn_out
-                    .nullifiers
-                    .contains(&Value::from(compute_nullifier(log)))
-                    .unwrap()
-            );
+            assert!(burn_out
+                .nullifiers
+                .contains(&Value::from(compute_nullifier(log)))
+                .unwrap());
         }
     }
 }
