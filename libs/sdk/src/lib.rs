@@ -18,9 +18,9 @@ use pod2::{
         containers::{Array, Dictionary, Set},
     },
 };
-use pod2utils::{dict, macros::BuildContext, rand_raw_value};
+use pod2utils::{dict, map, macros::BuildContext, rand_raw_value};
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
-use txlib::{EventHandle, GroundingWitness, Tx, TxBuilder, with_stable_identifier};
+use txlib::{StateHeader, EventHandle, GroundingWitness, Tx, TxBuilder, with_stable_identifier};
 use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 
 mod error;
@@ -1058,6 +1058,7 @@ impl ActionHandle {
                 };
                 let st_is_x = module.build_is_x(
                     &mut exe_ctx.bld,
+                    exe_ctx.tx_builder.state_header(),
                     &action,
                     &class,
                     object_refs_index,
@@ -2062,6 +2063,7 @@ impl SdkModule {
     fn build_is_x(
         &self,
         bld: &mut BuildContext,
+        state_header: &StateHeader,
         action_name: &str,
         class: &str,
         object_refs_index: usize,
@@ -2093,7 +2095,8 @@ impl SdkModule {
         let class_st_index =
             self.object_index_class_st_index[&(action_name.to_string(), object_refs_index)];
         branch_sts[class_st_index] = st_bridge;
-        bld.apply_custom_pred_simple(false, &class_predicate_name(class), branch_sts)
+        bld.apply_custom_pred(false, &class_predicate_name(class),
+            map!({"state_header" => state_header.array()}), branch_sts)
             .expect("apply IsX OR")
     }
 }

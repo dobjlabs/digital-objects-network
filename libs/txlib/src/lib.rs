@@ -529,6 +529,10 @@ impl TxBuilder {
         self.chain
     }
 
+    pub fn state_header(&self) -> &StateHeader {
+        &self.state_header
+    }
+
     /// Open a new action scope. Subsequent direct events
     /// (`insert`/`mutate`/`delete`) are recorded in this scope until
     /// `end_action` is called with the returned id. Scopes nest:

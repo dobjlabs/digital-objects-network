@@ -673,7 +673,7 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
 /// Emit IsX OR over bridge predicates.
 fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt::Result {
     let name = &class.name;
-    writeln!(w, "Is{name}(state, chain0, chain) = OR(")?;
+    writeln!(w, "Is{name}(state, state_header StateHeader, chain0, chain) = OR(")?;
     for (action_name, obj_index) in &class.actions {
         let meta = loader
             .actions_meta
@@ -694,6 +694,10 @@ pub(crate) fn fmt(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
         fmt_dependency(dep, w).unwrap();
     }
     writeln!(w)?;
+
+    // TODO: Support importing records via `use module`, so that we can import this record from
+    // `tx`
+    writeln!(w, "record StateHeader = (block_number, created, nullifiers, prior_state_history)")?;
     fmt_record_decls(loader, w)?;
     writeln!(w, "\n// Actions\n")?;
     for action in &loader.actions {
