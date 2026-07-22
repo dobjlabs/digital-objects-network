@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
-use pod2::middleware::{containers::Array, Hash, StrKey, Value, EMPTY_HASH, EMPTY_VALUE};
+use anyhow::{Result, anyhow};
+use pod2::middleware::{EMPTY_HASH, EMPTY_VALUE, Hash, StrKey, Value, containers::Array};
 use pod2utils::{dict, rand_raw_value};
 use sdk::{SdkModule, SpendableObject};
-use txlib::{with_stable_identifier, GroundingWitness, StateHeader};
+use txlib::{GroundingWitness, StateHeader, with_stable_identifier};
 
 use crate::inspect::derive_class_signature;
 

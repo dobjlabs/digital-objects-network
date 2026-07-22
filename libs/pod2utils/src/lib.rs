@@ -3,8 +3,8 @@ pub mod mockintro;
 
 use alloy_primitives::B256;
 use plonky2::field::types::Field;
-use pod2::middleware::{Hash, RawValue, EMPTY_HASH, F};
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use pod2::middleware::{EMPTY_HASH, F, Hash, RawValue};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use std::array;
 use std::cell::RefCell;
 

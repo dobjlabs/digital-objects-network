@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     middleware::{
+        F, Hash, Value,
         containers::{Array, Set},
-        Hash, Value, F,
     },
 };
 
