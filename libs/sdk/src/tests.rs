@@ -248,7 +248,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "72e06615d0c218158641b9cf41b1e65ee2bc8054f96fbd766ddb344bc90397ce"
+        module_hash = "9e84b0fb084e8be99f74c7788e3c43d13927826f0e0315f99d9b9a678c24103b"
 
         [[classes]]
         name = "Log"
@@ -332,7 +332,7 @@ IsFooFromJustOutput(state, chain0, chain, private: out JustOutputOut) = AND(
 
 // Classes
 
-IsFoo(state, chain0, chain) = OR(
+IsFoo(state, state_header StateHeader, chain0, chain) = OR(
   IsFooFromJustOutput(state, chain0, chain)
 )
 "#;
@@ -391,11 +391,11 @@ IsWoodFromLogToWood(state, chain0, chain, private: in LogToWoodIn, out LogToWood
 
 // Classes
 
-IsLog(state, chain0, chain) = OR(
+IsLog(state, state_header StateHeader, chain0, chain) = OR(
   IsLogFromLogToWood(state, chain0, chain)
 )
 
-IsWood(state, chain0, chain) = OR(
+IsWood(state, state_header StateHeader, chain0, chain) = OR(
   IsWoodFromLogToWood(state, chain0, chain)
 )
 "#;
@@ -511,7 +511,7 @@ IsFooFromUseFoo(state, chain0, chain, private: in UseFooIn, out UseFooOut) = AND
 
 // Classes
 
-IsFoo(state, chain0, chain) = OR(
+IsFoo(state, state_header StateHeader, chain0, chain) = OR(
   IsFooFromUseFoo(state, chain0, chain)
 )
 "#;

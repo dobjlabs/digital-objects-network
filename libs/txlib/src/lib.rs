@@ -529,6 +529,10 @@ impl TxBuilder {
         self.chain
     }
 
+    pub fn state_header(&self) -> &StateHeader {
+        &self.state_header
+    }
+
     /// Open a new action scope. Subsequent direct events
     /// (`insert`/`mutate`/`delete`) are recorded in this scope until
     /// `end_action` is called with the returned id. Scopes nest:
@@ -1316,9 +1320,10 @@ mod tests {
             .apply_custom_pred_simple(false, "SpawnWoodPick", vec![op_dur, st_insert])
             .unwrap();
         let st_guard = ctx
-            .apply_custom_pred_simple(
+            .apply_custom_pred(
                 false,
                 "IsWoodPick",
+                map!({"state_header" => state.state_header().array()}),
                 vec![st_spawn.clone(), Statement::None, Statement::None],
             )
             .unwrap();
@@ -1374,9 +1379,10 @@ mod tests {
                 )
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(
+                .apply_custom_pred(
                     false,
                     "IsWoodPick",
+                    map!({"state_header" => state.state_header().array()}),
                     vec![Statement::None, Statement::None, st_action.clone()],
                 )
                 .unwrap();
@@ -1391,7 +1397,12 @@ mod tests {
             .apply_custom_pred_simple(false, "MineStone", vec![st_use_wp, st_stone_insert])
             .unwrap();
         let st_guard = ctx
-            .apply_custom_pred_simple(false, "IsStone", vec![st_mine.clone()])
+            .apply_custom_pred(
+                false,
+                "IsStone",
+                map!({"state_header" => state.state_header().array()}),
+                vec![st_mine.clone()],
+            )
             .unwrap();
         tx2.set_guard(h, st_guard);
         tx2.end_action(scope_outer);
@@ -1449,7 +1460,12 @@ mod tests {
             .apply_custom_pred_simple(false, "FindLog", vec![st_insert])
             .unwrap();
         let st_guard = ctx
-            .apply_custom_pred_simple(false, "IsLog", vec![st_find.clone(), Statement::None])
+            .apply_custom_pred(
+                false,
+                "IsLog",
+                map!({"state_header" => state.state_header().array()}),
+                vec![st_find.clone(), Statement::None],
+            )
             .unwrap();
         tx1.set_guard(h, st_guard);
         tx1.end_action(scope);
@@ -1486,7 +1502,12 @@ mod tests {
                 .apply_custom_pred_simple(false, "DeleteLog", vec![st_del])
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(false, "IsLog", vec![Statement::None, st_action.clone()])
+                .apply_custom_pred(
+                    false,
+                    "IsLog",
+                    map!({"state_header" => state.state_header().array()}),
+                    vec![Statement::None, st_action.clone()],
+                )
                 .unwrap();
             tx2.set_guard(h_sub, st_guard);
             tx2.end_action(scope_sub);
@@ -1499,9 +1520,10 @@ mod tests {
             .apply_custom_pred_simple(false, "CraftWood", vec![st_del_log, st_ins])
             .unwrap();
         let st_guard = ctx
-            .apply_custom_pred_simple(
+            .apply_custom_pred(
                 false,
                 "IsWood",
+                map!({"state_header" => state.state_header().array()}),
                 vec![st_craft_wood.clone(), Statement::None],
             )
             .unwrap();
@@ -1538,7 +1560,12 @@ mod tests {
                 .apply_custom_pred_simple(false, "DeleteWood", vec![st_del])
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(false, "IsWood", vec![Statement::None, st_action.clone()])
+                .apply_custom_pred(
+                    false,
+                    "IsWood",
+                    map!({"state_header" => state.state_header().array()}),
+                    vec![Statement::None, st_action.clone()],
+                )
                 .unwrap();
             tx3.set_guard(h_sub, st_guard);
             tx3.end_action(scope_sub);
@@ -1584,9 +1611,10 @@ mod tests {
 
         // stick_a: IsStick branch 2 = CraftSticks(obj, other, chain_start, chain_end)
         let st_is_stick_a = ctx
-            .apply_custom_pred_simple(
+            .apply_custom_pred(
                 false,
                 "IsStick",
+                map!({"state_header" => state.state_header().array()}),
                 vec![Statement::None, st_craft_sticks.clone(), Statement::None],
             )
             .unwrap();
@@ -1594,9 +1622,10 @@ mod tests {
 
         // stick_b: IsStick branch 3 = CraftSticks(other, obj, chain_start, chain_end)
         let st_is_stick_b = ctx
-            .apply_custom_pred_simple(
+            .apply_custom_pred(
                 false,
                 "IsStick",
+                map!({"state_header" => state.state_header().array()}),
                 vec![Statement::None, Statement::None, st_craft_sticks.clone()],
             )
             .unwrap();
@@ -1656,7 +1685,12 @@ mod tests {
                 .apply_custom_pred_simple(false, "FindLog", vec![st_insert])
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(false, "IsLog", vec![st_find, Statement::None])
+                .apply_custom_pred(
+                    false,
+                    "IsLog",
+                    map!({"state_header" => state.state_header().array()}),
+                    vec![st_find, Statement::None],
+                )
                 .unwrap();
             tx.set_guard(h, st_guard);
             tx.end_action(scope);
@@ -1683,7 +1717,12 @@ mod tests {
                 .apply_custom_pred_simple(false, "DeleteLog", vec![st_del])
                 .unwrap();
             let st_guard = ctx
-                .apply_custom_pred_simple(false, "IsLog", vec![Statement::None, st_action])
+                .apply_custom_pred(
+                    false,
+                    "IsLog",
+                    map!({"state_header" => state.state_header().array()}),
+                    vec![Statement::None, st_action],
+                )
                 .unwrap();
             burn.set_guard(h, st_guard);
             burn.end_action(scope);
