@@ -18,9 +18,9 @@ use pod2::{
         containers::{Array, Dictionary, Set},
     },
 };
-use pod2utils::{dict, map, macros::BuildContext, rand_raw_value};
+use pod2utils::{dict, macros::BuildContext, map, rand_raw_value};
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
-use txlib::{StateHeader, EventHandle, GroundingWitness, Tx, TxBuilder, with_stable_identifier};
+use txlib::{EventHandle, GroundingWitness, StateHeader, Tx, TxBuilder, with_stable_identifier};
 use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 
 mod error;
@@ -2095,9 +2095,13 @@ impl SdkModule {
         let class_st_index =
             self.object_index_class_st_index[&(action_name.to_string(), object_refs_index)];
         branch_sts[class_st_index] = st_bridge;
-        bld.apply_custom_pred(false, &class_predicate_name(class),
-            map!({"state_header" => state_header.array()}), branch_sts)
-            .expect("apply IsX OR")
+        bld.apply_custom_pred(
+            false,
+            &class_predicate_name(class),
+            map!({"state_header" => state_header.array()}),
+            branch_sts,
+        )
+        .expect("apply IsX OR")
     }
 }
 
