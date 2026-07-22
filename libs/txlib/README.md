@@ -42,7 +42,7 @@ A useful mental model: each action's range covers the entire dependency tree of 
 
 Once all action statements are proven, the transaction system "replays" the chain: walks it event by event, and for each event verifies that the affected object's change is authorized.
 
-This is the role of the **type predicate** (`IsX`): every object's `type` field stores the hash of `Is<Class>`, which is an OR over the action predicates valid for that class. The type predicate takes the object state plus the current action's range, `(obj, chain_start, chain_end)`, as arguments. Validating an event means producing a statement of one of those OR branches whose range matches the current range. In a valid proof, that match is exactly one of the action statements proved at the start.
+This is the role of the **type predicate** (`IsX`): every object's `type` field stores the hash of `Is<Class>`, which is an OR over the action predicates valid for that class. The type predicate takes the object state, the grounding state and the current action's range, `(obj, state_header StateHeader, chain_start, chain_end)`, as arguments. Validating an event means producing a statement of one of those OR branches whose range matches the current range. In a valid proof, that match is exactly one of the action statements proved at the start.
 
 This is what ties the two halves together. The action statement commits to a range; the replay's guard call dispatches into IsX, which selects the right action; the action's recorded range must equal the range the guard is asking about. Each guard call has one and only one action statement that can satisfy it.
 
@@ -61,9 +61,9 @@ Replay is structured as recursive OR-walking over the chain. Four layers, bottom
    replay(action):
      scope = (action.chain_start, action.chain_end)
      for each step in action:
-       if step is insert(new):      live.add(new);                      guard(new, scope)
-       if step is mutate(old, new): live.swap(old, new); nullify(old);  guard(new, scope)
-       if step is delete(old):      live.remove(old);    nullify(old);  guard(old, scope)
+       if step is insert(new):      live.add(new);                      guard(new, state_header, scope)
+       if step is mutate(old, new): live.swap(old, new); nullify(old);  guard(new, state_header, scope)
+       if step is delete(old):      live.remove(old);    nullify(old);  guard(old, state_header, scope)
        if step is sub_action:       replay(sub_action)
    ```
 

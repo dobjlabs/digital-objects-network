@@ -82,7 +82,7 @@ ReplayContents(state_header, before_tx, after_tx, before_chain, after_chain) = O
 
 // The four specialised step variants.
 ReplayContentsStepInsert(state_header, before_tx, after_tx, before_chain, after_chain,
-    private: mid_tx, mid_chain, guard) = AND(
+    private: mid_tx, mid_chain) = AND(
   ReplayInsert(state_header, before_tx, mid_tx, before_chain, mid_chain)
   ReplayContents(state_header, mid_tx, after_tx, mid_chain, after_chain)
 )
