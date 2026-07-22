@@ -39,6 +39,7 @@ alloy = { version = "1.2.1", features = [
     "rpc-client",
     "rpc-types-beacon",
 ] }
+alloy-primitives = "1.5.7"
 
 # common
 anyhow = "1.0.56"

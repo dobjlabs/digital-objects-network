@@ -21,13 +21,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use payload::decode_hash_hex;
 use pod2::middleware::Hash;
-use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
+use sdk::{manifest::Manifest, Sdk, SpendableObject, SpendableObjects};
 use txlib::GroundingWitness;
 
-use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
+use crate::catalog::{extract_predicate, ActionCatalog, CatalogClass};
 use wire_types::{ActionSummary, ClassRef, QualifiedName};
 
 struct Plugin {
@@ -756,6 +756,8 @@ description = "consume a Foo to make a Bar"
         txlib::GroundingWitness::new(
             txlib::StateHeader::new(
                 1,
+                1,
+                pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,

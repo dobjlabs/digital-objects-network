@@ -151,8 +151,8 @@ pub struct GroundingWitnessResponse {
     pub state_root: Hash,
     /// Execution block number committed inside that state root.
     pub block_number: i64,
-    /// Execution block time
-    pub block_time: i64,
+    /// Execution block timestamp
+    pub block_timestamp: i64,
     /// Execution block hash
     pub block_hash: Hash,
     /// Created-set root.

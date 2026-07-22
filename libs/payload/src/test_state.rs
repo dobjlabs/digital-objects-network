@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     middleware::{
-        Hash, Value,
         containers::{Array, Set},
+        Hash, Value, F,
     },
 };
 
@@ -15,6 +15,8 @@ use pod2::{
 #[derive(Clone, Debug)]
 pub struct TestState {
     pub block_number: i64,
+    pub block_timestamp: i64,
+    pub block_hash: Hash,
     created: Array,
     created_index: HashMap<Hash, i64>,
     nullifiers: Set,
@@ -27,10 +29,18 @@ impl Default for TestState {
     }
 }
 
+pub struct BlockMetadata {
+    pub number: u32,
+    pub timestamp: u64,
+    pub hash: Hash,
+}
+
 impl TestState {
     pub fn empty(block_number: i64) -> Self {
         Self {
             block_number,
+            block_timestamp: block_number * 1000,
+            block_hash: Hash([F(0), F(0), F(0), F(block_number as u64)]),
             created: Array::new(Vec::<Value>::new()),
             created_index: HashMap::new(),
             nullifiers: Set::new(HashSet::<Value>::new()),
@@ -54,15 +64,20 @@ impl TestState {
     pub fn build_grounding_witness<W>(
         &self,
         input_commitments: &[Hash],
-        build: impl FnOnce(i64, Hash, Hash, Hash, HashMap<Hash, (i64, MerkleProof)>) -> W,
+        build: impl FnOnce(BlockMetadata, Hash, Hash, Hash, HashMap<Hash, (i64, MerkleProof)>) -> W,
     ) -> W {
         let created_proofs = input_commitments
             .iter()
             .map(|commitment| (*commitment, self.created_membership_proof(*commitment)))
             .collect::<HashMap<_, _>>();
         let (created_root, nullifiers_root, prior_state_history_root) = self.roots();
+        let meta = BlockMetadata {
+            number: self.block_number as u32,
+            timestamp: self.block_timestamp as u64,
+            hash: self.block_hash,
+        };
         build(
-            self.block_number,
+            meta,
             created_root,
             nullifiers_root,
             prior_state_history_root,

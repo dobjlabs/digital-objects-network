@@ -6116,6 +6116,7 @@ dependencies = [
 name = "pod2utils"
 version = "0.1.0"
 dependencies = [
+ "alloy-primitives",
  "anyhow",
  "itertools 0.14.0",
  "log",

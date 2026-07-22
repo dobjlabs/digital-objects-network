@@ -195,6 +195,8 @@ mod tests {
         GroundingWitness::new(
             StateHeader::new(
                 1,
+                1,
+                pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,

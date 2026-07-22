@@ -10,7 +10,7 @@ use sqlx::{
 
 use crate::{
     app_db::{db_bytes_to_hash, hash_to_db_bytes},
-    head::{StateHead, StateMetadata, StateRoots},
+    head::{BlockMetadata, StateHead, StateMetadata, StateRoots},
 };
 
 /// Current state head plus progress metadata loaded from Postgres.
@@ -92,6 +92,8 @@ impl SyncDb {
                 head_next_state_history_root BYTEA NOT NULL,
                 head_current_state_root BYTEA NULL,
                 head_current_block_number INTEGER NULL,
+                head_current_block_timestamp BIGINT NULL,
+                head_current_block_hash BYTEA NULL,
                 head_created_count BIGINT NOT NULL,
                 head_nullifier_count BIGINT NOT NULL,
                 head_state_root_count BIGINT NOT NULL,
@@ -190,6 +192,8 @@ impl SyncDb {
                    head_next_state_history_root,
                    head_current_state_root,
                    head_current_block_number,
+                   head_current_block_timestamp,
+                   head_current_block_hash,
                    head_created_count,
                    head_nullifier_count,
                    head_state_root_count
@@ -270,6 +274,8 @@ impl SyncDb {
                 head_next_state_history_root,
                 head_current_state_root,
                 head_current_block_number,
+                head_current_block_timestamp,
+                head_current_block_hash,
                 head_created_count,
                 head_nullifier_count,
                 head_state_root_count
@@ -288,7 +294,17 @@ impl SyncDb {
         .bind(hash_to_db_bytes(head.roots.prior_state_history))
         .bind(hash_to_db_bytes(head.roots.next_state_history))
         .bind(head.metadata.current_state_root.map(hash_to_db_bytes))
-        .bind(head.metadata.current_block_number.map(|v| v as i32))
+        .bind(head.metadata.current_block.map(|meta| meta.number as i32))
+        .bind(
+            head.metadata
+                .current_block
+                .map(|meta| meta.timestamp as i64),
+        )
+        .bind(
+            head.metadata
+                .current_block
+                .map(|meta| hash_to_db_bytes(meta.hash)),
+        )
         .bind(head.metadata.created_count as i64)
         .bind(head.metadata.nullifier_count as i64)
         .bind(head.metadata.state_root_count as i64)
@@ -430,6 +446,24 @@ impl SyncDb {
 }
 
 fn decode_head_row(row: &PgRow) -> Result<StateHead> {
+    let current_block = {
+        let number = row.get::<Option<i32>, _>("head_current_block_number");
+        let timestamp = row.get::<Option<i64>, _>("head_current_block_timestamp");
+        let hash = row
+            .get::<Option<Vec<u8>>, _>("head_current_block_hash")
+            .as_deref()
+            .map(db_bytes_to_hash)
+            .transpose()?;
+
+        match (number, timestamp, hash) {
+            (Some(number), Some(timestamp), Some(hash)) => Some(BlockMetadata {
+                number: number as u32,
+                timestamp: timestamp as u64,
+                hash,
+            }),
+            _ => None,
+        }
+    };
     Ok(StateHead {
         roots: StateRoots {
             created: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_created_root"))?,
@@ -447,9 +481,7 @@ fn decode_head_row(row: &PgRow) -> Result<StateHead> {
                 .as_deref()
                 .map(db_bytes_to_hash)
                 .transpose()?,
-            current_block_number: row
-                .get::<Option<i32>, _>("head_current_block_number")
-                .map(|value| value as u32),
+            current_block,
             created_count: row.get::<i64, _>("head_created_count") as u64,
             nullifier_count: row.get::<i64, _>("head_nullifier_count") as u64,
             state_root_count: row.get::<i64, _>("head_state_root_count") as u64,
@@ -478,7 +510,11 @@ mod tests {
             },
             metadata: StateMetadata {
                 current_state_root: Some(unique_hash(marker + 4)),
-                current_block_number: Some(block_number),
+                current_block: Some(BlockMetadata {
+                    number: block_number,
+                    timestamp: (block_number as u64) * 1000,
+                    hash: unique_hash(marker + 5),
+                }),
                 created_count: block_number as u64,
                 nullifier_count: block_number as u64 + 1,
                 state_root_count: block_number as u64 + 2,

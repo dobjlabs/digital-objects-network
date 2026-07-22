@@ -1,0 +1,82 @@
+[plugin]
+name = "craft-basics"
+version = "0.1.0"
+# Rewritten by `cargo run -p pexe -- build examples/craft-basics`.
+module_hash = "9db3acf116e6c8d635da722b0a17e7988bbffee10590fffe8fc0161aa0be18d0"
+
+[[classes]]
+name = "Log"
+emoji = "🌲"
+description = "A discovered log that can be refined into wood."
+
+[[classes]]
+name = "Wood"
+emoji = "🪵"
+description = "Refined wood used for sticks and basic tools."
+
+[[classes]]
+name = "Stick"
+emoji = "🥢"
+description = "A stick used as a handle in tool crafting."
+
+[[classes]]
+name = "Stone"
+emoji = "🪨"
+description = "Mined stone used to craft stronger tools."
+
+[[classes]]
+name = "WoodPick"
+emoji = "⛏️"
+description = "A wood pick that can mine stone while durability remains."
+
+[[classes]]
+name = "StonePick"
+emoji = "⛏️"
+description = "A stone pick that can mine stone while durability remains."
+
+[[actions]]
+name = "FindLog"
+emoji = "🌲"
+description = "Discover a log object by proving a short VDF."
+
+[[actions]]
+name = "CraftWood"
+emoji = "🪵"
+description = "Refine one log into a wood object with PoW quality checks."
+
+[[actions]]
+name = "CraftSticks"
+emoji = "🥢"
+description = "Split one wood object into two stick objects."
+
+[[actions]]
+name = "CraftWoodPick"
+emoji = "⛏️"
+description = "Combine wood and a stick to craft a wood pick."
+
+[[actions]]
+name = "UseWoodPick"
+emoji = "⛏️"
+description = "Internal durability/work update for wood pick usage."
+hidden = true
+
+[[actions]]
+name = "MineStoneWithWoodPick"
+emoji = "🪨"
+description = "Mine stone using a wood pick (consumes durability)."
+
+[[actions]]
+name = "CraftStonePick"
+emoji = "⛏️"
+description = "Combine stone and a stick to craft a stone pick."
+
+[[actions]]
+name = "UseStonePick"
+emoji = "⛏️"
+description = "Internal durability/work update for stone pick usage."
+hidden = true
+
+[[actions]]
+name = "MineStoneWithStonePick"
+emoji = "🪨"
+description = "Mine stone using a stone pick (consumes durability)."

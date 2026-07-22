@@ -31,13 +31,24 @@ impl StateRoots {
     }
 }
 
+/// Execution block metadata
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct BlockMetadata {
+    /// Block number
+    pub number: u32,
+    /// Block timestamp
+    pub timestamp: u64,
+    /// Block hash
+    pub hash: Hash,
+}
+
 /// Non-root metadata tracked alongside the state roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StateMetadata {
     /// Current state root for this head, if one exists.
     pub current_state_root: Option<Hash>,
-    /// Execution block number associated with `current_state_root`.
-    pub current_block_number: Option<u32>,
+    /// Execution block metadata associated with `current_state_root`
+    pub current_block: Option<BlockMetadata>,
     /// Number of objects in the global created set. The array is
     /// 0-indexed, so this doubles as the next array slot.
     pub created_count: u64,
@@ -57,7 +68,7 @@ impl StateMetadata {
     pub fn empty() -> Self {
         Self {
             current_state_root: None,
-            current_block_number: None,
+            current_block: None,
             created_count: 0,
             nullifier_count: 0,
             state_root_count: 0,
@@ -92,9 +103,11 @@ impl StateHead {
     }
 
     pub fn current_state_header(&self) -> Option<StateHeader> {
-        self.metadata.current_block_number.map(|block_number| {
+        self.metadata.current_block.map(|block_meta| {
             StateHeader::new(
-                block_number as i64,
+                block_meta.number as i64,
+                block_meta.timestamp as i64,
+                block_meta.hash,
                 self.roots.created,
                 self.roots.nullifiers,
                 self.roots.prior_state_history,

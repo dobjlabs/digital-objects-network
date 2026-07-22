@@ -1,16 +1,15 @@
+use anyhow::{Context, Result};
+use payload::{payload::Payload, proof::BlobParser};
+use pod2::middleware::{containers::Array, containers::Set, Hash, Value};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-
-use anyhow::{Context, Result};
-use payload::{payload::Payload, proof::BlobParser};
-use pod2::middleware::{containers::Array, containers::Set, Hash, Value};
 use tracing::{info, warn};
 
 use crate::{
     app_db::{created_array_holds, AppDb},
-    head::{StateHead, StateMetadata, StateRoots},
+    head::{BlockMetadata, StateHead, StateMetadata, StateRoots},
 };
 use txlib::StateHeader;
 
@@ -258,7 +257,7 @@ impl StateMachine {
         base_head: StateHead,
         recent_state_roots: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
-        block_number: u32,
+        block_meta: BlockMetadata,
         payloads: &[(u32, Payload)],
         prior_indices: &HashMap<Hash, i64>,
     ) -> Result<DerivedSlot> {
@@ -274,15 +273,21 @@ impl StateMachine {
         };
 
         for (blob_index, payload) in payloads {
-            self.apply_payload(&mut working, payload, prior_indices, slot, block_number)
-                .with_context(|| {
-                    format!("applying blob at slot {slot}, blob_index {blob_index}")
-                })?;
+            self.apply_payload(
+                &mut working,
+                payload,
+                prior_indices,
+                slot,
+                block_meta.number,
+            )
+            .with_context(|| format!("applying blob at slot {slot}, blob_index {blob_index}"))?;
         }
 
         let prior_state_history_root = base_head.roots.next_state_history;
         let new_state_root = StateHeader::new(
-            i64::from(block_number),
+            i64::from(block_meta.number),
+            block_meta.timestamp as i64,
+            block_meta.hash,
             working.created.commitment(),
             working.nullifiers.commitment(),
             prior_state_history_root,
@@ -303,7 +308,7 @@ impl StateMachine {
             },
             metadata: StateMetadata {
                 current_state_root: Some(new_state_root),
-                current_block_number: Some(block_number),
+                current_block: Some(block_meta),
                 created_count: working.metadata.created_count,
                 nullifier_count: working.metadata.nullifier_count,
                 state_root_count: base_head.metadata.state_root_count + 1,
@@ -312,7 +317,7 @@ impl StateMachine {
 
         info!(
             slot,
-            block_number,
+            block_number = block_meta.number,
             state_root_count = new_head.metadata.state_root_count,
             "Slot data"
         );
@@ -358,6 +363,14 @@ mod tests {
         hash_values(&[Value::from(n)])
     }
 
+    fn block_meta(n: u32) -> BlockMetadata {
+        BlockMetadata {
+            number: n,
+            timestamp: (n as u64) * 1000,
+            hash: unique_hash(n as i64),
+        }
+    }
+
     fn mock_txn_bytes(
         tx_final: Hash,
         nullifiers: &[Hash],
@@ -382,9 +395,16 @@ mod tests {
     }
 
     fn seed_state_root0(sm: &StateMachine) -> StateHead {
-        sm.derive_slot_head(StateHead::empty(), [], 0, 0, &[], &HashMap::new())
-            .unwrap()
-            .head
+        sm.derive_slot_head(
+            StateHead::empty(),
+            [],
+            0,
+            block_meta(0),
+            &[],
+            &HashMap::new(),
+        )
+        .unwrap()
+        .head
     }
 
     /// Parse blobs and derive one slot in one step (mirroring `Node::derive_slot`
@@ -394,16 +414,16 @@ mod tests {
         base_head: StateHead,
         recent_state_roots: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
-        block_number: u32,
+        block_meta: BlockMetadata,
         blobs: &[(u32, Vec<u8>)],
         prior_indices: &HashMap<Hash, i64>,
     ) -> DerivedSlot {
-        let parsed = sm.parse_blobs(blobs, slot, block_number);
+        let parsed = sm.parse_blobs(blobs, slot, block_meta.number);
         sm.derive_slot_head(
             base_head,
             recent_state_roots,
             slot,
-            block_number,
+            block_meta,
             &parsed,
             prior_indices,
         )
@@ -413,8 +433,17 @@ mod tests {
     #[test]
     fn test_empty_slot_produces_new_head() {
         let (sm, _app_db, _dir) = make_sm();
-        let head = derive(&sm, StateHead::empty(), [], 1, 7, &[], &HashMap::new()).head;
-        assert_eq!(head.metadata.current_block_number, Some(7));
+        let head = derive(
+            &sm,
+            StateHead::empty(),
+            [],
+            1,
+            block_meta(7),
+            &[],
+            &HashMap::new(),
+        )
+        .head;
+        assert_eq!(head.metadata.current_block.map(|m| m.number), Some(7));
         assert_eq!(head.metadata.state_root_count, 1);
     }
 
@@ -433,7 +462,7 @@ mod tests {
             head0,
             [(state_root0, 0)],
             1,
-            1,
+            block_meta(1),
             &[(0, blob)],
             &HashMap::new(),
         );
@@ -459,7 +488,16 @@ mod tests {
 
         let tx_final = unique_hash(21);
         let blob = mock_txn_bytes(tx_final, &[], &[unique_hash(22)], unique_hash(99));
-        let head1 = derive(&sm, head0, [], 2, 2, &[(0, blob)], &HashMap::new()).head;
+        let head1 = derive(
+            &sm,
+            head0,
+            [],
+            2,
+            block_meta(2),
+            &[(0, blob)],
+            &HashMap::new(),
+        )
+        .head;
         assert_eq!(head1.metadata.created_count, head0.metadata.created_count);
     }
 
@@ -476,7 +514,7 @@ mod tests {
             head0,
             [(state_root0, 0)],
             1,
-            1,
+            BlockMetadata::default(),
             &[(0, blob)],
             &HashMap::new(),
         );
@@ -509,7 +547,7 @@ mod tests {
             head0,
             [(state_root0, 0)],
             1,
-            1,
+            block_meta(1),
             &[(0, blob1)],
             &HashMap::new(),
         );
@@ -525,7 +563,7 @@ mod tests {
             head1,
             [(state_root1, 1)],
             2,
-            2,
+            block_meta(2),
             &[(0, blob2)],
             &derived1.created_added,
         )
@@ -549,7 +587,7 @@ mod tests {
             head0,
             [(state_root0, 0)],
             1,
-            1,
+            block_meta(1),
             &[(0, blob_a), (1, blob_b)],
             &HashMap::new(),
         );
@@ -570,7 +608,15 @@ mod tests {
         let obj = unique_hash(60);
         let phantom = HashMap::from([(obj, 1i64)]);
         let blob = mock_txn_bytes(unique_hash(61), &[], &[obj], state_root0);
-        let derived = derive(&sm, head0, [(state_root0, 0)], 1, 1, &[(0, blob)], &phantom);
+        let derived = derive(
+            &sm,
+            head0,
+            [(state_root0, 0)],
+            1,
+            block_meta(1),
+            &[(0, blob)],
+            &phantom,
+        );
         assert_eq!(derived.head.metadata.created_count, 1);
         assert_eq!(derived.created_added.get(&obj), Some(&0));
     }

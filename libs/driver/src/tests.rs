@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use payload::test_state::TestState;
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
@@ -15,11 +15,11 @@ use crate::clients::{
     SynchronizerMembership,
 };
 use crate::driver::{Driver, DriverDeps, PayloadBuilder};
-use crate::object_record::{ObjectRecord, ensure_extra_pod_deserializers_registered};
+use crate::object_record::{ensure_extra_pod_deserializers_registered, ObjectRecord};
 use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
+    ensure_store_dirs, load_object_files, write_object_file, ObjectFileEntry,
 };
-use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
+use crate::pexe_catalog::{test_plugin_bytes, PexeCatalog};
 use crate::{ActionQuery, DriverPaths, ExecuteActionInput};
 use wire_types::{ObjectStatus, QualifiedName};
 
@@ -43,6 +43,8 @@ fn dummy_grounding_witness() -> GroundingWitness {
     GroundingWitness::new(
         StateHeader::new(
             1,
+            1,
+            pod2::middleware::EMPTY_HASH,
             pod2::middleware::EMPTY_HASH,
             pod2::middleware::EMPTY_HASH,
             pod2::middleware::EMPTY_HASH,
@@ -66,6 +68,8 @@ fn state_header(state: &TestState) -> StateHeader {
     let (created_root, nullifiers_root, prior_state_history_root) = state.roots();
     StateHeader::new(
         state.block_number,
+        state.block_timestamp,
+        state.block_hash,
         created_root,
         nullifiers_root,
         prior_state_history_root,
@@ -277,11 +281,9 @@ fn test_list_actions_filters_by_input_class() {
         !filtered.is_empty(),
         "expected at least one Wood-consuming action"
     );
-    assert!(
-        filtered
-            .iter()
-            .all(|action| action.total_inputs.iter().any(|r| r.class == wood))
-    );
+    assert!(filtered
+        .iter()
+        .all(|action| action.total_inputs.iter().any(|r| r.class == wood)));
 }
 
 #[test]
@@ -482,13 +484,11 @@ fn install_plugin_writes_and_hot_reloads() {
     // Live without a restart...
     assert!(!driver.list_actions(None).unwrap().is_empty());
     // ...and the archive landed in the actions dir.
-    assert!(
-        driver
-            .paths()
-            .actions_dir
-            .join("craft-basics.pexe")
-            .exists()
-    );
+    assert!(driver
+        .paths()
+        .actions_dir
+        .join("craft-basics.pexe")
+        .exists());
 }
 
 #[test]
