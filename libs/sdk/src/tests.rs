@@ -250,7 +250,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "9e84b0fb084e8be99f74c7788e3c43d13927826f0e0315f99d9b9a678c24103b"
+        module_hash = "2c0b88c5322c588e45a168c583cd557f17bddde7c64306ea93ffb7aa68c35645"
 
         [[classes]]
         name = "Log"
@@ -327,7 +327,7 @@ JustOutput(out JustOutputOut, chain0, chain, private: initials JustOutputInitial
 
 // Bridges
 
-IsFooFromJustOutput(state, chain0, chain, private: out JustOutputOut) = AND(
+IsFooFromJustOutput(state, state_header StateHeader, chain0, chain, private: out JustOutputOut) = AND(
   ArrayContains(out, JustOutputOut::x, state)
   JustOutput(out, chain0, chain)
 )
@@ -335,7 +335,7 @@ IsFooFromJustOutput(state, chain0, chain, private: out JustOutputOut) = AND(
 // Classes
 
 IsFoo(state, state_header StateHeader, chain0, chain) = OR(
-  IsFooFromJustOutput(state, chain0, chain)
+  IsFooFromJustOutput(state, state_header, chain0, chain)
 )
 "#;
     assert!(
@@ -381,12 +381,12 @@ LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, wood
 
 // Bridges
 
-IsLogFromLogToWood(state, chain0, chain, private: in LogToWoodIn, out LogToWoodOut) = AND(
+IsLogFromLogToWood(state, state_header StateHeader, chain0, chain, private: in LogToWoodIn, out LogToWoodOut) = AND(
   ArrayContains(in, LogToWoodIn::log, state)
   LogToWood(in, out, chain0, chain)
 )
 
-IsWoodFromLogToWood(state, chain0, chain, private: in LogToWoodIn, out LogToWoodOut) = AND(
+IsWoodFromLogToWood(state, state_header StateHeader, chain0, chain, private: in LogToWoodIn, out LogToWoodOut) = AND(
   ArrayContains(out, LogToWoodOut::wood, state)
   LogToWood(in, out, chain0, chain)
 )
@@ -394,11 +394,11 @@ IsWoodFromLogToWood(state, chain0, chain, private: in LogToWoodIn, out LogToWood
 // Classes
 
 IsLog(state, state_header StateHeader, chain0, chain) = OR(
-  IsLogFromLogToWood(state, chain0, chain)
+  IsLogFromLogToWood(state, state_header, chain0, chain)
 )
 
 IsWood(state, state_header StateHeader, chain0, chain) = OR(
-  IsWoodFromLogToWood(state, chain0, chain)
+  IsWoodFromLogToWood(state, state_header, chain0, chain)
 )
 "#;
     assert!(
@@ -454,7 +454,7 @@ fn test_records_form_subaction() {
     assert!(
         module
             .podlang_src
-            .contains("IsBarFromMineBar(state, chain0, chain, private: out MineBarOut) = AND("),
+            .contains("IsBarFromMineBar(state, state_header StateHeader, chain0, chain, private: out MineBarOut) = AND("),
         "missing IsBarFromMineBar bridge:\n{}",
         module.podlang_src
     );
@@ -506,7 +506,7 @@ UseFoo(in UseFooIn, out UseFooOut, chain0, chain, private: foo0, dur) = AND(
 
 // Bridges
 
-IsFooFromUseFoo(state, chain0, chain, private: in UseFooIn, out UseFooOut) = AND(
+IsFooFromUseFoo(state, state_header StateHeader, chain0, chain, private: in UseFooIn, out UseFooOut) = AND(
   ArrayContains(out, UseFooOut::foo, state)
   UseFoo(in, out, chain0, chain)
 )
@@ -514,7 +514,7 @@ IsFooFromUseFoo(state, chain0, chain, private: in UseFooIn, out UseFooOut) = AND
 // Classes
 
 IsFoo(state, state_header StateHeader, chain0, chain) = OR(
-  IsFooFromUseFoo(state, chain0, chain)
+  IsFooFromUseFoo(state, state_header, chain0, chain)
 )
 "#;
     assert!(

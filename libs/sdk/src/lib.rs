@@ -2086,7 +2086,9 @@ impl SdkModule {
 
         // Step 2: discharge the bridge predicate.
         let st_bridge = bld
-            .apply_custom_pred_simple(false, &bridge_name, vec![st_array_contains, st_action])
+            .apply_custom_pred(false, &bridge_name,
+            map!({"state_header" => state_header.array()}),
+                vec![st_array_contains, st_action])
             .expect("apply bridge predicate");
 
         // Step 3: IsX OR with the bridge at the right branch.

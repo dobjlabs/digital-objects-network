@@ -629,7 +629,7 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
 
             // Bridge predicate signature: state, chain0, chain (public);
             // in <ActionIn>, out <ActionOut> private as needed.
-            write!(w, "{bridge_name}(state, chain0, chain")?;
+            write!(w, "{bridge_name}(state, state_header StateHeader, chain0, chain")?;
             let mut priv_parts: Vec<String> = Vec::new();
             if !meta.in_entries.is_empty() {
                 priv_parts.push(format!("in {}", schema_name(&meta.name, Side::In)));
@@ -686,7 +686,7 @@ fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt:
         let o = &meta.object_refs[*obj_index];
         let multi = is_multi_class(&meta.object_refs, &o.class);
         let bridge_name = bridge_predicate_name(&o.class, action_name, &o.varname, multi);
-        writeln!(w, "  {bridge_name}(state, chain0, chain)")?;
+        writeln!(w, "  {bridge_name}(state, state_header, chain0, chain)")?;
     }
     writeln!(w, ")")?;
     Ok(())
