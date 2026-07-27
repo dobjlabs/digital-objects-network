@@ -82,7 +82,7 @@ pub(crate) fn chain_schema_name(action_name: &str) -> String {
 /// record's array layout is `[step_0_value, step_1_value, ...]`, so the
 /// slot index is `ts - 1` and the step name is `step_{ts-1}`.
 pub(crate) fn chain_step_at(ts: usize, chain_max_ts: usize) -> Option<usize> {
-    (chain_packed(chain_max_ts) && ts > 0 && ts < chain_max_ts).then_some(ts - 1)
+    (chain_packed(chain_max_ts) && ts > 0 && ts < chain_max_ts).then(|| ts - 1)
 }
 
 #[derive(Clone, Copy)]
@@ -370,7 +370,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     if wrote_pub {
         write!(w, ", ")?;
     }
-    write!(w, "chain0, chain")?;
+    write!(w, "state_header StateHeader, chain0, chain")?;
 
     // Sub-action aliases: parent vars that hold a sub's first producing
     // Object Ref. They're not real wildcards in the parent's predicate
@@ -379,11 +379,10 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     let alias_names: std::collections::HashSet<String> =
         sub_calls.iter().filter_map(|c| c.alias.clone()).collect();
 
-    // Private wildcards: every (var, ts) except sub-action aliases,
-    // chain endpoints (public chain0/chain), packed chain intermediates
-    // (anchored via the `chain_steps` record), Object pre/post-form
-    // ts on collapsed sides, and Output Objects' script-final ts when
-    // packed into the `initials` record. Unpacked chain intermediates
+    // Private wildcards: every (var, ts) except sub-action aliases, state_header, chain
+    // endpoints (public chain0/chain), packed chain intermediates (anchored via the
+    // `chain_steps` record), Object pre/post-form ts on collapsed sides, and Output Objects'
+    // script-final ts when packed into the `initials` record. Unpacked chain intermediates
     // appear as scalar `chain1, chain2, ...` privates.
     let mut private_vars: Vec<String> = Vec::new();
     for var in &action.vars {
@@ -394,6 +393,8 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         for i in 0..=max_ts {
             let skip = if var == "chain" {
                 i == 0 || i == max_ts || chain_step_at(i, max_ts).is_some()
+            } else if var == "state_header" {
+                true
             } else {
                 meta.collapsed_at(var, i).is_some()
             };
@@ -627,9 +628,9 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
             let multi = is_multi_class(&meta.object_refs, &o.class);
             let bridge_name = bridge_predicate_name(&o.class, &meta.name, &o.varname, multi);
 
-            // Bridge predicate signature: state, chain0, chain (public);
+            // Bridge predicate signature: state, state_header, chain0, chain (public);
             // in <ActionIn>, out <ActionOut> private as needed.
-            write!(w, "{bridge_name}(state, chain0, chain")?;
+            write!(w, "{bridge_name}(state, state_header, chain0, chain")?;
             let mut priv_parts: Vec<String> = Vec::new();
             if !meta.in_entries.is_empty() {
                 priv_parts.push(format!("in {}", schema_name(&meta.name, Side::In)));
@@ -659,6 +660,7 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
             if !meta.out_entries.is_empty() {
                 call_args.push("out".to_string());
             }
+            call_args.push("state_header".to_string());
             call_args.push("chain0".to_string());
             call_args.push("chain".to_string());
             writeln!(w, "  {}({})", meta.name, call_args.join(", "))?;
@@ -686,7 +688,7 @@ fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt:
         let o = &meta.object_refs[*obj_index];
         let multi = is_multi_class(&meta.object_refs, &o.class);
         let bridge_name = bridge_predicate_name(&o.class, action_name, &o.varname, multi);
-        writeln!(w, "  {bridge_name}(state, chain0, chain)")?;
+        writeln!(w, "  {bridge_name}(state, state_header, chain0, chain)")?;
     }
     writeln!(w, ")")?;
     Ok(())

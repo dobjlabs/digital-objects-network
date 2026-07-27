@@ -562,3 +562,59 @@ fn Bad(action) {{
         }
     }
 }
+
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_sdk_state_header() {
+    let manifest_src = r#"
+        [plugin]
+        name = "test"
+        version = "0.1.0"
+        module_hash = "9e84b0fb084e8be99f74c7788e3c43d13927826f0e0315f99d9b9a678c24103b"
+
+        [[classes]]
+        name = "Ticker"
+        emoji = "🌲"
+        description = "A ticker."
+
+        [[actions]]
+        name = "MakeTicker"
+        emoji = "🌲"
+        description = "Make a ticker."
+
+        [[actions]]
+        name = "Tick"
+        emoji = "🪵"
+        description = "Tick the ticker."
+    "#;
+
+    let craft_src = r#"
+        fn MakeTicker(action) {
+            var ticker = action.output("Ticker");
+            ticker.set([
+                ["tick", 0],
+                ["ts", state_header.block_timestamp]
+            ]);
+        }
+
+        fn Tick(action) {
+            var ticker = action.mutate("Ticker");
+            var min_ts = unsafe { ticker.ts + 3600 };
+            action.st_sum(ticker.ts, 3600, min_ts);
+            action.st_gt(state_header.block_timestamp, min_ts);
+            var tick1 = unsafe { ticker.tick + 1 };
+            action.st_sum(ticker.tick, 1, tick1);
+            ticker.update("tick", tick1);
+            ticker.update("ts", state_header.block_timestamp);
+        }
+"#;
+
+    let manifest: Manifest = toml::from_str(manifest_src).unwrap();
+
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_manifest(craft_src, &manifest)
+        .unwrap();
+
+    println!("{}", module.podlang_src);
+}

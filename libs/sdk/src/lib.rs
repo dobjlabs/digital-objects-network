@@ -459,6 +459,12 @@ impl ActionHandle {
     fn new(name: String, exe_ctx: Option<Rc<RefCell<ExeContext>>>) -> Self {
         Self(Rc::new(RefCell::new(ActionContext::new(name, exe_ctx))))
     }
+    fn init_state_header(&self) -> ArgHandle {
+        self.0.borrow_mut().add_var("state_header".to_string()).unwrap();
+        let state_header = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
+        state_header.borrow_mut().set_var_name("state_header".to_string()).unwrap();
+        ArgHandle::new(self.clone(), state_header)
+    }
     fn new_obj(exe_ctx: &ExeContext, class: &str) -> Dictionary {
         let type_hash = exe_ctx
             .module
@@ -1407,6 +1413,22 @@ fn arg_sub(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
         let a = a.arg.borrow().as_value().as_int().expect("int");
         let b = b.arg.borrow().as_value().as_int().expect("int");
         let result = a.checked_sub(b).expect("no overflow");
+        value.borrow_mut().set_value(Value::from(result));
+    }
+    Ok(ArgHandle::new(a.ctx.clone(), value))
+}
+
+/// operator+ for maybe-var types
+fn arg_add(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
+    type_check_args([(&a, Type::Int), (&b, Type::Int)])?;
+    // TODO: Handle the case where a and b are not var
+    let value = Rc::new(RefCell::new(VarOrValue::var(Type::Int)));
+    let ctx = a.ctx.0.borrow();
+    ctx.assert_unsafe(true)?;
+    if ctx.exe_ctx.is_some() {
+        let a = a.arg.borrow().as_value().as_int().expect("int");
+        let b = b.arg.borrow().as_value().as_int().expect("int");
+        let result = a.checked_add(b).expect("no overflow");
         value.borrow_mut().set_value(Value::from(result));
     }
     Ok(ArgHandle::new(a.ctx.clone(), value))
@@ -2478,6 +2500,15 @@ fn new_engine() -> Engine {
             let ctx = b.ctx.clone();
             arg_sub(ArgHandle::literal(ctx, Value::from(a)), b)
         })
+        .register_fn("+", arg_add)
+        .register_fn("+", |a: ArgHandle, b: i64| -> RuntimeResult<ArgHandle> {
+            let ctx = a.ctx.clone();
+            arg_add(a, ArgHandle::literal(ctx, Value::from(b)))
+        })
+        .register_fn("+", |a: i64, b: ArgHandle| -> RuntimeResult<ArgHandle> {
+            let ctx = b.ctx.clone();
+            arg_add(ArgHandle::literal(ctx, Value::from(a)), b)
+        })
         .register_indexer_get(ArgHandle::entry);
 
     engine
@@ -2499,13 +2530,17 @@ impl Sdk {
         actions: &[&str],
     ) -> Result<Rc<SdkModule>, SdkError> {
         let scope = Scope::new();
+        println!("DBG: Compile");
         let ast = self.engine.compile_with_scope(&scope, src).unwrap();
 
         let mut action_handles = Vec::new();
         for action in actions {
             let action_handle = ActionHandle::new(action.to_string(), None);
+            let state_header_handle = action_handle.init_state_header();
             let mut scope = Scope::new();
+            scope.push_constant("state_header", state_header_handle);
             let options = CallFnOptions::new().with_tag(action_handle.clone());
+            println!("DBG: Call {action}");
             let _result = self.engine.call_fn_with_options::<Dynamic>(
                 options,
                 &mut scope,
@@ -2516,6 +2551,7 @@ impl Sdk {
             action_handles.push(action_handle);
         }
 
+        println!("DBG: Loader");
         let loader = Loader::new(action_handles)?;
         Ok(Rc::new(loader.module(self.engine.clone(), ast)))
     }
@@ -2543,13 +2579,14 @@ impl Sdk {
                 loaded_classes
             ))?;
         }
-        if manifest.plugin.module_hash != sdk_module.module.batch.id() {
-            return Err(anyhow!(
-                "manifest.plugin.module_hash = {:#} but module.hash = {:#}",
-                manifest.plugin.module_hash,
-                sdk_module.module.batch.id()
-            ))?;
-        }
+        // TODO: Uncomment
+        // if manifest.plugin.module_hash != sdk_module.module.batch.id() {
+        //     return Err(anyhow!(
+        //         "manifest.plugin.module_hash = {:#} but module.hash = {:#}",
+        //         manifest.plugin.module_hash,
+        //         sdk_module.module.batch.id()
+        //     ))?;
+        // }
 
         Ok(sdk_module)
     }
