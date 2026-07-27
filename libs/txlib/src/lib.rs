@@ -54,7 +54,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateHeader {
+    /// Execution block number
     pub block_number: i64,
+    /// Execution block timestamp
+    pub block_timestamp: i64,
+    /// Execution block hash
+    pub block_hash: Hash,
     /// Root of the global created-object set: the commitment of every object
     /// state ever created. Grounding proves an input is a member here.
     pub created_root: Hash,
@@ -65,12 +70,16 @@ pub struct StateHeader {
 impl StateHeader {
     pub fn new(
         block_number: i64,
+        block_timestamp: i64,
+        block_hash: Hash,
         created_root: Hash,
         nullifiers_root: Hash,
         prior_state_history_root: Hash,
     ) -> Self {
         Self {
             block_number,
+            block_timestamp,
+            block_hash,
             created_root,
             nullifiers_root,
             prior_state_history_root,
@@ -84,6 +93,8 @@ impl StateHeader {
     pub fn array(&self) -> Array {
         Array::new(vec![
             Value::from(self.block_number),
+            Value::from(self.block_timestamp),
+            Value::from(self.block_hash),
             Value::from(self.created_root),
             Value::from(self.nullifiers_root),
             Value::from(self.prior_state_history_root),
@@ -99,9 +110,11 @@ impl StateHeader {
 /// Slot indices for the `StateHeader` record, matching the field order in
 /// the `record StateHeader` declaration in txlib.podlang.
 pub const STATE_HEADER_BLOCK_NUMBER_SLOT: usize = 0;
-pub const STATE_HEADER_CREATED_SLOT: usize = 1;
-pub const STATE_HEADER_NULLIFIERS_SLOT: usize = 2;
-pub const STATE_HEADER_PRIOR_STATE_HISTORY_SLOT: usize = 3;
+pub const STATE_HEADER_BLOCK_TIMESTAMP_SLOT: usize = 1;
+pub const STATE_HEADER_BLOCK_HASH_SLOT: usize = 2;
+pub const STATE_HEADER_CREATED_SLOT: usize = 3;
+pub const STATE_HEADER_NULLIFIERS_SLOT: usize = 4;
+pub const STATE_HEADER_PRIOR_STATE_HISTORY_SLOT: usize = 5;
 
 /// Proof-bearing grounding data required to build a new transaction.
 ///
@@ -1133,7 +1146,7 @@ mod tests {
     use pod2::{
         backends::plonky2::mock::mainpod::MockProver,
         frontend::{MainPod, MultiPodBuilder},
-        middleware::{Params, Predicate, VDSet, containers::Array},
+        middleware::{F, Params, Predicate, VDSet, containers::Array},
     };
     use pod2utils::{macros::BuildContext, set};
 
@@ -1145,6 +1158,8 @@ mod tests {
     /// commitments-only `StateHeader`. The created set is grow-only.
     struct TestState {
         block_number: i64,
+        block_timestamp: i64,
+        block_hash: Hash,
         created: Array,
         created_index: HashMap<Hash, i64>,
         nullifiers: Set,
@@ -1155,6 +1170,8 @@ mod tests {
         fn empty(block_number: i64) -> Self {
             Self {
                 block_number,
+                block_timestamp: block_number * 1000,
+                block_hash: Hash([F(0), F(0), F(0), F(block_number as u64)]),
                 created: Array::new(Vec::new()),
                 created_index: HashMap::new(),
                 nullifiers: set!(),
@@ -1165,6 +1182,8 @@ mod tests {
         fn state_header(&self) -> StateHeader {
             StateHeader::new(
                 self.block_number,
+                self.block_timestamp,
+                self.block_hash,
                 self.created.commitment(),
                 self.nullifiers.commitment(),
                 self.state_history.commitment(),
@@ -1250,15 +1269,27 @@ mod tests {
 
     #[test]
     fn state_header_hash_matches_array_commitment() {
-        let sr = StateHeader::new(7, test_hash(1), test_hash(2), test_hash(3));
+        let sr = StateHeader::new(7, 8, test_hash(4), test_hash(1), test_hash(2), test_hash(3));
         assert_eq!(sr.hash(), sr.array().commitment());
     }
 
     #[test]
     fn state_header_serializes_and_deserializes_camelcase() {
-        let original = StateHeader::new(9, test_hash(1), test_hash(2), test_hash(3));
+        let original = StateHeader::new(
+            9,
+            10,
+            test_hash(5),
+            test_hash(1),
+            test_hash(2),
+            test_hash(3),
+        );
         let encoded = serde_json::to_value(&original).unwrap();
         assert_eq!(encoded["blockNumber"], serde_json::json!(9));
+        assert_eq!(encoded["blockTimestamp"], serde_json::json!(10));
+        assert_eq!(
+            encoded["blockHash"],
+            serde_json::json!(hex::encode([5_u8; 32]))
+        );
         assert_eq!(
             encoded["createdRoot"],
             serde_json::json!(hex::encode([1_u8; 32]))

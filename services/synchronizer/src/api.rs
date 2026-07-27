@@ -245,6 +245,8 @@ async fn post_grounding_witness(
     Ok(Json(GroundingWitnessResponse {
         state_root,
         block_number: state_header.block_number,
+        block_timestamp: state_header.block_timestamp,
+        block_hash: state_header.block_hash,
         created_root: state_header.created_root,
         nullifiers_root: state_header.nullifiers_root,
         prior_state_history_root: state_header.prior_state_history_root,
@@ -272,7 +274,11 @@ fn build_head_snapshot(snapshot: &CurrentSnapshot) -> HeadSnapshot {
         last_processed_slot: snapshot.last_processed_slot,
         last_processed_block_number: snapshot.last_processed_block_number,
         current_state_root: snapshot.head.metadata.current_state_root,
-        current_block_number: snapshot.head.metadata.current_block_number.map(i64::from),
+        current_block_number: snapshot
+            .head
+            .metadata
+            .current_block
+            .map(|meta| meta.number as i64),
         created_count: snapshot.head.metadata.created_count as usize,
         nullifier_count: snapshot.head.metadata.nullifier_count as usize,
         state_root_count: snapshot.head.metadata.state_root_count as usize,

@@ -756,6 +756,8 @@ description = "consume a Foo to make a Bar"
         txlib::GroundingWitness::new(
             txlib::StateHeader::new(
                 1,
+                1,
+                pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,
                 pod2::middleware::EMPTY_HASH,

@@ -7,7 +7,7 @@
 use module 0xTX_EVENTS_MODULE_HASH as tx
 
 // TODO: Support importing records via `use module`
-record StateHeader = (block_number, created, nullifiers, prior_state_history)
+record StateHeader = (block_number, block_timestamp, block_hash, created, nullifiers, prior_state_history)
 
 // ========================================================
 // Deletion Sub-Actions

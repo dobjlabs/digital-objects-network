@@ -22,10 +22,11 @@ use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
 use pod2::middleware::Hash;
+use pod2utils::b256_to_hash;
 use tracing::{debug, info, trace, warn};
 
 use crate::config::AppConfig;
-use crate::head::StateHead;
+use crate::head::{BlockMetadata, StateHead};
 use crate::state_machine::{DerivedSlot, StateMachine, MAX_STATE_ROOT_AGE_BLOCKS};
 use crate::sync_db::{CommittedSlotRecord, SyncDb};
 
@@ -46,7 +47,7 @@ struct SlotContext {
     parent_root: B256,
     execution_block_hash: B256,
     execution_block_number: u32,
-    execution_timestamp: u64,
+    execution_block_timestamp: u64,
     kzg_blob_commitments: Vec<(B256, KzgCommitment)>,
 }
 
@@ -295,7 +296,7 @@ impl Node {
             parent_root: beacon_block.parent_root,
             execution_block_hash: execution_payload.block_hash,
             execution_block_number: execution_payload.block_number,
-            execution_timestamp: execution_payload.timestamp,
+            execution_block_timestamp: execution_payload.timestamp,
             kzg_blob_commitments,
         })
     }
@@ -340,12 +341,12 @@ impl Node {
         base_head: StateHead,
         recent_state_roots: Vec<(Hash, i64)>,
         slot: u32,
-        block_number: u32,
+        block_meta: BlockMetadata,
         blob_payloads: &[(u32, Vec<u8>)],
     ) -> Result<DerivedSlot> {
         let parsed = self
             .state_machine
-            .parse_blobs(blob_payloads, slot, block_number);
+            .parse_blobs(blob_payloads, slot, block_meta.number);
         let candidates: Vec<Hash> = parsed
             .iter()
             .flat_map(|(_, payload)| payload.live.iter().copied())
@@ -355,7 +356,7 @@ impl Node {
             base_head,
             recent_state_roots,
             slot,
-            block_number,
+            block_meta,
             &parsed,
             &prior_indices,
         )
@@ -375,18 +376,24 @@ impl Node {
         info!(
             "Processing slot {} from {}",
             slot_ctx.slot,
-            DateTime::<Utc>::from_timestamp_secs(slot_ctx.execution_timestamp as i64)
+            DateTime::<Utc>::from_timestamp_secs(slot_ctx.execution_block_timestamp as i64)
                 .unwrap_or_default(),
         );
         self.state_machine.log_current_state(base_head);
 
         let block_number = slot_ctx.execution_block_number;
-        let min_block_number = base_head
-            .metadata
-            .current_block_number
-            .map(|n| n.saturating_sub(MAX_STATE_ROOT_AGE_BLOCKS as u32));
+        let min_block_number = base_head.metadata.current_block.map(|block_meta| {
+            block_meta
+                .number
+                .saturating_sub(MAX_STATE_ROOT_AGE_BLOCKS as u32)
+        });
         let recent_state_roots = self.sync_db.recent_state_roots(min_block_number).await?;
 
+        let block_meta = BlockMetadata {
+            number: slot_ctx.execution_block_number,
+            timestamp: slot_ctx.execution_block_timestamp,
+            hash: b256_to_hash(slot_ctx.execution_block_hash),
+        };
         if slot_ctx.kzg_blob_commitments.is_empty() {
             debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
             let derived = self
@@ -394,7 +401,7 @@ impl Node {
                     base_head,
                     recent_state_roots,
                     slot_ctx.slot,
-                    block_number,
+                    block_meta,
                     &[],
                 )
                 .await?;
@@ -462,7 +469,7 @@ impl Node {
                     base_head,
                     recent_state_roots,
                     slot_ctx.slot,
-                    block_number,
+                    block_meta,
                     &[],
                 )
                 .await?;
@@ -533,7 +540,7 @@ impl Node {
                 base_head,
                 recent_state_roots,
                 slot_ctx.slot,
-                block_number,
+                block_meta,
                 &blob_payloads,
             )
             .await?;

@@ -118,7 +118,14 @@ pub fn build_synthetic_state(
         indices.insert(commitment, index);
     }
 
-    let state_header = StateHeader::new(1, created.commitment(), EMPTY_HASH, EMPTY_HASH);
+    let state_header = StateHeader::new(
+        1,
+        1,
+        EMPTY_HASH,
+        created.commitment(),
+        EMPTY_HASH,
+        EMPTY_HASH,
+    );
 
     let mut created_proofs: HashMap<Hash, _> = HashMap::with_capacity(objs.len());
     for obj in objs {

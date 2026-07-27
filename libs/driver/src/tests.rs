@@ -43,6 +43,8 @@ fn dummy_grounding_witness() -> GroundingWitness {
     GroundingWitness::new(
         StateHeader::new(
             1,
+            1,
+            pod2::middleware::EMPTY_HASH,
             pod2::middleware::EMPTY_HASH,
             pod2::middleware::EMPTY_HASH,
             pod2::middleware::EMPTY_HASH,
@@ -66,6 +68,8 @@ fn state_header(state: &TestState) -> StateHeader {
     let (created_root, nullifiers_root, prior_state_history_root) = state.roots();
     StateHeader::new(
         state.block_number,
+        state.block_timestamp,
+        state.block_hash,
         created_root,
         nullifiers_root,
         prior_state_history_root,
