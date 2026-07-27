@@ -702,7 +702,7 @@ pub(crate) fn fmt(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     // `tx`
     writeln!(
         w,
-        "record StateHeader = (block_number, block_time, block_hash, created, nullifiers, prior_state_history)"
+        "record StateHeader = (block_number, block_timestamp, block_hash, created, nullifiers, prior_state_history)"
     )?;
     fmt_record_decls(loader, w)?;
     writeln!(w, "\n// Actions\n")?;
