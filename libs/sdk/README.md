@@ -164,7 +164,7 @@ use module 0xc2b96ca2c6970e4e950d09408011691c21b6c9c24610e74aec471ea53e0ace65 as
 use intro Vdf(count, input, output) from 0xab82223f501b5056f458f063eb2fc073f8ac01f2ea178a3a2303394fec6828a0
 use intro LtEqU256(lhs, rhs) from 0xe0595e5c75467e5a27bd30fa48a45e1dcc66a327076e5ce7c02ce33dfe357311
 
-record StateHeader = (block_number, created, nullifiers, prior_state_history)
+record StateHeader = (block_number, block_timestamp, block_hash, created, nullifiers, prior_state_history)
 record FindLogOut = (log)
 record FindLogInitials = (log)
 record CraftWoodIn = (log)

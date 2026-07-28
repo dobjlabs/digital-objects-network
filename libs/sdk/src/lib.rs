@@ -4,6 +4,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::slice;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use anyhow::{Result, anyhow};
 use itertools::zip_eq;
@@ -167,6 +168,8 @@ enum Type {
     Raw,
     Int,
     Dict,
+    // The Vec contains the optional Record field names
+    Array(Arc<Vec<String>>),
 }
 
 impl fmt::Display for Type {
@@ -214,6 +217,7 @@ impl VarOrValue {
                 Type::Raw => Some(()),
                 Type::Int => v.as_int().map(|_| ()),
                 Type::Dict => v.as_dictionary().map(|_| ()),
+                Type::Array(_) => v.as_array().map(|_| ()),
             }
             .ok_or_else(|| format!("type check: expected {}", typ).into()),
             Self::Var(Var {
@@ -269,15 +273,32 @@ impl VarOrValue {
             }) => value.clone().expect("has value at exec time"),
             Self::Var(Var {
                 value,
+                typ,
                 key: Some(key),
                 ..
             }) => {
-                let dict = value
-                    .as_ref()
-                    .expect("has value at exec time")
-                    .as_dictionary()
-                    .expect("dict");
-                dict.get(&StrKey::from(key)).unwrap().expect("key exists")
+                match typ {
+                    Type::Dict => {
+                        let dict = value
+                            .as_ref()
+                            .expect("has value at exec time")
+                            .as_dictionary()
+                            .expect("dict");
+                        dict.get(&StrKey::from(key)).unwrap().expect("key exists")
+                    },
+                    Type::Array(record) => {
+                        let array = value
+                            .as_ref()
+                            .expect("has value at exec time")
+                            .as_array()
+                            .expect("array");
+                        println!("DBG key={key}");
+                        // println!("DBG array={array:?}");
+                        let idx = record.iter().position(|k| k == key).unwrap();
+                        array.get(idx).unwrap().expect("index exists")
+                    },
+                    _ => todo!("implement type {typ}"),
+                }
             }
         }
     }
@@ -299,16 +320,32 @@ impl VarOrValue {
     fn as_op_arg(&self) -> OperationArg {
         match self {
             Self::Value(value) => OperationArg::Literal(value.clone()),
-            Self::Var(Var { value, key, .. }) => {
+            Self::Var(Var { typ, value, key, .. }) => {
                 let value = value.as_ref().expect("has value at exec time").clone();
                 if let Some(key) = key {
-                    let dict = value.as_dictionary().expect("dict");
-                    let value = dict.get(&key.into()).unwrap().unwrap();
-                    OperationArg::Statement(Statement::Contains(
-                        dict.into(),
-                        key.clone().into(),
-                        value.into(),
-                    ))
+                    let st_contains = match typ {
+                        Type::Dict => {
+                            let dict = value.as_dictionary().expect("dict");
+                            let value = dict.get(&key.into()).unwrap().unwrap();
+                            Statement::Contains(
+                                dict.into(),
+                                key.clone().into(),
+                                value.into(),
+                            )
+                        }
+                        Type::Array(record) => {
+                            let array = value.as_array().expect("array");
+                            let index = record.iter().position(|k| k == key).unwrap();
+                            let value = array.get(index).unwrap().unwrap();
+                            Statement::Contains(
+                                array.into(),
+                                (index as i64).into(),
+                                value.into(),
+                            )
+                        }
+                        _ => todo!("support other types"),
+                    };
+                    OperationArg::Statement(st_contains)
                 } else {
                     OperationArg::Literal(value)
                 }
@@ -452,6 +489,11 @@ impl ActionContext {
     }
 }
 
+static RECORD_STATE_HEADER: LazyLock<Arc<Vec<String>>> =
+    LazyLock::new(|| {
+Arc::new(["block_number", "block_timestamp", "block_hash", "created", "nullifiers", "prior_state_history"].map(|s| s.to_string()).into_iter().collect::<Vec<_>>())
+    });
+
 impl ActionHandle {
     //
     // Internal methods
@@ -459,11 +501,17 @@ impl ActionHandle {
     fn new(name: String, exe_ctx: Option<Rc<RefCell<ExeContext>>>) -> Self {
         Self(Rc::new(RefCell::new(ActionContext::new(name, exe_ctx))))
     }
-    fn init_state_header(&self) -> ArgHandle {
-        self.0.borrow_mut().add_var("state_header".to_string()).unwrap();
-        let state_header = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
-        state_header.borrow_mut().set_var_name("state_header".to_string()).unwrap();
-        ArgHandle::new(self.clone(), state_header)
+    fn state_header(&self) -> ArgHandle {
+        let mut ctx = self.0.borrow_mut();
+        ctx.add_var("state_header".to_string()).unwrap_or(());
+        let arg = Rc::new(RefCell::new(VarOrValue::var(Type::Array(RECORD_STATE_HEADER.clone()))));
+        arg.borrow_mut().set_var_name("state_header".to_string()).unwrap();
+        if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
+            let exe_ctx = exe_rc.borrow();
+            let state_header = exe_ctx.tx_builder.state_header();
+            arg.borrow_mut().set_value(Value::from(state_header.array()));
+        }
+        ArgHandle::new(self.clone(), arg)
     }
     fn new_obj(exe_ctx: &ExeContext, class: &str) -> Dictionary {
         let type_hash = exe_ctx
@@ -534,6 +582,7 @@ impl ActionHandle {
             (exe_ctx.module.clone(), scope_id, ctx.name.clone())
         };
         let mut scope = Scope::new();
+        scope.push_constant("state_header", self.state_header());
         let options = CallFnOptions::new().with_tag(self.clone());
         let _result = module.engine.call_fn_with_options::<Dynamic>(
             options,
@@ -985,12 +1034,14 @@ impl ActionHandle {
                         let dict = final_dict.clone().expect("Set final_dict captured at Rhai");
                         let ts = *current_ts.get(obj).unwrap_or(&0);
                         let dict_arg = anchor_or_literal(obj, &dict, ts);
+                        println!("DBG dict_arg={dict_arg}");
                         for (key, value) in kvs {
-                            let v = value.borrow().as_value().clone();
+                            let arg = value.borrow().as_op_arg().clone();
+                            println!("DBG key={key}, value={arg}");
                             let st = exe_ctx
                                 .bld
                                 .builder
-                                .priv_op(Operation::dict_contains(dict_arg.clone(), key.clone(), v))
+                                .priv_op(Operation::dict_contains(dict_arg.clone(), key.clone(), arg))
                                 .unwrap();
                             body_sts.push(st);
                         }
@@ -2536,9 +2587,8 @@ impl Sdk {
         let mut action_handles = Vec::new();
         for action in actions {
             let action_handle = ActionHandle::new(action.to_string(), None);
-            let state_header_handle = action_handle.init_state_header();
             let mut scope = Scope::new();
-            scope.push_constant("state_header", state_header_handle);
+            scope.push_constant("state_header", action_handle.state_header());
             let options = CallFnOptions::new().with_tag(action_handle.clone());
             println!("DBG: Call {action}");
             let _result = self.engine.call_fn_with_options::<Dynamic>(
