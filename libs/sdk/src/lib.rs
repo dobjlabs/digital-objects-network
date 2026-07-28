@@ -292,7 +292,7 @@ impl VarOrValue {
                             .expect("has value at exec time")
                             .as_array()
                             .expect("array");
-                        println!("DBG key={key}");
+                        // println!("DBG key={key}");
                         // println!("DBG array={array:?}");
                         let idx = record.iter().position(|k| k == key).unwrap();
                         array.get(idx).unwrap().expect("index exists")
@@ -1034,10 +1034,10 @@ impl ActionHandle {
                         let dict = final_dict.clone().expect("Set final_dict captured at Rhai");
                         let ts = *current_ts.get(obj).unwrap_or(&0);
                         let dict_arg = anchor_or_literal(obj, &dict, ts);
-                        println!("DBG dict_arg={dict_arg}");
+                        // println!("DBG dict_arg={dict_arg}");
                         for (key, value) in kvs {
                             let arg = value.borrow().as_op_arg().clone();
-                            println!("DBG key={key}, value={arg}");
+                            // println!("DBG key={key}, value={arg}");
                             let st = exe_ctx
                                 .bld
                                 .builder
@@ -2581,7 +2581,7 @@ impl Sdk {
         actions: &[&str],
     ) -> Result<Rc<SdkModule>, SdkError> {
         let scope = Scope::new();
-        println!("DBG: Compile");
+        // println!("DBG: Compile");
         let ast = self.engine.compile_with_scope(&scope, src).unwrap();
 
         let mut action_handles = Vec::new();
@@ -2590,7 +2590,7 @@ impl Sdk {
             let mut scope = Scope::new();
             scope.push_constant("state_header", action_handle.state_header());
             let options = CallFnOptions::new().with_tag(action_handle.clone());
-            println!("DBG: Call {action}");
+            // println!("DBG: Call {action}");
             let _result = self.engine.call_fn_with_options::<Dynamic>(
                 options,
                 &mut scope,
@@ -2601,7 +2601,7 @@ impl Sdk {
             action_handles.push(action_handle);
         }
 
-        println!("DBG: Loader");
+        // println!("DBG: Loader");
         let loader = Loader::new(action_handles)?;
         Ok(Rc::new(loader.module(self.engine.clone(), ast)))
     }
