@@ -661,8 +661,9 @@ impl ActionHandle {
                 }
             }
         }
-        let in_array = Array::new(in_dicts);
-        let out_array = Array::new(out_dicts);
+        let mut io_dicts = in_dicts;
+        io_dicts.extend(out_dicts.into_iter());
+        let io_array = Array::new(io_dicts);
 
         // Build the `<Action>Initials` record value (the pre-identity Output
         // dicts) when the action has one.
@@ -680,11 +681,8 @@ impl ActionHandle {
         // is collapsed; else a literal op-arg for the dict.
         let anchor_or_literal = |obj_name: &str, dict: &Dictionary, ts: usize| -> OperationArg {
             match meta.collapsed_at(obj_name, ts) {
-                Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::In)) => {
-                    (&in_array, meta.in_entry(obj_name).unwrap().0 as i64).into()
-                }
-                Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::Out)) => {
-                    (&out_array, meta.out_entry(obj_name).unwrap().0 as i64).into()
+                Some(fmt_podlang::Collapse::IO(_)) => {
+                    (&io_array, meta.io_entry(obj_name).unwrap().0 as i64).into()
                 }
                 Some(fmt_podlang::Collapse::Initials) => {
                     initials_anchor(obj_name).expect("collapsed_at promised an initials slot")
@@ -710,37 +708,23 @@ impl ActionHandle {
                         ObjectIO::Output => stamped_outputs[&varname].clone(),
                         _ => obj.borrow().to_dict(),
                     };
-                    let pre_dict = match io {
+                    let dict = match io {
                         ObjectIO::Mutate => original
                             .as_ref()
                             .expect("Mutate records a pre-mutation dict")
                             .clone(),
                         _ => post_dict.clone(),
                     };
-                    if let Some((idx, e)) = meta.in_entry(&varname)
+                    if let Some((idx, e)) = meta.io_entry(&varname)
                         && e.needs_wildcard
                     {
                         let st = exe_ctx
                             .bld
                             .builder
                             .priv_op(Operation::array_contains(
-                                Value::from(in_array.clone()),
+                                Value::from(io_array.clone()),
                                 idx as i64,
-                                Value::from(pre_dict.clone()),
-                            ))
-                            .unwrap();
-                        array_contains_sts.push(st);
-                    }
-                    if let Some((idx, e)) = meta.out_entry(&varname)
-                        && e.needs_wildcard
-                    {
-                        let st = exe_ctx
-                            .bld
-                            .builder
-                            .priv_op(Operation::array_contains(
-                                Value::from(out_array.clone()),
-                                idx as i64,
-                                Value::from(post_dict.clone()),
+                                Value::from(dict.clone()),
                             ))
                             .unwrap();
                         array_contains_sts.push(st);
@@ -900,16 +884,16 @@ impl ActionHandle {
                 let io = pending.io;
                 let new_anchor: Option<OperationArg> = match io {
                     ObjectIO::Output | ObjectIO::Mutate => meta
-                        .out_entry(varname)
+                        .io_entry(varname)
                         .filter(|(_, e)| !e.needs_wildcard)
-                        .map(|(idx, _)| (&out_array, idx as i64).into()),
+                        .map(|(idx, _)| (&io_array, idx as i64).into()),
                     ObjectIO::Input => None,
                 };
                 let old_anchor: Option<OperationArg> = match io {
                     ObjectIO::Input | ObjectIO::Mutate => meta
-                        .in_entry(varname)
+                        .io_entry(varname)
                         .filter(|(_, e)| !e.needs_wildcard)
-                        .map(|(idx, _)| (&in_array, idx as i64).into()),
+                        .map(|(idx, _)| (&io_array, idx as i64).into()),
                     ObjectIO::Output => None,
                 };
                 let pre_ts = pending.post_ts - 1;
@@ -1107,12 +1091,7 @@ impl ActionHandle {
                 // doesn't matter which form we hand the bridge.
                 let obj_ref = &meta.object_refs[object_refs_index];
                 let varname = &obj_ref.varname;
-                let (bridge_array, entry_idx) = match fmt_podlang::dispatch_side(&obj_ref.io) {
-                    fmt_podlang::Side::In => (in_array.clone(), meta.in_entry(varname).unwrap().0),
-                    fmt_podlang::Side::Out => {
-                        (out_array.clone(), meta.out_entry(varname).unwrap().0)
-                    }
-                };
+                let entry_idx = meta.io_entry(varname).unwrap().0;
                 let st_is_x = module.build_is_x(
                     &mut exe_ctx.bld,
                     exe_ctx.tx_builder.state_header(),
@@ -1120,7 +1099,7 @@ impl ActionHandle {
                     &class,
                     object_refs_index,
                     st_action.clone(),
-                    &bridge_array,
+                    &io_array,
                     entry_idx,
                     &obj_dict,
                 );
@@ -1667,6 +1646,14 @@ impl ActionMeta {
             .find(|(_, e)| e.varname == varname)
     }
 
+    pub(crate) fn io_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
+        self.out_entries
+            .iter()
+            .chain(self.in_entries.iter())
+            .enumerate()
+            .find(|(_, e)| e.varname == varname)
+    }
+
     pub(crate) fn max_ts(&self, varname: &str) -> usize {
         *self
             .var_max_ts
@@ -1675,9 +1662,8 @@ impl ActionMeta {
     }
 
     /// At a given ts, an object's state might be "collapsed" into a
-    /// record (in, out, or initials) rather than held in its own
-    /// wildcard. Returns which record, or None if it is not collapsed
-    /// at this ts.
+    /// record (io or initials) rather than held in its own wildcard. Returns which record, or
+    /// None if it is not collapsed at this ts.
     pub(crate) fn collapsed_at(&self, varname: &str, ts: usize) -> Option<fmt_podlang::Collapse> {
         let max_ts = self.max_ts(varname);
         if ts == 0
@@ -1685,14 +1671,14 @@ impl ActionMeta {
                 .in_entry(varname)
                 .is_some_and(|(_, e)| !e.needs_wildcard)
         {
-            return Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::In));
+            return Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::In));
         }
         if ts == max_ts
             && self
                 .out_entry(varname)
                 .is_some_and(|(_, e)| !e.needs_wildcard)
         {
-            return Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::Out));
+            return Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::Out));
         }
         // If we have an "initials" record for this var, and we are at
         // the penultimate ts, then the var must be collapsed into

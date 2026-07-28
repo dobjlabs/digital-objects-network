@@ -120,7 +120,7 @@ impl<'a> VarNameFmt<'a> {
 impl<'a> fmt::Display for VarNameFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(ns) = self.collapses_at() {
-            return write!(f, "{}.{}", ns.arg_name(), self.name);
+            return write!(f, "{}", ns.arg_name(&self.name));
         }
         let max_ts = self.meta.max_ts(self.name);
         if self.name == "chain"
@@ -139,46 +139,48 @@ impl<'a> fmt::Display for VarNameFmt<'a> {
 pub(crate) enum Side {
     In,
     Out,
+    Any,
 }
 
 /// The record namespace a collapsed Object state dict belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Collapse {
-    Side(Side),
+    IO(Side),
     Initials,
 }
 
 impl Side {
-    pub(crate) fn arg_name(self) -> &'static str {
+    pub(crate) fn arg_name(self, name: &str) -> String {
         match self {
-            Side::In => "in",
-            Side::Out => "out",
+            Side::In => format!("in_{name}"),
+            Side::Out => format!("out_{name}"),
+            Side::Any => format!("{name}"),
         }
     }
-    fn schema_suffix(self) -> &'static str {
-        match self {
-            Side::In => "In",
-            Side::Out => "Out",
-        }
-    }
+//     fn schema_suffix(self) -> &'static str {
+//         match self {
+//             Side::In => "In",
+//             Side::Out => "Out",
+//         }
+//     }
 }
 
-impl From<Side> for Collapse {
-    fn from(side: Side) -> Self {
-        Collapse::Side(side)
-    }
-}
+// impl From<Side> for Collapse {
+//     fn from(side: Side) -> Self {
+//         Collapse::Side(side)
+//     }
+// }
 
 impl Collapse {
-    pub(crate) fn arg_name(self) -> &'static str {
+    pub(crate) fn arg_name(self, name: &str) -> String {
         match self {
-            Collapse::Side(side) => side.arg_name(),
-            Collapse::Initials => "initials",
+            Collapse::IO(side) => format!("io.{}", side.arg_name(&name)),
+            Collapse::Initials => format!("initials.{name}"),
         }
     }
     fn schema_suffix(self) -> &'static str {
         match self {
-            Collapse::Side(side) => side.schema_suffix(),
+            Collapse::IO(_) => "IO",
             Collapse::Initials => "Initials",
         }
     }
@@ -216,7 +218,7 @@ pub(crate) fn dispatch_side(io: &ObjectIO) -> Side {
     }
 }
 
-/// Schema name for a (action, namespace) pair, e.g. `LogToWoodIn`.
+/// Schema name for a (action, namespace) pair, e.g. `LogToWoodIO`.
 fn schema_name(action_name: &str, ns: impl Into<Collapse>) -> String {
     format!("{action_name}{}", ns.into().schema_suffix())
 }
@@ -227,21 +229,12 @@ fn schema_name(action_name: &str, ns: impl Into<Collapse>) -> String {
 fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     let render = |entries: &[String]| entries.join(", ");
     for meta in &loader.actions_meta {
-        if !meta.in_entries.is_empty() {
-            let names: Vec<String> = meta.in_entries.iter().map(|e| e.varname.clone()).collect();
+        if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {
+            let names: Vec<String> = meta.in_entries.iter().map(|e| Side::In.arg_name(&e.varname)).chain(meta.out_entries.iter().map(|e| Side::Out.arg_name(&e.varname))).collect();
             writeln!(
                 w,
                 "record {} = ({})",
-                schema_name(&meta.name, Side::In),
-                render(&names),
-            )?;
-        }
-        if !meta.out_entries.is_empty() {
-            let names: Vec<String> = meta.out_entries.iter().map(|e| e.varname.clone()).collect();
-            writeln!(
-                w,
-                "record {} = ({})",
-                schema_name(&meta.name, Side::Out),
+                schema_name(&meta.name, Collapse::IO(Side::Any)),
                 render(&names),
             )?;
         }
@@ -356,15 +349,8 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // ---- Signature ----
     write!(w, "{}(", action.name)?;
     let mut wrote_pub = false;
-    if !meta.in_entries.is_empty() {
-        write!(w, "in {}", schema_name(&action.name, Side::In))?;
-        wrote_pub = true;
-    }
-    if !meta.out_entries.is_empty() {
-        if wrote_pub {
-            write!(w, ", ")?;
-        }
-        write!(w, "out {}", schema_name(&action.name, Side::Out))?;
+    if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {
+        write!(w, "io {}", schema_name(&action.name, Collapse::IO(Side::Any)))?;
         wrote_pub = true;
     }
     if wrote_pub {
@@ -407,10 +393,10 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // Append synthesized sub-action typed privates last.
     for c in &sub_calls {
         if let Some(name) = &c.sub_in_var {
-            private_vars.push(format!("{name} {}", schema_name(&c.sub_name, Side::In)));
+            private_vars.push(format!("{name} {}", schema_name(&c.sub_name, Collapse::IO(Side::Any))));
         }
         if let Some(name) = &c.sub_out_var {
-            private_vars.push(format!("{name} {}", schema_name(&c.sub_name, Side::Out)));
+            private_vars.push(format!("{name} {}", schema_name(&c.sub_name, Collapse::IO(Side::Any))));
         }
     }
     // Append the chain record typed private when packed.
@@ -420,8 +406,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // Append the initials record typed private when packed.
     if meta.initials_entries.is_some() {
         private_vars.push(format!(
-            "{} {}",
-            Collapse::Initials.arg_name(),
+            "initials {}",
             schema_name(&action.name, Collapse::Initials),
         ));
     }
@@ -465,8 +450,8 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         {
             writeln!(
                 w,
-                "  ArrayContains(in, {}::{}, {})",
-                schema_name(&action.name, Side::In),
+                "  ArrayContains(io, {}::in_{}, {})",
+                schema_name(&action.name, Collapse::IO(Side::Any)),
                 o.varname,
                 fmt_var_at(&o.varname, 0, max_ts),
             )?;
@@ -477,8 +462,8 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         {
             writeln!(
                 w,
-                "  ArrayContains(out, {}::{}, {})",
-                schema_name(&action.name, Side::Out),
+                "  ArrayContains(io, {}::out_{}, {})",
+                schema_name(&action.name, Collapse::IO(Side::Any)),
                 o.varname,
                 fmt_var_at(&o.varname, max_ts, max_ts),
             )?;
@@ -633,24 +618,20 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
             // in <ActionIn>, out <ActionOut> private as needed.
             write!(w, "{bridge_name}(state, state_header, chain0, chain")?;
             let mut priv_parts: Vec<String> = Vec::new();
-            if !meta.in_entries.is_empty() {
-                priv_parts.push(format!("in {}", schema_name(&meta.name, Side::In)));
-            }
-            if !meta.out_entries.is_empty() {
-                priv_parts.push(format!("out {}", schema_name(&meta.name, Side::Out)));
+            if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {
+                priv_parts.push(format!("io {}", schema_name(&meta.name, Collapse::IO(Side::Any))));
             }
             if !priv_parts.is_empty() {
                 write!(w, ", private: {}", priv_parts.join(", "))?;
             }
             writeln!(w, ") = AND(")?;
 
-            // ArrayContains(<side>, <Schema>::<entry>, state)
+            // ArrayContains(io, <Schema>::<entry>, state)
             writeln!(
                 w,
-                "  ArrayContains({}, {}::{}, state)",
-                side.arg_name(),
-                schema_name(&meta.name, side),
-                o.varname,
+                "  ArrayContains(io, {}::{}, state)",
+                schema_name(&meta.name, Collapse::IO(Side::Any)),
+                side.arg_name(&o.varname),
             )?;
 
             // Action call.
