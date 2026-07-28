@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     middleware::{
-        F, Hash, Value,
         containers::{Array, Set},
+        Hash, Value, F,
     },
 };
 
@@ -46,6 +46,12 @@ impl TestState {
             nullifiers: Set::new(HashSet::<Value>::new()),
             state_history: Array::new(Vec::<Value>::new()),
         }
+    }
+
+    pub fn next_block(&mut self, time_delta: u64) {
+        self.block_number += 1;
+        self.block_timestamp += time_delta as i64;
+        self.block_hash = Hash([F(0), F(0), F(0), F(self.block_number as u64)]);
     }
 
     /// `(created_root, nullifiers_root, prior_state_history_root)`.

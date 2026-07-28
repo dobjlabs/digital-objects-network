@@ -1053,17 +1053,17 @@ impl ActionHandle {
                         old_dict,
                         new_dict,
                     } => {
-                        let old = old_dict.clone().expect("Update old_dict captured at Rhai");
-                        let new = new_dict.clone().expect("Update new_dict captured at Rhai");
-                        let v = value.borrow().as_value().clone();
+                        let old_dict = old_dict.clone().expect("Update old_dict captured at Rhai");
+                        let new_dict = new_dict.clone().expect("Update new_dict captured at Rhai");
+                        let arg = value.borrow().as_op_arg().clone();
                         let ts_before = *current_ts.get(obj).unwrap_or(&0);
                         let ts_after = ts_before + 1;
-                        let new_arg = anchor_or_literal(obj, &new, ts_after);
-                        let old_arg = anchor_or_literal(obj, &old, ts_before);
+                        let new_dict_arg = anchor_or_literal(obj, &new_dict, ts_after);
+                        let old_dict_arg = anchor_or_literal(obj, &old_dict, ts_before);
                         let st = exe_ctx
                             .bld
                             .builder
-                            .priv_op(Operation::dict_update(old_arg, key.clone(), v, new_arg))
+                            .priv_op(Operation::dict_update(old_dict_arg, key.clone(), arg, new_dict_arg))
                             .unwrap();
                         body_sts.push(st);
                         if let Some(t) = current_ts.get_mut(obj) {
