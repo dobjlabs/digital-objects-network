@@ -956,8 +956,8 @@ impl<'a> Replayer<'a> {
             ))
             .unwrap();
 
-        println!("DBG btx={}", btx.inner());
-        println!("DBG new_live={}", new_live.inner());
+        // println!("DBG btx={}", btx.inner());
+        // println!("DBG new_live={}", new_live.inner());
         let op_si = self
             .ctx
             .builder
