@@ -1998,6 +1998,7 @@ impl Loader {
     fn module(self, engine: Rc<Engine>, ast: AST) -> SdkModule {
         let mut podlang_src = String::new();
         fmt_podlang::fmt(&self, &mut podlang_src).unwrap();
+        println!("DBG\n{podlang_src}");
 
         let params = Params::default();
         let module = Arc::new(

@@ -550,6 +550,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 if let Some(name) = &call.sub_out_var {
                     args.push(name.clone());
                 }
+                args.push("state_header".to_string());
                 args.push(format!("{chain}"));
                 args.push(format!("{chain_next}"));
                 writeln!(w, "  {sub_name}({})", args.join(", "))?;
