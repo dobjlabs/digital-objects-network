@@ -668,7 +668,7 @@ impl ActionHandle {
             }
         }
         let mut io_dicts = in_dicts;
-        io_dicts.extend(out_dicts.into_iter());
+        io_dicts.extend(out_dicts);
         let io_array = Array::new(io_dicts);
 
         // Build the `<Action>Initials` record value (the pre-identity Output

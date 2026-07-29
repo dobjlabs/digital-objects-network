@@ -120,7 +120,7 @@ impl<'a> VarNameFmt<'a> {
 impl<'a> fmt::Display for VarNameFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(ns) = self.collapses_at() {
-            return write!(f, "{}", ns.arg_name(&self.name));
+            return write!(f, "{}", ns.arg_name(self.name));
         }
         let max_ts = self.meta.max_ts(self.name);
         if self.name == "chain"
@@ -160,7 +160,7 @@ impl Side {
 impl Collapse {
     pub(crate) fn arg_name(self, name: &str) -> String {
         match self {
-            Collapse::IO(side) => format!("io.{}", side.arg_name(&name)),
+            Collapse::IO(side) => format!("io.{}", side.arg_name(name)),
             Collapse::Initials => format!("initials.{name}"),
         }
     }
