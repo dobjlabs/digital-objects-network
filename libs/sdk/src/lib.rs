@@ -681,8 +681,14 @@ impl ActionHandle {
         // is collapsed; else a literal op-arg for the dict.
         let anchor_or_literal = |obj_name: &str, dict: &Dictionary, ts: usize| -> OperationArg {
             match meta.collapsed_at(obj_name, ts) {
-                Some(fmt_podlang::Collapse::IO(_)) => {
-                    (&io_array, meta.io_entry(obj_name).unwrap().0 as i64).into()
+                Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::In)) => {
+                    (&io_array, meta.in_entry(obj_name).unwrap().0 as i64).into()
+                }
+                Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::Out)) => {
+                    (&io_array, meta.out_entry(obj_name).unwrap().0 as i64).into()
+                }
+                Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::Any)) => {
+                    panic!("TODO: Maybe I should get rid of Side::Any?")
                 }
                 Some(fmt_podlang::Collapse::Initials) => {
                     initials_anchor(obj_name).expect("collapsed_at promised an initials slot")
@@ -882,24 +888,25 @@ impl ActionHandle {
             for pending in pending_object_events {
                 let varname = &pending.varname;
                 let io = pending.io;
-                let new_anchor: Option<OperationArg> = match io {
-                    ObjectIO::Output | ObjectIO::Mutate => meta
-                        .io_entry(varname)
-                        .filter(|(_, e)| !e.needs_wildcard)
-                        .map(|(idx, _)| (&io_array, idx as i64).into()),
-                    ObjectIO::Input => None,
-                };
                 let old_anchor: Option<OperationArg> = match io {
                     ObjectIO::Input | ObjectIO::Mutate => meta
-                        .io_entry(varname)
+                        .in_entry(varname)
                         .filter(|(_, e)| !e.needs_wildcard)
                         .map(|(idx, _)| (&io_array, idx as i64).into()),
                     ObjectIO::Output => None,
+                };
+                let new_anchor: Option<OperationArg> = match io {
+                    ObjectIO::Output | ObjectIO::Mutate => meta
+                        .out_entry(varname)
+                        .filter(|(_, e)| !e.needs_wildcard)
+                        .map(|(idx, _)| (&io_array, idx as i64).into()),
+                    ObjectIO::Input => None,
                 };
                 let pre_ts = pending.post_ts - 1;
                 let post_ts = pending.post_ts;
                 let chain_anchor = chain_step_anchor(post_ts);
                 let prev_chain_anchor = chain_step_anchor(pre_ts);
+                // println!("DBG io: {:?}, varname: {varname}, new_anchor: {:?}", io, new_anchor);
                 let replacements: Vec<Option<OperationArg>> = match io {
                     ObjectIO::Output => {
                         let initial_anchor = initials_anchor(varname);
@@ -922,6 +929,12 @@ impl ActionHandle {
                         None,
                     ],
                 };
+                // println!("DBG st\n{}", pending.st_literal);
+                // for (i, r) in replacements.iter().enumerate() {
+                //     if let Some(r) = r {
+                //         println!("DBG replacement {}: {}", i, r);
+                //     }
+                // }
                 let st_tx = if replacements.iter().any(|r| r.is_some()) {
                     exe_ctx
                         .bld
@@ -1067,11 +1080,18 @@ impl ActionHandle {
         sts.extend(body_sts);
         sts.extend(event_sts);
 
+        for st in &sts {
+            println!("DBG st:\n{}", st);
+        }
+        println!("");
         let st_action = {
             let mut exe_ctx = exe_rc.borrow_mut();
+            let state_header = exe_ctx.tx_builder.state_header().array();
             exe_ctx
                 .bld
-                .apply_custom_pred_simple(false, &action, sts)
+                .apply_custom_pred(false, &action,
+                    map!({"state_header" => state_header}),
+                    sts)
                 .unwrap()
         };
 
@@ -1091,7 +1111,12 @@ impl ActionHandle {
                 // doesn't matter which form we hand the bridge.
                 let obj_ref = &meta.object_refs[object_refs_index];
                 let varname = &obj_ref.varname;
-                let entry_idx = meta.io_entry(varname).unwrap().0;
+
+                let entry_idx = match fmt_podlang::dispatch_side(&obj_ref.io) {
+                    fmt_podlang::Side::In => meta.in_entry(varname).unwrap().0,
+                    fmt_podlang::Side::Out =>  meta.out_entry(varname).unwrap().0,
+                    fmt_podlang::Side::Any => panic!(),
+                };
                 let st_is_x = module.build_is_x(
                     &mut exe_ctx.bld,
                     exe_ctx.tx_builder.state_header(),
@@ -1621,15 +1646,6 @@ impl ActionMeta {
         self.total_outputs.iter()
     }
 
-    /// Find this Object's `in` entry. Returns its slot in the
-    /// `<Action>In` record and the entry shape.
-    pub(crate) fn in_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
-        self.in_entries
-            .iter()
-            .enumerate()
-            .find(|(_, e)| e.varname == varname)
-    }
-
     /// Slot for `varname` in the `<Action>Initials` record, if such a
     /// record exists for this action.
     pub(crate) fn initials_slot(&self, varname: &str) -> Option<usize> {
@@ -1639,17 +1655,27 @@ impl ActionMeta {
             .position(|name| name == varname)
     }
 
-    pub(crate) fn out_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
-        self.out_entries
+    /// Find this Object's `in` entry. Returns its slot in the
+    /// `<Action>In` record and the entry shape.
+    pub(crate) fn in_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
+        self.in_entries
             .iter()
             .enumerate()
             .find(|(_, e)| e.varname == varname)
     }
 
-    pub(crate) fn io_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
+    pub(crate) fn out_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
         self.out_entries
             .iter()
-            .chain(self.in_entries.iter())
+            .enumerate()
+            .map(|(i, e)| (i+self.in_entries.len(), e))
+            .find(|(_, e)| e.varname == varname)
+    }
+
+    pub(crate) fn io_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
+        self.in_entries
+            .iter()
+            .chain(self.out_entries.iter())
             .enumerate()
             .find(|(_, e)| e.varname == varname)
     }
@@ -2146,7 +2172,8 @@ impl SdkModule {
 
         // Step 2: discharge the bridge predicate.
         let st_bridge = bld
-            .apply_custom_pred_simple(false, &bridge_name, vec![st_array_contains, st_action])
+            .apply_custom_pred_simple(false, &bridge_name,
+                vec![st_array_contains, st_action])
             .expect("apply bridge predicate");
 
         // Step 3: IsX OR with the bridge at the right branch.

@@ -267,10 +267,8 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
 struct SubActionCall {
     sub_name: String,
     /// Name of the parent's synthesized private wildcard for the sub's
-    /// `in` record (None if the sub has no in record).
-    sub_in_var: Option<String>,
-    /// Same, for the sub's `out` record.
-    sub_out_var: Option<String>,
+    /// `io` record
+    sub_io_var: String,
     /// Script-side alias name (the `pick` in `var pick = action.subaction(...)`).
     /// `None` if the user didn't bind via `var`. Used to skip the alias from
     /// the parent's private wildcards list.
@@ -280,7 +278,7 @@ struct SubActionCall {
 /// Walk the parent action's Insts and gather one `SubActionCall` per
 /// `Inst::SubAction`. Looks up each sub's record shape from the loader's
 /// `actions_meta`.
-fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubActionCall> {
+fn collect_sub_action_calls(action: &ActionContext) -> Vec<SubActionCall> {
     let mut calls = Vec::new();
     let mut idx_counter: HashMap<String, usize> = HashMap::new();
     for inst in &action.insts {
@@ -290,27 +288,10 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
             ..
         } = inst
         {
-            let sub_meta = loader
-                .actions_meta
-                .iter()
-                .find(|m| &m.name == sub_name)
-                .unwrap_or_else(|| panic!("sub-action {sub_name} not in loader.actions_meta"));
-            let has_in = !sub_meta.in_entries.is_empty();
-            let has_out = !sub_meta.out_entries.is_empty();
-
             let idx = *idx_counter.entry(sub_name.clone()).or_insert(0);
             *idx_counter.get_mut(sub_name).unwrap() += 1;
 
-            let sub_in_var = if has_in {
-                Some(format!("_{}_in_{}", sub_name, idx))
-            } else {
-                None
-            };
-            let sub_out_var = if has_out {
-                Some(format!("_{}_out_{}", sub_name, idx))
-            } else {
-                None
-            };
+            let sub_io_var = format!("_{}_io_{}", sub_name, idx);
 
             let alias_name = obj.borrow().var_name().to_string();
             let alias = if alias_name == "?" {
@@ -321,8 +302,7 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
 
             calls.push(SubActionCall {
                 sub_name: sub_name.clone(),
-                sub_in_var,
-                sub_out_var,
+                sub_io_var,
                 alias,
             });
         }
@@ -344,7 +324,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         .iter()
         .find(|m| m.name == action.name)
         .expect("ActionMeta exists at fmt time");
-    let sub_calls = collect_sub_action_calls(action, loader);
+    let sub_calls = collect_sub_action_calls(action);
 
     // ---- Signature ----
     write!(w, "{}(", action.name)?;
@@ -392,12 +372,8 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     }
     // Append synthesized sub-action typed privates last.
     for c in &sub_calls {
-        if let Some(name) = &c.sub_in_var {
-            private_vars.push(format!("{name} {}", schema_name(&c.sub_name, Collapse::IO(Side::Any))));
-        }
-        if let Some(name) = &c.sub_out_var {
-            private_vars.push(format!("{name} {}", schema_name(&c.sub_name, Collapse::IO(Side::Any))));
-        }
+        let name = &c.sub_io_var;
+        private_vars.push(format!("{name} {}", schema_name(&c.sub_name, Collapse::IO(Side::Any))));
     }
     // Append the chain record typed private when packed.
     if chain_packed(meta.chain_max_ts) {
@@ -529,12 +505,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 let chain = vars["chain"];
                 let chain_next = chain.next();
                 let mut args: Vec<String> = Vec::new();
-                if let Some(name) = &call.sub_in_var {
-                    args.push(name.clone());
-                }
-                if let Some(name) = &call.sub_out_var {
-                    args.push(name.clone());
-                }
+                args.push(call.sub_io_var.clone());
                 args.push("state_header".to_string());
                 args.push(format!("{chain}"));
                 args.push(format!("{chain_next}"));
@@ -636,11 +607,8 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
 
             // Action call.
             let mut call_args: Vec<String> = Vec::new();
-            if !meta.in_entries.is_empty() {
-                call_args.push("in".to_string());
-            }
-            if !meta.out_entries.is_empty() {
-                call_args.push("out".to_string());
+            if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {
+                call_args.push("io".to_string());
             }
             call_args.push("state_header".to_string());
             call_args.push("chain0".to_string());

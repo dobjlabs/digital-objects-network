@@ -4,8 +4,8 @@ use pod2::{
     frontend::MultiPodBuilder,
     lang::Module,
     middleware::{
-        CustomPredicateRef, Statement, StrKey, Value,
         containers::{Dictionary, Set},
+        CustomPredicateRef, OperationType, Statement, StrKey, Value,
     },
 };
 
@@ -326,14 +326,24 @@ impl BuildContext {
         statements: Vec<Statement>,
     ) -> anyhow::Result<Statement> {
         for module in &self.modules {
-            if let Some(cpr) = module.predicate_ref_by_name(name) {
+            if module.predicate_ref_by_name(name).is_some() {
                 return module.apply_predicate_with(name, statements, public, |is_public, op| {
                     let mut wildcard_values: Vec<(usize, Value)> = Vec::new();
+                    // Get the CustomPredicateRef from the closure because this may be a chain in a
+                    // split predicate where the wildcard indices are different than the top level
+                    // predicate.
+                    let cpr = match &op.0 {
+                        OperationType::Custom(cpr) => cpr,
+                        _ => unreachable!(),
+                    };
                     for (i, name) in cpr.predicate().wildcard_names().iter().enumerate() {
                         if let Some(value) = wildcard_map.get(name) {
                             wildcard_values.push((i, value.clone()));
                         }
                     }
+                    // for (i, wc) in &wildcard_values {
+                    //     println!("DBG {i} {wc}");
+                    // }
                     let st = self.builder.op(is_public, wildcard_values, op).unwrap();
                     Ok(st)
                 });
