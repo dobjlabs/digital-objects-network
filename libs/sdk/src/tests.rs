@@ -632,6 +632,6 @@ fn test_sdk_state_header() {
     let executor = module.executor(true, grounding_witness(&state, &[ticker0.obj.commitment()]));
     let res = executor.action("Tick", vec![ticker0]).unwrap();
     let ticker1_tx = res.tx.clone();
-    let [ticker1] = res.objs();
+    let [_ticker1] = res.objs();
     apply_tx(&mut state, &ticker1_tx);
 }
