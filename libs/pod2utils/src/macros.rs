@@ -4,8 +4,8 @@ use pod2::{
     frontend::MultiPodBuilder,
     lang::Module,
     middleware::{
-        CustomPredicateRef, OperationType, Statement, StrKey, Value,
         containers::{Dictionary, Set},
+        CustomPredicateRef, OperationType, Statement, StrKey, Value,
     },
 };
 
@@ -341,9 +341,6 @@ impl BuildContext {
                             wildcard_values.push((i, value.clone()));
                         }
                     }
-                    // for (i, wc) in &wildcard_values {
-                    //     println!("DBG {i} {wc}");
-                    // }
                     let st = self.builder.op(is_public, wildcard_values, op).unwrap();
                     Ok(st)
                 });

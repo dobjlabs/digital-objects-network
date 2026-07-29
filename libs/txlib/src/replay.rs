@@ -16,15 +16,15 @@
 use pod2::{
     frontend::Operation,
     middleware::{
-        Hash, Statement, Value,
         containers::{Dictionary, Set},
+        Hash, Statement, Value,
     },
 };
 use pod2utils::{dict, macros::BuildContext, map, op, st_custom};
 
 use crate::{
-    ChainEvent, OBJECT_NULLIFIER_VERSION, TxStats, build_tx, object_key_hash,
-    object_nullifier_from_key_hash, record, tx_with,
+    build_tx, object_key_hash, object_nullifier_from_key_hash, record, tx_with, ChainEvent,
+    TxStats, OBJECT_NULLIFIER_VERSION,
 };
 
 /// The replay walker. Owns the long-lived mutable builder state
@@ -956,8 +956,6 @@ impl<'a> Replayer<'a> {
             ))
             .unwrap();
 
-        // println!("DBG btx={}", btx.inner());
-        // println!("DBG new_live={}", new_live.inner());
         let op_si = self
             .ctx
             .builder
