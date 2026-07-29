@@ -139,7 +139,6 @@ impl<'a> fmt::Display for VarNameFmt<'a> {
 pub(crate) enum Side {
     In,
     Out,
-    Any,
 }
 
 /// The record namespace a collapsed Object state dict belongs to.
@@ -154,7 +153,6 @@ impl Side {
         match self {
             Side::In => format!("in_{name}"),
             Side::Out => format!("out_{name}"),
-            Side::Any => format!("{name}"),
         }
     }
 //     fn schema_suffix(self) -> &'static str {
@@ -218,10 +216,16 @@ pub(crate) fn dispatch_side(io: &ObjectIO) -> Side {
     }
 }
 
-/// Schema name for a (action, namespace) pair, e.g. `LogToWoodIO`.
-fn schema_name(action_name: &str, ns: impl Into<Collapse>) -> String {
-    format!("{action_name}{}", ns.into().schema_suffix())
+/// Initials schema name for a (action, namespace) pair, e.g. `LogToWoodInitials`.
+fn schema_name_initials(action_name: &str) -> String {
+    format!("{action_name}Initials")
 }
+
+/// IO schema name for a (action, namespace) pair, e.g. `LogToWoodIO`.
+fn schema_name_io(action_name: &str) -> String {
+    format!("{action_name}IO")
+}
+
 
 /// Emit `record <Action><Side> = (<entries>)` lines for any non-empty
 /// in/out schema across all actions, plus `<Action>Chain` records for
@@ -234,7 +238,7 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
             writeln!(
                 w,
                 "record {} = ({})",
-                schema_name(&meta.name, Collapse::IO(Side::Any)),
+                schema_name_io(&meta.name),
                 render(&names),
             )?;
         }
@@ -254,7 +258,7 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
             writeln!(
                 w,
                 "record {} = ({})",
-                schema_name(&meta.name, Collapse::Initials),
+                schema_name_initials(&meta.name),
                 render(initials),
             )?;
         }
@@ -330,7 +334,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     write!(w, "{}(", action.name)?;
     let mut wrote_pub = false;
     if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {
-        write!(w, "io {}", schema_name(&action.name, Collapse::IO(Side::Any)))?;
+        write!(w, "io {}", schema_name_io(&action.name))?;
         wrote_pub = true;
     }
     if wrote_pub {
@@ -373,7 +377,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // Append synthesized sub-action typed privates last.
     for c in &sub_calls {
         let name = &c.sub_io_var;
-        private_vars.push(format!("{name} {}", schema_name(&c.sub_name, Collapse::IO(Side::Any))));
+        private_vars.push(format!("{name} {}", schema_name_io(&c.sub_name)));
     }
     // Append the chain record typed private when packed.
     if chain_packed(meta.chain_max_ts) {
@@ -383,7 +387,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     if meta.initials_entries.is_some() {
         private_vars.push(format!(
             "initials {}",
-            schema_name(&action.name, Collapse::Initials),
+            schema_name_initials(&action.name),
         ));
     }
     if !private_vars.is_empty() {
@@ -427,7 +431,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
             writeln!(
                 w,
                 "  ArrayContains(io, {}::in_{}, {})",
-                schema_name(&action.name, Collapse::IO(Side::Any)),
+                schema_name_io(&action.name),
                 o.varname,
                 fmt_var_at(&o.varname, 0, max_ts),
             )?;
@@ -439,7 +443,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
             writeln!(
                 w,
                 "  ArrayContains(io, {}::out_{}, {})",
-                schema_name(&action.name, Collapse::IO(Side::Any)),
+                schema_name_io(&action.name),
                 o.varname,
                 fmt_var_at(&o.varname, max_ts, max_ts),
             )?;
@@ -590,7 +594,7 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
             write!(w, "{bridge_name}(state, state_header, chain0, chain")?;
             let mut priv_parts: Vec<String> = Vec::new();
             if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {
-                priv_parts.push(format!("io {}", schema_name(&meta.name, Collapse::IO(Side::Any))));
+                priv_parts.push(format!("io {}", schema_name_io(&meta.name)));
             }
             if !priv_parts.is_empty() {
                 write!(w, ", private: {}", priv_parts.join(", "))?;
@@ -601,7 +605,7 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
             writeln!(
                 w,
                 "  ArrayContains(io, {}::{}, state)",
-                schema_name(&meta.name, Collapse::IO(Side::Any)),
+                schema_name_io(&meta.name),
                 side.arg_name(&o.varname),
             )?;
 

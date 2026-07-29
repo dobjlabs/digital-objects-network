@@ -687,9 +687,6 @@ impl ActionHandle {
                 Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::Out)) => {
                     (&io_array, meta.out_entry(obj_name).unwrap().0 as i64).into()
                 }
-                Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::Any)) => {
-                    panic!("TODO: Maybe I should get rid of Side::Any?")
-                }
                 Some(fmt_podlang::Collapse::Initials) => {
                     initials_anchor(obj_name).expect("collapsed_at promised an initials slot")
                 }
@@ -1115,7 +1112,6 @@ impl ActionHandle {
                 let entry_idx = match fmt_podlang::dispatch_side(&obj_ref.io) {
                     fmt_podlang::Side::In => meta.in_entry(varname).unwrap().0,
                     fmt_podlang::Side::Out =>  meta.out_entry(varname).unwrap().0,
-                    fmt_podlang::Side::Any => panic!(),
                 };
                 let st_is_x = module.build_is_x(
                     &mut exe_ctx.bld,
