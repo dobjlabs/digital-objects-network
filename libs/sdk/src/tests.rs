@@ -250,7 +250,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "9e84b0fb084e8be99f74c7788e3c43d13927826f0e0315f99d9b9a678c24103b"
+        module_hash = "a8ae566dddbe81cdf1f7d15396eadb748cdf4f0a8976936c406199b556d62c10"
 
         [[classes]]
         name = "Log"
@@ -570,7 +570,7 @@ fn test_sdk_state_header() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "9e84b0fb084e8be99f74c7788e3c43d13927826f0e0315f99d9b9a678c24103b"
+        module_hash = "a8ae566dddbe81cdf1f7d15396eadb748cdf4f0a8976936c406199b556d62c10"
 
         [[classes]]
         name = "Ticker"
