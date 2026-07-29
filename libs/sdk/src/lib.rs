@@ -276,28 +276,26 @@ impl VarOrValue {
                 typ,
                 key: Some(key),
                 ..
-            }) => {
-                match typ {
-                    Type::Dict => {
-                        let dict = value
-                            .as_ref()
-                            .expect("has value at exec time")
-                            .as_dictionary()
-                            .expect("dict");
-                        dict.get(&StrKey::from(key)).unwrap().expect("key exists")
-                    }
-                    Type::Array(record) => {
-                        let array = value
-                            .as_ref()
-                            .expect("has value at exec time")
-                            .as_array()
-                            .expect("array");
-                        let idx = record.iter().position(|k| k == key).unwrap();
-                        array.get(idx).unwrap().expect("index exists")
-                    }
-                    _ => todo!("implement type {typ}"),
+            }) => match typ {
+                Type::Dict => {
+                    let dict = value
+                        .as_ref()
+                        .expect("has value at exec time")
+                        .as_dictionary()
+                        .expect("dict");
+                    dict.get(&StrKey::from(key)).unwrap().expect("key exists")
                 }
-            }
+                Type::Array(record) => {
+                    let array = value
+                        .as_ref()
+                        .expect("has value at exec time")
+                        .as_array()
+                        .expect("array");
+                    let idx = record.iter().position(|k| k == key).unwrap();
+                    array.get(idx).unwrap().expect("index exists")
+                }
+                _ => todo!("implement type {typ}"),
+            },
         }
     }
     // Only call this at exec time
