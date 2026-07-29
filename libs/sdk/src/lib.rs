@@ -285,18 +285,16 @@ impl VarOrValue {
                             .as_dictionary()
                             .expect("dict");
                         dict.get(&StrKey::from(key)).unwrap().expect("key exists")
-                    },
+                    }
                     Type::Array(record) => {
                         let array = value
                             .as_ref()
                             .expect("has value at exec time")
                             .as_array()
                             .expect("array");
-                        // println!("DBG key={key}");
-                        // println!("DBG array={array:?}");
                         let idx = record.iter().position(|k| k == key).unwrap();
                         array.get(idx).unwrap().expect("index exists")
-                    },
+                    }
                     _ => todo!("implement type {typ}"),
                 }
             }
@@ -320,28 +318,22 @@ impl VarOrValue {
     fn as_op_arg(&self) -> OperationArg {
         match self {
             Self::Value(value) => OperationArg::Literal(value.clone()),
-            Self::Var(Var { typ, value, key, .. }) => {
+            Self::Var(Var {
+                typ, value, key, ..
+            }) => {
                 let value = value.as_ref().expect("has value at exec time").clone();
                 if let Some(key) = key {
                     let st_contains = match typ {
                         Type::Dict => {
                             let dict = value.as_dictionary().expect("dict");
                             let value = dict.get(&key.into()).unwrap().unwrap();
-                            Statement::Contains(
-                                dict.into(),
-                                key.clone().into(),
-                                value.into(),
-                            )
+                            Statement::Contains(dict.into(), key.clone().into(), value.into())
                         }
                         Type::Array(record) => {
                             let array = value.as_array().expect("array");
                             let index = record.iter().position(|k| k == key).unwrap();
                             let value = array.get(index).unwrap().unwrap();
-                            Statement::Contains(
-                                array.into(),
-                                (index as i64).into(),
-                                value.into(),
-                            )
+                            Statement::Contains(array.into(), (index as i64).into(), value.into())
                         }
                         _ => todo!("support other types"),
                     };
@@ -489,10 +481,21 @@ impl ActionContext {
     }
 }
 
-static RECORD_STATE_HEADER: LazyLock<Arc<Vec<String>>> =
-    LazyLock::new(|| {
-Arc::new(["block_number", "block_timestamp", "block_hash", "created", "nullifiers", "prior_state_history"].map(|s| s.to_string()).into_iter().collect::<Vec<_>>())
-    });
+static RECORD_STATE_HEADER: LazyLock<Arc<Vec<String>>> = LazyLock::new(|| {
+    Arc::new(
+        [
+            "block_number",
+            "block_timestamp",
+            "block_hash",
+            "created",
+            "nullifiers",
+            "prior_state_history",
+        ]
+        .map(|s| s.to_string())
+        .into_iter()
+        .collect::<Vec<_>>(),
+    )
+});
 
 impl ActionHandle {
     //
@@ -504,12 +507,17 @@ impl ActionHandle {
     fn state_header(&self) -> ArgHandle {
         let mut ctx = self.0.borrow_mut();
         ctx.add_var("state_header".to_string()).unwrap_or(());
-        let arg = Rc::new(RefCell::new(VarOrValue::var(Type::Array(RECORD_STATE_HEADER.clone()))));
-        arg.borrow_mut().set_var_name("state_header".to_string()).unwrap();
+        let arg = Rc::new(RefCell::new(VarOrValue::var(Type::Array(
+            RECORD_STATE_HEADER.clone(),
+        ))));
+        arg.borrow_mut()
+            .set_var_name("state_header".to_string())
+            .unwrap();
         if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
             let exe_ctx = exe_rc.borrow();
             let state_header = exe_ctx.tx_builder.state_header();
-            arg.borrow_mut().set_value(Value::from(state_header.array()));
+            arg.borrow_mut()
+                .set_value(Value::from(state_header.array()));
         }
         ArgHandle::new(self.clone(), arg)
     }
@@ -903,7 +911,6 @@ impl ActionHandle {
                 let post_ts = pending.post_ts;
                 let chain_anchor = chain_step_anchor(post_ts);
                 let prev_chain_anchor = chain_step_anchor(pre_ts);
-                // println!("DBG io: {:?}, varname: {varname}, new_anchor: {:?}", io, new_anchor);
                 let replacements: Vec<Option<OperationArg>> = match io {
                     ObjectIO::Output => {
                         let initial_anchor = initials_anchor(varname);
@@ -926,12 +933,6 @@ impl ActionHandle {
                         None,
                     ],
                 };
-                // println!("DBG st\n{}", pending.st_literal);
-                // for (i, r) in replacements.iter().enumerate() {
-                //     if let Some(r) = r {
-                //         println!("DBG replacement {}: {}", i, r);
-                //     }
-                // }
                 let st_tx = if replacements.iter().any(|r| r.is_some()) {
                     exe_ctx
                         .bld
@@ -1028,14 +1029,16 @@ impl ActionHandle {
                         let dict = final_dict.clone().expect("Set final_dict captured at Rhai");
                         let ts = *current_ts.get(obj).unwrap_or(&0);
                         let dict_arg = anchor_or_literal(obj, &dict, ts);
-                        // println!("DBG dict_arg={dict_arg}");
                         for (key, value) in kvs {
                             let arg = value.borrow().as_op_arg().clone();
-                            // println!("DBG key={key}, value={arg}");
                             let st = exe_ctx
                                 .bld
                                 .builder
-                                .priv_op(Operation::dict_contains(dict_arg.clone(), key.clone(), arg))
+                                .priv_op(Operation::dict_contains(
+                                    dict_arg.clone(),
+                                    key.clone(),
+                                    arg,
+                                ))
                                 .unwrap();
                             body_sts.push(st);
                         }
@@ -1057,7 +1060,12 @@ impl ActionHandle {
                         let st = exe_ctx
                             .bld
                             .builder
-                            .priv_op(Operation::dict_update(old_dict_arg, key.clone(), arg, new_dict_arg))
+                            .priv_op(Operation::dict_update(
+                                old_dict_arg,
+                                key.clone(),
+                                arg,
+                                new_dict_arg,
+                            ))
                             .unwrap();
                         body_sts.push(st);
                         if let Some(t) = current_ts.get_mut(obj) {
@@ -1077,18 +1085,12 @@ impl ActionHandle {
         sts.extend(body_sts);
         sts.extend(event_sts);
 
-        for st in &sts {
-            println!("DBG st:\n{}", st);
-        }
-        println!("");
         let st_action = {
             let mut exe_ctx = exe_rc.borrow_mut();
             let state_header = exe_ctx.tx_builder.state_header().array();
             exe_ctx
                 .bld
-                .apply_custom_pred(false, &action,
-                    map!({"state_header" => state_header}),
-                    sts)
+                .apply_custom_pred(false, &action, map!({"state_header" => state_header}), sts)
                 .unwrap()
         };
 
@@ -1111,7 +1113,7 @@ impl ActionHandle {
 
                 let entry_idx = match fmt_podlang::dispatch_side(&obj_ref.io) {
                     fmt_podlang::Side::In => meta.in_entry(varname).unwrap().0,
-                    fmt_podlang::Side::Out =>  meta.out_entry(varname).unwrap().0,
+                    fmt_podlang::Side::Out => meta.out_entry(varname).unwrap().0,
                 };
                 let st_is_x = module.build_is_x(
                     &mut exe_ctx.bld,
@@ -1664,7 +1666,7 @@ impl ActionMeta {
         self.out_entries
             .iter()
             .enumerate()
-            .map(|(i, e)| (i+self.in_entries.len(), e))
+            .map(|(i, e)| (i + self.in_entries.len(), e))
             .find(|(_, e)| e.varname == varname)
     }
 
@@ -2006,7 +2008,6 @@ impl Loader {
     fn module(self, engine: Rc<Engine>, ast: AST) -> SdkModule {
         let mut podlang_src = String::new();
         fmt_podlang::fmt(&self, &mut podlang_src).unwrap();
-        println!("DBG\n{podlang_src}");
 
         let params = Params::default();
         let module = Arc::new(
@@ -2168,8 +2169,7 @@ impl SdkModule {
 
         // Step 2: discharge the bridge predicate.
         let st_bridge = bld
-            .apply_custom_pred_simple(false, &bridge_name,
-                vec![st_array_contains, st_action])
+            .apply_custom_pred_simple(false, &bridge_name, vec![st_array_contains, st_action])
             .expect("apply bridge predicate");
 
         // Step 3: IsX OR with the bridge at the right branch.
@@ -2591,7 +2591,6 @@ impl Sdk {
         actions: &[&str],
     ) -> Result<Rc<SdkModule>, SdkError> {
         let scope = Scope::new();
-        // println!("DBG: Compile");
         let ast = self.engine.compile_with_scope(&scope, src).unwrap();
 
         let mut action_handles = Vec::new();
@@ -2600,7 +2599,6 @@ impl Sdk {
             let mut scope = Scope::new();
             scope.push_constant("state_header", action_handle.state_header());
             let options = CallFnOptions::new().with_tag(action_handle.clone());
-            // println!("DBG: Call {action}");
             let _result = self.engine.call_fn_with_options::<Dynamic>(
                 options,
                 &mut scope,
@@ -2611,7 +2609,6 @@ impl Sdk {
             action_handles.push(action_handle);
         }
 
-        // println!("DBG: Loader");
         let loader = Loader::new(action_handles)?;
         Ok(Rc::new(loader.module(self.engine.clone(), ast)))
     }
@@ -2639,14 +2636,13 @@ impl Sdk {
                 loaded_classes
             ))?;
         }
-        // TODO: Uncomment
-        // if manifest.plugin.module_hash != sdk_module.module.batch.id() {
-        //     return Err(anyhow!(
-        //         "manifest.plugin.module_hash = {:#} but module.hash = {:#}",
-        //         manifest.plugin.module_hash,
-        //         sdk_module.module.batch.id()
-        //     ))?;
-        // }
+        if manifest.plugin.module_hash != sdk_module.module.batch.id() {
+            return Err(anyhow!(
+                "manifest.plugin.module_hash = {:#} but module.hash = {:#}",
+                manifest.plugin.module_hash,
+                sdk_module.module.batch.id()
+            ))?;
+        }
 
         Ok(sdk_module)
     }

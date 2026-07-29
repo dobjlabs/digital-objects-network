@@ -155,31 +155,13 @@ impl Side {
             Side::Out => format!("out_{name}"),
         }
     }
-//     fn schema_suffix(self) -> &'static str {
-//         match self {
-//             Side::In => "In",
-//             Side::Out => "Out",
-//         }
-//     }
 }
-
-// impl From<Side> for Collapse {
-//     fn from(side: Side) -> Self {
-//         Collapse::Side(side)
-//     }
-// }
 
 impl Collapse {
     pub(crate) fn arg_name(self, name: &str) -> String {
         match self {
             Collapse::IO(side) => format!("io.{}", side.arg_name(&name)),
             Collapse::Initials => format!("initials.{name}"),
-        }
-    }
-    fn schema_suffix(self) -> &'static str {
-        match self {
-            Collapse::IO(_) => "IO",
-            Collapse::Initials => "Initials",
         }
     }
 }
@@ -226,7 +208,6 @@ fn schema_name_io(action_name: &str) -> String {
     format!("{action_name}IO")
 }
 
-
 /// Emit `record <Action><Side> = (<entries>)` lines for any non-empty
 /// in/out schema across all actions, plus `<Action>Chain` records for
 /// actions whose chain has 2+ intermediate states.
@@ -234,7 +215,16 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     let render = |entries: &[String]| entries.join(", ");
     for meta in &loader.actions_meta {
         if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {
-            let names: Vec<String> = meta.in_entries.iter().map(|e| Side::In.arg_name(&e.varname)).chain(meta.out_entries.iter().map(|e| Side::Out.arg_name(&e.varname))).collect();
+            let names: Vec<String> = meta
+                .in_entries
+                .iter()
+                .map(|e| Side::In.arg_name(&e.varname))
+                .chain(
+                    meta.out_entries
+                        .iter()
+                        .map(|e| Side::Out.arg_name(&e.varname)),
+                )
+                .collect();
             writeln!(
                 w,
                 "record {} = ({})",
@@ -385,10 +375,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     }
     // Append the initials record typed private when packed.
     if meta.initials_entries.is_some() {
-        private_vars.push(format!(
-            "initials {}",
-            schema_name_initials(&action.name),
-        ));
+        private_vars.push(format!("initials {}", schema_name_initials(&action.name),));
     }
     if !private_vars.is_empty() {
         write!(w, ", private: ")?;

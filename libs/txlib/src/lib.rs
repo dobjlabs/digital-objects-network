@@ -33,9 +33,9 @@ use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     frontend::Operation,
     middleware::{
+        EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
         containers::{Array, Dictionary, Set},
-        hash_values, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
-        EMPTY_VALUE,
+        hash_values,
     },
 };
 use pod2utils::{dict, macros::BuildContext, map, op, rand_raw_value, set, st_custom};
@@ -1146,7 +1146,7 @@ mod tests {
     use pod2::{
         backends::plonky2::mock::mainpod::MockProver,
         frontend::{MainPod, MultiPodBuilder},
-        middleware::{containers::Array, Params, Predicate, VDSet, F},
+        middleware::{F, Params, Predicate, VDSet, containers::Array},
     };
     use pod2utils::{macros::BuildContext, set};
 
@@ -1444,10 +1444,12 @@ mod tests {
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);
 
-        assert!(tx_out
-            .nullifiers
-            .contains(&Value::from(compute_nullifier(&pick)))
-            .unwrap());
+        assert!(
+            tx_out
+                .nullifiers
+                .contains(&Value::from(compute_nullifier(&pick)))
+                .unwrap()
+        );
     }
 
     /// Tx 1: FindLog (genesis insert).
@@ -1672,10 +1674,12 @@ mod tests {
         assert!(tx3_out.live.contains(&Value::from(stick_a)).unwrap());
         assert!(tx3_out.live.contains(&Value::from(stick_b)).unwrap());
         // Wood should be nullified
-        assert!(tx3_out
-            .nullifiers
-            .contains(&Value::from(compute_nullifier(&wood)))
-            .unwrap());
+        assert!(
+            tx3_out
+                .nullifiers
+                .contains(&Value::from(compute_nullifier(&wood)))
+                .unwrap()
+        );
     }
 
     /// Grounding three inputs exercises InputsGroundedRecursive (peel two per
@@ -1762,10 +1766,12 @@ mod tests {
         solve_and_verify(ctx.builder);
 
         for log in &logs {
-            assert!(burn_out
-                .nullifiers
-                .contains(&Value::from(compute_nullifier(log)))
-                .unwrap());
+            assert!(
+                burn_out
+                    .nullifiers
+                    .contains(&Value::from(compute_nullifier(log)))
+                    .unwrap()
+            );
         }
     }
 }

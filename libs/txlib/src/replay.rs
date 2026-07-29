@@ -16,15 +16,15 @@
 use pod2::{
     frontend::Operation,
     middleware::{
-        containers::{Dictionary, Set},
         Hash, Statement, Value,
+        containers::{Dictionary, Set},
     },
 };
 use pod2utils::{dict, macros::BuildContext, map, op, st_custom};
 
 use crate::{
-    build_tx, object_key_hash, object_nullifier_from_key_hash, record, tx_with, ChainEvent,
-    TxStats, OBJECT_NULLIFIER_VERSION,
+    ChainEvent, OBJECT_NULLIFIER_VERSION, TxStats, build_tx, object_key_hash,
+    object_nullifier_from_key_hash, record, tx_with,
 };
 
 /// The replay walker. Owns the long-lived mutable builder state
