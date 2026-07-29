@@ -21,7 +21,8 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "e29598d5e1beadc27840770903098b8fd680094a", default-features = false, features = [
+# https://github.com/0xPARC/pod2/pull/530
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "06814abd7d925a1f753f2cf550152dbea318f4a9", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
@@ -65,8 +66,8 @@ thiserror = "2.0.18"
 wire-types = { path = "libs/wire-types" }
 
 # Uncomment to use a local pod2 dependency
-# [patch."https://github.com/0xPARC/pod2"]
-# pod2 = { path = "../pod2" }
+[patch."https://github.com/0xPARC/pod2"]
+pod2 = { path = "../pod2" }
 
 # Uncomment in order to enable debug information in the release builds.  This allows getting panic backtraces with a performance similar to regular release.
 # [profile.release]
