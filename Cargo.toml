@@ -66,8 +66,8 @@ thiserror = "2.0.18"
 wire-types = { path = "libs/wire-types" }
 
 # Uncomment to use a local pod2 dependency
-[patch."https://github.com/0xPARC/pod2"]
-pod2 = { path = "../pod2" }
+# [patch."https://github.com/0xPARC/pod2"]
+# pod2 = { path = "../pod2" }
 
 # Uncomment in order to enable debug information in the release builds.  This allows getting panic backtraces with a performance similar to regular release.
 # [profile.release]
