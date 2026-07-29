@@ -316,28 +316,27 @@ fn test_records_form_just_output() {
         .load_module_from_src_actions(craft_src, &["JustOutput"])
         .unwrap();
 
-    let expected = r#"record JustOutputOut = (x)
+    let expected = r#"record JustOutputIO = (out_x)
 record JustOutputInitials = (x)
 
 // Actions
 
-JustOutput(out JustOutputOut, chain0, chain, private: initials JustOutputInitials) = AND(
-  tx::TxInsert(chain0, chain, initials.x, out.x, @self_predicate(IsFoo))
+JustOutput(io JustOutputIO, state_header StateHeader, chain0, chain, private: initials JustOutputInitials) = AND(
+  tx::TxInsert(chain0, chain, initials.x, io.out_x, @self_predicate(IsFoo))
 )
 
 // Bridges
 
-IsFooFromJustOutput(state, chain0, chain, private: out JustOutputOut) = AND(
-  ArrayContains(out, JustOutputOut::x, state)
-  JustOutput(out, chain0, chain)
+IsFooFromJustOutput(state, state_header, chain0, chain, private: io JustOutputIO) = AND(
+  ArrayContains(io, JustOutputIO::out_x, state)
+  JustOutput(io, state_header, chain0, chain)
 )
 
 // Classes
 
 IsFoo(state, state_header StateHeader, chain0, chain) = OR(
-  IsFooFromJustOutput(state, chain0, chain)
-)
-"#;
+  IsFooFromJustOutput(state, state_header, chain0, chain)
+)"#;
     assert!(
         module.podlang_src.contains(expected),
         "records-form mismatch.\nexpected fragment:\n{expected}\nactual:\n{}",
@@ -367,40 +366,38 @@ fn test_records_form_input_output_update() {
         .load_module_from_src_actions(craft_src, &["LogToWood"])
         .unwrap();
 
-    let expected = r#"record LogToWoodIn = (log)
-record LogToWoodOut = (wood)
+    let expected = r#"record LogToWoodIO = (in_log, out_wood)
 record LogToWoodInitials = (wood)
 
 // Actions
 
-LogToWood(in LogToWoodIn, out LogToWoodOut, chain0, chain, private: chain1, wood0, key, initials LogToWoodInitials) = AND(
+LogToWood(io LogToWoodIO, state_header StateHeader, chain0, chain, private: chain1, wood0, key, initials LogToWoodInitials) = AND(
   DictUpdate(wood0, "key", key, initials.wood)
-  tx::TxDelete(chain0, chain1, in.log, @self_predicate(IsLog))
-  tx::TxInsert(chain1, chain, initials.wood, out.wood, @self_predicate(IsWood))
+  tx::TxDelete(chain0, chain1, io.in_log, @self_predicate(IsLog))
+  tx::TxInsert(chain1, chain, initials.wood, io.out_wood, @self_predicate(IsWood))
 )
 
 // Bridges
 
-IsLogFromLogToWood(state, chain0, chain, private: in LogToWoodIn, out LogToWoodOut) = AND(
-  ArrayContains(in, LogToWoodIn::log, state)
-  LogToWood(in, out, chain0, chain)
+IsLogFromLogToWood(state, state_header, chain0, chain, private: io LogToWoodIO) = AND(
+  ArrayContains(io, LogToWoodIO::in_log, state)
+  LogToWood(io, state_header, chain0, chain)
 )
 
-IsWoodFromLogToWood(state, chain0, chain, private: in LogToWoodIn, out LogToWoodOut) = AND(
-  ArrayContains(out, LogToWoodOut::wood, state)
-  LogToWood(in, out, chain0, chain)
+IsWoodFromLogToWood(state, state_header, chain0, chain, private: io LogToWoodIO) = AND(
+  ArrayContains(io, LogToWoodIO::out_wood, state)
+  LogToWood(io, state_header, chain0, chain)
 )
 
 // Classes
 
 IsLog(state, state_header StateHeader, chain0, chain) = OR(
-  IsLogFromLogToWood(state, chain0, chain)
+  IsLogFromLogToWood(state, state_header, chain0, chain)
 )
 
 IsWood(state, state_header StateHeader, chain0, chain) = OR(
-  IsWoodFromLogToWood(state, chain0, chain)
-)
-"#;
+  IsWoodFromLogToWood(state, state_header, chain0, chain)
+)"#;
     assert!(
         module.podlang_src.contains(expected),
         "records-form mismatch.\nexpected fragment:\n{expected}\nactual:\n{}",
@@ -439,11 +436,10 @@ fn test_records_form_subaction() {
     // Parent action signature + sub-action call body. `bar`'s
     // out-side collapses (no sub-field reads, no Intro use) so the
     // wildcard is dropped and body refs render as `out.bar`.
-    let expected_parent = r#"MineBar(out MineBarOut, chain0, chain, private: chain1, _UseFoo_in_0 UseFooIn, _UseFoo_out_0 UseFooOut, initials MineBarInitials) = AND(
-  UseFoo(_UseFoo_in_0, _UseFoo_out_0, chain0, chain1)
-  tx::TxInsert(chain1, chain, initials.bar, out.bar, @self_predicate(IsBar))
-)
-"#;
+    let expected_parent = r#"MineBar(io MineBarIO, state_header StateHeader, chain0, chain, private: chain1, _UseFoo_io_0 UseFooIO, initials MineBarInitials) = AND(
+  UseFoo(_UseFoo_io_0, state_header, chain0, chain1)
+  tx::TxInsert(chain1, chain, initials.bar, io.out_bar, @self_predicate(IsBar))
+)"#;
     assert!(
         module.podlang_src.contains(expected_parent),
         "MineBar records-form mismatch.\nexpected:\n{expected_parent}\nactual:\n{}",
@@ -452,9 +448,9 @@ fn test_records_form_subaction() {
 
     // The bridge for MineBar's direct output (`bar`) should exist.
     assert!(
-        module
-            .podlang_src
-            .contains("IsBarFromMineBar(state, chain0, chain, private: out MineBarOut) = AND("),
+        module.podlang_src.contains(
+            "IsBarFromMineBar(state, state_header, chain0, chain, private: io MineBarIO) = AND("
+        ),
         "missing IsBarFromMineBar bridge:\n{}",
         module.podlang_src
     );
@@ -491,32 +487,30 @@ fn test_records_form_mutate() {
         .load_module_from_src_actions(craft_src, &["UseFoo"])
         .unwrap();
 
-    let expected = r#"record UseFooIn = (foo)
-record UseFooOut = (foo)
+    let expected = r#"record UseFooIO = (in_foo, out_foo)
 
 // Actions
 
-UseFoo(in UseFooIn, out UseFooOut, chain0, chain, private: foo0, dur) = AND(
-  ArrayContains(in, UseFooIn::foo, foo0)
+UseFoo(io UseFooIO, state_header StateHeader, chain0, chain, private: foo0, dur) = AND(
+  ArrayContains(io, UseFooIO::in_foo, foo0)
   Gt(foo0.durability, 0)
   Sum(dur, 1, foo0.durability)
-  DictUpdate(foo0, "durability", dur, out.foo)
-  tx::TxMutate(chain0, chain, foo0, out.foo, @self_predicate(IsFoo))
+  DictUpdate(foo0, "durability", dur, io.out_foo)
+  tx::TxMutate(chain0, chain, foo0, io.out_foo, @self_predicate(IsFoo))
 )
 
 // Bridges
 
-IsFooFromUseFoo(state, chain0, chain, private: in UseFooIn, out UseFooOut) = AND(
-  ArrayContains(out, UseFooOut::foo, state)
-  UseFoo(in, out, chain0, chain)
+IsFooFromUseFoo(state, state_header, chain0, chain, private: io UseFooIO) = AND(
+  ArrayContains(io, UseFooIO::out_foo, state)
+  UseFoo(io, state_header, chain0, chain)
 )
 
 // Classes
 
 IsFoo(state, state_header StateHeader, chain0, chain) = OR(
-  IsFooFromUseFoo(state, chain0, chain)
-)
-"#;
+  IsFooFromUseFoo(state, state_header, chain0, chain)
+)"#;
     assert!(
         module.podlang_src.contains(expected),
         "records-form mismatch.\nexpected fragment:\n{expected}\nactual:\n{}",
