@@ -153,11 +153,17 @@ enum Inst {
     /// statement is consumed here in the parent's post-Rhai walk.
     SubAction {
         action: String,
-        /// Aliases the sub-action's first producing object Ref so
-        /// parent scripts can bind it via `var foo = subaction(...)`.
+        /// Aliases the Ref of the sub-action's first produced object
+        /// so parent scripts can bind it via `var foo = subaction(...)`.
         obj: Ref,
         /// Sub-action's predicate statement. Some at Execute, None at Load.
         st_sub: Option<Statement>,
+        /// The sub-action's `io` record value, the aliased out entry's
+        /// slot in it, and that entry's dict, snapshotted before any
+        /// parent-side writes. Backs the ArrayContains clause that pins
+        /// the alias wildcard when the parent body references it. Some
+        /// at Execute when the sub produces an object, None otherwise.
+        sub_out: Option<(Value, i64, Dictionary)>,
     },
 }
 
@@ -578,8 +584,10 @@ impl ActionHandle {
     /// Open an action scope, run the action's rhai body, emit its
     /// txlib events, build its predicate, attach guards, and close
     /// the scope. Sub-actions invoked from the rhai body recurse here
-    /// and stack their scope on top of this one.
-    fn exe_action(&self) -> RuntimeResult<Statement> {
+    /// and stack their scope on top of this one. Returns the action's
+    /// predicate statement plus its io record, which `subaction` uses
+    /// to pin a referenced alias.
+    fn exe_action(&self) -> RuntimeResult<(Statement, Array)> {
         let (module, scope_id, action) = {
             let ctx = self.0.borrow();
             let exe_rc = ctx.exe_ctx.as_ref().expect("exe phase").clone();
@@ -754,6 +762,33 @@ impl ActionHandle {
                     }
                 }
             }
+            // Pin each referenced sub-action alias to its sub's first
+            // out entry, matching fmt_action's alias ArrayContains
+            // clause.
+            let referenced = body_referenced_vars(&ctx.insts);
+            for inst in &ctx.insts {
+                if let Inst::SubAction {
+                    obj,
+                    sub_out: Some((io_record, entry_idx, dict)),
+                    ..
+                } = inst
+                {
+                    let alias = obj.borrow().var_name().to_string();
+                    if alias == "?" || !referenced.contains(&alias) {
+                        continue;
+                    }
+                    let st = exe_ctx
+                        .bld
+                        .builder
+                        .priv_op(Operation::array_contains(
+                            io_record.clone(),
+                            *entry_idx,
+                            Value::from(dict.clone()),
+                        ))
+                        .unwrap();
+                    array_contains_sts.push(st);
+                }
+            }
         }
 
         // ---- Per-Object type guard + Tx event. Same order as
@@ -776,8 +811,13 @@ impl ActionHandle {
             post_ts: usize,
         }
         // Assign a parent_ts to each Object/SubAction inst (each one
-        // advances the parent chain by exactly 1, in inst-iteration
-        // order). Drives chain anchoring and the chain_steps record.
+        // advances the parent chain by exactly 1). Events are recorded
+        // in emission order, not declaration order: sub-actions run and
+        // emit during the parent's Rhai body, while direct Object events
+        // are emitted post-Rhai, so all SubAction insts occupy the chain
+        // ts range before all Object insts (each group in inst order).
+        // `fmt_action` renders the same order. Drives chain anchoring
+        // and the chain_steps record.
         let chain_max_ts = meta.chain_max_ts;
         // chain_step_values[ts - 1] holds the per-ts chain hash for each
         // intermediate ts in 1..chain_max_ts (the final ts is the public
@@ -789,17 +829,23 @@ impl ActionHandle {
             vec![Value::from(0_i64); chain_max_ts.saturating_sub(1)];
         let inst_chain_ts: Vec<Option<usize>> = {
             let ctx = self.0.borrow();
-            let mut chain_ts: usize = 0;
+            let num_subs = ctx
+                .insts
+                .iter()
+                .filter(|inst| matches!(inst, Inst::SubAction { .. }))
+                .count();
+            let mut sub_ts: usize = 0;
+            let mut obj_ts: usize = num_subs;
             ctx.insts
                 .iter()
                 .map(|inst| match inst {
                     Inst::Object { .. } => {
-                        chain_ts += 1;
-                        Some(chain_ts)
+                        obj_ts += 1;
+                        Some(obj_ts)
                     }
                     Inst::SubAction { st_sub, .. } => {
-                        chain_ts += 1;
-                        if let Some(slot) = fmt_podlang::chain_step_at(chain_ts, chain_max_ts) {
+                        sub_ts += 1;
+                        if let Some(slot) = fmt_podlang::chain_step_at(sub_ts, chain_max_ts) {
                             let st = st_sub
                                 .as_ref()
                                 .expect("SubAction statement captured at Rhai");
@@ -809,7 +855,7 @@ impl ActionHandle {
                             };
                             chain_step_values[slot] = post_chain;
                         }
-                        Some(chain_ts)
+                        Some(sub_ts)
                     }
                     _ => None,
                 })
@@ -1142,7 +1188,7 @@ impl ActionHandle {
             }
             exe_ctx.tx_builder.end_action(scope_id);
         }
-        Ok(st_action)
+        Ok((st_action, io_array))
     }
     //
     // Exposed methods helpers
@@ -1172,36 +1218,56 @@ impl ActionHandle {
     /// before this call returns. The sub-action's predicate statement
     /// is cached on the `Inst::SubAction` and composed into the
     /// parent's predicate during its post-Rhai body walk. The returned
-    /// `ArgHandle` aliases the sub's first producing object so parent
+    /// `ArgHandle` aliases the sub's first produced object so parent
     /// scripts can bind it via `var foo = subaction("X")`.
     fn subaction(self, action: String) -> RuntimeResult<ArgHandle> {
         let exe_rc_opt = self.0.borrow().exe_ctx.clone();
         let arg_placeholder = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
 
-        let (arg, st_sub) = if let Some(exe_rc) = exe_rc_opt {
+        let (arg, st_sub, sub_out) = if let Some(exe_rc) = exe_rc_opt {
             let sub_handle = ActionHandle::new(action.clone(), Some(exe_rc.clone()));
-            let st_sub = sub_handle.exe_action()?;
+            let (st_sub, sub_io_array) = sub_handle.exe_action()?;
 
-            // Alias the parent's binding to the sub-action's first
-            // producing object Ref, or a fresh placeholder if the sub
+            // Alias the parent's binding to the Ref of the sub-action's
+            // first produced object, or a fresh placeholder if the sub
             // produces nothing.
-            let arg = sub_handle
-                .0
-                .borrow()
-                .insts
-                .iter()
-                .find_map(|i| match i {
-                    Inst::Object {
-                        io: ObjectIO::Output | ObjectIO::Mutate,
-                        obj,
-                        ..
-                    } => Some(obj.clone()),
+            let aliased: Option<(ObjectIO, Ref)> =
+                sub_handle.0.borrow().insts.iter().find_map(|i| match i {
+                    Inst::Object { io, obj, .. } if io.produces() => Some((*io, obj.clone())),
                     _ => None,
-                })
-                .unwrap_or_else(|| arg_placeholder.clone());
-            (arg, Some(st_sub))
+                });
+            let (arg, sub_out) = if let Some((io, obj)) = aliased {
+                let module = exe_rc.borrow().module.clone();
+                let sub_meta = module.action_by_name(&action);
+                let varname = obj.borrow().var_name().to_string();
+                let (entry_idx, _) = sub_meta
+                    .out_entry(&varname)
+                    .expect("produced object has an out entry");
+                let entry = sub_io_array
+                    .get(entry_idx)
+                    .expect("array op")
+                    .expect("sub io record has an entry per produced object");
+                // An Output's out entry is the post-identity dict, but
+                // the sub left its Ref at the pre-identity form; rebind
+                // so parent reads see the recorded form.
+                if io == ObjectIO::Output {
+                    obj.borrow_mut().set_value(entry.clone());
+                }
+                // The shared Ref still carries the sub's script-side
+                // var name; reset it so only a parent `var` binding
+                // names it (matching the Load-phase placeholder).
+                obj.borrow_mut().set_var_name("?".to_string())?;
+                let dict = entry.as_dictionary().expect("out entry is a dict");
+                (
+                    obj,
+                    Some((Value::from(sub_io_array), entry_idx as i64, dict)),
+                )
+            } else {
+                (arg_placeholder.clone(), None)
+            };
+            (arg, Some(st_sub), sub_out)
         } else {
-            (arg_placeholder, None)
+            (arg_placeholder, None, None)
         };
 
         let mut ctx = self.0.borrow_mut();
@@ -1209,6 +1275,7 @@ impl ActionHandle {
             action,
             obj: arg.clone(),
             st_sub,
+            sub_out,
         });
         ctx.inc_t_var("chain").expect("chain exists");
         Ok(ArgHandle::new(self.clone(), arg))
@@ -1732,6 +1799,7 @@ impl ActionMeta {
             var_max_ts: ctx.max_ts_per_var(),
             ..Self::default()
         };
+        let referenced = body_referenced_vars(&ctx.insts);
         for inst in &ctx.insts {
             match inst {
                 Inst::Object { io, obj, class, .. } => {
@@ -1748,11 +1816,17 @@ impl ActionMeta {
                     }
                     meta.object_refs.push(r);
                 }
-                Inst::SubAction { action, .. } => {
+                Inst::SubAction { action, obj, .. } => {
                     let sub = prior
                         .iter()
                         .find(|a| &a.name == action)
                         .ok_or_else(|| anyhow!("subaction {action} not defined"))?;
+                    let alias = obj.borrow().var_name().to_string();
+                    if alias != "?" && referenced.contains(&alias) && sub.out_entries.is_empty() {
+                        return Err(anyhow!(
+                            "subaction {action} produces no object; `{alias}` cannot be referenced in the parent body"
+                        ));
+                    }
                     meta.total_inputs.extend(sub.total_inputs.iter().cloned());
                     meta.total_outputs.extend(sub.total_outputs.iter().cloned());
                 }
@@ -1789,6 +1863,41 @@ impl ActionMeta {
         meta.initials_entries = (!output_names.is_empty() && !any_blocked).then_some(output_names);
         Ok(meta)
     }
+}
+
+/// Var names referenced by the action's body Insts: as a Statement or
+/// Intro arg, as a Set/Update value, or as a Set/Update target. Drives
+/// whether a sub-action alias must materialize as a parent wildcard
+/// pinned to the sub's out record; unreferenced aliases stay purely
+/// structural.
+pub(crate) fn body_referenced_vars(insts: &[Inst]) -> HashSet<String> {
+    fn add(referenced: &mut HashSet<String>, r: &Ref) {
+        if let VarOrValue::Var(var) = &*r.borrow() {
+            referenced.insert(var.name.clone());
+        }
+    }
+    let mut referenced = HashSet::new();
+    for inst in insts {
+        match inst {
+            Inst::Object { .. } | Inst::SubAction { .. } => {}
+            Inst::Update { obj, value, .. } => {
+                referenced.insert(obj.clone());
+                add(&mut referenced, value);
+            }
+            Inst::Set { obj, kvs, .. } => {
+                referenced.insert(obj.clone());
+                for (_key, value) in kvs {
+                    add(&mut referenced, value);
+                }
+            }
+            Inst::Statement { args, .. } | Inst::Intro { args, .. } => {
+                for arg in args {
+                    add(&mut referenced, arg);
+                }
+            }
+        }
+    }
+    referenced
 }
 
 /// An Object's in/out/initials form normally collapses into the matching

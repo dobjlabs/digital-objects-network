@@ -265,15 +265,20 @@ struct SubActionCall {
     /// `io` record
     sub_io_var: String,
     /// Script-side alias name (the `pick` in `var pick = action.subaction(...)`).
-    /// `None` if the user didn't bind via `var`. Used to skip the alias from
-    /// the parent's private wildcards list.
+    /// `None` if the user didn't bind via `var`. An alias referenced by
+    /// the parent body becomes a parent wildcard pinned to the sub's io
+    /// record; an unreferenced alias is skipped from the private
+    /// wildcards list.
     alias: Option<String>,
+    /// Name of the sub's first out entry, the one the alias refers to.
+    /// `None` if the sub produces nothing.
+    first_out_entry: Option<String>,
 }
 
 /// Walk the parent action's Insts and gather one `SubActionCall` per
 /// `Inst::SubAction`. Looks up each sub's record shape from the loader's
 /// `actions_meta`.
-fn collect_sub_action_calls(action: &ActionContext) -> Vec<SubActionCall> {
+fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubActionCall> {
     let mut calls = Vec::new();
     let mut idx_counter: HashMap<String, usize> = HashMap::new();
     for inst in &action.insts {
@@ -294,11 +299,18 @@ fn collect_sub_action_calls(action: &ActionContext) -> Vec<SubActionCall> {
             } else {
                 Some(alias_name)
             };
+            let sub_meta = loader
+                .actions_meta
+                .iter()
+                .find(|m| m.name == *sub_name)
+                .expect("sub-action meta exists at fmt time");
+            let first_out_entry = sub_meta.out_entries.first().map(|e| e.varname.clone());
 
             calls.push(SubActionCall {
                 sub_name: sub_name.clone(),
                 sub_io_var,
                 alias,
+                first_out_entry,
             });
         }
     }
@@ -319,19 +331,24 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
         .iter()
         .find(|m| m.name == action.name)
         .expect("ActionMeta exists at fmt time");
-    let sub_calls = collect_sub_action_calls(action);
+    let sub_calls = collect_sub_action_calls(action, loader);
 
     // ---- Signature ----
     write!(w, "{}(", action.name)?;
     write!(w, "io {}, ", schema_name_io(&action.name))?;
     write!(w, "state_header StateHeader, chain0, chain")?;
 
-    // Sub-action aliases: parent vars that hold a sub's first producing
-    // Object Ref. They're not real wildcards in the parent's predicate
-    // (the binding is structural to the script, not the proof) so we
-    // skip them from the private list.
-    let alias_names: std::collections::HashSet<String> =
-        sub_calls.iter().filter_map(|c| c.alias.clone()).collect();
+    // Sub-action aliases: parent vars that hold a sub's first out
+    // entry's Object Ref. A referenced alias becomes a real parent
+    // wildcard (pinned to the sub's io record by an ArrayContains
+    // clause below); an unreferenced alias is structural only and is
+    // skipped from the private list.
+    let referenced = crate::body_referenced_vars(&action.insts);
+    let alias_names: std::collections::HashSet<String> = sub_calls
+        .iter()
+        .filter_map(|c| c.alias.clone())
+        .filter(|alias| !referenced.contains(alias))
+        .collect();
 
     // Private wildcards: every (var, ts) except sub-action aliases, state_header, chain
     // endpoints (public chain0/chain), packed chain intermediates (anchored via the
@@ -429,6 +446,25 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 fmt_var_at(&o.varname, max_ts, max_ts),
             )?;
         }
+    }
+    // Pin each referenced sub-action alias to its sub's first out
+    // entry.
+    for call in &sub_calls {
+        let Some(alias) = &call.alias else { continue };
+        if !referenced.contains(alias) {
+            continue;
+        }
+        let Some(entry) = &call.first_out_entry else {
+            continue;
+        };
+        writeln!(
+            w,
+            "  ArrayContains({}, {}::out_{}, {})",
+            call.sub_io_var,
+            schema_name_io(&call.sub_name),
+            entry,
+            fmt_var_at(alias, 0, meta.max_ts(alias)),
+        )?;
     }
 
     // ---- Body (Insts other than Object) ----
