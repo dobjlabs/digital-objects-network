@@ -1559,8 +1559,8 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
 /// One object reference in an action, in declaration order. Only
 /// `class` is exposed; `io` is internal, used by the
 /// `local_inputs()` / `local_outputs()` filters. `varname` is the
-/// script-side variable name; it doubles as the entry name in the
-/// records-form `<Action>In` / `<Action>Out` schemas.
+/// script-side variable name; side-prefixed (`in_<var>` / `out_<var>`)
+/// it forms the entry names in the records-form `<Action>IO` schema.
 #[derive(Debug, Clone)]
 pub struct ActionObjectRef {
     pub(crate) io: ObjectIO,
@@ -1568,12 +1568,12 @@ pub struct ActionObjectRef {
     pub(crate) varname: String,
 }
 
-/// One slot in an action's `<Action>In` or `<Action>Out` record. A
-/// Mutate Object contributes one `EntryShape` to each side; Input/
-/// Output Objects contribute one to their side only. `needs_wildcard`
-/// drives whether the slot is referenced directly (collapsed to
-/// `<side>.<entry>` anchored refs) or via a private wildcard pinned
-/// by an `ArrayContains` clause.
+/// One slot in an action's `<Action>IO` record (in-entries first,
+/// then out-entries). A Mutate Object contributes one `EntryShape` to
+/// each side; Input/Output Objects contribute one to their side only.
+/// `needs_wildcard` drives whether the slot is referenced directly
+/// (collapsed to `io.<side>_<entry>` anchored refs) or via a private
+/// wildcard pinned by an `ArrayContains` clause.
 #[derive(Debug, Clone)]
 pub(crate) struct EntryShape {
     pub varname: String,
@@ -1651,8 +1651,8 @@ impl ActionMeta {
             .position(|name| name == varname)
     }
 
-    /// Find this Object's `in` entry. Returns its slot in the
-    /// `<Action>In` record and the entry shape.
+    /// Find this Object's in-side entry. Returns its slot in the
+    /// `<Action>IO` record and the entry shape.
     pub(crate) fn in_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
         self.in_entries
             .iter()
@@ -1660,6 +1660,9 @@ impl ActionMeta {
             .find(|(_, e)| e.varname == varname)
     }
 
+    /// Find this Object's out-side entry. Returns its slot in the
+    /// `<Action>IO` record (offset past the in-entries) and the entry
+    /// shape.
     pub(crate) fn out_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
         self.out_entries
             .iter()
