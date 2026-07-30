@@ -524,6 +524,273 @@ IsFoo(state, state_header StateHeader, chain0, chain) = OR(
     );
 }
 
+/// Parent reads a value off the object mutated by a sub-action: the
+/// referenced alias becomes a parent wildcard pinned to the sub's
+/// first out entry.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_subaction_alias_read_mutate() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn SpawnShip(action) {
+            var ship = action.output("Ship");
+            ship.set([["fuel", 10]]);
+        }
+
+        fn BurnFuel(action) {
+            var ship = action.mutate("Ship");
+            var fuel = action.random();
+            ship.update("fuel", fuel);
+        }
+
+        fn MineRock(action) {
+            var ship = action.subaction("BurnFuel");
+            var rock = action.output("Rock");
+            rock.set([["mined_with_fuel", ship.fuel]]);
+        }
+    "#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["SpawnShip", "BurnFuel", "MineRock"])
+        .unwrap();
+    println!("{}", module.podlang_src);
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnShip", vec![]).unwrap();
+    let ship_tx = res.tx.clone();
+    let [ship] = res.objs();
+    apply_tx(&mut state, &ship_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ship.obj.commitment()]));
+    let res = executor.action("MineRock", vec![ship]).unwrap();
+    let [_ship2, _rock] = res.objs();
+}
+
+/// Entry reads written into another object via set(): `seen_fuel`
+/// reads the pre-mutation form (forces the in-side wildcard) and
+/// `mined_with_fuel` the post-mutation form (forces the out-side
+/// wildcard). Both must be emitted as Contains-backed args, not
+/// literals, to match the rendered anchored-key templates.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_cross_read_into_set() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn SpawnShip(action) {
+            var ship = action.output("Ship");
+            ship.set([["fuel", 10]]);
+        }
+
+        fn MineRock(action) {
+            var ship = action.mutate("Ship");
+            var rock = action.output("Rock");
+            rock.set([["seen_fuel", ship.fuel]]);
+            var fuel = unsafe { ship.fuel - 1 };
+            action.st_sum(fuel, 1, ship.fuel);
+            ship.update("fuel", fuel);
+            rock.set([["mined_with_fuel", ship.fuel]]);
+        }
+    "#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["SpawnShip", "MineRock"])
+        .unwrap();
+    println!("{}", module.podlang_src);
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnShip", vec![]).unwrap();
+    let ship_tx = res.tx.clone();
+    let [ship] = res.objs();
+    apply_tx(&mut state, &ship_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ship.obj.commitment()]));
+    let res = executor.action("MineRock", vec![ship]).unwrap();
+    let [_ship2, _rock] = res.objs();
+}
+
+/// Three direct-object chain events (mutate first) so the chain packs
+/// into a `<Action>Chain` record, with no sub-actions: guards the
+/// emission-order chain-ts numbering for the all-direct case.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_packed_chain_direct_objects() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn SpawnShip(action) {
+            var ship = action.output("Ship");
+            ship.set([["fuel", 10]]);
+        }
+
+        fn MineTwoRocks(action) {
+            var ship = action.mutate("Ship");
+            var rock_a = action.output("Rock");
+            var rock_b = action.output("Rock");
+            var fuel = action.random();
+            ship.update("fuel", fuel);
+        }
+    "#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["SpawnShip", "MineTwoRocks"])
+        .unwrap();
+    println!("{}", module.podlang_src);
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnShip", vec![]).unwrap();
+    let ship_tx = res.tx.clone();
+    let [ship] = res.objs();
+    apply_tx(&mut state, &ship_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ship.obj.commitment()]));
+    let res = executor.action("MineTwoRocks", vec![ship]).unwrap();
+    let [_ship2, _rock_a, _rock_b] = res.objs();
+}
+
+/// Direct objects declared before a subaction call, with enough events
+/// to pack the parent's chain record. Events are recorded sub-actions
+/// first (they run during Rhai; direct events are emitted post-Rhai),
+/// so chain-ts numbering must follow emission order, not declaration
+/// order.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_packed_chain_objects_before_subaction() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn SpawnShip(action) {
+            var ship = action.output("Ship");
+            ship.set([["fuel", 10]]);
+        }
+
+        fn BurnFuel(action) {
+            var ship = action.mutate("Ship");
+            var fuel = action.random();
+            ship.update("fuel", fuel);
+        }
+
+        fn MineTwoRocks(action) {
+            var rock_a = action.output("Rock");
+            var rock_b = action.output("Rock");
+            var ship = action.subaction("BurnFuel");
+        }
+    "#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["SpawnShip", "BurnFuel", "MineTwoRocks"])
+        .unwrap();
+    println!("{}", module.podlang_src);
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnShip", vec![]).unwrap();
+    let ship_tx = res.tx.clone();
+    let [ship] = res.objs();
+    apply_tx(&mut state, &ship_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ship.obj.commitment()]));
+    let res = executor.action("MineTwoRocks", vec![ship]).unwrap();
+    let [_ship2, _rock_a, _rock_b] = res.objs();
+}
+
+/// Two mutations in one action where the second object's update()
+/// takes a value read off the first object, exercising the
+/// Contains-backed value arg on the DictUpdate path.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_cross_read_into_update() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn SpawnShip(action) {
+            var ship = action.output("Ship");
+            ship.set([["fuel", 10]]);
+        }
+
+        fn SpawnSector(action) {
+            var sector = action.output("Sector");
+            sector.set([["ship_fuel", 0]]);
+        }
+
+        fn EnterSector(action) {
+            var ship = action.mutate("Ship");
+            var sector = action.mutate("Sector");
+            var fuel = unsafe { ship.fuel - 1 };
+            action.st_sum(fuel, 1, ship.fuel);
+            ship.update("fuel", fuel);
+            sector.update("ship_fuel", ship.fuel);
+        }
+    "#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["SpawnShip", "SpawnSector", "EnterSector"])
+        .unwrap();
+    println!("{}", module.podlang_src);
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnShip", vec![]).unwrap();
+    let ship_tx = res.tx.clone();
+    let [ship] = res.objs();
+    apply_tx(&mut state, &ship_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnSector", vec![]).unwrap();
+    let sector_tx = res.tx.clone();
+    let [sector] = res.objs();
+    apply_tx(&mut state, &sector_tx);
+
+    let executor = module.executor(
+        true,
+        grounding_witness(&state, &[ship.obj.commitment(), sector.obj.commitment()]),
+    );
+    let res = executor.action("EnterSector", vec![ship, sector]).unwrap();
+    let [_ship2, _sector2] = res.objs();
+}
+
+/// Parent reads values off an object created (not mutated) by a
+/// sub-action, exercising the post-identity rebinding of the alias.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_subaction_alias_read_output() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn SpawnShip(action) {
+            var ship = action.output("Ship");
+            ship.set([["fuel", 10]]);
+        }
+
+        fn ChristenShip(action) {
+            var ship = action.subaction("SpawnShip");
+            var plaque = action.output("Plaque");
+            plaque.set([["ship_fuel", ship.fuel], ["ship_id", ship.stable_identifier]]);
+        }
+    "#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["SpawnShip", "ChristenShip"])
+        .unwrap();
+    println!("{}", module.podlang_src);
+
+    let state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("ChristenShip", vec![]).unwrap();
+    let [ship, plaque] = res.objs();
+    let ship_id = ship
+        .obj
+        .get(&StrKey::from("stable_identifier"))
+        .unwrap()
+        .unwrap();
+    let plaque_ship_id = plaque.obj.get(&StrKey::from("ship_id")).unwrap().unwrap();
+    assert_eq!(ship_id, plaque_ship_id);
+}
+
 /// Class names go straight into qualified ids (`<plugin>::<class>`) and
 /// `.dobj` filename prefixes. The SDK refuses to compile a script that
 /// declares a class name outside the `[A-Za-z0-9_-]` allowlist so a
