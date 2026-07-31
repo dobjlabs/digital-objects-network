@@ -717,14 +717,14 @@ impl ActionHandle {
                         ObjectIO::Output => stamped_outputs[&varname].clone(),
                         _ => obj.borrow().to_dict(),
                     };
-                    let dict = match io {
+                    let pre_dict = match io {
                         ObjectIO::Mutate => original
                             .as_ref()
                             .expect("Mutate records a pre-mutation dict")
                             .clone(),
                         _ => post_dict.clone(),
                     };
-                    if let Some((idx, e)) = meta.io_entry(&varname)
+                    if let Some((idx, e)) = meta.in_entry(&varname)
                         && e.needs_wildcard
                     {
                         let st = exe_ctx
@@ -733,7 +733,21 @@ impl ActionHandle {
                             .priv_op(Operation::array_contains(
                                 Value::from(io_array.clone()),
                                 idx as i64,
-                                Value::from(dict.clone()),
+                                Value::from(pre_dict.clone()),
+                            ))
+                            .unwrap();
+                        array_contains_sts.push(st);
+                    }
+                    if let Some((idx, e)) = meta.out_entry(&varname)
+                        && e.needs_wildcard
+                    {
+                        let st = exe_ctx
+                            .bld
+                            .builder
+                            .priv_op(Operation::array_contains(
+                                Value::from(io_array.clone()),
+                                idx as i64,
+                                Value::from(post_dict.clone()),
                             ))
                             .unwrap();
                         array_contains_sts.push(st);
@@ -1665,14 +1679,6 @@ impl ActionMeta {
             .iter()
             .enumerate()
             .map(|(i, e)| (i + self.in_entries.len(), e))
-            .find(|(_, e)| e.varname == varname)
-    }
-
-    pub(crate) fn io_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
-        self.in_entries
-            .iter()
-            .chain(self.out_entries.iter())
-            .enumerate()
             .find(|(_, e)| e.varname == varname)
     }
 
