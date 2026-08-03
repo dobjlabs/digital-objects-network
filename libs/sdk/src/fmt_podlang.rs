@@ -1,9 +1,11 @@
 //! Functions used to format to podlang source code.
 //!
 //! This is the records-form emitter. Every action becomes
-//! `Action(in <Action>In, out <Action>Out, chain0, chain, ...)` where the
-//! `in`/`out` typed wildcards are pod2 records carrying one entry per
-//! Object inst on that side. Each (action, object) tuple gets a bridge
+//! `Action(io <Action>IO, state_header StateHeader, chain0, chain, ...)`
+//! where `io` is a pod2 record carrying one `in_<var>` entry per Input
+//! and one `out_<var>` entry per Output (a Mutate contributes one of
+//! each) and `state_header` is the grounding state root record threaded
+//! down from `TxFinalized`. Each (action, object) tuple gets a bridge
 //! predicate that pins the focused entry via `ArrayContains` and defers
 //! to the action; the IsX OR is over those bridge predicates.
 
@@ -132,9 +134,9 @@ impl<'a> fmt::Display for VarNameFmt<'a> {
     }
 }
 
-/// Which public record an Object inst belongs to: `in <Action>In`
-/// and `out <Action>Out` each carry one entry per Object inst on that
-/// side (Mutate contributes to both).
+/// Which side of the `<Action>IO` record an Object inst's entry sits
+/// on: `in_<var>` entries come first, then `out_<var>` entries (Mutate
+/// contributes one entry to each side).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Side {
     In,
@@ -307,11 +309,11 @@ fn collect_sub_action_calls(action: &ActionContext) -> Vec<SubActionCall> {
 /// Emit one action predicate. For each Object inst, sides whose
 /// `needs_wildcard` is set get a leading `ArrayContains` clause + a
 /// private wildcard; collapsed sides drop both and let body refs render
-/// as `in.<entry>` / `out.<entry>` anchored refs. Witness vars (e.g.,
-/// values passed to `obj.update(k, v)`) appear as plain private
-/// wildcards. Sub-action calls are emitted with synthesized typed-
-/// private wildcards `_<Sub>_in_<n>` / `_<Sub>_out_<n>` matching the
-/// sub's record schemas.
+/// as `io.in_<entry>` / `io.out_<entry>` anchored refs. Witness vars
+/// (e.g., values passed to `obj.update(k, v)`) appear as plain private
+/// wildcards. Sub-action calls are emitted with a synthesized typed-
+/// private wildcard `_<Sub>_io_<n>` matching the sub's record schema,
+/// and pass the parent's `state_header` through.
 fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     let meta = loader
         .actions_meta
@@ -390,7 +392,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
 
     // Per-var rendering state for body emission. Each var holds a
     // back-reference to `meta` so `VarNameFmt::collapses_at` can
-    // resolve whether it renders as `in.<name>` / `out.<name>` /
+    // resolve whether it renders as `io.in_<name>` / `io.out_<name>` /
     // `initials.<name>` at a given ts.
     let mut vars: HashMap<&str, VarNameFmt> = action
         .vars
@@ -519,7 +521,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // extra ts that `output_max_ts` reserves) is the post-identity `new`
     // dict TxInsert produces. The post-identity form is the object's
     // output state: it is what the transaction inserts, and it collapses
-    // to `out.<name>` to bind the `<Action>Out` record entry.
+    // to `io.out_<name>` to bind the `<Action>IO` record entry.
     for o in &meta.object_refs {
         let chain = vars["chain"];
         let chain_next = chain.next();
@@ -577,7 +579,7 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
             let bridge_name = bridge_predicate_name(&o.class, &meta.name, &o.varname, multi);
 
             // Bridge predicate signature: state, state_header, chain0, chain (public);
-            // in <ActionIn>, out <ActionOut> private as needed.
+            // io <ActionIO> private when the action has any entries.
             write!(w, "{bridge_name}(state, state_header, chain0, chain")?;
             let mut priv_parts: Vec<String> = Vec::new();
             if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {

@@ -57,6 +57,11 @@ because we want to calculate the value of a `var` as a witness to some
 statement. The generation of constraining statements can be disabled by using
 an `unsafe` block.
 
+The integer operators `+` and `-` on `var` values are only available inside
+`unsafe` blocks: they compute a witness value and emit nothing. Pair the
+result with an explicit statement (`action.st_sum`, `action.st_gt`, ...)
+afterward, or a malicious prover can substitute any value.
+
 ## Type checking
 
 The scripting language has dynamic types so we do type checking at runtime.
@@ -84,6 +89,38 @@ action.intro_lt_eq_u256(wood, target);
 ```
 
 The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
+
+## Reading the state header
+
+Every action scope has a `state_header` constant: the `StateHeader` record of
+the state root the transaction grounds against. Its entries are
+`block_number`, `block_timestamp`, `block_hash`, `created`, `nullifiers` and
+`prior_state_history`. A field access like `state_header.block_timestamp`
+behaves like a `var` entry ref: using it in a statement or an object write
+emits an anchored statement against the action's public `state_header`
+argument, which txlib pins to the grounded state root all the way up from
+`TxFinalized` — a prover cannot substitute its own values.
+
+```rhai
+fn Tick(action) {
+    var ticker = action.mutate("Ticker");
+    var min_ts = unsafe { ticker.ts + 3600 };
+    action.st_sum(ticker.ts, 3600, min_ts);
+    action.st_gt(state_header.block_timestamp, min_ts);
+    ticker.update("ts", state_header.block_timestamp);
+}
+```
+
+Timing caveat: the header describes the _grounding_ state root, not the block
+that will include the transaction. The synchronizer accepts grounding roots up
+to `MAX_STATE_ROOT_AGE_BLOCKS` (300 blocks, roughly an hour) old, so a prover
+may legitimately ground against the oldest accepted root: `block_timestamp`
+can trail wall-clock time by up to that window, and the transaction lands on
+chain later still. Treat time locks written against it as coarse-grained.
+
+`block_hash` is a lossy repacking of the execution block hash (each 8-byte
+limb reduced into a field element, see `pod2utils::b256_to_hash`) — suitable
+as opaque entropy, not for byte-exact comparison with the L1 hash.
 
 # Missing features
 
