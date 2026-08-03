@@ -190,8 +190,8 @@ impl<'a> fmt::Display for ArgFmt<'a> {
 }
 
 /// Which record an Object's IsX OR branch dispatches on: inputs
-/// dispatch on `in.X`; outputs and mutates dispatch on `out.X`.
-/// The `in` form of a mutate is intentionally excluded; replay's
+/// dispatch on `io.in_X`; outputs and mutates dispatch on `io.out_X`.
+/// The `io.in_` form of a mutate is intentionally excluded; replay's
 /// mutate guard fires on the post-mutation form.
 pub(crate) fn dispatch_side(io: &ObjectIO) -> Side {
     match io {
@@ -211,29 +211,27 @@ fn schema_name_io(action_name: &str) -> String {
 }
 
 /// Emit `record <Action><Side> = (<entries>)` lines for any non-empty
-/// in/out schema across all actions, plus `<Action>Chain` records for
+/// io schema across all actions, plus `<Action>Chain` records for
 /// actions whose chain has 2+ intermediate states.
 fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     let render = |entries: &[String]| entries.join(", ");
     for meta in &loader.actions_meta {
-        if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {
-            let names: Vec<String> = meta
-                .in_entries
-                .iter()
-                .map(|e| Side::In.arg_name(&e.varname))
-                .chain(
-                    meta.out_entries
-                        .iter()
-                        .map(|e| Side::Out.arg_name(&e.varname)),
-                )
-                .collect();
-            writeln!(
-                w,
-                "record {} = ({})",
-                schema_name_io(&meta.name),
-                render(&names),
-            )?;
-        }
+        let names: Vec<String> = meta
+            .in_entries
+            .iter()
+            .map(|e| Side::In.arg_name(&e.varname))
+            .chain(
+                meta.out_entries
+                    .iter()
+                    .map(|e| Side::Out.arg_name(&e.varname)),
+            )
+            .collect();
+        writeln!(
+            w,
+            "record {} = ({})",
+            schema_name_io(&meta.name),
+            render(&names),
+        )?;
         if chain_packed(meta.chain_max_ts) {
             // Intermediates: ts=1..=chain_max_ts-1 -> step_0..step_(K-2).
             let steps: Vec<String> = (0..meta.chain_max_ts - 1)
@@ -324,14 +322,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
 
     // ---- Signature ----
     write!(w, "{}(", action.name)?;
-    let mut wrote_pub = false;
-    if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {
-        write!(w, "io {}", schema_name_io(&action.name))?;
-        wrote_pub = true;
-    }
-    if wrote_pub {
-        write!(w, ", ")?;
-    }
+    write!(w, "io {}, ", schema_name_io(&action.name))?;
     write!(w, "state_header StateHeader, chain0, chain")?;
 
     // Sub-action aliases: parent vars that hold a sub's first producing
@@ -581,13 +572,7 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
             // Bridge predicate signature: state, state_header, chain0, chain (public);
             // io <ActionIO> private when the action has any entries.
             write!(w, "{bridge_name}(state, state_header, chain0, chain")?;
-            let mut priv_parts: Vec<String> = Vec::new();
-            if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {
-                priv_parts.push(format!("io {}", schema_name_io(&meta.name)));
-            }
-            if !priv_parts.is_empty() {
-                write!(w, ", private: {}", priv_parts.join(", "))?;
-            }
+            write!(w, ", private: io {}", schema_name_io(&meta.name))?;
             writeln!(w, ") = AND(")?;
 
             // ArrayContains(io, <Schema>::<entry>, state)
@@ -599,13 +584,7 @@ fn fmt_bridges(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
             )?;
 
             // Action call.
-            let mut call_args: Vec<String> = Vec::new();
-            if !meta.in_entries.is_empty() || !meta.out_entries.is_empty() {
-                call_args.push("io".to_string());
-            }
-            call_args.push("state_header".to_string());
-            call_args.push("chain0".to_string());
-            call_args.push("chain".to_string());
+            let call_args = ["io", "state_header", "chain0", "chain"];
             writeln!(w, "  {}({})", meta.name, call_args.join(", "))?;
 
             writeln!(w, ")")?;
