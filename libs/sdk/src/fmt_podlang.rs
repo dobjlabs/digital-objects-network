@@ -625,7 +625,7 @@ pub(crate) fn fmt(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
 
     // TODO: Support importing records via `use module`, so that we can import this record from
     // `tx`
-    writeln!(w, "{}", RECORD_STATE_HEADER_PODLANG)?;
+    writeln!(w, "{}", &*RECORD_STATE_HEADER_PODLANG)?;
     fmt_record_decls(loader, w)?;
     writeln!(w, "\n// Actions\n")?;
     for action in &loader.actions {
