@@ -4,6 +4,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::slice;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use anyhow::{Result, anyhow};
 use itertools::zip_eq;
@@ -167,6 +168,8 @@ enum Type {
     Raw,
     Int,
     Dict,
+    // The Vec contains the optional Record field names
+    Array(Arc<Vec<String>>),
 }
 
 impl fmt::Display for Type {
@@ -214,6 +217,7 @@ impl VarOrValue {
                 Type::Raw => Some(()),
                 Type::Int => v.as_int().map(|_| ()),
                 Type::Dict => v.as_dictionary().map(|_| ()),
+                Type::Array(_) => v.as_array().map(|_| ()),
             }
             .ok_or_else(|| format!("type check: expected {}", typ).into()),
             Self::Var(Var {
@@ -269,16 +273,29 @@ impl VarOrValue {
             }) => value.clone().expect("has value at exec time"),
             Self::Var(Var {
                 value,
+                typ,
                 key: Some(key),
                 ..
-            }) => {
-                let dict = value
-                    .as_ref()
-                    .expect("has value at exec time")
-                    .as_dictionary()
-                    .expect("dict");
-                dict.get(&StrKey::from(key)).unwrap().expect("key exists")
-            }
+            }) => match typ {
+                Type::Dict => {
+                    let dict = value
+                        .as_ref()
+                        .expect("has value at exec time")
+                        .as_dictionary()
+                        .expect("dict");
+                    dict.get(&StrKey::from(key)).unwrap().expect("key exists")
+                }
+                Type::Array(record) => {
+                    let array = value
+                        .as_ref()
+                        .expect("has value at exec time")
+                        .as_array()
+                        .expect("array");
+                    let idx = record.iter().position(|k| k == key).unwrap();
+                    array.get(idx).unwrap().expect("index exists")
+                }
+                _ => todo!("implement type {typ}"),
+            },
         }
     }
     // Only call this at exec time
@@ -299,16 +316,26 @@ impl VarOrValue {
     fn as_op_arg(&self) -> OperationArg {
         match self {
             Self::Value(value) => OperationArg::Literal(value.clone()),
-            Self::Var(Var { value, key, .. }) => {
+            Self::Var(Var {
+                typ, value, key, ..
+            }) => {
                 let value = value.as_ref().expect("has value at exec time").clone();
                 if let Some(key) = key {
-                    let dict = value.as_dictionary().expect("dict");
-                    let value = dict.get(&key.into()).unwrap().unwrap();
-                    OperationArg::Statement(Statement::Contains(
-                        dict.into(),
-                        key.clone().into(),
-                        value.into(),
-                    ))
+                    let st_contains = match typ {
+                        Type::Dict => {
+                            let dict = value.as_dictionary().expect("dict");
+                            let value = dict.get(&key.into()).unwrap().unwrap();
+                            Statement::Contains(dict.into(), key.clone().into(), value.into())
+                        }
+                        Type::Array(record) => {
+                            let array = value.as_array().expect("array");
+                            let index = record.iter().position(|k| k == key).unwrap();
+                            let value = array.get(index).unwrap().unwrap();
+                            Statement::Contains(array.into(), (index as i64).into(), value.into())
+                        }
+                        _ => todo!("support other types"),
+                    };
+                    OperationArg::Statement(st_contains)
                 } else {
                     OperationArg::Literal(value)
                 }
@@ -452,12 +479,45 @@ impl ActionContext {
     }
 }
 
+static RECORD_STATE_HEADER: LazyLock<Arc<Vec<String>>> = LazyLock::new(|| {
+    Arc::new(
+        [
+            "block_number",
+            "block_timestamp",
+            "block_hash",
+            "created",
+            "nullifiers",
+            "prior_state_history",
+        ]
+        .map(|s| s.to_string())
+        .into_iter()
+        .collect::<Vec<_>>(),
+    )
+});
+
 impl ActionHandle {
     //
     // Internal methods
     //
     fn new(name: String, exe_ctx: Option<Rc<RefCell<ExeContext>>>) -> Self {
         Self(Rc::new(RefCell::new(ActionContext::new(name, exe_ctx))))
+    }
+    fn state_header(&self) -> ArgHandle {
+        let mut ctx = self.0.borrow_mut();
+        ctx.add_var("state_header".to_string()).unwrap_or(());
+        let arg = Rc::new(RefCell::new(VarOrValue::var(Type::Array(
+            RECORD_STATE_HEADER.clone(),
+        ))));
+        arg.borrow_mut()
+            .set_var_name("state_header".to_string())
+            .unwrap();
+        if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
+            let exe_ctx = exe_rc.borrow();
+            let state_header = exe_ctx.tx_builder.state_header();
+            arg.borrow_mut()
+                .set_value(Value::from(state_header.array()));
+        }
+        ArgHandle::new(self.clone(), arg)
     }
     fn new_obj(exe_ctx: &ExeContext, class: &str) -> Dictionary {
         let type_hash = exe_ctx
@@ -528,6 +588,7 @@ impl ActionHandle {
             (exe_ctx.module.clone(), scope_id, ctx.name.clone())
         };
         let mut scope = Scope::new();
+        scope.push_constant("state_header", self.state_header());
         let options = CallFnOptions::new().with_tag(self.clone());
         let _result = module.engine.call_fn_with_options::<Dynamic>(
             options,
@@ -606,8 +667,9 @@ impl ActionHandle {
                 }
             }
         }
-        let in_array = Array::new(in_dicts);
-        let out_array = Array::new(out_dicts);
+        let mut io_dicts = in_dicts;
+        io_dicts.extend(out_dicts);
+        let io_array = Array::new(io_dicts);
 
         // Build the `<Action>Initials` record value (the pre-identity Output
         // dicts) when the action has one.
@@ -625,11 +687,11 @@ impl ActionHandle {
         // is collapsed; else a literal op-arg for the dict.
         let anchor_or_literal = |obj_name: &str, dict: &Dictionary, ts: usize| -> OperationArg {
             match meta.collapsed_at(obj_name, ts) {
-                Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::In)) => {
-                    (&in_array, meta.in_entry(obj_name).unwrap().0 as i64).into()
+                Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::In)) => {
+                    (&io_array, meta.in_entry(obj_name).unwrap().0 as i64).into()
                 }
-                Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::Out)) => {
-                    (&out_array, meta.out_entry(obj_name).unwrap().0 as i64).into()
+                Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::Out)) => {
+                    (&io_array, meta.out_entry(obj_name).unwrap().0 as i64).into()
                 }
                 Some(fmt_podlang::Collapse::Initials) => {
                     initials_anchor(obj_name).expect("collapsed_at promised an initials slot")
@@ -669,7 +731,7 @@ impl ActionHandle {
                             .bld
                             .builder
                             .priv_op(Operation::array_contains(
-                                Value::from(in_array.clone()),
+                                Value::from(io_array.clone()),
                                 idx as i64,
                                 Value::from(pre_dict.clone()),
                             ))
@@ -683,7 +745,7 @@ impl ActionHandle {
                             .bld
                             .builder
                             .priv_op(Operation::array_contains(
-                                Value::from(out_array.clone()),
+                                Value::from(io_array.clone()),
                                 idx as i64,
                                 Value::from(post_dict.clone()),
                             ))
@@ -843,19 +905,19 @@ impl ActionHandle {
             for pending in pending_object_events {
                 let varname = &pending.varname;
                 let io = pending.io;
-                let new_anchor: Option<OperationArg> = match io {
-                    ObjectIO::Output | ObjectIO::Mutate => meta
-                        .out_entry(varname)
-                        .filter(|(_, e)| !e.needs_wildcard)
-                        .map(|(idx, _)| (&out_array, idx as i64).into()),
-                    ObjectIO::Input => None,
-                };
                 let old_anchor: Option<OperationArg> = match io {
                     ObjectIO::Input | ObjectIO::Mutate => meta
                         .in_entry(varname)
                         .filter(|(_, e)| !e.needs_wildcard)
-                        .map(|(idx, _)| (&in_array, idx as i64).into()),
+                        .map(|(idx, _)| (&io_array, idx as i64).into()),
                     ObjectIO::Output => None,
+                };
+                let new_anchor: Option<OperationArg> = match io {
+                    ObjectIO::Output | ObjectIO::Mutate => meta
+                        .out_entry(varname)
+                        .filter(|(_, e)| !e.needs_wildcard)
+                        .map(|(idx, _)| (&io_array, idx as i64).into()),
+                    ObjectIO::Input => None,
                 };
                 let pre_ts = pending.post_ts - 1;
                 let post_ts = pending.post_ts;
@@ -980,11 +1042,15 @@ impl ActionHandle {
                         let ts = *current_ts.get(obj).unwrap_or(&0);
                         let dict_arg = anchor_or_literal(obj, &dict, ts);
                         for (key, value) in kvs {
-                            let v = value.borrow().as_value().clone();
+                            let arg = value.borrow().as_op_arg().clone();
                             let st = exe_ctx
                                 .bld
                                 .builder
-                                .priv_op(Operation::dict_contains(dict_arg.clone(), key.clone(), v))
+                                .priv_op(Operation::dict_contains(
+                                    dict_arg.clone(),
+                                    key.clone(),
+                                    arg,
+                                ))
                                 .unwrap();
                             body_sts.push(st);
                         }
@@ -996,17 +1062,22 @@ impl ActionHandle {
                         old_dict,
                         new_dict,
                     } => {
-                        let old = old_dict.clone().expect("Update old_dict captured at Rhai");
-                        let new = new_dict.clone().expect("Update new_dict captured at Rhai");
-                        let v = value.borrow().as_value().clone();
+                        let old_dict = old_dict.clone().expect("Update old_dict captured at Rhai");
+                        let new_dict = new_dict.clone().expect("Update new_dict captured at Rhai");
+                        let arg = value.borrow().as_op_arg().clone();
                         let ts_before = *current_ts.get(obj).unwrap_or(&0);
                         let ts_after = ts_before + 1;
-                        let new_arg = anchor_or_literal(obj, &new, ts_after);
-                        let old_arg = anchor_or_literal(obj, &old, ts_before);
+                        let new_dict_arg = anchor_or_literal(obj, &new_dict, ts_after);
+                        let old_dict_arg = anchor_or_literal(obj, &old_dict, ts_before);
                         let st = exe_ctx
                             .bld
                             .builder
-                            .priv_op(Operation::dict_update(old_arg, key.clone(), v, new_arg))
+                            .priv_op(Operation::dict_update(
+                                old_dict_arg,
+                                key.clone(),
+                                arg,
+                                new_dict_arg,
+                            ))
                             .unwrap();
                         body_sts.push(st);
                         if let Some(t) = current_ts.get_mut(obj) {
@@ -1028,9 +1099,10 @@ impl ActionHandle {
 
         let st_action = {
             let mut exe_ctx = exe_rc.borrow_mut();
+            let state_header = exe_ctx.tx_builder.state_header().array();
             exe_ctx
                 .bld
-                .apply_custom_pred_simple(false, &action, sts)
+                .apply_custom_pred(false, &action, map!({"state_header" => state_header}), sts)
                 .unwrap()
         };
 
@@ -1050,11 +1122,10 @@ impl ActionHandle {
                 // doesn't matter which form we hand the bridge.
                 let obj_ref = &meta.object_refs[object_refs_index];
                 let varname = &obj_ref.varname;
-                let (bridge_array, entry_idx) = match fmt_podlang::dispatch_side(&obj_ref.io) {
-                    fmt_podlang::Side::In => (in_array.clone(), meta.in_entry(varname).unwrap().0),
-                    fmt_podlang::Side::Out => {
-                        (out_array.clone(), meta.out_entry(varname).unwrap().0)
-                    }
+
+                let entry_idx = match fmt_podlang::dispatch_side(&obj_ref.io) {
+                    fmt_podlang::Side::In => meta.in_entry(varname).unwrap().0,
+                    fmt_podlang::Side::Out => meta.out_entry(varname).unwrap().0,
                 };
                 let st_is_x = module.build_is_x(
                     &mut exe_ctx.bld,
@@ -1063,7 +1134,7 @@ impl ActionHandle {
                     &class,
                     object_refs_index,
                     st_action.clone(),
-                    &bridge_array,
+                    &io_array,
                     entry_idx,
                     &obj_dict,
                 );
@@ -1412,6 +1483,22 @@ fn arg_sub(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
     Ok(ArgHandle::new(a.ctx.clone(), value))
 }
 
+/// operator+ for maybe-var types
+fn arg_add(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
+    type_check_args([(&a, Type::Int), (&b, Type::Int)])?;
+    // TODO: Handle the case where a and b are not var
+    let value = Rc::new(RefCell::new(VarOrValue::var(Type::Int)));
+    let ctx = a.ctx.0.borrow();
+    ctx.assert_unsafe(true)?;
+    if ctx.exe_ctx.is_some() {
+        let a = a.arg.borrow().as_value().as_int().expect("int");
+        let b = b.arg.borrow().as_value().as_int().expect("int");
+        let result = a.checked_add(b).expect("no overflow");
+        value.borrow_mut().set_value(Value::from(result));
+    }
+    Ok(ArgHandle::new(a.ctx.clone(), value))
+}
+
 /// Try to get the pod2 Value or promote a native type to it.
 fn _try_value_from_dynamic(v: Dynamic) -> Result<Value, Dynamic> {
     let v = match v.try_cast_result::<Value>() {
@@ -1486,8 +1573,8 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
 /// One object reference in an action, in declaration order. Only
 /// `class` is exposed; `io` is internal, used by the
 /// `local_inputs()` / `local_outputs()` filters. `varname` is the
-/// script-side variable name; it doubles as the entry name in the
-/// records-form `<Action>In` / `<Action>Out` schemas.
+/// script-side variable name; side-prefixed (`in_<var>` / `out_<var>`)
+/// it forms the entry names in the records-form `<Action>IO` schema.
 #[derive(Debug, Clone)]
 pub struct ActionObjectRef {
     pub(crate) io: ObjectIO,
@@ -1495,12 +1582,12 @@ pub struct ActionObjectRef {
     pub(crate) varname: String,
 }
 
-/// One slot in an action's `<Action>In` or `<Action>Out` record. A
-/// Mutate Object contributes one `EntryShape` to each side; Input/
-/// Output Objects contribute one to their side only. `needs_wildcard`
-/// drives whether the slot is referenced directly (collapsed to
-/// `<side>.<entry>` anchored refs) or via a private wildcard pinned
-/// by an `ArrayContains` clause.
+/// One slot in an action's `<Action>IO` record (in-entries first,
+/// then out-entries). A Mutate Object contributes one `EntryShape` to
+/// each side; Input/Output Objects contribute one to their side only.
+/// `needs_wildcard` drives whether the slot is referenced directly
+/// (collapsed to `io.<side>_<entry>` anchored refs) or via a private
+/// wildcard pinned by an `ArrayContains` clause.
 #[derive(Debug, Clone)]
 pub(crate) struct EntryShape {
     pub varname: String,
@@ -1569,15 +1656,6 @@ impl ActionMeta {
         self.total_outputs.iter()
     }
 
-    /// Find this Object's `in` entry. Returns its slot in the
-    /// `<Action>In` record and the entry shape.
-    pub(crate) fn in_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
-        self.in_entries
-            .iter()
-            .enumerate()
-            .find(|(_, e)| e.varname == varname)
-    }
-
     /// Slot for `varname` in the `<Action>Initials` record, if such a
     /// record exists for this action.
     pub(crate) fn initials_slot(&self, varname: &str) -> Option<usize> {
@@ -1587,10 +1665,24 @@ impl ActionMeta {
             .position(|name| name == varname)
     }
 
+    /// Find this Object's in-side entry. Returns its slot in the
+    /// `<Action>IO` record and the entry shape.  The IO record contains the in entries
+    /// followed by the out entries.
+    pub(crate) fn in_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
+        self.in_entries
+            .iter()
+            .enumerate()
+            .find(|(_, e)| e.varname == varname)
+    }
+
+    /// Find this Object's out-side entry. Returns its slot in the
+    /// `<Action>IO` record (offset past the in-entries) and the entry
+    /// shape.  The IO record contains the in entries followed by the out entries.
     pub(crate) fn out_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
         self.out_entries
             .iter()
             .enumerate()
+            .map(|(i, e)| (i + self.in_entries.len(), e))
             .find(|(_, e)| e.varname == varname)
     }
 
@@ -1602,9 +1694,8 @@ impl ActionMeta {
     }
 
     /// At a given ts, an object's state might be "collapsed" into a
-    /// record (in, out, or initials) rather than held in its own
-    /// wildcard. Returns which record, or None if it is not collapsed
-    /// at this ts.
+    /// record (io or initials) rather than held in its own wildcard. Returns which record, or
+    /// None if it is not collapsed at this ts.
     pub(crate) fn collapsed_at(&self, varname: &str, ts: usize) -> Option<fmt_podlang::Collapse> {
         let max_ts = self.max_ts(varname);
         if ts == 0
@@ -1612,14 +1703,14 @@ impl ActionMeta {
                 .in_entry(varname)
                 .is_some_and(|(_, e)| !e.needs_wildcard)
         {
-            return Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::In));
+            return Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::In));
         }
         if ts == max_ts
             && self
                 .out_entry(varname)
                 .is_some_and(|(_, e)| !e.needs_wildcard)
         {
-            return Some(fmt_podlang::Collapse::Side(fmt_podlang::Side::Out));
+            return Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::Out));
         }
         // If we have an "initials" record for this var, and we are at
         // the penultimate ts, then the var must be collapsed into
@@ -2478,6 +2569,15 @@ fn new_engine() -> Engine {
             let ctx = b.ctx.clone();
             arg_sub(ArgHandle::literal(ctx, Value::from(a)), b)
         })
+        .register_fn("+", arg_add)
+        .register_fn("+", |a: ArgHandle, b: i64| -> RuntimeResult<ArgHandle> {
+            let ctx = a.ctx.clone();
+            arg_add(a, ArgHandle::literal(ctx, Value::from(b)))
+        })
+        .register_fn("+", |a: i64, b: ArgHandle| -> RuntimeResult<ArgHandle> {
+            let ctx = b.ctx.clone();
+            arg_add(ArgHandle::literal(ctx, Value::from(a)), b)
+        })
         .register_indexer_get(ArgHandle::entry);
 
     engine
@@ -2505,6 +2605,7 @@ impl Sdk {
         for action in actions {
             let action_handle = ActionHandle::new(action.to_string(), None);
             let mut scope = Scope::new();
+            scope.push_constant("state_header", action_handle.state_header());
             let options = CallFnOptions::new().with_tag(action_handle.clone());
             let _result = self.engine.call_fn_with_options::<Dynamic>(
                 options,

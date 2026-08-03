@@ -48,6 +48,12 @@ impl TestState {
         }
     }
 
+    pub fn next_block(&mut self, time_delta: u64) {
+        self.block_number += 1;
+        self.block_timestamp += time_delta as i64;
+        self.block_hash = Hash([F(0), F(0), F(0), F(self.block_number as u64)]);
+    }
+
     /// `(created_root, nullifiers_root, prior_state_history_root)`.
     pub fn roots(&self) -> (Hash, Hash, Hash) {
         (

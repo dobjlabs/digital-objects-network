@@ -27,6 +27,7 @@
 pub mod predicates;
 mod replay;
 
+use std::sync::LazyLock;
 use std::{collections::HashMap, sync::Arc};
 
 use pod2::{
@@ -115,6 +116,34 @@ pub const STATE_HEADER_BLOCK_HASH_SLOT: usize = 2;
 pub const STATE_HEADER_CREATED_SLOT: usize = 3;
 pub const STATE_HEADER_NULLIFIERS_SLOT: usize = 4;
 pub const STATE_HEADER_PRIOR_STATE_HISTORY_SLOT: usize = 5;
+
+pub static RECORD_STATE_HEADER_FIELDS: LazyLock<Arc<Vec<String>>> = LazyLock::new(|| {
+    Arc::new(
+        [
+            "block_number",
+            "block_timestamp",
+            "block_hash",
+            "created",
+            "nullifiers",
+            "prior_state_history",
+        ]
+        .map(|s| s.to_string())
+        .into_iter()
+        .collect::<Vec<_>>(),
+    )
+});
+
+pub static RECORD_STATE_HEADER_PODLANG: LazyLock<String> = LazyLock::new(|| {
+    let mut s = "record StateHeader = (".to_string();
+    for (i, f) in RECORD_STATE_HEADER_FIELDS.iter().enumerate() {
+        if i != 0 {
+            s += ", ";
+        }
+        s += f;
+    }
+    s += ")";
+    s
+});
 
 /// Proof-bearing grounding data required to build a new transaction.
 ///

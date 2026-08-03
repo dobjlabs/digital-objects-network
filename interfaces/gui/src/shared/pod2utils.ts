@@ -9,7 +9,8 @@ function isPod2IntWrapper(value: unknown): value is { Int: string | number } {
 function parsePod2IntWrapper(value: unknown): number | null {
   if (!isPod2IntWrapper(value)) return null;
   const raw = value.Int;
-  const parsed = typeof raw === "number" ? raw : Number.parseInt(String(raw), 10);
+  const parsed =
+    typeof raw === "number" ? raw : Number.parseInt(String(raw), 10);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -38,7 +39,10 @@ function normalizePod2ContainerInner(value: unknown): unknown {
     )
   ) {
     return Object.fromEntries(
-      tupleEntries.map(([key, entry]) => [key as string, normalizePod2Value(entry)]),
+      tupleEntries.map(([key, entry]) => [
+        key as string,
+        normalizePod2Value(entry),
+      ]),
     );
   }
 
@@ -48,10 +52,10 @@ function normalizePod2ContainerInner(value: unknown): unknown {
     )
   ) {
     return tupleEntries
-      .map(([index, entry]) => [
-        parsePod2IntWrapper(index) ?? 0,
-        normalizePod2Value(entry),
-      ] as const)
+      .map(
+        ([index, entry]) =>
+          [parsePod2IntWrapper(index) ?? 0, normalizePod2Value(entry)] as const,
+      )
       .sort((left, right) => left[0] - right[0])
       .map(([, entry]) => entry);
   }
@@ -59,6 +63,68 @@ function normalizePod2ContainerInner(value: unknown): unknown {
   return tupleEntries.map((entry) =>
     entry.map((item) => normalizePod2Value(item)),
   );
+}
+
+const CONTAINER_KIND_PATTERN = /^[d-][s-][a-]$/;
+
+function isPod2Container(
+  value: Record<string, unknown>,
+): value is { kind: string; kvs: unknown[] } {
+  return (
+    Object.keys(value).length === 2 &&
+    typeof value.kind === "string" &&
+    CONTAINER_KIND_PATTERN.test(value.kind) &&
+    Array.isArray(value.kvs)
+  );
+}
+
+/**
+ * pod2 containers serialize as `{ kind, kvs }`: `kind` is a three-flag
+ * string ("d--" dictionary, "-s-" set, "--a" array; flags can combine when
+ * one root has been used as several types) and `kvs` holds `[key, value]`
+ * entries, collapsed to `[value]` when the key equals the value (always the
+ * case for sets). Unwrap by the claimed kind; a kvs whose entries do not
+ * match it falls back to the shape heuristics of
+ * `normalizePod2ContainerInner`.
+ */
+function normalizePod2Container(kind: string, kvs: unknown[]): unknown {
+  const entryPair = (entry: unknown): [unknown, unknown] | null => {
+    if (!Array.isArray(entry) || entry.length < 1 || entry.length > 2) {
+      return null;
+    }
+    return [entry[0], entry[entry.length - 1]];
+  };
+  const pairs = kvs.map(entryPair);
+
+  if (kind[0] === "d") {
+    if (pairs.every((pair) => pair !== null && typeof pair[0] === "string")) {
+      return Object.fromEntries(
+        (pairs as [string, unknown][]).map(([key, entry]) => [
+          key,
+          normalizePod2Value(entry),
+        ]),
+      );
+    }
+  } else if (kind[1] === "s") {
+    if (pairs.every((pair) => pair !== null)) {
+      return (pairs as [unknown, unknown][]).map(([, entry]) =>
+        normalizePod2Value(entry),
+      );
+    }
+  } else if (kind[2] === "a") {
+    const slots = pairs.map((pair) => {
+      if (!pair) return null;
+      const index = parsePod2IntWrapper(pair[0]);
+      if (index === null) return null;
+      return [index, normalizePod2Value(pair[1])] as const;
+    });
+    if (slots.every((slot) => slot !== null)) {
+      return (slots as (readonly [number, unknown])[])
+        .sort((left, right) => left[0] - right[0])
+        .map(([, entry]) => entry);
+    }
+  }
+  return normalizePod2ContainerInner(kvs);
 }
 
 function normalizePod2Value(value: unknown): unknown {
@@ -84,6 +150,10 @@ function normalizePod2Value(value: unknown): unknown {
 
   if (!isRecord(value)) {
     return value;
+  }
+
+  if (isPod2Container(value)) {
+    return normalizePod2Container(value.kind, value.kvs);
   }
 
   const keys = Object.keys(value);
@@ -122,7 +192,10 @@ function normalizePod2Value(value: unknown): unknown {
   }
 
   return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, normalizePod2Value(entry)]),
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      normalizePod2Value(entry),
+    ]),
   );
 }
 
