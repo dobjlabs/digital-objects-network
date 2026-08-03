@@ -1666,7 +1666,8 @@ impl ActionMeta {
     }
 
     /// Find this Object's in-side entry. Returns its slot in the
-    /// `<Action>IO` record and the entry shape.
+    /// `<Action>IO` record and the entry shape.  The IO record contains the in entries
+    /// followed by the out entries.
     pub(crate) fn in_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
         self.in_entries
             .iter()
@@ -1676,7 +1677,7 @@ impl ActionMeta {
 
     /// Find this Object's out-side entry. Returns its slot in the
     /// `<Action>IO` record (offset past the in-entries) and the entry
-    /// shape.
+    /// shape.  The IO record contains the in entries followed by the out entries.
     pub(crate) fn out_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
         self.out_entries
             .iter()
