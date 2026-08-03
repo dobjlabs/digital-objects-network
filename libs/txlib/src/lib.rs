@@ -27,15 +27,16 @@
 pub mod predicates;
 mod replay;
 
+use std::sync::LazyLock;
 use std::{collections::HashMap, sync::Arc};
 
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     frontend::Operation,
     middleware::{
-        EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
         containers::{Array, Dictionary, Set},
-        hash_values,
+        hash_values, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
+        EMPTY_VALUE,
     },
 };
 use pod2utils::{dict, macros::BuildContext, map, op, rand_raw_value, set, st_custom};
@@ -115,6 +116,34 @@ pub const STATE_HEADER_BLOCK_HASH_SLOT: usize = 2;
 pub const STATE_HEADER_CREATED_SLOT: usize = 3;
 pub const STATE_HEADER_NULLIFIERS_SLOT: usize = 4;
 pub const STATE_HEADER_PRIOR_STATE_HISTORY_SLOT: usize = 5;
+
+pub static RECORD_STATE_HEADER_FIELDS: LazyLock<Arc<Vec<String>>> = LazyLock::new(|| {
+    Arc::new(
+        [
+            "block_number",
+            "block_timestamp",
+            "block_hash",
+            "created",
+            "nullifiers",
+            "prior_state_history",
+        ]
+        .map(|s| s.to_string())
+        .into_iter()
+        .collect::<Vec<_>>(),
+    )
+});
+
+pub static RECORD_STATE_HEADER_PODLANG: LazyLock<String> = LazyLock::new(|| {
+    let mut s = "record StateHeader = (".to_string();
+    for (i, f) in RECORD_STATE_HEADER_FIELDS.iter().enumerate() {
+        if i != 0 {
+            s += ", ";
+        }
+        s += f;
+    }
+    s += ")";
+    s
+});
 
 /// Proof-bearing grounding data required to build a new transaction.
 ///
@@ -1146,7 +1175,7 @@ mod tests {
     use pod2::{
         backends::plonky2::mock::mainpod::MockProver,
         frontend::{MainPod, MultiPodBuilder},
-        middleware::{F, Params, Predicate, VDSet, containers::Array},
+        middleware::{containers::Array, Params, Predicate, VDSet, F},
     };
     use pod2utils::{macros::BuildContext, set};
 
@@ -1444,12 +1473,10 @@ mod tests {
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);
 
-        assert!(
-            tx_out
-                .nullifiers
-                .contains(&Value::from(compute_nullifier(&pick)))
-                .unwrap()
-        );
+        assert!(tx_out
+            .nullifiers
+            .contains(&Value::from(compute_nullifier(&pick)))
+            .unwrap());
     }
 
     /// Tx 1: FindLog (genesis insert).
@@ -1674,12 +1701,10 @@ mod tests {
         assert!(tx3_out.live.contains(&Value::from(stick_a)).unwrap());
         assert!(tx3_out.live.contains(&Value::from(stick_b)).unwrap());
         // Wood should be nullified
-        assert!(
-            tx3_out
-                .nullifiers
-                .contains(&Value::from(compute_nullifier(&wood)))
-                .unwrap()
-        );
+        assert!(tx3_out
+            .nullifiers
+            .contains(&Value::from(compute_nullifier(&wood)))
+            .unwrap());
     }
 
     /// Grounding three inputs exercises InputsGroundedRecursive (peel two per
@@ -1766,12 +1791,10 @@ mod tests {
         solve_and_verify(ctx.builder);
 
         for log in &logs {
-            assert!(
-                burn_out
-                    .nullifiers
-                    .contains(&Value::from(compute_nullifier(log)))
-                    .unwrap()
-            );
+            assert!(burn_out
+                .nullifiers
+                .contains(&Value::from(compute_nullifier(log)))
+                .unwrap());
         }
     }
 }

@@ -13,6 +13,7 @@ use crate::{
     ActionContext, ActionMeta, ActionObjectRef, ClassMeta, Dependency, Inst, Intro, Loader,
     ObjectIO, Ref, VarOrValue,
 };
+use txlib::RECORD_STATE_HEADER_PODLANG;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -624,10 +625,7 @@ pub(crate) fn fmt(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
 
     // TODO: Support importing records via `use module`, so that we can import this record from
     // `tx`
-    writeln!(
-        w,
-        "record StateHeader = (block_number, block_timestamp, block_hash, created, nullifiers, prior_state_history)"
-    )?;
+    writeln!(w, "{}", RECORD_STATE_HEADER_PODLANG)?;
     fmt_record_decls(loader, w)?;
     writeln!(w, "\n// Actions\n")?;
     for action in &loader.actions {
