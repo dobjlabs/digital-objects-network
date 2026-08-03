@@ -13,9 +13,9 @@ use crate::{
     ActionContext, ActionMeta, ActionObjectRef, ClassMeta, Dependency, Inst, Intro, Loader,
     ObjectIO, Ref, VarOrValue,
 };
-use txlib::RECORD_STATE_HEADER_PODLANG;
 use std::collections::HashMap;
 use std::fmt;
+use txlib::RECORD_STATE_HEADER_PODLANG;
 
 fn fmt_dependency(dep: &Dependency, w: &mut dyn fmt::Write) -> fmt::Result {
     match dep {
