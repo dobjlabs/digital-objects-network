@@ -20,7 +20,7 @@ use pod2::{
     },
 };
 use pod2utils::{dict, macros::BuildContext, map, rand_raw_value};
-use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope};
+use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope, Position};
 use txlib::{EventHandle, GroundingWitness, StateHeader, Tx, TxBuilder, with_stable_identifier};
 use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 
@@ -1288,7 +1288,7 @@ impl ActionHandle {
             } else {
                 VdfPod::new_boxed(&exe_ctx.params, exe_ctx.vd_set.clone(), n, inp)
             }
-            .unwrap();
+            .map_err(rt_err_from_anyhow)?;
             let st = add_intro_pod(&mut exe_ctx, pod);
             work.borrow_mut().set_value(st.args()[2].literal().unwrap());
             statement = Some(st);
@@ -1314,7 +1314,7 @@ impl ActionHandle {
             } else {
                 LtEqU256Pod::new_boxed(&exe_ctx.params, exe_ctx.vd_set.clone(), l, r)
             }
-            .unwrap();
+            .map_err(rt_err_from_anyhow)?;
             let st = add_intro_pod(&mut exe_ctx, pod);
             statement = Some(st);
         }
@@ -1325,6 +1325,10 @@ impl ActionHandle {
         });
         Ok(())
     }
+}
+
+fn rt_err_from_anyhow(err: anyhow::Error) -> Box<EvalAltResult> {
+    Box::new(EvalAltResult::ErrorRuntime(Dynamic::from(Rc::new(err)), Position::NONE))
 }
 
 /// Attach an intro pod (VDF, LtEqU256, etc.) to the builder and
