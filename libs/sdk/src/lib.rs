@@ -20,7 +20,9 @@ use pod2::{
     },
 };
 use pod2utils::{dict, macros::BuildContext, map, rand_raw_value};
-use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Scope, Position};
+use rhai::{
+    AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Position, Scope,
+};
 use txlib::{EventHandle, GroundingWitness, StateHeader, Tx, TxBuilder, with_stable_identifier};
 use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 
@@ -1328,7 +1330,10 @@ impl ActionHandle {
 }
 
 fn rt_err_from_anyhow(err: anyhow::Error) -> Box<EvalAltResult> {
-    Box::new(EvalAltResult::ErrorRuntime(Dynamic::from(Rc::new(err)), Position::NONE))
+    Box::new(EvalAltResult::ErrorRuntime(
+        Dynamic::from(Rc::new(err)),
+        Position::NONE,
+    ))
 }
 
 /// Attach an intro pod (VDF, LtEqU256, etc.) to the builder and

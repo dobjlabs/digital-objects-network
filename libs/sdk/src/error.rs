@@ -27,10 +27,10 @@ impl From<Box<EvalAltResult>> for SdkError {
     fn from(e: Box<EvalAltResult>) -> Self {
         // Unwrap the runtime error because otherwise the Display impl only formats the type and
         // not the value.
-        if let EvalAltResult::ErrorRuntime(payload, pos) = innermost(&e) {
-            if let Some(e) = payload.read_lock::<Rc<anyhow::Error>>() {
-                return Self::Eval(format!("{}", &*e), *pos);
-            }
+        if let EvalAltResult::ErrorRuntime(payload, pos) = innermost(&e)
+            && let Some(e) = payload.read_lock::<Rc<anyhow::Error>>()
+        {
+            return Self::Eval(format!("{}", &*e), *pos);
         }
         Self::Eval(format!("{e}"), e.position())
     }
