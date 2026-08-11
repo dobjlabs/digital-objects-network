@@ -20,7 +20,7 @@
 #
 # Each gets:
 #   - a copy of craft-basics.pexe from the host's ~/.dobj/actions/
-#   - a settings.json pointing at the hosted synchronizer + relayer
+#   - a settings.json pointing at the synchronizer + relayer picked below
 #
 # Prereqs:
 #   - `cargo build -p dobjd --release` (or `just dobjd` to start once)
@@ -28,7 +28,8 @@
 #
 # Pass --hosted (default) to use the public synchronizer + relayer,
 # or --local to point at http://127.0.0.1:3000 / :3200 (which you'd run
-# yourself via `just sync` + `just relayer`).
+# yourself via `just sync` + `just relayer`). `just dev-agents` passes
+# --local and runs both services in their own mprocs panes.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."

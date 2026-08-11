@@ -1,8 +1,26 @@
 procs:
+  # Local chain-anchoring services, same as `just dev`. The demo's dobjds
+  # and the user's own dobjd all point at these (127.0.0.1:3000 / :3200).
+  # Needs Postgres running locally.
+  synchronizer:
+    shell: just sync
+
+  relayer:
+    shell: just relayer
+
+  # Waits for the local synchronizer + relayer to bind before launching the
+  # 6 demo dobjds — mprocs has no native deps, so we poll /healthz inline.
   bootstrap_dobjds:
     shell: |
       cargo build -p dobjd --release
-      exec bash agents/scripts/bootstrap_dobjds.sh
+      echo "bootstrap_dobjds: waiting for local synchronizer (:3000) + relayer (:3200)…"
+      for port in 3000 3200; do
+        until curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; do
+          sleep 2
+        done
+        echo "  :$port ready"
+      done
+      exec bash agents/scripts/bootstrap_dobjds.sh --local
 
   # Waits for the 6 bootstrap dobjds to come up before starting the A2A
   # agents — mprocs doesn't have native deps, so we poll /healthz inline.
@@ -20,9 +38,9 @@ procs:
       echo "all six dobjds healthy — starting A2A agents"
       exec bash agents/scripts/run_all.sh
 
-  # The user's own dev-remote dobjd at :7717 (the standard default — same
-  # port `just dev` and `just dev-remote` use). Distinct from the 6
-  # bootstrap dobjds owned by the demo (which now start at :7727).
+  # The user's own dobjd at :7717 (the standard default — same port
+  # `just dev` and `just dev-remote` use). Distinct from the 6 bootstrap
+  # dobjds owned by the demo (which now start at :7727).
   dobjd:
     shell: just dobjd
 

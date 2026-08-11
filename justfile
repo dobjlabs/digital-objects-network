@@ -48,28 +48,33 @@ dev: ensure-plugins ensure-commands ensure-mcp
 dev-remote: ensure-plugins ensure-commands ensure-remote-settings ensure-mcp
     mprocs --config mprocs.remote.yaml
 
-# Full A2A agent demo in one mprocs window:
-#   - pane 1: bootstrap_dobjds.sh  (6 dobjds on 7727/7737/7747/7757/7767/7777)
-#   - pane 2: run_all.sh           (6 A2A agents on 9994-9999, polls until
-#                                   pane 1's dobjds are healthy first)
-#   - pane 3: dobjd at :7717       (your own dev-remote dobjd — the
-#                                   standard default, separate from
-#                                   the demo's 6)
-#   - pane 4: web (Vite :1420 → :7717)
-#   - pane 5: desktop (Tauri shell)
-# Uses hosted sync/relayer (no local Postgres needed). Conflicts with
-# `just dev` and `just dev-remote` standalone — pick one.
-dev-agents: ensure-plugins ensure-commands ensure-remote-settings ensure-mcp
+# Full A2A agent demo in one mprocs window, all local (same chain-anchoring
+# setup as `just dev`):
+#   - pane 1: synchronizer at :3000
+#   - pane 2: relayer at :3200
+#   - pane 3: bootstrap_dobjds.sh  (6 dobjds on 7727/7737/7747/7757/7767/7777,
+#                                   pointed at the local sync/relayer; polls
+#                                   :3000 + :3200 until they're up first)
+#   - pane 4: run_all.sh           (6 A2A agents on 9994-9999, polls until
+#                                   pane 3's dobjds are healthy first)
+#   - pane 5: dobjd at :7717       (your own dobjd — the standard default,
+#                                   separate from the demo's 6)
+#   - pane 6: web (Vite :1420 → :7717)
+#   - pane 7: desktop (Tauri shell)
+# Needs Postgres running locally (the synchronizer + relayer both use it).
+# Conflicts with `just dev` and `just dev-remote` standalone — pick one.
+dev-agents: ensure-plugins ensure-commands ensure-local-settings ensure-mcp
     mprocs --config mprocs.agents.yaml
 
-# Idempotently point ~/.dobj/settings.json at the hosted synchronizer +
+# Idempotently point ~/.dobj/settings.json at the given synchronizer +
 # relayer. Preserves any other keys already in the file.
-ensure-remote-settings:
+ensure-settings sync_url relayer_url:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p ~/.dobj
-    python3 - <<'PY'
+    SYNC_URL='{{sync_url}}' RELAY_URL='{{relayer_url}}' python3 - <<'PY'
     import json
+    import os
     from pathlib import Path
     p = Path.home() / '.dobj' / 'settings.json'
     try:
@@ -78,11 +83,20 @@ ensure-remote-settings:
             data = {}
     except Exception:
         data = {}
-    data['synchronizerApiUrl'] = 'http://18.217.144.33:3000'
-    data['relayerApiUrl'] = 'http://18.217.144.33:3200'
+    data['synchronizerApiUrl'] = os.environ['SYNC_URL']
+    data['relayerApiUrl'] = os.environ['RELAY_URL']
     p.write_text(json.dumps(data, indent=2) + '\n')
-    print(f"~/.dobj/settings.json → hosted sync ({data['synchronizerApiUrl']}) + relayer ({data['relayerApiUrl']})")
+    print(f"~/.dobj/settings.json → sync ({data['synchronizerApiUrl']}) + relayer ({data['relayerApiUrl']})")
     PY
+
+# Point ~/.dobj/settings.json at the hosted synchronizer + relayer.
+ensure-remote-settings: (ensure-settings 'http://18.217.144.33:3000' 'http://18.217.144.33:3200')
+
+# Point ~/.dobj/settings.json back at the local synchronizer + relayer
+# (the built-in defaults). Undoes a previous `ensure-remote-settings`, which
+# would otherwise leave your own dobjd talking to the hosted endpoints while
+# the demo's dobjds use the local ones.
+ensure-local-settings: (ensure-settings 'http://127.0.0.1:3000' 'http://127.0.0.1:3200')
 
 # Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
 # `just dev` so a fresh clone (or a `just reset`-ed dev env) boots cleanly.
