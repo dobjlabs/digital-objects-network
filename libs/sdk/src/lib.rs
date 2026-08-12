@@ -2024,7 +2024,13 @@ impl Loader {
 
     fn module(self, engine: Rc<Engine>, ast: AST) -> SdkModule {
         let mut podlang_src = String::new();
+        let started = std::time::Instant::now();
         fmt_podlang::fmt(&self, &mut podlang_src).unwrap();
+        log::debug!(
+            "podlang render: {:?} ({} bytes)",
+            started.elapsed(),
+            podlang_src.len()
+        );
 
         let params = Params::default();
         let module = Arc::new(
@@ -2608,8 +2614,11 @@ impl Sdk {
         actions: &[&str],
     ) -> Result<Rc<SdkModule>, SdkError> {
         let scope = Scope::new();
+        let started = std::time::Instant::now();
         let ast = self.engine.compile_with_scope(&scope, src).unwrap();
+        log::debug!("rhai compile: {:?}", started.elapsed());
 
+        let started = std::time::Instant::now();
         let mut action_handles = Vec::new();
         for action in actions {
             let action_handle = ActionHandle::new(action.to_string(), None);
@@ -2625,8 +2634,15 @@ impl Sdk {
             )?;
             action_handles.push(action_handle);
         }
+        log::debug!(
+            "rhai load-phase runs x{}: {:?}",
+            actions.len(),
+            started.elapsed()
+        );
 
+        let started = std::time::Instant::now();
         let loader = Loader::new(action_handles)?;
+        log::debug!("loader analysis: {:?}", started.elapsed());
         Ok(Rc::new(loader.module(self.engine.clone(), ast)))
     }
 
