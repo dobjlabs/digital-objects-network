@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use pexe::{
-    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, SCRIPT_FILE, compile_module_hash, inspect,
-    install, pack, read_pexe_file, set_manifest_hash, unpack,
+    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash, inspect, install, pack,
+    read_pexe_file, set_manifest_hash, unpack,
 };
 
 // These names intentionally mirror `driver::paths::{DOBJ_HOME_DIR, ACTIONS_DIR}`.
@@ -352,14 +352,10 @@ fn build_one(
     let manifest = source.parse_manifest()?;
     let plugin_name = manifest.plugin.name.clone();
 
-    // A recipe has no script to compile and no module hash of its own; its
-    // pinned hashes name the plugins it composes, checked at catalog load.
-    let (manifest_toml, hash_label) = if manifest.is_recipe() {
-        if source.script.is_some() {
-            return Err(anyhow!(
-                "{plugin_name} declares recipes and also has a {SCRIPT_FILE}; a recipe composes other plugins' actions and has no script of its own"
-            ));
-        }
+    // A recipe-only pexe has no script to compile and no module hash of its
+    // own; its pinned hashes name the plugins it composes, checked at
+    // catalog load. A pexe carrying both is compiled like any plugin.
+    let (manifest_toml, hash_label) = if source.script.is_none() {
         (source.manifest_toml.clone(), "recipe".to_string())
     } else {
         // Compile the script to derive the real module hash from the pod2 batch id.

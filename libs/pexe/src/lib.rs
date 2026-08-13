@@ -126,23 +126,19 @@ pub fn unpack_raw(bytes: &[u8]) -> Result<(String, Option<String>)> {
 
 /// Unpack pexe bytes into a parsed [`Manifest`] and the script source.
 ///
-/// A plugin must carry a script and a recipe must not: the two kinds are
-/// distinguished by the manifest, and an archive that disagrees with its
-/// own manifest is rejected here rather than confusing the catalog.
+/// A pexe may carry a script, recipes, or both: a recipe can name its own
+/// plugin's actions alongside another plugin's, which is how a composed
+/// transaction also produces objects of the recipe author's own classes.
+/// Carrying neither is what makes an archive useless, so that is rejected.
 pub fn unpack(bytes: &[u8]) -> Result<(Manifest, Option<String>)> {
     let (manifest_toml, script) = unpack_raw(bytes)?;
     let manifest: Manifest =
         toml::from_str(&manifest_toml).map_err(|err| anyhow!("invalid manifest.toml: {err}"))?;
-    match (manifest.is_recipe(), &script) {
-        (true, Some(_)) => bail!(
-            "{} declares recipes and also ships a {SCRIPT_FILE}; a recipe composes other plugins' actions and has no script of its own",
-            manifest.plugin.name
-        ),
-        (false, None) => bail!(
+    if script.is_none() && !manifest.is_recipe() {
+        bail!(
             "{} ships no {SCRIPT_FILE} and declares no recipes",
             manifest.plugin.name
-        ),
-        _ => {}
+        );
     }
     Ok((manifest, script))
 }

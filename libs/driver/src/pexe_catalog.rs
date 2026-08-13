@@ -35,8 +35,8 @@ struct Plugin {
     #[allow(dead_code)]
     path: PathBuf,
     manifest: Manifest,
-    /// Absent for a recipe pexe, which composes other plugins' actions
-    /// and compiles to no module of its own.
+    /// Absent for a pexe that only carries recipes, which compiles to no
+    /// module of its own. A pexe may carry both.
     script: Option<String>,
 }
 
@@ -146,15 +146,18 @@ impl PexeCatalog {
 
         for plugin in plugins {
             let plugin_name = plugin.manifest.plugin.name.clone();
-            // Recipes contribute no classes or predicates, so they are
-            // resolved after every plugin is loaded and their steps exist.
-            if plugin.manifest.is_recipe() {
+            // A pexe with no script contributes no classes or predicates.
+            // Recipes are resolved in a later pass either way, once every
+            // plugin is loaded and their steps exist.
+            let Some(script) = plugin.script.as_deref() else {
+                if !plugin.manifest.is_recipe() {
+                    return Err(anyhow!(
+                        "plugin {plugin_name} has no script and declares no recipes"
+                    ));
+                }
                 enriched_plugins.push(plugin);
                 continue;
-            }
-            let script = plugin.script.as_deref().ok_or_else(|| {
-                anyhow!("plugin {plugin_name} has no script and declares no recipes")
-            })?;
+            };
             let module = sdk
                 .load_module_from_src_manifest(script, &plugin.manifest)
                 .map_err(|err| anyhow!("failed to load plugin {plugin_name}: {err}"))?;
@@ -302,7 +305,10 @@ impl PexeCatalog {
             // A required plugin present at a different hash is a different
             // set of classes, so its actions are not the ones this recipe
             // was written against.
-            let mut required: HashSet<&str> = HashSet::new();
+            // A recipe may also run its own plugin's actions, so a composed
+            // transaction can produce objects of the recipe author's own
+            // classes alongside the ones it claims.
+            let mut required: HashSet<&str> = HashSet::from([plugin_name.as_str()]);
             for require in &plugin.manifest.requires {
                 required.insert(require.plugin.as_str());
                 match installed_hashes.get(require.plugin.as_str()) {
@@ -579,10 +585,12 @@ pub(crate) fn test_plugin_bytes() -> Vec<u8> {
 }
 
 #[cfg(test)]
-/// The bundled recipe example, packed from source like the plugin above.
+/// The bundled recipe example, packed from source like the plugin above. It
+/// carries a script of its own for the receipt class it mints.
 pub(crate) fn bundled_recipe_bytes() -> Vec<u8> {
     let manifest = include_str!("../../../examples/swap-log-wood/manifest.toml");
-    pexe::pack(manifest, None).expect("bundled recipe packs")
+    let script = include_str!("../../../examples/swap-log-wood/plugin.rhai");
+    pexe::pack(manifest, Some(script)).expect("bundled recipe packs")
 }
 
 #[cfg(test)]
@@ -990,6 +998,48 @@ description = "consume a Foo to make a Bar"
         );
     }
 
+    /// A recipe may run its own plugin's actions alongside another's, which
+    /// is how a composed transaction also produces objects of classes the
+    /// recipe author owns. The bundled example does exactly this.
+    #[test]
+    fn test_bundled_recipe_mints_its_own_class() {
+        let catalog = PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("craft-basics.pexe"), test_plugin_bytes()),
+                (PathBuf::from("swap-log-wood.pexe"), bundled_recipe_bytes()),
+            ],
+            true,
+        )
+        .expect("bundled recipe loads");
+
+        let recipe = catalog
+            .get_action(&QualifiedName::new("swap-log-wood", "SwapLogWood"))
+            .expect("bundled recipe is a catalog action");
+
+        // Consumes craft-basics classes; produces those plus its own receipt.
+        let names =
+            |refs: &[ClassRef]| -> Vec<String> { refs.iter().map(|r| r.class.id()).collect() };
+        assert_eq!(
+            names(&recipe.total_inputs),
+            vec!["craft-basics::Log", "craft-basics::Wood"]
+        );
+        assert_eq!(
+            names(&recipe.total_outputs),
+            vec![
+                "craft-basics::Log",
+                "craft-basics::Wood",
+                "swap-log-wood::Swapped"
+            ]
+        );
+
+        // The receipt's class belongs to the recipe's own module, so its
+        // guard is the recipe plugin's own IsSwapped.
+        let swapped = catalog
+            .get_class(&QualifiedName::new("swap-log-wood", "Swapped"))
+            .expect("the recipe plugin declares Swapped");
+        assert_eq!(recipe.total_outputs[2].hash, swapped.hash);
+    }
+
     // --- Recipe fixtures -----------------------------------------------------
     //
     // A recipe pexe carries no script. It pins the plugins it composes by
@@ -1164,6 +1214,82 @@ description = "take possession of a Bar"
         assert_ne!(out.obj(1).obj.commitment(), bar.obj.commitment());
     }
 
+    /// Three actions, two batches, one transaction: the bundled recipe
+    /// re-keys a craft-basics log and wood and mints its own receipt.
+    #[test]
+    fn test_bundled_recipe_executes_across_two_batches() {
+        let catalog = PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("craft-basics.pexe"), test_plugin_bytes()),
+                (PathBuf::from("swap-log-wood.pexe"), bundled_recipe_bytes()),
+            ],
+            true,
+        )
+        .expect("bundled recipe loads");
+        let mut state = payload::test_state::TestState::default();
+
+        // FindLog twice, then turn one log into wood, to hold both at once.
+        let mut run = |action: QualifiedName, inputs: Vec<SpendableObject>| {
+            let commitments: Vec<Hash> = inputs.iter().map(|i| i.obj.commitment()).collect();
+            let witness = recipe_test_witness(&state, &commitments);
+            let out = catalog
+                .execute_action(action.clone(), witness, inputs)
+                .unwrap_or_else(|err| panic!("{action} runs: {err}"));
+            state.apply_tx(
+                out.tx.live_commitments().unwrap(),
+                out.tx.nullifier_hashes().unwrap(),
+            );
+            out
+        };
+        let log = run(QualifiedName::new("craft-basics", "FindLog"), vec![]).obj(0);
+        let spare = run(QualifiedName::new("craft-basics", "FindLog"), vec![]).obj(0);
+        let wood = run(QualifiedName::new("craft-basics", "CraftWood"), vec![spare]).obj(0);
+
+        let out = run(
+            QualifiedName::new("swap-log-wood", "SwapLogWood"),
+            vec![log.clone(), wood.clone()],
+        );
+
+        // Both claims spent their input; the receipt consumed nothing.
+        let nullifiers = out.tx.nullifier_hashes().unwrap();
+        assert_eq!(nullifiers.len(), 2);
+        assert!(nullifiers.contains(&txlib::object_nullifier_hash(&log.obj).unwrap()));
+        assert!(nullifiers.contains(&txlib::object_nullifier_hash(&wood.obj).unwrap()));
+
+        // Log, wood, receipt -- all three live off one transaction.
+        assert_eq!(out.objs.len(), 3);
+        let live = out.tx.live_commitments().unwrap();
+        for produced in &out.objs {
+            assert!(live.contains(&produced.obj.commitment()));
+        }
+
+        // The claimed objects keep craft-basics' classes; the receipt carries
+        // the recipe plugin's own.
+        assert_eq!(
+            obj_type_hash_for_test(&out.obj(0).obj).unwrap(),
+            obj_type_hash_for_test(&log.obj).unwrap()
+        );
+        assert_eq!(
+            obj_type_hash_for_test(&out.obj(1).obj).unwrap(),
+            obj_type_hash_for_test(&wood.obj).unwrap()
+        );
+        let swapped = catalog
+            .get_class(&QualifiedName::new("swap-log-wood", "Swapped"))
+            .expect("Swapped class present");
+        assert_eq!(
+            obj_type_hash_for_test(&out.obj(2).obj).unwrap(),
+            decode_hash_hex(&swapped.hash).unwrap()
+        );
+        assert!(
+            out.obj(2)
+                .obj
+                .get(&pod2::middleware::StrKey::from("swapped_at"))
+                .unwrap()
+                .is_some(),
+            "the receipt records the grounding block timestamp"
+        );
+    }
+
     fn recipe_bytes(recipe_name: &str, requires: &str, module_hash: &str, steps: &str) -> Vec<u8> {
         let manifest = format!(
             r#"[plugin]
@@ -1288,31 +1414,85 @@ steps = [{steps}]
     }
 
     #[test]
-    fn test_recipe_pexe_with_a_script_is_rejected() {
+    fn test_pexe_with_neither_script_nor_recipes_is_rejected() {
+        let manifest = r#"[plugin]
+name = "empty"
+version = "0.1.0"
+"#;
+        let bytes = pexe::pack(manifest, None).expect("pack");
+        let err = pexe::unpack(&bytes)
+            .expect_err("an archive that does nothing must be rejected")
+            .to_string();
+        assert!(
+            err.contains("declares no recipes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_recipe_may_carry_its_own_script() {
         let hash = claims_module_hash("base");
-        let manifest = format!(
+        // A recipe pexe that also declares a class of its own, and runs its
+        // own action as a third step alongside the two it claims.
+        let script = r#"
+fn MintReceipt(action) {
+    var receipt = action.output("Receipt");
+    var key = action.random();
+    receipt.update("key", key);
+}
+"#;
+        let template = format!(
             r#"[plugin]
 name = "swap"
 version = "0.1.0"
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 
 [[requires]]
 plugin = "base"
 module_hash = "{hash}"
 
+[[classes]]
+name = "Receipt"
+emoji = "R"
+description = "a swap receipt"
+
+[[actions]]
+name = "MintReceipt"
+emoji = "R"
+description = "mint a receipt"
+hidden = true
+
 [[recipes]]
 name = "SwapFooBar"
 emoji = "S"
-description = "re-key one Foo and one Bar"
-steps = ["base::ClaimFoo"]
+description = "re-key a Foo and a Bar and mint a receipt"
+steps = ["base::ClaimFoo", "base::ClaimBar", "swap::MintReceipt"]
 "#
         );
-        let bytes = pexe::pack(&manifest, Some(CLAIM_SCRIPT)).expect("pack");
-        let err = pexe::unpack(&bytes)
-            .expect_err("a recipe carrying a script must be rejected")
-            .to_string();
-        assert!(
-            err.contains("has no script of its own"),
-            "unexpected error: {err}"
+        let manifest: sdk::manifest::Manifest = toml::from_str(&template).expect("manifest parses");
+        let real_hash =
+            pexe::compile_module_hash(&manifest, script).expect("recipe script compiles");
+        let with_hash =
+            pexe::set_manifest_hash(&template, &real_hash).expect("rewrite module_hash");
+        let bytes = pexe::pack(&with_hash, Some(script)).expect("pack");
+
+        let catalog = PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("base.pexe"), claims_plugin_bytes("base")),
+                (PathBuf::from("swap.pexe"), bytes),
+            ],
+            true,
+        )
+        .expect("a recipe pexe may carry its own script");
+
+        let recipe = catalog
+            .get_action(&QualifiedName::new("swap", "SwapFooBar"))
+            .expect("recipe present");
+        let outputs: Vec<String> = recipe.total_outputs.iter().map(|r| r.class.id()).collect();
+        assert_eq!(
+            outputs,
+            vec!["base::Foo", "base::Bar", "swap::Receipt"],
+            "the recipe produces its own class alongside the claimed ones"
         );
     }
 }

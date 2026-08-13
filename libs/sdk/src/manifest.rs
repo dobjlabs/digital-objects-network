@@ -20,8 +20,10 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// A recipe pexe composes other plugins' actions instead of shipping
-    /// a script, so it has no `module_hash` and no classes to declare.
+    /// Whether this pexe declares any recipes. A pexe may carry recipes
+    /// with or without a script of its own: a recipe can name its own
+    /// plugin's actions alongside another plugin's, so a composed
+    /// transaction can also produce objects of classes it declares here.
     pub fn is_recipe(&self) -> bool {
         !self.recipes.is_empty()
     }
