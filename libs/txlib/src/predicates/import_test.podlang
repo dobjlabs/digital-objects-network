@@ -1,0 +1,34 @@
+/*
+  A third test batch that IMPORTS the swap_test batch and calls its
+  predicate directly, rather than naming it as a separate top-level
+  action of the same transaction.
+
+  This is the alternative to composing at the transaction level: here one
+  action's predicate contains another batch's action as a sub-action
+  clause, so the parent spans both and can constrain them against each
+  other. The `Receipt` class belongs to this module.
+*/
+
+use module 0xTX_EVENTS_MODULE_HASH as tx
+use module 0xSWAP_MODULE_HASH as gem
+
+// TODO: Support importing records via `use module`
+record StateHeader = (block_number, block_timestamp, block_hash, created, nullifiers, prior_state_history)
+
+// Claim someone else's Gem and mint a Receipt of our own, in one action.
+// `gem::ClaimGem` occupies the range (chain_start, h0) as a nested
+// action, and the receipt insert closes out the parent's range.
+// The `Equal` clause is the payoff of importing rather than composing at
+// the transaction level: `gem_obj` is in scope here, so the receipt can be
+// pinned to the very object that was claimed. Sibling top-level actions
+// cannot see each other's objects and so cannot express this.
+ClaimAndReceipt(gem_obj, receipt, chain_start, chain_end,
+    private: h0, receipt0) = AND(
+  gem::ClaimGem(gem_obj, chain_start, h0)
+  Equal(receipt0.gem, gem_obj.stable_identifier)
+  tx::TxInsert(h0, chain_end, receipt0, receipt, @self_predicate(IsReceipt))
+)
+
+IsReceipt(obj, state_header StateHeader, chain_start, chain_end, private: other) = OR(
+  ClaimAndReceipt(other, obj, chain_start, chain_end)
+)
