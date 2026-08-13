@@ -886,3 +886,227 @@ fn test_sdk_state_header() {
     let [_ticker1] = res.objs();
     apply_tx(&mut state, &ticker1_tx);
 }
+
+/// Two actions in one transaction: both objects are re-keyed together,
+/// so the pair lands or fails as a unit. This is the shape a swap takes.
+#[test]
+fn test_two_actions_one_transaction() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let src = r#"
+        fn SpawnLog(action) {
+            var log = action.output("Log");
+        }
+        fn SpawnWood(action) {
+            var wood = action.output("Wood");
+        }
+        fn ClaimLog(action) {
+            var log = action.mutate("Log");
+            var key = action.random();
+            log.update("key", key);
+        }
+        fn ClaimWood(action) {
+            var wood = action.mutate("Wood");
+            var key = action.random();
+            wood.update("key", key);
+        }
+    "#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(src, &["SpawnLog", "SpawnWood", "ClaimLog", "ClaimWood"])
+        .unwrap();
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnLog", vec![]).unwrap();
+    let spawn_log_tx = res.tx.clone();
+    let [log] = res.objs();
+    apply_tx(&mut state, &spawn_log_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnWood", vec![]).unwrap();
+    let spawn_wood_tx = res.tx.clone();
+    let [wood] = res.objs();
+    apply_tx(&mut state, &spawn_wood_tx);
+
+    // One transaction, two top-level actions.
+    let witness = grounding_witness(&state, &[log.obj.commitment(), wood.obj.commitment()]);
+    let executor = module.executor(true, witness);
+    let res = executor
+        .actions(vec![
+            Invocation {
+                module: module.clone(),
+                action: "ClaimLog".to_string(),
+                inputs: vec![log.clone()],
+            },
+            Invocation {
+                module: module.clone(),
+                action: "ClaimWood".to_string(),
+                inputs: vec![wood.clone()],
+            },
+        ])
+        .unwrap();
+
+    let [claimed_log, claimed_wood] = res.objs();
+    let nullifiers = res.tx.nullifier_hashes().unwrap();
+    assert_eq!(nullifiers.len(), 2, "both inputs are spent by the one tx");
+    assert!(nullifiers.contains(&txlib::object_nullifier_hash(&log.obj).unwrap()));
+    assert!(nullifiers.contains(&txlib::object_nullifier_hash(&wood.obj).unwrap()));
+
+    // Re-keying changes each commitment, and the stable identifier
+    // carries across so both stay the same objects.
+    let live = res.tx.live_commitments().unwrap();
+    assert!(live.contains(&claimed_log.obj.commitment()));
+    assert!(live.contains(&claimed_wood.obj.commitment()));
+    assert_ne!(claimed_log.obj.commitment(), log.obj.commitment());
+    assert_ne!(claimed_wood.obj.commitment(), wood.obj.commitment());
+    let stable = |obj: &pod2::middleware::containers::Dictionary| {
+        obj.get(&pod2::middleware::StrKey::from("stable_identifier"))
+            .unwrap()
+            .unwrap()
+    };
+    assert_eq!(stable(&claimed_log.obj), stable(&log.obj));
+    assert_eq!(stable(&claimed_wood.obj), stable(&wood.obj));
+}
+
+/// The same transaction, but the two actions come from two separately
+/// compiled plugins. This is what lets a user's own pexe compose actions
+/// over classes another plugin defined.
+#[test]
+fn test_two_plugins_one_transaction() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let logs_src = r#"
+        fn SpawnLog(action) {
+            var log = action.output("Log");
+        }
+        fn ClaimLog(action) {
+            var log = action.mutate("Log");
+            var key = action.random();
+            log.update("key", key);
+        }
+    "#;
+    // Structurally different from the log plugin, not just differently
+    // named: predicate names are not hashed, so two plugins whose
+    // rendered podlang has the same shape compile to the same batch and
+    // therefore to the same classes. The extra literal field is what
+    // makes this a second batch.
+    let gems_src = r#"
+        fn SpawnGem(action) {
+            var gem = action.output("Gem");
+            gem.set([
+                ["facets", 8]
+            ]);
+        }
+        fn ClaimGem(action) {
+            var gem = action.mutate("Gem");
+            var key = action.random();
+            gem.update("key", key);
+        }
+    "#;
+    let sdk = Sdk::default();
+    let logs = sdk
+        .load_module_from_src_actions(logs_src, &["SpawnLog", "ClaimLog"])
+        .unwrap();
+    let gems = sdk
+        .load_module_from_src_actions(gems_src, &["SpawnGem", "ClaimGem"])
+        .unwrap();
+    assert_ne!(
+        logs.module().batch.id(),
+        gems.module().batch.id(),
+        "the two plugins must compile to distinct batches"
+    );
+
+    let mut state = TestState::default();
+
+    let executor = logs.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnLog", vec![]).unwrap();
+    let tx = res.tx.clone();
+    let [log] = res.objs();
+    apply_tx(&mut state, &tx);
+
+    let executor = gems.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnGem", vec![]).unwrap();
+    let tx = res.tx.clone();
+    let [gem] = res.objs();
+    apply_tx(&mut state, &tx);
+
+    let witness = grounding_witness(&state, &[log.obj.commitment(), gem.obj.commitment()]);
+    let executor = Executor::with_modules(vec![logs.clone(), gems.clone()], true, witness).unwrap();
+    let res = executor
+        .actions(vec![
+            Invocation {
+                module: logs.clone(),
+                action: "ClaimLog".to_string(),
+                inputs: vec![log.clone()],
+            },
+            Invocation {
+                module: gems.clone(),
+                action: "ClaimGem".to_string(),
+                inputs: vec![gem.clone()],
+            },
+        ])
+        .unwrap();
+
+    let nullifiers = res.tx.nullifier_hashes().unwrap();
+    assert!(nullifiers.contains(&txlib::object_nullifier_hash(&log.obj).unwrap()));
+    assert!(nullifiers.contains(&txlib::object_nullifier_hash(&gem.obj).unwrap()));
+
+    let [claimed_log, claimed_gem] = res.objs();
+    let live = res.tx.live_commitments().unwrap();
+    assert!(live.contains(&claimed_log.obj.commitment()));
+    assert!(live.contains(&claimed_gem.obj.commitment()));
+}
+
+/// Plugin identity is structural, not nominal: predicate names are
+/// metadata and are not hashed, so renaming every class and action in a
+/// plugin leaves its batch id -- and therefore all of its class hashes
+/// -- unchanged. Two independently authored plugins that render to the
+/// same shape share an economy, and a recipe that pins a `module_hash`
+/// is pinning structure rather than a name.
+#[test]
+fn test_batch_id_ignores_names() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let logs_src = r#"
+        fn SpawnLog(action) {
+            var log = action.output("Log");
+        }
+    "#;
+    let renamed_src = r#"
+        fn ConjureIngot(action) {
+            var ingot = action.output("Ingot");
+        }
+    "#;
+    let sdk = Sdk::default();
+    let logs = sdk
+        .load_module_from_src_actions(logs_src, &["SpawnLog"])
+        .unwrap();
+    let renamed = sdk
+        .load_module_from_src_actions(renamed_src, &["ConjureIngot"])
+        .unwrap();
+
+    assert_eq!(
+        logs.module().batch.id(),
+        renamed.module().batch.id(),
+        "renaming a class and its action must not change the batch id"
+    );
+    assert_eq!(
+        logs.class_hash("Log").unwrap(),
+        renamed.class_hash("Ingot").unwrap(),
+        "structurally identical classes are the same class"
+    );
+
+    // Adding a constrained field is a structural change, so it does move
+    // the batch id.
+    let extra_src = r#"
+        fn SpawnLog(action) {
+            var log = action.output("Log");
+            log.set([
+                ["facets", 8]
+            ]);
+        }
+    "#;
+    let extra = sdk
+        .load_module_from_src_actions(extra_src, &["SpawnLog"])
+        .unwrap();
+    assert_ne!(logs.module().batch.id(), extra.module().batch.id());
+}

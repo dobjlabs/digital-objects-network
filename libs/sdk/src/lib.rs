@@ -2349,6 +2349,15 @@ impl SpendableObjects {
     }
 }
 
+/// One action to run inside a transaction, together with the plugin it
+/// comes from and the objects it consumes. A transaction is a list of
+/// these; they need not share a plugin.
+pub struct Invocation {
+    pub module: Rc<SdkModule>,
+    pub action: String,
+    pub inputs: Vec<SpendableObject>,
+}
+
 /// The Executor is used to hold the state of action execution at Execution time.
 pub struct Executor {
     mock: bool,
@@ -2406,6 +2415,27 @@ fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
 
 impl Executor {
     fn new(module: Rc<SdkModule>, mock: bool, grounding_witness: Arc<GroundingWitness>) -> Self {
+        Self::with_modules(vec![module], mock, grounding_witness)
+            .expect("one module is never empty")
+    }
+
+    /// Build an executor over several plugin modules, so one transaction
+    /// can carry actions from more than one plugin.
+    ///
+    /// The txlib batches arrive once per plugin and are deduplicated by
+    /// batch id: leaving copies in would make every txlib predicate name
+    /// resolve ambiguously. Two plugins compiled against genuinely
+    /// different txlib batches keep both copies and fail that way, which
+    /// is the honest outcome -- their events are not interchangeable.
+    pub fn with_modules(
+        modules: Vec<Rc<SdkModule>>,
+        mock: bool,
+        grounding_witness: Arc<GroundingWitness>,
+    ) -> Result<Self> {
+        let module = modules
+            .first()
+            .ok_or_else(|| anyhow!("an executor needs at least one plugin module"))?
+            .clone();
         let mock_prover = MockProver {};
         let real_prover = Prover {};
         let (vd_set, prover): (_, Box<dyn MainPodProver>) = if mock {
@@ -2415,20 +2445,24 @@ impl Executor {
             (vd_set.clone(), Box::new(real_prover))
         };
         let params = Params::default();
-        let modules = vec![
-            module.tx_events_mod.clone(),
-            module.txlib_mod.clone(),
-            module.module.clone(),
-        ];
-        Self {
+        let mut pod_modules: Vec<Arc<Module>> = Vec::new();
+        let mut seen: HashSet<Hash> = HashSet::new();
+        for plugin in &modules {
+            for batch in [&plugin.tx_events_mod, &plugin.txlib_mod, &plugin.module] {
+                if seen.insert(batch.batch.id()) {
+                    pod_modules.push(batch.clone());
+                }
+            }
+        }
+        Ok(Self {
             mock,
             params,
             vd_set,
             grounding_witness,
             prover,
-            pod_modules: modules,
+            pod_modules,
             module,
-        }
+        })
     }
     fn new_builder(&self) -> MultiPodBuilder {
         MultiPodBuilder::new(&self.params, &self.vd_set)
@@ -2442,45 +2476,85 @@ impl Executor {
         action: &str,
         inputs: Vec<SpendableObject>,
     ) -> Result<SpendableObjects, SdkError> {
+        self.actions(vec![Invocation {
+            module: self.module.clone(),
+            action: action.to_string(),
+            inputs,
+        }])
+    }
+
+    /// Execute several actions as one transaction.
+    ///
+    /// Each invocation opens its own top-level action scope, so the
+    /// actions are siblings on the event chain rather than nested, and
+    /// they may come from different plugins. Grounding covers the whole
+    /// transaction, so the caller's witness must carry a proof for every
+    /// input across every invocation.
+    pub fn actions(&self, invocations: Vec<Invocation>) -> Result<SpendableObjects, SdkError> {
         // TODO: In this function: return errors instead of panic from unwrap.
+        if invocations.is_empty() {
+            return Err(anyhow!("a transaction needs at least one action").into());
+        }
         let builder = self.new_builder();
         let mut bld = BuildContext {
             builder,
             modules: self.pod_modules.clone(),
         };
 
-        let total = &self.module.action_by_name(action).total_inputs;
-
-        let mut tx_inputs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
-        let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
-        for (input, _ref) in zip_eq(inputs, total.iter()) {
-            let SpendableObject { obj } = input;
-            tx_inputs.push(obj.clone());
-            rhai_input_objs.push(obj);
+        // The tx builder grounds every input up front; each invocation
+        // then pops only its own off the rhai stack.
+        let mut tx_inputs: Vec<Dictionary> = Vec::new();
+        let mut per_action_inputs: Vec<Vec<Dictionary>> = Vec::with_capacity(invocations.len());
+        for invocation in &invocations {
+            let total = &invocation
+                .module
+                .action_by_name(&invocation.action)
+                .total_inputs;
+            let mut objs: Vec<Dictionary> = Vec::with_capacity(invocation.inputs.len());
+            for (input, _ref) in zip_eq(invocation.inputs.iter(), total.iter()) {
+                tx_inputs.push(input.obj.clone());
+                objs.push(input.obj.clone());
+            }
+            // Reverse so rhai pops in declaration order (last-declared on top).
+            objs.reverse();
+            per_action_inputs.push(objs);
         }
-        // Reverse so rhai pops in declaration order (last-declared on top).
-        rhai_input_objs.reverse();
 
         let tx_builder = self.new_tx_builder(&mut bld, &tx_inputs);
         let exe_rc = Rc::new(RefCell::new(ExeContext {
             mock: self.mock,
             params: self.params.clone(),
             vd_set: self.vd_set.clone(),
-            inputs: rhai_input_objs,
+            inputs: Vec::new(),
             bld,
             tx_builder,
-            module: self.module.clone(),
+            module: invocations[0].module.clone(),
             outputs: Vec::new(),
         }));
-        let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
-        log::info!("executing action {}", action);
-        let start = std::time::Instant::now();
-        action_handle.exe_action()?;
-        log::info!("executing action {} took {:?}", action, start.elapsed());
 
-        // Release the handle's Rc clone so `exe_rc` has a unique
-        // owner for the `try_unwrap` below.
-        action_handle.0.borrow_mut().exe_ctx = None;
+        for (invocation, inputs) in zip_eq(&invocations, per_action_inputs) {
+            {
+                let mut exe_ctx = exe_rc.borrow_mut();
+                // Each body is parsed from its own plugin's script, so the
+                // module handle moves with the invocation.
+                exe_ctx.module = invocation.module.clone();
+                exe_ctx.inputs = inputs;
+            }
+            let action_handle = ActionHandle::new(invocation.action.clone(), Some(exe_rc.clone()));
+            log::info!("executing action {}", invocation.action);
+            let start = std::time::Instant::now();
+            action_handle.exe_action()?;
+            log::info!(
+                "executing action {} took {:?}",
+                invocation.action,
+                start.elapsed()
+            );
+
+            // Release the handle's Rc clone so `exe_rc` has a unique
+            // owner for the `try_unwrap` below.
+            action_handle.0.borrow_mut().exe_ctx = None;
+        }
+
         let ExeContext {
             tx_builder,
             mut bld,
@@ -2498,15 +2572,16 @@ impl Executor {
         // statements are not revealed: they would force a wrapping pod
         // to mask them from the relayer / synchronizer's `ProofParser`,
         // which expects a single public statement.
-        log::info!("proving tx_pod for action {}", action);
+        let label = invocations
+            .iter()
+            .map(|invocation| invocation.action.as_str())
+            .collect::<Vec<_>>()
+            .join(" + ");
+        log::info!("proving tx_pod for {label}");
         let start = std::time::Instant::now();
         let tx_pod = prove(bld.builder, &*self.prover);
         tx_pod.pod.verify().unwrap();
-        log::info!(
-            "proving tx_pod for action {} took {:?}",
-            action,
-            start.elapsed()
-        );
+        log::info!("proving tx_pod for {label} took {:?}", start.elapsed());
 
         let objs: Vec<SpendableObject> = outputs
             .into_iter()
