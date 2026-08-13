@@ -40,11 +40,12 @@ const MAX_ENTRY_BYTES: u64 = 1024 * 1024;
 /// forcing large allocations inside `ZipArchive`.
 const MAX_ENTRIES: usize = 16;
 
-/// Pexe source on disk: a directory containing `manifest.toml` and `plugin.rhai`.
+/// Pexe source on disk: a directory containing `manifest.toml`, plus
+/// `plugin.rhai` unless it is a recipe.
 pub struct PluginSource {
     pub root: PathBuf,
     pub manifest_toml: String,
-    pub script: String,
+    pub script: Option<String>,
 }
 
 impl PluginSource {
@@ -54,12 +55,29 @@ impl PluginSource {
         let script_path = root.join(SCRIPT_FILE);
         let manifest_toml = std::fs::read_to_string(&manifest_path)
             .with_context(|| format!("failed to read manifest: {}", manifest_path.display()))?;
-        let script = std::fs::read_to_string(&script_path)
-            .with_context(|| format!("failed to read script: {}", script_path.display()))?;
+        let script = if script_path.exists() {
+            Some(
+                std::fs::read_to_string(&script_path)
+                    .with_context(|| format!("failed to read script: {}", script_path.display()))?,
+            )
+        } else {
+            None
+        };
         Ok(Self {
             root,
             manifest_toml,
             script,
+        })
+    }
+
+    /// The script, or an error naming the directory when this source is a
+    /// recipe and the caller needs a script.
+    pub fn require_script(&self) -> Result<&str> {
+        self.script.as_deref().ok_or_else(|| {
+            anyhow!(
+                "{} has no {SCRIPT_FILE}; a recipe pexe composes other plugins' actions",
+                self.root.display()
+            )
         })
     }
 
@@ -68,8 +86,9 @@ impl PluginSource {
     }
 }
 
-/// Pack a manifest + script into pexe bytes.
-pub fn pack(manifest_toml: &str, script: &str) -> Result<Vec<u8>> {
+/// Pack a manifest + script into pexe bytes. Pass `None` for a recipe
+/// pexe, which composes other plugins' actions and has no script.
+pub fn pack(manifest_toml: &str, script: Option<&str>) -> Result<Vec<u8>> {
     let buf = Cursor::new(Vec::<u8>::new());
     let mut zip = ZipWriter::new(buf);
     let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -77,15 +96,18 @@ pub fn pack(manifest_toml: &str, script: &str) -> Result<Vec<u8>> {
     zip.start_file(MANIFEST_FILE, opts)?;
     zip.write_all(manifest_toml.as_bytes())?;
 
-    zip.start_file(SCRIPT_FILE, opts)?;
-    zip.write_all(script.as_bytes())?;
+    if let Some(script) = script {
+        zip.start_file(SCRIPT_FILE, opts)?;
+        zip.write_all(script.as_bytes())?;
+    }
 
     let buf = zip.finish()?;
     Ok(buf.into_inner())
 }
 
-/// Unpack pexe bytes into `(manifest_toml_src, script_src)` without parsing.
-pub fn unpack_raw(bytes: &[u8]) -> Result<(String, String)> {
+/// Unpack pexe bytes into `(manifest_toml_src, script_src)` without
+/// parsing. The script is absent for a recipe pexe.
+pub fn unpack_raw(bytes: &[u8]) -> Result<(String, Option<String>)> {
     let mut zip =
         ZipArchive::new(Cursor::new(bytes)).map_err(|err| anyhow!("invalid pexe zip: {err}"))?;
     if zip.len() > MAX_ENTRIES {
@@ -95,15 +117,33 @@ pub fn unpack_raw(bytes: &[u8]) -> Result<(String, String)> {
         );
     }
     let manifest_toml = read_entry(&mut zip, MANIFEST_FILE)?;
-    let script = read_entry(&mut zip, SCRIPT_FILE)?;
+    let script = match zip.index_for_name(SCRIPT_FILE) {
+        Some(_) => Some(read_entry(&mut zip, SCRIPT_FILE)?),
+        None => None,
+    };
     Ok((manifest_toml, script))
 }
 
 /// Unpack pexe bytes into a parsed [`Manifest`] and the script source.
-pub fn unpack(bytes: &[u8]) -> Result<(Manifest, String)> {
+///
+/// A plugin must carry a script and a recipe must not: the two kinds are
+/// distinguished by the manifest, and an archive that disagrees with its
+/// own manifest is rejected here rather than confusing the catalog.
+pub fn unpack(bytes: &[u8]) -> Result<(Manifest, Option<String>)> {
     let (manifest_toml, script) = unpack_raw(bytes)?;
     let manifest: Manifest =
         toml::from_str(&manifest_toml).map_err(|err| anyhow!("invalid manifest.toml: {err}"))?;
+    match (manifest.is_recipe(), &script) {
+        (true, Some(_)) => bail!(
+            "{} declares recipes and also ships a {SCRIPT_FILE}; a recipe composes other plugins' actions and has no script of its own",
+            manifest.plugin.name
+        ),
+        (false, None) => bail!(
+            "{} ships no {SCRIPT_FILE} and declares no recipes",
+            manifest.plugin.name
+        ),
+        _ => {}
+    }
     Ok((manifest, script))
 }
 
@@ -206,10 +246,18 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 
     #[test]
     fn test_pack_unpack_round_trip() {
-        let bytes = pack("name = \"x\"", "fn Foo() {}").unwrap();
+        let bytes = pack("name = \"x\"", Some("fn Foo() {}")).unwrap();
         let (manifest, script) = unpack_raw(&bytes).unwrap();
         assert!(manifest.contains("name = \"x\""));
-        assert_eq!(script, "fn Foo() {}");
+        assert_eq!(script.as_deref(), Some("fn Foo() {}"));
+    }
+
+    #[test]
+    fn test_pack_unpack_round_trip_without_script() {
+        let bytes = pack("name = \"x\"", None).unwrap();
+        let (manifest, script) = unpack_raw(&bytes).unwrap();
+        assert!(manifest.contains("name = \"x\""));
+        assert_eq!(script, None, "a recipe archive carries no script entry");
     }
 
     fn zip_with_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {

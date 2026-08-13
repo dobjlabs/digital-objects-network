@@ -39,14 +39,22 @@ fn txlib_event_hash(name: &str) -> Hash {
 /// Directories are read via `PluginSource::read`; anything else is
 /// treated as a `.pexe` archive and unpacked.
 fn load_target(path: &Path) -> Result<(Manifest, String)> {
-    if path.is_dir() {
+    let (manifest, script) = if path.is_dir() {
         let source = PluginSource::read(path)?;
         let manifest = source.parse_manifest()?;
-        Ok((manifest, source.script))
+        (manifest, source.script)
     } else {
         let bytes = read_pexe_file(path)?;
-        unpack(&bytes)
-    }
+        unpack(&bytes)?
+    };
+    // Recipes hold no predicates, so there is nothing here to render.
+    let script = script.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} is a recipe: it composes other plugins' actions and has no predicates of its own",
+            manifest.plugin.name
+        )
+    })?;
+    Ok((manifest, script))
 }
 
 /// Compile the plugin script with the manifest's action list and return

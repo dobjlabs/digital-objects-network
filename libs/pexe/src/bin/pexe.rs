@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use pexe::{
-    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash, inspect, install, pack,
-    read_pexe_file, set_manifest_hash, unpack,
+    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, SCRIPT_FILE, compile_module_hash, inspect,
+    install, pack, read_pexe_file, set_manifest_hash, unpack,
 };
 
 // These names intentionally mirror `driver::paths::{DOBJ_HOME_DIR, ACTIONS_DIR}`.
@@ -247,8 +247,13 @@ fn main() -> Result<()> {
             let (manifest, script) = unpack(&bytes)?;
             println!("# manifest");
             println!("{:#?}", manifest);
-            println!("\n# plugin.rhai");
-            println!("{}", script);
+            match script {
+                Some(script) => {
+                    println!("\n# plugin.rhai");
+                    println!("{}", script);
+                }
+                None => println!("\n# no plugin.rhai (recipe)"),
+            }
         }
         Cmd::Inspect { cmd } => match cmd {
             InspectCmd::Predicates {
@@ -347,35 +352,51 @@ fn build_one(
     let manifest = source.parse_manifest()?;
     let plugin_name = manifest.plugin.name.clone();
 
-    // Compile the script to derive the real module hash from the pod2 batch id.
-    let real_hash = compile_module_hash(&manifest, &source.script)?;
-    let declared_hash = format!("{:#}", manifest.plugin.module_hash);
-    let declared_hash = declared_hash.trim_start_matches("0x").to_lowercase();
-    let real_hash_clean = real_hash.trim_start_matches("0x").to_lowercase();
-
-    let manifest_toml = if declared_hash == real_hash_clean {
-        source.manifest_toml.clone()
-    } else if check {
-        return Err(anyhow!(
-            "module_hash mismatch in {name}: manifest says {declared}, compiled script yields {real} (re-run without --check to rewrite)",
-            name = plugin_name,
-            declared = declared_hash,
-            real = real_hash_clean,
-        ));
+    // A recipe has no script to compile and no module hash of its own; its
+    // pinned hashes name the plugins it composes, checked at catalog load.
+    let (manifest_toml, hash_label) = if manifest.is_recipe() {
+        if source.script.is_some() {
+            return Err(anyhow!(
+                "{plugin_name} declares recipes and also has a {SCRIPT_FILE}; a recipe composes other plugins' actions and has no script of its own"
+            ));
+        }
+        (source.manifest_toml.clone(), "recipe".to_string())
     } else {
-        log::info!(
-            "  rewriting module_hash in source manifest: {} -> {}",
-            declared_hash,
-            real_hash_clean,
-        );
-        let rewritten = set_manifest_hash(&source.manifest_toml, &real_hash_clean)?;
-        let manifest_path = source.root.join(MANIFEST_FILE);
-        std::fs::write(&manifest_path, &rewritten)
-            .with_context(|| format!("failed to write back {}", manifest_path.display()))?;
-        rewritten
+        // Compile the script to derive the real module hash from the pod2 batch id.
+        let real_hash = compile_module_hash(&manifest, source.require_script()?)?;
+        let declared_hash = manifest
+            .plugin
+            .module_hash
+            .map(|hash| format!("{hash:#}"))
+            .unwrap_or_default();
+        let declared_hash = declared_hash.trim_start_matches("0x").to_lowercase();
+        let real_hash_clean = real_hash.trim_start_matches("0x").to_lowercase();
+
+        let manifest_toml = if declared_hash == real_hash_clean {
+            source.manifest_toml.clone()
+        } else if check {
+            return Err(anyhow!(
+                "module_hash mismatch in {name}: manifest says {declared}, compiled script yields {real} (re-run without --check to rewrite)",
+                name = plugin_name,
+                declared = declared_hash,
+                real = real_hash_clean,
+            ));
+        } else {
+            log::info!(
+                "  rewriting module_hash in source manifest: {} -> {}",
+                declared_hash,
+                real_hash_clean,
+            );
+            let rewritten = set_manifest_hash(&source.manifest_toml, &real_hash_clean)?;
+            let manifest_path = source.root.join(MANIFEST_FILE);
+            std::fs::write(&manifest_path, &rewritten)
+                .with_context(|| format!("failed to write back {}", manifest_path.display()))?;
+            rewritten
+        };
+        (manifest_toml, real_hash_clean)
     };
 
-    let bytes = pack(&manifest_toml, &source.script)?;
+    let bytes = pack(&manifest_toml, source.script.as_deref())?;
     let out_path = out_dir.join(format!("{plugin_name}.{PEXE_EXTENSION}"));
     std::fs::write(&out_path, &bytes)
         .with_context(|| format!("failed to write {}", out_path.display()))?;
@@ -383,7 +404,7 @@ fn build_one(
         "  wrote {} ({} bytes, hash={})",
         out_path.display(),
         bytes.len(),
-        real_hash_clean,
+        hash_label,
     );
 
     if let Some(dir) = install_dir {

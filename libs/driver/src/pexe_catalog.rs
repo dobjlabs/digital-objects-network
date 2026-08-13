@@ -17,8 +17,9 @@
 //! therefore `!Send`. `execute_action` re-loads the script from its stored bytes
 //! on demand, matching the per-call pattern used before.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -34,7 +35,17 @@ struct Plugin {
     #[allow(dead_code)]
     path: PathBuf,
     manifest: Manifest,
-    script: String,
+    /// Absent for a recipe pexe, which composes other plugins' actions
+    /// and compiles to no module of its own.
+    script: Option<String>,
+}
+
+/// A catalog action assembled from other plugins' actions rather than
+/// compiled from a script. Its steps run as sibling top-level actions of
+/// one transaction, and its inputs are the steps' inputs concatenated in
+/// step order.
+struct RecipeEntry {
+    steps: Vec<QualifiedName>,
 }
 
 pub struct PexeCatalog {
@@ -43,6 +54,11 @@ pub struct PexeCatalog {
     actions_by_name: HashMap<QualifiedName, ActionSummary>,
     /// Maps qualified action -> plugin index in `plugins`.
     action_plugin_idx: HashMap<QualifiedName, usize>,
+    /// Every action including hidden ones, so recipe steps can resolve
+    /// actions the catalog does not surface on its own.
+    actions_including_hidden: HashMap<QualifiedName, ActionSummary>,
+    /// Recipe actions, keyed by their own qualified name.
+    recipes: HashMap<QualifiedName, RecipeEntry>,
     classes: Vec<CatalogClass>,
     classes_by_name: HashMap<QualifiedName, CatalogClass>,
     classes_by_hash: HashMap<Hash, QualifiedName>,
@@ -51,6 +67,29 @@ pub struct PexeCatalog {
 }
 
 impl PexeCatalog {
+    /// Recompile the plugin that provides `action`. The driver does not
+    /// cache compiled modules, so this runs per execution.
+    fn load_module(&self, sdk: &Sdk, action: &QualifiedName) -> Result<Rc<sdk::SdkModule>> {
+        let plugin_idx = *self
+            .action_plugin_idx
+            .get(action)
+            .ok_or_else(|| anyhow!("no plugin provides action {action}"))?;
+        let plugin = &self.plugins[plugin_idx];
+        let script = plugin.script.as_deref().ok_or_else(|| {
+            anyhow!(
+                "plugin {} has no script, so it cannot run {action}",
+                plugin.manifest.plugin.name
+            )
+        })?;
+        sdk.load_module_from_src_manifest(script, &plugin.manifest)
+            .map_err(|err| {
+                anyhow!(
+                    "failed to reload plugin {} for execution: {err}",
+                    plugin.manifest.plugin.name
+                )
+            })
+    }
+
     /// Scan `actions_dir` for `.pexe` files, unpack them, and assemble the catalog.
     pub fn load(actions_dir: &Path) -> Result<Self> {
         let plugins = discover_plugins(actions_dir)?;
@@ -103,10 +142,21 @@ impl PexeCatalog {
         let mut enriched_plugins: Vec<Plugin> = Vec::with_capacity(plugins.len());
         let mut action_plugin_idx: HashMap<QualifiedName, usize> = HashMap::new();
 
+        let mut actions_including_hidden: HashMap<QualifiedName, ActionSummary> = HashMap::new();
+
         for plugin in plugins {
             let plugin_name = plugin.manifest.plugin.name.clone();
+            // Recipes contribute no classes or predicates, so they are
+            // resolved after every plugin is loaded and their steps exist.
+            if plugin.manifest.is_recipe() {
+                enriched_plugins.push(plugin);
+                continue;
+            }
+            let script = plugin.script.as_deref().ok_or_else(|| {
+                anyhow!("plugin {plugin_name} has no script and declares no recipes")
+            })?;
             let module = sdk
-                .load_module_from_src_manifest(&plugin.script, &plugin.manifest)
+                .load_module_from_src_manifest(script, &plugin.manifest)
                 .map_err(|err| anyhow!("failed to load plugin {plugin_name}: {err}"))?;
             let podlang_src = module.podlang_src().to_string();
             if !combined_podlang.is_empty() {
@@ -201,10 +251,6 @@ impl PexeCatalog {
                     .map(|r| resolve_class(&r.class))
                     .collect::<Result<Vec<_>>>()?;
 
-                if meta.is_some_and(|m| m.hidden) {
-                    continue;
-                }
-
                 let action_hash = module
                     .action_hash(&bare)
                     .map(|h| format!("{:#}", h))
@@ -213,7 +259,7 @@ impl PexeCatalog {
                 // prefix like classes get).
                 let predicate_source = extract_predicate(&podlang_src, &bare)
                     .unwrap_or_else(|| format!("{bare}(state) = AND(...)"));
-                all_actions.push(ActionSummary {
+                let summary = ActionSummary {
                     action: qname,
                     emoji: meta.map_or("⚙️", |m| m.emoji.as_str()).to_string(),
                     hash: action_hash,
@@ -223,10 +269,115 @@ impl PexeCatalog {
                     total_inputs,
                     total_outputs,
                     predicate_source,
-                });
+                };
+                actions_including_hidden.insert(summary.action.clone(), summary.clone());
+
+                if meta.is_some_and(|m| m.hidden) {
+                    continue;
+                }
+                all_actions.push(summary);
             }
 
             enriched_plugins.push(plugin);
+        }
+
+        // Recipe pass: every plugin is loaded, so a recipe's steps can be
+        // resolved and its inputs derived from them.
+        let installed_hashes: HashMap<&str, Option<Hash>> = enriched_plugins
+            .iter()
+            .map(|plugin| {
+                (
+                    plugin.manifest.plugin.name.as_str(),
+                    plugin.manifest.plugin.module_hash,
+                )
+            })
+            .collect();
+        let mut recipes: HashMap<QualifiedName, RecipeEntry> = HashMap::new();
+        for (plugin_idx, plugin) in enriched_plugins.iter().enumerate() {
+            if !plugin.manifest.is_recipe() {
+                continue;
+            }
+            let plugin_name = plugin.manifest.plugin.name.clone();
+
+            // A required plugin present at a different hash is a different
+            // set of classes, so its actions are not the ones this recipe
+            // was written against.
+            let mut required: HashSet<&str> = HashSet::new();
+            for require in &plugin.manifest.requires {
+                required.insert(require.plugin.as_str());
+                match installed_hashes.get(require.plugin.as_str()) {
+                    None => {
+                        return Err(anyhow!(
+                            "recipe {plugin_name} requires plugin {} which is not installed",
+                            require.plugin
+                        ));
+                    }
+                    Some(None) => {
+                        return Err(anyhow!(
+                            "recipe {plugin_name} requires plugin {} at {:#}, but that plugin declares no module hash",
+                            require.plugin,
+                            require.module_hash
+                        ));
+                    }
+                    Some(Some(installed)) if *installed != require.module_hash => {
+                        return Err(anyhow!(
+                            "recipe {plugin_name} requires plugin {} at {:#}, but it is installed at {:#}; rebuild the recipe against the installed version",
+                            require.plugin,
+                            require.module_hash,
+                            installed
+                        ));
+                    }
+                    Some(Some(_)) => {}
+                }
+            }
+
+            for recipe in &plugin.manifest.recipes {
+                let qname = QualifiedName::new(plugin_name.clone(), recipe.name.clone());
+                if recipe.steps.is_empty() {
+                    return Err(anyhow!("recipe {qname} declares no steps"));
+                }
+                let mut steps = Vec::with_capacity(recipe.steps.len());
+                let mut total_inputs = Vec::new();
+                let mut total_outputs = Vec::new();
+                for step in &recipe.steps {
+                    let step_name = QualifiedName::parse(step)
+                        .map_err(|err| anyhow!("recipe {qname}: {err}"))?;
+                    if !required.contains(step_name.plugin_name.as_str()) {
+                        return Err(anyhow!(
+                            "recipe {qname} runs {step_name} but does not require plugin {}",
+                            step_name.plugin_name
+                        ));
+                    }
+                    let step_action =
+                        actions_including_hidden.get(&step_name).ok_or_else(|| {
+                            anyhow!("recipe {qname} runs {step_name}, which no plugin provides")
+                        })?;
+                    total_inputs.extend(step_action.total_inputs.iter().cloned());
+                    total_outputs.extend(step_action.total_outputs.iter().cloned());
+                    steps.push(step_name);
+                }
+
+                if let Some(prior) = action_plugin_idx.insert(qname.clone(), plugin_idx) {
+                    return Err(anyhow!(
+                        "duplicate action qualified name {qname} (already mapped to plugin idx {prior})"
+                    ));
+                }
+                let summary = ActionSummary {
+                    action: qname.clone(),
+                    emoji: recipe.emoji.clone(),
+                    hash: String::new(),
+                    description: recipe.description.clone(),
+                    total_inputs,
+                    total_outputs,
+                    predicate_source: format!(
+                        "// recipe: one transaction running\n//   {}",
+                        recipe.steps.join("\n//   ")
+                    ),
+                };
+                actions_including_hidden.insert(qname.clone(), summary.clone());
+                all_actions.push(summary);
+                recipes.insert(qname, RecipeEntry { steps });
+            }
         }
 
         // Second pass: fill produced_by / consumed_by per class.
@@ -270,6 +421,8 @@ impl PexeCatalog {
 
         Ok(Self {
             plugins: enriched_plugins,
+            actions_including_hidden,
+            recipes,
             actions: all_actions,
             actions_by_name,
             action_plugin_idx,
@@ -314,21 +467,47 @@ impl ActionCatalog for PexeCatalog {
         grounding_witness: GroundingWitness,
         inputs: Vec<SpendableObject>,
     ) -> Result<SpendableObjects> {
-        let plugin_idx = *self
-            .action_plugin_idx
-            .get(&action)
-            .ok_or_else(|| anyhow!("no plugin provides action {action}"))?;
-        let plugin = &self.plugins[plugin_idx];
         let sdk = Sdk::default();
-        let module = sdk
-            .load_module_from_src_manifest(&plugin.script, &plugin.manifest)
-            .map_err(|err| {
-                anyhow!(
-                    "failed to reload plugin {} for execution: {err}",
-                    plugin.manifest.plugin.name
-                )
-            })?;
-        let executor = module.executor(self.mock_proofs, Arc::new(grounding_witness));
+        let witness = Arc::new(grounding_witness);
+
+        if let Some(recipe) = self.recipes.get(&action) {
+            // Inputs arrive in the same order the recipe's `total_inputs`
+            // concatenated them, so each step takes the next slice.
+            let mut remaining = inputs.into_iter();
+            let mut modules: Vec<Rc<sdk::SdkModule>> = Vec::with_capacity(recipe.steps.len());
+            let mut invocations = Vec::with_capacity(recipe.steps.len());
+            for step in &recipe.steps {
+                let module = self.load_module(&sdk, step)?;
+                let arity = self
+                    .actions_including_hidden
+                    .get(step)
+                    .ok_or_else(|| anyhow!("recipe {action} runs unknown step {step}"))?
+                    .total_inputs
+                    .len();
+                let step_inputs: Vec<SpendableObject> = remaining.by_ref().take(arity).collect();
+                if step_inputs.len() != arity {
+                    return Err(anyhow!(
+                        "recipe {action} ran out of inputs at step {step}: it needs {arity} more"
+                    ));
+                }
+                modules.push(module.clone());
+                invocations.push(sdk::Invocation {
+                    module,
+                    action: step.name.clone(),
+                    inputs: step_inputs,
+                });
+            }
+            if remaining.next().is_some() {
+                return Err(anyhow!(
+                    "recipe {action} was given more inputs than its steps consume"
+                ));
+            }
+            let executor = sdk::Executor::with_modules(modules, self.mock_proofs, witness)?;
+            return Ok(executor.actions(invocations)?);
+        }
+
+        let module = self.load_module(&sdk, &action)?;
+        let executor = module.executor(self.mock_proofs, witness);
         Ok(executor.action(&action.name, inputs)?)
     }
 
@@ -396,7 +575,7 @@ pub(crate) fn test_plugin_bytes() -> Vec<u8> {
     // Pack the live plugin sources in-memory so tests never touch ~/.dobj/actions.
     let manifest = include_str!("../../../examples/craft-basics/manifest.toml");
     let script = include_str!("../../../examples/craft-basics/plugin.rhai");
-    pexe::pack(manifest, script).expect("test plugin packs")
+    pexe::pack(manifest, Some(script)).expect("test plugin packs")
 }
 
 #[cfg(test)]
@@ -595,7 +774,7 @@ description = "consume a Foo to make a Bar"
             pexe::compile_module_hash(&manifest, script).expect("synthetic script compiles");
         let with_hash =
             pexe::set_manifest_hash(&template, &real_hash).expect("rewrite module_hash");
-        pexe::pack(&with_hash, script).expect("pack synthetic plugin")
+        pexe::pack(&with_hash, Some(script)).expect("pack synthetic plugin")
     }
 
     fn alpha_beta_catalog() -> PexeCatalog {
@@ -769,5 +948,331 @@ description = "consume a Foo to make a Bar"
     fn obj_type_hash_for_test(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {
         let value = obj.get(&pod2::middleware::StrKey::from("type")).ok()??;
         Some(Hash(value.raw().0))
+    }
+
+    // --- Recipe fixtures -----------------------------------------------------
+    //
+    // A recipe pexe carries no script. It pins the plugins it composes by
+    // module hash and lists qualified actions to run as one transaction.
+
+    const CLAIM_SCRIPT: &str = r#"
+fn MakeFoo(action) {
+    var foo = action.output("Foo");
+    foo.set([["durability", 100]]);
+    var key = action.random();
+    foo.update("key", key);
+}
+
+fn MakeBar(action) {
+    var bar = action.output("Bar");
+    bar.set([["durability", 100]]);
+    var key = action.random();
+    bar.update("key", key);
+}
+
+fn ClaimFoo(action) {
+    var foo = action.mutate("Foo");
+    var key = action.random();
+    foo.update("key", key);
+}
+
+fn ClaimBar(action) {
+    var bar = action.mutate("Bar");
+    var key = action.random();
+    bar.update("key", key);
+}
+"#;
+
+    /// A plugin exposing claim actions, i.e. the extension surface a base
+    /// plugin has to publish before recipes can compose it.
+    fn claims_plugin_bytes(plugin_name: &str) -> Vec<u8> {
+        let template = format!(
+            r#"[plugin]
+name = "{plugin_name}"
+version = "0.1.0"
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[classes]]
+name = "Foo"
+emoji = "F"
+description = "test class Foo"
+
+[[classes]]
+name = "Bar"
+emoji = "B"
+description = "test class Bar"
+
+[[actions]]
+name = "MakeFoo"
+emoji = "F"
+description = "make a Foo"
+
+[[actions]]
+name = "MakeBar"
+emoji = "B"
+description = "make a Bar"
+
+[[actions]]
+name = "ClaimFoo"
+emoji = "F"
+description = "take possession of a Foo"
+
+[[actions]]
+name = "ClaimBar"
+emoji = "B"
+description = "take possession of a Bar"
+"#
+        );
+        let manifest: sdk::manifest::Manifest =
+            toml::from_str(&template).expect("claims manifest parses");
+        let real_hash =
+            pexe::compile_module_hash(&manifest, CLAIM_SCRIPT).expect("claims script compiles");
+        let with_hash =
+            pexe::set_manifest_hash(&template, &real_hash).expect("rewrite module_hash");
+        pexe::pack(&with_hash, Some(CLAIM_SCRIPT)).expect("pack claims plugin")
+    }
+
+    /// The module hash a recipe must pin to compose `claims_plugin_bytes`.
+    fn claims_module_hash(plugin_name: &str) -> String {
+        let bytes = claims_plugin_bytes(plugin_name);
+        let (manifest, _) = pexe::unpack(&bytes).expect("claims pexe unpacks");
+        format!(
+            "{:#}",
+            manifest.plugin.module_hash.expect("plugin has a hash")
+        )
+        .trim_start_matches("0x")
+        .to_string()
+    }
+
+    fn recipe_test_witness(
+        state: &payload::test_state::TestState,
+        input_commitments: &[Hash],
+    ) -> txlib::GroundingWitness {
+        state.build_grounding_witness(
+            input_commitments,
+            |meta, created_root, nullifiers_root, prior_state_history_root, created_proofs| {
+                txlib::GroundingWitness::new(
+                    txlib::StateHeader::new(
+                        meta.number as i64,
+                        meta.timestamp as i64,
+                        meta.hash,
+                        created_root,
+                        nullifiers_root,
+                        prior_state_history_root,
+                    ),
+                    created_proofs,
+                )
+            },
+        )
+    }
+
+    /// The end of the whole chain: a recipe from one pexe consuming and
+    /// re-keying objects whose classes were defined by another, in a single
+    /// transaction, driven through the ordinary single-action entry point.
+    #[test]
+    fn test_recipe_runs_its_steps_as_one_transaction() {
+        let catalog = claims_and_recipe_catalog();
+        let mut state = payload::test_state::TestState::default();
+
+        let mut mint = |action: &str| {
+            let out = catalog
+                .execute_action(
+                    QualifiedName::new("base", action),
+                    dummy_grounding_witness(),
+                    vec![],
+                )
+                .unwrap_or_else(|err| panic!("base::{action} runs: {err}"));
+            state.apply_tx(
+                out.tx.live_commitments().unwrap(),
+                out.tx.nullifier_hashes().unwrap(),
+            );
+            out.obj(0)
+        };
+        let foo = mint("MakeFoo");
+        let bar = mint("MakeBar");
+
+        let witness = recipe_test_witness(&state, &[foo.obj.commitment(), bar.obj.commitment()]);
+        let out = catalog
+            .execute_action(
+                QualifiedName::new("swap", "SwapFooBar"),
+                witness,
+                vec![foo.clone(), bar.clone()],
+            )
+            .expect("recipe runs");
+
+        // One transaction spent both inputs, so the pair cannot half-land.
+        let nullifiers = out.tx.nullifier_hashes().unwrap();
+        assert_eq!(nullifiers.len(), 2, "both inputs spent by the one tx");
+        assert!(nullifiers.contains(&txlib::object_nullifier_hash(&foo.obj).unwrap()));
+        assert!(nullifiers.contains(&txlib::object_nullifier_hash(&bar.obj).unwrap()));
+
+        let live = out.tx.live_commitments().unwrap();
+        assert_eq!(out.objs.len(), 2, "one successor per claimed object");
+        for produced in &out.objs {
+            assert!(live.contains(&produced.obj.commitment()));
+        }
+
+        // Each successor keeps the class its own plugin defined: a recipe
+        // cannot mint into a class, only re-key within one.
+        let foo_type = obj_type_hash_for_test(&foo.obj).unwrap();
+        let bar_type = obj_type_hash_for_test(&bar.obj).unwrap();
+        assert_eq!(obj_type_hash_for_test(&out.obj(0).obj).unwrap(), foo_type);
+        assert_eq!(obj_type_hash_for_test(&out.obj(1).obj).unwrap(), bar_type);
+
+        // Re-keying moves every commitment.
+        assert_ne!(out.obj(0).obj.commitment(), foo.obj.commitment());
+        assert_ne!(out.obj(1).obj.commitment(), bar.obj.commitment());
+    }
+
+    fn recipe_bytes(recipe_name: &str, requires: &str, module_hash: &str, steps: &str) -> Vec<u8> {
+        let manifest = format!(
+            r#"[plugin]
+name = "{recipe_name}"
+version = "0.1.0"
+
+[[requires]]
+plugin = "{requires}"
+module_hash = "{module_hash}"
+
+[[recipes]]
+name = "SwapFooBar"
+emoji = "S"
+description = "re-key one Foo and one Bar in a single transaction"
+steps = [{steps}]
+"#
+        );
+        pexe::pack(&manifest, None).expect("pack recipe")
+    }
+
+    fn claims_and_recipe_catalog() -> PexeCatalog {
+        let hash = claims_module_hash("base");
+        PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("base.pexe"), claims_plugin_bytes("base")),
+                (
+                    PathBuf::from("swap.pexe"),
+                    recipe_bytes(
+                        "swap",
+                        "base",
+                        &hash,
+                        r#""base::ClaimFoo", "base::ClaimBar""#,
+                    ),
+                ),
+            ],
+            true,
+        )
+        .expect("catalog loads plugin plus recipe")
+    }
+
+    #[test]
+    fn test_recipe_surfaces_as_an_action_with_the_steps_inputs() {
+        let catalog = claims_and_recipe_catalog();
+        let recipe = catalog
+            .get_action(&QualifiedName::new("swap", "SwapFooBar"))
+            .expect("recipe is a catalog action");
+
+        // The recipe consumes and produces exactly what its steps do, in
+        // step order, which is what lets it run through the ordinary
+        // single-action request path.
+        let classes = |refs: &[ClassRef]| -> Vec<String> {
+            refs.iter().map(|r| r.class.name.clone()).collect()
+        };
+        assert_eq!(classes(&recipe.total_inputs), vec!["Foo", "Bar"]);
+        assert_eq!(classes(&recipe.total_outputs), vec!["Foo", "Bar"]);
+        // Its classes stay owned by the plugin that declared them.
+        assert_eq!(recipe.total_inputs[0].class.plugin_name, "base");
+    }
+
+    #[test]
+    fn test_recipe_requiring_a_different_module_hash_is_rejected() {
+        let wrong = "1".repeat(64);
+        let result = PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("base.pexe"), claims_plugin_bytes("base")),
+                (
+                    PathBuf::from("swap.pexe"),
+                    recipe_bytes("swap", "base", &wrong, r#""base::ClaimFoo""#),
+                ),
+            ],
+            true,
+        );
+        let err = result
+            .err()
+            .map(|err| err.to_string())
+            .unwrap_or_else(|| panic!("stale pin must be rejected"));
+        assert!(err.contains("installed at"), "unexpected error: {err}");
+        assert!(
+            err.contains("rebuild the recipe"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_recipe_requiring_a_missing_plugin_is_rejected() {
+        let hash = claims_module_hash("base");
+        let result = PexeCatalog::from_bytes(
+            std::iter::once((
+                PathBuf::from("swap.pexe"),
+                recipe_bytes("swap", "base", &hash, r#""base::ClaimFoo""#),
+            )),
+            true,
+        );
+        let err = result
+            .err()
+            .map(|err| err.to_string())
+            .unwrap_or_else(|| panic!("missing plugin must be rejected"));
+        assert!(err.contains("is not installed"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_recipe_step_outside_its_requires_is_rejected() {
+        let hash = claims_module_hash("base");
+        let result = PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("base.pexe"), claims_plugin_bytes("base")),
+                (
+                    PathBuf::from("swap.pexe"),
+                    recipe_bytes("swap", "base", &hash, r#""other::ClaimFoo""#),
+                ),
+            ],
+            true,
+        );
+        let err = result
+            .err()
+            .map(|err| err.to_string())
+            .unwrap_or_else(|| panic!("step outside requires must be rejected"));
+        assert!(
+            err.contains("does not require plugin"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_recipe_pexe_with_a_script_is_rejected() {
+        let hash = claims_module_hash("base");
+        let manifest = format!(
+            r#"[plugin]
+name = "swap"
+version = "0.1.0"
+
+[[requires]]
+plugin = "base"
+module_hash = "{hash}"
+
+[[recipes]]
+name = "SwapFooBar"
+emoji = "S"
+description = "re-key one Foo and one Bar"
+steps = ["base::ClaimFoo"]
+"#
+        );
+        let bytes = pexe::pack(&manifest, Some(CLAIM_SCRIPT)).expect("pack");
+        let err = pexe::unpack(&bytes)
+            .expect_err("a recipe carrying a script must be rejected")
+            .to_string();
+        assert!(
+            err.contains("has no script of its own"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -2853,10 +2853,16 @@ impl Sdk {
                 loaded_classes
             ))?;
         }
-        if manifest.plugin.module_hash != sdk_module.module.batch.id() {
+        let pinned = manifest.plugin.module_hash.ok_or_else(|| {
+            anyhow!(
+                "plugin {} declares no module_hash; run `pexe build` to fill it in",
+                manifest.plugin.name
+            )
+        })?;
+        if pinned != sdk_module.module.batch.id() {
             return Err(anyhow!(
                 "manifest.plugin.module_hash = {:#} but module.hash = {:#}",
-                manifest.plugin.module_hash,
+                pinned,
                 sdk_module.module.batch.id()
             ))?;
         }
