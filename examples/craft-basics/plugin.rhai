@@ -77,8 +77,8 @@ fn MineStoneWithStonePick(action) {
 // Nothing else about the state changes, and the stable identifier carries
 // across, so the object stays the same object under new custody.
 //
-// These are also the surface a recipe pexe composes: a recipe can only run
-// actions this plugin already exposes.
+// These are also this plugin's extension surface: another plugin's script can
+// only reach the actions exposed here.
 
 fn claim(action, obj) {
     var key = action.random();

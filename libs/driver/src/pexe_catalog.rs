@@ -9,9 +9,14 @@
 //! when printed). Two plugins may declare a class or action with the same
 //! bare name; they stay distinct because every internal map keys on the full
 //! `QualifiedName` and because their on-chain `Is{class}` predicate hashes
-//! differ (each module has a unique `module_hash`). Cross-plugin class
-//! references are not supported: an action must reference classes declared
-//! in its own plugin.
+//! differ (each module has a unique `module_hash`).
+//!
+//! A script names its own classes only, so an action's own objects belong to
+//! its plugin. It may still act on another plugin's objects by calling that
+//! plugin's action -- `subaction("other::Action")` -- which is why an
+//! action's declared inputs and outputs can span plugins and why each is
+//! resolved against the plugin that owns it. Those calls also set the load
+//! order here, since the callee's compiled batch is part of the caller's.
 //!
 //! The compiled [`sdk::SdkModule`] is not kept — it holds a `Rc<Engine>` and is
 //! therefore `!Send`. `execute_action` re-loads the script from its stored bytes
@@ -938,7 +943,7 @@ description = "consume a Foo to make a Bar"
 
         let mut run = |action: QualifiedName, inputs: Vec<SpendableObject>| {
             let commitments: Vec<Hash> = inputs.iter().map(|i| i.obj.commitment()).collect();
-            let witness = recipe_test_witness(&state, &commitments);
+            let witness = witness_for(&state, &commitments);
             let out = catalog
                 .execute_action(action.clone(), witness, inputs)
                 .unwrap_or_else(|err| panic!("{action} runs: {err}"));
@@ -987,7 +992,8 @@ description = "consume a Foo to make a Bar"
         );
     }
 
-    fn recipe_test_witness(
+    /// A grounding witness over `state` covering the given inputs.
+    fn witness_for(
         state: &payload::test_state::TestState,
         input_commitments: &[Hash],
     ) -> txlib::GroundingWitness {

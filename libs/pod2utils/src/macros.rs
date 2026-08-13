@@ -306,7 +306,7 @@ pub fn apply_custom_pred(
 }
 
 /// Apply a predicate from a known module, bypassing name resolution.
-pub fn apply_custom_pred_in(
+fn apply_custom_pred_in(
     module: &Arc<Module>,
     builder: &mut MultiPodBuilder,
     public: bool,
