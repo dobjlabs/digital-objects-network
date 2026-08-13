@@ -15,6 +15,18 @@ pub fn crafting_test_module() -> lang::Module {
     load_module(&source, "craft", &params, &[events]).expect("crafting_test.podlang compiles")
 }
 
+#[cfg(test)]
+/// Load a second, independent plugin batch. Used to prove a transaction
+/// can carry top-level actions guarded by two different batches.
+pub fn swap_test_module() -> lang::Module {
+    let params = pod2::middleware::Params::default();
+    let events = Arc::new(events_module());
+    let events_hash = format!("{:#}", events.batch.id());
+    let source =
+        include_str!("swap_test.podlang").replace(TX_EVENTS_HASH_PLACEHOLDER, &events_hash);
+    load_module(&source, "swap", &params, &[events]).expect("swap_test.podlang compiles")
+}
+
 /// The chain-primitive event predicates (TxInsert/TxMutate/TxDelete).
 /// Kept in their own batch so action predicates and recorded
 /// transactions keep stable hashes across edits to the replay and

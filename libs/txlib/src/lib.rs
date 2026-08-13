@@ -1219,6 +1219,17 @@ mod tests {
             )
         }
 
+        /// Place an object in the created set without proving the
+        /// transaction that would have produced it, so a test can start
+        /// from a given holding instead of minting it first.
+        fn seed(&mut self, obj: &Dictionary) {
+            let index = self.created_index.len() as i64;
+            self.created
+                .insert(index as usize, Value::from(obj.clone()))
+                .unwrap();
+            self.created_index.insert(obj.commitment(), index);
+        }
+
         fn apply_tx(&mut self, tx: &Tx) {
             for obj in tx.live.iter() {
                 let obj = obj.expect("tx live entry should decode");
@@ -1801,6 +1812,134 @@ mod tests {
                     .contains(&Value::from(compute_nullifier(log)))
                     .unwrap()
             );
+        }
+    }
+
+    /// One transaction, two top-level actions, two different plugin
+    /// batches: `UseWoodPick` from the crafting batch and `ClaimGem`
+    /// from a second batch that neither txlib nor the crafting batch
+    /// references. Guard dispatch reaches each batch through its
+    /// object's `type` field, which is what lets a transaction compose
+    /// actions from plugins that were compiled independently.
+    #[test]
+    fn test_actions_from_two_batches_in_one_tx() {
+        let events = Arc::new(crate::predicates::events_module());
+        let txlib = Arc::new(crate::predicates::module());
+        let craft = Arc::new(crate::predicates::crafting_test_module());
+        let swap = Arc::new(crate::predicates::swap_test_module());
+        assert_ne!(
+            craft.batch.id(),
+            swap.batch.id(),
+            "the two plugin batches must be distinct for this test to mean anything"
+        );
+
+        let is_wood_pick = Value::from(
+            Predicate::Custom(craft.predicate_ref_by_name("IsWoodPick").unwrap()).hash(),
+        );
+        let is_gem =
+            Value::from(Predicate::Custom(swap.predicate_ref_by_name("IsGem").unwrap()).hash());
+        let modules = vec![events, txlib, craft, swap];
+
+        let params = Params::default();
+        let vd_set = VDSet::new(&[]);
+
+        // Start from a holding of one pick and one gem rather than
+        // minting each in its own transaction first.
+        let mut state = TestState::empty(0);
+        let pick = with_stable_identifier(&make_object(
+            is_wood_pick,
+            &[("durability", Value::from(100_i64))],
+        ));
+        let gem = with_stable_identifier(&make_object(is_gem, &[]));
+        state.seed(&pick);
+        state.seed(&gem);
+
+        let builder = MultiPodBuilder::new(&params, &vd_set);
+        let mut ctx = BuildContext { builder, modules };
+
+        let inputs = vec![pick.clone(), gem.clone()];
+        let witness = state.grounding_witness(&inputs);
+        let mut tx = TxBuilder::new(&mut ctx, &inputs, witness);
+
+        // ---- top-level action 0: UseWoodPick, guarded by the crafting batch ----
+        let mut pick_new = pick.clone();
+        pick_new
+            .update(&StrKey::from("durability"), &Value::from(99_i64))
+            .unwrap();
+        let scope_pick = tx.begin_action();
+        let (st_mutate_pick, h_pick) = tx.mutate(&mut ctx, &pick_new, &pick);
+        let op_gt = ctx
+            .builder
+            .priv_op(op!(Gt((&pick, "durability"), 0_i64)))
+            .unwrap();
+        let op_sum = ctx
+            .builder
+            .priv_op(op!(Sum(99_i64, 1_i64, (&pick, "durability"))))
+            .unwrap();
+        let op_du_pick = ctx
+            .builder
+            .priv_op(op!(DictUpdate(pick, "durability", 99_i64, pick_new)))
+            .unwrap();
+        let st_use = ctx
+            .apply_custom_pred_simple(
+                false,
+                "UseWoodPick",
+                vec![op_gt, op_sum, op_du_pick, st_mutate_pick],
+            )
+            .unwrap();
+        let st_guard_pick = ctx
+            .apply_custom_pred(
+                false,
+                "IsWoodPick",
+                map!({"state_header" => state.state_header().array()}),
+                vec![Statement::None, Statement::None, st_use],
+            )
+            .unwrap();
+        tx.set_guard(h_pick, st_guard_pick);
+        tx.end_action(scope_pick);
+
+        // ---- top-level action 1: ClaimGem, guarded by the second batch ----
+        let new_key = Value::from(rand_raw_value());
+        let mut gem_new = gem.clone();
+        gem_new.update(&StrKey::from("key"), &new_key).unwrap();
+        let scope_gem = tx.begin_action();
+        let (st_mutate_gem, h_gem) = tx.mutate(&mut ctx, &gem_new, &gem);
+        let op_du_gem = ctx
+            .builder
+            .priv_op(op!(DictUpdate(gem, "key", new_key, gem_new)))
+            .unwrap();
+        let st_claim = ctx
+            .apply_custom_pred_simple(false, "ClaimGem", vec![op_du_gem, st_mutate_gem])
+            .unwrap();
+        let st_guard_gem = ctx
+            .apply_custom_pred(
+                false,
+                "IsGem",
+                map!({"state_header" => state.state_header().array()}),
+                vec![Statement::None, st_claim],
+            )
+            .unwrap();
+        tx.set_guard(h_gem, st_guard_gem);
+        tx.end_action(scope_gem);
+
+        eprintln!("{tx}");
+        let (st, tx_out, stats) = tx.finalize(&mut ctx);
+        print_stats(&stats);
+        ctx.builder.reveal(&st).unwrap();
+        solve_and_verify(ctx.builder);
+
+        // Both old states are spent and both successors are live, so the
+        // two actions landed as one atomic transaction.
+        for old in [&pick, &gem] {
+            assert!(
+                tx_out
+                    .nullifiers
+                    .contains(&Value::from(compute_nullifier(old)))
+                    .unwrap()
+            );
+        }
+        for new in [&pick_new, &gem_new] {
+            assert!(tx_out.live.contains(&Value::from(new.clone())).unwrap());
         }
     }
 }

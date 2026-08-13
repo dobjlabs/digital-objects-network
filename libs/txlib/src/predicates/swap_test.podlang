@@ -1,0 +1,32 @@
+/*
+  A second test plugin batch, separate from crafting_test.podlang.
+
+  Exists so a test can prove one transaction whose top-level actions
+  are guarded by predicates from two different batches. Guard dispatch
+  reaches these predicates through the object's `type` field, so
+  nothing here is referenced by txlib or by the other batch.
+*/
+
+use module 0xTX_EVENTS_MODULE_HASH as tx
+
+// TODO: Support importing records via `use module`
+record StateHeader = (block_number, block_timestamp, block_hash, created, nullifiers, prior_state_history)
+
+// SpawnGem: test-only creation from nothing.
+SpawnGem(gem, chain_start, chain_end, private: gem0) = AND(
+  tx::TxInsert(chain_start, chain_end, gem0, gem, @self_predicate(IsGem))
+)
+
+// ClaimGem: take exclusive possession by rotating `key`. Rotating the
+// key changes the commitment and the nullifier, so a holder who was
+// sent this object can make the sender's copy unspendable. No other
+// field is constrained.
+ClaimGem(gem, chain_start, chain_end, private: gem0, key) = AND(
+  DictUpdate(gem0, "key", key, gem)
+  tx::TxMutate(chain_start, chain_end, gem0, gem, @self_predicate(IsGem))
+)
+
+IsGem(obj, state_header StateHeader, chain_start, chain_end) = OR(
+  SpawnGem(obj, chain_start, chain_end)
+  ClaimGem(obj, chain_start, chain_end)
+)
