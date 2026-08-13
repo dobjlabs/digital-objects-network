@@ -162,7 +162,7 @@ mod tests {
         let manifest = source.parse_manifest().unwrap();
         let action_names: Vec<&str> = manifest.actions.iter().map(|a| a.name.as_str()).collect();
         Sdk::default()
-            .load_module_from_src_actions(source.require_script().unwrap(), &action_names)
+            .load_module_from_src_actions(&source.script, &action_names)
             .unwrap()
     }
 

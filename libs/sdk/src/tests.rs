@@ -1110,3 +1110,87 @@ fn test_batch_id_ignores_names() {
         .unwrap();
     assert_ne!(logs.module().batch.id(), extra.module().batch.id());
 }
+
+/// A script reaching into another plugin with a qualified sub-action call.
+/// The parent's predicate contains the dependency's action, so the two are
+/// one action rather than siblings -- and the parent can pin its own output
+/// to the object the dependency just claimed.
+#[test]
+fn test_qualified_subaction_into_a_dependency() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let base_src = r#"
+        fn SpawnGem(action) {
+            var gem = action.output("Gem");
+        }
+        fn ClaimGem(action) {
+            var gem = action.mutate("Gem");
+            var key = action.random();
+            gem.update("key", key);
+        }
+    "#;
+    // Reaches base::ClaimGem and mints a receipt of its own class, bound to
+    // the gem's stable identifier.
+    let swap_src = r#"
+        fn ClaimAndReceipt(action) {
+            var gem = action.subaction("base::ClaimGem");
+            var receipt = action.output("Receipt");
+        }
+    "#;
+    let sdk = Sdk::default();
+    let base = sdk
+        .load_module_from_src_actions(base_src, &["SpawnGem", "ClaimGem"])
+        .unwrap();
+    let mut deps = PluginDeps::new();
+    deps.insert("base".to_string(), base.clone());
+    let swap = sdk
+        .load_module_from_src_deps(swap_src, &["ClaimAndReceipt"], deps)
+        .unwrap();
+    println!("{}", swap.podlang_src());
+
+    // The dependency is imported, so its batch id is inside the caller's.
+    assert!(
+        swap.dependencies().iter().any(|dep| matches!(
+            dep,
+            Dependency::Module { hash, .. } if *hash == base.module().id()
+        )),
+        "the caller must import the dependency's batch"
+    );
+
+    // The parent's declared arity covers the dependency's objects too.
+    let meta = &swap.actions()[0];
+    let classes: Vec<&str> = meta.total_inputs().map(|r| r.class.as_str()).collect();
+    assert_eq!(classes, vec!["Gem"]);
+    let out: Vec<&str> = meta.total_outputs().map(|r| r.class.as_str()).collect();
+    assert_eq!(out, vec!["Gem", "Receipt"]);
+
+    let mut state = TestState::default();
+    let executor = base.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnGem", vec![]).unwrap();
+    let tx = res.tx.clone();
+    let [gem] = res.objs();
+    apply_tx(&mut state, &tx);
+
+    let witness = grounding_witness(&state, &[gem.obj.commitment()]);
+    let executor = swap.executor(true, witness);
+    let res = executor
+        .action("ClaimAndReceipt", vec![gem.clone()])
+        .unwrap();
+
+    // The gem was re-keyed and a receipt minted, in one action.
+    let nullifiers = res.tx.nullifier_hashes().unwrap();
+    assert!(nullifiers.contains(&txlib::object_nullifier_hash(&gem.obj).unwrap()));
+    let [claimed, receipt] = res.objs();
+    let live = res.tx.live_commitments().unwrap();
+    assert!(live.contains(&claimed.obj.commitment()));
+    assert!(live.contains(&receipt.obj.commitment()));
+
+    // The claimed gem keeps the dependency's class; the receipt carries the
+    // caller's own.
+    let type_of = |obj: &pod2::middleware::containers::Dictionary| {
+        obj.get(&pod2::middleware::StrKey::from("type"))
+            .unwrap()
+            .unwrap()
+    };
+    assert_eq!(type_of(&claimed.obj), type_of(&gem.obj));
+    assert_ne!(type_of(&receipt.obj), type_of(&claimed.obj));
+}

@@ -211,11 +211,51 @@ fn schema_name_io(action_name: &str) -> String {
     format!("{action_name}IO")
 }
 
+/// IO schema name for an imported action. Namespaced by plugin so it
+/// cannot collide with a local action of the same name.
+fn imported_schema_name_io(plugin: &str, action_name: &str) -> String {
+    format!("{}_{action_name}IO", crate::dep_alias(plugin))
+}
+
 /// Emit `record <Action><Side> = (<entries>)` lines for any non-empty
 /// io schema across all actions, plus `<Action>Chain` records for
 /// actions whose chain has 2+ intermediate states.
 fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
     let render = |entries: &[String]| entries.join(", ");
+    let io_entries = |meta: &ActionMeta| -> Vec<String> {
+        meta.in_entries
+            .iter()
+            .map(|e| Side::In.arg_name(&e.varname))
+            .chain(
+                meta.out_entries
+                    .iter()
+                    .map(|e| Side::Out.arg_name(&e.varname)),
+            )
+            .collect()
+    };
+
+    // Records are frontend metadata and are not importable, so every
+    // imported action's `io` shape is re-declared here under a namespaced
+    // name. The entry order is what fixes the array indices, so it must
+    // match the dependency's own declaration.
+    let mut imported_io: Vec<(String, Vec<String>)> = Vec::new();
+    for meta in &loader.actions_meta {
+        for sub in &meta.sub_refs {
+            let Some(plugin) = &sub.plugin else { continue };
+            let name = imported_schema_name_io(plugin, &sub.action);
+            if imported_io.iter().any(|(existing, _)| existing == &name) {
+                continue;
+            }
+            imported_io.push((name, io_entries(loader.sub_meta(sub))));
+        }
+    }
+    for (name, entries) in &imported_io {
+        if entries.is_empty() {
+            continue;
+        }
+        writeln!(w, "record {} = ({})", name, render(entries))?;
+    }
+
     for meta in &loader.actions_meta {
         let names: Vec<String> = meta
             .in_entries
@@ -260,7 +300,13 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
 /// One sub-action call in the parent's body, with its synthesized
 /// private wildcard names + record-shape info for the call.
 struct SubActionCall {
-    sub_name: String,
+    /// How the call is written in podlang: a bare name for a local
+    /// sub-action, `dep_<plugin>::<Action>` for an imported one.
+    call_name: String,
+    /// Record type of the sub's `io` argument. Imported subs get a
+    /// locally-declared copy under a namespaced name, since records are
+    /// frontend metadata and cannot be imported.
+    io_schema: String,
     /// Name of the parent's synthesized private wildcard for the sub's
     /// `io` record
     sub_io_var: String,
@@ -288,10 +334,23 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
             ..
         } = inst
         {
+            let sub_ref = crate::SubRef::parse(sub_name).expect("sub name parsed at load time");
             let idx = *idx_counter.entry(sub_name.clone()).or_insert(0);
             *idx_counter.get_mut(sub_name).unwrap() += 1;
 
-            let sub_io_var = format!("_{}_io_{}", sub_name, idx);
+            let (call_name, io_schema, io_var_stem) = match &sub_ref.plugin {
+                None => (
+                    sub_ref.action.clone(),
+                    schema_name_io(&sub_ref.action),
+                    sub_ref.action.clone(),
+                ),
+                Some(plugin) => (
+                    format!("{}::{}", crate::dep_alias(plugin), sub_ref.action),
+                    imported_schema_name_io(plugin, &sub_ref.action),
+                    format!("{}_{}", crate::dep_alias(plugin), sub_ref.action),
+                ),
+            };
+            let sub_io_var = format!("_{}_io_{}", io_var_stem, idx);
 
             let alias_name = obj.borrow().var_name().to_string();
             let alias = if alias_name == "?" {
@@ -299,15 +358,12 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
             } else {
                 Some(alias_name)
             };
-            let sub_meta = loader
-                .actions_meta
-                .iter()
-                .find(|m| m.name == *sub_name)
-                .expect("sub-action meta exists at fmt time");
+            let sub_meta = loader.sub_meta(&sub_ref);
             let first_out_entry = sub_meta.out_entries.first().map(|e| e.varname.clone());
 
             calls.push(SubActionCall {
-                sub_name: sub_name.clone(),
+                call_name,
+                io_schema,
                 sub_io_var,
                 alias,
                 first_out_entry,
@@ -378,7 +434,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // Append synthesized sub-action typed privates last.
     for c in &sub_calls {
         let name = &c.sub_io_var;
-        private_vars.push(format!("{name} {}", schema_name_io(&c.sub_name)));
+        private_vars.push(format!("{name} {}", c.io_schema));
     }
     // Append the chain record typed private when packed.
     if chain_packed(meta.chain_max_ts) {
@@ -461,7 +517,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
             w,
             "  ArrayContains({}, {}::out_{}, {})",
             call.sub_io_var,
-            schema_name_io(&call.sub_name),
+            call.io_schema,
             entry,
             fmt_var_at(alias, 0, meta.max_ts(alias)),
         )?;
@@ -518,9 +574,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 }
                 writeln!(w, ")")?;
             }
-            Inst::SubAction {
-                action: sub_name, ..
-            } => {
+            Inst::SubAction { .. } => {
                 let call = &sub_calls[sub_call_idx];
                 sub_call_idx += 1;
                 let chain = vars["chain"];
@@ -530,7 +584,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 args.push("state_header".to_string());
                 args.push(format!("{chain}"));
                 args.push(format!("{chain_next}"));
-                writeln!(w, "  {sub_name}({})", args.join(", "))?;
+                writeln!(w, "  {}({})", call.call_name, args.join(", "))?;
                 vars.get_mut("chain").expect("chain exists").inc();
             }
         }

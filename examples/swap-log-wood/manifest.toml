@@ -1,28 +1,15 @@
-# A pexe that both declares its own class and composes another plugin's
-# actions.
+# A plugin whose script composes another plugin's actions.
 #
-# The recipe below runs three actions as siblings of one transaction: two
-# craft-basics claims, and one action from this plugin's own script. A script
-# here could never re-key a craft-basics Log directly -- `action.mutate("Log")`
-# would mean *this* plugin's Log, since a class is the OR over the actions of
-# the script defining it. Naming craft-basics' own actions as steps is what
-# lets their guards match, and the receipt is minted alongside because
-# `Swapped` is a class this plugin owns.
+# There is nothing here about the dependency: the script's qualified
+# `subaction("craft-basics::ClaimLog")` calls declare it by using it, and the
+# catalog loads craft-basics first so its compiled batch is available. The
+# module_hash below covers that import, so it moves whenever craft-basics does.
 
 [plugin]
 name = "swap-log-wood"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build examples/swap-log-wood`.
-module_hash = "30275cba84f1a6d8edb13ce093b27891c253a41f37f751518f5af7368b714678"
-
-# Pinned by module hash, not by name. A craft-basics installed at any other
-# hash is a different set of classes, so the catalog refuses to load this
-# recipe against it rather than running the wrong actions. Re-pin with:
-#   cargo run -p pexe --release -- build examples/craft-basics
-# then copy the hash it prints.
-[[requires]]
-plugin = "craft-basics"
-module_hash = "44d6fd33861e3ab021c0362a348243226cfa94345c912676102115a4864cd084"
+module_hash = "73666676f7531778615b77172f281f2f7a400f4e7feeb3102d1468c367826f00"
 
 [[classes]]
 name = "Swapped"
@@ -30,20 +17,6 @@ emoji = "🧾"
 description = "A receipt minted by a swap, stamped with the grounding block's timestamp."
 
 [[actions]]
-name = "MintSwapped"
-emoji = "🧾"
-description = "Mint a swap receipt."
-hidden = true
-
-# Inputs are the steps' inputs concatenated in step order, so this action
-# takes one Log then one Wood -- MintSwapped consumes nothing. All three
-# land in a single transaction: either every part happens or none does.
-[[recipes]]
 name = "SwapLogWood"
 emoji = "🤝"
 description = "Re-key one log and one wood together and mint a receipt, in a single transaction."
-steps = [
-  "craft-basics::ClaimLog",
-  "craft-basics::ClaimWood",
-  "swap-log-wood::MintSwapped",
-]

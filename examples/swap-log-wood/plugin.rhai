@@ -1,13 +1,22 @@
-// swap-log-wood's own class. A script can only ever declare and touch its
-// own classes -- `action.output("Swapped")` means *this* plugin's Swapped,
-// because a class is the OR over the actions of the script that defines it.
-// That is exactly why the log and wood halves of the swap are craft-basics
-// actions named in the recipe rather than code written here.
+// A plugin that reaches into another one.
 //
-// This action runs as a third sibling in the same transaction, so the receipt
-// lands if and only if both claims do.
+// `action.subaction("craft-basics::ClaimLog")` runs craft-basics' own action
+// as a nested step of this one, which is what makes the log's class guard
+// match: a class is the OR over the actions of the script that defines it, so
+// `action.mutate("Log")` written here would mean *this* plugin's Log and
+// could never spend a craft-basics one.
+//
+// Declaring the dependency is the call itself -- nothing to keep in step in
+// the manifest. The cost is coupling: calling into craft-basics puts its
+// batch id inside this plugin's, so this plugin's own classes rehash whenever
+// craft-basics does.
+//
+// `Swapped` is a class this plugin owns, minted in the same transaction, so
+// the receipt lands if and only if both claims do.
 
-fn MintSwapped(action) {
+fn SwapLogWood(action) {
+    var log = action.subaction("craft-basics::ClaimLog");
+    var wood = action.subaction("craft-basics::ClaimWood");
     var receipt = action.output("Swapped");
     receipt.set([
         ["swapped_at", state_header.block_timestamp]

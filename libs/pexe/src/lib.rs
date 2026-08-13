@@ -12,7 +12,7 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use sdk::{Sdk, manifest::Manifest};
+use sdk::{PluginDeps, Sdk, manifest::Manifest};
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 pub mod fixtures;
@@ -40,12 +40,11 @@ const MAX_ENTRY_BYTES: u64 = 1024 * 1024;
 /// forcing large allocations inside `ZipArchive`.
 const MAX_ENTRIES: usize = 16;
 
-/// Pexe source on disk: a directory containing `manifest.toml`, plus
-/// `plugin.rhai` unless it is a recipe.
+/// Pexe source on disk: a directory containing `manifest.toml` and `plugin.rhai`.
 pub struct PluginSource {
     pub root: PathBuf,
     pub manifest_toml: String,
-    pub script: Option<String>,
+    pub script: String,
 }
 
 impl PluginSource {
@@ -55,29 +54,12 @@ impl PluginSource {
         let script_path = root.join(SCRIPT_FILE);
         let manifest_toml = std::fs::read_to_string(&manifest_path)
             .with_context(|| format!("failed to read manifest: {}", manifest_path.display()))?;
-        let script = if script_path.exists() {
-            Some(
-                std::fs::read_to_string(&script_path)
-                    .with_context(|| format!("failed to read script: {}", script_path.display()))?,
-            )
-        } else {
-            None
-        };
+        let script = std::fs::read_to_string(&script_path)
+            .with_context(|| format!("failed to read script: {}", script_path.display()))?;
         Ok(Self {
             root,
             manifest_toml,
             script,
-        })
-    }
-
-    /// The script, or an error naming the directory when this source is a
-    /// recipe and the caller needs a script.
-    pub fn require_script(&self) -> Result<&str> {
-        self.script.as_deref().ok_or_else(|| {
-            anyhow!(
-                "{} has no {SCRIPT_FILE}; a recipe pexe composes other plugins' actions",
-                self.root.display()
-            )
         })
     }
 
@@ -86,9 +68,8 @@ impl PluginSource {
     }
 }
 
-/// Pack a manifest + script into pexe bytes. Pass `None` for a recipe
-/// pexe, which composes other plugins' actions and has no script.
-pub fn pack(manifest_toml: &str, script: Option<&str>) -> Result<Vec<u8>> {
+/// Pack a manifest + script into pexe bytes.
+pub fn pack(manifest_toml: &str, script: &str) -> Result<Vec<u8>> {
     let buf = Cursor::new(Vec::<u8>::new());
     let mut zip = ZipWriter::new(buf);
     let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -96,18 +77,15 @@ pub fn pack(manifest_toml: &str, script: Option<&str>) -> Result<Vec<u8>> {
     zip.start_file(MANIFEST_FILE, opts)?;
     zip.write_all(manifest_toml.as_bytes())?;
 
-    if let Some(script) = script {
-        zip.start_file(SCRIPT_FILE, opts)?;
-        zip.write_all(script.as_bytes())?;
-    }
+    zip.start_file(SCRIPT_FILE, opts)?;
+    zip.write_all(script.as_bytes())?;
 
     let buf = zip.finish()?;
     Ok(buf.into_inner())
 }
 
-/// Unpack pexe bytes into `(manifest_toml_src, script_src)` without
-/// parsing. The script is absent for a recipe pexe.
-pub fn unpack_raw(bytes: &[u8]) -> Result<(String, Option<String>)> {
+/// Unpack pexe bytes into `(manifest_toml_src, script_src)` without parsing.
+pub fn unpack_raw(bytes: &[u8]) -> Result<(String, String)> {
     let mut zip =
         ZipArchive::new(Cursor::new(bytes)).map_err(|err| anyhow!("invalid pexe zip: {err}"))?;
     if zip.len() > MAX_ENTRIES {
@@ -117,29 +95,15 @@ pub fn unpack_raw(bytes: &[u8]) -> Result<(String, Option<String>)> {
         );
     }
     let manifest_toml = read_entry(&mut zip, MANIFEST_FILE)?;
-    let script = match zip.index_for_name(SCRIPT_FILE) {
-        Some(_) => Some(read_entry(&mut zip, SCRIPT_FILE)?),
-        None => None,
-    };
+    let script = read_entry(&mut zip, SCRIPT_FILE)?;
     Ok((manifest_toml, script))
 }
 
 /// Unpack pexe bytes into a parsed [`Manifest`] and the script source.
-///
-/// A pexe may carry a script, recipes, or both: a recipe can name its own
-/// plugin's actions alongside another plugin's, which is how a composed
-/// transaction also produces objects of the recipe author's own classes.
-/// Carrying neither is what makes an archive useless, so that is rejected.
-pub fn unpack(bytes: &[u8]) -> Result<(Manifest, Option<String>)> {
+pub fn unpack(bytes: &[u8]) -> Result<(Manifest, String)> {
     let (manifest_toml, script) = unpack_raw(bytes)?;
     let manifest: Manifest =
         toml::from_str(&manifest_toml).map_err(|err| anyhow!("invalid manifest.toml: {err}"))?;
-    if script.is_none() && !manifest.is_recipe() {
-        bail!(
-            "{} ships no {SCRIPT_FILE} and declares no recipes",
-            manifest.plugin.name
-        );
-    }
     Ok((manifest, script))
 }
 
@@ -166,12 +130,51 @@ fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> R
 /// Compile the script against its manifest's action names and return the hex-encoded
 /// module hash.
 pub fn compile_module_hash(manifest: &Manifest, script: &str) -> Result<String> {
+    compile_module_hash_with_deps(manifest, script, PluginDeps::new())
+}
+
+/// As [`compile_module_hash`], with dependency plugins available to the
+/// script's qualified sub-action calls. The imported batches are part of
+/// what the returned hash covers.
+pub fn compile_module_hash_with_deps(
+    manifest: &Manifest,
+    script: &str,
+    deps: PluginDeps,
+) -> Result<String> {
     let sdk = Sdk::default();
     let names: Vec<&str> = manifest.actions.iter().map(|a| a.name.as_str()).collect();
     let module = sdk
-        .load_module_from_src_actions(script, &names)
+        .load_module_from_src_deps(script, &names, deps)
         .map_err(|err| anyhow!("failed to compile plugin: {err}"))?;
     Ok(format!("{:#}", module.module().batch.id()))
+}
+
+/// Compile the plugins a script calls into, reading them as installed
+/// `.pexe` archives from `search_dir`.
+///
+/// Build-time dependency resolution has to come from somewhere; the install
+/// directory is the same place the driver loads from, so a plugin that
+/// builds here is one that will also load there.
+pub fn resolve_script_deps(script: &str, search_dir: &Path) -> Result<PluginDeps> {
+    let sdk = Sdk::default();
+    let mut deps = PluginDeps::new();
+    for plugin_name in sdk::script_dependencies(script) {
+        let path = search_dir.join(format!("{plugin_name}.{PEXE_EXTENSION}"));
+        let bytes = read_pexe_file(&path).with_context(|| {
+            format!(
+                "this script calls into {plugin_name}, which must be installed to build against; expected {}",
+                path.display()
+            )
+        })?;
+        let (manifest, dep_script) = unpack(&bytes)?;
+        // A dependency may itself call into others, so resolve depth-first.
+        let dep_deps = resolve_script_deps(&dep_script, search_dir)?;
+        let module = sdk
+            .load_module_from_manifest_deps(&dep_script, &manifest, dep_deps)
+            .map_err(|err| anyhow!("failed to compile dependency {plugin_name}: {err}"))?;
+        deps.insert(plugin_name, module);
+    }
+    Ok(deps)
 }
 
 /// Rewrite the `module_hash` line in a manifest's TOML source to the given hash,
@@ -242,18 +245,10 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 
     #[test]
     fn test_pack_unpack_round_trip() {
-        let bytes = pack("name = \"x\"", Some("fn Foo() {}")).unwrap();
+        let bytes = pack("name = \"x\"", "fn Foo() {}").unwrap();
         let (manifest, script) = unpack_raw(&bytes).unwrap();
         assert!(manifest.contains("name = \"x\""));
-        assert_eq!(script.as_deref(), Some("fn Foo() {}"));
-    }
-
-    #[test]
-    fn test_pack_unpack_round_trip_without_script() {
-        let bytes = pack("name = \"x\"", None).unwrap();
-        let (manifest, script) = unpack_raw(&bytes).unwrap();
-        assert!(manifest.contains("name = \"x\""));
-        assert_eq!(script, None, "a recipe archive carries no script entry");
+        assert_eq!(script, "fn Foo() {}");
     }
 
     fn zip_with_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
