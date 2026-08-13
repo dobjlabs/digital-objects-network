@@ -2,7 +2,7 @@
 name = "craft-basics"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build examples/craft-basics`.
-module_hash = "57631b51fb9a921588d391211f94c0bd8f777aff0a16755bc2dfefb52d6ff5b0"
+module_hash = "44d6fd33861e3ab021c0362a348243226cfa94345c912676102115a4864cd084"
 
 [[classes]]
 name = "Log"
@@ -80,3 +80,33 @@ hidden = true
 name = "MineStoneWithStonePick"
 emoji = "🪨"
 description = "Mine stone using a stone pick (consumes durability)."
+
+[[actions]]
+name = "ClaimLog"
+emoji = "🪧"
+description = "Take exclusive possession of a received log by rotating its key."
+
+[[actions]]
+name = "ClaimWood"
+emoji = "🪧"
+description = "Take exclusive possession of a received wood by rotating its key."
+
+[[actions]]
+name = "ClaimStick"
+emoji = "🪧"
+description = "Take exclusive possession of a received stick by rotating its key."
+
+[[actions]]
+name = "ClaimStone"
+emoji = "🪧"
+description = "Take exclusive possession of a received stone by rotating its key."
+
+[[actions]]
+name = "ClaimWoodPick"
+emoji = "🪧"
+description = "Take exclusive possession of a received wood pick by rotating its key."
+
+[[actions]]
+name = "ClaimStonePick"
+emoji = "🪧"
+description = "Take exclusive possession of a received stone pick by rotating its key."

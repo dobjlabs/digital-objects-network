@@ -70,3 +70,47 @@ fn MineStoneWithStonePick(action) {
     var pick = action.subaction("UseStonePick");
     var stone = action.output("Stone");
 }
+
+// ── claims ───────────────────────────────────────────────────────────────────
+// Rotating `key` moves an object's commitment and its nullifier, so a holder
+// who was sent an object can spend the sender's copy out from under them.
+// Nothing else about the state changes, and the stable identifier carries
+// across, so the object stays the same object under new custody.
+//
+// These are also the surface a recipe pexe composes: a recipe can only run
+// actions this plugin already exposes.
+
+fn claim(action, obj) {
+    var key = action.random();
+    obj.update("key", key);
+}
+
+fn ClaimLog(action) {
+    var log = action.mutate("Log");
+    claim(action, log);
+}
+
+fn ClaimWood(action) {
+    var wood = action.mutate("Wood");
+    claim(action, wood);
+}
+
+fn ClaimStick(action) {
+    var stick = action.mutate("Stick");
+    claim(action, stick);
+}
+
+fn ClaimStone(action) {
+    var stone = action.mutate("Stone");
+    claim(action, stone);
+}
+
+fn ClaimWoodPick(action) {
+    var pick = action.mutate("WoodPick");
+    claim(action, pick);
+}
+
+fn ClaimStonePick(action) {
+    var pick = action.mutate("StonePick");
+    claim(action, pick);
+}

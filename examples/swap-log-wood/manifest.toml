@@ -1,0 +1,29 @@
+# A recipe pexe: it ships no plugin.rhai and compiles to no module, so it
+# defines no classes and cannot change any. All it does is name actions that
+# another plugin already exposes and run them as one transaction.
+#
+# Because the steps are craft-basics actions, each object's own class guard
+# authorizes its change -- which is what lets this live in a separate pexe
+# that anyone can write and install without touching craft-basics.
+
+[plugin]
+name = "swap-log-wood"
+version = "0.1.0"
+
+# Pinned by module hash, not by name. A craft-basics installed at any other
+# hash is a different set of classes, so the catalog refuses to load this
+# recipe against it rather than running the wrong actions. Re-pin with:
+#   cargo run -p pexe --release -- build examples/craft-basics
+# then copy the hash it prints.
+[[requires]]
+plugin = "craft-basics"
+module_hash = "44d6fd33861e3ab021c0362a348243226cfa94345c912676102115a4864cd084"
+
+# Inputs are the steps' inputs concatenated in step order, so this action
+# takes one Log then one Wood. Both are re-keyed in a single transaction:
+# either both land or neither does.
+[[recipes]]
+name = "SwapLogWood"
+emoji = "🤝"
+description = "Re-key one log and one wood together, in a single transaction."
+steps = ["craft-basics::ClaimLog", "craft-basics::ClaimWood"]

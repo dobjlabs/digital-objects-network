@@ -579,6 +579,13 @@ pub(crate) fn test_plugin_bytes() -> Vec<u8> {
 }
 
 #[cfg(test)]
+/// The bundled recipe example, packed from source like the plugin above.
+pub(crate) fn bundled_recipe_bytes() -> Vec<u8> {
+    let manifest = include_str!("../../../examples/swap-log-wood/manifest.toml");
+    pexe::pack(manifest, None).expect("bundled recipe packs")
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -948,6 +955,39 @@ description = "consume a Foo to make a Bar"
     fn obj_type_hash_for_test(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {
         let value = obj.get(&pod2::middleware::StrKey::from("type")).ok()??;
         Some(Hash(value.raw().0))
+    }
+
+    /// The bundled recipe must stay loadable against the bundled
+    /// craft-basics. `pexe build` re-pins a plugin's own `module_hash` but
+    /// never a recipe's `[[requires]]`, so any change to craft-basics
+    /// silently staleness this pin until something checks it.
+    #[test]
+    fn test_bundled_recipe_matches_bundled_plugin() {
+        let catalog = PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("craft-basics.pexe"), test_plugin_bytes()),
+                (PathBuf::from("swap-log-wood.pexe"), bundled_recipe_bytes()),
+            ],
+            true,
+        )
+        .expect("bundled recipe loads against bundled craft-basics -- if this fails, re-pin examples/swap-log-wood/manifest.toml to the hash `pexe build examples/craft-basics` prints");
+
+        let recipe = catalog
+            .get_action(&QualifiedName::new("swap-log-wood", "SwapLogWood"))
+            .expect("bundled recipe is a catalog action");
+        let classes: Vec<&str> = recipe
+            .total_inputs
+            .iter()
+            .map(|r| r.class.name.as_str())
+            .collect();
+        assert_eq!(classes, vec!["Log", "Wood"]);
+        assert!(
+            recipe
+                .total_inputs
+                .iter()
+                .all(|r| r.class.plugin_name == "craft-basics"),
+            "the recipe consumes craft-basics classes, not its own"
+        );
     }
 
     // --- Recipe fixtures -----------------------------------------------------
