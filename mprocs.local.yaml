@@ -3,11 +3,19 @@
 # Chain-facing env vars come from the `just dev-local` recipe that launches
 # this file. Ports: anvil :8545, beacon shim :8555, then the usual archiver
 # :3001, synchronizer :3000, relayer :3200, dobjd :7717.
+#
+# anvil and the shim are exec'd rather than run through `just X` (which the
+# `just anvil` / `just beacon-shim` recipes still offer for standalone use).
+# `just` installs no signal handlers, so on quit it takes the SIGTERM and dies
+# without passing it on, leaving its grandchild running. exec makes the real
+# process mprocs' direct child, so the signal reaches it.
 procs:
   anvil:
-    shell: just anvil
+    shell: exec anvil --block-time 2 --port 8545 --state data/anvil-state.json --state-interval 5
   beacon-shim:
-    shell: just beacon-shim
+    shell: exec cargo run -p beacon-shim --release
+    env:
+      RUST_LOG: info
   archiver:
     shell: just wait-health http://127.0.0.1:8555/healthz && just archiver
   synchronizer:

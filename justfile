@@ -15,7 +15,9 @@ archiver:
 
 # The 2s block time is load-bearing, and the state file must stay in step with
 # the archiver + synchronizer stores; see devtools/beacon-shim/README.md.
-# Run the local anvil devnet that backs `just dev-local`.
+# mprocs.local.yaml repeats these flags rather than calling this recipe, so that
+# it supervises anvil directly and can signal it on quit. Keep the two in step.
+# Run the local anvil devnet standalone.
 anvil:
     @mkdir -p data
     anvil --block-time 2 --port 8545 --state data/anvil-state.json --state-interval 5
@@ -79,6 +81,8 @@ dev-remote: ensure-remote-settings ensure-plugins ensure-mcp ensure-mcp-enabled
 dev-local: ensure-anvil ensure-db-local ensure-local-settings ensure-plugins ensure-mcp ensure-mcp-enabled
     #!/usr/bin/env bash
     set -euo pipefail
+    # mprocs.local.yaml execs anvil directly, so nothing else creates its state dir.
+    mkdir -p data
     export RPC_URL=http://127.0.0.1:8545
     export BEACON_URL=http://127.0.0.1:8555
     export ARCHIVER_URL=http://127.0.0.1:3001
