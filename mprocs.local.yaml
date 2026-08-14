@@ -1,0 +1,22 @@
+# Local-devnet variant of mprocs.yaml: anvil plus the beacon shim stand in for
+# a public execution + beacon endpoint, so nothing here reaches the network.
+# Chain-facing env vars come from the `just dev-local` recipe that launches
+# this file. Ports: anvil :8545, beacon shim :8555, then the usual archiver
+# :3001, synchronizer :3000, relayer :3200, dobjd :7717.
+procs:
+  anvil:
+    shell: just anvil
+  beacon-shim:
+    shell: just beacon-shim
+  archiver:
+    shell: just wait-health http://127.0.0.1:8555/healthz && just archiver
+  synchronizer:
+    shell: just wait-health http://127.0.0.1:3001/healthz && just sync
+  relayer:
+    shell: just wait-health http://127.0.0.1:3000/healthz && just relayer
+  dobjd:
+    shell: just wait-health http://127.0.0.1:3200/healthz && just dobjd
+  web:
+    shell: just wait-health http://127.0.0.1:7717/healthz && just web
+  desktop:
+    shell: just wait-health http://localhost:1420 && just desktop-shell

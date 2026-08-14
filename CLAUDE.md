@@ -35,6 +35,7 @@ The workspace is declared in `Cargo.toml`. Crate-by-crate:
 | `libs/intro-pods/vdfpod`         | VDF intro pod (PoW gating via iterated hashing).                                                                                                                                                     |
 | `libs/intro-pods/lt-eq-u256-pod` | 256-bit `<=` intro pod (PoW difficulty checks). Crate name `lt-eq-u256-pod`.                                                                                                                         |
 | `examples/*`                     | Example plugin sources: `craft-basics` (Log, Wood, Stick, Stone, WoodPick, StonePick + 9 actions) and `craft-rocket`.                                                                                |
+| `devtools/beacon-shim`           | **Dev only, never shipped.** Beacon REST shim over a local anvil devnet; backs `just dev-local`. Keep it out of `images.yml` and `deploy/compose.yaml`.                                              |
 
 ## Build / test / dev
 
@@ -44,6 +45,11 @@ Use `just` (recipes in `justfile`):
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `just dev`               | Brings up archiver + synchronizer + relayer + **dobjd** + Vite + Tauri shell via `mprocs.yaml`, each gated on the previous one's health. Depends on `ensure-db` + `ensure-start-slot` + `ensure-plugins` + `ensure-mcp`. Open `http://localhost:1420` in a browser or use the desktop window. |
 | `just dev-remote`        | Like `just dev` but skips the local archiver/synchronizer/relayer and points dobjd at the hosted public endpoints (via `ensure-remote-settings`). Uses `mprocs.remote.yaml`. No local Postgres needed.                                                                                        |
+| `just dev-local`         | Like `just dev` but against a local anvil devnet plus `beacon-shim`, so nothing reaches the network. Uses `mprocs.local.yaml`, its own Postgres databases / RocksDB path / blobs directory, and exported chain vars. Needs anvil. See `devtools/beacon-shim/README.md`.                        |
+| `just anvil`             | Runs the local devnet: 2s blocks, state persisted to `data/anvil-state.json`. The block time is load-bearing, see "Local devnet" below.                                                                                                                                                       |
+| `just beacon-shim`       | Runs the Beacon REST shim on `:8555` in front of anvil.                                                                                                                                                                                                                                       |
+| `just ensure-anvil`      | Fails with the foundry install command if anvil is missing.                                                                                                                                                                                                                                   |
+| `just ensure-db-local`   | Creates the `synchronizer_local` + `relayer_local` Postgres databases used by `just dev-local`. Idempotent.                                                                                                                                                                                   |
 | `just sync`              | Runs the synchronizer (loads `services/synchronizer/.env`).                                                                                                                                                                                                                                   |
 | `just relayer`           | Runs the relayer (loads `services/relayer/.env`).                                                                                                                                                                                                                                             |
 | `just archiver`          | Runs the archiver (loads `services/archiver/.env`).                                                                                                                                                                                                                                           |
@@ -72,6 +78,12 @@ Use `just` (recipes in `justfile`):
 - RocksDB stores under `data/` and `~/.dobj/` are created on first run; the archiver writes blobs to its `BLOBS_PATH` (filesystem, no DB).
 - `dobjd` binds **two adjacent ports**: HTTP on `DOBJD_PORT` (default `7717`) and MCP on `DOBJD_PORT + 1` (default `7718`). A taken port fails startup fast. MCP serving is gated by the `mcpEnabled` setting (`dobj settings set --mcp on|off`, default **off**); toggling starts/stops the MCP server immediately, no restart.
 - `just dev-remote` skips the local chain-side services and points dobjd at the hosted synchronizer + relayer, so no local Postgres / beacon is needed.
+
+**Local devnet (`just dev-local`):**
+
+Runs the full stack against anvil instead of a public Ethereum endpoint, with `devtools/beacon-shim` supplying the consensus-layer view anvil has no notion of (slot = block number, beacon root = block hash). Requires foundry (`curl -L https://foundry.paradigm.xyz | bash && foundryup`) and Postgres.
+
+The constraints it encodes (2s block time vs grounding expiry, `INIT_START_SLOT >= 1`, keeping the anvil state file in step with the archiver and synchronizer stores) are documented in `devtools/beacon-shim/README.md`. The two that bite silently: a faster block time expires grounding roots mid-proof and reads as a grounding bug, and mixing devnet state with `just dev` state leaves the synchronizer deriving against roots that never existed.
 
 **Always run tests with `--release`** — proof generation is impractically slow in debug. Use `MockProver` (not the real Prover) in unit tests; gate real-proof tests with `#[ignore]`. Use `assert!`, not `debug_assert!`, since tests run `--release`.
 
