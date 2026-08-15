@@ -23,23 +23,36 @@ use std::{fmt::Display, str::FromStr};
 
 use backoff::ExponentialBackoff;
 use reqwest::{Client, Url};
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tracing::trace;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum NumericOrTextCode {
     String(String),
     Number(usize),
 }
 /// API Error response
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ErrorResponse {
     /// Error code
     pub code: NumericOrTextCode,
     /// Error message
     #[serde(default)]
     pub message: Option<String>,
+}
+
+impl ErrorResponse {
+    /// The body a server must return for a non-404 failure. [`json_get`] parses
+    /// every such response as a [`ClientResponse`], so a body that is not this
+    /// shape reaches the caller as a deserialization error with the real
+    /// message dropped.
+    pub fn new(code: u16, message: impl Into<String>) -> Self {
+        Self {
+            code: NumericOrTextCode::Number(code as usize),
+            message: Some(message.into()),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

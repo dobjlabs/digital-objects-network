@@ -83,6 +83,8 @@ dev-local: ensure-anvil ensure-db-local ensure-local-settings ensure-plugins ens
     set -euo pipefail
     # mprocs.local.yaml execs anvil directly, so nothing else creates its state dir.
     mkdir -p data
+    # Absolute, because the Tauri shell resolves it from interfaces/gui.
+    export DOBJ_HOME="$PWD/data/dobj-local"
     export RPC_URL=http://127.0.0.1:8545
     export BEACON_URL=http://127.0.0.1:8555
     export ARCHIVER_URL=http://127.0.0.1:3001
@@ -124,12 +126,13 @@ ensure-db-local: (create-db "synchronizer_local") (create-db "relayer_local")
 ensure-local-settings:
     #!/usr/bin/env bash
     set -euo pipefail
-    f="$HOME/.dobj/settings.json"
-    mkdir -p "$HOME/.dobj"
+    root="${DOBJ_HOME:-$HOME/.dobj}"
+    f="$root/settings.json"
+    mkdir -p "$root"
     cur="{}"; [ -f "$f" ] && cur="$(jq '.' "$f" 2>/dev/null || echo '{}')"
     printf '%s' "$cur" | jq '. + {synchronizerApiUrl:"http://127.0.0.1:3000", relayerApiUrl:"http://127.0.0.1:3200"}' > "$f.tmp"
     mv "$f.tmp" "$f"
-    echo "~/.dobj/settings.json -> local sync + relayer"
+    echo "$f -> local sync + relayer"
 
 # Block (up to ~5 min) until an HTTP endpoint responds, then return. mprocs
 # uses this to launch synchronizer -> relayer -> dobjd -> web -> desktop in
@@ -148,19 +151,26 @@ wait-health URL:
     done
     echo "timed out waiting for {{URL}}; starting anyway"
 
-# Idempotently point ~/.dobj/settings.json at the hosted synchronizer + relayer
+# Idempotently point the driver's settings.json at the hosted synchronizer + relayer
 ensure-remote-settings:
-    @mkdir -p ~/.dobj
-    @printf '{"synchronizerApiUrl":"https://synchronizer.don.pateldhvani.com","relayerApiUrl":"https://relayer.don.pateldhvani.com"}\n' > ~/.dobj/settings.json
-    @echo "~/.dobj/settings.json → hosted sync + relayer"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="${DOBJ_HOME:-$HOME/.dobj}"
+    mkdir -p "$root"
+    printf '{"synchronizerApiUrl":"https://synchronizer.don.pateldhvani.com","relayerApiUrl":"https://relayer.don.pateldhvani.com"}\n' > "$root/settings.json"
+    echo "$root/settings.json -> hosted sync + relayer"
 
-# Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
-# `just dev` so a fresh clone (or a `just reset`-ed dev env) boots cleanly.
+# Install plugins into the driver's actions/ dir if none are present. Runs as
+# part of `just dev` so a fresh clone (or a `just reset`-ed dev env) boots
+# cleanly. Honours DOBJ_HOME, so `just dev-local` stocks its own devnet root.
 ensure-plugins:
-    @mkdir -p ~/.dobj/actions
-    @if [ -z "$(find ~/.dobj/actions -maxdepth 1 -name '*.pexe' -print -quit)" ]; then \
-        echo "No .pexe plugins installed — packaging from examples/ and installing..."; \
-        just install-plugins; \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    actions="${DOBJ_HOME:-$HOME/.dobj}/actions"
+    mkdir -p "$actions"
+    if [ -z "$(find "$actions" -maxdepth 1 -name '*.pexe' -print -quit)" ]; then
+        echo "No .pexe plugins in $actions - packaging from examples/ and installing..."
+        just install-plugins
     fi
 
 # Register the dobj MCP with Claude Code at project (default) scope, so it
@@ -186,12 +196,13 @@ ensure-mcp:
 ensure-mcp-enabled:
     #!/usr/bin/env bash
     set -euo pipefail
-    f="$HOME/.dobj/settings.json"
-    mkdir -p "$HOME/.dobj"
+    root="${DOBJ_HOME:-$HOME/.dobj}"
+    f="$root/settings.json"
+    mkdir -p "$root"
     cur="{}"; [ -f "$f" ] && cur="$(jq '.' "$f" 2>/dev/null || echo '{}')"
     printf '%s' "$cur" | jq '{synchronizerApiUrl:"http://127.0.0.1:3000", relayerApiUrl:"http://127.0.0.1:3200"} + . + {mcpEnabled:true}' > "$f.tmp"
     mv "$f.tmp" "$f"
-    echo "~/.dobj/settings.json -> mcpEnabled=true"
+    echo "$f -> mcpEnabled=true"
 
 # Create one Postgres database if it is absent. Idempotent.
 create-db NAME:
@@ -264,8 +275,15 @@ ensure-start-slot:
 reset:
     #!/usr/bin/env bash
     set -uo pipefail
+    # The installed CLI always lives under ~/.dobj/bin, even when DOBJ_HOME
+    # points the driver's data elsewhere.
     [ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
+    root="${DOBJ_HOME:-}"
+    case "$root" in
+        ""|/) ;;
+        *) rm -rf "$root" && echo "removed dobj home: $root" ;;
+    esac
     command -v claude >/dev/null 2>&1 && claude mcp remove dobj 2>/dev/null && echo "removed: dobj MCP registration" || true
     for db in synchronizer relayer synchronizer_local relayer_local; do
         psql postgres://postgres@localhost:5432/postgres -c "DROP DATABASE IF EXISTS $db;" || true

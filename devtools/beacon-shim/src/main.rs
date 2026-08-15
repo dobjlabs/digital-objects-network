@@ -33,7 +33,7 @@ use axum::{
 };
 use axum_extra::extract::Query;
 use bytes::Bytes;
-use eth_clients::beacon::types::BlockId;
+use eth_clients::{beacon::types::BlockId, common::ErrorResponse};
 use futures_util::stream::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -180,12 +180,15 @@ struct BlobsQuery {
     versioned_hashes: Vec<B256>,
 }
 
+/// Resolves the id before forwarding, because anvil's blob endpoint takes an
+/// execution block id and rejects the beacon `head` / `finalized` tags.
 async fn get_blobs(
     Path(block_id): Path<String>,
     Query(query): Query<BlobsQuery>,
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
-    let body = fetch_blobs(&state, &block_id, &query.versioned_hashes).await?;
+    let block = resolve_block(&state, &block_id).await?;
+    let body = fetch_blobs(&state, block.header.hash, &query.versioned_hashes).await?;
     Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
 }
 
@@ -252,7 +255,7 @@ async fn resolve_block(state: &AppState, block_id: &str) -> Result<Block, ApiErr
 /// commitments. Consumers derive versioned hashes from these and index blobs by
 /// the resulting position, so a placeholder would not just mismatch, it would
 /// panic on the lookup.
-async fn kzg_commitments(state: &AppState, block: &Block) -> Result<Vec<Bytes48>> {
+async fn kzg_commitments(state: &AppState, block: &Block) -> Result<Vec<Bytes48>, ApiError> {
     if block.header.blob_gas_used.unwrap_or(0) == 0 {
         return Ok(Vec::new());
     }
@@ -266,8 +269,10 @@ async fn kzg_commitments(state: &AppState, block: &Block) -> Result<Vec<Bytes48>
         return Ok(cached.clone());
     }
 
-    let body = fetch_blobs(state, &format!("{root:#x}"), &[]).await?;
-    let blobs: Vec<HeapBlob> = serde_json::from_slice::<BlobsBody>(&body)?.data;
+    let body = fetch_blobs(state, root, &[]).await?;
+    let blobs: Vec<HeapBlob> = serde_json::from_slice::<BlobsBody>(&body)
+        .map_err(anyhow::Error::from)?
+        .data;
     let commitments = tokio::task::spawn_blocking(move || {
         let settings = EnvKzgSettings::Default.get();
         blobs
@@ -281,7 +286,8 @@ async fn kzg_commitments(state: &AppState, block: &Block) -> Result<Vec<Bytes48>
             .collect::<Result<Vec<_>, c_kzg::Error>>()
             .map_err(|err| anyhow!("failed to compute kzg commitments: {err}"))
     })
-    .await??;
+    .await
+    .map_err(anyhow::Error::from)??;
 
     state
         .commitments
@@ -302,17 +308,30 @@ struct BlobsBody {
 /// anvil parses `versioned_hashes` as one comma-separated value while
 /// `eth-clients` sends repeated query pairs, which would reach anvil as the
 /// last pair alone and silently return the wrong blob set.
-async fn fetch_blobs(state: &AppState, block_id: &str, versioned_hashes: &[B256]) -> Result<Bytes> {
-    let mut url = format!("{}/eth/v1/beacon/blobs/{}", state.anvil_url, block_id);
+async fn fetch_blobs(
+    state: &AppState,
+    root: B256,
+    versioned_hashes: &[B256],
+) -> Result<Bytes, ApiError> {
+    let mut url = format!("{}/eth/v1/beacon/blobs/{root:#x}", state.anvil_url);
     if !versioned_hashes.is_empty() {
         let joined: Vec<String> = versioned_hashes.iter().map(|h| h.to_string()).collect();
         url.push_str(&format!("?versioned_hashes={}", joined.join(",")));
     }
-    let response = state.http.get(&url).send().await?;
+    let response = state
+        .http
+        .get(&url)
+        .send()
+        .await
+        .map_err(anyhow::Error::from)?;
+    // anvil answers 404 only when the block itself is absent; a block holding no
+    // blobs is a 200 with an empty list. Reporting it as success would turn a
+    // missing block into "this block had no blobs".
     if response.status() == StatusCode::NOT_FOUND {
-        return Ok(Bytes::from_static(br#"{"data":[]}"#));
+        return Err(ApiError::NotFound);
     }
-    Ok(response.error_for_status()?.bytes().await?)
+    let response = response.error_for_status().map_err(anyhow::Error::from)?;
+    Ok(response.bytes().await.map_err(anyhow::Error::from)?)
 }
 
 enum ApiError {
@@ -330,12 +349,42 @@ impl From<anyhow::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        match self {
-            Self::NotFound => (StatusCode::NOT_FOUND, "not found").into_response(),
+        let (status, message) = match self {
+            Self::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             Self::Internal(err) => {
                 warn!(?err, "Beacon shim request failed");
-                (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
+                (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
             }
+        };
+        (status, Json(ErrorResponse::new(status.as_u16(), message))).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eth_clients::common::ClientResponse;
+
+    /// `json_get` feeds every non-404 body to `ClientResponse`, so an error body
+    /// that does not land on its `Error` arm reaches the caller as a serde
+    /// failure instead of the message.
+    #[tokio::test]
+    async fn internal_error_body_parses_as_a_client_error() {
+        let response = ApiError::Internal(anyhow!("upstream exploded")).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let parsed: ClientResponse<serde_json::Value> =
+            serde_json::from_slice(&body).expect("error body must be JSON");
+
+        match parsed {
+            ClientResponse::Error(err) => {
+                assert_eq!(err.message.as_deref(), Some("upstream exploded"));
+                assert_eq!(err.code.to_string(), "500");
+            }
+            _ => panic!("error body did not parse as ClientResponse::Error"),
         }
     }
 }
