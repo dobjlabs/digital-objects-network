@@ -217,6 +217,14 @@ fn imported_schema_name_io(plugin: &str, action_name: &str) -> String {
     format!("{}_{action_name}IO", crate::dep_alias(plugin))
 }
 
+/// Whether an action carries an `io` record at all. An action whose every
+/// object slot is spliced in from sub-actions owns no entries; its record,
+/// its `io` signature arg, and the `io` arg of calls to it are all omitted
+/// together, since a record without entries is unrepresentable in podlang.
+pub(crate) fn action_has_io(meta: &ActionMeta) -> bool {
+    !meta.in_entries.is_empty() || !meta.out_entries.is_empty()
+}
+
 /// Emit `record <Action><Side> = (<entries>)` lines for any non-empty
 /// io schema across all actions, plus `<Action>Chain` records for
 /// actions whose chain has 2+ intermediate states.
@@ -267,12 +275,17 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
                     .map(|e| Side::Out.arg_name(&e.varname)),
             )
             .collect();
-        writeln!(
-            w,
-            "record {} = ({})",
-            schema_name_io(&meta.name),
-            render(&names),
-        )?;
+        // An all-subaction action owns no entries; podlang has no empty
+        // record form, and the action's signature drops its `io` arg to
+        // match (see fmt_action), so nothing references the schema.
+        if !names.is_empty() {
+            writeln!(
+                w,
+                "record {} = ({})",
+                schema_name_io(&meta.name),
+                render(&names),
+            )?;
+        }
         if chain_packed(meta.chain_max_ts) {
             // Intermediates: ts=1..=chain_max_ts-1 -> step_0..step_(K-2).
             let steps: Vec<String> = (0..meta.chain_max_ts - 1)
@@ -319,6 +332,10 @@ struct SubActionCall {
     /// Name of the sub's first out entry, the one the alias refers to.
     /// `None` if the sub produces nothing.
     first_out_entry: Option<String>,
+    /// False when the sub owns no io entries (an all-subaction composite):
+    /// no typed private is synthesized and the call passes no `io` arg,
+    /// matching the sub's own io-less signature.
+    has_io: bool,
 }
 
 /// Walk the parent action's Insts and gather one `SubActionCall` per
@@ -367,6 +384,7 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
                 sub_io_var,
                 alias,
                 first_out_entry,
+                has_io: action_has_io(sub_meta),
             });
         }
     }
@@ -391,7 +409,9 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
 
     // ---- Signature ----
     write!(w, "{}(", action.name)?;
-    write!(w, "io {}, ", schema_name_io(&action.name))?;
+    if action_has_io(meta) {
+        write!(w, "io {}, ", schema_name_io(&action.name))?;
+    }
     write!(w, "state_header StateHeader, chain0, chain")?;
 
     // Sub-action aliases: parent vars that hold a sub's first out
@@ -433,6 +453,9 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     }
     // Append synthesized sub-action typed privates last.
     for c in &sub_calls {
+        if !c.has_io {
+            continue;
+        }
         let name = &c.sub_io_var;
         private_vars.push(format!("{name} {}", c.io_schema));
     }
@@ -580,7 +603,9 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 let chain = vars["chain"];
                 let chain_next = chain.next();
                 let mut args: Vec<String> = Vec::new();
-                args.push(call.sub_io_var.clone());
+                if call.has_io {
+                    args.push(call.sub_io_var.clone());
+                }
                 args.push("state_header".to_string());
                 args.push(format!("{chain}"));
                 args.push(format!("{chain_next}"));

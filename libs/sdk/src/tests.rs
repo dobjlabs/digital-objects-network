@@ -1024,3 +1024,85 @@ fn test_qualified_subaction_into_a_dependency() {
     assert_eq!(type_of(&claimed.obj), type_of(&gem.obj));
     assert_ne!(type_of(&receipt.obj), type_of(&claimed.obj));
 }
+
+#[test]
+fn test_receipt_free_composite_action() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let base_src = r#"
+        fn SpawnGem(action) {
+            var gem = action.output("Gem");
+        }
+        fn SpawnCoin(action) {
+            var coin = action.output("Coin");
+        }
+        fn ClaimGem(action) {
+            var gem = action.mutate("Gem");
+            var key = action.random();
+            gem.update("key", key);
+        }
+        fn ClaimCoin(action) {
+            var coin = action.mutate("Coin");
+            var key = action.random();
+            coin.update("key", key);
+        }
+    "#;
+    // A pure swap: every object slot is spliced from the dependency's
+    // claims, the caller mints nothing of its own. The caller's io record
+    // is empty, so its predicate has no `io` arg at all -- previously this
+    // failed to compile as `record SwapIO = ()`.
+    let swap_src = r#"
+        fn Swap(action) {
+            var gem = action.subaction("base::ClaimGem");
+            var coin = action.subaction("base::ClaimCoin");
+        }
+    "#;
+    let sdk = Sdk::default();
+    let base = sdk
+        .load_module_from_src_actions(
+            base_src,
+            &["SpawnGem", "SpawnCoin", "ClaimGem", "ClaimCoin"],
+        )
+        .unwrap();
+    let mut deps = PluginDeps::new();
+    deps.insert("base".to_string(), base.clone());
+    let swap = sdk
+        .load_module_from_src_deps(swap_src, &["Swap"], deps)
+        .unwrap();
+    println!("{}", swap.podlang_src());
+
+    // No own entries: the io record and signature arg are gone, and the
+    // declared arity is exactly the spliced slots.
+    assert!(!swap.podlang_src().contains("SwapIO"));
+    let meta = &swap.actions()[0];
+    let classes: Vec<&str> = meta.total_inputs().map(|r| r.class.as_str()).collect();
+    assert_eq!(classes, vec!["Gem", "Coin"]);
+    let out: Vec<&str> = meta.total_outputs().map(|r| r.class.as_str()).collect();
+    assert_eq!(out, vec!["Gem", "Coin"]);
+
+    let mut state = TestState::default();
+    let executor = base.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnGem", vec![]).unwrap();
+    let [gem] = res.objs();
+    apply_tx(&mut state, &res.tx.clone());
+    let executor = base.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnCoin", vec![]).unwrap();
+    let [coin] = res.objs();
+    apply_tx(&mut state, &res.tx.clone());
+
+    let witness = grounding_witness(&state, &[gem.obj.commitment(), coin.obj.commitment()]);
+    let executor = swap.executor(true, witness);
+    let res = executor
+        .action("Swap", vec![gem.clone(), coin.clone()])
+        .unwrap();
+
+    // Both survivors re-keyed atomically; nothing else minted.
+    let nullifiers = res.tx.nullifier_hashes().unwrap();
+    assert!(nullifiers.contains(&txlib::object_nullifier_hash(&gem.obj).unwrap()));
+    assert!(nullifiers.contains(&txlib::object_nullifier_hash(&coin.obj).unwrap()));
+    let [new_gem, new_coin] = res.objs();
+    let live = res.tx.live_commitments().unwrap();
+    assert!(live.contains(&new_gem.obj.commitment()));
+    assert!(live.contains(&new_coin.obj.commitment()));
+    assert_ne!(new_gem.obj.commitment(), gem.obj.commitment());
+    assert_ne!(new_coin.obj.commitment(), coin.obj.commitment());
+}
