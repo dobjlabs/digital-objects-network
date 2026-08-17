@@ -6,6 +6,15 @@ pub struct Manifest {
     pub plugin: Plugin,
     pub classes: Vec<Class>,
     pub actions: Vec<Action>,
+    /// Declared dependencies -- the only build-time resolution there is. The
+    /// declaration must cover the script's qualified sub-action calls
+    /// exactly; each dependency loads from its `path`, and a declared
+    /// `module_hash` is verified per dependency, so version drift names the
+    /// offending import instead of surfacing as a whole-plugin hash
+    /// mismatch. A script that composes nothing declares no entries (the
+    /// section may be absent).
+    #[serde(default)]
+    pub imports: Vec<Import>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +40,23 @@ pub struct Action {
     pub hidden: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct Import {
+    /// The dependency's plugin name, as it appears in qualified calls.
+    pub name: String,
+    /// Where the built `.pexe` lives, relative to this manifest's directory.
+    /// A build-time convenience only: installed catalogs still resolve
+    /// dependencies by name, so the path never needs to exist off the
+    /// machine that built the plugin.
+    pub path: String,
+    /// The dependency batch id to pin. Optional; when present, resolution
+    /// fails with a per-import message if the pexe at `path` (or, in an
+    /// installed catalog, the plugin of this name) compiles to a different
+    /// batch.
+    #[serde(default)]
+    pub module_hash: Option<Hash>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -41,7 +67,6 @@ mod tests {
 [plugin]
 name = "craft-wood-pick"
 version = "0.1.0"
-imports = ["craft-wood", "craft-sticks"]
 module_hash = "b77a964de74c8569e6c6172692bb50147df9334fd9b572abc8d4d9c688a40e06"
 
 [[classes]]
@@ -51,18 +76,18 @@ description = "A wood pick that can mine stone while durability remains."
 
 [[actions]]
 name = "CraftWoodPick"
-fn_name = "CraftWoodPick"
 emoji = "⛏️"
 description = "Combine wood and a stick to craft a wood pick."
 
 [[actions]]
 name = "UseWoodPick"
-fn_name = "UseWoodPick"
 emoji = "⛏️"
 description = "Internal durability/work update for wood pick usage."
 hidden = true
         "#;
         let manifest: Manifest = toml::from_str(toml_str).unwrap();
-        println!("{:#?}", manifest);
+        assert_eq!(manifest.classes.len(), 1);
+        assert_eq!(manifest.actions.len(), 2);
+        assert!(manifest.actions[1].hidden);
     }
 }

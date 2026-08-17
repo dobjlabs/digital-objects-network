@@ -1,0 +1,33 @@
+# A plugin whose script composes actions from two other plugins, with the
+# dependencies declared as [[imports]]: each entry names the plugin, the path
+# its built pexe loads from at build time (relative to this directory), and
+# the batch id to pin. A stale or swapped dependency then fails with a message
+# naming the import, rather than as this plugin's own module_hash mismatch.
+# The declaration must cover exactly what the script's qualified subaction
+# calls compose -- a missing or unused entry is a build error.
+
+[plugin]
+name = "swap-log-copper"
+version = "0.1.0"
+# Rewritten by `cargo run -p pexe -- build examples/swap-log-copper`.
+module_hash = "5f108a4f9e3b5ba79d268b25d3550bd7f280836f5639ab9fa6ec3170bec565d4"
+
+[[imports]]
+name = "craft-basics"
+path = "../../target/pexe/craft-basics.pexe"
+module_hash = "44d6fd33861e3ab021c0362a348243226cfa94345c912676102115a4864cd084"
+
+[[imports]]
+name = "craft-rocket"
+path = "../../target/pexe/craft-rocket.pexe"
+module_hash = "ce8779af93a5a494f717ba26e7280b97a6b402d84ffb17f2d716d1624aeab5ca"
+
+[[classes]]
+name = "Swapped"
+emoji = "🧾"
+description = "A receipt minted by a swap, stamped with the grounding block's timestamp."
+
+[[actions]]
+name = "SwapLogCopper"
+emoji = "🤝"
+description = "Re-key one log and one copper together and mint a receipt, in a single transaction."

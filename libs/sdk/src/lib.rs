@@ -1,8 +1,7 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
-use std::slice;
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -1148,9 +1147,16 @@ impl ActionHandle {
         let st_action = {
             let mut exe_ctx = exe_rc.borrow_mut();
             let state_header = exe_ctx.tx_builder.state_header().array();
+            let owner = exe_ctx.module.module.clone();
             exe_ctx
                 .bld
-                .apply_custom_pred(false, &action, map!({"state_header" => state_header}), sts)
+                .apply_custom_pred_in(
+                    &owner,
+                    false,
+                    &action,
+                    map!({"state_header" => state_header}),
+                    sts,
+                )
                 .unwrap()
         };
 
@@ -1226,9 +1232,37 @@ impl ActionHandle {
         let exe_rc_opt = self.0.borrow().exe_ctx.clone();
         let arg_placeholder = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
 
+        let sub_ref = SubRef::parse(&action).map_err(rt_err_from_anyhow)?;
         let (arg, st_sub, sub_out) = if let Some(exe_rc) = exe_rc_opt {
-            let sub_handle = ActionHandle::new(action.clone(), Some(exe_rc.clone()));
-            let (st_sub, sub_io_array) = sub_handle.exe_action()?;
+            // An imported action's body lives in its own plugin's script, so
+            // the module handle moves to that plugin for the duration of the
+            // call while the transaction builder stays shared.
+            let restore = match &sub_ref.plugin {
+                None => None,
+                Some(plugin) => {
+                    let mut exe_ctx = exe_rc.borrow_mut();
+                    let dep = exe_ctx
+                        .module
+                        .plugin_deps
+                        .get(plugin)
+                        .ok_or_else(|| {
+                            rt_err_from_anyhow(anyhow!(
+                                "subaction {action} names a plugin this script does not depend on"
+                            ))
+                        })?
+                        .clone();
+                    Some(std::mem::replace(&mut exe_ctx.module, dep))
+                }
+            };
+            let sub_handle = ActionHandle::new(sub_ref.action.clone(), Some(exe_rc.clone()));
+            let sub_result = sub_handle.exe_action();
+            // The sub's own module owns its `ActionMeta`, so keep it for the
+            // out-entry lookup below before handing the slot back.
+            let sub_module = exe_rc.borrow().module.clone();
+            if let Some(parent_module) = restore {
+                exe_rc.borrow_mut().module = parent_module;
+            }
+            let (st_sub, sub_io_array) = sub_result?;
 
             // Alias the parent's binding to the Ref of the sub-action's
             // first produced object, or a fresh placeholder if the sub
@@ -1239,8 +1273,7 @@ impl ActionHandle {
                     _ => None,
                 });
             let (arg, sub_out) = if let Some((io, obj)) = aliased {
-                let module = exe_rc.borrow().module.clone();
-                let sub_meta = module.action_by_name(&action);
+                let sub_meta = sub_module.action_by_name(&sub_ref.action);
                 let varname = obj.borrow().var_name().to_string();
                 let (entry_idx, _) = sub_meta
                     .out_entry(&varname)
@@ -1656,6 +1689,10 @@ pub struct ActionObjectRef {
     pub(crate) io: ObjectIO,
     pub class: String,
     pub(crate) varname: String,
+    /// Plugin that declares `class`. `None` means the plugin being loaded;
+    /// `Some` appears on refs spliced in from a dependency reached by a
+    /// qualified sub-action call, whose classes that plugin still owns.
+    pub owner: Option<String>,
 }
 
 /// One slot in an action's `<Action>IO` record (in-entries first,
@@ -1703,6 +1740,9 @@ pub struct ActionMeta {
     /// cached result of `ActionContext::max_ts_per_var`, so `collapsed_at`
     /// need not recompute it or take it as an argument.
     var_max_ts: HashMap<String, usize>,
+    /// One entry per sub-action call in body order, so the renderer and
+    /// the executor agree on which calls cross into a dependency plugin.
+    pub(crate) sub_refs: Vec<SubRef>,
 }
 
 impl ActionMeta {
@@ -1801,7 +1841,39 @@ impl ActionMeta {
     /// sub-action's already-computed `total_inputs`/`total_outputs` at
     /// the point of its `subaction` call. `prior` must contain entries
     /// for every sub-action this one references.
-    fn from_action_ctx(prior: &[ActionMeta], ctx: &ActionContext) -> Result<Self> {
+    /// Resolve a sub-action to the `ActionMeta` describing it, looking in
+    /// this script's already-loaded actions or in a dependency plugin.
+    fn resolve_sub<'a>(
+        prior: &'a [ActionMeta],
+        deps: &'a PluginDeps,
+        sub: &SubRef,
+    ) -> Result<&'a ActionMeta> {
+        match &sub.plugin {
+            None => prior
+                .iter()
+                .find(|a| a.name == sub.action)
+                .ok_or_else(|| anyhow!("subaction {} not defined", sub.action)),
+            Some(plugin) => {
+                let dep = deps.get(plugin).ok_or_else(|| {
+                    anyhow!(
+                        "subaction {}::{} names a plugin this script does not depend on",
+                        plugin,
+                        sub.action
+                    )
+                })?;
+                dep.actions
+                    .iter()
+                    .find(|a| a.name == sub.action)
+                    .ok_or_else(|| anyhow!("plugin {plugin} defines no action {}", sub.action))
+            }
+        }
+    }
+
+    fn from_action_ctx(
+        prior: &[ActionMeta],
+        deps: &PluginDeps,
+        ctx: &ActionContext,
+    ) -> Result<Self> {
         let mut meta = Self {
             name: ctx.name.clone(),
             chain_max_ts: ctx.var_state.get("chain").map(|s| s.ts).unwrap_or(0),
@@ -1816,6 +1888,7 @@ impl ActionMeta {
                         io: *io,
                         class: class.clone(),
                         varname: obj.borrow().var_name().to_string(),
+                        owner: None,
                     };
                     if io.consumes() {
                         meta.total_inputs.push(r.clone());
@@ -1826,18 +1899,25 @@ impl ActionMeta {
                     meta.object_refs.push(r);
                 }
                 Inst::SubAction { action, obj, .. } => {
-                    let sub = prior
-                        .iter()
-                        .find(|a| &a.name == action)
-                        .ok_or_else(|| anyhow!("subaction {action} not defined"))?;
+                    let sub_ref = SubRef::parse(action)?;
+                    let sub = Self::resolve_sub(prior, deps, &sub_ref)?;
                     let alias = obj.borrow().var_name().to_string();
                     if alias != "?" && referenced.contains(&alias) && sub.out_entries.is_empty() {
                         return Err(anyhow!(
                             "subaction {action} produces no object; `{alias}` cannot be referenced in the parent body"
                         ));
                     }
-                    meta.total_inputs.extend(sub.total_inputs.iter().cloned());
-                    meta.total_outputs.extend(sub.total_outputs.iter().cloned());
+                    let stamp = |refs: &[ActionObjectRef]| -> Vec<ActionObjectRef> {
+                        refs.iter()
+                            .map(|r| ActionObjectRef {
+                                owner: r.owner.clone().or_else(|| sub_ref.plugin.clone()),
+                                ..r.clone()
+                            })
+                            .collect()
+                    };
+                    meta.total_inputs.extend(stamp(&sub.total_inputs));
+                    meta.total_outputs.extend(stamp(&sub.total_outputs));
+                    meta.sub_refs.push(sub_ref);
                 }
                 _ => {}
             }
@@ -2039,6 +2119,75 @@ pub struct ClassMeta {
     pub actions: Vec<(String, usize)>,
 }
 
+/// Plugin modules a script may reach with a qualified sub-action call.
+///
+/// Keyed by plugin name, which is what appears in the script:
+/// `action.subaction("craft-basics::RekeyLog")`. Calling a dependency's
+/// action embeds its batch id in the caller's own batch, so the caller's
+/// class hashes move whenever a dependency changes.
+pub type PluginDeps = BTreeMap<String, Rc<SdkModule>>;
+
+/// A sub-action target: an action in this script, or one in a dependency.
+#[derive(Debug, Clone)]
+pub(crate) struct SubRef {
+    /// `None` for an action defined in the calling script.
+    pub(crate) plugin: Option<String>,
+    pub(crate) action: String,
+}
+
+impl SubRef {
+    /// Parse `Action` (local) or `plugin::Action` (a dependency's).
+    pub(crate) fn parse(raw: &str) -> Result<Self> {
+        match raw.split_once("::") {
+            None => Ok(Self {
+                plugin: None,
+                action: raw.to_string(),
+            }),
+            Some((plugin, action)) if !plugin.is_empty() && !action.is_empty() => Ok(Self {
+                plugin: Some(plugin.to_string()),
+                action: action.to_string(),
+            }),
+            Some(_) => Err(anyhow!(
+                "invalid sub-action name {raw:?}: expected `Action` or `plugin::Action`"
+            )),
+        }
+    }
+}
+
+/// Plugin names a script reaches with a qualified sub-action call.
+///
+/// The dependency set is declared by use: a script that calls
+/// `subaction("craft-basics::RekeyLog")` depends on craft-basics, with
+/// nothing to keep in step in the manifest. Scanning the source is enough
+/// because the SDK only accepts a literal name here -- a computed one
+/// would not survive the load phase, which runs with no inputs.
+pub fn script_dependencies(script: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for rest in script.split("subaction(").skip(1) {
+        let Some(open) = rest.find('"') else {
+            continue;
+        };
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('"') else {
+            continue;
+        };
+        let name = &after[..close];
+        if let Some((plugin, _action)) = name.split_once("::")
+            && !plugin.is_empty()
+            && !found.iter().any(|existing| existing == plugin)
+        {
+            found.push(plugin.to_string());
+        }
+    }
+    found
+}
+
+/// Podlang module alias for a dependency plugin. Plugin names allow `-`,
+/// which is not an identifier character, so it is mapped to `_`.
+pub(crate) fn dep_alias(plugin: &str) -> String {
+    format!("dep_{}", plugin.replace('-', "_"))
+}
+
 /// The Loader is used to store declarative module information at Load time.
 struct Loader {
     // The frozen chain-primitive batch (TxInsert/TxMutate/TxDelete).
@@ -2047,6 +2196,10 @@ struct Loader {
     tx_events_mod: Arc<Module>,
     txlib_mod: Arc<Module>,
     dependencies: Vec<Dependency>,
+    /// Every plugin module offered to this script, whether reached or not.
+    plugin_deps: PluginDeps,
+    /// Plugins actually reached by a qualified sub-action call, sorted.
+    imported_plugins: Vec<String>,
     actions: Vec<ActionHandle>,
     // Metadata extracted from `actions`
     actions_meta: Vec<ActionMeta>,
@@ -2081,10 +2234,10 @@ impl Loader {
         classes
     }
 
-    fn new(actions: Vec<ActionHandle>) -> Result<Self> {
+    fn new(actions: Vec<ActionHandle>, plugin_deps: PluginDeps) -> Result<Self> {
         let tx_events_mod = Arc::new(txlib::predicates::events_module());
         let txlib_mod = Arc::new(txlib::predicates::module());
-        let dependencies = vec![
+        let mut dependencies = vec![
             Dependency::Module {
                 name: "tx".to_string(),
                 hash: tx_events_mod.id(),
@@ -2100,20 +2253,64 @@ impl Loader {
         ];
         let mut actions_meta = Vec::with_capacity(actions.len());
         for handle in &actions {
-            let meta = ActionMeta::from_action_ctx(&actions_meta, &handle.0.borrow())?;
+            let meta =
+                ActionMeta::from_action_ctx(&actions_meta, &plugin_deps, &handle.0.borrow())?;
             actions_meta.push(meta);
+        }
+        // Import only the plugins actually reached by a qualified call, so an
+        // unused dependency cannot move this module's hash.
+        let mut imported: Vec<String> = Vec::new();
+        for meta in &actions_meta {
+            for sub in &meta.sub_refs {
+                if let Some(plugin) = &sub.plugin
+                    && !imported.contains(plugin)
+                {
+                    imported.push(plugin.clone());
+                }
+            }
+        }
+        imported.sort();
+        for plugin in &imported {
+            let dep = plugin_deps
+                .get(plugin)
+                .ok_or_else(|| anyhow!("no dependency module for plugin {plugin}"))?;
+            dependencies.push(Dependency::Module {
+                name: dep_alias(plugin),
+                hash: dep.module.id(),
+            });
         }
         let classes = Self::actions_to_classes(&actions_meta);
         Ok(Self {
             tx_events_mod,
             txlib_mod,
             dependencies,
+            plugin_deps,
+            imported_plugins: imported,
             actions,
             actions_meta,
             classes,
         })
     }
 
+    /// The `ActionMeta` for a sub-action call, local or imported. Panics
+    /// only on shapes `ActionMeta::from_action_ctx` already rejected.
+    fn sub_meta(&self, sub: &SubRef) -> &ActionMeta {
+        match &sub.plugin {
+            None => self
+                .actions_meta
+                .iter()
+                .find(|m| m.name == sub.action)
+                .expect("local sub-action meta exists at fmt time"),
+            Some(plugin) => self
+                .plugin_deps
+                .get(plugin)
+                .expect("dependency resolved at load time")
+                .actions
+                .iter()
+                .find(|m| m.name == sub.action)
+                .expect("imported sub-action meta exists at fmt time"),
+        }
+    }
     /// Map (action_name, object_index) -> index of that action's branch
     /// in the class's IsX OR, matching the order in which branches are
     /// emitted by `fmt_class`. `object_index` is the 0-based position of
@@ -2142,14 +2339,19 @@ impl Loader {
         );
 
         let params = Params::default();
+        // Every batch the rendered source declares with `use module` has to
+        // be available here: the chain primitives, plus one per imported
+        // plugin.
+        let mut imports: Vec<Arc<Module>> = vec![self.tx_events_mod.clone()];
+        for plugin in &self.imported_plugins {
+            let dep = self
+                .plugin_deps
+                .get(plugin)
+                .expect("dependency resolved at load time");
+            imports.push(dep.module.clone());
+        }
         let module = Arc::new(
-            load_module(
-                podlang_src.as_str(),
-                "root",
-                &params,
-                slice::from_ref(&self.tx_events_mod),
-            )
-            .expect("compiles"),
+            load_module(podlang_src.as_str(), "root", &params, &imports).expect("compiles"),
         );
         let object_index_class_st_index = Self::object_index_class_st_index(&self.actions_meta);
         let class_hashes: HashMap<String, Hash> = self
@@ -2173,6 +2375,7 @@ impl Loader {
             ast,
             class_hashes,
             dependencies: self.dependencies,
+            plugin_deps: self.plugin_deps,
         }
     }
 }
@@ -2199,6 +2402,9 @@ pub struct SdkModule {
     // Exposed so callers can map a foreign batch hash back to its
     // declared module alias (e.g. for qualified-name rendering).
     dependencies: Vec<Dependency>,
+    /// Dependency plugin modules, keyed by plugin name. A qualified
+    /// `subaction("plugin::Action")` runs its body out of these.
+    plugin_deps: PluginDeps,
 }
 
 impl SdkModule {
@@ -2301,7 +2507,12 @@ impl SdkModule {
 
         // Step 2: discharge the bridge predicate.
         let st_bridge = bld
-            .apply_custom_pred_simple(false, &bridge_name, vec![st_array_contains, st_action])
+            .apply_custom_pred_simple_in(
+                &self.module,
+                false,
+                &bridge_name,
+                vec![st_array_contains, st_action],
+            )
             .expect("apply bridge predicate");
 
         // Step 3: IsX OR with the bridge at the right branch.
@@ -2310,7 +2521,8 @@ impl SdkModule {
         let class_st_index =
             self.object_index_class_st_index[&(action_name.to_string(), object_refs_index)];
         branch_sts[class_st_index] = st_bridge;
-        bld.apply_custom_pred(
+        bld.apply_custom_pred_in(
+            &self.module,
             false,
             &class_predicate_name(class),
             map!({"state_header" => state_header.array()}),
@@ -2415,18 +2627,31 @@ impl Executor {
             (vd_set.clone(), Box::new(real_prover))
         };
         let params = Params::default();
-        let modules = vec![
-            module.tx_events_mod.clone(),
-            module.txlib_mod.clone(),
-            module.module.clone(),
-        ];
+        // Walk dependencies so an imported plugin's batch is present to
+        // discharge the predicates its qualified sub-action calls. Batches are
+        // deduplicated by id: every plugin carries its own copy of the txlib
+        // batches, and leaving duplicates in would make each txlib predicate
+        // name resolve ambiguously.
+        let mut pod_modules: Vec<Arc<Module>> = Vec::new();
+        let mut seen: HashSet<Hash> = HashSet::new();
+        let mut queue: Vec<Rc<SdkModule>> = vec![module.clone()];
+        while let Some(plugin) = queue.pop() {
+            for batch in [&plugin.tx_events_mod, &plugin.txlib_mod, &plugin.module] {
+                if seen.insert(batch.batch.id()) {
+                    pod_modules.push(batch.clone());
+                }
+            }
+            for dep in plugin.plugin_deps.values() {
+                queue.push(dep.clone());
+            }
+        }
         Self {
             mock,
             params,
             vd_set,
             grounding_witness,
             prover,
-            pod_modules: modules,
+            pod_modules,
             module,
         }
     }
@@ -2722,6 +2947,18 @@ impl Sdk {
         src: &str,
         actions: &[&str],
     ) -> Result<Rc<SdkModule>, SdkError> {
+        self.load_module_from_src_deps(src, actions, PluginDeps::new())
+    }
+
+    /// Load a module whose script may reach other plugins' actions with
+    /// qualified `subaction("plugin::Action")` calls. Reaching one imports
+    /// that plugin's batch, which puts its id inside this module's own.
+    pub fn load_module_from_src_deps(
+        &self,
+        src: &str,
+        actions: &[&str],
+        plugin_deps: PluginDeps,
+    ) -> Result<Rc<SdkModule>, SdkError> {
         let scope = Scope::new();
         let started = std::time::Instant::now();
         let ast = self.engine.compile_with_scope(&scope, src).unwrap();
@@ -2750,7 +2987,7 @@ impl Sdk {
         );
 
         let started = std::time::Instant::now();
-        let loader = Loader::new(action_handles)?;
+        let loader = Loader::new(action_handles, plugin_deps)?;
         log::debug!("loader analysis: {:?}", started.elapsed());
         Ok(Rc::new(loader.module(self.engine.clone(), ast)))
     }
@@ -2760,8 +2997,19 @@ impl Sdk {
         src: &str,
         manifest: &Manifest,
     ) -> Result<Rc<SdkModule>, SdkError> {
+        self.load_module_from_manifest_deps(src, manifest, PluginDeps::new())
+    }
+
+    /// As [`Self::load_module_from_src_manifest`], with dependency plugins
+    /// available to qualified sub-action calls.
+    pub fn load_module_from_manifest_deps(
+        &self,
+        src: &str,
+        manifest: &Manifest,
+        plugin_deps: PluginDeps,
+    ) -> Result<Rc<SdkModule>, SdkError> {
         let manifest_actions: Vec<_> = manifest.actions.iter().map(|a| a.name.as_str()).collect();
-        let sdk_module = self.load_module_from_src_actions(src, &manifest_actions)?;
+        let sdk_module = self.load_module_from_src_deps(src, &manifest_actions, plugin_deps)?;
 
         // Validate against the manifest metadata
         let loaded_classes: HashSet<_> = sdk_module

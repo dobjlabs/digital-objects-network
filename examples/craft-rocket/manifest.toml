@@ -2,7 +2,7 @@
 name = "craft-rocket"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build examples/craft-rocket`.
-module_hash = "f838acbb5b8a196174ec1adb15b2dc19f60faa5ef76ab0ab60b6ee010f0f964f"
+module_hash = "ce8779af93a5a494f717ba26e7280b97a6b402d84ffb17f2d716d1624aeab5ca"
 
 # ── raw resources ────────────────────────────────────────────────────────────
 
@@ -737,3 +737,268 @@ description = "Final assembly: engine + casing + payload + 2 resin → 1 rocket.
 name = "CraftRocketCat"
 emoji = "🚀"
 description = "Catalysed rocket — reaction-chamber + catalyst, deterministic."
+
+[[actions]]
+name = "RekeyIron"
+emoji = "🔑"
+description = "Take exclusive possession of a received iron by rotating its key."
+
+[[actions]]
+name = "RekeyCopper"
+emoji = "🔑"
+description = "Take exclusive possession of a received copper by rotating its key."
+
+[[actions]]
+name = "RekeyOil"
+emoji = "🔑"
+description = "Take exclusive possession of a received oil by rotating its key."
+
+[[actions]]
+name = "RekeySulfur"
+emoji = "🔑"
+description = "Take exclusive possession of a received sulfur by rotating its key."
+
+[[actions]]
+name = "RekeyWater"
+emoji = "🔑"
+description = "Take exclusive possession of a received water by rotating its key."
+
+[[actions]]
+name = "RekeyCane"
+emoji = "🔑"
+description = "Take exclusive possession of a received cane by rotating its key."
+
+[[actions]]
+name = "RekeyHemp"
+emoji = "🔑"
+description = "Take exclusive possession of a received hemp by rotating its key."
+
+[[actions]]
+name = "RekeyIngot"
+emoji = "🔑"
+description = "Take exclusive possession of a received ingot by rotating its key."
+
+[[actions]]
+name = "RekeyPlate"
+emoji = "🔑"
+description = "Take exclusive possession of a received plate by rotating its key."
+
+[[actions]]
+name = "RekeyPulp"
+emoji = "🔑"
+description = "Take exclusive possession of a received pulp by rotating its key."
+
+[[actions]]
+name = "RekeyFiber"
+emoji = "🔑"
+description = "Take exclusive possession of a received fiber by rotating its key."
+
+[[actions]]
+name = "RekeyAcid"
+emoji = "🔑"
+description = "Take exclusive possession of a received acid by rotating its key."
+
+[[actions]]
+name = "RekeyTar"
+emoji = "🔑"
+description = "Take exclusive possession of a received tar by rotating its key."
+
+[[actions]]
+name = "RekeyFuel"
+emoji = "🔑"
+description = "Take exclusive possession of a received fuel by rotating its key."
+
+[[actions]]
+name = "RekeyGas"
+emoji = "🔑"
+description = "Take exclusive possession of a received gas by rotating its key."
+
+[[actions]]
+name = "RekeySlag"
+emoji = "🔑"
+description = "Take exclusive possession of a received slag by rotating its key."
+
+[[actions]]
+name = "RekeyFlux"
+emoji = "🔑"
+description = "Take exclusive possession of a received flux by rotating its key."
+
+[[actions]]
+name = "RekeySludge"
+emoji = "🔑"
+description = "Take exclusive possession of a received sludge by rotating its key."
+
+[[actions]]
+name = "RekeyMold"
+emoji = "🔑"
+description = "Take exclusive possession of a received mold by rotating its key."
+
+[[actions]]
+name = "RekeyCatalyst"
+emoji = "🔑"
+description = "Take exclusive possession of a received catalyst by rotating its key."
+
+[[actions]]
+name = "RekeyBinder"
+emoji = "🔑"
+description = "Take exclusive possession of a received binder by rotating its key."
+
+[[actions]]
+name = "RekeyLye"
+emoji = "🔑"
+description = "Take exclusive possession of a received lye by rotating its key."
+
+[[actions]]
+name = "RekeyDrillBit"
+emoji = "🔑"
+description = "Take exclusive possession of a received drill bit by rotating its key."
+
+[[actions]]
+name = "RekeySolderingIron"
+emoji = "🔑"
+description = "Take exclusive possession of a received soldering iron by rotating its key."
+
+[[actions]]
+name = "RekeyPressureValve"
+emoji = "🔑"
+description = "Take exclusive possession of a received pressure valve by rotating its key."
+
+[[actions]]
+name = "RekeySteel"
+emoji = "🔑"
+description = "Take exclusive possession of a received steel by rotating its key."
+
+[[actions]]
+name = "RekeyWire"
+emoji = "🔑"
+description = "Take exclusive possession of a received wire by rotating its key."
+
+[[actions]]
+name = "RekeyCloth"
+emoji = "🔑"
+description = "Take exclusive possession of a received cloth by rotating its key."
+
+[[actions]]
+name = "RekeyBoard"
+emoji = "🔑"
+description = "Take exclusive possession of a received board by rotating its key."
+
+[[actions]]
+name = "RekeyWax"
+emoji = "🔑"
+description = "Take exclusive possession of a received wax by rotating its key."
+
+[[actions]]
+name = "RekeyGrease"
+emoji = "🔑"
+description = "Take exclusive possession of a received grease by rotating its key."
+
+[[actions]]
+name = "RekeySolvent"
+emoji = "🔑"
+description = "Take exclusive possession of a received solvent by rotating its key."
+
+[[actions]]
+name = "RekeyCoating"
+emoji = "🔑"
+description = "Take exclusive possession of a received coating by rotating its key."
+
+[[actions]]
+name = "RekeyRubber"
+emoji = "🔑"
+description = "Take exclusive possession of a received rubber by rotating its key."
+
+[[actions]]
+name = "RekeyExtract"
+emoji = "🔑"
+description = "Take exclusive possession of a received extract by rotating its key."
+
+[[actions]]
+name = "RekeyGear"
+emoji = "🔑"
+description = "Take exclusive possession of a received gear by rotating its key."
+
+[[actions]]
+name = "RekeyCoil"
+emoji = "🔑"
+description = "Take exclusive possession of a received coil by rotating its key."
+
+[[actions]]
+name = "RekeyBearing"
+emoji = "🔑"
+description = "Take exclusive possession of a received bearing by rotating its key."
+
+[[actions]]
+name = "RekeyCircuit"
+emoji = "🔑"
+description = "Take exclusive possession of a received circuit by rotating its key."
+
+[[actions]]
+name = "RekeyCanvas"
+emoji = "🔑"
+description = "Take exclusive possession of a received canvas by rotating its key."
+
+[[actions]]
+name = "RekeyPanel"
+emoji = "🔑"
+description = "Take exclusive possession of a received panel by rotating its key."
+
+[[actions]]
+name = "RekeyPistons"
+emoji = "🔑"
+description = "Take exclusive possession of a received pistons by rotating its key."
+
+[[actions]]
+name = "RekeyResin"
+emoji = "🔑"
+description = "Take exclusive possession of a received resin by rotating its key."
+
+[[actions]]
+name = "RekeyEngine"
+emoji = "🔑"
+description = "Take exclusive possession of a received engine by rotating its key."
+
+[[actions]]
+name = "RekeyCasing"
+emoji = "🔑"
+description = "Take exclusive possession of a received casing by rotating its key."
+
+[[actions]]
+name = "RekeyPayload"
+emoji = "🔑"
+description = "Take exclusive possession of a received payload by rotating its key."
+
+[[actions]]
+name = "RekeyRocket"
+emoji = "🔑"
+description = "Take exclusive possession of a received rocket by rotating its key."
+
+[[actions]]
+name = "RekeyMachineI"
+emoji = "🔑"
+description = "Take exclusive possession of a received machine I by rotating its key."
+
+[[actions]]
+name = "RekeyMachineII"
+emoji = "🔑"
+description = "Take exclusive possession of a received machine II by rotating its key."
+
+[[actions]]
+name = "RekeyBlastFurnace"
+emoji = "🔑"
+description = "Take exclusive possession of a received blast furnace by rotating its key."
+
+[[actions]]
+name = "RekeyCircuitFab"
+emoji = "🔑"
+description = "Take exclusive possession of a received circuit fab by rotating its key."
+
+[[actions]]
+name = "RekeyCrackingUnit"
+emoji = "🔑"
+description = "Take exclusive possession of a received cracking unit by rotating its key."
+
+[[actions]]
+name = "RekeyReactionChamber"
+emoji = "🔑"
+description = "Take exclusive possession of a received reaction chamber by rotating its key."

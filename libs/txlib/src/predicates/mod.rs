@@ -15,6 +15,35 @@ pub fn crafting_test_module() -> lang::Module {
     load_module(&source, "craft", &params, &[events]).expect("crafting_test.podlang compiles")
 }
 
+#[cfg(test)]
+/// Load a second, independent plugin batch. Used to prove a transaction
+/// can carry top-level actions guarded by two different batches.
+pub fn swap_test_module() -> lang::Module {
+    let params = pod2::middleware::Params::default();
+    let events = Arc::new(events_module());
+    let events_hash = format!("{:#}", events.batch.id());
+    let source =
+        include_str!("swap_test.podlang").replace(TX_EVENTS_HASH_PLACEHOLDER, &events_hash);
+    load_module(&source, "swap", &params, &[events]).expect("swap_test.podlang compiles")
+}
+
+#[cfg(test)]
+/// Load a batch that imports [`swap_test_module`] and calls its action as a
+/// sub-action clause, to check whether a plugin batch can depend on
+/// another rather than only sit beside it in a transaction.
+pub fn import_test_module() -> lang::Module {
+    let params = pod2::middleware::Params::default();
+    let events = Arc::new(events_module());
+    let swap = Arc::new(swap_test_module());
+    let source = include_str!("import_test.podlang")
+        .replace(
+            TX_EVENTS_HASH_PLACEHOLDER,
+            &format!("{:#}", events.batch.id()),
+        )
+        .replace("0xSWAP_MODULE_HASH", &format!("{:#}", swap.batch.id()));
+    load_module(&source, "imp", &params, &[events, swap]).expect("import_test.podlang compiles")
+}
+
 /// The chain-primitive event predicates (TxInsert/TxMutate/TxDelete).
 /// Kept in their own batch so action predicates and recorded
 /// transactions keep stable hashes across edits to the replay and
@@ -39,6 +68,17 @@ pub fn module() -> lang::Module {
 mod tests {
 
     use super::*;
+
+    // A batch may import another batch and call its predicates. Note the
+    // consequence: the call embeds the imported batch's id in this batch's
+    // statement templates, so this module's id -- and every class hash in it
+    // -- moves whenever the imported plugin changes.
+    #[test]
+    fn test_import_test_predicates_exist() {
+        let module = import_test_module();
+        module.predicate_ref_by_name("ClaimAndReceipt").unwrap();
+        module.predicate_ref_by_name("IsReceipt").unwrap();
+    }
 
     #[test]
     fn test_crafting_predicates_exist() {

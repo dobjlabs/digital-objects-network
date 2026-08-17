@@ -70,3 +70,50 @@ fn MineStoneWithStonePick(action) {
     var pick = action.subaction("UseStonePick");
     var stone = action.output("Stone");
 }
+
+// ── rekeys ───────────────────────────────────────────────────────────────────
+// Rotating `key` moves an object's commitment and its nullifier, so a holder
+// who was sent an object can spend the sender's copy out from under them.
+// Nothing else about the state changes, and the stable identifier carries
+// across, so the object stays the same object under new custody.
+//
+// These are also part of this plugin's extension surface -- which is every
+// [[actions]] entry in the manifest, hidden ones included (hidden only skips
+// catalog listings). A dependent plugin's script reaches any of those with a
+// qualified subaction call; lowercase helpers like rekey() are inlined at
+// compile time and are not callable, so the manifest IS the public API.
+
+fn rekey(action, obj) {
+    var key = action.random();
+    obj.update("key", key);
+}
+
+fn RekeyLog(action) {
+    var log = action.mutate("Log");
+    rekey(action, log);
+}
+
+fn RekeyWood(action) {
+    var wood = action.mutate("Wood");
+    rekey(action, wood);
+}
+
+fn RekeyStick(action) {
+    var stick = action.mutate("Stick");
+    rekey(action, stick);
+}
+
+fn RekeyStone(action) {
+    var stone = action.mutate("Stone");
+    rekey(action, stone);
+}
+
+fn RekeyWoodPick(action) {
+    var pick = action.mutate("WoodPick");
+    rekey(action, pick);
+}
+
+fn RekeyStonePick(action) {
+    var pick = action.mutate("StonePick");
+    rekey(action, pick);
+}

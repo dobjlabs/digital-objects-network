@@ -886,3 +886,223 @@ fn test_sdk_state_header() {
     let [_ticker1] = res.objs();
     apply_tx(&mut state, &ticker1_tx);
 }
+
+/// Plugin identity is structural, not nominal: predicate names are
+/// metadata and are not hashed, so renaming every class and action in a
+/// plugin leaves its batch id -- and therefore all of its class hashes
+/// -- unchanged. Two independently authored plugins that render to the
+/// same shape share an economy, and a plugin that pins a dependency's
+/// `module_hash` is pinning structure rather than a name.
+#[test]
+fn test_batch_id_ignores_names() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let logs_src = r#"
+        fn SpawnLog(action) {
+            var log = action.output("Log");
+        }
+    "#;
+    let renamed_src = r#"
+        fn ConjureIngot(action) {
+            var ingot = action.output("Ingot");
+        }
+    "#;
+    let sdk = Sdk::default();
+    let logs = sdk
+        .load_module_from_src_actions(logs_src, &["SpawnLog"])
+        .unwrap();
+    let renamed = sdk
+        .load_module_from_src_actions(renamed_src, &["ConjureIngot"])
+        .unwrap();
+
+    assert_eq!(
+        logs.module().batch.id(),
+        renamed.module().batch.id(),
+        "renaming a class and its action must not change the batch id"
+    );
+    assert_eq!(
+        logs.class_hash("Log").unwrap(),
+        renamed.class_hash("Ingot").unwrap(),
+        "structurally identical classes are the same class"
+    );
+
+    // Adding a constrained field is a structural change, so it does move
+    // the batch id.
+    let extra_src = r#"
+        fn SpawnLog(action) {
+            var log = action.output("Log");
+            log.set([
+                ["facets", 8]
+            ]);
+        }
+    "#;
+    let extra = sdk
+        .load_module_from_src_actions(extra_src, &["SpawnLog"])
+        .unwrap();
+    assert_ne!(logs.module().batch.id(), extra.module().batch.id());
+}
+
+/// A script reaching into another plugin with a qualified sub-action call.
+/// The parent's predicate contains the dependency's action, so the two are
+/// one action rather than siblings -- and the parent can pin its own output
+/// to the object the dependency just rekeyed.
+#[test]
+fn test_qualified_subaction_into_a_dependency() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let base_src = r#"
+        fn SpawnGem(action) {
+            var gem = action.output("Gem");
+        }
+        fn RekeyGem(action) {
+            var gem = action.mutate("Gem");
+            var key = action.random();
+            gem.update("key", key);
+        }
+    "#;
+    // Reaches base::RekeyGem and mints a receipt of its own class, bound to
+    // the gem's stable identifier.
+    let swap_src = r#"
+        fn RekeyAndReceipt(action) {
+            var gem = action.subaction("base::RekeyGem");
+            var receipt = action.output("Receipt");
+        }
+    "#;
+    let sdk = Sdk::default();
+    let base = sdk
+        .load_module_from_src_actions(base_src, &["SpawnGem", "RekeyGem"])
+        .unwrap();
+    let mut deps = PluginDeps::new();
+    deps.insert("base".to_string(), base.clone());
+    let swap = sdk
+        .load_module_from_src_deps(swap_src, &["RekeyAndReceipt"], deps)
+        .unwrap();
+    println!("{}", swap.podlang_src());
+
+    // The dependency is imported, so its batch id is inside the caller's.
+    assert!(
+        swap.dependencies().iter().any(|dep| matches!(
+            dep,
+            Dependency::Module { hash, .. } if *hash == base.module().id()
+        )),
+        "the caller must import the dependency's batch"
+    );
+
+    // The parent's declared arity covers the dependency's objects too.
+    let meta = &swap.actions()[0];
+    let classes: Vec<&str> = meta.total_inputs().map(|r| r.class.as_str()).collect();
+    assert_eq!(classes, vec!["Gem"]);
+    let out: Vec<&str> = meta.total_outputs().map(|r| r.class.as_str()).collect();
+    assert_eq!(out, vec!["Gem", "Receipt"]);
+
+    let mut state = TestState::default();
+    let executor = base.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnGem", vec![]).unwrap();
+    let tx = res.tx.clone();
+    let [gem] = res.objs();
+    apply_tx(&mut state, &tx);
+
+    let witness = grounding_witness(&state, &[gem.obj.commitment()]);
+    let executor = swap.executor(true, witness);
+    let res = executor
+        .action("RekeyAndReceipt", vec![gem.clone()])
+        .unwrap();
+
+    // The gem was re-keyed and a receipt minted, in one action.
+    let nullifiers = res.tx.nullifier_hashes().unwrap();
+    assert!(nullifiers.contains(&txlib::object_nullifier_hash(&gem.obj).unwrap()));
+    let [rekeyed, receipt] = res.objs();
+    let live = res.tx.live_commitments().unwrap();
+    assert!(live.contains(&rekeyed.obj.commitment()));
+    assert!(live.contains(&receipt.obj.commitment()));
+
+    // The rekeyed gem keeps the dependency's class; the receipt carries the
+    // caller's own.
+    let type_of = |obj: &pod2::middleware::containers::Dictionary| {
+        obj.get(&pod2::middleware::StrKey::from("type"))
+            .unwrap()
+            .unwrap()
+    };
+    assert_eq!(type_of(&rekeyed.obj), type_of(&gem.obj));
+    assert_ne!(type_of(&receipt.obj), type_of(&rekeyed.obj));
+}
+
+#[test]
+fn test_receipt_free_composite_action() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let base_src = r#"
+        fn SpawnGem(action) {
+            var gem = action.output("Gem");
+        }
+        fn SpawnCoin(action) {
+            var coin = action.output("Coin");
+        }
+        fn RekeyGem(action) {
+            var gem = action.mutate("Gem");
+            var key = action.random();
+            gem.update("key", key);
+        }
+        fn RekeyCoin(action) {
+            var coin = action.mutate("Coin");
+            var key = action.random();
+            coin.update("key", key);
+        }
+    "#;
+    // A pure swap: every object slot is spliced from the dependency's
+    // rekeys, the caller mints nothing of its own. The caller's io record
+    // is empty, so its predicate has no `io` arg at all -- previously this
+    // failed to compile as `record SwapIO = ()`.
+    let swap_src = r#"
+        fn Swap(action) {
+            var gem = action.subaction("base::RekeyGem");
+            var coin = action.subaction("base::RekeyCoin");
+        }
+    "#;
+    let sdk = Sdk::default();
+    let base = sdk
+        .load_module_from_src_actions(
+            base_src,
+            &["SpawnGem", "SpawnCoin", "RekeyGem", "RekeyCoin"],
+        )
+        .unwrap();
+    let mut deps = PluginDeps::new();
+    deps.insert("base".to_string(), base.clone());
+    let swap = sdk
+        .load_module_from_src_deps(swap_src, &["Swap"], deps)
+        .unwrap();
+    println!("{}", swap.podlang_src());
+
+    // No own entries: the io record and signature arg are gone, and the
+    // declared arity is exactly the spliced slots.
+    assert!(!swap.podlang_src().contains("SwapIO"));
+    let meta = &swap.actions()[0];
+    let classes: Vec<&str> = meta.total_inputs().map(|r| r.class.as_str()).collect();
+    assert_eq!(classes, vec!["Gem", "Coin"]);
+    let out: Vec<&str> = meta.total_outputs().map(|r| r.class.as_str()).collect();
+    assert_eq!(out, vec!["Gem", "Coin"]);
+
+    let mut state = TestState::default();
+    let executor = base.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnGem", vec![]).unwrap();
+    let [gem] = res.objs();
+    apply_tx(&mut state, &res.tx.clone());
+    let executor = base.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnCoin", vec![]).unwrap();
+    let [coin] = res.objs();
+    apply_tx(&mut state, &res.tx.clone());
+
+    let witness = grounding_witness(&state, &[gem.obj.commitment(), coin.obj.commitment()]);
+    let executor = swap.executor(true, witness);
+    let res = executor
+        .action("Swap", vec![gem.clone(), coin.clone()])
+        .unwrap();
+
+    // Both survivors re-keyed atomically; nothing else minted.
+    let nullifiers = res.tx.nullifier_hashes().unwrap();
+    assert!(nullifiers.contains(&txlib::object_nullifier_hash(&gem.obj).unwrap()));
+    assert!(nullifiers.contains(&txlib::object_nullifier_hash(&coin.obj).unwrap()));
+    let [new_gem, new_coin] = res.objs();
+    let live = res.tx.live_commitments().unwrap();
+    assert!(live.contains(&new_gem.obj.commitment()));
+    assert!(live.contains(&new_coin.obj.commitment()));
+    assert_ne!(new_gem.obj.commitment(), gem.obj.commitment());
+    assert_ne!(new_coin.obj.commitment(), coin.obj.commitment());
+}

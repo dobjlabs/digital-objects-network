@@ -9,22 +9,30 @@
 //! when printed). Two plugins may declare a class or action with the same
 //! bare name; they stay distinct because every internal map keys on the full
 //! `QualifiedName` and because their on-chain `Is{class}` predicate hashes
-//! differ (each module has a unique `module_hash`). Cross-plugin class
-//! references are not supported: an action must reference classes declared
-//! in its own plugin.
+//! differ (each module has a unique `module_hash`).
+//!
+//! A script names its own classes only, so an action's own objects belong to
+//! its plugin. It may still act on another plugin's objects by calling that
+//! plugin's action -- `subaction("other::Action")` -- which is why an
+//! action's declared inputs and outputs can span plugins and why each is
+//! resolved against the plugin that owns it. Those calls also set the load
+//! order here, since the callee's compiled batch is part of the caller's.
 //!
 //! The compiled [`sdk::SdkModule`] is not kept — it holds a `Rc<Engine>` and is
 //! therefore `!Send`. `execute_action` re-loads the script from its stored bytes
 //! on demand, matching the per-call pattern used before.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use payload::decode_hash_hex;
 use pod2::middleware::Hash;
-use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
+use sdk::{
+    PluginDeps, Sdk, SpendableObject, SpendableObjects, manifest::Manifest, script_dependencies,
+};
 use txlib::GroundingWitness;
 
 use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
@@ -51,6 +59,68 @@ pub struct PexeCatalog {
 }
 
 impl PexeCatalog {
+    /// Recompile the plugin that provides `action`, together with any
+    /// plugins its script reaches by qualified sub-action call. The driver
+    /// does not cache compiled modules, so this runs per execution.
+    fn load_module(&self, sdk: &Sdk, action: &QualifiedName) -> Result<Rc<sdk::SdkModule>> {
+        let plugin_idx = *self
+            .action_plugin_idx
+            .get(action)
+            .ok_or_else(|| anyhow!("no plugin provides action {action}"))?;
+        self.load_plugin_module(sdk, plugin_idx, &mut HashMap::new())
+    }
+
+    /// Compile one plugin, recursing into its dependencies first. `cache`
+    /// keeps a plugin compiled once per call even when several dependents
+    /// name it.
+    fn load_plugin_module(
+        &self,
+        sdk: &Sdk,
+        plugin_idx: usize,
+        cache: &mut HashMap<String, Rc<sdk::SdkModule>>,
+    ) -> Result<Rc<sdk::SdkModule>> {
+        let plugin = &self.plugins[plugin_idx];
+        let plugin_name = plugin.manifest.plugin.name.clone();
+        if let Some(module) = cache.get(&plugin_name) {
+            return Ok(module.clone());
+        }
+        let mut deps = PluginDeps::new();
+        for dep_name in script_dependencies(&plugin.script) {
+            let dep_idx = self
+                .plugins
+                .iter()
+                .position(|candidate| candidate.manifest.plugin.name == dep_name)
+                .ok_or_else(|| {
+                    anyhow!("plugin {plugin_name} calls into {dep_name}, which is not installed")
+                })?;
+            let dep = self.load_plugin_module(sdk, dep_idx, cache)?;
+            // A declared import pin turns version drift into a message naming
+            // the dependency; without one the mismatch still fails, but only
+            // as the caller's own whole-module hash check. Import paths are a
+            // build-machine convenience and mean nothing here.
+            if let Some(pinned) = plugin
+                .manifest
+                .imports
+                .iter()
+                .find(|import| import.name == dep_name)
+                .and_then(|import| import.module_hash)
+            {
+                let compiled = dep.module().batch.id();
+                if pinned != compiled {
+                    return Err(anyhow!(
+                        "plugin {plugin_name} pins import {dep_name} at {pinned:#}, but the installed {dep_name} compiles to {compiled:#}"
+                    ));
+                }
+            }
+            deps.insert(dep_name, dep);
+        }
+        let module = sdk
+            .load_module_from_manifest_deps(&plugin.script, &plugin.manifest, deps)
+            .map_err(|err| anyhow!("failed to reload plugin {plugin_name} for execution: {err}"))?;
+        cache.insert(plugin_name, module.clone());
+        Ok(module)
+    }
+
     /// Scan `actions_dir` for `.pexe` files, unpack them, and assemble the catalog.
     pub fn load(actions_dir: &Path) -> Result<Self> {
         let plugins = discover_plugins(actions_dir)?;
@@ -103,11 +173,25 @@ impl PexeCatalog {
         let mut enriched_plugins: Vec<Plugin> = Vec::with_capacity(plugins.len());
         let mut action_plugin_idx: HashMap<QualifiedName, usize> = HashMap::new();
 
+        // Load in dependency order so a plugin whose script makes a
+        // qualified `subaction("other::Action")` call has `other`'s compiled
+        // module available; the call embeds its batch id in this one's.
+        let plugins = order_by_dependencies(plugins)?;
+        let mut loaded: PluginDeps = PluginDeps::new();
+
         for plugin in plugins {
             let plugin_name = plugin.manifest.plugin.name.clone();
+            let mut deps = PluginDeps::new();
+            for dep_name in script_dependencies(&plugin.script) {
+                let dep = loaded.get(&dep_name).cloned().ok_or_else(|| {
+                    anyhow!("plugin {plugin_name} calls into {dep_name}, which is not installed")
+                })?;
+                deps.insert(dep_name, dep);
+            }
             let module = sdk
-                .load_module_from_src_manifest(&plugin.script, &plugin.manifest)
+                .load_module_from_manifest_deps(&plugin.script, &plugin.manifest, deps)
                 .map_err(|err| anyhow!("failed to load plugin {plugin_name}: {err}"))?;
+            loaded.insert(plugin_name.clone(), module.clone());
             let podlang_src = module.podlang_src().to_string();
             if !combined_podlang.is_empty() {
                 combined_podlang.push_str("\n// ---\n");
@@ -178,32 +262,36 @@ impl PexeCatalog {
                 }
 
                 let meta = action_meta_by_name.get(bare.as_str());
-                let resolve_class = |class_name: &str| -> Result<ClassRef> {
-                    let hash = class_hashes.get(class_name).ok_or_else(|| {
+                // A class is resolved against the plugin that declares it:
+                // this one, or the dependency an imported sub-action came
+                // from. Classes never move between plugins.
+                let resolve_class = |r: &sdk::ActionObjectRef| -> Result<ClassRef> {
+                    let owner = r.owner.as_deref().unwrap_or(plugin_name.as_str());
+                    let hash = if owner == plugin_name {
+                        class_hashes.get(&r.class).copied()
+                    } else {
+                        loaded.get(owner).and_then(|dep| dep.class_hash(&r.class))
+                    }
+                    .ok_or_else(|| {
                         anyhow!(
-                            "plugin {plugin_name}: action {bare} references class {class_name:?} \
-                             which is not declared in this plugin (cross-plugin class \
-                             references are not supported yet)"
+                            "plugin {plugin_name}: action {bare} references class {:?} of plugin {owner}, which does not declare it",
+                            r.class
                         )
                     })?;
                     Ok(ClassRef {
-                        class: QualifiedName::new(plugin_name.clone(), class_name.to_string()),
+                        class: QualifiedName::new(owner.to_string(), r.class.clone()),
                         hash: format!("{:#}", hash),
                     })
                 };
 
                 let total_inputs = action
                     .total_inputs()
-                    .map(|r| resolve_class(&r.class))
+                    .map(resolve_class)
                     .collect::<Result<Vec<_>>>()?;
                 let total_outputs = action
                     .total_outputs()
-                    .map(|r| resolve_class(&r.class))
+                    .map(resolve_class)
                     .collect::<Result<Vec<_>>>()?;
-
-                if meta.is_some_and(|m| m.hidden) {
-                    continue;
-                }
 
                 let action_hash = module
                     .action_hash(&bare)
@@ -213,7 +301,7 @@ impl PexeCatalog {
                 // prefix like classes get).
                 let predicate_source = extract_predicate(&podlang_src, &bare)
                     .unwrap_or_else(|| format!("{bare}(state) = AND(...)"));
-                all_actions.push(ActionSummary {
+                let summary = ActionSummary {
                     action: qname,
                     emoji: meta.map_or("⚙️", |m| m.emoji.as_str()).to_string(),
                     hash: action_hash,
@@ -223,7 +311,11 @@ impl PexeCatalog {
                     total_inputs,
                     total_outputs,
                     predicate_source,
-                });
+                };
+                if meta.is_some_and(|m| m.hidden) {
+                    continue;
+                }
+                all_actions.push(summary);
             }
 
             enriched_plugins.push(plugin);
@@ -314,21 +406,11 @@ impl ActionCatalog for PexeCatalog {
         grounding_witness: GroundingWitness,
         inputs: Vec<SpendableObject>,
     ) -> Result<SpendableObjects> {
-        let plugin_idx = *self
-            .action_plugin_idx
-            .get(&action)
-            .ok_or_else(|| anyhow!("no plugin provides action {action}"))?;
-        let plugin = &self.plugins[plugin_idx];
         let sdk = Sdk::default();
-        let module = sdk
-            .load_module_from_src_manifest(&plugin.script, &plugin.manifest)
-            .map_err(|err| {
-                anyhow!(
-                    "failed to reload plugin {} for execution: {err}",
-                    plugin.manifest.plugin.name
-                )
-            })?;
-        let executor = module.executor(self.mock_proofs, Arc::new(grounding_witness));
+        let witness = Arc::new(grounding_witness);
+
+        let module = self.load_module(&sdk, &action)?;
+        let executor = module.executor(self.mock_proofs, witness);
         Ok(executor.action(&action.name, inputs)?)
     }
 
@@ -397,6 +479,70 @@ pub(crate) fn test_plugin_bytes() -> Vec<u8> {
     let manifest = include_str!("../../../examples/craft-basics/manifest.toml");
     let script = include_str!("../../../examples/craft-basics/plugin.rhai");
     pexe::pack(manifest, script).expect("test plugin packs")
+}
+
+#[cfg(test)]
+/// The second bundled plugin, for cross-plugin composition tests.
+pub(crate) fn test_rocket_bytes() -> Vec<u8> {
+    let manifest = include_str!("../../../examples/craft-rocket/manifest.toml");
+    let script = include_str!("../../../examples/craft-rocket/plugin.rhai");
+    pexe::pack(manifest, script).expect("test rocket packs")
+}
+
+#[cfg(test)]
+/// The bundled swap example, packed from source like the plugins above. Its
+/// script reaches craft-basics AND craft-rocket with qualified sub-action
+/// calls, and its manifest pins both through [[imports]].
+pub(crate) fn bundled_swap_bytes() -> Vec<u8> {
+    let manifest = include_str!("../../../examples/swap-log-copper/manifest.toml");
+    let script = include_str!("../../../examples/swap-log-copper/plugin.rhai");
+    pexe::pack(manifest, script).expect("bundled swap packs")
+}
+
+/// Order plugins so every plugin follows the ones it calls into.
+///
+/// A cycle is rejected: two plugins cannot each embed the other's batch id
+/// in their own, so there is no order in which both could compile.
+fn order_by_dependencies(plugins: Vec<Plugin>) -> Result<Vec<Plugin>> {
+    let mut remaining = plugins;
+    let mut ordered: Vec<Plugin> = Vec::with_capacity(remaining.len());
+    let mut placed: HashSet<String> = HashSet::new();
+
+    while !remaining.is_empty() {
+        let ready = remaining.iter().position(|plugin| {
+            script_dependencies(&plugin.script)
+                .iter()
+                .all(|dep| placed.contains(dep))
+        });
+        match ready {
+            Some(idx) => {
+                let plugin = remaining.remove(idx);
+                placed.insert(plugin.manifest.plugin.name.clone());
+                ordered.push(plugin);
+            }
+            None => {
+                let stuck: Vec<String> = remaining
+                    .iter()
+                    .map(|plugin| {
+                        let missing: Vec<String> = script_dependencies(&plugin.script)
+                            .into_iter()
+                            .filter(|dep| !placed.contains(dep))
+                            .collect();
+                        format!(
+                            "{} needs {}",
+                            plugin.manifest.plugin.name,
+                            missing.join(", ")
+                        )
+                    })
+                    .collect();
+                return Err(anyhow!(
+                    "cannot resolve plugin load order ({}); either a dependency is not installed or the plugins form a cycle",
+                    stuck.join("; ")
+                ));
+            }
+        }
+    }
+    Ok(ordered)
 }
 
 #[cfg(test)]
@@ -769,5 +915,132 @@ description = "consume a Foo to make a Bar"
     fn obj_type_hash_for_test(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {
         let value = obj.get(&pod2::middleware::StrKey::from("type")).ok()??;
         Some(Hash(value.raw().0))
+    }
+
+    /// The bundled swap example calls into craft-basics and craft-rocket
+    /// from its script, and its manifest pins both via [[imports]]. Its own
+    /// `module_hash` covers those imports, so any change to either
+    /// dependency invalidates it until it is rebuilt -- which is what this
+    /// checks, with the pins turning drift into per-import messages.
+    #[test]
+    fn test_bundled_swap_loads_against_bundled_plugins() {
+        let catalog = PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("swap-log-copper.pexe"), bundled_swap_bytes()),
+                (PathBuf::from("craft-basics.pexe"), test_plugin_bytes()),
+                (PathBuf::from("craft-rocket.pexe"), test_rocket_bytes()),
+            ],
+            true,
+        )
+        .expect("bundled swap loads -- if this fails, rebuild examples/swap-log-copper");
+
+        let swap = catalog
+            .get_action(&QualifiedName::new("swap-log-copper", "SwapLogCopper"))
+            .expect("swap is a catalog action");
+        let ids =
+            |refs: &[ClassRef]| -> Vec<String> { refs.iter().map(|r| r.class.id()).collect() };
+        // Consumes the dependencies' classes through the qualified calls, and
+        // produces those plus its own receipt.
+        assert_eq!(
+            ids(&swap.total_inputs),
+            vec!["craft-basics::Log", "craft-rocket::Copper"]
+        );
+        assert_eq!(
+            ids(&swap.total_outputs),
+            vec![
+                "craft-basics::Log",
+                "craft-rocket::Copper",
+                "swap-log-copper::Swapped"
+            ]
+        );
+    }
+
+    /// The whole point, end to end: a plugin's script re-keys two objects
+    /// whose classes another plugin defines, and mints one of its own, all in
+    /// a single transaction.
+    #[test]
+    fn test_bundled_swap_executes() {
+        let catalog = PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("craft-basics.pexe"), test_plugin_bytes()),
+                (PathBuf::from("craft-rocket.pexe"), test_rocket_bytes()),
+                (PathBuf::from("swap-log-copper.pexe"), bundled_swap_bytes()),
+            ],
+            true,
+        )
+        .expect("bundled swap loads");
+        let mut state = payload::test_state::TestState::default();
+
+        let mut run = |action: QualifiedName, inputs: Vec<SpendableObject>| {
+            let commitments: Vec<Hash> = inputs.iter().map(|i| i.obj.commitment()).collect();
+            let witness = witness_for(&state, &commitments);
+            let out = catalog
+                .execute_action(action.clone(), witness, inputs)
+                .unwrap_or_else(|err| panic!("{action} runs: {err}"));
+            state.apply_tx(
+                out.tx.live_commitments().unwrap(),
+                out.tx.nullifier_hashes().unwrap(),
+            );
+            out
+        };
+        let log = run(QualifiedName::new("craft-basics", "FindLog"), vec![]).obj(0);
+        let copper = run(QualifiedName::new("craft-rocket", "MineCopper"), vec![]).obj(0);
+
+        let out = run(
+            QualifiedName::new("swap-log-copper", "SwapLogCopper"),
+            vec![log.clone(), copper.clone()],
+        );
+
+        let nullifiers = out.tx.nullifier_hashes().unwrap();
+        assert_eq!(nullifiers.len(), 2, "both rekeys spent their input");
+        assert!(nullifiers.contains(&txlib::object_nullifier_hash(&log.obj).unwrap()));
+        assert!(nullifiers.contains(&txlib::object_nullifier_hash(&copper.obj).unwrap()));
+
+        assert_eq!(out.objs.len(), 3, "log, copper, and the receipt");
+        let live = out.tx.live_commitments().unwrap();
+        for produced in &out.objs {
+            assert!(live.contains(&produced.obj.commitment()));
+        }
+
+        // The rekeyed objects keep their defining plugins' classes; only the
+        // receipt carries this plugin's own.
+        assert_eq!(
+            obj_type_hash_for_test(&out.obj(0).obj).unwrap(),
+            obj_type_hash_for_test(&log.obj).unwrap()
+        );
+        assert_eq!(
+            obj_type_hash_for_test(&out.obj(1).obj).unwrap(),
+            obj_type_hash_for_test(&copper.obj).unwrap()
+        );
+        let swapped = catalog
+            .get_class(&QualifiedName::new("swap-log-copper", "Swapped"))
+            .expect("Swapped class present");
+        assert_eq!(
+            obj_type_hash_for_test(&out.obj(2).obj).unwrap(),
+            decode_hash_hex(&swapped.hash).unwrap()
+        );
+    }
+
+    /// A grounding witness over `state` covering the given inputs.
+    fn witness_for(
+        state: &payload::test_state::TestState,
+        input_commitments: &[Hash],
+    ) -> txlib::GroundingWitness {
+        state.build_grounding_witness(
+            input_commitments,
+            |meta, created_root, nullifiers_root, prior_state_history_root, created_proofs| {
+                txlib::GroundingWitness::new(
+                    txlib::StateHeader::new(
+                        meta.number as i64,
+                        meta.timestamp as i64,
+                        meta.hash,
+                        created_root,
+                        nullifiers_root,
+                        prior_state_history_root,
+                    ),
+                    created_proofs,
+                )
+            },
+        )
     }
 }

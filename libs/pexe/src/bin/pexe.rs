@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use pexe::{
-    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash, inspect, install, pack,
-    read_pexe_file, set_manifest_hash, unpack,
+    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash_with_deps, inspect, install,
+    pack, read_pexe_file, resolve_declared_imports, set_manifest_hash, unpack,
 };
 
 // These names intentionally mirror `driver::paths::{DOBJ_HOME_DIR, ACTIONS_DIR}`.
@@ -348,7 +348,13 @@ fn build_one(
     let plugin_name = manifest.plugin.name.clone();
 
     // Compile the script to derive the real module hash from the pod2 batch id.
-    let real_hash = compile_module_hash(&manifest, &source.script)?;
+    // Any plugin this script calls into is compiled first, since its batch id
+    // is part of this hash. The manifest's [[imports]] is the ONLY dependency
+    // resolution: each entry names its pexe path and may pin its hash, and the
+    // declared set must match the script's qualified calls exactly. A script
+    // that composes nothing declares none.
+    let deps = resolve_declared_imports(&source.root, &manifest.imports, &source.script)?;
+    let real_hash = compile_module_hash_with_deps(&manifest, &source.script, deps)?;
     let declared_hash = format!("{:#}", manifest.plugin.module_hash);
     let declared_hash = declared_hash.trim_start_matches("0x").to_lowercase();
     let real_hash_clean = real_hash.trim_start_matches("0x").to_lowercase();

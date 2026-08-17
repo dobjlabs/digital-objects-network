@@ -251,13 +251,46 @@ macro_rules! _wildcard_values {
     }};
 }
 
-pub fn find_custom_pred_by_name(modules: &[Arc<Module>], name: &str) -> Option<CustomPredicateRef> {
+/// Find the one module defining `name`.
+///
+/// Ambiguity is an error rather than a first-match win: two plugin
+/// batches can each define an action or class of the same name, and
+/// resolving to whichever was loaded first would prove a predicate from
+/// the wrong batch. Callers that already know the batch should use the
+/// `_in` variants and skip resolution entirely.
+pub fn resolve_module<'a>(
+    modules: &'a [Arc<Module>],
+    name: &str,
+) -> anyhow::Result<&'a Arc<Module>> {
+    let mut found: Option<&Arc<Module>> = None;
     for module in modules {
-        if let Some(cpr) = module.predicate_ref_by_name(name) {
-            return Some(cpr);
+        if module.predicate_ref_by_name(name).is_none() {
+            continue;
         }
+        if let Some(previous) = found {
+            anyhow::bail!(
+                "predicate {name} is defined in both module {} and module {}; \
+                 qualify the call with the intended module",
+                previous.batch.name,
+                module.batch.name,
+            );
+        }
+        found = Some(module);
     }
-    None
+    found.ok_or_else(|| anyhow::anyhow!("predicate {name} is not defined in any loaded module"))
+}
+
+pub fn find_custom_pred_by_name(
+    modules: &[Arc<Module>],
+    name: &str,
+) -> anyhow::Result<CustomPredicateRef> {
+    let module = resolve_module(modules, name)?;
+    module.predicate_ref_by_name(name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "predicate {name} vanished from module {}",
+            module.batch.name
+        )
+    })
 }
 
 pub fn apply_custom_pred(
@@ -268,21 +301,31 @@ pub fn apply_custom_pred(
     wildcard_map: HashMap<String, Value>,
     statements: Vec<Statement>,
 ) -> anyhow::Result<Statement> {
-    for module in modules {
-        if let Some(cpr) = module.predicate_ref_by_name(name) {
-            return module.apply_predicate_with(name, statements, public, |is_public, op| {
-                let mut wildcard_values: Vec<(usize, Value)> = Vec::new();
-                for (i, name) in cpr.predicate().wildcard_names().iter().enumerate() {
-                    if let Some(value) = wildcard_map.get(name) {
-                        wildcard_values.push((i, value.clone()));
-                    }
-                }
-                let st = builder.op(is_public, wildcard_values, op).unwrap();
-                Ok(st)
-            });
+    let module = resolve_module(modules, name)?.clone();
+    apply_custom_pred_in(&module, builder, public, name, wildcard_map, statements)
+}
+
+/// Apply a predicate from a known module, bypassing name resolution.
+fn apply_custom_pred_in(
+    module: &Arc<Module>,
+    builder: &mut MultiPodBuilder,
+    public: bool,
+    name: &str,
+    wildcard_map: HashMap<String, Value>,
+    statements: Vec<Statement>,
+) -> anyhow::Result<Statement> {
+    let cpr = module
+        .predicate_ref_by_name(name)
+        .ok_or_else(|| anyhow::anyhow!("module {} defines no {name}", module.batch.name))?;
+    module.apply_predicate_with(name, statements, public, |is_public, op| {
+        let mut wildcard_values: Vec<(usize, Value)> = Vec::new();
+        for (i, name) in cpr.predicate().wildcard_names().iter().enumerate() {
+            if let Some(value) = wildcard_map.get(name) {
+                wildcard_values.push((i, value.clone()));
+            }
         }
-    }
-    panic!("predicate not found");
+        Ok(builder.op(is_public, wildcard_values, op)?)
+    })
 }
 
 /// Argument types:
@@ -325,28 +368,35 @@ impl BuildContext {
         wildcard_map: HashMap<String, Value>,
         statements: Vec<Statement>,
     ) -> anyhow::Result<Statement> {
-        for module in &self.modules {
-            if module.predicate_ref_by_name(name).is_some() {
-                return module.apply_predicate_with(name, statements, public, |is_public, op| {
-                    let mut wildcard_values: Vec<(usize, Value)> = Vec::new();
-                    // Get the CustomPredicateRef from the closure because this may be a chain in a
-                    // split predicate where the wildcard indices are different than the top level
-                    // predicate.
-                    let cpr = match &op.0 {
-                        OperationType::Custom(cpr) => cpr,
-                        _ => unreachable!(),
-                    };
-                    for (i, name) in cpr.predicate().wildcard_names().iter().enumerate() {
-                        if let Some(value) = wildcard_map.get(name) {
-                            wildcard_values.push((i, value.clone()));
-                        }
-                    }
-                    let st = self.builder.op(is_public, wildcard_values, op).unwrap();
-                    Ok(st)
-                });
+        let module = resolve_module(&self.modules, name)?.clone();
+        self.apply_custom_pred_in(&module, public, name, wildcard_map, statements)
+    }
+
+    /// Apply a predicate from a known module, bypassing name resolution.
+    pub fn apply_custom_pred_in(
+        &mut self,
+        module: &Arc<Module>,
+        public: bool,
+        name: &str,
+        wildcard_map: HashMap<String, Value>,
+        statements: Vec<Statement>,
+    ) -> anyhow::Result<Statement> {
+        module.apply_predicate_with(name, statements, public, |is_public, op| {
+            let mut wildcard_values: Vec<(usize, Value)> = Vec::new();
+            // Get the CustomPredicateRef from the closure because this may be a chain in a
+            // split predicate where the wildcard indices are different than the top level
+            // predicate.
+            let cpr = match &op.0 {
+                OperationType::Custom(cpr) => cpr,
+                _ => unreachable!(),
+            };
+            for (i, name) in cpr.predicate().wildcard_names().iter().enumerate() {
+                if let Some(value) = wildcard_map.get(name) {
+                    wildcard_values.push((i, value.clone()));
+                }
             }
-        }
-        panic!("predicate not found");
+            Ok(self.builder.op(is_public, wildcard_values, op)?)
+        })
     }
 
     /// Apply a custom predicate without wildcard value hints.
@@ -358,19 +408,26 @@ impl BuildContext {
         name: &str,
         statements: Vec<Statement>,
     ) -> anyhow::Result<Statement> {
-        for module in &self.modules {
-            if module.predicate_ref_by_name(name).is_some() {
-                return module.apply_predicate_with(
-                    name,
-                    statements,
-                    public,
-                    |is_public, op| -> anyhow::Result<Statement> {
-                        Ok(self.builder.op(is_public, vec![], op)?)
-                    },
-                );
-            }
-        }
-        panic!("predicate {name} not found");
+        let module = resolve_module(&self.modules, name)?.clone();
+        self.apply_custom_pred_simple_in(&module, public, name, statements)
+    }
+
+    /// Apply a predicate from a known module, bypassing name resolution.
+    pub fn apply_custom_pred_simple_in(
+        &mut self,
+        module: &Arc<Module>,
+        public: bool,
+        name: &str,
+        statements: Vec<Statement>,
+    ) -> anyhow::Result<Statement> {
+        module.apply_predicate_with(
+            name,
+            statements,
+            public,
+            |is_public, op| -> anyhow::Result<Statement> {
+                Ok(self.builder.op(is_public, vec![], op)?)
+            },
+        )
     }
 }
 
@@ -396,4 +453,47 @@ macro_rules! st_custom {
     ($ctx:expr, $pred:ident($($wc_name:ident=$wc_value:expr),*) = ($($sts:tt)*)) => {{
         $crate::_st_custom!(&mut $ctx.builder, &$ctx.modules, false, $pred($($wc_name=$wc_value),*) = ($($sts)*))
     }};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pod2::{lang::load_module, middleware::Params};
+
+    /// A one-predicate module, so two of them can be made to collide on
+    /// a name the way two independently compiled plugins would.
+    fn module_named(module: &str, predicate: &str) -> Arc<Module> {
+        let params = Params::default();
+        let source = format!("{predicate}(a, b) = AND(\n  Equal(a, b)\n)\n");
+        Arc::new(load_module(&source, module, &params, &[]).expect("test module compiles"))
+    }
+
+    #[test]
+    fn resolves_a_name_defined_once() {
+        let modules = vec![
+            module_named("plug_a", "Claim"),
+            module_named("plug_b", "Ship"),
+        ];
+        let found = resolve_module(&modules, "Claim").expect("Claim resolves");
+        assert_eq!(found.batch.name, "plug_a");
+    }
+
+    #[test]
+    fn rejects_a_name_two_modules_define() {
+        let modules = vec![
+            module_named("plug_a", "Claim"),
+            module_named("plug_b", "Claim"),
+        ];
+        let err = resolve_module(&modules, "Claim").expect_err("ambiguity must not resolve");
+        let message = format!("{err}");
+        assert!(message.contains("plug_a"), "{message}");
+        assert!(message.contains("plug_b"), "{message}");
+    }
+
+    #[test]
+    fn reports_a_name_no_module_defines() {
+        let modules = vec![module_named("plug_a", "Claim")];
+        let err = resolve_module(&modules, "Swap").expect_err("missing name must not resolve");
+        assert!(format!("{err}").contains("not defined in any loaded module"));
+    }
 }

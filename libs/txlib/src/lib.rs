@@ -1219,6 +1219,17 @@ mod tests {
             )
         }
 
+        /// Place an object in the created set without proving the
+        /// transaction that would have produced it, so a test can start
+        /// from a given holding instead of minting it first.
+        fn seed(&mut self, obj: &Dictionary) {
+            let index = self.created_index.len() as i64;
+            self.created
+                .insert(index as usize, Value::from(obj.clone()))
+                .unwrap();
+            self.created_index.insert(obj.commitment(), index);
+        }
+
         fn apply_tx(&mut self, tx: &Tx) {
             for obj in tx.live.iter() {
                 let obj = obj.expect("tx live entry should decode");
@@ -1802,5 +1813,121 @@ mod tests {
                     .unwrap()
             );
         }
+    }
+
+    /// A plugin batch importing another and calling its action as a
+    /// sub-action clause, rather than sitting beside it as a sibling
+    /// top-level action. The parent predicate spans both halves, so the
+    /// receipt it mints could be constrained against the claimed object.
+    #[test]
+    fn test_imported_batch_action_as_subaction() {
+        let events = Arc::new(crate::predicates::events_module());
+        let txlib = Arc::new(crate::predicates::module());
+        let swap = Arc::new(crate::predicates::swap_test_module());
+        let imp = Arc::new(crate::predicates::import_test_module());
+
+        let is_gem =
+            Value::from(Predicate::Custom(swap.predicate_ref_by_name("IsGem").unwrap()).hash());
+        let is_receipt =
+            Value::from(Predicate::Custom(imp.predicate_ref_by_name("IsReceipt").unwrap()).hash());
+        let modules = vec![events, txlib, swap, imp];
+
+        let params = Params::default();
+        let vd_set = VDSet::new(&[]);
+        let mut state = TestState::empty(0);
+        let gem = with_stable_identifier(&make_object(is_gem, &[]));
+        state.seed(&gem);
+
+        let builder = MultiPodBuilder::new(&params, &vd_set);
+        let mut ctx = BuildContext { builder, modules };
+        let inputs = vec![gem.clone()];
+        let witness = state.grounding_witness(&inputs);
+        let mut tx = TxBuilder::new(&mut ctx, &inputs, witness);
+
+        let scope_outer = tx.begin_action();
+
+        // Nested action from the imported batch. Its own scope is what makes
+        // the gem's guard range match the ClaimGem statement.
+        let new_key = Value::from(rand_raw_value());
+        let mut gem_new = gem.clone();
+        gem_new.update(&StrKey::from("key"), &new_key).unwrap();
+        let st_claim = {
+            let scope_sub = tx.begin_action();
+            let (st_mutate, h_sub) = tx.mutate(&mut ctx, &gem_new, &gem);
+            let op_du = ctx
+                .builder
+                .priv_op(op!(DictUpdate(gem, "key", new_key, gem_new)))
+                .unwrap();
+            let st_claim = ctx
+                .apply_custom_pred_simple(false, "ClaimGem", vec![op_du, st_mutate])
+                .unwrap();
+            let st_guard = ctx
+                .apply_custom_pred(
+                    false,
+                    "IsGem",
+                    map!({"state_header" => state.state_header().array()}),
+                    vec![Statement::None, st_claim.clone()],
+                )
+                .unwrap();
+            tx.set_guard(h_sub, st_guard);
+            tx.end_action(scope_sub);
+            st_claim
+        };
+
+        // Direct event in the parent scope: mint this batch's own class,
+        // pinned to the object the nested action just claimed.
+        let claimed_id = gem_new
+            .get(&StrKey::from(STABLE_IDENTIFIER_FIELD))
+            .unwrap()
+            .unwrap();
+        let receipt_initial = make_object(is_receipt, &[("gem", claimed_id.clone())]);
+        let (receipt, st_insert, h) = tx.insert(&mut ctx, &receipt_initial);
+        let op_binds = ctx
+            .builder
+            .priv_op(op!(Equal(
+                (&receipt_initial, "gem"),
+                (&gem_new, STABLE_IDENTIFIER_FIELD)
+            )))
+            .unwrap();
+        let st_parent = ctx
+            .apply_custom_pred_simple(
+                false,
+                "ClaimAndReceipt",
+                vec![st_claim, op_binds, st_insert],
+            )
+            .unwrap();
+        let st_guard = ctx
+            .apply_custom_pred(
+                false,
+                "IsReceipt",
+                map!({"state_header" => state.state_header().array()}),
+                vec![st_parent],
+            )
+            .unwrap();
+        tx.set_guard(h, st_guard);
+        tx.end_action(scope_outer);
+
+        eprintln!("{tx}");
+        let (st, tx_out, stats) = tx.finalize(&mut ctx);
+        print_stats(&stats);
+        ctx.builder.reveal(&st).unwrap();
+        solve_and_verify(ctx.builder);
+
+        assert!(
+            tx_out
+                .nullifiers
+                .contains(&Value::from(compute_nullifier(&gem)))
+                .unwrap()
+        );
+        for live in [&gem_new, &receipt] {
+            assert!(tx_out.live.contains(&Value::from(live.clone())).unwrap());
+        }
+
+        // The receipt names the object it was minted for, which is the thing
+        // a transaction-level composition cannot prove.
+        assert_eq!(
+            receipt.get(&StrKey::from("gem")).unwrap().unwrap(),
+            claimed_id
+        );
     }
 }

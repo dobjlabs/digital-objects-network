@@ -873,3 +873,284 @@ fn CraftRocketCat(action) {
     var rocket = action.output("Rocket");
     vdf_proof(action, rocket, 70);
 }
+// ── rekeys ─────────────────────────────────────────────────────────────────────
+// Rotating `key` moves an object's commitment and its nullifier, so a holder
+// who was sent an object can spend the sender's copy out from under them.
+// Nothing else about the state changes, and the stable identifier carries
+// across, so the object stays the same object under new custody.
+//
+// These are also part of this plugin's extension surface -- which is every
+// [[actions]] entry in the manifest, hidden ones included (hidden only skips
+// catalog listings). A dependent plugin's script reaches any of those with a
+// qualified subaction call; lowercase helpers like rekey() are inlined at
+// compile time and are not callable, so the manifest IS the public API.
+
+fn rekey(action, obj) {
+    var key = action.random();
+    obj.update("key", key);
+}
+
+fn RekeyIron(action) {
+    var obj = action.mutate("Iron");
+    rekey(action, obj);
+}
+
+fn RekeyCopper(action) {
+    var obj = action.mutate("Copper");
+    rekey(action, obj);
+}
+
+fn RekeyOil(action) {
+    var obj = action.mutate("Oil");
+    rekey(action, obj);
+}
+
+fn RekeySulfur(action) {
+    var obj = action.mutate("Sulfur");
+    rekey(action, obj);
+}
+
+fn RekeyWater(action) {
+    var obj = action.mutate("Water");
+    rekey(action, obj);
+}
+
+fn RekeyCane(action) {
+    var obj = action.mutate("Cane");
+    rekey(action, obj);
+}
+
+fn RekeyHemp(action) {
+    var obj = action.mutate("Hemp");
+    rekey(action, obj);
+}
+
+fn RekeyIngot(action) {
+    var obj = action.mutate("Ingot");
+    rekey(action, obj);
+}
+
+fn RekeyPlate(action) {
+    var obj = action.mutate("Plate");
+    rekey(action, obj);
+}
+
+fn RekeyPulp(action) {
+    var obj = action.mutate("Pulp");
+    rekey(action, obj);
+}
+
+fn RekeyFiber(action) {
+    var obj = action.mutate("Fiber");
+    rekey(action, obj);
+}
+
+fn RekeyAcid(action) {
+    var obj = action.mutate("Acid");
+    rekey(action, obj);
+}
+
+fn RekeyTar(action) {
+    var obj = action.mutate("Tar");
+    rekey(action, obj);
+}
+
+fn RekeyFuel(action) {
+    var obj = action.mutate("Fuel");
+    rekey(action, obj);
+}
+
+fn RekeyGas(action) {
+    var obj = action.mutate("Gas");
+    rekey(action, obj);
+}
+
+fn RekeySlag(action) {
+    var obj = action.mutate("Slag");
+    rekey(action, obj);
+}
+
+fn RekeyFlux(action) {
+    var obj = action.mutate("Flux");
+    rekey(action, obj);
+}
+
+fn RekeySludge(action) {
+    var obj = action.mutate("Sludge");
+    rekey(action, obj);
+}
+
+fn RekeyMold(action) {
+    var obj = action.mutate("Mold");
+    rekey(action, obj);
+}
+
+fn RekeyCatalyst(action) {
+    var obj = action.mutate("Catalyst");
+    rekey(action, obj);
+}
+
+fn RekeyBinder(action) {
+    var obj = action.mutate("Binder");
+    rekey(action, obj);
+}
+
+fn RekeyLye(action) {
+    var obj = action.mutate("Lye");
+    rekey(action, obj);
+}
+
+fn RekeyDrillBit(action) {
+    var obj = action.mutate("DrillBit");
+    rekey(action, obj);
+}
+
+fn RekeySolderingIron(action) {
+    var obj = action.mutate("SolderingIron");
+    rekey(action, obj);
+}
+
+fn RekeyPressureValve(action) {
+    var obj = action.mutate("PressureValve");
+    rekey(action, obj);
+}
+
+fn RekeySteel(action) {
+    var obj = action.mutate("Steel");
+    rekey(action, obj);
+}
+
+fn RekeyWire(action) {
+    var obj = action.mutate("Wire");
+    rekey(action, obj);
+}
+
+fn RekeyCloth(action) {
+    var obj = action.mutate("Cloth");
+    rekey(action, obj);
+}
+
+fn RekeyBoard(action) {
+    var obj = action.mutate("Board");
+    rekey(action, obj);
+}
+
+fn RekeyWax(action) {
+    var obj = action.mutate("Wax");
+    rekey(action, obj);
+}
+
+fn RekeyGrease(action) {
+    var obj = action.mutate("Grease");
+    rekey(action, obj);
+}
+
+fn RekeySolvent(action) {
+    var obj = action.mutate("Solvent");
+    rekey(action, obj);
+}
+
+fn RekeyCoating(action) {
+    var obj = action.mutate("Coating");
+    rekey(action, obj);
+}
+
+fn RekeyRubber(action) {
+    var obj = action.mutate("Rubber");
+    rekey(action, obj);
+}
+
+fn RekeyExtract(action) {
+    var obj = action.mutate("Extract");
+    rekey(action, obj);
+}
+
+fn RekeyGear(action) {
+    var obj = action.mutate("Gear");
+    rekey(action, obj);
+}
+
+fn RekeyCoil(action) {
+    var obj = action.mutate("Coil");
+    rekey(action, obj);
+}
+
+fn RekeyBearing(action) {
+    var obj = action.mutate("Bearing");
+    rekey(action, obj);
+}
+
+fn RekeyCircuit(action) {
+    var obj = action.mutate("Circuit");
+    rekey(action, obj);
+}
+
+fn RekeyCanvas(action) {
+    var obj = action.mutate("Canvas");
+    rekey(action, obj);
+}
+
+fn RekeyPanel(action) {
+    var obj = action.mutate("Panel");
+    rekey(action, obj);
+}
+
+fn RekeyPistons(action) {
+    var obj = action.mutate("Pistons");
+    rekey(action, obj);
+}
+
+fn RekeyResin(action) {
+    var obj = action.mutate("Resin");
+    rekey(action, obj);
+}
+
+fn RekeyEngine(action) {
+    var obj = action.mutate("Engine");
+    rekey(action, obj);
+}
+
+fn RekeyCasing(action) {
+    var obj = action.mutate("Casing");
+    rekey(action, obj);
+}
+
+fn RekeyPayload(action) {
+    var obj = action.mutate("Payload");
+    rekey(action, obj);
+}
+
+fn RekeyRocket(action) {
+    var obj = action.mutate("Rocket");
+    rekey(action, obj);
+}
+
+fn RekeyMachineI(action) {
+    var obj = action.mutate("MachineI");
+    rekey(action, obj);
+}
+
+fn RekeyMachineII(action) {
+    var obj = action.mutate("MachineII");
+    rekey(action, obj);
+}
+
+fn RekeyBlastFurnace(action) {
+    var obj = action.mutate("BlastFurnace");
+    rekey(action, obj);
+}
+
+fn RekeyCircuitFab(action) {
+    var obj = action.mutate("CircuitFab");
+    rekey(action, obj);
+}
+
+fn RekeyCrackingUnit(action) {
+    var obj = action.mutate("CrackingUnit");
+    rekey(action, obj);
+}
+
+fn RekeyReactionChamber(action) {
+    var obj = action.mutate("ReactionChamber");
+    rekey(action, obj);
+}
