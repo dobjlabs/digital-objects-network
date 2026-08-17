@@ -33,10 +33,16 @@ use axum::{
 };
 use axum_extra::extract::Query;
 use bytes::Bytes;
-use eth_clients::{beacon::types::BlockId, common::ErrorResponse};
+use eth_clients::{
+    beacon::types::{
+        BlockBody, BlockData, BlockHeaderData, BlockHeaderMessage, BlockHeaderResponse, BlockId,
+        BlockMessage, BlockResponse, ExecutionPayload, HeadEventData, InnerBlockHeader, Spec,
+        SpecResponse,
+    },
+    common::ErrorResponse,
+};
 use futures_util::stream::Stream;
 use serde::Deserialize;
-use serde_json::{json, Value};
 use tracing::{info, warn};
 use wire_types::HealthResponse;
 
@@ -128,50 +134,66 @@ async fn healthz() -> Json<HealthResponse> {
     Json(HealthResponse::stamped("dev", "devtools"))
 }
 
-async fn get_spec(State(state): State<AppState>) -> Json<Value> {
-    Json(json!({ "data": { "DEPOSIT_NETWORK_ID": state.network_id.to_string() } }))
+async fn get_spec(State(state): State<AppState>) -> Json<SpecResponse> {
+    Json(SpecResponse {
+        data: Spec {
+            deposit_network_id: state.network_id,
+        },
+    })
 }
 
 async fn get_header(
     Path(block_id): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<BlockHeaderResponse>, ApiError> {
     let block = resolve_block(&state, &block_id).await?;
-    Ok(Json(json!({
-        "data": {
-            "root": block.header.hash,
-            "header": {
-                "message": {
-                    "parent_root": block.header.parent_hash,
-                    "slot": block.header.number.to_string(),
-                }
-            }
-        }
-    })))
+    Ok(Json(BlockHeaderResponse {
+        data: BlockHeaderData {
+            root: block.header.hash,
+            header: InnerBlockHeader {
+                message: BlockHeaderMessage {
+                    parent_root: block.header.parent_hash,
+                    slot: slot_of(&block)?,
+                },
+            },
+        },
+    }))
 }
 
 async fn get_block(
     Path(block_id): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<BlockResponse>, ApiError> {
     let block = resolve_block(&state, &block_id).await?;
+    let slot = slot_of(&block)?;
     let commitments = kzg_commitments(&state, &block).await?;
-    Ok(Json(json!({
-        "data": {
-            "message": {
-                "slot": block.header.number.to_string(),
-                "parent_root": block.header.parent_hash,
-                "body": {
-                    "execution_payload": {
-                        "block_hash": block.header.hash,
-                        "block_number": block.header.number.to_string(),
-                        "timestamp": block.header.timestamp.to_string(),
+    Ok(Json(BlockResponse {
+        data: BlockData {
+            message: BlockMessage {
+                body: BlockBody {
+                    execution_payload: ExecutionPayload {
+                        block_hash: block.header.hash,
+                        block_number: slot,
+                        timestamp: block.header.timestamp,
                     },
-                    "blob_kzg_commitments": commitments,
-                }
-            }
-        }
-    })))
+                    blob_kzg_commitments: commitments,
+                },
+                parent_root: block.header.parent_hash,
+                slot,
+            },
+        },
+    }))
+}
+
+/// Beacon slots are `u32` while anvil counts blocks in `u64`. Truncating would
+/// hand the synchronizer a slot that disagrees with the one the header reports.
+fn slot_of(block: &Block) -> Result<u32, ApiError> {
+    u32::try_from(block.header.number).map_err(|_| {
+        ApiError::Internal(anyhow!(
+            "block number {} exceeds the beacon slot width",
+            block.header.number
+        ))
+    })
 }
 
 #[derive(Deserialize)]
@@ -205,13 +227,20 @@ async fn head_events(
             {
                 Ok(Some(block)) if block.header.number > last_seen => {
                     let number = block.header.number;
-                    let event = Event::default().event("head").data(
-                        json!({
-                            "slot": number.to_string(),
-                            "block": block.header.hash,
-                        })
-                        .to_string(),
-                    );
+                    let head = match slot_of(&block) {
+                        Ok(slot) => HeadEventData {
+                            slot,
+                            block: block.header.hash,
+                        },
+                        Err(_) => {
+                            warn!(number, "Head block number exceeds the beacon slot width");
+                            continue;
+                        }
+                    };
+                    let event = Event::default()
+                        .event("head")
+                        .json_data(head)
+                        .expect("head event serializes");
                     return Some((Ok(event), (state, number)));
                 }
                 Ok(_) => {}
