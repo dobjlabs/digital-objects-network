@@ -6,13 +6,13 @@ pub struct Manifest {
     pub plugin: Plugin,
     pub classes: Vec<Class>,
     pub actions: Vec<Action>,
-    /// Declared dependencies. Optional: with no entries, builders fall back
-    /// to scanning the script for qualified sub-action calls and resolving
-    /// each plugin by name from an install directory. With entries, the
-    /// declaration is authoritative: it must cover the scanned set exactly,
-    /// each dependency loads from its `path`, and a declared `module_hash`
-    /// is verified per dependency -- so version drift names the offending
-    /// import instead of surfacing as a whole-plugin hash mismatch.
+    /// Declared dependencies -- the only build-time resolution there is. The
+    /// declaration must cover the script's qualified sub-action calls
+    /// exactly; each dependency loads from its `path`, and a declared
+    /// `module_hash` is verified per dependency, so version drift names the
+    /// offending import instead of surfacing as a whole-plugin hash
+    /// mismatch. A script that composes nothing declares no entries (the
+    /// section may be absent).
     #[serde(default)]
     pub imports: Vec<Import>,
 }

@@ -7,12 +7,12 @@
 // could never spend a craft-basics one. The copper side works the same way
 // through craft-rocket.
 //
-// This example declares its dependencies in the manifest's [[imports]] --
-// each entry names the plugin, the pexe path to load it from, and the batch
-// id to pin (see swap-log-sticks for the scan-only style, where the call
-// itself is the declaration). Either way the coupling is the same: calling
-// into a plugin puts its batch id inside this one's, so this plugin's own
-// classes rehash whenever a dependency does.
+// Dependencies are declared in the manifest's [[imports]] -- each entry
+// names the plugin, the pexe path to load it from, and the batch id to pin;
+// the declaration must match the script's qualified calls exactly. The
+// coupling is unavoidable either way: calling into a plugin puts its batch
+// id inside this one's, so this plugin's own classes rehash whenever a
+// dependency does.
 //
 // `Swapped` is a class this plugin owns, minted in the same transaction, so
 // the receipt lands if and only if both rekeys do.

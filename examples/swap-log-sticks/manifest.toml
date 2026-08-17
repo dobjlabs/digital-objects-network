@@ -10,6 +10,11 @@ name = "swap-log-sticks"
 version = "0.1.0"
 module_hash = "cb4f2e337f85a82c903a9ce4be9ac9fac0687194f1e6e36d522ec677245e2fce"
 
+[[imports]]
+name = "craft-basics"
+path = "../../target/pexe/craft-basics.pexe"
+module_hash = "44d6fd33861e3ab021c0362a348243226cfa94345c912676102115a4864cd084"
+
 [[actions]]
 name = "SwapLogSticks"
 emoji = "🤝"

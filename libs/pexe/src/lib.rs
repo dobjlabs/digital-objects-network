@@ -155,44 +155,16 @@ pub fn compile_module_hash_with_deps(
     Ok(format!("{:#}", module.module().batch.id()))
 }
 
-/// Compile the plugins a script calls into, reading them as installed
-/// `.pexe` archives from `search_dir`.
-///
-/// Build-time dependency resolution has to come from somewhere; the install
-/// directory is the same place the driver loads from, so a plugin that
-/// builds here is one that will also load there.
-pub fn resolve_script_deps(script: &str, search_dir: &Path) -> Result<PluginDeps> {
-    let sdk = Sdk::default();
-    let mut deps = PluginDeps::new();
-    for plugin_name in sdk::script_dependencies(script) {
-        let path = search_dir.join(format!("{plugin_name}.{PEXE_EXTENSION}"));
-        let bytes = read_pexe_file(&path).with_context(|| {
-            format!(
-                "this script calls into {plugin_name}, which must be installed to build against; expected {}",
-                path.display()
-            )
-        })?;
-        let (manifest, dep_script) = unpack(&bytes)?;
-        // A dependency may itself call into others, so resolve depth-first.
-        let dep_deps = resolve_script_deps(&dep_script, search_dir)?;
-        let module = sdk
-            .load_module_from_manifest_deps(&dep_script, &manifest, dep_deps)
-            .map_err(|err| anyhow!("failed to compile dependency {plugin_name}: {err}"))?;
-        deps.insert(plugin_name, module);
-    }
-    Ok(deps)
-}
-
-/// Resolve dependencies from the manifest's declared `[[imports]]` instead of
-/// an install-directory scan. The declaration must cover the script's
-/// qualified calls exactly (a missing or unused entry is an error), each
-/// import loads from its `path` relative to `plugin_root`, and a declared
-/// `module_hash` is verified against what the loaded pexe compiles to --
-/// version drift names the offending import instead of surfacing later as a
-/// whole-plugin hash mismatch. Imports may compose each other; anything an
-/// import's own script calls into must itself be declared here, because a
-/// path recorded inside a dependency's manifest was relative to the machine
-/// that built IT.
+/// Resolve build-time dependencies from the manifest's declared
+/// `[[imports]]` -- the only resolution there is. The declaration must cover
+/// the script's qualified calls exactly (a missing or unused entry is an
+/// error), each import loads from its `path` relative to `plugin_root`, and
+/// a declared `module_hash` is verified against what the loaded pexe
+/// compiles to -- version drift names the offending import instead of
+/// surfacing later as a whole-plugin hash mismatch. Imports may compose each
+/// other; anything an import's own script calls into must itself be declared
+/// here, because a path recorded inside a dependency's manifest was relative
+/// to the machine that built IT.
 pub fn resolve_declared_imports(
     plugin_root: &Path,
     imports: &[Import],
