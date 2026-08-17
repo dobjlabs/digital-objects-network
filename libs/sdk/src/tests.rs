@@ -944,7 +944,7 @@ fn test_batch_id_ignores_names() {
 /// A script reaching into another plugin with a qualified sub-action call.
 /// The parent's predicate contains the dependency's action, so the two are
 /// one action rather than siblings -- and the parent can pin its own output
-/// to the object the dependency just claimed.
+/// to the object the dependency just rekeyed.
 #[test]
 fn test_qualified_subaction_into_a_dependency() {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -952,28 +952,28 @@ fn test_qualified_subaction_into_a_dependency() {
         fn SpawnGem(action) {
             var gem = action.output("Gem");
         }
-        fn ClaimGem(action) {
+        fn RekeyGem(action) {
             var gem = action.mutate("Gem");
             var key = action.random();
             gem.update("key", key);
         }
     "#;
-    // Reaches base::ClaimGem and mints a receipt of its own class, bound to
+    // Reaches base::RekeyGem and mints a receipt of its own class, bound to
     // the gem's stable identifier.
     let swap_src = r#"
-        fn ClaimAndReceipt(action) {
-            var gem = action.subaction("base::ClaimGem");
+        fn RekeyAndReceipt(action) {
+            var gem = action.subaction("base::RekeyGem");
             var receipt = action.output("Receipt");
         }
     "#;
     let sdk = Sdk::default();
     let base = sdk
-        .load_module_from_src_actions(base_src, &["SpawnGem", "ClaimGem"])
+        .load_module_from_src_actions(base_src, &["SpawnGem", "RekeyGem"])
         .unwrap();
     let mut deps = PluginDeps::new();
     deps.insert("base".to_string(), base.clone());
     let swap = sdk
-        .load_module_from_src_deps(swap_src, &["ClaimAndReceipt"], deps)
+        .load_module_from_src_deps(swap_src, &["RekeyAndReceipt"], deps)
         .unwrap();
     println!("{}", swap.podlang_src());
 
@@ -1003,26 +1003,26 @@ fn test_qualified_subaction_into_a_dependency() {
     let witness = grounding_witness(&state, &[gem.obj.commitment()]);
     let executor = swap.executor(true, witness);
     let res = executor
-        .action("ClaimAndReceipt", vec![gem.clone()])
+        .action("RekeyAndReceipt", vec![gem.clone()])
         .unwrap();
 
     // The gem was re-keyed and a receipt minted, in one action.
     let nullifiers = res.tx.nullifier_hashes().unwrap();
     assert!(nullifiers.contains(&txlib::object_nullifier_hash(&gem.obj).unwrap()));
-    let [claimed, receipt] = res.objs();
+    let [rekeyed, receipt] = res.objs();
     let live = res.tx.live_commitments().unwrap();
-    assert!(live.contains(&claimed.obj.commitment()));
+    assert!(live.contains(&rekeyed.obj.commitment()));
     assert!(live.contains(&receipt.obj.commitment()));
 
-    // The claimed gem keeps the dependency's class; the receipt carries the
+    // The rekeyed gem keeps the dependency's class; the receipt carries the
     // caller's own.
     let type_of = |obj: &pod2::middleware::containers::Dictionary| {
         obj.get(&pod2::middleware::StrKey::from("type"))
             .unwrap()
             .unwrap()
     };
-    assert_eq!(type_of(&claimed.obj), type_of(&gem.obj));
-    assert_ne!(type_of(&receipt.obj), type_of(&claimed.obj));
+    assert_eq!(type_of(&rekeyed.obj), type_of(&gem.obj));
+    assert_ne!(type_of(&receipt.obj), type_of(&rekeyed.obj));
 }
 
 #[test]
@@ -1035,32 +1035,32 @@ fn test_receipt_free_composite_action() {
         fn SpawnCoin(action) {
             var coin = action.output("Coin");
         }
-        fn ClaimGem(action) {
+        fn RekeyGem(action) {
             var gem = action.mutate("Gem");
             var key = action.random();
             gem.update("key", key);
         }
-        fn ClaimCoin(action) {
+        fn RekeyCoin(action) {
             var coin = action.mutate("Coin");
             var key = action.random();
             coin.update("key", key);
         }
     "#;
     // A pure swap: every object slot is spliced from the dependency's
-    // claims, the caller mints nothing of its own. The caller's io record
+    // rekeys, the caller mints nothing of its own. The caller's io record
     // is empty, so its predicate has no `io` arg at all -- previously this
     // failed to compile as `record SwapIO = ()`.
     let swap_src = r#"
         fn Swap(action) {
-            var gem = action.subaction("base::ClaimGem");
-            var coin = action.subaction("base::ClaimCoin");
+            var gem = action.subaction("base::RekeyGem");
+            var coin = action.subaction("base::RekeyCoin");
         }
     "#;
     let sdk = Sdk::default();
     let base = sdk
         .load_module_from_src_actions(
             base_src,
-            &["SpawnGem", "SpawnCoin", "ClaimGem", "ClaimCoin"],
+            &["SpawnGem", "SpawnCoin", "RekeyGem", "RekeyCoin"],
         )
         .unwrap();
     let mut deps = PluginDeps::new();

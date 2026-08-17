@@ -82,31 +82,31 @@ emoji = "🪨"
 description = "Mine stone using a stone pick (consumes durability)."
 
 [[actions]]
-name = "ClaimLog"
-emoji = "🪧"
+name = "RekeyLog"
+emoji = "🔑"
 description = "Take exclusive possession of a received log by rotating its key."
 
 [[actions]]
-name = "ClaimWood"
-emoji = "🪧"
+name = "RekeyWood"
+emoji = "🔑"
 description = "Take exclusive possession of a received wood by rotating its key."
 
 [[actions]]
-name = "ClaimStick"
-emoji = "🪧"
+name = "RekeyStick"
+emoji = "🔑"
 description = "Take exclusive possession of a received stick by rotating its key."
 
 [[actions]]
-name = "ClaimStone"
-emoji = "🪧"
+name = "RekeyStone"
+emoji = "🔑"
 description = "Take exclusive possession of a received stone by rotating its key."
 
 [[actions]]
-name = "ClaimWoodPick"
-emoji = "🪧"
+name = "RekeyWoodPick"
+emoji = "🔑"
 description = "Take exclusive possession of a received wood pick by rotating its key."
 
 [[actions]]
-name = "ClaimStonePick"
-emoji = "🪧"
+name = "RekeyStonePick"
+emoji = "🔑"
 description = "Take exclusive possession of a received stone pick by rotating its key."

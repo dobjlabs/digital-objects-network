@@ -1,7 +1,7 @@
 # A plugin whose script composes another plugin's actions.
 #
 # There is nothing here about the dependency: the script's qualified
-# `subaction("craft-basics::ClaimLog")` calls declare it by using it, and the
+# `subaction("craft-basics::RekeyLog")` calls declare it by using it, and the
 # catalog loads craft-basics first so its compiled batch is available. The
 # module_hash below covers that import, so it moves whenever craft-basics does.
 

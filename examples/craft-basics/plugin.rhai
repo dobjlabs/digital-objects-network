@@ -71,7 +71,7 @@ fn MineStoneWithStonePick(action) {
     var stone = action.output("Stone");
 }
 
-// ── claims ───────────────────────────────────────────────────────────────────
+// ── rekeys ───────────────────────────────────────────────────────────────────
 // Rotating `key` moves an object's commitment and its nullifier, so a holder
 // who was sent an object can spend the sender's copy out from under them.
 // Nothing else about the state changes, and the stable identifier carries
@@ -80,37 +80,37 @@ fn MineStoneWithStonePick(action) {
 // These are also this plugin's extension surface: another plugin's script can
 // only reach the actions exposed here.
 
-fn claim(action, obj) {
+fn rekey(action, obj) {
     var key = action.random();
     obj.update("key", key);
 }
 
-fn ClaimLog(action) {
+fn RekeyLog(action) {
     var log = action.mutate("Log");
-    claim(action, log);
+    rekey(action, log);
 }
 
-fn ClaimWood(action) {
+fn RekeyWood(action) {
     var wood = action.mutate("Wood");
-    claim(action, wood);
+    rekey(action, wood);
 }
 
-fn ClaimStick(action) {
+fn RekeyStick(action) {
     var stick = action.mutate("Stick");
-    claim(action, stick);
+    rekey(action, stick);
 }
 
-fn ClaimStone(action) {
+fn RekeyStone(action) {
     var stone = action.mutate("Stone");
-    claim(action, stone);
+    rekey(action, stone);
 }
 
-fn ClaimWoodPick(action) {
+fn RekeyWoodPick(action) {
     var pick = action.mutate("WoodPick");
-    claim(action, pick);
+    rekey(action, pick);
 }
 
-fn ClaimStonePick(action) {
+fn RekeyStonePick(action) {
     var pick = action.mutate("StonePick");
-    claim(action, pick);
+    rekey(action, pick);
 }

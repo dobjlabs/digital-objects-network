@@ -1,4 +1,4 @@
-# A receipt-free recipe: every slot is spliced from craft-basics claims,
+# A receipt-free recipe: every slot is spliced from craft-basics rekeys,
 # so this plugin declares no classes of its own (`classes = []`) and its
 # action compiles without an io record. Three re-keyed survivors plus the
 # chain overhead land exactly on pod2's 8-wildcard predicate budget --

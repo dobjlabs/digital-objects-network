@@ -2122,7 +2122,7 @@ pub struct ClassMeta {
 /// Plugin modules a script may reach with a qualified sub-action call.
 ///
 /// Keyed by plugin name, which is what appears in the script:
-/// `action.subaction("craft-basics::ClaimLog")`. Calling a dependency's
+/// `action.subaction("craft-basics::RekeyLog")`. Calling a dependency's
 /// action embeds its batch id in the caller's own batch, so the caller's
 /// class hashes move whenever a dependency changes.
 pub type PluginDeps = BTreeMap<String, Rc<SdkModule>>;
@@ -2157,7 +2157,7 @@ impl SubRef {
 /// Plugin names a script reaches with a qualified sub-action call.
 ///
 /// The dependency set is declared by use: a script that calls
-/// `subaction("craft-basics::ClaimLog")` depends on craft-basics, with
+/// `subaction("craft-basics::RekeyLog")` depends on craft-basics, with
 /// nothing to keep in step in the manifest. Scanning the source is enough
 /// because the SDK only accepts a literal name here -- a computed one
 /// would not survive the load phase, which runs with no inputs.
