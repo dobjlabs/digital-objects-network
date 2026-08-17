@@ -13,6 +13,20 @@ relayer:
 archiver:
     RUST_LOG=info cargo run -p archiver --release
 
+# The 2s block time is load-bearing, and the state file must stay in step with
+# the archiver + synchronizer stores; see devtools/beacon-shim/README.md.
+# mprocs.local.yaml repeats these flags rather than calling this recipe, so that
+# it supervises anvil directly and can signal it on quit. Keep the two in step.
+# Run the local anvil devnet standalone.
+anvil:
+    @mkdir -p data
+    anvil --block-time 2 --port 8545 --state data/anvil-state.json --state-interval 5
+
+# Run the Beacon REST shim that projects anvil blocks onto beacon slots for the
+# archiver and synchronizer. Waits for anvil, so start order does not matter.
+beacon-shim:
+    RUST_LOG=info cargo run -p beacon-shim --release
+
 # Run the desktop app standalone (Tauri spawns its own Vite on :1420).
 # Use this when you only want the desktop window. Inside `just dev` we use
 # `desktop-shell` instead so a shared Vite serves both desktop and browser.
@@ -54,6 +68,72 @@ dev: ensure-db ensure-start-slot ensure-plugins ensure-mcp ensure-mcp-enabled
 dev-remote: ensure-remote-settings ensure-plugins ensure-mcp ensure-mcp-enabled
     mprocs --config mprocs.remote.yaml
 
+# Like `just dev`, but against a local anvil devnet instead of a public
+# Ethereum endpoint, so nothing in the stack reaches the network. The chain
+# vars are exported rather than written to each service's .env: dotenvy leaves
+# an already-set variable alone, so the environment wins and the .env files
+# stay untouched for `just dev`.
+#
+# Stores are kept separate from `just dev`'s (own Postgres databases, own
+# RocksDB path, own blobs directory) because the two point at different chains
+# and sharing them would leave the synchronizer deriving against roots that
+# never existed on the other one. See devtools/beacon-shim/README.md.
+dev-local: ensure-anvil ensure-db-local ensure-local-settings ensure-plugins ensure-mcp ensure-mcp-enabled
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # mprocs.local.yaml execs anvil directly, so nothing else creates its state dir.
+    mkdir -p data
+    # Absolute, because the Tauri shell resolves it from interfaces/gui.
+    export DOBJ_HOME="$PWD/data/dobj-local"
+    export RPC_URL=http://127.0.0.1:8545
+    export BEACON_URL=http://127.0.0.1:8555
+    export ARCHIVER_URL=http://127.0.0.1:3001
+    export TO_ADDRESS=0x4343434343434343434343434343434343434343
+    export FILTER_ADDRESS="$TO_ADDRESS"
+    # anvil's first genesis-funded dev account. Published test key, local only.
+    export PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+    # Must be >= 1: the synchronizer bootstraps from INIT_START_SLOT - 1.
+    export INIT_START_SLOT=1
+    export BLOBS_PATH=data/blobs-local/
+    export APP_STATE_DB_PATH=data/synchronizer-db-local
+    export SYNC_METADATA_DB_URL=postgres://postgres@localhost:5432/synchronizer_local
+    export DB_URL=postgres://postgres@localhost:5432/relayer_local
+    # The shipped defaults pace requests for a 15 req/s public endpoint.
+    export SYNC_DELAY_MS=50
+    export CATCHUP_BATCH_SIZE=64
+    mprocs --config mprocs.local.yaml
+
+# Fail with the install command when anvil is missing. Unlike the optional
+# `claude` CLI in ensure-mcp, `just dev-local` cannot run without it.
+ensure-anvil:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v anvil >/dev/null 2>&1; then
+        echo "anvil not found; install foundry with:" >&2
+        echo "    curl -L https://foundry.paradigm.xyz | bash && foundryup" >&2
+        exit 1
+    fi
+    echo "anvil: $(anvil --version | head -n1)"
+
+# Create the Postgres databases `just dev-local` uses. Separate from
+# `ensure-db` so the devnet and the public-endpoint stack never share a store.
+ensure-db-local: (create-db "synchronizer_local") (create-db "relayer_local")
+
+# Point ~/.dobj/settings.json at the local synchronizer + relayer. The
+# counterpart to `ensure-remote-settings`, which is sticky: without this a
+# `just dev-remote` leaves dobjd talking to the hosted services, so a later
+# `just dev-local` would prove against them while anvil runs untouched.
+ensure-local-settings:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="${DOBJ_HOME:-$HOME/.dobj}"
+    f="$root/settings.json"
+    mkdir -p "$root"
+    cur="{}"; [ -f "$f" ] && cur="$(jq '.' "$f" 2>/dev/null || echo '{}')"
+    printf '%s' "$cur" | jq '. + {synchronizerApiUrl:"http://127.0.0.1:3000", relayerApiUrl:"http://127.0.0.1:3200"}' > "$f.tmp"
+    mv "$f.tmp" "$f"
+    echo "$f -> local sync + relayer"
+
 # Block (up to ~5 min) until an HTTP endpoint responds, then return. mprocs
 # uses this to launch synchronizer -> relayer -> dobjd -> web -> desktop in
 # order, each gated on the previous one's health, so they don't race to
@@ -71,19 +151,26 @@ wait-health URL:
     done
     echo "timed out waiting for {{URL}}; starting anyway"
 
-# Idempotently point ~/.dobj/settings.json at the hosted synchronizer + relayer
+# Idempotently point the driver's settings.json at the hosted synchronizer + relayer
 ensure-remote-settings:
-    @mkdir -p ~/.dobj
-    @printf '{"synchronizerApiUrl":"https://synchronizer.don.pateldhvani.com","relayerApiUrl":"https://relayer.don.pateldhvani.com"}\n' > ~/.dobj/settings.json
-    @echo "~/.dobj/settings.json → hosted sync + relayer"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="${DOBJ_HOME:-$HOME/.dobj}"
+    mkdir -p "$root"
+    printf '{"synchronizerApiUrl":"https://synchronizer.don.pateldhvani.com","relayerApiUrl":"https://relayer.don.pateldhvani.com"}\n' > "$root/settings.json"
+    echo "$root/settings.json -> hosted sync + relayer"
 
-# Install plugins into ~/.dobj/actions/ if none are present. Runs as part of
-# `just dev` so a fresh clone (or a `just reset`-ed dev env) boots cleanly.
+# Install plugins into the driver's actions/ dir if none are present. Runs as
+# part of `just dev` so a fresh clone (or a `just reset`-ed dev env) boots
+# cleanly. Honours DOBJ_HOME, so `just dev-local` stocks its own devnet root.
 ensure-plugins:
-    @mkdir -p ~/.dobj/actions
-    @if [ -z "$(find ~/.dobj/actions -maxdepth 1 -name '*.pexe' -print -quit)" ]; then \
-        echo "No .pexe plugins installed — packaging from examples/ and installing..."; \
-        just install-plugins; \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    actions="${DOBJ_HOME:-$HOME/.dobj}/actions"
+    mkdir -p "$actions"
+    if [ -z "$(find "$actions" -maxdepth 1 -name '*.pexe' -print -quit)" ]; then
+        echo "No .pexe plugins in $actions - packaging from examples/ and installing..."
+        just install-plugins
     fi
 
 # Register the dobj MCP with Claude Code at project (default) scope, so it
@@ -109,19 +196,22 @@ ensure-mcp:
 ensure-mcp-enabled:
     #!/usr/bin/env bash
     set -euo pipefail
-    f="$HOME/.dobj/settings.json"
-    mkdir -p "$HOME/.dobj"
+    root="${DOBJ_HOME:-$HOME/.dobj}"
+    f="$root/settings.json"
+    mkdir -p "$root"
     cur="{}"; [ -f "$f" ] && cur="$(jq '.' "$f" 2>/dev/null || echo '{}')"
     printf '%s' "$cur" | jq '{synchronizerApiUrl:"http://127.0.0.1:3000", relayerApiUrl:"http://127.0.0.1:3200"} + . + {mcpEnabled:true}' > "$f.tmp"
     mv "$f.tmp" "$f"
-    echo "~/.dobj/settings.json -> mcpEnabled=true"
+    echo "$f -> mcpEnabled=true"
+
+# Create one Postgres database if it is absent. Idempotent.
+create-db NAME:
+    @psql postgres://postgres@localhost:5432/postgres -tAc "SELECT 1 FROM pg_database WHERE datname='{{NAME}}'" | grep -q 1 || psql postgres://postgres@localhost:5432/postgres -c 'CREATE DATABASE {{NAME}}'
 
 # Ensure the local Postgres databases the synchronizer + relayer expect exist.
 # `just dev` runs this automatically; run it yourself before `just sync` /
-# `just relayer`. Idempotent: skips a database that already exists.
-ensure-db:
-    @psql postgres://postgres@localhost:5432/postgres -tAc "SELECT 1 FROM pg_database WHERE datname='synchronizer'" | grep -q 1 || psql postgres://postgres@localhost:5432/postgres -c 'CREATE DATABASE synchronizer'
-    @psql postgres://postgres@localhost:5432/postgres -tAc "SELECT 1 FROM pg_database WHERE datname='relayer'" | grep -q 1 || psql postgres://postgres@localhost:5432/postgres -c 'CREATE DATABASE relayer'
+# `just relayer`.
+ensure-db: (create-db "synchronizer") (create-db "relayer")
 
 # Point the synchronizer + archiver at the current chain head on a *fresh* start.
 # Both require INIT_START_SLOT but use it only when their store is empty (they
@@ -185,11 +275,19 @@ ensure-start-slot:
 reset:
     #!/usr/bin/env bash
     set -uo pipefail
+    # The installed CLI always lives under ~/.dobj/bin, even when DOBJ_HOME
+    # points the driver's data elsewhere.
     [ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
     rm -rf data/ ~/.dobj
+    root="${DOBJ_HOME:-}"
+    case "$root" in
+        ""|/) ;;
+        *) rm -rf "$root" && echo "removed dobj home: $root" ;;
+    esac
     command -v claude >/dev/null 2>&1 && claude mcp remove dobj 2>/dev/null && echo "removed: dobj MCP registration" || true
-    psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS synchronizer;' || true
-    psql postgres://postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS relayer;' || true
+    for db in synchronizer relayer synchronizer_local relayer_local; do
+        psql postgres://postgres@localhost:5432/postgres -c "DROP DATABASE IF EXISTS $db;" || true
+    done
     blobs="$(sed -n 's/^[[:space:]]*BLOBS_PATH=//p' services/archiver/.env 2>/dev/null | tail -n1 | tr -d '"' | sed 's/[[:space:]]*$//')"
     blobs="${blobs:-/tmp/blobs/}"
     case "$blobs" in

@@ -1,3 +1,6 @@
+# Keep in step with mprocs.local.yaml, which repeats this chain behind a local
+# anvil devnet (mprocs has no include mechanism).
+#
 # Launch order: synchronizer -> relayer -> dobjd -> web -> desktop. Each proc
 # waits for the previous one's health endpoint before starting, so they don't
 # race to cold-build the shared proving-circuit cache (and the desktop shell

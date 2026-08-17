@@ -15,6 +15,7 @@ use pexe::{
 // change it here too.
 const DRIVER_DOBJ_HOME_DIR: &str = ".dobj";
 const DRIVER_ACTIONS_DIR: &str = "actions";
+const DRIVER_DOBJ_HOME_ENV: &str = "DOBJ_HOME";
 
 /// Release tag + target triple, stamped by build.rs ("dev" outside a release
 /// build). pexe ships in the same release bundle as dobj/dobjd and `dobj
@@ -28,6 +29,12 @@ const VERSION: &str = concat!(
 );
 
 fn default_install_dir() -> Result<PathBuf> {
+    // Resolved the same way as `driver::paths::default_dobj_root`, which this
+    // crate cannot call without depending on the whole driver. Installing into
+    // a root the driver would not read is worse than the duplication.
+    if let Some(root) = std::env::var_os(DRIVER_DOBJ_HOME_ENV).filter(|root| !root.is_empty()) {
+        return Ok(PathBuf::from(root).join(DRIVER_ACTIONS_DIR));
+    }
     let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory"))?;
     Ok(home.join(DRIVER_DOBJ_HOME_DIR).join(DRIVER_ACTIONS_DIR))
 }

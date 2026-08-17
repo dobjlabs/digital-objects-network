@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, anyhow};
 
@@ -6,6 +9,13 @@ use crate::types::DriverPaths;
 
 /// Top-level directory under the user's home that the driver owns.
 pub const DOBJ_HOME_DIR: &str = ".dobj";
+
+/// Environment variable holding an absolute path that replaces the default
+/// root. `just dev-local` sets it so a devnet's objects, plugins, and settings
+/// never mix with those of a run against a public endpoint: the two chains
+/// share no state, so an object created against one cannot be proven or synced
+/// against the other.
+pub const DOBJ_HOME_ENV: &str = "DOBJ_HOME";
 
 /// File name (inside [`DOBJ_HOME_DIR`]) holding persisted driver settings.
 pub const SETTINGS_FILE: &str = "settings.json";
@@ -39,10 +49,23 @@ impl DriverPaths {
     }
 }
 
-/// The `.dobj` directory under the user's home.
+/// [`DOBJ_HOME_ENV`] if it is set, otherwise the `.dobj` directory under the
+/// user's home.
 pub fn default_dobj_root() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory"))?;
-    Ok(home.join(DOBJ_HOME_DIR))
+    dobj_root_from(std::env::var_os(DOBJ_HOME_ENV))
+}
+
+/// Split out from [`default_dobj_root`] so the resolution can be tested without
+/// mutating the environment, which every other test in the process shares.
+fn dobj_root_from(override_root: Option<OsString>) -> Result<PathBuf> {
+    match override_root.filter(|root| !root.is_empty()) {
+        Some(root) => Ok(PathBuf::from(root)),
+        None => {
+            let home =
+                dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory"))?;
+            Ok(home.join(DOBJ_HOME_DIR))
+        }
+    }
 }
 
 pub fn default_paths() -> Result<DriverPaths> {
@@ -65,8 +88,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_dobj_root_honours_the_env_override() {
+        assert_eq!(
+            dobj_root_from(Some(OsString::from("/tmp/devnet-home"))).unwrap(),
+            PathBuf::from("/tmp/devnet-home")
+        );
+    }
+
+    #[test]
+    fn test_empty_env_override_falls_back_to_home() {
+        let root = dobj_root_from(Some(OsString::new())).unwrap();
+        assert!(root.ends_with(DOBJ_HOME_DIR));
+    }
+
+    #[test]
     fn test_default_paths_shape() {
-        let paths = default_paths().unwrap();
+        let paths = DriverPaths::from_dobj_root(dobj_root_from(None).unwrap());
         let expect_settings = format!("{DOBJ_HOME_DIR}/{SETTINGS_FILE}");
         let expect_objects = format!("{DOBJ_HOME_DIR}/{OBJECTS_DIR}");
         let expect_nullified = format!("{DOBJ_HOME_DIR}/{OBJECTS_DIR}/{NULLIFIED_DIR}");

@@ -14,7 +14,10 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::node::Store;
-use eth_clients::beacon::types::{BlobsResponse, BlockHeader};
+use eth_clients::{
+    beacon::types::{BlobsResponse, BlockHeader},
+    common::ErrorResponse,
+};
 use tokio::sync::RwLock;
 use wire_types::HealthResponse;
 
@@ -80,7 +83,7 @@ async fn get_blobs(
     Path(block_id): Path<B256>,
     Query(query): Query<BlobsQuery>,
     State(state): State<ApiState>,
-) -> Result<Json<BlobsResponse>, (StatusCode, String)> {
+) -> Result<Json<BlobsResponse>, (StatusCode, Json<ErrorResponse>)> {
     let block_blobs = state
         .store
         .load_blobs_disk(&block_id)
@@ -94,7 +97,7 @@ async fn get_blobs(
         if let Some((index, _, blob)) = block_blobs.iter().find(|(_, vh0, _)| vh == *vh0) {
             blobs.push((*index, blob));
         } else {
-            return Err((
+            return Err(error_response(
                 StatusCode::NOT_FOUND,
                 format!(
                     "blob with versioned_hash {} not found in stored blobs from block {}",
@@ -110,6 +113,43 @@ async fn get_blobs(
     }))
 }
 
-fn internal_error(err: anyhow::Error) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+/// The synchronizer reads this endpoint through `eth-clients`, which parses
+/// every non-404 body as an [`ErrorResponse`]. A bare string reaches it as a
+/// deserialization failure with the real message dropped.
+fn error_response(status: StatusCode, message: String) -> (StatusCode, Json<ErrorResponse>) {
+    (status, Json(ErrorResponse::new(status.as_u16(), message)))
+}
+
+fn internal_error(err: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
+    error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::response::IntoResponse;
+    use eth_clients::common::ClientResponse;
+
+    /// The synchronizer's `eth-clients` reader feeds every non-404 body to
+    /// `ClientResponse`, so a body that misses its `Error` arm arrives as a
+    /// serde failure instead of the message.
+    #[tokio::test]
+    async fn error_body_parses_as_a_client_error() {
+        let response = internal_error(anyhow::anyhow!("disk gone")).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let parsed: ClientResponse<serde_json::Value> =
+            serde_json::from_slice(&body).expect("error body must be JSON");
+
+        match parsed {
+            ClientResponse::Error(err) => {
+                assert_eq!(err.message.as_deref(), Some("disk gone"));
+                assert_eq!(err.code.to_string(), "500");
+            }
+            _ => panic!("error body did not parse as ClientResponse::Error"),
+        }
+    }
 }
