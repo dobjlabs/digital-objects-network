@@ -94,6 +94,24 @@ impl PexeCatalog {
                     anyhow!("plugin {plugin_name} calls into {dep_name}, which is not installed")
                 })?;
             let dep = self.load_plugin_module(sdk, dep_idx, cache)?;
+            // A declared import pin turns version drift into a message naming
+            // the dependency; without one the mismatch still fails, but only
+            // as the caller's own whole-module hash check. Import paths are a
+            // build-machine convenience and mean nothing here.
+            if let Some(pinned) = plugin
+                .manifest
+                .imports
+                .iter()
+                .find(|import| import.name == dep_name)
+                .and_then(|import| import.module_hash)
+            {
+                let compiled = dep.module().batch.id();
+                if pinned != compiled {
+                    return Err(anyhow!(
+                        "plugin {plugin_name} pins import {dep_name} at {pinned:#}, but the installed {dep_name} compiles to {compiled:#}"
+                    ));
+                }
+            }
             deps.insert(dep_name, dep);
         }
         let module = sdk
@@ -464,11 +482,20 @@ pub(crate) fn test_plugin_bytes() -> Vec<u8> {
 }
 
 #[cfg(test)]
-/// The bundled swap example, packed from source like the plugin above. Its
-/// script reaches craft-basics with a qualified sub-action call.
+/// The second bundled plugin, for cross-plugin composition tests.
+pub(crate) fn test_rocket_bytes() -> Vec<u8> {
+    let manifest = include_str!("../../../examples/craft-rocket/manifest.toml");
+    let script = include_str!("../../../examples/craft-rocket/plugin.rhai");
+    pexe::pack(manifest, script).expect("test rocket packs")
+}
+
+#[cfg(test)]
+/// The bundled swap example, packed from source like the plugins above. Its
+/// script reaches craft-basics AND craft-rocket with qualified sub-action
+/// calls, and its manifest pins both through [[imports]].
 pub(crate) fn bundled_swap_bytes() -> Vec<u8> {
-    let manifest = include_str!("../../../examples/swap-log-wood/manifest.toml");
-    let script = include_str!("../../../examples/swap-log-wood/plugin.rhai");
+    let manifest = include_str!("../../../examples/swap-log-copper/manifest.toml");
+    let script = include_str!("../../../examples/swap-log-copper/plugin.rhai");
     pexe::pack(manifest, script).expect("bundled swap packs")
 }
 
@@ -890,38 +917,40 @@ description = "consume a Foo to make a Bar"
         Some(Hash(value.raw().0))
     }
 
-    /// The bundled swap example calls into craft-basics from its script.
-    /// Its own `module_hash` covers that import, so any change to
-    /// craft-basics invalidates it until it is rebuilt -- which is what this
-    /// checks.
+    /// The bundled swap example calls into craft-basics and craft-rocket
+    /// from its script, and its manifest pins both via [[imports]]. Its own
+    /// `module_hash` covers those imports, so any change to either
+    /// dependency invalidates it until it is rebuilt -- which is what this
+    /// checks, with the pins turning drift into per-import messages.
     #[test]
-    fn test_bundled_swap_loads_against_bundled_plugin() {
+    fn test_bundled_swap_loads_against_bundled_plugins() {
         let catalog = PexeCatalog::from_bytes(
             [
-                (PathBuf::from("swap-log-wood.pexe"), bundled_swap_bytes()),
+                (PathBuf::from("swap-log-copper.pexe"), bundled_swap_bytes()),
                 (PathBuf::from("craft-basics.pexe"), test_plugin_bytes()),
+                (PathBuf::from("craft-rocket.pexe"), test_rocket_bytes()),
             ],
             true,
         )
-        .expect("bundled swap loads -- if this fails, rebuild examples/swap-log-wood");
+        .expect("bundled swap loads -- if this fails, rebuild examples/swap-log-copper");
 
         let swap = catalog
-            .get_action(&QualifiedName::new("swap-log-wood", "SwapLogWood"))
+            .get_action(&QualifiedName::new("swap-log-copper", "SwapLogCopper"))
             .expect("swap is a catalog action");
         let ids =
             |refs: &[ClassRef]| -> Vec<String> { refs.iter().map(|r| r.class.id()).collect() };
-        // Consumes craft-basics classes through the qualified calls, and
+        // Consumes the dependencies' classes through the qualified calls, and
         // produces those plus its own receipt.
         assert_eq!(
             ids(&swap.total_inputs),
-            vec!["craft-basics::Log", "craft-basics::Wood"]
+            vec!["craft-basics::Log", "craft-rocket::Copper"]
         );
         assert_eq!(
             ids(&swap.total_outputs),
             vec![
                 "craft-basics::Log",
-                "craft-basics::Wood",
-                "swap-log-wood::Swapped"
+                "craft-rocket::Copper",
+                "swap-log-copper::Swapped"
             ]
         );
     }
@@ -934,7 +963,8 @@ description = "consume a Foo to make a Bar"
         let catalog = PexeCatalog::from_bytes(
             [
                 (PathBuf::from("craft-basics.pexe"), test_plugin_bytes()),
-                (PathBuf::from("swap-log-wood.pexe"), bundled_swap_bytes()),
+                (PathBuf::from("craft-rocket.pexe"), test_rocket_bytes()),
+                (PathBuf::from("swap-log-copper.pexe"), bundled_swap_bytes()),
             ],
             true,
         )
@@ -954,37 +984,36 @@ description = "consume a Foo to make a Bar"
             out
         };
         let log = run(QualifiedName::new("craft-basics", "FindLog"), vec![]).obj(0);
-        let spare = run(QualifiedName::new("craft-basics", "FindLog"), vec![]).obj(0);
-        let wood = run(QualifiedName::new("craft-basics", "CraftWood"), vec![spare]).obj(0);
+        let copper = run(QualifiedName::new("craft-rocket", "MineCopper"), vec![]).obj(0);
 
         let out = run(
-            QualifiedName::new("swap-log-wood", "SwapLogWood"),
-            vec![log.clone(), wood.clone()],
+            QualifiedName::new("swap-log-copper", "SwapLogCopper"),
+            vec![log.clone(), copper.clone()],
         );
 
         let nullifiers = out.tx.nullifier_hashes().unwrap();
-        assert_eq!(nullifiers.len(), 2, "both claims spent their input");
+        assert_eq!(nullifiers.len(), 2, "both rekeys spent their input");
         assert!(nullifiers.contains(&txlib::object_nullifier_hash(&log.obj).unwrap()));
-        assert!(nullifiers.contains(&txlib::object_nullifier_hash(&wood.obj).unwrap()));
+        assert!(nullifiers.contains(&txlib::object_nullifier_hash(&copper.obj).unwrap()));
 
-        assert_eq!(out.objs.len(), 3, "log, wood, and the receipt");
+        assert_eq!(out.objs.len(), 3, "log, copper, and the receipt");
         let live = out.tx.live_commitments().unwrap();
         for produced in &out.objs {
             assert!(live.contains(&produced.obj.commitment()));
         }
 
-        // The claimed objects keep craft-basics' classes; only the receipt
-        // carries this plugin's own.
+        // The rekeyed objects keep their defining plugins' classes; only the
+        // receipt carries this plugin's own.
         assert_eq!(
             obj_type_hash_for_test(&out.obj(0).obj).unwrap(),
             obj_type_hash_for_test(&log.obj).unwrap()
         );
         assert_eq!(
             obj_type_hash_for_test(&out.obj(1).obj).unwrap(),
-            obj_type_hash_for_test(&wood.obj).unwrap()
+            obj_type_hash_for_test(&copper.obj).unwrap()
         );
         let swapped = catalog
-            .get_class(&QualifiedName::new("swap-log-wood", "Swapped"))
+            .get_class(&QualifiedName::new("swap-log-copper", "Swapped"))
             .expect("Swapped class present");
         assert_eq!(
             obj_type_hash_for_test(&out.obj(2).obj).unwrap(),

@@ -6,6 +6,15 @@ pub struct Manifest {
     pub plugin: Plugin,
     pub classes: Vec<Class>,
     pub actions: Vec<Action>,
+    /// Declared dependencies. Optional: with no entries, builders fall back
+    /// to scanning the script for qualified sub-action calls and resolving
+    /// each plugin by name from an install directory. With entries, the
+    /// declaration is authoritative: it must cover the scanned set exactly,
+    /// each dependency loads from its `path`, and a declared `module_hash`
+    /// is verified per dependency -- so version drift names the offending
+    /// import instead of surfacing as a whole-plugin hash mismatch.
+    #[serde(default)]
+    pub imports: Vec<Import>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +38,23 @@ pub struct Action {
     pub description: String,
     #[serde(default)]
     pub hidden: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Import {
+    /// The dependency's plugin name, as it appears in qualified calls.
+    pub name: String,
+    /// Where the built `.pexe` lives, relative to this manifest's directory.
+    /// A build-time convenience only: installed catalogs still resolve
+    /// dependencies by name, so the path never needs to exist off the
+    /// machine that built the plugin.
+    pub path: String,
+    /// The dependency batch id to pin. Optional; when present, resolution
+    /// fails with a per-import message if the pexe at `path` (or, in an
+    /// installed catalog, the plugin of this name) compiles to a different
+    /// batch.
+    #[serde(default)]
+    pub module_hash: Option<Hash>,
 }
 
 #[cfg(test)]

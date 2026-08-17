@@ -11,8 +11,14 @@
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
+use std::collections::BTreeMap;
+use std::rc::Rc;
+
 use anyhow::{Context, Result, anyhow, bail};
-use sdk::{PluginDeps, Sdk, manifest::Manifest};
+use sdk::{
+    PluginDeps, Sdk, SdkModule,
+    manifest::{Import, Manifest},
+};
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 pub mod fixtures;
@@ -173,6 +179,102 @@ pub fn resolve_script_deps(script: &str, search_dir: &Path) -> Result<PluginDeps
             .load_module_from_manifest_deps(&dep_script, &manifest, dep_deps)
             .map_err(|err| anyhow!("failed to compile dependency {plugin_name}: {err}"))?;
         deps.insert(plugin_name, module);
+    }
+    Ok(deps)
+}
+
+/// Resolve dependencies from the manifest's declared `[[imports]]` instead of
+/// an install-directory scan. The declaration must cover the script's
+/// qualified calls exactly (a missing or unused entry is an error), each
+/// import loads from its `path` relative to `plugin_root`, and a declared
+/// `module_hash` is verified against what the loaded pexe compiles to --
+/// version drift names the offending import instead of surfacing later as a
+/// whole-plugin hash mismatch. Imports may compose each other; anything an
+/// import's own script calls into must itself be declared here, because a
+/// path recorded inside a dependency's manifest was relative to the machine
+/// that built IT.
+pub fn resolve_declared_imports(
+    plugin_root: &Path,
+    imports: &[Import],
+    script: &str,
+) -> Result<PluginDeps> {
+    let sdk = Sdk::default();
+
+    let mut declared: BTreeMap<&str, &Import> = BTreeMap::new();
+    for import in imports {
+        if declared.insert(import.name.as_str(), import).is_some() {
+            return Err(anyhow!("[[imports]] declares {} twice", import.name));
+        }
+    }
+    let scanned = sdk::script_dependencies(script);
+    for name in &scanned {
+        if !declared.contains_key(name.as_str()) {
+            return Err(anyhow!(
+                "this script calls into {name}, but [[imports]] does not declare it"
+            ));
+        }
+    }
+    for name in declared.keys() {
+        if !scanned.iter().any(|scan| scan == name) {
+            return Err(anyhow!(
+                "[[imports]] declares {name}, but the script never calls into it"
+            ));
+        }
+    }
+
+    fn load_import(
+        sdk: &Sdk,
+        plugin_root: &Path,
+        declared: &BTreeMap<&str, &Import>,
+        name: &str,
+        cache: &mut PluginDeps,
+    ) -> Result<Rc<SdkModule>> {
+        if let Some(module) = cache.get(name) {
+            return Ok(module.clone());
+        }
+        let import = declared.get(name).ok_or_else(|| {
+            anyhow!("{name} is not declared in [[imports]]")
+        })?;
+        let path = plugin_root.join(&import.path);
+        let bytes = read_pexe_file(&path)
+            .with_context(|| format!("import {name}: no pexe at {}", path.display()))?;
+        let (manifest, dep_script) = unpack(&bytes)?;
+        if manifest.plugin.name != name {
+            return Err(anyhow!(
+                "import {name}: the pexe at {} is plugin {}",
+                path.display(),
+                manifest.plugin.name
+            ));
+        }
+        let mut dep_deps = PluginDeps::new();
+        for transitive in sdk::script_dependencies(&dep_script) {
+            let module = load_import(sdk, plugin_root, declared, &transitive, cache)
+                .with_context(|| {
+                    format!("import {name} composes {transitive}, which must also be declared")
+                })?;
+            dep_deps.insert(transitive, module);
+        }
+        let module = sdk
+            .load_module_from_manifest_deps(&dep_script, &manifest, dep_deps)
+            .map_err(|err| anyhow!("import {name}: failed to compile: {err}"))?;
+        if let Some(pinned) = import.module_hash {
+            let compiled = module.module().batch.id();
+            if pinned != compiled {
+                return Err(anyhow!(
+                    "import {name}: manifest pins module_hash {pinned:#}, but {} compiles to {compiled:#}",
+                    path.display()
+                ));
+            }
+        }
+        cache.insert(name.to_string(), module.clone());
+        Ok(module)
+    }
+
+    let mut cache = PluginDeps::new();
+    let mut deps = PluginDeps::new();
+    for name in scanned {
+        let module = load_import(&sdk, plugin_root, &declared, &name, &mut cache)?;
+        deps.insert(name, module);
     }
     Ok(deps)
 }

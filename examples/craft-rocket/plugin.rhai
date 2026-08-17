@@ -879,8 +879,11 @@ fn CraftRocketCat(action) {
 // Nothing else about the state changes, and the stable identifier carries
 // across, so the object stays the same object under new custody.
 //
-// These are also this plugin's extension surface: another plugin's script can
-// only reach the actions exposed here.
+// These are also part of this plugin's extension surface -- which is every
+// [[actions]] entry in the manifest, hidden ones included (hidden only skips
+// catalog listings). A dependent plugin's script reaches any of those with a
+// qualified subaction call; lowercase helpers like rekey() are inlined at
+// compile time and are not callable, so the manifest IS the public API.
 
 fn rekey(action, obj) {
     var key = action.random();
