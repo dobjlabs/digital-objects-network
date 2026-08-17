@@ -1,6 +1,17 @@
 # Digital Objects Network justfile
 # Install just: https://github.com/casey/just
 
+# Driver state root the ensure-* recipes below act on. They take it as a
+# parameter rather than reading DOBJ_HOME themselves: a dependency runs in its
+# own process before the depending recipe's body, so it cannot see an export
+# the body performs, and `just dev-local` would stock the default root instead
+# of its devnet one.
+DOBJ_ROOT := env_var_or_default("DOBJ_HOME", home_directory() / ".dobj")
+
+# Devnet counterpart, passed by `just dev-local`. Absolute, because the Tauri
+# shell resolves it from interfaces/gui.
+LOCAL_DOBJ_ROOT := justfile_directory() / "data/dobj-local"
+
 # Run the synchronizer (loads env from services/synchronizer/.env if present)
 sync:
     RUST_LOG=info cargo run -p synchronizer --release
@@ -78,13 +89,12 @@ dev-remote: ensure-remote-settings ensure-plugins ensure-mcp ensure-mcp-enabled
 # RocksDB path, own blobs directory) because the two point at different chains
 # and sharing them would leave the synchronizer deriving against roots that
 # never existed on the other one. See devtools/beacon-shim/README.md.
-dev-local: ensure-anvil ensure-db-local ensure-local-settings ensure-plugins ensure-mcp ensure-mcp-enabled
+dev-local: ensure-anvil ensure-db-local (ensure-local-settings LOCAL_DOBJ_ROOT) (ensure-plugins LOCAL_DOBJ_ROOT) ensure-mcp (ensure-mcp-enabled LOCAL_DOBJ_ROOT)
     #!/usr/bin/env bash
     set -euo pipefail
     # mprocs.local.yaml execs anvil directly, so nothing else creates its state dir.
     mkdir -p data
-    # Absolute, because the Tauri shell resolves it from interfaces/gui.
-    export DOBJ_HOME="$PWD/data/dobj-local"
+    export DOBJ_HOME="{{LOCAL_DOBJ_ROOT}}"
     export RPC_URL=http://127.0.0.1:8545
     export BEACON_URL=http://127.0.0.1:8555
     export ARCHIVER_URL=http://127.0.0.1:3001
@@ -123,10 +133,10 @@ ensure-db-local: (create-db "synchronizer_local") (create-db "relayer_local")
 # counterpart to `ensure-remote-settings`, which is sticky: without this a
 # `just dev-remote` leaves dobjd talking to the hosted services, so a later
 # `just dev-local` would prove against them while anvil runs untouched.
-ensure-local-settings:
+ensure-local-settings ROOT=DOBJ_ROOT:
     #!/usr/bin/env bash
     set -euo pipefail
-    root="${DOBJ_HOME:-$HOME/.dobj}"
+    root="{{ROOT}}"
     f="$root/settings.json"
     mkdir -p "$root"
     cur="{}"; [ -f "$f" ] && cur="$(jq '.' "$f" 2>/dev/null || echo '{}')"
@@ -162,15 +172,16 @@ ensure-remote-settings:
 
 # Install plugins into the driver's actions/ dir if none are present. Runs as
 # part of `just dev` so a fresh clone (or a `just reset`-ed dev env) boots
-# cleanly. Honours DOBJ_HOME, so `just dev-local` stocks its own devnet root.
-ensure-plugins:
+# cleanly. `just dev-local` passes its devnet root, which is stocked separately
+# from the default one.
+ensure-plugins ROOT=DOBJ_ROOT:
     #!/usr/bin/env bash
     set -euo pipefail
-    actions="${DOBJ_HOME:-$HOME/.dobj}/actions"
+    actions="{{ROOT}}/actions"
     mkdir -p "$actions"
     if [ -z "$(find "$actions" -maxdepth 1 -name '*.pexe' -print -quit)" ]; then
         echo "No .pexe plugins in $actions - packaging from examples/ and installing..."
-        just install-plugins
+        just install-plugins '{{ROOT}}'
     fi
 
 # Register the dobj MCP with Claude Code at project (default) scope, so it
@@ -193,10 +204,10 @@ ensure-mcp:
 # disabled. Read-modify-write: keep any existing synchronizer/relayer URLs (both
 # are required fields, so the file must stay complete) and seed the local-dev
 # defaults when the file is absent. Idempotent.
-ensure-mcp-enabled:
+ensure-mcp-enabled ROOT=DOBJ_ROOT:
     #!/usr/bin/env bash
     set -euo pipefail
-    root="${DOBJ_HOME:-$HOME/.dobj}"
+    root="{{ROOT}}"
     f="$root/settings.json"
     mkdir -p "$root"
     cur="{}"; [ -f "$f" ] && cur="$(jq '.' "$f" 2>/dev/null || echo '{}')"
@@ -315,9 +326,9 @@ build:
 pack-plugins:
     cargo run -p pexe --release -- build examples/*
 
-# Build and install plugins into ~/.dobj/actions/
-install-plugins:
-    cargo run -p pexe --release -- build --install examples/*
+# Build and install plugins into the driver's actions/ dir (default ~/.dobj/actions/)
+install-plugins ROOT=DOBJ_ROOT:
+    cargo run -p pexe --release -- build --install --install-dir '{{ROOT}}/actions' examples/*
 
 # Run the `pexe` CLI with arbitrary args. Example:
 #   just pexe inspect plan --action CraftWood examples/craft-basics

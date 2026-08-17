@@ -128,13 +128,19 @@ export function ObjectsPanel({
     );
   };
 
+  const displayedObjectsDir = displayPathInObjectsDir(
+    objectsDirPath,
+    objectsDirPath,
+  );
+
   return (
     <section className="objects-panel">
       <button
         type="button"
         className="panel-header panel-header-button"
         onClick={onOpenObjectsDir}
-        title={displayPathInObjectsDir(objectsDirPath, objectsDirPath)}
+        title={displayedObjectsDir}
+        data-hover-label={`open ${displayedObjectsDir}/`}
       >
         Your Objects
       </button>
