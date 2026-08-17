@@ -57,14 +57,18 @@ impl fmt::Display for Topic {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct SpecResponse {
     pub data: Spec,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct Spec {
-    #[serde(rename = "DEPOSIT_NETWORK_ID", deserialize_with = "deserialize_u64")]
+    #[serde(
+        rename = "DEPOSIT_NETWORK_ID",
+        deserialize_with = "deserialize_u64",
+        serialize_with = "serialize_u64"
+    )]
     pub deposit_network_id: u64,
 }
 #[derive(Deserialize, Debug)]
@@ -78,36 +82,36 @@ pub struct Block {
     pub slot: u32,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct ExecutionPayload {
     pub block_hash: B256,
-    #[serde(deserialize_with = "deserialize_u32")]
+    #[serde(deserialize_with = "deserialize_u32", serialize_with = "serialize_u32")]
     pub block_number: u32,
-    #[serde(deserialize_with = "deserialize_u64")]
+    #[serde(deserialize_with = "deserialize_u64", serialize_with = "serialize_u64")]
     pub timestamp: u64,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct BlockBody {
     // Mandatory after "Deneb"
     pub execution_payload: ExecutionPayload,
     // Mandatory after "Bellatrix/The Merge"
     pub blob_kzg_commitments: Vec<KzgCommitment>,
 }
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct BlockMessage {
     pub body: BlockBody,
     pub parent_root: B256,
-    #[serde(deserialize_with = "deserialize_u32")]
+    #[serde(deserialize_with = "deserialize_u32", serialize_with = "serialize_u32")]
     pub slot: u32,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct BlockData {
     pub message: BlockMessage,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct BlockResponse {
     pub data: BlockData,
 }
@@ -131,7 +135,7 @@ pub struct BlobsResponse {
     pub data: Vec<HeapBlob>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct BlockHeaderResponse {
     pub data: BlockHeaderData,
 }
@@ -143,26 +147,26 @@ pub struct BlockHeader {
     pub slot: u32,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct BlockHeaderData {
     pub root: B256,
     pub header: InnerBlockHeader,
 }
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct InnerBlockHeader {
     pub message: BlockHeaderMessage,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct BlockHeaderMessage {
     pub parent_root: B256,
-    #[serde(deserialize_with = "deserialize_u32")]
+    #[serde(deserialize_with = "deserialize_u32", serialize_with = "serialize_u32")]
     pub slot: u32,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct HeadEventData {
-    #[serde(deserialize_with = "deserialize_u32")]
+    #[serde(deserialize_with = "deserialize_u32", serialize_with = "serialize_u32")]
     pub slot: u32,
     #[allow(dead_code)]
     pub block: B256,
@@ -174,6 +178,13 @@ pub struct FinalizedCheckpointEventData {
 }
 
 fn serialize_u32<S>(v: &u32, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&v.to_string())
+}
+
+fn serialize_u64<S>(v: &u64, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -318,5 +329,79 @@ impl BlockId {
                 None => Err(BlockIdResolutionError::BlockNotFound(self.clone())),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The beacon API encodes these integers as JSON strings. Serializing them
+    /// as numbers would produce a document this crate's own reader rejects, so
+    /// the two halves are checked against each other rather than against a
+    /// hand-written literal.
+    #[test]
+    fn response_types_round_trip_through_their_own_reader() {
+        let json = serde_json::to_string(&BlockResponse {
+            data: BlockData {
+                message: BlockMessage {
+                    body: BlockBody {
+                        execution_payload: ExecutionPayload {
+                            block_hash: B256::repeat_byte(0xaa),
+                            block_number: 6,
+                            timestamp: 1_786_703_077,
+                        },
+                        blob_kzg_commitments: vec![KzgCommitment::repeat_byte(0xbb)],
+                    },
+                    parent_root: B256::repeat_byte(0xcc),
+                    slot: 6,
+                },
+            },
+        })
+        .expect("serialize");
+
+        assert!(
+            json.contains(r#""block_number":"6""#),
+            "integers must serialize as strings: {json}"
+        );
+
+        let block: Block = serde_json::from_str::<BlockResponse>(&json)
+            .expect("the reader must accept what the writer produced")
+            .into();
+        assert_eq!(block.slot, 6);
+        assert_eq!(block.execution_payload.block_number, 6);
+        assert_eq!(block.execution_payload.timestamp, 1_786_703_077);
+        assert_eq!(block.blob_kzg_commitments.len(), 1);
+    }
+
+    #[test]
+    fn header_and_spec_round_trip() {
+        let json = serde_json::to_string(&BlockHeaderResponse {
+            data: BlockHeaderData {
+                root: B256::repeat_byte(0x11),
+                header: InnerBlockHeader {
+                    message: BlockHeaderMessage {
+                        parent_root: B256::repeat_byte(0x22),
+                        slot: 42,
+                    },
+                },
+            },
+        })
+        .expect("serialize");
+        let header: BlockHeader = serde_json::from_str::<BlockHeaderResponse>(&json)
+            .expect("reader accepts writer")
+            .into();
+        assert_eq!(header.slot, 42);
+        assert_eq!(header.root, B256::repeat_byte(0x11));
+
+        let json = serde_json::to_string(&SpecResponse {
+            data: Spec {
+                deposit_network_id: 31337,
+            },
+        })
+        .expect("serialize");
+        assert!(json.contains(r#""DEPOSIT_NETWORK_ID":"31337""#), "{json}");
+        let spec: SpecResponse = serde_json::from_str(&json).expect("reader accepts writer");
+        assert_eq!(spec.data.deposit_network_id, 31337);
     }
 }
