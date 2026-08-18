@@ -693,21 +693,26 @@ impl ActionHandle {
             Some((initials_array.as_ref()?, slot as i64).into())
         };
 
-        // Returns an anchored op-arg when the Object's side at this ts
-        // is collapsed; else a literal op-arg for the dict.
-        let anchor_or_literal = |obj_name: &str, dict: &Dictionary, ts: usize| -> OperationArg {
-            match meta.collapsed_at(obj_name, ts) {
-                Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::In)) => {
-                    (&io_array, meta.in_entry(obj_name).unwrap().0 as i64).into()
+        // Returns the anchored op-arg for the Object's collapsed side at
+        // this ts, or None when the form stays an explicit wildcard.
+        let anchor_at = |obj_name: &str, ts: usize| -> Option<OperationArg> {
+            match meta.collapsed_at(obj_name, ts)? {
+                fmt_podlang::Collapse::IO(fmt_podlang::Side::In) => {
+                    Some((&io_array, meta.in_entry(obj_name).unwrap().0 as i64).into())
                 }
-                Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::Out)) => {
-                    (&io_array, meta.out_entry(obj_name).unwrap().0 as i64).into()
+                fmt_podlang::Collapse::IO(fmt_podlang::Side::Out) => {
+                    Some((&io_array, meta.out_entry(obj_name).unwrap().0 as i64).into())
                 }
-                Some(fmt_podlang::Collapse::Initials) => {
-                    initials_anchor(obj_name).expect("collapsed_at promised an initials slot")
+                fmt_podlang::Collapse::Initials => {
+                    Some(initials_anchor(obj_name).expect("collapsed_at promised an initials slot"))
                 }
-                None => OperationArg::Literal(Value::from(dict.clone())),
             }
+        };
+
+        // Like `anchor_at`, falling back to a literal op-arg for the dict.
+        let anchor_or_literal = |obj_name: &str, dict: &Dictionary, ts: usize| -> OperationArg {
+            anchor_at(obj_name, ts)
+                .unwrap_or_else(|| OperationArg::Literal(Value::from(dict.clone())))
         };
 
         // ---- Emit ArrayContains clauses for each Object's pre/post-
@@ -1037,13 +1042,46 @@ impl ActionHandle {
                             .unwrap();
                         body_sts.push(st);
                     }
-                    Inst::Intro { statement, .. } => {
-                        // pod2's `Statement::Intro` only accepts literal
-                        // args, so `compute_wildcard_needs` forces a
-                        // wildcard on any side whose Object appears
-                        // here at its pre/post-form ts. The cached
-                        // literal Statement then matches directly.
-                        body_sts.push(statement.clone().expect("Intro statement captured at Rhai"));
+                    Inst::Intro {
+                        statement, args, ..
+                    } => {
+                        let st_literal =
+                            statement.clone().expect("Intro statement captured at Rhai");
+                        // The intro pod's cached Statement carries only
+                        // literal values, while the compiled podlang
+                        // anchors two arg forms: a dict-field arg
+                        // (`var.key`) is lifted to its entry, and a
+                        // whole-dict arg of an Object collapsed at this
+                        // ts is lifted to its record slot. Loose-wildcard
+                        // and literal args stay literal.
+                        let replacements: Vec<Option<OperationArg>> = args
+                            .iter()
+                            .map(|arg| {
+                                let arg = arg.borrow();
+                                match &*arg {
+                                    VarOrValue::Var(Var { key: Some(_), .. }) => {
+                                        Some(arg.as_op_arg())
+                                    }
+                                    VarOrValue::Var(Var {
+                                        key: None, name, ..
+                                    }) => current_ts.get(name).and_then(|ts| anchor_at(name, *ts)),
+                                    VarOrValue::Value(_) => None,
+                                }
+                            })
+                            .collect();
+                        let st = if replacements.iter().any(|r| r.is_some()) {
+                            exe_ctx
+                                .bld
+                                .builder
+                                .priv_op(Operation::replace_value_with_entry(
+                                    replacements,
+                                    st_literal,
+                                ))
+                                .unwrap()
+                        } else {
+                            st_literal
+                        };
+                        body_sts.push(st);
                     }
                     Inst::SubAction { st_sub, .. } => {
                         let st_literal = st_sub
@@ -1842,7 +1880,7 @@ impl ActionMeta {
                 _ => {}
             }
         }
-        let (needs_in, needs_out, blocks_initials_pack) = compute_wildcard_needs(ctx);
+        let (needs_in, needs_out) = compute_wildcard_needs(ctx);
         for r in &meta.object_refs {
             if r.io.consumes() {
                 meta.in_entries.push(EntryShape {
@@ -1857,19 +1895,14 @@ impl ActionMeta {
                 });
             }
         }
-        // Give the action an initials record iff it has Output objects and none
-        // is blocked from anchoring (blocks_initials_pack, from
-        // compute_wildcard_needs); otherwise leave it None.
+        // Give the action an initials record iff it has Output objects.
         let output_names: Vec<String> = meta
             .object_refs
             .iter()
             .filter(|r| r.io == ObjectIO::Output)
             .map(|r| r.varname.clone())
             .collect();
-        let any_blocked = output_names
-            .iter()
-            .any(|name| blocks_initials_pack.contains(name));
-        meta.initials_entries = (!output_names.is_empty() && !any_blocked).then_some(output_names);
+        meta.initials_entries = (!output_names.is_empty()).then_some(output_names);
         Ok(meta)
     }
 }
@@ -1909,17 +1942,16 @@ pub(crate) fn body_referenced_vars(insts: &[Inst]) -> HashSet<String> {
     referenced
 }
 
-/// An Object's in/out/initials form normally collapses into the matching
-/// record and needs no wildcard of its own. A body reference can defeat
-/// that, keeping the form as an explicit wildcard instead; this walks the
-/// body and returns the Objects forced open on each side: `needs_in`,
-/// `needs_out`, and `blocks_initials_pack` (an Output's pre-identity form,
-/// reachable only by an Intro, so forcing it open also disables initials
-/// packing for the action). The per-reference rules are in the `check`
-/// closure below.
-fn compute_wildcard_needs(
-    ctx: &ActionContext,
-) -> (HashSet<String>, HashSet<String>, HashSet<String>) {
+/// An Object's in/out form normally collapses into the io record and
+/// needs no wildcard of its own. A sub-field body reference (`var.key`)
+/// defeats that, keeping the form as an explicit wildcard instead:
+/// double-anchoring a record entry isn't supported, so the dict must
+/// stay a wildcard for `<var>.<key>` to render. This walks the body and
+/// returns the Objects forced open on each side: `needs_in` and
+/// `needs_out`. Whole-dict refs never force a wildcard; a collapsed
+/// dict arg is lifted to its record entry at execution via
+/// ReplaceValueWithEntry.
+fn compute_wildcard_needs(ctx: &ActionContext) -> (HashSet<String>, HashSet<String>) {
     let mut object_io: HashMap<String, ObjectIO> = HashMap::new();
     for inst in &ctx.insts {
         if let Inst::Object { io, obj, .. } = inst {
@@ -1930,26 +1962,16 @@ fn compute_wildcard_needs(
     let max_ts = ctx.max_ts_per_var();
     let mut needs_in: HashSet<String> = HashSet::new();
     let mut needs_out: HashSet<String> = HashSet::new();
-    let mut blocks_initials_pack: HashSet<String> = HashSet::new();
 
-    // Force the wildcard on whichever side(s) the Object Ref pins.
-    // Sub-field anchored refs (`var.key.is_some()`) always count
-    // (double-anchoring isn't supported). Whole-dict refs
-    // (`var.key.is_none()`) only count when `whole_dict_pins` is set
-    // (currently true for Intro args, since pod2's `Statement::Intro`
-    // only accepts literal args and can't be lifted via
-    // ReplaceValueWithEntry).
     let check = |arg: &Ref,
-                 whole_dict_pins: bool,
                  cur: &HashMap<String, usize>,
                  needs_in: &mut HashSet<String>,
-                 needs_out: &mut HashSet<String>,
-                 blocks_initials_pack: &mut HashSet<String>| {
+                 needs_out: &mut HashSet<String>| {
         let arg = arg.borrow();
         let VarOrValue::Var(var) = &*arg else {
             return;
         };
-        if var.key.is_none() && !whole_dict_pins {
+        if var.key.is_none() {
             return;
         }
         let Some(io) = object_io.get(&var.name) else {
@@ -1959,16 +1981,11 @@ fn compute_wildcard_needs(
         let mts = *max_ts.get(&var.name).unwrap_or(&0);
         let at_in = matches!(io, ObjectIO::Input | ObjectIO::Mutate) && ts == 0;
         let at_out = matches!(io, ObjectIO::Output | ObjectIO::Mutate) && ts == mts;
-        let at_initials =
-            matches!(io, ObjectIO::Output) && var.key.is_none() && whole_dict_pins && ts + 1 == mts;
         if at_in {
             needs_in.insert(var.name.clone());
         }
         if at_out {
             needs_out.insert(var.name.clone());
-        }
-        if at_initials {
-            blocks_initials_pack.insert(var.name.clone());
         }
     };
 
@@ -1976,58 +1993,25 @@ fn compute_wildcard_needs(
         match inst {
             Inst::Object { .. } | Inst::SubAction { .. } => {}
             Inst::Update { obj, value, .. } => {
-                check(
-                    value,
-                    false,
-                    &current_ts,
-                    &mut needs_in,
-                    &mut needs_out,
-                    &mut blocks_initials_pack,
-                );
+                check(value, &current_ts, &mut needs_in, &mut needs_out);
                 if let Some(ts) = current_ts.get_mut(obj) {
                     *ts += 1;
                 }
             }
             Inst::Set { kvs, .. } => {
                 for (_k, v) in kvs {
-                    check(
-                        v,
-                        false,
-                        &current_ts,
-                        &mut needs_in,
-                        &mut needs_out,
-                        &mut blocks_initials_pack,
-                    );
+                    check(v, &current_ts, &mut needs_in, &mut needs_out);
                 }
             }
-            Inst::Statement { args, .. } => {
+            Inst::Statement { args, .. } | Inst::Intro { args, .. } => {
                 for arg in args {
-                    check(
-                        arg,
-                        false,
-                        &current_ts,
-                        &mut needs_in,
-                        &mut needs_out,
-                        &mut blocks_initials_pack,
-                    );
-                }
-            }
-            Inst::Intro { args, .. } => {
-                for arg in args {
-                    check(
-                        arg,
-                        true,
-                        &current_ts,
-                        &mut needs_in,
-                        &mut needs_out,
-                        &mut blocks_initials_pack,
-                    );
+                    check(arg, &current_ts, &mut needs_in, &mut needs_out);
                 }
             }
         }
     }
 
-    (needs_in, needs_out, blocks_initials_pack)
+    (needs_in, needs_out)
 }
 
 /// Collected metadata that declares a Class

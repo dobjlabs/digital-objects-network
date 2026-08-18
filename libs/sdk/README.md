@@ -205,6 +205,7 @@ record StateHeader = (block_number, block_timestamp, block_hash, created, nullif
 record FindLogIO = (out_log)
 record FindLogInitials = (log)
 record CraftWoodIO = (in_log, out_wood)
+record CraftWoodInitials = (wood)
 record CraftSticksIO = (in_wood, out_stick_a, out_stick_b)
 record CraftSticksChain = (step_0, step_1)
 record CraftSticksInitials = (stick_a, stick_b)
@@ -223,11 +224,11 @@ FindLog(io FindLogIO, state_header StateHeader, chain0, chain, private: log0, wo
   tx::TxInsert(chain0, chain, initials.log, io.out_log, @self_predicate(IsLog))
 )
 
-CraftWood(io CraftWoodIO, state_header StateHeader, chain0, chain, private: chain1, wood0, wood1, key) = AND(
-  DictUpdate(wood0, "key", key, wood1)
-  LtEqU256(wood1, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))
+CraftWood(io CraftWoodIO, state_header StateHeader, chain0, chain, private: chain1, wood0, key, initials CraftWoodInitials) = AND(
+  DictUpdate(wood0, "key", key, initials.wood)
+  LtEqU256(initials.wood, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))
   tx::TxDelete(chain0, chain1, io.in_log, @self_predicate(IsLog))
-  tx::TxInsert(chain1, chain, wood1, io.out_wood, @self_predicate(IsWood))
+  tx::TxInsert(chain1, chain, initials.wood, io.out_wood, @self_predicate(IsWood))
 )
 
 CraftSticks(io CraftSticksIO, state_header StateHeader, chain0, chain, private: chain_steps CraftSticksChain, initials CraftSticksInitials) = AND(
