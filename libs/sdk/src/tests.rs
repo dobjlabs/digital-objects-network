@@ -250,7 +250,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "b356b892ed13e203eddd3f0ea85c67e56ac3756ac7fe935bf387767b0dbfc2fd"
+        module_hash = "75119e01ece11fd33d43bb2f68239c92450d338140f6757dd286abbb628b5712"
 
         [[classes]]
         name = "Log"
@@ -298,6 +298,46 @@ fn test_sdk_2() {
         .unwrap();
 
     println!("{}", module.podlang_src);
+}
+
+/// A dict-field read (`obj.field`) as an intro arg compiles to an
+/// anchored key, so execution must lift the intro pod's literal
+/// statement to the anchored form before the action predicate is
+/// proved. Exercises both arg positions at once.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_intro_dict_field_arg() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+            ore.set([["grade_floor", 3], ["grade", 7]]);
+        }
+
+        fn RefineOre(action) {
+            var ore = action.input("Ore");
+            var metal = action.output("Metal");
+            action.intro_lt_eq_u256(ore.grade_floor, ore.grade);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre", "RefineOre"])
+        .unwrap();
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let ore_tx = res.tx.clone();
+    let [ore] = res.objs();
+    apply_tx(&mut state, &ore_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ore.obj.commitment()]));
+    let res = executor.action("RefineOre", vec![ore]).unwrap();
+    let refine_tx = res.tx.clone();
+    let [_metal] = res.objs();
+    apply_tx(&mut state, &refine_tx);
 }
 
 /// Simplest records-form output: one output, no `.update`. The
