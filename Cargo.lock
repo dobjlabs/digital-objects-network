@@ -6096,7 +6096,7 @@ dependencies = [
 [[package]]
 name = "pod2"
 version = "0.1.0"
-source = "git+https://github.com/0xPARC/pod2?rev=7bea7db462f8410a35a84ab5f3654f961557bb19#7bea7db462f8410a35a84ab5f3654f961557bb19"
+source = "git+https://github.com/0xPARC/pod2?rev=1ee11948bcb83f53b689f0a9a14a68b943120c2e#1ee11948bcb83f53b689f0a9a14a68b943120c2e"
 dependencies = [
  "annotate-snippets",
  "anyhow",
@@ -6120,6 +6120,7 @@ dependencies = [
  "plonky2_u32",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
+ "rayon",
  "schemars 0.8.22",
  "serde",
  "serde_arrays",
