@@ -499,6 +499,14 @@ pub(crate) fn bundled_swap_bytes() -> Vec<u8> {
     pexe::pack(manifest, script).expect("bundled swap packs")
 }
 
+#[cfg(test)]
+/// The permissioned-currency example, packed from source.
+pub(crate) fn test_usdc_bytes() -> Vec<u8> {
+    let manifest = include_str!("../../../examples/usdc/manifest.toml");
+    let script = include_str!("../../../examples/usdc/plugin.rhai");
+    pexe::pack(manifest, script).expect("test usdc packs")
+}
+
 /// Order plugins so every plugin follows the ones it calls into.
 ///
 /// A cycle is rejected: two plugins cannot each embed the other's batch id
@@ -912,6 +920,16 @@ description = "consume a Foo to make a Bar"
         )
     }
 
+    fn obj_field_for_test(
+        obj: &pod2::middleware::containers::Dictionary,
+        name: &str,
+    ) -> pod2::middleware::Value {
+        obj.get(&pod2::middleware::StrKey::from(name))
+            .expect("field read")
+            .expect("field present")
+            .clone()
+    }
+
     fn obj_type_hash_for_test(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {
         let value = obj.get(&pod2::middleware::StrKey::from("type")).ok()??;
         Some(Hash(value.raw().0))
@@ -1018,6 +1036,78 @@ description = "consume a Foo to make a Bar"
         assert_eq!(
             obj_type_hash_for_test(&out.obj(2).obj).unwrap(),
             decode_hash_hex(&swapped.hash).unwrap()
+        );
+    }
+
+    /// The permissioned currency, end to end: authority is possession of the
+    /// IssuerCap (mint and burn must mutate it, so each use nullifies it),
+    /// the supply counter rides the cap, bills carry the cap's stamp through
+    /// Halve, and rekeying is the handover step.
+    #[test]
+    fn test_usdc_lifecycle_executes() {
+        let catalog =
+            PexeCatalog::from_bytes([(PathBuf::from("usdc.pexe"), test_usdc_bytes())], true)
+                .expect("usdc loads -- if this fails, rebuild examples/usdc");
+        let mut state = payload::test_state::TestState::default();
+
+        let mut run = |action: QualifiedName, inputs: Vec<SpendableObject>| {
+            let commitments: Vec<Hash> = inputs.iter().map(|i| i.obj.commitment()).collect();
+            let witness = witness_for(&state, &commitments);
+            let out = catalog
+                .execute_action(action.clone(), witness, inputs)
+                .unwrap_or_else(|err| panic!("{action} runs: {err}"));
+            state.apply_tx(
+                out.tx.live_commitments().unwrap(),
+                out.tx.nullifier_hashes().unwrap(),
+            );
+            out
+        };
+        let int_value = |n: i64| pod2::middleware::Value::from(n);
+
+        let cap = run(QualifiedName::new("usdc", "Genesis"), vec![]).obj(0);
+        assert_eq!(obj_field_for_test(&cap.obj, "total_issued"), int_value(0));
+        let issuer_id = obj_field_for_test(&cap.obj, "issuer_id");
+
+        let minted = run(QualifiedName::new("usdc", "Mint1024"), vec![cap]);
+        assert_eq!(minted.objs.len(), 2, "the reproduced cap and the bill");
+        let cap = minted.obj(0);
+        let bill = minted.obj(1);
+        assert_eq!(
+            obj_field_for_test(&cap.obj, "total_issued"),
+            int_value(1024)
+        );
+        assert_eq!(obj_field_for_test(&bill.obj, "amount"), int_value(1024));
+        assert_eq!(obj_field_for_test(&bill.obj, "issuer"), issuer_id);
+
+        let halved = run(QualifiedName::new("usdc", "Halve"), vec![bill]);
+        assert_eq!(halved.objs.len(), 2);
+        for half in &halved.objs {
+            assert_eq!(obj_field_for_test(&half.obj, "amount"), int_value(512));
+            assert_eq!(obj_field_for_test(&half.obj, "issuer"), issuer_id);
+        }
+        let (spend, keep) = (halved.obj(0), halved.obj(1));
+
+        let rekeyed = run(QualifiedName::new("usdc", "RekeyUSDC"), vec![spend]).obj(0);
+        assert_eq!(obj_field_for_test(&rekeyed.obj, "amount"), int_value(512));
+        assert_eq!(obj_field_for_test(&rekeyed.obj, "issuer"), issuer_id);
+
+        let burned = run(QualifiedName::new("usdc", "Burn"), vec![cap, rekeyed]);
+        assert_eq!(burned.objs.len(), 1, "only the reproduced cap survives");
+        let cap = burned.obj(0);
+        assert_eq!(obj_field_for_test(&cap.obj, "total_issued"), int_value(512));
+
+        // The gate itself: without the cap as its first input, Mint has
+        // nothing of the right class to mutate. In production dobjd refuses
+        // a wrong-class input before execution starts; fed directly to the
+        // executor, the attempt aborts instead of returning -- either way it
+        // must not produce a bill.
+        let witness = witness_for(&state, &[keep.obj.commitment()]);
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            catalog.execute_action(QualifiedName::new("usdc", "Mint1024"), witness, vec![keep])
+        }));
+        assert!(
+            !matches!(attempt, Ok(Ok(_))),
+            "minting must require possession of the IssuerCap"
         );
     }
 

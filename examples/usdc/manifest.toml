@@ -1,0 +1,62 @@
+# A permissioned stablecoin in the bearer-object model. There is no public-key
+# check in the host surface, so authority is POSSESSION: mint and burn mutate
+# the IssuerCap, which only its holder can do -- every use nullifies and
+# reproduces the cap, so authority cannot be replayed, and handing the admin
+# role over is just RekeyIssuerCap. Bills are UTXO-style: an integer amount
+# stamped with the issuing cap's issuer_id. Anyone can run Genesis, so a
+# currency is trusted by its PUBLISHED issuer_id, the way a token is trusted
+# by its contract address; a bill whose stamp differs is somebody else's
+# currency. There is no run-time parameter channel, so amounts move in fixed
+# shapes: mint powers of two, make change with Halve. total_issued rides the
+# cap and is updated by every mint and burn; burn only bills carrying your own
+# stamp, or the counter drifts from what you actually issued.
+
+[plugin]
+name = "usdc"
+version = "0.1.0"
+module_hash = "de5e7a5cfafeb62d9f869f1f7af18fee8915334bd7b51a41e9daf155d01356c0"
+
+[[classes]]
+name = "IssuerCap"
+emoji = "🏛"
+description = "The issuing authority: whoever holds it can mint and burn, and its issuer_id marks every genuine bill."
+
+[[classes]]
+name = "USDC"
+emoji = "💵"
+description = "A bill: an integer amount stamped with the issuing cap's issuer_id."
+
+[[actions]]
+name = "Genesis"
+emoji = "🌱"
+description = "Create an issuer cap with a fresh issuer_id and a zero supply counter."
+
+[[actions]]
+name = "RekeyIssuerCap"
+emoji = "🔑"
+description = "Rotate the cap's key: admin key rotation, or handing the issuer role over."
+
+[[actions]]
+name = "Mint1024"
+emoji = "🖨"
+description = "Mint a 1024 bill against the cap and count it into total_issued."
+
+[[actions]]
+name = "Mint1"
+emoji = "🖨"
+description = "Mint a 1 bill against the cap and count it into total_issued."
+
+[[actions]]
+name = "Halve"
+emoji = "✂️"
+description = "Split a bill into two equal halves; an odd amount cannot halve."
+
+[[actions]]
+name = "RekeyUSDC"
+emoji = "🔑"
+description = "Take exclusive possession of a received bill by rotating its key."
+
+[[actions]]
+name = "Burn"
+emoji = "🔥"
+description = "Redeem a bill against the cap: destroy it and count it out of total_issued."

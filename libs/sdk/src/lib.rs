@@ -1608,6 +1608,23 @@ fn arg_add(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
     Ok(ArgHandle::new(a.ctx.clone(), value))
 }
 
+/// operator/ for maybe-var types (integer division). Like all unsafe
+/// arithmetic this computes a WITNESS and constrains nothing -- a script
+/// halving an amount must still pin the result with st_sum.
+fn arg_div(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
+    type_check_args([(&a, Type::Int), (&b, Type::Int)])?;
+    let value = Rc::new(RefCell::new(VarOrValue::var(Type::Int)));
+    let ctx = a.ctx.0.borrow();
+    ctx.assert_unsafe(true)?;
+    if ctx.exe_ctx.is_some() {
+        let a = a.arg.borrow().as_value().as_int().expect("int");
+        let b = b.arg.borrow().as_value().as_int().expect("int");
+        let result = a.checked_div(b).expect("no division by zero");
+        value.borrow_mut().set_value(Value::from(result));
+    }
+    Ok(ArgHandle::new(a.ctx.clone(), value))
+}
+
 /// Try to get the pod2 Value or promote a native type to it.
 fn _try_value_from_dynamic(v: Dynamic) -> Result<Value, Dynamic> {
     let v = match v.try_cast_result::<Value>() {
@@ -2904,6 +2921,7 @@ fn new_engine() -> Engine {
                 let ctx = lhs.ctx.0.borrow();
                 if ctx.exe_ctx.is_some() {
                     let rhs = try_value_from_dynamic(rhs)?;
+                    eprintln!("VAR_ASSIGN {:?}", rhs);
                     *lhs.arg.borrow_mut().as_mut_value() = rhs;
                 }
                 Ok(())
@@ -2926,6 +2944,15 @@ fn new_engine() -> Engine {
         .register_fn("+", |a: i64, b: ArgHandle| -> RuntimeResult<ArgHandle> {
             let ctx = b.ctx.clone();
             arg_add(ArgHandle::literal(ctx, Value::from(a)), b)
+        })
+        .register_fn("/", arg_div)
+        .register_fn("/", |a: ArgHandle, b: i64| -> RuntimeResult<ArgHandle> {
+            let ctx = a.ctx.clone();
+            arg_div(a, ArgHandle::literal(ctx, Value::from(b)))
+        })
+        .register_fn("/", |a: i64, b: ArgHandle| -> RuntimeResult<ArgHandle> {
+            let ctx = b.ctx.clone();
+            arg_div(ArgHandle::literal(ctx, Value::from(a)), b)
         })
         .register_indexer_get(ArgHandle::entry);
 
