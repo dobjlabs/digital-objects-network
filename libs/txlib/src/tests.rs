@@ -91,6 +91,12 @@ impl TestState {
     }
 }
 
+/// Round-trip a value through its wire encoding, so a session boundary
+/// passes bytes rather than the producer's Rust values.
+fn wire<T: serde::Serialize + serde::de::DeserializeOwned>(value: T) -> T {
+    serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap()
+}
+
 fn solve_and_verify(builder: MultiPodBuilder) -> MainPod {
     eprintln!("resource summary: {}", builder.resource_summary());
     let solution = builder.solve().unwrap();
@@ -446,6 +452,11 @@ fn two_party_rekey_transfers_without_sharing_keys() {
 /// is asserted first and then executed session by session: two
 /// exchanges, three proving sessions, and only the erasure-before-
 /// Rekey edge forces the sequentiality.
+///
+/// Every cross-party artifact crosses the session boundary as
+/// serialized bytes and is validated against its pod on receipt, so
+/// the pod boundary here is a real wire boundary: no Rust value made
+/// by one session reaches another.
 #[test]
 fn swap_follows_the_two_exchange_schedule() {
     use graph::{NodeKind, StatementGraph, StatementNode};
@@ -533,6 +544,13 @@ fn swap_follows_the_two_exchange_schedule() {
     let offer_b = TransferOffer::prove(&mut bob_offer_session, context, &pick_b);
     let bob_offer_pod = solve_and_verify(bob_offer_session.builder);
 
+    // Exchange 1, as bytes: validated against its pod before use.
+    let (offer_b, bob_offer_pod) = wire((offer_b, bob_offer_pod));
+    bob_offer_pod.pod.verify().unwrap();
+    offer_b
+        .validate(&bob_offer_pod, context, pick_b.commitment())
+        .unwrap();
+
     // Round 1: Alice proves everything of hers in one session: her own
     // offer, and her acceptance of Bob's leg at the plan positions that
     // account for leg 1 being recorded first.
@@ -553,6 +571,20 @@ fn swap_follows_the_two_exchange_schedule() {
         is_wood_pick_guard(&mut alice_session, &state, 3, acceptance.st_rekey.clone());
     alice_session.builder.reveal(&st_guard_leg2).unwrap();
     let alice_pod = solve_and_verify(alice_session.builder);
+
+    // Exchange 2, as bytes: Alice's whole session in one message.
+    let (offer_a, acceptance, st_guard_leg2, alice_pod) =
+        wire((offer_a, acceptance, st_guard_leg2, alice_pod));
+    alice_pod.pod.verify().unwrap();
+    offer_a
+        .validate(&alice_pod, context, pick_a.commitment())
+        .unwrap();
+    acceptance
+        .validate(&alice_pod, alice_projected.commitment())
+        .unwrap();
+    acceptance
+        .validate_guard(&alice_pod, &st_guard_leg2)
+        .unwrap();
 
     // Round 2: Bob assembles both legs and finalizes.
     let mut bob = build_ctx();
@@ -603,7 +635,8 @@ fn swap_follows_the_two_exchange_schedule() {
 /// way out, Bob on the way back), and Bob must finalize because
 /// recording the stone insert requires holding its dict. MineStone is
 /// entirely Bob-internal, so it contributes no graph node and the
-/// borrow schedules exactly like the swap.
+/// borrow schedules exactly like the swap. Cross-party artifacts cross
+/// the session boundaries as validated bytes here too.
 #[test]
 fn borrow_act_return_follows_the_two_exchange_schedule() {
     use graph::{NodeKind, StatementGraph, StatementNode};
@@ -711,6 +744,13 @@ fn borrow_act_return_follows_the_two_exchange_schedule() {
     let offer_returned = TransferOffer::prove(&mut bob_offer_session, context, &pick_used);
     let bob_offer_pod = solve_and_verify(bob_offer_session.builder);
 
+    // Exchange 1, as bytes: validated against its pod before use.
+    let (offer_returned, bob_offer_pod) = wire((offer_returned, bob_offer_pod));
+    bob_offer_pod.pod.verify().unwrap();
+    offer_returned
+        .validate(&bob_offer_pod, context, pick_used.commitment())
+        .unwrap();
+
     // Round 1: Alice's single session: the offer of the pick she lends
     // plus her acceptance of its return at the plan's last positions.
     let mut alice_session = build_ctx();
@@ -730,6 +770,20 @@ fn borrow_act_return_follows_the_two_exchange_schedule() {
         is_wood_pick_guard(&mut alice_session, &state, 3, acceptance.st_rekey.clone());
     alice_session.builder.reveal(&st_guard_return).unwrap();
     let alice_pod = solve_and_verify(alice_session.builder);
+
+    // Exchange 2, as bytes: Alice's whole session in one message.
+    let (offer_pick, acceptance, st_guard_return, alice_pod) =
+        wire((offer_pick, acceptance, st_guard_return, alice_pod));
+    alice_pod.pod.verify().unwrap();
+    offer_pick
+        .validate(&alice_pod, context, pick.commitment())
+        .unwrap();
+    acceptance
+        .validate(&alice_pod, pick_returned.commitment())
+        .unwrap();
+    acceptance
+        .validate_guard(&alice_pod, &st_guard_return)
+        .unwrap();
 
     // Round 2: Bob assembles all three actions and finalizes.
     let mut bob = build_ctx();
@@ -820,6 +874,56 @@ fn borrow_act_return_follows_the_two_exchange_schedule() {
     );
     assert_eq!(stats.get("EndorseSpend"), Some(&2));
     assert_plan_agrees(&plan, &leaf_positions, &tx_out);
+}
+
+/// A tampered or mismatched contribution fails at receipt with a
+/// readable error, not as an opaque solver failure at assembly time.
+#[test]
+fn contribution_validation_rejects_mismatched_bundles() {
+    let (modules, is_wood_pick) = craft_modules();
+    let mut state = TestState::empty(0);
+    let pick = spawn_wood_pick(&mut state, &modules, is_wood_pick);
+    let receiver_key = Value::from(rand_raw_value());
+    let plan = transfer_plan(&pick, &receiver_key);
+    let context = plan.context(state.state_header().hash());
+
+    let mut owner = BuildContext {
+        builder: MultiPodBuilder::new(&Params::default(), &VDSet::new(&[])),
+        modules,
+    };
+    let offer = TransferOffer::prove(&mut owner, context, &pick);
+    let pod = solve_and_verify(owner.builder);
+
+    offer.validate(&pod, context, pick.commitment()).unwrap();
+
+    let err = offer.validate(&pod, context, test_hash(9)).unwrap_err();
+    assert!(format!("{err}").contains("openings are for"));
+
+    let err = offer
+        .validate(&pod, test_hash(8), pick.commitment())
+        .unwrap_err();
+    assert!(format!("{err}").contains("spend endorsement is"));
+
+    let mut wrong_nullifier = offer.clone();
+    wrong_nullifier.auth.nullifier = test_hash(7);
+    let err = wrong_nullifier
+        .validate(&pod, context, pick.commitment())
+        .unwrap_err();
+    assert!(format!("{err}").contains("spend endorsement is"));
+
+    let mut wrong_type = offer.clone();
+    wrong_type.openings.type_value = Value::from(123_i64);
+    let err = wrong_type
+        .validate(&pod, context, pick.commitment())
+        .unwrap_err();
+    assert!(format!("{err}").contains("type opening is"));
+
+    let mut unproven = offer;
+    unproven.auth.st_endorsement = Statement::None;
+    let err = unproven
+        .validate(&pod, context, pick.commitment())
+        .unwrap_err();
+    assert!(format!("{err}").contains("not among the pod's public statements"));
 }
 
 /// The endorsement has to bind. An `EndorseSpend` produced for a

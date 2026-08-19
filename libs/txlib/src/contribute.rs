@@ -7,8 +7,16 @@
 //! consumes them through [`crate::TxBuilder::mutate_joint`] and
 //! [`crate::TxBuilder::rekey_receive`].
 
-use pod2::middleware::{EMPTY_VALUE, Hash, Statement, Value, containers::Dictionary};
+use std::sync::LazyLock;
+
+use pod2::{
+    frontend::MainPod,
+    middleware::{
+        CustomPredicateRef, EMPTY_VALUE, Hash, Statement, Value, ValueRef, containers::Dictionary,
+    },
+};
 use pod2utils::{macros::BuildContext, op};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     ConsumedSide, ContributedSpend, ObjSide, STABLE_IDENTIFIER_FIELD, erased_key_state,
@@ -42,7 +50,8 @@ use crate::{
 /// Reveals the object's commitment, type, and stable identifier, and
 /// nothing else: `DictContains` exposes only the field it names, never
 /// `key`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ObjectOpenings {
     pub commitment: Hash,
     pub type_value: Value,
@@ -88,7 +97,8 @@ impl ObjectOpenings {
 /// The owner needs nothing but the context *commitment* to produce it:
 /// not the transaction's live or nullifier sets, only the negotiated
 /// value they hash to.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SpendAuthorization {
     /// Nullifier of the consumed state. The assembler needs the value
     /// to fold into the transaction's nullifier set, and cannot derive
@@ -121,7 +131,8 @@ impl SpendAuthorization {
 /// same object and the same transaction context, and none of them
 /// reveals the owner's key. Producing them is the whole of the sender's
 /// side of a transfer; [`crate::TxBuilder::rekey_receive`] consumes them.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TransferOffer {
     pub openings: ObjectOpenings,
     /// `DictUpdate(old, "key", {}, mid)`: the key-erasing half of the
@@ -170,7 +181,8 @@ impl TransferOffer {
 /// This is the mirror of [`TransferOffer`], and the two directions are
 /// not interchangeable: a transfer is always proven by its receiver and
 /// endorsed by its sender, whichever of them holds the builder.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TransferAcceptance {
     /// Openings of the received state, which the assembler needs for its
     /// own `TxMutate` clauses and cannot prove itself.
@@ -232,4 +244,174 @@ impl TransferAcceptance {
     pub fn obj_side(&self) -> ObjSide {
         ObjSide::Contributed(Box::new(self.openings.clone()))
     }
+}
+
+// ============================================================================
+// Receiving-side validation
+// ============================================================================
+//
+// A contribution that crosses a process boundary arrives as data plus
+// the pod that proves it. Validation rebuilds each expected statement
+// from the plain fields and the negotiated plan data, then checks that
+// the received statement equals it and is among the pod's public
+// statements, so a mismatched bundle fails at receipt with a readable
+// error instead of as an opaque solver failure at assembly time.
+// Soundness never depends on these checks: the proof does.
+
+/// This build's `EndorseSpend` predicate, for pinning a received
+/// endorsement to the exact batch: a peer on a different txlib build
+/// fails here with both batch ids named, instead of at the solver.
+static ENDORSE_SPEND: LazyLock<CustomPredicateRef> = LazyLock::new(|| {
+    crate::predicates::module()
+        .predicate_ref_by_name("EndorseSpend")
+        .expect("txlib module declares EndorseSpend")
+});
+
+impl ObjectOpenings {
+    /// Validate received openings against the pod that must prove them
+    /// and the commitment the plan says they are about.
+    pub(crate) fn validate(&self, pod: &MainPod, object: Hash) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.commitment == object,
+            "openings are for {}, expected {object}",
+            self.commitment
+        );
+        expect_public(pod, &self.st_type, "type opening")?;
+        check_opening(
+            &self.st_type,
+            self.commitment,
+            "type",
+            &self.type_value,
+            "type opening",
+        )?;
+        expect_public(pod, &self.st_stable_identifier, "stable identifier opening")?;
+        check_opening(
+            &self.st_stable_identifier,
+            self.commitment,
+            STABLE_IDENTIFIER_FIELD,
+            &self.stable_identifier,
+            "stable identifier opening",
+        )?;
+        Ok(())
+    }
+}
+
+impl SpendAuthorization {
+    /// Validate a received authorization against the pod, the
+    /// negotiated context, and the consumed state's commitment.
+    pub(crate) fn validate(&self, pod: &MainPod, context: Hash, old: Hash) -> anyhow::Result<()> {
+        expect_public(pod, &self.st_endorsement, "spend endorsement")?;
+        let Statement::Custom(predicate, _) = &self.st_endorsement else {
+            anyhow::bail!("spend endorsement is not a custom-predicate statement");
+        };
+        anyhow::ensure!(
+            predicate == &*ENDORSE_SPEND,
+            "spend endorsement applies {} from batch {}, expected this build's EndorseSpend (batch {})",
+            predicate.predicate().name,
+            predicate.batch.id(),
+            ENDORSE_SPEND.batch.id()
+        );
+        let expected = Statement::Custom(
+            ENDORSE_SPEND.clone(),
+            vec![
+                ValueRef::Literal(Value::from(context)),
+                ValueRef::Literal(Value::from(self.nullifier)),
+                ValueRef::Literal(Value::from(old)),
+            ],
+        );
+        anyhow::ensure!(
+            self.st_endorsement == expected,
+            "spend endorsement is {}, expected {expected}",
+            self.st_endorsement
+        );
+        Ok(())
+    }
+}
+
+impl TransferOffer {
+    /// Validate a received offer: the openings, the key-erasing
+    /// update, and the spend authorization, against the pod, the
+    /// negotiated context, and the old state's commitment. The
+    /// erased-key commitment is deliberately unchecked: the party that
+    /// reconstructs `mid` from the disclosed fields checks it by
+    /// commitment match, and `Rekey` cannot be proven otherwise.
+    pub fn validate(&self, pod: &MainPod, context: Hash, old: Hash) -> anyhow::Result<()> {
+        self.openings.validate(pod, old)?;
+        expect_public(pod, &self.st_key_erasure, "key erasure")?;
+        // Statement arg order is (old_root, key, value, new_root); the
+        // enum's field comments in pod2 say otherwise and are stale.
+        let Statement::ContainerUpdate(old_root, key, erased, _mid) = &self.st_key_erasure else {
+            anyhow::bail!("key erasure is not a ContainerUpdate statement");
+        };
+        ensure_literal(old_root, &Value::from(old), "key erasure's subject")?;
+        ensure_literal(key, &Value::from("key"), "key erasure's field")?;
+        ensure_literal(
+            erased,
+            &Value::from(EMPTY_VALUE),
+            "key erasure's written value",
+        )?;
+        self.auth.validate(pod, context, old)?;
+        Ok(())
+    }
+}
+
+impl TransferAcceptance {
+    /// Validate a received acceptance: the openings of the new state,
+    /// against the commitment the plan projects for it. `st_rekey` is
+    /// private to the receiver's pod and deliberately unchecked here;
+    /// the class guard wrapping it is the acceptance's public face,
+    /// checked by [`TransferAcceptance::validate_guard`].
+    pub fn validate(&self, pod: &MainPod, new: Hash) -> anyhow::Result<()> {
+        self.openings.validate(pod, new)
+    }
+
+    /// Validate the class guard that crosses alongside an acceptance:
+    /// it must be among the pod's public statements and be the
+    /// transferred class's own guard, whose predicate hash is the
+    /// object's `type`.
+    pub fn validate_guard(&self, pod: &MainPod, guard: &Statement) -> anyhow::Result<()> {
+        expect_public(pod, guard, "class guard")?;
+        let guard_type = Value::from(guard.predicate().hash());
+        anyhow::ensure!(
+            guard_type == self.openings.type_value,
+            "class guard hashes to {guard_type}, the transferred object's type is {}",
+            self.openings.type_value
+        );
+        Ok(())
+    }
+}
+
+fn expect_public(pod: &MainPod, statement: &Statement, what: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        pod.public_statements.contains(statement),
+        "{what} is not among the pod's public statements"
+    );
+    Ok(())
+}
+
+fn ensure_literal(arg: &ValueRef, expected: &Value, what: &str) -> anyhow::Result<()> {
+    let ValueRef::Literal(value) = arg else {
+        anyhow::bail!("{what} is anchored, expected a literal");
+    };
+    anyhow::ensure!(value == expected, "{what} is {value}, expected {expected}");
+    Ok(())
+}
+
+fn check_opening(
+    actual: &Statement,
+    dict: Hash,
+    field: &str,
+    value: &Value,
+    what: &str,
+) -> anyhow::Result<()> {
+    let expected = Statement::Contains(
+        ValueRef::Literal(Value::from(dict)),
+        ValueRef::Literal(Value::from(field)),
+        ValueRef::Literal(value.clone()),
+    );
+    anyhow::ensure!(
+        actual == &expected,
+        "{what} is {actual}, expected {expected}"
+    );
+    Ok(())
 }
