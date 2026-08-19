@@ -591,6 +591,237 @@ fn swap_follows_the_two_exchange_schedule() {
     assert_plan_agrees(&plan, &leaf_positions, &tx_out);
 }
 
+/// Borrow-act-return in one transaction: Alice lends her pick to Bob,
+/// Bob mines a stone with it, and the worn pick returns to Alice, all
+/// three as top-level actions sharing one context. The loan and the
+/// return finalize together, so there is no interval where Bob holds
+/// the pick without the return already proven; the price is that the
+/// borrowed-period work is pre-agreed, which is what lets every
+/// intermediate state's fields enter the plan.
+///
+/// The rekey roles reverse between the legs (Alice zero-keys on the
+/// way out, Bob on the way back), and Bob must finalize because
+/// recording the stone insert requires holding its dict. MineStone is
+/// entirely Bob-internal, so it contributes no graph node and the
+/// borrow schedules exactly like the swap.
+#[test]
+fn borrow_act_return_follows_the_two_exchange_schedule() {
+    use graph::{NodeKind, StatementGraph, StatementNode};
+
+    let (modules, is_wood_pick) = craft_modules();
+    let craft = Arc::new(crate::predicates::crafting_test_module());
+    let is_stone =
+        Value::from(Predicate::Custom(craft.predicate_ref_by_name("IsStone").unwrap()).hash());
+    let mut state = TestState::empty(0);
+    let pick = spawn_wood_pick(&mut state, &modules, is_wood_pick);
+    let params = Params::default();
+    let vd_set = VDSet::new(&[]);
+    let build_ctx = || BuildContext {
+        builder: MultiPodBuilder::new(&params, &vd_set),
+        modules: modules.clone(),
+    };
+
+    // Data round: Alice disclosed the pick's fields and the parties
+    // agreed the borrowed-period work (one MineStone: durability 100
+    // to 99, one stone minted under Bob's key), so both can project
+    // every intermediate state up to its owner's key.
+    let key_bob = Value::from(rand_raw_value());
+    let key_alice = Value::from(rand_raw_value());
+    let pick_lent = obj_with_key(&erased_key_state(&pick), key_bob.clone());
+    let mut pick_used = pick_lent.clone();
+    pick_used
+        .update(&StrKey::from("durability"), &Value::from(99_i64))
+        .unwrap();
+    let stone_initial = make_object(is_stone, &[]);
+    let stone = with_stable_identifier(&stone_initial);
+    let pick_returned = obj_with_key(&erased_key_state(&pick_used), key_alice.clone());
+
+    let plan = TxPlan::new(
+        vec![pick.commitment()],
+        vec![
+            PlannedEvent::Action(vec![PlannedEvent::Mutate {
+                old: pick.commitment(),
+                new: pick_lent.commitment(),
+                nullifier: compute_nullifier(&pick),
+            }]),
+            PlannedEvent::Action(vec![
+                PlannedEvent::Action(vec![PlannedEvent::Mutate {
+                    old: pick_lent.commitment(),
+                    new: pick_used.commitment(),
+                    nullifier: compute_nullifier(&pick_lent),
+                }]),
+                PlannedEvent::Insert {
+                    new: stone.commitment(),
+                },
+            ]),
+            PlannedEvent::Action(vec![PlannedEvent::Mutate {
+                old: pick_used.commitment(),
+                new: pick_returned.commitment(),
+                nullifier: compute_nullifier(&pick_used),
+            }]),
+        ],
+    )
+    .unwrap();
+    let context = plan.context(state.state_header().hash());
+
+    let graph = StatementGraph::new(vec![
+        StatementNode::new(
+            "offer:pick",
+            "alice",
+            NodeKind::TransferOffer {
+                object: pick.commitment(),
+            },
+            &[],
+        ),
+        StatementNode::new(
+            "offer:pick_returned",
+            "bob",
+            NodeKind::TransferOffer {
+                object: pick_used.commitment(),
+            },
+            &[],
+        ),
+        StatementNode::new(
+            "accept:pick_returned",
+            "alice",
+            NodeKind::TransferAcceptance {
+                object: pick_used.commitment(),
+            },
+            &["offer:pick_returned"],
+        ),
+        StatementNode::new(
+            "finalize",
+            "bob",
+            NodeKind::Finalize,
+            &["offer:pick", "accept:pick_returned"],
+        ),
+    ])
+    .unwrap();
+    assert_eq!(
+        graph.schedule().to_string(),
+        "round 0: bob proves [offer:pick_returned]\n\
+         round 1: alice proves [offer:pick, accept:pick_returned] importing [offer:pick_returned]\n\
+         round 2: bob proves [finalize] importing [offer:pick, accept:pick_returned]\n"
+    );
+
+    // Round 0: Bob offers the returned state. It does not exist yet;
+    // its dict is fully determined by the agreed effect plus his key,
+    // and the offer's statements are hash facts about that dict.
+    let mut bob_offer_session = build_ctx();
+    let offer_returned = TransferOffer::prove(&mut bob_offer_session, context, &pick_used);
+    let bob_offer_pod = solve_and_verify(bob_offer_session.builder);
+
+    // Round 1: Alice's single session: the offer of the pick she lends
+    // plus her acceptance of its return at the plan's last positions.
+    let mut alice_session = build_ctx();
+    alice_session.builder.add_pod(bob_offer_pod).unwrap();
+    let offer_pick = TransferOffer::prove(&mut alice_session, context, &pick);
+    let (return_prev, return_chain) = plan.event_range(3);
+    let mid_returned = erased_key_state(&pick_used);
+    let (acceptance, alices_pick) = TransferAcceptance::prove(
+        &mut alice_session,
+        &offer_returned,
+        &mid_returned,
+        key_alice,
+        return_prev,
+        return_chain,
+    );
+    let st_guard_return =
+        is_wood_pick_guard(&mut alice_session, &state, 3, acceptance.st_rekey.clone());
+    alice_session.builder.reveal(&st_guard_return).unwrap();
+    let alice_pod = solve_and_verify(alice_session.builder);
+
+    // Round 2: Bob assembles all three actions and finalizes.
+    let mut bob = build_ctx();
+    bob.builder.add_pod(alice_pod).unwrap();
+    let mut tx = TxBuilder::new_from_commitments(
+        &mut bob,
+        &[pick.commitment()],
+        state.grounding_witness(std::slice::from_ref(&pick)),
+    );
+    assert_eq!(plan.chain_start(), tx.chain_start);
+    let mut leaf_positions = Vec::new();
+
+    // Borrow leg.
+    let scope = tx.begin_action();
+    let (borrowed, st_rekey, h) =
+        tx.rekey_receive(&mut bob, &offer_pick, &erased_key_state(&pick), key_bob);
+    leaf_positions.push(tx.chain_position());
+    tx.set_guard(h, is_wood_pick_guard(&mut bob, &state, 3, st_rekey));
+    tx.end_action(scope);
+    assert_eq!(borrowed.commitment(), pick_lent.commitment());
+
+    // MineStone with the borrowed pick, entirely Bob's.
+    let scope_outer = tx.begin_action();
+    let st_use_wp = {
+        let scope_sub = tx.begin_action();
+        let (st_mutate, h_sub) = tx.mutate(&mut bob, &pick_used, &pick_lent);
+        leaf_positions.push(tx.chain_position());
+        let op_gt = bob
+            .builder
+            .priv_op(op!(Gt((&pick_lent, "durability"), 0_i64)))
+            .unwrap();
+        let op_sum = bob
+            .builder
+            .priv_op(op!(Sum(99_i64, 1_i64, (&pick_lent, "durability"))))
+            .unwrap();
+        let op_du = bob
+            .builder
+            .priv_op(op!(DictUpdate(pick_lent, "durability", 99_i64, pick_used)))
+            .unwrap();
+        let st_action = bob
+            .apply_custom_pred_simple(false, "UseWoodPick", vec![op_gt, op_sum, op_du, st_mutate])
+            .unwrap();
+        tx.set_guard(
+            h_sub,
+            is_wood_pick_guard(&mut bob, &state, 2, st_action.clone()),
+        );
+        tx.end_action(scope_sub);
+        st_action
+    };
+    let (_stone, st_stone_insert, h) = tx.insert(&mut bob, &stone_initial);
+    leaf_positions.push(tx.chain_position());
+    let st_mine = bob
+        .apply_custom_pred_simple(false, "MineStone", vec![st_use_wp, st_stone_insert])
+        .unwrap();
+    let st_guard = bob
+        .apply_custom_pred(
+            false,
+            "IsStone",
+            map!({"state_header" => state.state_header().array()}),
+            vec![st_mine],
+        )
+        .unwrap();
+    tx.set_guard(h, st_guard);
+    tx.end_action(scope_outer);
+
+    // Return leg.
+    let scope = tx.begin_action();
+    let h = tx.rekey_send(&mut bob, &pick_used, &acceptance);
+    leaf_positions.push(tx.chain_position());
+    tx.set_guard(h, st_guard_return);
+    tx.end_action(scope);
+
+    eprintln!("{tx}");
+    let (st, tx_out, stats) = tx.finalize(&mut bob);
+    print_stats(&stats);
+    bob.builder.reveal(&st).unwrap();
+    solve_and_verify(bob.builder);
+
+    // Alice got her pick back with the agreed wear, Bob kept the stone.
+    // Alice endorsed once, in her offer; Bob's two spends were held, so
+    // replay derived both endorsements at finalize.
+    assert_eq!(alices_pick.commitment(), pick_returned.commitment());
+    assert!(
+        tx_out
+            .live
+            .contains(&Value::from(stone.commitment()))
+            .unwrap()
+    );
+    assert_eq!(stats.get("EndorseSpend"), Some(&2));
+    assert_plan_agrees(&plan, &leaf_positions, &tx_out);
+}
+
 /// The endorsement has to bind. An `EndorseSpend` produced for a
 /// different transaction context must not authorize this one, even
 /// though it is a valid statement about the same object and carries
