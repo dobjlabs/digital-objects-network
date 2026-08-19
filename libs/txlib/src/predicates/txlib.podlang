@@ -9,14 +9,17 @@
 
   1. Replay -- walks the recorded chain, verifying each event's
      hash step, updating the live/nullifier sets, and calling the
-     affected object's type guard to authorize the event.
+     affected object's type guard to authorize the event. Every
+     spend (mutate/delete) additionally requires a spend
+     endorsement: a hash of the consumed object's key with the
+     transaction context (see EndorseSpend).
 
   2. InputsGrounded -- proves each input object is present in the
-     global created set carried by the state root.
+     global created set carried by the state header.
 
   3. TxFinalized -- the public entry point. Ties input grounding,
      chain seeding, and full replay together. Exposes
-     (state_header, tx_final, nullifiers, live) publicly.
+     (context, tx_final, nullifiers, live) publicly.
 
   State convention: most predicates thread four public arguments:
   (before_tx, after_tx, before_chain, after_chain). Each step
@@ -30,6 +33,23 @@
     chain_start: hash,    // enclosing action's chain start (for guard dispatch)
     chain_end: hash       // enclosing action's chain end (for guard dispatch)
   }
+
+  Context convention: the replay spine threads a per-transaction
+  context dict as its first argument:
+
+  Context = {
+    state_header: hash,   // StateHeader record commitment (grounding block)
+    tx_commitment: hash   // tx_final, the after_tx dict commitment
+  }
+
+  Guards receive `context.state_header` (they are proven while the
+  transaction is still being assembled, before tx_final exists), so
+  their statements are scoped to the grounding block only. Spend
+  endorsements hash the full context, so a spend is only valid inside
+  the exact transaction (and against the exact state header) its
+  owner endorsed. TxFinalBindings pins context.tx_commitment ==
+  tx_final; the verifier recomputes the two-entry context dict from
+  (state_header, tx_final), which also rejects padded context dicts.
 */
 
 use module 0xTX_EVENTS_MODULE_HASH as tx
@@ -44,6 +64,21 @@ use module 0xTX_EVENTS_MODULE_HASH as tx
 Nullify(nullifier, obj, private: obj_key_hash) = AND(
   Hash(obj, obj.key, obj_key_hash)
   Hash(obj_key_hash, "txlib-nullifier-v1", nullifier)
+)
+
+// Spend endorsement: endorsement = H(old.key, H(context, "txlib-endorsement-v1")).
+// Producing this statement requires opening the object dict at `key`,
+// i.e. it can only be proven by the object's owner, and it cannot be
+// copied from any other transaction's proof because the context (and
+// therefore `tagged`) differs. This is what binds a spend to the whole
+// transaction: ReplayNullify requires it, so consuming an object is
+// only possible with the owner's endorsement of the exact context
+// (state header + final transaction commitment). The domain tag keeps
+// this hash shape disjoint from the nullifier derivation, which also
+// hashes the object's key material.
+EndorseSpend(context, old, private: tagged, endorsement) = AND(
+  Hash(context, "txlib-endorsement-v1", tagged)
+  Hash(old.key, tagged, endorsement)
 )
 
 // ========================================================
@@ -72,46 +107,46 @@ Nullify(nullifier, obj, private: obj_key_hash) = AND(
 // out the per-iteration OR-dispatch that ReplayElement still needs at
 // the trailing leaf.
 
-ReplayContents(state_header, before_tx, after_tx, before_chain, after_chain) = OR(
-  ReplayElement(state_header, before_tx, after_tx, before_chain, after_chain)
-  ReplayContentsStepInsert(state_header, before_tx, after_tx, before_chain, after_chain)
-  ReplayContentsStepMutate(state_header, before_tx, after_tx, before_chain, after_chain)
-  ReplayContentsStepDelete(state_header, before_tx, after_tx, before_chain, after_chain)
-  ReplayContentsStepAction(state_header, before_tx, after_tx, before_chain, after_chain)
+ReplayContents(context, before_tx, after_tx, before_chain, after_chain) = OR(
+  ReplayElement(context, before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepInsert(context, before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepMutate(context, before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepDelete(context, before_tx, after_tx, before_chain, after_chain)
+  ReplayContentsStepAction(context, before_tx, after_tx, before_chain, after_chain)
 )
 
 // The four specialised step variants.
-ReplayContentsStepInsert(state_header, before_tx, after_tx, before_chain, after_chain,
+ReplayContentsStepInsert(context, before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain) = AND(
-  ReplayInsert(state_header, before_tx, mid_tx, before_chain, mid_chain)
-  ReplayContents(state_header, mid_tx, after_tx, mid_chain, after_chain)
+  ReplayInsert(context, before_tx, mid_tx, before_chain, mid_chain)
+  ReplayContents(context, mid_tx, after_tx, mid_chain, after_chain)
 )
 
-ReplayContentsStepMutate(state_header, before_tx, after_tx, before_chain, after_chain,
+ReplayContentsStepMutate(context, before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain) = AND(
-  ReplayMutate(state_header, before_tx, mid_tx, before_chain, mid_chain)
-  ReplayContents(state_header, mid_tx, after_tx, mid_chain, after_chain)
+  ReplayMutate(context, before_tx, mid_tx, before_chain, mid_chain)
+  ReplayContents(context, mid_tx, after_tx, mid_chain, after_chain)
 )
 
-ReplayContentsStepDelete(state_header, before_tx, after_tx, before_chain, after_chain,
+ReplayContentsStepDelete(context, before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain) = AND(
-  ReplayDelete(state_header, before_tx, mid_tx, before_chain, mid_chain)
-  ReplayContents(state_header, mid_tx, after_tx, mid_chain, after_chain)
+  ReplayDelete(context, before_tx, mid_tx, before_chain, mid_chain)
+  ReplayContents(context, mid_tx, after_tx, mid_chain, after_chain)
 )
 
-ReplayContentsStepAction(state_header, before_tx, after_tx, before_chain, after_chain,
+ReplayContentsStepAction(context, before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain) = AND(
-  ReplayAction(state_header, before_tx, mid_tx, before_chain, mid_chain)
-  ReplayContents(state_header, mid_tx, after_tx, mid_chain, after_chain)
+  ReplayAction(context, before_tx, mid_tx, before_chain, mid_chain)
+  ReplayContents(context, mid_tx, after_tx, mid_chain, after_chain)
 )
 
 // A single element: one of the three event types, or a nested
 // action (which recursively contains its own ReplayContents).
-ReplayElement(state_header, before_tx, after_tx, before_chain, after_chain) = OR(
-  ReplayInsert(state_header, before_tx, after_tx, before_chain, after_chain)
-  ReplayMutate(state_header, before_tx, after_tx, before_chain, after_chain)
-  ReplayDelete(state_header, before_tx, after_tx, before_chain, after_chain)
-  ReplayAction(state_header, before_tx, after_tx, before_chain, after_chain)
+ReplayElement(context, before_tx, after_tx, before_chain, after_chain) = OR(
+  ReplayInsert(context, before_tx, after_tx, before_chain, after_chain)
+  ReplayMutate(context, before_tx, after_tx, before_chain, after_chain)
+  ReplayDelete(context, before_tx, after_tx, before_chain, after_chain)
+  ReplayAction(context, before_tx, after_tx, before_chain, after_chain)
 )
 
 // ========================================================
@@ -132,11 +167,11 @@ ReplayElement(state_header, before_tx, after_tx, before_chain, after_chain) = OR
 
 // Set chain_start/chain_end in tx, replay contents, copy live/nullifiers
 // back to outer tx (which restores the parent's chain_start/chain_end).
-ReplayAction(state_header, before_tx, after_tx, before_chain, after_chain,
+ReplayAction(context, before_tx, after_tx, before_chain, after_chain,
     private: pair, inner_tx, end_tx) = AND(
   DictUpdate(before_tx, "chain_start", before_chain, pair.scope_mid)
   DictUpdate(pair.scope_mid, "chain_end", after_chain, inner_tx)
-  ReplayContents(state_header, inner_tx, end_tx, before_chain, after_chain)
+  ReplayContents(context, inner_tx, end_tx, before_chain, after_chain)
   DictUpdate(before_tx, "live", end_tx.live, pair.mid)
   DictUpdate(pair.mid, "nullifiers", end_tx.nullifiers, after_tx)
 )
@@ -156,18 +191,18 @@ ReplayAction(state_header, before_tx, after_tx, before_chain, after_chain,
 // bypassing ReplayAction/ReplayContents/ReplayElement/ReplayInsert
 // (5 statements). "Mining" actions that just produce one object hit
 // this path.
-ReplayActions(state_header, before_tx, after_tx, before_chain, after_chain) = OR(
-  ReplayAction(state_header, before_tx, after_tx, before_chain, after_chain)
-  ReplayActionsStep(state_header, before_tx, after_tx, before_chain, after_chain)
-  ReplayActionInsert(state_header, before_tx, after_tx, before_chain, after_chain)
+ReplayActions(context, before_tx, after_tx, before_chain, after_chain) = OR(
+  ReplayAction(context, before_tx, after_tx, before_chain, after_chain)
+  ReplayActionsStep(context, before_tx, after_tx, before_chain, after_chain)
+  ReplayActionInsert(context, before_tx, after_tx, before_chain, after_chain)
 )
 
 // One action, then a recursive tail. Used for transactions that
 // contain 2+ top-level actions.
-ReplayActionsStep(state_header, before_tx, after_tx, before_chain, after_chain,
+ReplayActionsStep(context, before_tx, after_tx, before_chain, after_chain,
     private: mid_tx, mid_chain) = AND(
-  ReplayAction(state_header, before_tx, mid_tx, before_chain, mid_chain)
-  ReplayActions(state_header, mid_tx, after_tx, mid_chain, after_chain)
+  ReplayAction(context, before_tx, mid_tx, before_chain, mid_chain)
+  ReplayActions(context, mid_tx, after_tx, mid_chain, after_chain)
 )
 
 // K=1 fast path: a single-event action whose only event is an Insert.
@@ -178,12 +213,12 @@ ReplayActionsStep(state_header, before_tx, after_tx, before_chain, after_chain,
 // chain scope, so the guard sees the same values it would have seen
 // inside a `ReplayAction`-materialized `inner_tx`. Skipping that
 // materialization is what saves the three intermediate statements.
-ReplayActionInsert(state_header, before_tx, after_tx, before_chain, after_chain,
+ReplayActionInsert(context, before_tx, after_tx, before_chain, after_chain,
     private: new, pair, guard) = AND(
   tx::TxInsert(before_chain, after_chain, pair.initial, new, guard)
   SetInsert(before_tx.live, new, pair.new_live)
   DictUpdate(before_tx, "live", pair.new_live, after_tx)
-  guard(new, state_header, before_chain, after_chain)
+  guard(new, context.state_header, before_chain, after_chain)
 )
 
 // ========================================================
@@ -198,12 +233,12 @@ ReplayActionInsert(state_header, before_tx, after_tx, before_chain, after_chain,
 // into a small private dict and accessed via anchored keys:
 // `pair.initial`/`pair.new_live` for Insert, `pair.new_live`/`pair.mid_tx` for
 // Delete.
-ReplayInsert(state_header, before_tx, after_tx, before_chain, after_chain,
+ReplayInsert(context, before_tx, after_tx, before_chain, after_chain,
     private: new, pair, guard) = AND(
   tx::TxInsert(before_chain, after_chain, pair.initial, new, guard)
   SetInsert(before_tx.live, new, pair.new_live)
   DictUpdate(before_tx, "live", pair.new_live, after_tx)
-  guard(new, state_header, before_tx.chain_start, before_tx.chain_end)
+  guard(new, context.state_header, before_tx.chain_start, before_tx.chain_end)
 )
 
 // ========================================================
@@ -213,32 +248,38 @@ ReplayInsert(state_header, before_tx, after_tx, before_chain, after_chain,
 // Nullifier computation and accumulation. Shared by mutate and
 // delete to prevent double-spending of the consumed object.
 // nullifier = H(H(obj, obj.key), "txlib-nullifier-v1")
-ReplayNullify(mid_tx, after_tx, old,
+// The EndorseSpend clause is the owner's consent: it hashes the
+// consumed object's key with the full transaction context, so this
+// statement can only exist for a transaction (and state header) the
+// owner endorsed. The set/dict clauses are bookkeeping; EndorseSpend
+// is the only clause that cannot be reproduced without the key.
+ReplayNullify(context, mid_tx, after_tx, old,
     private: obj_key_hash, nullifier, new_nullifiers) = AND(
   Hash(old, old.key, obj_key_hash)
   Hash(obj_key_hash, "txlib-nullifier-v1", nullifier)
+  EndorseSpend(context, old)
   SetInsert(mid_tx.nullifiers, nullifier, new_nullifiers)
   DictUpdate(mid_tx, "nullifiers", new_nullifiers, after_tx)
 )
 
 // Live-set swap + nullifier accumulation. Chain/event-hash work is
 // delegated to TxMutate in the ReplayMutate parent.
-ReplayMutateEvent(before_tx, after_tx, old, new,
+ReplayMutateEvent(context, before_tx, after_tx, old, new,
     private: new_live, live_mid, mid_tx) = AND(
   SetDelete(before_tx.live, old, live_mid)
   SetInsert(live_mid, new, new_live)
   DictUpdate(before_tx, "live", new_live, mid_tx)
-  ReplayNullify(mid_tx, after_tx, old)
+  ReplayNullify(context, mid_tx, after_tx, old)
 )
 
 // Full mutate replay: chain step (via TxMutate) + state update +
 // guard dispatch. The guard dispatches on `new` alone because
 // TxMutate's shared `type` arg already pins old.type == new.type.
-ReplayMutate(state_header, before_tx, after_tx, before_chain, after_chain,
+ReplayMutate(context, before_tx, after_tx, before_chain, after_chain,
     private: old, new, guard) = AND(
   tx::TxMutate(before_chain, after_chain, old, new, guard)
-  ReplayMutateEvent(before_tx, after_tx, old, new)
-  guard(new, state_header, before_tx.chain_start, before_tx.chain_end)
+  ReplayMutateEvent(context, before_tx, after_tx, old, new)
+  guard(new, context.state_header, before_tx.chain_start, before_tx.chain_end)
 )
 
 // ========================================================
@@ -247,13 +288,13 @@ ReplayMutate(state_header, before_tx, after_tx, before_chain, after_chain,
 
 // Full delete replay: chain step (via TxDelete) + live-set removal
 // + nullifier accumulation + guard dispatch.
-ReplayDelete(state_header, before_tx, after_tx, before_chain, after_chain,
+ReplayDelete(context, before_tx, after_tx, before_chain, after_chain,
     private: old, guard, pair) = AND(
   tx::TxDelete(before_chain, after_chain, old, guard)
   SetDelete(before_tx.live, old, pair.new_live)
   DictUpdate(before_tx, "live", pair.new_live, pair.mid_tx)
-  ReplayNullify(pair.mid_tx, after_tx, old)
-  guard(old, state_header, before_tx.chain_start, before_tx.chain_end)
+  ReplayNullify(context, pair.mid_tx, after_tx, old)
+  guard(old, context.state_header, before_tx.chain_start, before_tx.chain_end)
 )
 
 // ========================================================
@@ -311,9 +352,11 @@ InputsGroundedRecursive(inputs, created,
 // certificate: it attests to the final state without revealing the
 // event sequence that produced it.
 
-// Exposes (state_header, tx_final, nullifiers, live) publicly. The
-// verifier sees `state_header` as a single hash -- the commitment of the
-// `StateHeader` record.
+// Exposes (context, tx_final, nullifiers, live) publicly. The verifier
+// sees `context` as a single hash -- the commitment of the two-entry
+// context dict {state_header, tx_commitment} -- and recomputes it from
+// the known state header and the published tx_final (which also rules
+// out context dicts padded with extra keys).
 // tx_final is the after_tx dictionary commitment, which binds the
 // live set, nullifiers, and final chain_start/chain_end together. Both
 // the nullifier set and the final live set are also surfaced as their
@@ -330,16 +373,24 @@ InputsGroundedRecursive(inputs, created,
 // values for those two fields (they pass through ReplayActions
 // verbatim into `tx_final`, since ReplayAction only updates the
 // `live` and `nullifiers` keys).
-TxFinalBindings(tx_final, nullifiers, live) = AND(
+//
+// TxFinalBindings also pins the context's two entries: the inner
+// state header (whose `created` field grounds the inputs) and
+// `tx_commitment == tx_final`, which closes the endorsement loop --
+// every ReplayNullify in the replay endorsed this same context, so
+// every spend endorsed this exact final commitment.
+TxFinalBindings(context, state_header, tx_final, nullifiers, live) = AND(
+  DictContains(context, "state_header", state_header)
+  DictContains(context, "tx_commitment", tx_final)
   DictContains(tx_final, "nullifiers", nullifiers)
   DictContains(tx_final, "live", live)
 )
 
-TxFinalized(state_header StateHeader, tx_final, nullifiers, live,
-     private: before_tx, chain_start, chain_final) = AND(
+TxFinalized(context, tx_final, nullifiers, live,
+     private: state_header StateHeader, before_tx, chain_start, chain_final) = AND(
   InputsGrounded(before_tx.live, state_header.created)
   Hash(before_tx.live, {}, chain_start)
   DictInsert({"nullifiers": {}, "chain_start": {}, "chain_end": {}}, "live", before_tx.live, before_tx)
-  TxFinalBindings(tx_final, nullifiers, live)
-  ReplayActions(state_header, before_tx, tx_final, chain_start, chain_final)
+  TxFinalBindings(context, state_header, tx_final, nullifiers, live)
+  ReplayActions(context, before_tx, tx_final, chain_start, chain_final)
 )

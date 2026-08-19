@@ -23,15 +23,19 @@ use pod2::{
 use pod2utils::{dict, macros::BuildContext, map, op, st_custom};
 
 use crate::{
-    ChainEvent, OBJECT_NULLIFIER_VERSION, TxStats, build_tx, object_key_hash,
-    object_nullifier_from_key_hash, record, tx_with,
+    ChainEvent, ENDORSEMENT_VERSION, OBJECT_NULLIFIER_VERSION, TxStats, build_tx,
+    endorsement_hashes, object_key_hash, object_nullifier_from_key_hash, record, tx_with,
 };
 
 /// The replay walker. Owns the long-lived mutable builder state
-/// (`BuildContext` + `TxStats`) that threads through every event.
+/// (`BuildContext` + `TxStats`) that threads through every event,
+/// plus the per-transaction context dict (constant across the walk):
+/// guards are rebound to `context.state_header` and every spend's
+/// `ReplayNullify` endorses the full context.
 pub(crate) struct Replayer<'a> {
     ctx: &'a mut BuildContext,
     stats: &'a mut TxStats,
+    context: &'a Dictionary,
 }
 
 /// Per-step immutable world view: the live/nullifier sets and the
@@ -126,8 +130,16 @@ impl<'a> ReplayFrame<'a> {
 }
 
 impl<'a> Replayer<'a> {
-    pub(crate) fn new(ctx: &'a mut BuildContext, stats: &'a mut TxStats) -> Self {
-        Self { ctx, stats }
+    pub(crate) fn new(
+        ctx: &'a mut BuildContext,
+        stats: &'a mut TxStats,
+        context: &'a Dictionary,
+    ) -> Self {
+        Self {
+            ctx,
+            stats,
+            context,
+        }
     }
 
     fn record(&mut self, name: &str) {
@@ -584,7 +596,7 @@ impl<'a> Replayer<'a> {
             .priv_op(Operation::replace_value_with_entry(
                 vec![
                     None,
-                    None,
+                    Some((self.context, "state_header")),
                     Some((&btx, "chain_start")),
                     Some((&btx, "chain_end")),
                 ],
@@ -620,7 +632,7 @@ impl<'a> Replayer<'a> {
             .priv_op(Operation::replace_value_with_entry(
                 vec![
                     None,
-                    None,
+                    Some((self.context, "state_header")),
                     Some((&scratch.btx, "chain_start")),
                     Some((&scratch.btx, "chain_end")),
                 ],
@@ -645,8 +657,9 @@ impl<'a> Replayer<'a> {
     }
 
     /// Build a `ReplayNullify` statement: derives the object key hash
-    /// and nullifier from `old`, then accumulates the nullifier into
-    /// the tx's nullifiers set. `mid_tx` is the tx state with the new
+    /// and nullifier from `old`, endorses the spend against the
+    /// transaction context, then accumulates the nullifier into the
+    /// tx's nullifiers set. `mid_tx` is the tx state with the new
     /// live set already in place; `after_tx` is `mid_tx` with
     /// `nullifiers` updated to `new_nullifiers`. Used by both mutate and delete
     /// replay.
@@ -659,6 +672,28 @@ impl<'a> Replayer<'a> {
     ) -> Statement {
         let okh = object_key_hash(old).unwrap();
         let nul = object_nullifier_from_key_hash(okh);
+
+        // EndorseSpend: H(old.key, H(context, "txlib-endorsement-v1")).
+        // The second hash opens `old` at "key", so this statement (and
+        // therefore ReplayNullify) can only be produced by the object's
+        // owner, for this exact context.
+        let (tagged, endorsement) = endorsement_hashes(self.context, old);
+        let op_e1 = self
+            .ctx
+            .builder
+            .priv_op(op!(Hash(self.context, ENDORSEMENT_VERSION, tagged)))
+            .unwrap();
+        let op_e2 = self
+            .ctx
+            .builder
+            .priv_op(op!(Hash((old, "key"), tagged, endorsement)))
+            .unwrap();
+        let st_endorse = self
+            .ctx
+            .apply_custom_pred_simple(false, "EndorseSpend", vec![op_e1, op_e2])
+            .unwrap();
+        self.record("EndorseSpend");
+
         let op_h1 = self
             .ctx
             .builder
@@ -689,7 +724,7 @@ impl<'a> Replayer<'a> {
             .apply_custom_pred_simple(
                 false,
                 "ReplayNullify",
-                vec![op_h1, op_h2, op_si, op_du_null],
+                vec![op_h1, op_h2, st_endorse, op_si, op_du_null],
             )
             .unwrap();
         self.record("ReplayNullify");
@@ -773,7 +808,7 @@ impl<'a> Replayer<'a> {
             .ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![Some((&pair, "mid_tx")), None, None],
+                vec![None, Some((&pair, "mid_tx")), None, None],
                 st_nullify.clone(),
             ))
             .unwrap();
@@ -799,7 +834,7 @@ impl<'a> Replayer<'a> {
             .priv_op(Operation::replace_value_with_entry(
                 vec![
                     None,
-                    None,
+                    Some((self.context, "state_header")),
                     Some((&btx, "chain_start")),
                     Some((&btx, "chain_end")),
                 ],
@@ -911,7 +946,8 @@ impl<'a> Replayer<'a> {
     /// `before_tx.chain_start`/`chain_end`. That means we don't need to
     /// rebind the chain slots of `guard_evidence` -- the literal chain
     /// values it carries from record time already match the public arg
-    /// bindings.
+    /// bindings. The state_header slot is still rebound to
+    /// `context.state_header`, like every other guard dispatch.
     ///
     /// Caller must have verified that `contents` is `[ChainEvent::Insert
     /// { .. }]`; this method panics otherwise. The action's `chain_after`
@@ -966,12 +1002,20 @@ impl<'a> Replayer<'a> {
             .builder
             .priv_op(op!(DictUpdate(btx, "live", (&pair, "new_live"), atx)))
             .unwrap();
+        let rebound_evidence = self
+            .ctx
+            .builder
+            .priv_op(Operation::replace_value_with_entry(
+                vec![None, Some((self.context, "state_header")), None, None],
+                evidence,
+            ))
+            .unwrap();
         let st = self
             .ctx
             .apply_custom_pred_simple(
                 false,
                 "ReplayActionInsert",
-                vec![tx_stmt_wrapped, op_si, op_du, evidence],
+                vec![tx_stmt_wrapped, op_si, op_du, rebound_evidence],
             )
             .unwrap();
         self.record("ReplayActionInsert");

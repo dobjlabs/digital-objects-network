@@ -64,6 +64,10 @@ pub struct Payload {
     pub proof: PayloadProof,
     /// Commitment of the finalized transaction dictionary `{live, nullifiers, chain_start, chain_end}`.
     pub tx_final: Hash,
+    /// Commitment of the `StateHeader` record this tx grounds against.
+    /// The proof's first public arg is not this hash directly but the
+    /// per-transaction context commitment recomputed from
+    /// `(state_root, tx_final)` (see `txlib::context_commitment`).
     pub state_root: Hash,
     pub nullifiers: Vec<Hash>,
     /// Commitments of the objects this tx leaves live. The synchronizer

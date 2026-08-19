@@ -250,6 +250,23 @@ impl<'de> Deserialize<'de> for Tx {
 }
 
 pub(crate) const OBJECT_NULLIFIER_VERSION: &str = "txlib-nullifier-v1";
+pub(crate) const ENDORSEMENT_VERSION: &str = "txlib-endorsement-v1";
+
+/// Commitment of the per-transaction context dict
+/// `{state_header, tx_commitment}` for `(state_root, tx_final)`.
+///
+/// This is the value `TxFinalized` exposes as its first public arg and
+/// the value every spend endorsement hashes. Verifiers rebuild it from
+/// the published state root and tx_final; because the reconstruction
+/// is an exact two-entry dict, a prover-supplied context padded with
+/// extra keys can never match.
+pub fn context_commitment(state_root: Hash, tx_final: Hash) -> Hash {
+    dict!({
+        "state_header" => state_root,
+        "tx_commitment" => tx_final
+    })
+    .commitment()
+}
 
 pub fn object_key_hash(obj: &Dictionary) -> anyhow::Result<Hash> {
     let key = obj
@@ -281,6 +298,24 @@ pub fn object_nullifier_hash(obj: &Dictionary) -> anyhow::Result<Hash> {
 /// H(H(obj, obj.key), "txlib-nullifier-v1")
 pub fn compute_nullifier(obj: &Dictionary) -> Hash {
     object_nullifier_hash(obj).expect("object missing required key field")
+}
+
+/// The spend-endorsement hash pair for `(context, obj)`:
+/// `tagged = H(context, "txlib-endorsement-v1")`,
+/// `endorsement = H(obj.key, tagged)`. Computing the second hash needs
+/// the object's `key` entry, so only the object's owner can endorse a
+/// spend for a given transaction context.
+pub(crate) fn endorsement_hashes(context: &Dictionary, obj: &Dictionary) -> (Hash, Hash) {
+    let key = obj
+        .get(&StrKey::from("key"))
+        .expect("object dict lookup")
+        .expect("object missing required key field");
+    let tagged = hash_values(&[
+        Value::from(context.commitment()),
+        Value::from(ENDORSEMENT_VERSION),
+    ]);
+    let endorsement = hash_values(&[key, Value::from(tagged)]);
+    (tagged, endorsement)
 }
 
 pub fn rekey(obj: &mut Dictionary) {
@@ -884,6 +919,18 @@ impl TxBuilder {
         let before_tx = build_tx(&self.inputs_set, &set!(), zero, zero);
         let after_tx = build_tx(&self.live, &self.nullifiers, zero, zero);
 
+        // The per-transaction context: binds the grounding state header
+        // and the final transaction commitment together. The live and
+        // nullifier sets are maintained incrementally by the event
+        // recorders, so after_tx (and therefore the context) is known
+        // before any replay statement is built. The entries carry the
+        // full container values (not just their hashes) so replay-time
+        // anchored-key rebinds can open the dict against them.
+        let context = dict!({
+            "state_header" => self.state_header.array(),
+            "tx_commitment" => after_tx.clone()
+        });
+
         // Replay the top-level action sequence. Every top-level event
         // is guaranteed to be a ChainEvent::Action (enforced by the
         // begin_action/end_action API), so we dispatch directly to
@@ -895,11 +942,8 @@ impl TxBuilder {
             chain_start: zero,
             chain_end: zero,
         };
-        let (st_replay, _, _, _) = replay::Replayer::new(ctx, &mut stats).build_replay_actions(
-            &self.events,
-            self.chain_start,
-            frame,
-        );
+        let (st_replay, _, _, _) = replay::Replayer::new(ctx, &mut stats, &context)
+            .build_replay_actions(&self.events, self.chain_start, frame);
 
         // Tie grounding to the public state root: rebind the InputsGrounded
         // statement's `inputs` to `before_tx.live` (the in-tx working set) and
@@ -962,7 +1006,22 @@ impl TxBuilder {
                 st_dict_insert_lit,
             ))
             .unwrap();
-        // Surface the final nullifier and live sets as public args.
+        // Surface the final nullifier and live sets as public args, and
+        // pin the context's two entries: the inner state header (used to
+        // ground the inputs) and tx_commitment == tx_final (which closes
+        // the endorsement loop for every spend in the replay).
+        let st_dc_ctx_header = ctx
+            .builder
+            .priv_op(op!(DictContains(
+                context,
+                "state_header",
+                self.state_header.array()
+            )))
+            .unwrap();
+        let st_dc_ctx_txfinal = ctx
+            .builder
+            .priv_op(op!(DictContains(context, "tx_commitment", after_tx)))
+            .unwrap();
         let st_dc_null_after = ctx
             .builder
             .priv_op(op!(DictContains(after_tx, "nullifiers", self.nullifiers)))
@@ -975,7 +1034,12 @@ impl TxBuilder {
             .apply_custom_pred_simple(
                 false,
                 "TxFinalBindings",
-                vec![st_dc_null_after, st_dc_live_after],
+                vec![
+                    st_dc_ctx_header,
+                    st_dc_ctx_txfinal,
+                    st_dc_null_after,
+                    st_dc_live_after,
+                ],
             )
             .unwrap();
         record(&mut stats, "TxFinalBindings");
@@ -1294,6 +1358,26 @@ mod tests {
         obj.delete(&StrKey::from("key")).unwrap();
         let err = object_nullifier_hash(&obj).expect_err("missing key must fail");
         assert!(format!("{err}").contains("missing required key field"));
+    }
+
+    // The prover builds the context dict from full container values
+    // (header array, after_tx dict) so replay-time anchored-key rebinds
+    // can open it; the verifier rebuilds it from bare hashes
+    // (payload.state_root, payload.tx_final). Both must commit
+    // identically or no published proof would ever verify.
+    #[test]
+    fn context_commitment_matches_value_forms() {
+        let sr = StateHeader::new(7, 8, test_hash(4), test_hash(1), test_hash(2), test_hash(3));
+        let zero: Hash = EMPTY_VALUE.into();
+        let tx_dict = build_tx(&set!(), &set!(), zero, zero);
+        let full = dict!({
+            "state_header" => sr.array(),
+            "tx_commitment" => tx_dict.clone()
+        });
+        assert_eq!(
+            full.commitment(),
+            context_commitment(sr.hash(), tx_dict.commitment())
+        );
     }
 
     #[test]
