@@ -20,6 +20,25 @@ fn assert_renders(module: &SdkModule, expected: &[&str]) {
     }
 }
 
+/// One resolved import, as `load_module_from_src_actions` wants it.
+fn imports_of(entries: [(&str, &Rc<SdkModule>); 1]) -> Vec<ModuleImport> {
+    entries
+        .into_iter()
+        .map(|(name, module)| ModuleImport {
+            name: name.to_string(),
+            module: module.clone(),
+        })
+        .collect()
+}
+
+/// The `(class, defining plugin)` pairs an action's refs resolve to.
+fn class_plugin_pairs<'a>(
+    refs: impl Iterator<Item = &'a ActionObjectRef>,
+) -> Vec<(&'a str, Option<&'a str>)> {
+    refs.map(|r| (r.class.as_str(), r.plugin.as_deref()))
+        .collect()
+}
+
 fn grounding_witness(state: &TestState, input_commitments: &[Hash]) -> Arc<GroundingWitness> {
     state.build_grounding_witness(
         input_commitments,
@@ -105,7 +124,7 @@ fn test_sdk_1() {
         "MineStoneWithWoodPick",
     ];
     let module = sdk
-        .load_module_from_src_actions(craft_src, actions)
+        .load_module_from_src_actions(craft_src, actions, &[])
         .unwrap();
 
     fn classes<'a>(refs: impl Iterator<Item = &'a ActionObjectRef>) -> Vec<&'a str> {
@@ -304,7 +323,7 @@ fn test_sdk_2() {
 
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_manifest(craft_src, &manifest)
+        .load_module_from_src_manifest(craft_src, &manifest, &[])
         .unwrap();
 
     println!("{}", module.podlang_src);
@@ -332,7 +351,7 @@ fn test_intro_dict_field_arg() {
 "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["FindOre", "RefineOre"])
+        .load_module_from_src_actions(craft_src, &["FindOre", "RefineOre"], &[])
         .unwrap();
 
     let mut state = TestState::default();
@@ -363,7 +382,7 @@ fn test_records_form_just_output() {
 "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["JustOutput"])
+        .load_module_from_src_actions(craft_src, &["JustOutput"], &[])
         .unwrap();
 
     let expected = r#"record JustOutputIO = (out_x)
@@ -413,7 +432,7 @@ fn test_records_form_input_output_update() {
 "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["LogToWood"])
+        .load_module_from_src_actions(craft_src, &["LogToWood"], &[])
         .unwrap();
 
     let expected = r#"record LogToWoodIO = (in_log, out_wood)
@@ -480,7 +499,7 @@ fn test_records_form_subaction() {
 "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["UseFoo", "MineBar"])
+        .load_module_from_src_actions(craft_src, &["UseFoo", "MineBar"], &[])
         .unwrap();
 
     // Parent action signature + sub-action call body. `bar`'s
@@ -534,7 +553,7 @@ fn test_records_form_mutate() {
 "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["UseFoo"])
+        .load_module_from_src_actions(craft_src, &["UseFoo"], &[])
         .unwrap();
 
     let expected = r#"record UseFooIO = (in_foo, out_foo)
@@ -595,7 +614,7 @@ fn test_subaction_alias_read_mutate() {
     "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["LaunchProbe", "Descend", "SampleRock"])
+        .load_module_from_src_actions(craft_src, &["LaunchProbe", "Descend", "SampleRock"], &[])
         .unwrap();
     println!("{}", module.podlang_src);
 
@@ -639,7 +658,7 @@ fn test_cross_read_into_set() {
     "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["SpawnTank", "DrawFuel"])
+        .load_module_from_src_actions(craft_src, &["SpawnTank", "DrawFuel"], &[])
         .unwrap();
     println!("{}", module.podlang_src);
 
@@ -685,7 +704,7 @@ fn test_packed_chain_objects_before_subaction() {
     "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["SpawnShip", "BurnFuel", "MineTwoRocks"])
+        .load_module_from_src_actions(craft_src, &["SpawnShip", "BurnFuel", "MineTwoRocks"], &[])
         .unwrap();
     println!("{}", module.podlang_src);
 
@@ -731,7 +750,7 @@ fn test_cross_read_into_update() {
     "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["SpawnShip", "SpawnSector", "EnterSector"])
+        .load_module_from_src_actions(craft_src, &["SpawnShip", "SpawnSector", "EnterSector"], &[])
         .unwrap();
     println!("{}", module.podlang_src);
 
@@ -777,7 +796,7 @@ fn test_subaction_alias_read_output() {
     "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["SpawnShip", "ChristenShip"])
+        .load_module_from_src_actions(craft_src, &["SpawnShip", "ChristenShip"], &[])
         .unwrap();
     println!("{}", module.podlang_src);
 
@@ -812,7 +831,7 @@ fn test_subaction_alias_no_output_rejected() {
         }
     "#;
     let sdk = Sdk::default();
-    let result = sdk.load_module_from_src_actions(craft_src, &["BurnLog", "MineRock"]);
+    let result = sdk.load_module_from_src_actions(craft_src, &["BurnLog", "MineRock"], &[]);
     match result {
         Ok(_) => panic!("expected load to reject referencing a no-output sub-action alias"),
         Err(err) => {
@@ -850,7 +869,7 @@ fn Bad(action) {{
 }}
 "#
         );
-        let result = sdk.load_module_from_src_actions(&craft_src, &["Bad"]);
+        let result = sdk.load_module_from_src_actions(&craft_src, &["Bad"], &[]);
         match result {
             Ok(_) => panic!("expected SDK to reject {label}, but the script compiled"),
             Err(err) => {
@@ -914,7 +933,7 @@ fn test_sdk_state_header() {
 
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_manifest(craft_src, &manifest)
+        .load_module_from_src_manifest(craft_src, &manifest, &[])
         .unwrap();
 
     println!("{}", module.podlang_src);
@@ -960,7 +979,7 @@ fn test_statement_whole_dict_arg() {
 "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["FindOre", "AssertOre"])
+        .load_module_from_src_actions(craft_src, &["FindOre", "AssertOre"], &[])
         .unwrap();
     assert_renders(
         &module,
@@ -1006,7 +1025,7 @@ fn test_unsafe_product_paired_with_statement() {
 "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["FindOre", "MixAlloy"])
+        .load_module_from_src_actions(craft_src, &["FindOre", "MixAlloy"], &[])
         .unwrap();
     assert_renders(&module, &["Product(ore0.grade, 2, doubled)"]);
 
@@ -1046,7 +1065,7 @@ fn test_arithmetic_is_unsafe_only() {
 "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["UnsafeMix"])
+        .load_module_from_src_actions(craft_src, &["UnsafeMix"], &[])
         .unwrap();
     assert!(
         !module.podlang_src.contains("Sum("),
@@ -1078,7 +1097,7 @@ fn test_arithmetic_is_unsafe_only() {
 "#,
         ),
     ] {
-        let err = match Sdk::default().load_module_from_src_actions(src, &[action]) {
+        let err = match Sdk::default().load_module_from_src_actions(src, &[action], &[]) {
             Ok(_) => panic!("expected {action} to require an unsafe block"),
             Err(err) => err.to_string(),
         };
@@ -1164,6 +1183,7 @@ fn test_statement_surface_round_trips() {
                 "DictTransitions",
                 "SetTransitions",
             ],
+            &[],
         )
         .unwrap();
     assert_renders(
@@ -1208,7 +1228,7 @@ fn test_read_field_of_own_output() {
 "#;
     let sdk = Sdk::default();
     let module = sdk
-        .load_module_from_src_actions(craft_src, &["CraftPick"])
+        .load_module_from_src_actions(craft_src, &["CraftPick"], &[])
         .unwrap();
     assert_renders(
         &module,
@@ -1295,10 +1315,378 @@ fn test_set_guards() {
 "#,
         ),
     ] {
-        let err = match Sdk::default().load_module_from_src_actions(src, &[action]) {
+        let err = match Sdk::default().load_module_from_src_actions(src, &[action], &[]) {
             Ok(_) => panic!("expected {action} to be rejected"),
             Err(err) => err.to_string(),
         };
         assert!(err.contains(expected), "{action}: {err}");
     }
+}
+
+/// Cross-plugin action calls end to end: an importer plugin runs an
+/// imported plugin's action as a sub-action, reads its output's
+/// fields, and produces a native-class object in the same tx. The
+/// foreign-produced object then grounds and spends normally through
+/// the defining plugin. Both modules deliberately define an action
+/// named `CraftWood` so name resolution across batches is pinned.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_cross_plugin_subaction() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let basics_src = r#"
+        fn FindLog(action) {
+            var log = action.output("Log");
+            var work = action.intro_vdf(3, log);
+            log.update("work", work);
+        }
+
+        fn CraftWood(action) {
+            var log = action.input("Log");
+            var wood = action.output("Wood");
+        }
+
+        fn CraftSticks(action) {
+            var wood = action.input("Wood");
+            var stick = action.output("Stick");
+        }
+    "#;
+    let sdk = Sdk::default();
+    let basics = sdk
+        .load_module_from_src_actions(basics_src, &["FindLog", "CraftWood", "CraftSticks"], &[])
+        .unwrap();
+
+    let totem_src = r#"
+        fn CraftWood(action) {
+            var timber = action.output("Timber");
+        }
+
+        fn CraftTotem(action) {
+            var wood = action.subaction("craft-basics::CraftWood");
+            var totem = action.output("Totem");
+            totem.set([["wood_key", wood.key]]);
+        }
+    "#;
+    let imports = imports_of([("craft-basics", &basics)]);
+    let totem_module = sdk
+        .load_module_from_src_actions(totem_src, &["CraftWood", "CraftTotem"], &imports)
+        .unwrap();
+
+    println!("{}", totem_module.podlang_src());
+    let src = totem_module.podlang_src();
+    assert!(
+        src.contains(&format!(
+            "use module {:#} as craft_basics",
+            basics.module().batch.id()
+        )),
+        "importer podlang must import the basics batch"
+    );
+    assert!(src.contains("craft_basics::CraftWood(_craft_basics_CraftWood_io_0"));
+    assert!(src.contains("_craft_basics_CraftWood_io_0 craft_basics::CraftWoodIO"));
+
+    // The sub-action's inputs/outputs splice into the parent's totals,
+    // tagged with the defining plugin.
+    let meta = totem_module
+        .actions()
+        .iter()
+        .find(|a| a.name == "CraftTotem")
+        .unwrap();
+    assert_eq!(
+        class_plugin_pairs(meta.total_inputs()),
+        vec![("Log", Some("craft-basics"))]
+    );
+    assert_eq!(
+        class_plugin_pairs(meta.total_outputs()),
+        vec![("Wood", Some("craft-basics")), ("Totem", None)]
+    );
+
+    // Same class name, different plugin, different guard hash.
+    assert_ne!(
+        basics.class_hash("Wood").unwrap(),
+        totem_module.class_hash("Timber").unwrap()
+    );
+
+    let mut state = TestState::default();
+
+    println!("exe FindLog (basics)");
+    let executor = basics.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindLog", vec![]).unwrap();
+    let log_tx = res.tx.clone();
+    let [log] = res.objs();
+    apply_tx(&mut state, &log_tx);
+
+    println!("exe CraftTotem (importer, sub-calls basics::CraftWood)");
+    let executor = totem_module.executor(true, grounding_witness(&state, &[log.obj.commitment()]));
+    let res = executor.action("CraftTotem", vec![log]).unwrap();
+    let totem_tx = res.tx.clone();
+    let [wood, totem] = res.objs();
+    apply_tx(&mut state, &totem_tx);
+
+    // The foreign-produced wood carries the basics IsWood guard hash;
+    // the native totem carries the importer's IsTotem hash and links
+    // the wood's key.
+    assert_eq!(
+        txlib::object_type(&wood.obj),
+        Value::from(basics.class_hash("Wood").unwrap())
+    );
+    assert_eq!(
+        txlib::object_type(&totem.obj),
+        Value::from(totem_module.class_hash("Totem").unwrap())
+    );
+    assert_eq!(
+        totem.obj.get(&StrKey::from("wood_key")).unwrap().unwrap(),
+        wood.obj.get(&StrKey::from("key")).unwrap().unwrap()
+    );
+
+    println!("exe CraftSticks (basics, spends the importer-tx wood)");
+    let executor = basics.executor(true, grounding_witness(&state, &[wood.obj.commitment()]));
+    let res = executor.action("CraftSticks", vec![wood]).unwrap();
+    let sticks_tx = res.tx.clone();
+    let [_stick] = res.objs();
+    apply_tx(&mut state, &sticks_tx);
+}
+
+/// A qualified sub-action must name a declared import; a foreign class
+/// can never be declared directly (closed classes).
+#[test]
+fn test_cross_plugin_load_errors() {
+    let sdk = Sdk::default();
+
+    let undeclared_src = r#"
+        fn UsesGhost(action) {
+            var x = action.subaction("ghost-plugin::Conjure");
+        }
+    "#;
+    let err = sdk
+        .load_module_from_src_actions(undeclared_src, &["UsesGhost"], &[])
+        .err()
+        .expect("undeclared plugin must fail to load");
+    assert!(
+        err.to_string().contains("not declared as an import"),
+        "unexpected error: {err}"
+    );
+
+    let foreign_class_src = r#"
+        fn StealWood(action) {
+            var wood = action.input("craft-basics::Wood");
+        }
+    "#;
+    let err = sdk
+        .load_module_from_src_actions(foreign_class_src, &["StealWood"], &[])
+        .err()
+        .expect("foreign class declaration must fail to load");
+    assert!(
+        err.to_string().contains("foreign classes are closed"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Manifest `[[imports]]` validation: the declared name/hash pins must
+/// line up with the modules the loader was handed.
+#[test]
+fn test_cross_plugin_manifest_imports() {
+    let sdk = Sdk::default();
+    let basics_src = r#"
+        fn FindLog(action) {
+            var log = action.output("Log");
+        }
+    "#;
+    let basics = sdk
+        .load_module_from_src_actions(basics_src, &["FindLog"], &[])
+        .unwrap();
+    let basics_hash = format!("{:#}", basics.module().batch.id());
+    let imports = imports_of([("craft-basics", &basics)]);
+    let imports = imports.as_slice();
+
+    let parent_src = r#"
+        fn Beacon(action) {
+            var log = action.subaction("craft-basics::FindLog");
+            var beacon = action.output("Beacon");
+        }
+    "#;
+    let manifest_toml = |import_hash: &str| {
+        format!(
+            r#"
+        [plugin]
+        name = "beacon"
+        version = "0.1.0"
+        module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+
+        [[imports]]
+        name = "craft-basics"
+        module_hash = "{}"
+
+        [[classes]]
+        name = "Beacon"
+        emoji = "B"
+        description = "A beacon."
+
+        [[actions]]
+        name = "Beacon"
+        emoji = "B"
+        description = "Raise a beacon over a fresh log."
+        "#,
+            import_hash.trim_start_matches("0x")
+        )
+    };
+
+    // A wrong pin fails before compilation.
+    let manifest: Manifest = toml::from_str(&manifest_toml(&"ab".repeat(32))).unwrap();
+    let err = sdk
+        .load_module_from_src_manifest(parent_src, &manifest, imports)
+        .err()
+        .expect("pin mismatch must fail");
+    assert!(
+        err.to_string().contains("manifest pins module_hash"),
+        "unexpected error: {err}"
+    );
+
+    // Providing a module the manifest does not declare fails too.
+    let mut undeclared = toml::from_str::<Manifest>(&manifest_toml(&basics_hash)).unwrap();
+    undeclared.imports.clear();
+    let err = sdk
+        .load_module_from_src_manifest(parent_src, &undeclared, imports)
+        .err()
+        .expect("undeclared provided import must fail");
+    assert!(
+        err.to_string().contains("does not declare it"),
+        "unexpected error: {err}"
+    );
+
+    // Correct pin loads; the module hash check then runs as usual and
+    // reports the real hash, which covers the import pin transitively.
+    let manifest: Manifest = toml::from_str(&manifest_toml(&basics_hash)).unwrap();
+    let err = sdk
+        .load_module_from_src_manifest(parent_src, &manifest, imports)
+        .err()
+        .expect("placeholder plugin hash must mismatch");
+    assert!(
+        err.to_string().contains("module_hash"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Transitive imports: C imports B, B imports A. Running C's action
+/// sub-calls into B, whose body sub-calls into A, so the executor must
+/// carry all three batches and each nested sub-action must resolve
+/// against its own module's imports.
+#[test]
+fn test_transitive_plugin_imports() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let sdk = Sdk::default();
+
+    let quarry_src = r#"
+        fn QuarryStone(action) {
+            var stone = action.output("Stone");
+        }
+    "#;
+    let quarry = sdk
+        .load_module_from_src_actions(quarry_src, &["QuarryStone"], &[])
+        .unwrap();
+
+    let mason_src = r#"
+        fn CarveBlock(action) {
+            var stone = action.subaction("quarry::QuarryStone");
+            var block = action.output("Block");
+            block.set([["stone_key", stone.key]]);
+        }
+    "#;
+    let mason = sdk
+        .load_module_from_src_actions(
+            mason_src,
+            &["CarveBlock"],
+            &imports_of([("quarry", &quarry)]),
+        )
+        .unwrap();
+
+    let builder_src = r#"
+        fn RaiseWall(action) {
+            var block = action.subaction("mason::CarveBlock");
+            var wall = action.output("Wall");
+            wall.set([["block_key", block.key]]);
+        }
+    "#;
+    let builder = sdk
+        .load_module_from_src_actions(
+            builder_src,
+            &["RaiseWall"],
+            &imports_of([("mason", &mason)]),
+        )
+        .unwrap();
+
+    // The transitively-produced Stone keeps its original defining plugin.
+    let meta = builder
+        .actions()
+        .iter()
+        .find(|a| a.name == "RaiseWall")
+        .unwrap();
+    assert_eq!(
+        class_plugin_pairs(meta.total_outputs()),
+        vec![
+            ("Stone", Some("quarry")),
+            ("Block", Some("mason")),
+            ("Wall", None),
+        ]
+    );
+
+    let state = TestState::default();
+    let executor = builder.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("RaiseWall", vec![]).unwrap();
+    let [stone, block, wall] = res.objs();
+    assert_eq!(
+        txlib::object_type(&stone.obj),
+        Value::from(quarry.class_hash("Stone").unwrap())
+    );
+    assert_eq!(
+        txlib::object_type(&block.obj),
+        Value::from(mason.class_hash("Block").unwrap())
+    );
+    assert_eq!(
+        txlib::object_type(&wall.obj),
+        Value::from(builder.class_hash("Wall").unwrap())
+    );
+}
+
+/// Two manifests importing each other fail resolution with a cycle
+/// error before any pin validation runs.
+#[test]
+fn test_import_cycle_rejected() {
+    let manifest = |name: &str, dep: &str| -> Manifest {
+        toml::from_str(&format!(
+            r#"
+            [plugin]
+            name = "{name}"
+            version = "0.1.0"
+            module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+
+            [[imports]]
+            name = "{dep}"
+            module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+
+            [[classes]]
+            name = "Thing"
+            emoji = "T"
+            description = "a thing"
+
+            [[actions]]
+            name = "MakeThing"
+            emoji = "T"
+            description = "make a thing"
+            "#
+        ))
+        .unwrap()
+    };
+    let ouro = manifest("ouro", "boros");
+    let boros = manifest("boros", "ouro");
+    let script = r#"
+        fn MakeThing(action) {
+            var thing = action.output("Thing");
+        }
+    "#;
+    let sdk = Sdk::default();
+    let mut resolver = ImportResolver::new(&sdk, [(&ouro, script), (&boros, script)]);
+    let err = resolver.load("ouro").err().expect("cycle must fail");
+    assert!(
+        err.to_string().contains("import cycle"),
+        "unexpected error: {err}"
+    );
 }

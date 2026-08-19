@@ -166,6 +166,44 @@ chain later still. Treat time locks written against it as coarse-grained.
 limb reduced into a field element, see `pod2utils::b256_to_hash`) — suitable
 as opaque entropy, not for byte-exact comparison with the L1 hash.
 
+# Cross-plugin imports
+
+A plugin can call another plugin's actions as sub-actions. The manifest
+declares the dependency with a pinned module hash (stamped by `pexe build`,
+like the plugin's own `module_hash`):
+
+```toml
+[[imports]]
+name = "craft-basics"
+module_hash = "d7edcb9150d12af76a54fbbac7b00b8bb24fab61bc1395b65da47547ad5d1b42"
+```
+
+and the script calls it with a qualified name:
+
+```rhai
+fn CraftTotem(action) {
+    var wood = action.subaction("craft-basics::CraftWood");
+    var totem = action.output("Totem");
+    totem.set([["seal", wood.key]]);
+}
+```
+
+Bare `subaction` names always mean this module; qualified names must name a
+declared import. The compiled podlang imports the dependency's batch
+(`use module <hash> as craft_basics`) and calls its predicate directly, so
+the importer's `module_hash` transitively commits to the exact imported
+version. The sub-action's inputs and outputs splice into the caller's
+totals, and its Rhai body executes inline against the shared transaction
+at execute time.
+
+Foreign classes are closed: `input`/`output`/`mutate` reject qualified
+class names. An importer cannot insert, mutate, or delete another plugin's
+objects directly — each class's replay guard enumerates only the defining
+plugin's actions — so cross-plugin interaction happens by running the
+defining plugin's actions and reading their outputs. Anything more (e.g.
+consuming a foreign object as an ingredient) needs the defining plugin to
+export an action for it.
+
 # Missing features
 
 - [ ] Literal Array

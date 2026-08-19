@@ -9,9 +9,11 @@
 //! when printed). Two plugins may declare a class or action with the same
 //! bare name; they stay distinct because every internal map keys on the full
 //! `QualifiedName` and because their on-chain `Is{class}` predicate hashes
-//! differ (each module has a unique `module_hash`). Cross-plugin class
-//! references are not supported: an action must reference classes declared
-//! in its own plugin.
+//! differ (each module has a unique `module_hash`). A plugin interacts with
+//! another plugin's classes only by declaring the plugin in its manifest's
+//! `[[imports]]` and calling its actions via `subaction("<plugin>::<Action>")`;
+//! plugins load in dependency order and an unresolvable or hash-mismatched
+//! import fails the whole catalog load.
 //!
 //! The compiled [`sdk::SdkModule`] is not kept — it holds a `Rc<Engine>` and is
 //! therefore `!Send`. `execute_action` re-loads the script from its stored bytes
@@ -21,7 +23,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use payload::decode_hash_hex;
 use pod2::middleware::Hash;
 use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
@@ -96,17 +98,17 @@ impl PexeCatalog {
         }
 
         let sdk = Sdk::default();
+        let mut resolver = plugin_resolver(&sdk, &plugins);
 
         let mut all_actions: Vec<ActionSummary> = Vec::new();
         let mut classes_in_order: Vec<CatalogClass> = Vec::new();
         let mut combined_podlang = String::new();
-        let mut enriched_plugins: Vec<Plugin> = Vec::with_capacity(plugins.len());
         let mut action_plugin_idx: HashMap<QualifiedName, usize> = HashMap::new();
 
-        for plugin in plugins {
+        for (plugin_idx, plugin) in plugins.iter().enumerate() {
             let plugin_name = plugin.manifest.plugin.name.clone();
-            let module = sdk
-                .load_module_from_src_manifest(&plugin.script, &plugin.manifest)
+            let module = resolver
+                .load(&plugin_name)
                 .map_err(|err| anyhow!("failed to load plugin {plugin_name}: {err}"))?;
             let podlang_src = module.podlang_src().to_string();
             if !combined_podlang.is_empty() {
@@ -166,7 +168,6 @@ impl PexeCatalog {
                 .iter()
                 .map(|a| (a.name.as_str(), a))
                 .collect();
-            let plugin_idx = enriched_plugins.len();
 
             for action in module.actions() {
                 let bare = action.name.clone();
@@ -178,27 +179,33 @@ impl PexeCatalog {
                 }
 
                 let meta = action_meta_by_name.get(bare.as_str());
-                let resolve_class = |class_name: &str| -> Result<ClassRef> {
-                    let hash = class_hashes.get(class_name).ok_or_else(|| {
-                        anyhow!(
-                            "plugin {plugin_name}: action {bare} references class {class_name:?} \
-                             which is not declared in this plugin (cross-plugin class \
-                             references are not supported yet)"
-                        )
-                    })?;
+                // A class spliced in from an imported sub-action resolves
+                // against its defining plugin's module, reached through
+                // this module's import graph.
+                let resolve_class = |r: &sdk::ActionObjectRef| -> Result<ClassRef> {
+                    let owner = r.plugin.clone().unwrap_or_else(|| plugin_name.clone());
+                    let hash = module
+                        .defining_module(r.plugin.as_deref())
+                        .and_then(|defining| defining.class_hash(&r.class))
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "plugin {plugin_name}: action {bare} references class {r}, \
+                                 which has no compiled hash in plugin {owner}"
+                            )
+                        })?;
                     Ok(ClassRef {
-                        class: QualifiedName::new(plugin_name.clone(), class_name.to_string()),
+                        class: QualifiedName::new(owner, r.class.clone()),
                         hash: format!("{:#}", hash),
                     })
                 };
 
                 let total_inputs = action
                     .total_inputs()
-                    .map(|r| resolve_class(&r.class))
+                    .map(resolve_class)
                     .collect::<Result<Vec<_>>>()?;
                 let total_outputs = action
                     .total_outputs()
-                    .map(|r| resolve_class(&r.class))
+                    .map(resolve_class)
                     .collect::<Result<Vec<_>>>()?;
 
                 if meta.is_some_and(|m| m.hidden) {
@@ -225,8 +232,6 @@ impl PexeCatalog {
                     predicate_source,
                 });
             }
-
-            enriched_plugins.push(plugin);
         }
 
         // Second pass: fill produced_by / consumed_by per class.
@@ -269,7 +274,7 @@ impl PexeCatalog {
             .collect();
 
         Ok(Self {
-            plugins: enriched_plugins,
+            plugins,
             actions: all_actions,
             actions_by_name,
             action_plugin_idx,
@@ -320,14 +325,13 @@ impl ActionCatalog for PexeCatalog {
             .ok_or_else(|| anyhow!("no plugin provides action {action}"))?;
         let plugin = &self.plugins[plugin_idx];
         let sdk = Sdk::default();
-        let module = sdk
-            .load_module_from_src_manifest(&plugin.script, &plugin.manifest)
-            .map_err(|err| {
-                anyhow!(
-                    "failed to reload plugin {} for execution: {err}",
-                    plugin.manifest.plugin.name
-                )
-            })?;
+        let mut resolver = plugin_resolver(&sdk, &self.plugins);
+        let module = resolver.load(&plugin.manifest.plugin.name).map_err(|err| {
+            anyhow!(
+                "failed to reload plugin {} for execution: {err}",
+                plugin.manifest.plugin.name
+            )
+        })?;
         let executor = module.executor(self.mock_proofs, Arc::new(grounding_witness));
         Ok(executor.action(&action.name, inputs)?)
     }
@@ -341,17 +345,22 @@ impl ActionCatalog for PexeCatalog {
     }
 }
 
+/// Resolver over the installed plugins: each loads once, dependencies
+/// before importers, with cycles and hash-pin mismatches rejected.
+fn plugin_resolver<'a>(sdk: &'a Sdk, plugins: &'a [Plugin]) -> sdk::ImportResolver<'a> {
+    sdk::ImportResolver::new(
+        sdk,
+        plugins
+            .iter()
+            .map(|plugin| (&plugin.manifest, plugin.script.as_str())),
+    )
+}
+
 fn discover_plugins(actions_dir: &Path) -> Result<Vec<Plugin>> {
     if !actions_dir.exists() {
         return Ok(Vec::new());
     }
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(actions_dir)
-        .with_context(|| format!("failed to read {}", actions_dir.display()))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some(pexe::PEXE_EXTENSION))
-        .collect();
-    entries.sort();
-
+    let entries = pexe::pexe_paths_in(actions_dir);
     let mut plugins = Vec::with_capacity(entries.len());
     for path in entries {
         let bytes = pexe::read_pexe_file(&path)?;
@@ -397,6 +406,13 @@ pub(crate) fn test_plugin_bytes() -> Vec<u8> {
     let manifest = include_str!("../../../examples/craft-basics/manifest.toml");
     let script = include_str!("../../../examples/craft-basics/plugin.rhai");
     pexe::pack(manifest, script).expect("test plugin packs")
+}
+
+#[cfg(test)]
+pub(crate) fn test_totem_plugin_bytes() -> Vec<u8> {
+    let manifest = include_str!("../../../examples/craft-totem/manifest.toml");
+    let script = include_str!("../../../examples/craft-totem/plugin.rhai");
+    pexe::pack(manifest, script).expect("totem plugin packs")
 }
 
 #[cfg(test)]
@@ -589,13 +605,29 @@ emoji = "B"
 description = "consume a Foo to make a Bar"
 "#
         );
+        pack_stamped(&template, script, &[])
+    }
+
+    /// Compile a synthetic plugin, stamp its manifest's `module_hash`
+    /// (and any `[[imports]]` pins) the way `pexe build` would, and pack
+    /// it, so the catalog's manifest validation passes.
+    fn pack_stamped(template: &str, script: &str, imports: &[sdk::ModuleImport]) -> Vec<u8> {
         let manifest: sdk::manifest::Manifest =
-            toml::from_str(&template).expect("synthetic manifest parses");
-        let real_hash =
-            pexe::compile_module_hash(&manifest, script).expect("synthetic script compiles");
-        let with_hash =
-            pexe::set_manifest_hash(&template, &real_hash).expect("rewrite module_hash");
-        pexe::pack(&with_hash, script).expect("pack synthetic plugin")
+            toml::from_str(template).expect("synthetic manifest parses");
+        let module = pexe::compile_module(&Sdk::default(), &manifest, script, imports)
+            .expect("synthetic script compiles");
+        let mut toml_src =
+            pexe::set_manifest_hash(template, &format!("{:#}", module.module().batch.id()))
+                .expect("rewrite module_hash");
+        for import in imports {
+            toml_src = pexe::set_manifest_import_hash(
+                &toml_src,
+                &import.name,
+                &format!("{:#}", import.module.module().batch.id()),
+            )
+            .expect("rewrite import module_hash");
+        }
+        pexe::pack(&toml_src, script).expect("pack synthetic plugin")
     }
 
     fn alpha_beta_catalog() -> PexeCatalog {
@@ -749,6 +781,213 @@ description = "consume a Foo to make a Bar"
             beta_foo.predicate_source.contains("IsFoo"),
             "beta IsFoo source should mention IsFoo; got {}",
             beta_foo.predicate_source
+        );
+    }
+
+    // --- Cross-plugin import fixtures -----------------------------------------
+    //
+    // `gamma` imports `alpha` and runs alpha::MakeFoo as a sub-action,
+    // reading the produced Foo's key into its own Box output.
+
+    const GAMMA_SCRIPT: &str = r#"
+fn WrapFoo(action) {
+    var foo = action.subaction("alpha::MakeFoo");
+    var wrapped = action.output("Box");
+    wrapped.set([["foo_key", foo.key]]);
+}
+"#;
+
+    /// Load a plugin from packed bytes, resolving its imports among the
+    /// other packed plugins given.
+    fn load_packed(sdk: &Sdk, name: &str, packed: &[&[u8]]) -> std::rc::Rc<sdk::SdkModule> {
+        let sources: Vec<(sdk::manifest::Manifest, String)> = packed
+            .iter()
+            .map(|bytes| pexe::unpack(bytes).expect("plugin unpacks"))
+            .collect();
+        sdk::ImportResolver::new(
+            sdk,
+            sources
+                .iter()
+                .map(|(manifest, script)| (manifest, script.as_str())),
+        )
+        .load(name)
+        .unwrap_or_else(|err| panic!("{name} loads: {err}"))
+    }
+
+    /// Pack a gamma plugin importing the given built alpha archive, with
+    /// both the import pin and the module hash stamped the way `pexe
+    /// build` would. The placeholder pin exercises
+    /// `set_manifest_import_hash`.
+    fn gamma_plugin_bytes(alpha_bytes: &[u8]) -> Vec<u8> {
+        let sdk = Sdk::default();
+        let alpha_module = load_packed(&sdk, "alpha", &[alpha_bytes]);
+        let template = r#"[plugin]
+name = "gamma"
+version = "0.1.0"
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[imports]]
+name = "alpha"
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[classes]]
+name = "Box"
+emoji = "X"
+description = "wraps an alpha Foo"
+
+[[actions]]
+name = "WrapFoo"
+emoji = "X"
+description = "run alpha::MakeFoo and box the result"
+"#;
+        pack_stamped(
+            template,
+            GAMMA_SCRIPT,
+            &[sdk::ModuleImport {
+                name: "alpha".to_string(),
+                module: alpha_module,
+            }],
+        )
+    }
+
+    #[test]
+    fn test_cross_plugin_import_in_catalog() {
+        let alpha = synthetic_plugin_bytes("alpha", ALPHA_SCRIPT);
+        let gamma = gamma_plugin_bytes(&alpha);
+        let catalog = PexeCatalog::from_bytes(
+            [
+                // Importer listed first: load order comes from the
+                // resolver, not the listing order.
+                (PathBuf::from("gamma.pexe"), gamma),
+                (PathBuf::from("alpha.pexe"), alpha),
+            ],
+            true,
+        )
+        .expect("catalog with import loads");
+
+        // WrapFoo's spliced totals point at alpha's Foo with alpha's hash.
+        let wrap = catalog
+            .get_action(&QualifiedName::new("gamma", "WrapFoo"))
+            .expect("gamma::WrapFoo present");
+        let alpha_foo = catalog
+            .get_class(&QualifiedName::new("alpha", "Foo"))
+            .expect("alpha::Foo present");
+        assert!(wrap.total_inputs.is_empty());
+        let out_classes: Vec<&QualifiedName> =
+            wrap.total_outputs.iter().map(|r| &r.class).collect();
+        assert_eq!(
+            out_classes,
+            vec![
+                &QualifiedName::new("alpha", "Foo"),
+                &QualifiedName::new("gamma", "Box"),
+            ]
+        );
+        assert_eq!(wrap.total_outputs[0].hash, alpha_foo.hash);
+
+        // alpha::Foo's produced_by includes the importing action.
+        assert!(
+            alpha_foo
+                .produced_by
+                .contains(&QualifiedName::new("gamma", "WrapFoo")),
+            "alpha::Foo produced_by should include gamma::WrapFoo; got {:?}",
+            alpha_foo.produced_by
+        );
+
+        // Executing the importer emits a Foo typed with alpha's guard
+        // hash and a Box typed with gamma's.
+        let out = catalog
+            .execute_action(
+                QualifiedName::new("gamma", "WrapFoo"),
+                dummy_grounding_witness(),
+                vec![],
+            )
+            .expect("gamma::WrapFoo runs");
+        assert_eq!(out.objs.len(), 2);
+        let foo_type = obj_type_hash_for_test(&out.obj(0).obj).expect("foo output has type");
+        assert_eq!(foo_type, decode_hash_hex(&alpha_foo.hash).unwrap());
+        let gamma_box = catalog
+            .get_class(&QualifiedName::new("gamma", "Box"))
+            .expect("gamma::Box present");
+        let box_type = obj_type_hash_for_test(&out.obj(1).obj).expect("box output has type");
+        assert_eq!(box_type, decode_hash_hex(&gamma_box.hash).unwrap());
+    }
+
+    /// The shipped craft-totem example end to end through the catalog:
+    /// its stamped manifest pins resolve against the shipped
+    /// craft-basics, and CraftTotem consumes a grounded Log through the
+    /// imported CraftWood sub-action.
+    #[test]
+    fn test_craft_totem_example_runs() {
+        let basics_bytes = test_plugin_bytes();
+        let totem_bytes = test_totem_plugin_bytes();
+        let catalog = PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("craft-basics.pexe"), basics_bytes.clone()),
+                (PathBuf::from("craft-totem.pexe"), totem_bytes),
+            ],
+            true,
+        )
+        .expect("example plugins load");
+
+        // Mint a synthetic grounded Log against craft-basics's module.
+        let sdk = Sdk::default();
+        let basics = load_packed(&sdk, "craft-basics", &[&basics_bytes]);
+        let log = pexe::fixtures::mint_class(&basics, "Log").expect("mint Log");
+        let state = pexe::fixtures::build_synthetic_state(&[log]).expect("synthetic state");
+
+        let out = catalog
+            .execute_action(
+                QualifiedName::new("craft-totem", "CraftTotem"),
+                (*state.grounding_witness).clone(),
+                state.spendable,
+            )
+            .expect("craft-totem::CraftTotem runs");
+        assert_eq!(out.objs.len(), 2, "one Wood plus one Totem");
+        let wood_type = obj_type_hash_for_test(&out.obj(0).obj).expect("wood has type");
+        let basics_wood = catalog
+            .get_class(&QualifiedName::new("craft-basics", "Wood"))
+            .expect("craft-basics::Wood present");
+        assert_eq!(wood_type, decode_hash_hex(&basics_wood.hash).unwrap());
+        let totem_type = obj_type_hash_for_test(&out.obj(1).obj).expect("totem has type");
+        let totem_class = catalog
+            .get_class(&QualifiedName::new("craft-totem", "Totem"))
+            .expect("craft-totem::Totem present");
+        assert_eq!(totem_type, decode_hash_hex(&totem_class.hash).unwrap());
+    }
+
+    #[test]
+    fn test_cross_plugin_missing_dep_fails_catalog() {
+        let alpha = synthetic_plugin_bytes("alpha", ALPHA_SCRIPT);
+        let gamma = gamma_plugin_bytes(&alpha);
+        let err = PexeCatalog::from_bytes([(PathBuf::from("gamma.pexe"), gamma)], true)
+            .err()
+            .expect("catalog without the dependency must fail");
+        assert!(
+            err.to_string().contains("not among the available plugins"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_cross_plugin_pin_mismatch_fails_catalog() {
+        let alpha = synthetic_plugin_bytes("alpha", ALPHA_SCRIPT);
+        let gamma = gamma_plugin_bytes(&alpha);
+        // Install a different plugin under the same name: beta's script
+        // compiles to a different batch id, so gamma's pin no longer
+        // matches the module the name resolves to.
+        let impostor_alpha = synthetic_plugin_bytes("alpha", BETA_SCRIPT);
+        let err = PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("alpha.pexe"), impostor_alpha),
+                (PathBuf::from("gamma.pexe"), gamma),
+            ],
+            true,
+        )
+        .err()
+        .expect("catalog with a mismatched import pin must fail");
+        assert!(
+            err.to_string().contains("manifest pins module_hash"),
+            "unexpected error: {err}"
         );
     }
 

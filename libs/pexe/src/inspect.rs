@@ -50,12 +50,13 @@ fn load_target(path: &Path) -> Result<(Manifest, String)> {
 }
 
 /// Compile the plugin script with the manifest's action list and return
-/// the loaded SDK module.
+/// the loaded SDK module. Declared imports resolve against built
+/// archives in [`crate::DEFAULT_OUT_DIR`] and the default install dir.
 fn load_sdk_module(manifest: &Manifest, script: &str) -> Result<std::rc::Rc<SdkModule>> {
     let sdk = Sdk::default();
-    let action_names: Vec<&str> = manifest.actions.iter().map(|a| a.name.as_str()).collect();
-    sdk.load_module_from_src_actions(script, &action_names)
-        .map_err(|err| anyhow!("failed to compile plugin: {err}"))
+    let dep_dirs = crate::dep_search_dirs(&[], Path::new(crate::DEFAULT_OUT_DIR), None);
+    let imports = crate::resolve_manifest_imports(&sdk, manifest, &dep_dirs)?;
+    crate::compile_module(&sdk, manifest, script, &imports)
 }
 
 /// `pexe inspect predicates`.
@@ -299,9 +300,9 @@ fn prepare_run(target: &Path, action_name: &str) -> Result<ActionRun> {
         .iter()
         .find(|a| a.name == action_name)
         .ok_or_else(|| anyhow!("no action named {action_name} in this plugin"))?;
-    let input_classes: Vec<String> = action.total_inputs().map(|r| r.class.clone()).collect();
-    let output_classes: Vec<String> = action.total_outputs().map(|r| r.class.clone()).collect();
-    let minted = crate::fixtures::mint_classes(&module, &input_classes)?;
+    let input_classes: Vec<String> = action.total_inputs().map(|r| r.to_string()).collect();
+    let output_classes: Vec<String> = action.total_outputs().map(|r| r.to_string()).collect();
+    let minted = crate::fixtures::mint_classes(&module, action.total_inputs())?;
     let state = crate::fixtures::build_synthetic_state(&minted)?;
     Ok(ActionRun {
         module,
@@ -495,10 +496,11 @@ fn print_dep_graph(plan: &sdk::PlanData, aliases: &HashMap<Hash, String>) {
     }
 }
 
-/// Map each imported module's batch hash to its declared alias (e.g.
-/// `txlib`'s batch id -> `"tx"`). Used to qualify foreign predicate
-/// names in label rendering. The local module's batch is *not* in the
-/// dependency list, so its customs come out unprefixed naturally.
+/// Map each imported module's batch hash to its dependency name (the
+/// tx_events batch -> `"tx"`, an imported plugin -> its plugin name).
+/// Used to qualify foreign predicate names in label rendering. The local
+/// module's batch is *not* in the dependency list, so its customs come
+/// out unprefixed naturally.
 fn build_alias_map(module: &SdkModule) -> HashMap<Hash, String> {
     let mut map = HashMap::new();
     for dep in module.dependencies() {

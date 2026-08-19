@@ -325,28 +325,48 @@ impl BuildContext {
         wildcard_map: HashMap<String, Value>,
         statements: Vec<Statement>,
     ) -> anyhow::Result<Statement> {
-        for module in &self.modules {
-            if module.predicate_ref_by_name(name).is_some() {
-                return module.apply_predicate_with(name, statements, public, |is_public, op| {
-                    let mut wildcard_values: Vec<(usize, Value)> = Vec::new();
-                    // Get the CustomPredicateRef from the closure because this may be a chain in a
-                    // split predicate where the wildcard indices are different than the top level
-                    // predicate.
-                    let cpr = match &op.0 {
-                        OperationType::Custom(cpr) => cpr,
-                        _ => unreachable!(),
-                    };
-                    for (i, name) in cpr.predicate().wildcard_names().iter().enumerate() {
-                        if let Some(value) = wildcard_map.get(name) {
-                            wildcard_values.push((i, value.clone()));
-                        }
-                    }
-                    let st = self.builder.op(is_public, wildcard_values, op).unwrap();
-                    Ok(st)
-                });
+        let module = self
+            .modules
+            .iter()
+            .find(|module| module.predicate_ref_by_name(name).is_some())
+            .cloned();
+        match module {
+            Some(module) => {
+                self.apply_custom_pred_in(&module, public, name, wildcard_map, statements)
             }
+            None => panic!("predicate not found"),
         }
-        panic!("predicate not found");
+    }
+
+    /// Apply a custom predicate from a named module rather than the first
+    /// module in `modules` that happens to define the name. Callers that
+    /// load several batches defining the same predicate names (e.g. two
+    /// plugins each with an `IsWood`) must name the owning module.
+    pub fn apply_custom_pred_in(
+        &mut self,
+        module: &Module,
+        public: bool,
+        name: &str,
+        wildcard_map: HashMap<String, Value>,
+        statements: Vec<Statement>,
+    ) -> anyhow::Result<Statement> {
+        module.apply_predicate_with(name, statements, public, |is_public, op| {
+            let mut wildcard_values: Vec<(usize, Value)> = Vec::new();
+            // Get the CustomPredicateRef from the closure because this may be a chain in a
+            // split predicate where the wildcard indices are different than the top level
+            // predicate.
+            let cpr = match &op.0 {
+                OperationType::Custom(cpr) => cpr,
+                _ => unreachable!(),
+            };
+            for (i, name) in cpr.predicate().wildcard_names().iter().enumerate() {
+                if let Some(value) = wildcard_map.get(name) {
+                    wildcard_values.push((i, value.clone()));
+                }
+            }
+            let st = self.builder.op(is_public, wildcard_values, op).unwrap();
+            Ok(st)
+        })
     }
 
     /// Apply a custom predicate without wildcard value hints.

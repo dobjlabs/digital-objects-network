@@ -1,21 +1,17 @@
 //! `pexe`: build and install plugin archives.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use pexe::{
-    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash, inspect, install, pack,
-    read_pexe_file, set_manifest_hash, unpack,
+    DEFAULT_OUT_DIR, MANIFEST_FILE, PEXE_EXTENSION, PluginSource, default_install_dir,
+    dep_search_dirs, inspect, install, pack, read_pexe_file, resolve_manifest_imports,
+    set_manifest_hash, set_manifest_import_hash, unpack,
 };
-
-// These names intentionally mirror `driver::paths::{DOBJ_HOME_DIR, ACTIONS_DIR}`.
-// They're duplicated here because the `pexe` lib is a dependency of `driver`, so
-// `pexe` can't depend on `driver` without a cycle. If either changes over there,
-// change it here too.
-const DRIVER_DOBJ_HOME_DIR: &str = ".dobj";
-const DRIVER_ACTIONS_DIR: &str = "actions";
-const DRIVER_DOBJ_HOME_ENV: &str = "DOBJ_HOME";
+use pod2::middleware::Hash;
+use sdk::Sdk;
 
 /// Release tag + target triple, stamped by build.rs ("dev" outside a release
 /// build). pexe ships in the same release bundle as dobj/dobjd and `dobj
@@ -27,17 +23,6 @@ const VERSION: &str = concat!(
     env!("DOBJ_TARGET_TRIPLE"),
     ")"
 );
-
-fn default_install_dir() -> Result<PathBuf> {
-    // Resolved the same way as `driver::paths::default_dobj_root`, which this
-    // crate cannot call without depending on the whole driver. Installing into
-    // a root the driver would not read is worse than the duplication.
-    if let Some(root) = std::env::var_os(DRIVER_DOBJ_HOME_ENV).filter(|root| !root.is_empty()) {
-        return Ok(PathBuf::from(root).join(DRIVER_ACTIONS_DIR));
-    }
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory"))?;
-    Ok(home.join(DRIVER_DOBJ_HOME_DIR).join(DRIVER_ACTIONS_DIR))
-}
 
 #[derive(Parser, Debug)]
 #[command(name = "pexe", about = "plugin packaging tool", version = VERSION)]
@@ -56,7 +41,7 @@ enum Cmd {
         plugins: Vec<PathBuf>,
 
         /// Output directory for the built .pexe files.
-        #[arg(long, default_value = "target/pexe")]
+        #[arg(long, default_value = DEFAULT_OUT_DIR)]
         out_dir: PathBuf,
 
         /// Also install the built archives into the target install dir.
@@ -71,6 +56,13 @@ enum Cmd {
         /// fail instead.
         #[arg(long)]
         check: bool,
+
+        /// Extra directories to search for already-built dependency pexes
+        /// (searched before the output dir and the install dir). A plugin's
+        /// [[imports]] resolve only against built archives: build the
+        /// dependency first.
+        #[arg(long)]
+        deps: Vec<PathBuf>,
     },
     /// Dump the contents of a .pexe archive to stdout.
     Dump {
@@ -227,6 +219,7 @@ fn main() -> Result<()> {
             install: do_install,
             install_dir,
             check,
+            deps,
         } => {
             std::fs::create_dir_all(&out_dir)
                 .with_context(|| format!("failed to create {}", out_dir.display()))?;
@@ -238,8 +231,20 @@ fn main() -> Result<()> {
             } else {
                 None
             };
+            let dep_dirs = dep_search_dirs(&deps, &out_dir, target_install.as_deref());
+            // An importer resolves its deps from the archives already in
+            // out_dir, so any dependency named in this invocation has to
+            // be built first. `examples/*` arrives alphabetically, which
+            // is not that order in general.
+            let plugins = order_by_imports(plugins)?;
             for plugin_dir in plugins {
-                build_one(&plugin_dir, &out_dir, target_install.as_deref(), check)?;
+                build_one(
+                    &plugin_dir,
+                    &out_dir,
+                    target_install.as_deref(),
+                    check,
+                    &dep_dirs,
+                )?;
             }
         }
         Cmd::Dump { pexe } => {
@@ -336,44 +341,154 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Sort plugin source dirs so that a plugin declaring an import of
+/// another plugin in the same invocation builds after it. Plugins whose
+/// imports are not in the invocation keep their relative order and
+/// resolve from previously built or installed archives. An import cycle
+/// among the given plugins is an error (the SDK's resolver would reject
+/// it later anyway, with less context).
+fn order_by_imports(plugin_dirs: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
+    let mut by_name: HashMap<String, usize> = HashMap::new();
+    let mut declared_imports: Vec<Vec<String>> = Vec::with_capacity(plugin_dirs.len());
+    for (idx, dir) in plugin_dirs.iter().enumerate() {
+        let manifest = PluginSource::read(dir)?.parse_manifest()?;
+        by_name.insert(manifest.plugin.name.clone(), idx);
+        declared_imports.push(manifest.imports.iter().map(|i| i.name.clone()).collect());
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        Unvisited,
+        InProgress,
+        Done,
+    }
+    let mut marks = vec![Mark::Unvisited; plugin_dirs.len()];
+    let mut ordered: Vec<usize> = Vec::with_capacity(plugin_dirs.len());
+    // Iterative post-order walk: a plugin is emitted once every
+    // in-invocation dependency it names has been emitted.
+    for start in 0..plugin_dirs.len() {
+        if marks[start] != Mark::Unvisited {
+            continue;
+        }
+        let mut stack = vec![(start, 0usize)];
+        while let Some((idx, dep_pos)) = stack.pop() {
+            if dep_pos == 0 {
+                if marks[idx] == Mark::Done {
+                    continue;
+                }
+                marks[idx] = Mark::InProgress;
+            }
+            match declared_imports[idx]
+                .get(dep_pos)
+                .and_then(|name| by_name.get(name))
+            {
+                Some(&dep) => {
+                    stack.push((idx, dep_pos + 1));
+                    match marks[dep] {
+                        Mark::InProgress => {
+                            return Err(anyhow!(
+                                "import cycle among the plugins being built: {} <-> {}",
+                                plugin_dirs[idx].display(),
+                                plugin_dirs[dep].display(),
+                            ));
+                        }
+                        Mark::Unvisited => stack.push((dep, 0)),
+                        Mark::Done => {}
+                    }
+                }
+                None if dep_pos < declared_imports[idx].len() => {
+                    // Import not in this invocation; resolved from disk.
+                    stack.push((idx, dep_pos + 1));
+                }
+                None => {
+                    marks[idx] = Mark::Done;
+                    ordered.push(idx);
+                }
+            }
+        }
+    }
+
+    let mut sorted: Vec<Option<PathBuf>> = plugin_dirs.into_iter().map(Some).collect();
+    Ok(ordered
+        .into_iter()
+        .map(|idx| sorted[idx].take().expect("each plugin ordered once"))
+        .collect())
+}
+
+/// Un-prefixed lowercase hex, the form manifests store.
+fn hash_hex(hash: Hash) -> String {
+    format!("{hash:#}").trim_start_matches("0x").to_lowercase()
+}
+
+/// Decide whether a manifest pin needs stamping. `Ok(true)` means the
+/// caller should rewrite it; `--check` turns a mismatch into an error
+/// instead, since CI wants drift reported rather than fixed.
+fn needs_stamp(check: bool, what: &str, declared: Hash, real: Hash) -> Result<bool> {
+    if declared == real {
+        return Ok(false);
+    }
+    if check {
+        return Err(anyhow!(
+            "{what} mismatch: manifest says {}, compiled value is {} (re-run without --check to rewrite)",
+            hash_hex(declared),
+            hash_hex(real),
+        ));
+    }
+    log::info!(
+        "  rewriting {what}: {} -> {}",
+        hash_hex(declared),
+        hash_hex(real)
+    );
+    Ok(true)
+}
+
 fn build_one(
     plugin_dir: &Path,
     out_dir: &Path,
     install_dir: Option<&Path>,
     check: bool,
+    dep_dirs: &[PathBuf],
 ) -> Result<()> {
     log::info!("building {}", plugin_dir.display());
     let source = PluginSource::read(plugin_dir)?;
     let manifest = source.parse_manifest()?;
     let plugin_name = manifest.plugin.name.clone();
 
-    // Compile the script to derive the real module hash from the pod2 batch id.
-    let real_hash = compile_module_hash(&manifest, &source.script)?;
-    let declared_hash = format!("{:#}", manifest.plugin.module_hash);
-    let declared_hash = declared_hash.trim_start_matches("0x").to_lowercase();
-    let real_hash_clean = real_hash.trim_start_matches("0x").to_lowercase();
+    // Resolve declared imports against already-built archives. Each dep
+    // loads with its own pins enforced; the pins THIS manifest declares
+    // for them are stamped below, so a stale pin here is a rewrite, not
+    // an error.
+    let sdk = Sdk::default();
+    let imports = resolve_manifest_imports(&sdk, &manifest, dep_dirs)?;
 
-    let manifest_toml = if declared_hash == real_hash_clean {
-        source.manifest_toml.clone()
-    } else if check {
-        return Err(anyhow!(
-            "module_hash mismatch in {name}: manifest says {declared}, compiled script yields {real} (re-run without --check to rewrite)",
-            name = plugin_name,
-            declared = declared_hash,
-            real = real_hash_clean,
-        ));
-    } else {
-        log::info!(
-            "  rewriting module_hash in source manifest: {} -> {}",
-            declared_hash,
-            real_hash_clean,
-        );
-        let rewritten = set_manifest_hash(&source.manifest_toml, &real_hash_clean)?;
+    let mut manifest_toml = source.manifest_toml.clone();
+    let mut manifest_rewritten = false;
+    for (declared, resolved) in manifest.imports.iter().zip(imports.iter()) {
+        let real = resolved.module.module().batch.id();
+        let what = format!("[[imports]] {} module_hash", declared.name);
+        if needs_stamp(check, &what, declared.module_hash, real)
+            .with_context(|| format!("in {plugin_name}"))?
+        {
+            manifest_toml =
+                set_manifest_import_hash(&manifest_toml, &declared.name, &hash_hex(real))?;
+            manifest_rewritten = true;
+        }
+    }
+
+    // Compile the script to derive the real module hash from the pod2 batch id.
+    let module = pexe::compile_module(&sdk, &manifest, &source.script, &imports)?;
+    let real_hash = module.module().batch.id();
+    if needs_stamp(check, "module_hash", manifest.plugin.module_hash, real_hash)
+        .with_context(|| format!("in {plugin_name}"))?
+    {
+        manifest_toml = set_manifest_hash(&manifest_toml, &hash_hex(real_hash))?;
+        manifest_rewritten = true;
+    }
+    if manifest_rewritten {
         let manifest_path = source.root.join(MANIFEST_FILE);
-        std::fs::write(&manifest_path, &rewritten)
+        std::fs::write(&manifest_path, &manifest_toml)
             .with_context(|| format!("failed to write back {}", manifest_path.display()))?;
-        rewritten
-    };
+    }
 
     let bytes = pack(&manifest_toml, &source.script)?;
     let out_path = out_dir.join(format!("{plugin_name}.{PEXE_EXTENSION}"));
@@ -383,7 +498,7 @@ fn build_one(
         "  wrote {} ({} bytes, hash={})",
         out_path.display(),
         bytes.len(),
-        real_hash_clean,
+        hash_hex(real_hash),
     );
 
     if let Some(dir) = install_dir {
