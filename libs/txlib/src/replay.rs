@@ -23,8 +23,8 @@ use pod2::{
 use pod2utils::{dict, macros::BuildContext, map, op, st_custom};
 
 use crate::{
-    ChainEvent, ENDORSEMENT_VERSION, OBJECT_NULLIFIER_VERSION, TxStats, build_tx,
-    endorsement_hashes, object_key_hash, object_nullifier_from_key_hash, record, tx_with,
+    ChainEvent, ConsumedSide, ObjSide, TxStats, build_tx, object_key_hash,
+    object_nullifier_from_key_hash, prove_endorse_spend, record, tx_with,
 };
 
 /// The replay walker. Owns the long-lived mutable builder state
@@ -109,17 +109,16 @@ pub(crate) struct MutateScratch {
 impl<'a> ReplayFrame<'a> {
     /// Compute the pre-mutate tx context + post-mutate set snapshots
     /// for a `(old -> new)` mutate.
-    pub(crate) fn mutate_scratch(self, old: &Dictionary, new: &Dictionary) -> MutateScratch {
+    pub(crate) fn mutate_scratch(self, old: &ConsumedSide, new: &ObjSide) -> MutateScratch {
         let btx = self.to_tx_dict();
         let mut live_minus_old = self.live.clone();
-        live_minus_old
-            .delete(&Value::from(old.commitment()))
-            .unwrap();
+        live_minus_old.delete(&old.openings().value()).unwrap();
         let mut new_live = live_minus_old.clone();
-        new_live.insert(&Value::from(new.clone())).unwrap();
-        let nul = object_nullifier_from_key_hash(object_key_hash(old).unwrap());
+        new_live.insert(&new.value()).unwrap();
         let mut new_nullifiers = self.nullifiers.clone();
-        new_nullifiers.insert(&Value::from(nul)).unwrap();
+        new_nullifiers
+            .insert(&Value::from(old.nullifier()))
+            .unwrap();
         MutateScratch {
             btx,
             live_minus_old,
@@ -617,8 +616,8 @@ impl<'a> Replayer<'a> {
 
     fn build_replay_mutate(
         &mut self,
-        new: &Dictionary,
-        old: &Dictionary,
+        new: &ObjSide,
+        old: &ConsumedSide,
         frame: ReplayFrame<'_>,
         tx_stmt: Statement,
         guard_evidence: Statement,
@@ -656,58 +655,36 @@ impl<'a> Replayer<'a> {
         (st, new_live, new_nullifiers)
     }
 
-    /// Build a `ReplayNullify` statement: derives the object key hash
-    /// and nullifier from `old`, endorses the spend against the
-    /// transaction context, then accumulates the nullifier into the
-    /// tx's nullifiers set. `mid_tx` is the tx state with the new
-    /// live set already in place; `after_tx` is `mid_tx` with
-    /// `nullifiers` updated to `new_nullifiers`. Used by both mutate and delete
-    /// replay.
+    /// Build a `ReplayNullify` statement: authorizes the spend of `old`
+    /// (deriving its nullifier and endorsing the transaction context),
+    /// then accumulates the nullifier into the tx's nullifiers set.
+    /// `mid_tx` is the tx state with the new live set already in place;
+    /// `after_tx` is `mid_tx` with `nullifiers` updated to
+    /// `new_nullifiers`. Used by both mutate and delete replay.
     fn build_replay_nullify(
         &mut self,
-        old: &Dictionary,
+        old: &ConsumedSide,
         mid_tx: &Dictionary,
         after_tx: &Dictionary,
         new_nullifiers: &Set,
     ) -> Statement {
-        let okh = object_key_hash(old).unwrap();
-        let nul = object_nullifier_from_key_hash(okh);
+        // EndorseSpend is the object owner's contribution. When the owner
+        // is another party they supply the finished statement, and replay
+        // needs nothing from `old` but its commitment.
+        let st_endorse = match (old.endorsement(), old.held_dict()) {
+            (Some(st), _) => st.clone(),
+            (None, Some(d)) => self.build_endorse_spend(d),
+            (None, None) => unreachable!("ConsumedSide::Contributed always carries an endorsement"),
+        };
 
-        // EndorseSpend: H(old.key, H(context, "txlib-endorsement-v1")).
-        // The second hash opens `old` at "key", so this statement (and
-        // therefore ReplayNullify) can only be produced by the object's
-        // owner, for this exact context.
-        let (tagged, endorsement) = endorsement_hashes(self.context, old);
-        let op_e1 = self
-            .ctx
-            .builder
-            .priv_op(op!(Hash(self.context, ENDORSEMENT_VERSION, tagged)))
-            .unwrap();
-        let op_e2 = self
-            .ctx
-            .builder
-            .priv_op(op!(Hash((old, "key"), tagged, endorsement)))
-            .unwrap();
-        let st_endorse = self
-            .ctx
-            .apply_custom_pred_simple(false, "EndorseSpend", vec![op_e1, op_e2])
-            .unwrap();
-        self.record("EndorseSpend");
-
-        let op_h1 = self
-            .ctx
-            .builder
-            .priv_op(op!(Hash(old, (old, "key"), okh)))
-            .unwrap();
-        let op_h2 = self
-            .ctx
-            .builder
-            .priv_op(op!(Hash(okh, OBJECT_NULLIFIER_VERSION, nul)))
-            .unwrap();
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert((mid_tx, "nullifiers"), nul, new_nullifiers)))
+            .priv_op(op!(SetInsert(
+                (mid_tx, "nullifiers"),
+                old.nullifier(),
+                new_nullifiers
+            )))
             .unwrap();
         let op_du_null = self
             .ctx
@@ -721,13 +698,22 @@ impl<'a> Replayer<'a> {
             .unwrap();
         let st = self
             .ctx
-            .apply_custom_pred_simple(
-                false,
-                "ReplayNullify",
-                vec![op_h1, op_h2, st_endorse, op_si, op_du_null],
-            )
+            .apply_custom_pred_simple(false, "ReplayNullify", vec![st_endorse, op_si, op_du_null])
             .unwrap();
         self.record("ReplayNullify");
+        st
+    }
+
+    /// Build `EndorseSpend` for a state this builder holds the key to.
+    /// The joint path takes the equivalent statement from the object's
+    /// owner instead, proven at record time against a negotiated
+    /// context; see [`crate::SpendAuthorization`]. The two phases are
+    /// inherent: a local spend cannot be endorsed until finalize, when
+    /// the transaction context first exists.
+    fn build_endorse_spend(&mut self, old: &Dictionary) -> Statement {
+        let context = Value::from(self.context.commitment());
+        let (_, st) = prove_endorse_spend(self.ctx, false, context, old);
+        self.record("EndorseSpend");
         st
     }
 
@@ -735,11 +721,12 @@ impl<'a> Replayer<'a> {
     /// Shared between `build_replay_mutate` and
     /// `build_replay_step_mutate` (these inner predicates don't
     /// reference `new`/`old` via anchored keys -- they take the dicts
-    /// directly as wildcards).
+    /// directly as wildcards, so a contributed side's commitment is
+    /// all replay needs here).
     fn build_replay_mutate_event(
         &mut self,
-        new: &Dictionary,
-        old: &Dictionary,
+        new: &ObjSide,
+        old: &ConsumedSide,
         scratch: &MutateScratch,
     ) -> Statement {
         let MutateScratch {
@@ -757,12 +744,16 @@ impl<'a> Replayer<'a> {
         let op_sd = self
             .ctx
             .builder
-            .priv_op(op!(SetDelete((btx, "live"), old, live_minus_old)))
+            .priv_op(op!(SetDelete(
+                (btx, "live"),
+                old.openings().value(),
+                live_minus_old
+            )))
             .unwrap();
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert(live_minus_old, new, new_live)))
+            .priv_op(op!(SetInsert(live_minus_old, new.value(), new_live)))
             .unwrap();
         let op_du_live = self
             .ctx
@@ -803,7 +794,11 @@ impl<'a> Replayer<'a> {
             "mid_tx" => m1.clone()
         });
 
-        let st_nullify = self.build_replay_nullify(old, &m1, &atx, &new_nullifiers);
+        // Deletes are always of a state this builder holds: burning a
+        // counterparty's object has no use case, so there is no
+        // contributed-side delete path.
+        let st_nullify =
+            self.build_replay_nullify(&ConsumedSide::Held(old.clone()), &m1, &atx, &new_nullifiers);
         let st_nullify_wrapped = self
             .ctx
             .builder

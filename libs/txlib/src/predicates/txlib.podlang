@@ -59,24 +59,45 @@ use module 0xTX_EVENTS_MODULE_HASH as tx
 // ========================================================
 
 // Standalone nullifier derivation: H(H(obj, obj.key), "txlib-nullifier-v1").
-// In practice we inline this into ReplayNullify, but it's useful to have it
-// for third-party code that needs to compute nullifiers outside of replay.
+// Replay derives the same value inside EndorseSpend, where it is bundled
+// with the spend endorsement; this copy is for third-party code that needs
+// to compute a nullifier outside of replay.
 Nullify(nullifier, obj, private: obj_key_hash) = AND(
   Hash(obj, obj.key, obj_key_hash)
   Hash(obj_key_hash, "txlib-nullifier-v1", nullifier)
 )
 
-// Spend endorsement: endorsement = H(old.key, H(context, "txlib-endorsement-v1")).
-// Producing this statement requires opening the object dict at `key`,
-// i.e. it can only be proven by the object's owner, and it cannot be
-// copied from any other transaction's proof because the context (and
-// therefore `tagged`) differs. This is what binds a spend to the whole
-// transaction: ReplayNullify requires it, so consuming an object is
-// only possible with the owner's endorsement of the exact context
-// (state header + final transaction commitment). The domain tag keeps
-// this hash shape disjoint from the nullifier derivation, which also
-// hashes the object's key material.
-EndorseSpend(context, old, private: tagged, endorsement) = AND(
+// The owner's complete spend authorization for one object: it derives
+// the object's nullifier and endorses the transaction context.
+//
+//   nullifier   = H(H(obj, obj.key), "txlib-nullifier-v1")
+//   endorsement = H(old.key, H(context, "txlib-endorsement-v1"))
+//
+// Both halves open the object dict at `key`, so this statement can only
+// be proven by the object's owner, and it cannot be copied from any
+// other transaction's proof because the context (and therefore
+// `tagged`) differs. That is what binds a spend to the whole
+// transaction: ReplayNullify requires this statement, so consuming an
+// object is only possible with the owner's endorsement of the exact
+// context (state header + final transaction commitment).
+//
+// The two derivations are bundled into one predicate rather than split
+// because a custom predicate application is a scarce per-POD resource
+// (`max_custom_predicate_verification_ops`), while the Hash clauses
+// themselves are free apart from their statement slots. Bundling also
+// makes this the single statement a party exports when contributing a
+// spend to a jointly-assembled transaction.
+//
+// The domain tag keeps the endorsement's hash shape disjoint from the
+// nullifier derivation, which hashes the same key material. Hashing
+// `old.key` directly rather than `obj_key_hash` is deliberate:
+// `obj_key_hash` can be disclosed to counterparties so they can check a
+// foreign nullifier, so an endorsement derived from it would be
+// forgeable by anyone holding it.
+EndorseSpend(context, nullifier, old,
+    private: obj_key_hash, tagged, endorsement) = AND(
+  Hash(old, old.key, obj_key_hash)
+  Hash(obj_key_hash, "txlib-nullifier-v1", nullifier)
   Hash(context, "txlib-endorsement-v1", tagged)
   Hash(old.key, tagged, endorsement)
 )
@@ -245,19 +266,15 @@ ReplayInsert(context, before_tx, after_tx, before_chain, after_chain,
 // Replay: Mutate
 // ========================================================
 
-// Nullifier computation and accumulation. Shared by mutate and
-// delete to prevent double-spending of the consumed object.
-// nullifier = H(H(obj, obj.key), "txlib-nullifier-v1")
-// The EndorseSpend clause is the owner's consent: it hashes the
-// consumed object's key with the full transaction context, so this
-// statement can only exist for a transaction (and state header) the
-// owner endorsed. The set/dict clauses are bookkeeping; EndorseSpend
-// is the only clause that cannot be reproduced without the key.
+// Nullifier accumulation. Shared by mutate and delete to prevent
+// double-spending of the consumed object. The nullifier itself is
+// derived inside EndorseSpend, which is also the owner's consent to
+// this transaction: the set/dict clauses here are bookkeeping any
+// assembler can prove, while EndorseSpend cannot be produced without
+// the object's key.
 ReplayNullify(context, mid_tx, after_tx, old,
-    private: obj_key_hash, nullifier, new_nullifiers) = AND(
-  Hash(old, old.key, obj_key_hash)
-  Hash(obj_key_hash, "txlib-nullifier-v1", nullifier)
-  EndorseSpend(context, old)
+    private: nullifier, new_nullifiers) = AND(
+  EndorseSpend(context, nullifier, old)
   SetInsert(mid_tx.nullifiers, nullifier, new_nullifiers)
   DictUpdate(mid_tx, "nullifiers", new_nullifiers, after_tx)
 )

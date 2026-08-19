@@ -1,0 +1,71 @@
+/*
+  tx_rekey: transfer of control over an object.
+
+  Rekey is how control of an object moves between parties. An object's
+  `key` field is the secret that authorizes spending it: the nullifier
+  and the spend endorsement both hash it (see EndorseSpend in
+  txlib.podlang), so whoever knows `key` and only they can consume the
+  object's current state. Rekey mutates an object to an otherwise
+  identical state under a new key.
+
+  This lives in its own module, separate from txlib.podlang, for the
+  same reason the tx_events primitives do: every class's type guard
+  references Rekey, so its hash is baked into every plugin module hash.
+  Keeping it out of txlib.podlang means churn in the replay and
+  finalize predicates does not invalidate plugin manifests. Edits here
+  are interface-breaking, so the module's batch id is pinned by a test
+  in mod.rs.
+
+  Rekey is generic over the object's class: the `type` argument is the
+  class's own guard hash, so a class opts in by adding one branch to
+  its guard,
+
+    IsWoodPick(obj, state_header StateHeader, chain_start, chain_end) = OR(
+      ...
+      rk::Rekey(obj, chain_start, chain_end, @self_predicate(IsWoodPick))
+    )
+
+  and a class that should not be transferable simply omits it.
+*/
+
+use module 0xTX_EVENTS_MODULE_HASH as tx
+
+// Two-party transfer in a single action.
+//
+// The two DictUpdate clauses walk the object's key through a publicly
+// known sentinel:
+//
+//   old  --(key := {})--> mid --(key := new_key)--> new
+//
+// This split is what lets a transfer happen in one action without
+// either party learning the other's key. Only the current owner can
+// prove the first clause, because updating `old` requires opening it,
+// and only they know `old.key`. The receiver can prove the second
+// clause without any help: `mid` is `old` with the key erased, so the
+// receiver can reconstruct it from the object's disclosed fields, and
+// `new_key` is theirs alone. Neither clause exposes a key --
+// DictUpdate's arguments are the two dict commitments, the field name
+// and the new value, never the field's previous value, and `new_key`
+// is a private wildcard.
+//
+// The first clause doubles as a disclosure proof: the receiver
+// recomputes `mid` from the fields the owner claims the object has,
+// and a commitment match proves the owner described every non-key
+// field honestly.
+//
+// `mid` is a witness and must never become an event object. Splitting
+// this into two chain events (erase the key, then set it) would make
+// the intermediate's nullifier publicly computable, since its key is
+// the sentinel, and two transfers of an object whose other fields
+// happen to match would then collide on that nullifier and be
+// rejected as a double-spend.
+//
+// DictUpdate requires the key to already exist and touches nothing
+// else, so `type` and `stable_identifier` survive: the object stays
+// under the same guard, and TxMutate's identity clause holds without
+// any extra constraint here.
+Rekey(new, chain_start, chain_end, type, private: old, mid, new_key) = AND(
+  DictUpdate(old, "key", {}, mid)
+  DictUpdate(mid, "key", new_key, new)
+  tx::TxMutate(chain_start, chain_end, old, new, type)
+)
