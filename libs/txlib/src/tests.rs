@@ -166,36 +166,39 @@ fn is_wood_pick_guard(
     .unwrap()
 }
 
-/// The transaction context both parties in a transfer of `pick`
-/// derive independently: the effect they agreed on (the receiver's
-/// projected state, the owner's nullifier) hashed together with the
-/// state header they ground against.
-fn transfer_context(state: &TestState, pick: &Dictionary, receiver_key: &Value) -> Hash {
-    let zero: Hash = EMPTY_VALUE.into();
+/// The plan both parties to a single transfer of `pick` derive
+/// independently from the agreed effect: one action mutating `pick`
+/// into the state `receiver_key` produces. The consumed side's
+/// nullifier is the owner's contribution; everything else here is
+/// computable from disclosed data. Header-free: `TxPlan::context`
+/// brings the grounding header in.
+fn transfer_plan(pick: &Dictionary, receiver_key: &Value) -> TxPlan {
     let projected = obj_with_key(&erased_key_state(pick), receiver_key.clone());
-    let mut live = set!();
-    live.insert(&Value::from(projected.commitment())).unwrap();
-    let mut nullifiers = set!();
-    nullifiers
-        .insert(&Value::from(compute_nullifier(pick)))
-        .unwrap();
-    let tx_final = build_tx(&live, &nullifiers, zero, zero).commitment();
-    context_commitment(state.state_header().hash(), tx_final)
+    TxPlan::new(
+        vec![pick.commitment()],
+        vec![PlannedEvent::Action(vec![PlannedEvent::Mutate {
+            old: pick.commitment(),
+            new: projected.commitment(),
+            nullifier: compute_nullifier(pick),
+        }])],
+    )
+    .expect("single-transfer plan is well formed")
 }
 
-/// The chain positions a single-mutate transaction puts its one event
-/// at, derived from the agreed event sequence alone.
-///
-/// A party proving an action outside a `TxBuilder` needs these, and both
-/// parties can compute them: the seed is `H(inputs, {})` over the agreed
-/// input set, and the event hash is over the two commitments.
-fn single_mutate_positions(old: &Dictionary, new: &Dictionary) -> (Hash, Hash) {
-    let mut inputs = set!();
-    inputs.insert(&Value::from(old.commitment())).unwrap();
-    let chain_start = hash_values(&[Value::from(inputs.commitment()), Value::from(EMPTY_VALUE)]);
-    let event_hash = hash_values(&[Value::from(old.commitment()), Value::from(new.commitment())]);
-    let chain_end = hash_values(&[Value::from(chain_start), Value::from(event_hash)]);
-    (chain_start, chain_end)
+/// Assert `plan`'s derivation agrees with what a builder actually
+/// recorded: one chain position per leaf event in recording order,
+/// then the finalized sets and commitment. The fold threads a single
+/// chain, so pinning every leaf's end position (plus the seed, checked
+/// at builder construction) pins every start position too.
+fn assert_plan_agrees(plan: &TxPlan, leaf_positions: &[Hash], tx: &Tx) {
+    assert_eq!(plan.leaf_count(), leaf_positions.len());
+    for (index, position) in leaf_positions.iter().enumerate() {
+        assert_eq!(plan.event_range(index).1, *position);
+    }
+    assert_eq!(plan.chain_end(), *leaf_positions.last().unwrap());
+    assert_eq!(plan.live().commitment(), tx.live.commitment());
+    assert_eq!(plan.nullifiers().commitment(), tx.nullifiers.commitment());
+    assert_eq!(plan.tx_final(), tx.dict().commitment());
 }
 
 /// Two-party transfer with the roles of assembler and receiver split:
@@ -227,8 +230,9 @@ fn sender_assembled_transfer_never_opens_the_received_state() {
     let mid = erased_key_state(&pick);
     let receiver_key = Value::from(rand_raw_value());
     let projected = obj_with_key(&mid, receiver_key.clone());
-    let (chain_start, chain_end) = single_mutate_positions(&pick, &projected);
-    let context = transfer_context(&state, &pick, &receiver_key);
+    let plan = transfer_plan(&pick, &receiver_key);
+    let (chain_start, chain_end) = plan.event_range(0);
+    let context = plan.context(state.state_header().hash());
 
     // 1. Sender proves its offer into a pod.
     let mut sender = build_ctx();
@@ -291,12 +295,10 @@ fn sender_assembled_transfer_never_opens_the_received_state() {
             .contains(&Value::from(compute_nullifier(&pick)))
             .unwrap()
     );
-    // The positions the receiver proved against are the ones the
-    // assembled transaction actually used.
-    assert_eq!(
-        single_mutate_positions(&pick, &received),
-        (chain_start, chain_end)
-    );
+    // The received state is the planned one (asserted above), so the
+    // positions the receiver proved against and the effect that landed
+    // are the plan's.
+    assert_eq!(plan.tx_final(), tx_out.dict().commitment());
 }
 
 /// The receiver derives the chain positions itself rather than being
@@ -320,13 +322,13 @@ fn transfer_action_cannot_be_proven_at_the_wrong_chain_position() {
 
     let mid = erased_key_state(&pick);
     let receiver_key = Value::from(rand_raw_value());
-    let projected = obj_with_key(&mid, receiver_key.clone());
-    let (chain_start, _) = single_mutate_positions(&pick, &projected);
+    let plan = transfer_plan(&pick, &receiver_key);
+    let (chain_start, _) = plan.event_range(0);
 
     let mut sender = build_ctx();
     let offer = TransferOffer::prove(
         &mut sender,
-        transfer_context(&state, &pick, &receiver_key),
+        plan.context(state.state_header().hash()),
         &pick,
     );
     let offer_pod = solve_and_verify(sender.builder);
@@ -405,7 +407,7 @@ fn two_party_rekey_transfers_without_sharing_keys() {
     let pick = spawn_wood_pick(&mut state, &modules, is_wood_pick);
 
     let receiver_key = Value::from(rand_raw_value());
-    let context = transfer_context(&state, &pick, &receiver_key);
+    let context = transfer_plan(&pick, &receiver_key).context(state.state_header().hash());
     let (tx_out, received) =
         run_two_party_transfer(&state, &modules, &pick, receiver_key.clone(), context);
 
@@ -555,6 +557,110 @@ fn state_header_serializes_and_deserializes_camelcase() {
     assert_eq!(decoded, original);
 }
 
+// TxPlan validates the same structure TxBuilder enforces at record
+// time; a plan built from counterparty data must fail with a readable
+// error rather than a panic.
+#[test]
+fn tx_plan_rejects_malformed_structures() {
+    let a = test_hash(1);
+    let b = test_hash(2);
+    let n = test_hash(3);
+
+    let err = TxPlan::new(vec![], vec![]).expect_err("empty plan");
+    assert!(format!("{err}").contains("at least one action"));
+
+    let err = TxPlan::new(vec![], vec![PlannedEvent::Insert { new: a }])
+        .expect_err("bare top-level event");
+    assert!(format!("{err}").contains("must be an action"));
+
+    let err = TxPlan::new(vec![], vec![PlannedEvent::Action(vec![])]).expect_err("empty action");
+    assert!(format!("{err}").contains("at least one event"));
+
+    let spend_unknown = PlannedEvent::Action(vec![PlannedEvent::Mutate {
+        old: a,
+        new: b,
+        nullifier: n,
+    }]);
+    let err = TxPlan::new(vec![], vec![spend_unknown]).expect_err("mutate of a non-live state");
+    assert!(format!("{err}").contains("not live"));
+
+    let double_insert = PlannedEvent::Action(vec![
+        PlannedEvent::Insert { new: a },
+        PlannedEvent::Insert { new: a },
+    ]);
+    let err = TxPlan::new(vec![], vec![double_insert]).expect_err("duplicate insert");
+    assert!(format!("{err}").contains("duplicate created state"));
+
+    let err = TxPlan::new(
+        vec![a, a],
+        vec![PlannedEvent::Action(vec![PlannedEvent::Insert { new: b }])],
+    )
+    .expect_err("duplicate input");
+    assert!(format!("{err}").contains("duplicate input"));
+}
+
+// Scope algebra on a shape the proving scenarios never produce: a
+// direct leaf on each side of a sub-action.
+#[test]
+fn tx_plan_scope_is_the_innermost_enclosing_action_range() {
+    let plan = TxPlan::new(
+        vec![],
+        vec![PlannedEvent::Action(vec![
+            PlannedEvent::Insert { new: test_hash(1) },
+            PlannedEvent::Action(vec![PlannedEvent::Insert { new: test_hash(2) }]),
+            PlannedEvent::Insert { new: test_hash(3) },
+        ])],
+    )
+    .unwrap();
+
+    assert_eq!(plan.leaf_count(), 3);
+    // The chain folds flat: each leaf starts where the previous one
+    // ended, actions contribute no steps of their own.
+    assert_eq!(plan.event_range(0).0, plan.chain_start());
+    assert_eq!(plan.event_range(1).0, plan.event_range(0).1);
+    assert_eq!(plan.event_range(2).0, plan.event_range(1).1);
+    assert_eq!(plan.chain_end(), plan.event_range(2).1);
+    // Direct leaves of the outer action share its whole range, even
+    // the one recorded before the sub-action closed.
+    assert_eq!(plan.scope(0), (plan.chain_start(), plan.chain_end()));
+    assert_eq!(plan.scope(0), plan.scope(2));
+    // The nested leaf's scope is the sub-action's range only.
+    assert_eq!(
+        plan.scope(1),
+        (plan.event_range(0).1, plan.event_range(1).1)
+    );
+}
+
+#[test]
+fn tx_plan_serde_round_trip() {
+    let old = test_hash(1);
+    let plan = TxPlan::new(
+        vec![old],
+        vec![PlannedEvent::Action(vec![
+            PlannedEvent::Mutate {
+                old,
+                new: test_hash(2),
+                nullifier: test_hash(3),
+            },
+            PlannedEvent::Insert { new: test_hash(4) },
+        ])],
+    )
+    .unwrap();
+
+    let encoded = serde_json::to_string(&plan).unwrap();
+    let decoded: TxPlan = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded.inputs(), plan.inputs());
+    assert_eq!(decoded.events(), plan.events());
+    assert_eq!(decoded.tx_final(), plan.tx_final());
+    assert_eq!(decoded.event_range(0), plan.event_range(0));
+    assert_eq!(decoded.scope(1), plan.scope(1));
+
+    // A malformed document fails at deserialization, not at first use.
+    let malformed = serde_json::json!({"inputs": [], "events": []});
+    let err = serde_json::from_value::<TxPlan>(malformed).expect_err("empty plan document");
+    assert!(format!("{err}").contains("at least one action"));
+}
+
 /// Tx 1: Spawn a WoodPick (insert, no inputs).
 /// Tx 2: MineStone using the WoodPick (mutate pick + insert stone).
 #[test]
@@ -632,9 +738,28 @@ fn test_mine_stone() {
         .unwrap();
     let stone_initial = make_object(is_stone.clone(), &[]);
 
+    // The plan mirrors the event tree recorded below; every derived
+    // position and quantity must agree with the builder's.
+    let plan = TxPlan::new(
+        vec![pick.commitment()],
+        vec![PlannedEvent::Action(vec![
+            PlannedEvent::Action(vec![PlannedEvent::Mutate {
+                old: pick.commitment(),
+                new: pick_new.commitment(),
+                nullifier: compute_nullifier(&pick),
+            }]),
+            PlannedEvent::Insert {
+                new: with_stable_identifier(&stone_initial).commitment(),
+            },
+        ])],
+    )
+    .unwrap();
+
     let inputs = vec![pick.clone()];
     let witness = state.grounding_witness(&inputs);
     let mut tx2 = TxBuilder::new(&mut ctx, &inputs, witness);
+    assert_eq!(plan.chain_start(), tx2.chain_start);
+    let mut leaf_positions = Vec::new();
 
     let scope_outer = tx2.begin_action();
 
@@ -642,6 +767,7 @@ fn test_mine_stone() {
     let st_use_wp = {
         let scope_sub = tx2.begin_action();
         let (st_mutate, h_sub) = tx2.mutate(&mut ctx, &pick_new, &pick);
+        leaf_positions.push(tx2.chain_position());
         let op_gt = ctx
             .builder
             .priv_op(op!(Gt((&pick, "durability"), 0_i64)))
@@ -672,11 +798,13 @@ fn test_mine_stone() {
             .unwrap();
         tx2.set_guard(h_sub, st_guard);
         tx2.end_action(scope_sub);
+        assert_eq!(plan.scope(0), (plan.chain_start(), tx2.chain_position()));
         st_action
     };
 
     // Direct: insert stone
     let (_stone, st_stone_insert, h) = tx2.insert(&mut ctx, &stone_initial);
+    leaf_positions.push(tx2.chain_position());
     let st_mine = ctx
         .apply_custom_pred_simple(false, "MineStone", vec![st_use_wp, st_stone_insert])
         .unwrap();
@@ -703,6 +831,7 @@ fn test_mine_stone() {
             .contains(&Value::from(compute_nullifier(&pick)))
             .unwrap()
     );
+    assert_plan_agrees(&plan, &leaf_positions, &tx_out);
 }
 
 /// Tx 1: FindLog (genesis insert).
@@ -830,9 +959,29 @@ fn test_craft_sticks() {
     let stick_a_initial = make_object(is_stick.clone(), &[]);
     let stick_b_initial = make_object(is_stick, &[]);
 
+    // Plan mirror for the delete + two-inserts shape.
+    let plan = TxPlan::new(
+        vec![wood.commitment()],
+        vec![PlannedEvent::Action(vec![
+            PlannedEvent::Action(vec![PlannedEvent::Delete {
+                old: wood.commitment(),
+                nullifier: compute_nullifier(&wood),
+            }]),
+            PlannedEvent::Insert {
+                new: with_stable_identifier(&stick_a_initial).commitment(),
+            },
+            PlannedEvent::Insert {
+                new: with_stable_identifier(&stick_b_initial).commitment(),
+            },
+        ])],
+    )
+    .unwrap();
+
     let inputs = vec![wood.clone()];
     let witness = state.grounding_witness(&inputs);
     let mut tx3 = TxBuilder::new(&mut ctx, &inputs, witness);
+    assert_eq!(plan.chain_start(), tx3.chain_start);
+    let mut leaf_positions = Vec::new();
 
     let scope_outer = tx3.begin_action();
 
@@ -840,6 +989,7 @@ fn test_craft_sticks() {
     let st_del_wood = {
         let scope_sub = tx3.begin_action();
         let (st_del, h_sub) = tx3.delete(&mut ctx, &wood);
+        leaf_positions.push(tx3.chain_position());
         let st_action = ctx
             .apply_custom_pred_simple(false, "DeleteWood", vec![st_del])
             .unwrap();
@@ -858,9 +1008,11 @@ fn test_craft_sticks() {
 
     // Direct: insert stick_a
     let (stick_a, st_ins_a, h_a) = tx3.insert(&mut ctx, &stick_a_initial);
+    leaf_positions.push(tx3.chain_position());
 
     // Direct: insert stick_b
     let (stick_b, st_ins_b, h_b) = tx3.insert(&mut ctx, &stick_b_initial);
+    leaf_positions.push(tx3.chain_position());
 
     // Pack stick_a / stick_b's pre-identity initials into an
     // `initials` dict so CraftSticks stays within the 8-wildcard
@@ -933,6 +1085,7 @@ fn test_craft_sticks() {
             .contains(&Value::from(compute_nullifier(&wood)))
             .unwrap()
     );
+    assert_plan_agrees(&plan, &leaf_positions, &tx3_out);
 }
 
 /// Grounding three inputs exercises InputsGroundedRecursive (peel two per

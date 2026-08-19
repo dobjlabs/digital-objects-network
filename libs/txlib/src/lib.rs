@@ -29,6 +29,9 @@
 //! - `object` -- object states and the values derived from them
 //!   (field accessors, nullifier and endorsement hashes, dict
 //!   transforms). No dependency on the builder.
+//! - `plan` -- pure derivation of a transaction's negotiated
+//!   quantities (chain positions, guard scopes, tx_final, context)
+//!   from its planned event sequence, for parties without a builder.
 //! - `state_header` -- the committed state view a transaction grounds
 //!   against, and the witness carrying its membership proofs.
 //! - `contribute` -- what a party proves about objects it holds so
@@ -45,6 +48,7 @@ pub mod predicates;
 
 mod contribute;
 mod object;
+mod plan;
 mod replay;
 mod state_header;
 
@@ -55,6 +59,7 @@ pub use object::{
     object_stable_identifier, object_type, with_stable_identifier,
 };
 pub(crate) use object::{obj_with_key, prove_endorse_spend};
+pub use plan::{PlannedEvent, TxPlan};
 pub use state_header::{
     GroundingWitness, RECORD_STATE_HEADER_FIELDS, RECORD_STATE_HEADER_PODLANG,
     STATE_HEADER_BLOCK_HASH_SLOT, STATE_HEADER_BLOCK_NUMBER_SLOT,
@@ -242,7 +247,7 @@ pub(crate) fn prove_tx_mutate(
     old: &ObjSide,
     new: &ObjSide,
 ) -> Statement {
-    let event_hash = hash_values(&[old.value(), new.value()]);
+    let event_hash = event_hash_mutate(old.value(), new.value());
     let type_value = new.type_value();
     let st_dc_new = new.type_opening(ctx, &type_value);
     let st_dc_old = old.type_opening(ctx, &type_value);
@@ -390,8 +395,37 @@ pub struct EventHandle {
 }
 
 // ============================================================================
-// Replay tx-dict helpers
+// Chain arithmetic and tx-dict helpers
 // ============================================================================
+//
+// The hash formulas here are protocol constants shared with the
+// podlang circuit. The recorders below and the `TxPlan` mirror both
+// derive from these helpers, so the formulas have exactly one home.
+
+/// Chain seed of a transaction over `inputs`: `H(inputs, {})`.
+pub(crate) fn chain_seed(inputs: &Set) -> Hash {
+    hash_values(&[Value::from(inputs.commitment()), Value::from(EMPTY_VALUE)])
+}
+
+/// Event hash of an insert: `H({}, new)`.
+pub(crate) fn event_hash_insert(new: Value) -> Hash {
+    hash_values(&[Value::from(EMPTY_VALUE), new])
+}
+
+/// Event hash of a mutate: `H(old, new)`.
+pub(crate) fn event_hash_mutate(old: Value, new: Value) -> Hash {
+    hash_values(&[old, new])
+}
+
+/// Event hash of a delete: `H(old, {})`.
+pub(crate) fn event_hash_delete(old: Value) -> Hash {
+    hash_values(&[old, Value::from(EMPTY_VALUE)])
+}
+
+/// One chain step: `H(prev, event_hash)`.
+pub(crate) fn chain_step(prev: Hash, event_hash: Hash) -> Hash {
+    hash_values(&[Value::from(prev), Value::from(event_hash)])
+}
 
 /// Build a replay tx dict with all 4 keys (chain is separate).
 pub(crate) fn build_tx(
@@ -406,6 +440,15 @@ pub(crate) fn build_tx(
         "chain_start" => chain_start,
         "chain_end" => chain_end
     })
+}
+
+/// A top-level replay scope dict: live and nullifiers with both chain
+/// bounds zeroed. `TxFinalized` pins the zeroed bounds and
+/// `ReplayAction` restores real ones per scope; the after set's
+/// commitment is tx_final, the value the relayer publishes.
+pub(crate) fn top_level_tx(live: &Set, nullifiers: &Set) -> Dictionary {
+    let zero: Hash = EMPTY_VALUE.into();
+    build_tx(live, nullifiers, zero, zero)
 }
 
 /// Return a clone of `tx` with one field replaced.
@@ -587,10 +630,7 @@ impl TxBuilder {
     ) -> Self {
         let (st_inputs_grounded, inputs_set, stats) =
             Self::build_inputs_grounded(ctx, inputs, &grounding);
-        let chain_start = hash_values(&[
-            Value::from(inputs_set.commitment()),
-            Value::from(EMPTY_VALUE),
-        ]);
+        let chain_start = chain_seed(&inputs_set);
         let state_header = Arc::new(grounding.state_header.clone());
         Self {
             chain: chain_start,
@@ -728,8 +768,8 @@ impl TxBuilder {
         let new = with_stable_identifier(initial);
 
         let prev = self.chain;
-        let event_hash = hash_values(&[Value::from(EMPTY_VALUE), Value::from(new.clone())]);
-        self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
+        let event_hash = event_hash_insert(Value::from(new.clone()));
+        self.chain = chain_step(prev, event_hash);
         self.live.insert(&Value::from(new.clone())).unwrap();
 
         let new_type = object_type(&new);
@@ -812,8 +852,8 @@ impl TxBuilder {
         let old_openings = old.openings();
 
         let prev = self.chain;
-        let event_hash = hash_values(&[old_openings.value(), new.value()]);
-        self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
+        let event_hash = event_hash_mutate(old_openings.value(), new.value());
+        self.chain = chain_step(prev, event_hash);
         self.live.delete(&old_openings.value()).unwrap();
         self.live.insert(&new.value()).unwrap();
         self.nullifiers
@@ -975,8 +1015,8 @@ impl TxBuilder {
             "delete must be called inside an action scope",
         );
         let prev = self.chain;
-        let event_hash = hash_values(&[Value::from(old.clone()), Value::from(EMPTY_VALUE)]);
-        self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
+        let event_hash = event_hash_delete(Value::from(old.clone()));
+        self.chain = chain_step(prev, event_hash);
         self.live.delete(&Value::from(old.commitment())).unwrap();
         self.nullifiers
             .insert(&Value::from(compute_nullifier(old)))
@@ -1026,8 +1066,8 @@ impl TxBuilder {
         let mut stats = self.stats;
         let zero: Hash = EMPTY_VALUE.into();
 
-        let before_tx = build_tx(&self.inputs_set, &set!(), zero, zero);
-        let after_tx = build_tx(&self.live, &self.nullifiers, zero, zero);
+        let before_tx = top_level_tx(&self.inputs_set, &set!());
+        let after_tx = top_level_tx(&self.live, &self.nullifiers);
 
         // The per-transaction context: binds the grounding state header
         // and the final transaction commitment together. The live and
