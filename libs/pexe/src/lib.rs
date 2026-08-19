@@ -12,7 +12,7 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use sdk::{Sdk, manifest::Manifest};
+use sdk::{ModuleImport, Sdk, manifest::Manifest};
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 pub mod fixtures;
@@ -23,6 +23,10 @@ pub const SCRIPT_FILE: &str = "plugin.rhai";
 
 /// File extension (no leading dot) of a pexe archive.
 pub const PEXE_EXTENSION: &str = "pexe";
+
+/// Where `pexe build` writes archives, and where dependency resolution
+/// looks for them first.
+pub const DEFAULT_OUT_DIR: &str = "target/pexe";
 
 /// Largest `.pexe` file we will read from disk into memory. A packed bundled
 /// plugin is under 8 KiB; this bounds the compressed-side read for untrusted
@@ -127,15 +131,141 @@ fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> R
     String::from_utf8(out).map_err(|err| anyhow!("entry {name} in pexe is not valid UTF-8: {err}"))
 }
 
-/// Compile the script against its manifest's action names and return the hex-encoded
-/// module hash.
-pub fn compile_module_hash(manifest: &Manifest, script: &str) -> Result<String> {
-    let sdk = Sdk::default();
+/// Compile the script against its manifest's action names. `imports` must
+/// hold the resolved module of every plugin the script sub-calls; the hash
+/// pins in the manifest are not consulted (this is the compile that produces
+/// the value they get stamped with).
+pub fn compile_module(
+    sdk: &Sdk,
+    manifest: &Manifest,
+    script: &str,
+    imports: &[ModuleImport],
+) -> Result<std::rc::Rc<sdk::SdkModule>> {
     let names: Vec<&str> = manifest.actions.iter().map(|a| a.name.as_str()).collect();
-    let module = sdk
-        .load_module_from_src_actions(script, &names)
-        .map_err(|err| anyhow!("failed to compile plugin: {err}"))?;
+    sdk.load_module_from_src_actions(script, &names, imports)
+        .map_err(|err| anyhow!("failed to compile plugin: {err}"))
+}
+
+/// Like [`compile_module`], returning just the hex-encoded module hash.
+pub fn compile_module_hash(
+    manifest: &Manifest,
+    script: &str,
+    imports: &[ModuleImport],
+) -> Result<String> {
+    let module = compile_module(&Sdk::default(), manifest, script, imports)?;
     Ok(format!("{:#}", module.module().batch.id()))
+}
+
+/// `.pexe` files in `dir`, sorted by path. A missing or unreadable
+/// directory yields nothing.
+pub fn pexe_paths_in(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some(PEXE_EXTENSION))
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// Directories searched for already-built dependency pexes, in priority
+/// order (first match by plugin name wins): any explicit `extra` dirs,
+/// then the build output dir, then the install dir.
+pub fn dep_search_dirs(
+    extra: &[PathBuf],
+    out_dir: &Path,
+    install_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = extra.to_vec();
+    dirs.push(out_dir.to_path_buf());
+    if let Some(dir) = install_dir {
+        dirs.push(dir.to_path_buf());
+    } else if let Ok(dir) = default_install_dir() {
+        dirs.push(dir);
+    }
+    dirs
+}
+
+/// Unpack every readable `.pexe` under `dirs` into (manifest, script)
+/// sources for import resolution. Unreadable or malformed archives are
+/// skipped with a log warning so an unrelated broken pexe can't block
+/// building an import-free plugin. The first archive found for a plugin
+/// name wins.
+pub fn discover_dep_sources(dirs: &[PathBuf]) -> Vec<(Manifest, String)> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut sources = Vec::new();
+    for path in dirs.iter().flat_map(|dir| pexe_paths_in(dir)) {
+        match read_pexe_file(&path).and_then(|bytes| unpack(&bytes)) {
+            Ok((manifest, script)) => {
+                if seen.insert(manifest.plugin.name.clone()) {
+                    sources.push((manifest, script));
+                }
+            }
+            Err(err) => {
+                log::warn!("skipping unreadable pexe {}: {err}", path.display());
+            }
+        }
+    }
+    sources
+}
+
+/// Resolve a manifest's declared `[[imports]]` against already-built
+/// archives found in `dep_dirs`, in `manifest.imports` order. Each
+/// dependency is loaded with its own manifest validated (including its
+/// own import pins); the pins THIS manifest declares for them are the
+/// caller's business, since `pexe build` stamps them.
+pub fn resolve_manifest_imports(
+    sdk: &Sdk,
+    manifest: &Manifest,
+    dep_dirs: &[PathBuf],
+) -> Result<Vec<ModuleImport>> {
+    if manifest.imports.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sources = discover_dep_sources(dep_dirs);
+    let mut resolver = sdk::ImportResolver::new(
+        sdk,
+        sources
+            .iter()
+            .map(|(manifest, script)| (manifest, script.as_str())),
+    );
+    resolver.resolve_imports(manifest).map_err(|err| {
+        anyhow!(
+            "{}: failed to resolve imports (searched {dep_dirs:?}): {err}",
+            manifest.plugin.name
+        )
+    })
+}
+
+/// Default plugin install dir, resolved the same way as
+/// `driver::paths` (which this crate cannot depend on without a cycle):
+/// `$DOBJ_HOME/actions` when set, else `~/.dobj/actions`.
+pub fn default_install_dir() -> Result<PathBuf> {
+    if let Some(root) = std::env::var_os("DOBJ_HOME").filter(|root| !root.is_empty()) {
+        return Ok(PathBuf::from(root).join("actions"));
+    }
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory"))?;
+    Ok(home.join(".dobj").join("actions"))
+}
+
+/// Set `table["module_hash"]` to `clean`, preserving the existing value's
+/// surrounding whitespace and comments when the key is already there.
+fn write_module_hash(table: &mut dyn toml_edit::TableLike, clean: &str) {
+    if let Some(val) = table.get_mut("module_hash").and_then(|i| i.as_value_mut()) {
+        let decor = val.decor().clone();
+        *val = clean.into();
+        *val.decor_mut() = decor;
+    } else {
+        table.insert("module_hash", toml_edit::value(clean));
+    }
+}
+
+fn parse_manifest_doc(toml_src: &str) -> Result<toml_edit::DocumentMut> {
+    toml_src
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|err| anyhow!("invalid manifest toml: {err}"))
 }
 
 /// Rewrite the `module_hash` line in a manifest's TOML source to the given hash,
@@ -143,21 +273,32 @@ pub fn compile_module_hash(manifest: &Manifest, script: &str) -> Result<String> 
 /// absent.
 pub fn set_manifest_hash(toml_src: &str, new_hash_hex: &str) -> Result<String> {
     let clean = new_hash_hex.trim_start_matches("0x");
-    let mut doc = toml_src
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|err| anyhow!("invalid manifest toml: {err}"))?;
-    // If the key already exists, preserve its surrounding whitespace and comments
-    // by replacing only the inner string while keeping the value's decor.
-    if let Some(val) = doc["plugin"]
-        .get_mut("module_hash")
-        .and_then(|i| i.as_value_mut())
-    {
-        let decor = val.decor().clone();
-        *val = clean.into();
-        *val.decor_mut() = decor;
-    } else {
-        doc["plugin"]["module_hash"] = toml_edit::value(clean);
-    }
+    let mut doc = parse_manifest_doc(toml_src)?;
+    let plugin = doc["plugin"]
+        .as_table_like_mut()
+        .ok_or_else(|| anyhow!("manifest has no [plugin] table"))?;
+    write_module_hash(plugin, clean);
+    Ok(doc.to_string())
+}
+
+/// Rewrite the `module_hash` of one `[[imports]]` entry in a manifest's TOML
+/// source, preserving formatting of everything else.
+pub fn set_manifest_import_hash(
+    toml_src: &str,
+    import_name: &str,
+    new_hash_hex: &str,
+) -> Result<String> {
+    let clean = new_hash_hex.trim_start_matches("0x");
+    let mut doc = parse_manifest_doc(toml_src)?;
+    let imports = doc
+        .get_mut("imports")
+        .and_then(|item| item.as_array_of_tables_mut())
+        .ok_or_else(|| anyhow!("manifest has no [[imports]] tables"))?;
+    let table = imports
+        .iter_mut()
+        .find(|table| table.get("name").and_then(|v| v.as_str()) == Some(import_name))
+        .ok_or_else(|| anyhow!("manifest has no [[imports]] entry named {import_name:?}"))?;
+    write_module_hash(table, clean);
     Ok(doc.to_string())
 }
 
@@ -279,5 +420,50 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
         let out = set_manifest_hash(src, "cafe").unwrap();
         assert!(out.contains("cafe"));
         assert!(out.contains("# pinned by CI"));
+    }
+
+    const EXAMPLES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
+
+    /// Every example's committed `module_hash` (and every `[[imports]]`
+    /// pin) must match what its committed source compiles to. `pexe
+    /// build` rewrites a stale hash silently, and release CI builds
+    /// without `--check`, so without this the repo can carry a manifest
+    /// that no longer describes its own plugin -- which fails a catalog
+    /// load for anyone who installs the archive as committed.
+    #[test]
+    fn every_example_manifest_hash_is_current() {
+        let mut sources: Vec<(Manifest, String)> = Vec::new();
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(EXAMPLES_DIR)
+            .expect("examples dir readable")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.is_dir())
+            .collect();
+        dirs.sort();
+        assert!(!dirs.is_empty(), "no example plugins found");
+        for dir in &dirs {
+            let source = PluginSource::read(dir).expect("example source readable");
+            let manifest = source
+                .parse_manifest()
+                .unwrap_or_else(|err| panic!("{}: {err}", dir.display()));
+            sources.push((manifest, source.script));
+        }
+
+        // Resolving from these same sources (rather than from built
+        // archives) is what makes the check about the committed state.
+        let sdk = Sdk::default();
+        let mut resolver = sdk::ImportResolver::new(
+            &sdk,
+            sources
+                .iter()
+                .map(|(manifest, script)| (manifest, script.as_str())),
+        );
+        for (manifest, _) in &sources {
+            let name = &manifest.plugin.name;
+            // `load` compiles the plugin and validates its own hash plus
+            // its import pins, so a stale value fails right here.
+            resolver.load(name).unwrap_or_else(|err| {
+                panic!("{name}: stale manifest? re-run `pexe build examples/*`: {err}")
+            });
+        }
     }
 }
