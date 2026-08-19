@@ -440,6 +440,157 @@ fn two_party_rekey_transfers_without_sharing_keys() {
     );
 }
 
+/// A swap: two top-level Rekey actions sharing one plan and one
+/// context. Bob assembles, so his leg arrives via `rekey_receive` and
+/// the leg he gives via `rekey_send`. The statement graph's schedule
+/// is asserted first and then executed session by session: two
+/// exchanges, three proving sessions, and only the erasure-before-
+/// Rekey edge forces the sequentiality.
+#[test]
+fn swap_follows_the_two_exchange_schedule() {
+    use graph::{NodeKind, StatementGraph, StatementNode};
+
+    let (modules, is_wood_pick) = craft_modules();
+    let mut state = TestState::empty(0);
+    let pick_a = spawn_wood_pick(&mut state, &modules, is_wood_pick.clone());
+    let pick_b = spawn_wood_pick(&mut state, &modules, is_wood_pick);
+    let params = Params::default();
+    let vd_set = VDSet::new(&[]);
+    let build_ctx = || BuildContext {
+        builder: MultiPodBuilder::new(&params, &vd_set),
+        modules: modules.clone(),
+    };
+
+    // Data round: each side disclosed its pick's non-key fields; each
+    // receiver projects the state its own (never disclosed) key
+    // produces, and each owner contributes its spend's nullifier.
+    let key_a = Value::from(rand_raw_value());
+    let key_b = Value::from(rand_raw_value());
+    let bob_projected = obj_with_key(&erased_key_state(&pick_a), key_b.clone());
+    let alice_projected = obj_with_key(&erased_key_state(&pick_b), key_a.clone());
+    let plan = TxPlan::new(
+        vec![pick_a.commitment(), pick_b.commitment()],
+        vec![
+            PlannedEvent::Action(vec![PlannedEvent::Mutate {
+                old: pick_a.commitment(),
+                new: bob_projected.commitment(),
+                nullifier: compute_nullifier(&pick_a),
+            }]),
+            PlannedEvent::Action(vec![PlannedEvent::Mutate {
+                old: pick_b.commitment(),
+                new: alice_projected.commitment(),
+                nullifier: compute_nullifier(&pick_b),
+            }]),
+        ],
+    )
+    .unwrap();
+    let context = plan.context(state.state_header().hash());
+
+    // The statement graph. Alice's acceptance of Bob's leg is the one
+    // node with a foreign premise besides the finalize.
+    let graph = StatementGraph::new(vec![
+        StatementNode::new(
+            "offer:pick_a",
+            "alice",
+            NodeKind::TransferOffer {
+                object: pick_a.commitment(),
+            },
+            &[],
+        ),
+        StatementNode::new(
+            "offer:pick_b",
+            "bob",
+            NodeKind::TransferOffer {
+                object: pick_b.commitment(),
+            },
+            &[],
+        ),
+        StatementNode::new(
+            "accept:pick_b",
+            "alice",
+            NodeKind::TransferAcceptance {
+                object: pick_b.commitment(),
+            },
+            &["offer:pick_b"],
+        ),
+        StatementNode::new(
+            "finalize",
+            "bob",
+            NodeKind::Finalize,
+            &["offer:pick_a", "accept:pick_b"],
+        ),
+    ])
+    .unwrap();
+    assert_eq!(
+        graph.schedule().to_string(),
+        "round 0: bob proves [offer:pick_b]\n\
+         round 1: alice proves [offer:pick_a, accept:pick_b] importing [offer:pick_b]\n\
+         round 2: bob proves [finalize] importing [offer:pick_a, accept:pick_b]\n"
+    );
+
+    // Round 0: Bob proves the offer for the leg he gives.
+    let mut bob_offer_session = build_ctx();
+    let offer_b = TransferOffer::prove(&mut bob_offer_session, context, &pick_b);
+    let bob_offer_pod = solve_and_verify(bob_offer_session.builder);
+
+    // Round 1: Alice proves everything of hers in one session: her own
+    // offer, and her acceptance of Bob's leg at the plan positions that
+    // account for leg 1 being recorded first.
+    let mut alice_session = build_ctx();
+    alice_session.builder.add_pod(bob_offer_pod).unwrap();
+    let offer_a = TransferOffer::prove(&mut alice_session, context, &pick_a);
+    let (leg2_prev, leg2_chain) = plan.event_range(1);
+    let mid_b = erased_key_state(&pick_b);
+    let (acceptance, alices_pick) = TransferAcceptance::prove(
+        &mut alice_session,
+        &offer_b,
+        &mid_b,
+        key_a,
+        leg2_prev,
+        leg2_chain,
+    );
+    let st_guard_leg2 =
+        is_wood_pick_guard(&mut alice_session, &state, 3, acceptance.st_rekey.clone());
+    alice_session.builder.reveal(&st_guard_leg2).unwrap();
+    let alice_pod = solve_and_verify(alice_session.builder);
+
+    // Round 2: Bob assembles both legs and finalizes.
+    let mut bob = build_ctx();
+    bob.builder.add_pod(alice_pod).unwrap();
+    let mut tx = TxBuilder::new_from_commitments(
+        &mut bob,
+        &[pick_a.commitment(), pick_b.commitment()],
+        state.grounding_witness(&[pick_a.clone(), pick_b.clone()]),
+    );
+    assert_eq!(plan.chain_start(), tx.chain_start);
+    let mut leaf_positions = Vec::new();
+
+    let scope = tx.begin_action();
+    let mid_a = erased_key_state(&pick_a);
+    let (bobs_pick, st_rekey, h) = tx.rekey_receive(&mut bob, &offer_a, &mid_a, key_b);
+    leaf_positions.push(tx.chain_position());
+    tx.set_guard(h, is_wood_pick_guard(&mut bob, &state, 3, st_rekey));
+    tx.end_action(scope);
+
+    let scope = tx.begin_action();
+    let h = tx.rekey_send(&mut bob, &pick_b, &acceptance);
+    leaf_positions.push(tx.chain_position());
+    tx.set_guard(h, st_guard_leg2);
+    tx.end_action(scope);
+
+    eprintln!("{tx}");
+    let (st, tx_out, stats) = tx.finalize(&mut bob);
+    print_stats(&stats);
+    bob.builder.reveal(&st).unwrap();
+    solve_and_verify(bob.builder);
+
+    // Each party controls the other's former pick: the received states
+    // are the projections, which differ from the originals only in key.
+    assert_eq!(bobs_pick.commitment(), bob_projected.commitment());
+    assert_eq!(alices_pick.commitment(), alice_projected.commitment());
+    assert_plan_agrees(&plan, &leaf_positions, &tx_out);
+}
+
 /// The endorsement has to bind. An `EndorseSpend` produced for a
 /// different transaction context must not authorize this one, even
 /// though it is a valid statement about the same object and carries

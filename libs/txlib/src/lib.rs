@@ -47,6 +47,8 @@
 pub mod predicates;
 
 mod contribute;
+#[cfg(test)]
+mod graph;
 mod object;
 mod plan;
 mod replay;
