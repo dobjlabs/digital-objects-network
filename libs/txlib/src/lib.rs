@@ -29,13 +29,8 @@
 //! - `object` -- object states and the values derived from them
 //!   (field accessors, nullifier and endorsement hashes, dict
 //!   transforms). No dependency on the builder.
-//! - `plan` -- pure derivation of a transaction's negotiated
-//!   quantities (chain positions, guard scopes, tx_final, context)
-//!   from its planned event sequence, for parties without a builder.
 //! - `state_header` -- the committed state view a transaction grounds
 //!   against, and the witness carrying its membership proofs.
-//! - `contribute` -- what a party proves about objects it holds so
-//!   another party can assemble a transaction over them.
 //! - `replay` -- the finalize-time walk over the recorded event tree.
 //! - [`predicates`] -- the podlang sources and their compiled modules.
 //!
@@ -43,25 +38,24 @@
 //! and its `finalize`, and the two enums naming the sides of a
 //! mutation ([`ObjSide`] and [`ConsumedSide`]), which are on every
 //! mutate path rather than only the joint ones.
+//!
+//! This crate is party-blind. A mutation side says whether the builder
+//! can open it, never whose it is, and no type here names a party.
+//! Producing what an unopenable side needs, negotiating a plan, and
+//! scheduling who proves what belong to the `joint-tx` crate above.
 
 pub mod predicates;
 
-mod contribute;
-#[cfg(test)]
-mod graph;
 mod object;
-mod plan;
 mod replay;
 mod state_header;
+pub mod test_support;
 
-pub use contribute::{ObjectOpenings, SpendAuthorization, TransferAcceptance, TransferOffer};
 pub use object::{
     STABLE_IDENTIFIER_FIELD, compute_nullifier, context_commitment, erased_key_state, new_obj,
-    object_key_hash, object_nullifier_from_key_hash, object_nullifier_hash,
-    object_stable_identifier, object_type, with_stable_identifier,
+    obj_with_key, object_key_hash, object_nullifier_from_key_hash, object_nullifier_hash,
+    object_stable_identifier, object_type, prove_endorse_spend, with_stable_identifier,
 };
-pub(crate) use object::{obj_with_key, prove_endorse_spend};
-pub use plan::{PlannedEvent, TxPlan};
 pub use state_header::{
     GroundingWitness, RECORD_STATE_HEADER_FIELDS, RECORD_STATE_HEADER_PODLANG,
     STATE_HEADER_BLOCK_HASH_SLOT, STATE_HEADER_BLOCK_NUMBER_SLOT,
@@ -161,12 +155,30 @@ impl<'de> Deserialize<'de> for Tx {
     }
 }
 
+/// Everything a mutation needs about a state whose dict the builder
+/// does not have: the field values, and the statements proving they
+/// belong to that commitment.
+///
+/// Plain data on purpose. Proving these statements needs the dict and
+/// so happens outside this crate; recording against them needs only
+/// the values and the finished statements.
+#[derive(Clone, Debug)]
+pub struct ContributedOpenings {
+    pub commitment: Hash,
+    pub type_value: Value,
+    pub stable_identifier: Value,
+    /// `DictContains(obj, "type", type_value)`
+    pub st_type: Statement,
+    /// `DictContains(obj, "stable_identifier", stable_identifier)`
+    pub st_stable_identifier: Statement,
+}
+
 /// One side of a mutation: either a state this builder holds and can
-/// open, or one a counterparty contributed openings for.
+/// open, or one it has only openings for.
 #[derive(Clone, Debug)]
 pub enum ObjSide {
     Held(Dictionary),
-    Contributed(Box<ObjectOpenings>),
+    Contributed(Box<ContributedOpenings>),
 }
 
 impl ObjSide {
@@ -242,7 +254,12 @@ impl ObjSide {
 /// `chain` is the position after this event, so a party proving this
 /// outside a `TxBuilder` has to derive both positions from the agreed
 /// event sequence.
-pub(crate) fn prove_tx_mutate(
+/// Public because a party that is not assembling sometimes has to
+/// prove the action predicate itself, and every such predicate's body
+/// contains `TxMutate`. A statement built here has no recorded event
+/// behind it until a `TxBuilder` accepts one, and replay and the class
+/// guard still have to.
+pub fn prove_tx_mutate(
     ctx: &mut BuildContext,
     prev_chain: Hash,
     chain: Hash,
@@ -293,13 +310,19 @@ pub enum ConsumedSide {
     Contributed(Box<ContributedSpend>),
 }
 
-/// What the owner of a state contributes when another party assembles
-/// the transaction that spends it: field openings for the assembler's
-/// `TxMutate` clauses, plus the authorization only the owner can prove.
+/// Everything a spend needs about a state whose key the builder does
+/// not have: its openings, its nullifier, and the endorsement that
+/// authorizes consuming it in this exact transaction.
+///
+/// Both the nullifier and the endorsement hash the object's `key`, so
+/// neither can be derived here; they arrive finished from whoever
+/// holds it.
 #[derive(Clone, Debug)]
 pub struct ContributedSpend {
-    pub openings: ObjectOpenings,
-    pub auth: SpendAuthorization,
+    pub openings: ContributedOpenings,
+    pub nullifier: Hash,
+    /// `EndorseSpend(context, nullifier, old)`
+    pub endorsement: Statement,
 }
 
 impl ConsumedSide {
@@ -316,7 +339,7 @@ impl ConsumedSide {
     pub(crate) fn nullifier(&self) -> Hash {
         match self {
             Self::Held(d) => compute_nullifier(d),
-            Self::Contributed(c) => c.auth.nullifier,
+            Self::Contributed(c) => c.nullifier,
         }
     }
 
@@ -325,7 +348,7 @@ impl ConsumedSide {
     pub(crate) fn endorsement(&self) -> Option<&Statement> {
         match self {
             Self::Held(_) => None,
-            Self::Contributed(c) => Some(&c.auth.st_endorsement),
+            Self::Contributed(c) => Some(&c.endorsement),
         }
     }
 
@@ -405,27 +428,27 @@ pub struct EventHandle {
 // derive from these helpers, so the formulas have exactly one home.
 
 /// Chain seed of a transaction over `inputs`: `H(inputs, {})`.
-pub(crate) fn chain_seed(inputs: &Set) -> Hash {
+pub fn chain_seed(inputs: &Set) -> Hash {
     hash_values(&[Value::from(inputs.commitment()), Value::from(EMPTY_VALUE)])
 }
 
 /// Event hash of an insert: `H({}, new)`.
-pub(crate) fn event_hash_insert(new: Value) -> Hash {
+pub fn event_hash_insert(new: Value) -> Hash {
     hash_values(&[Value::from(EMPTY_VALUE), new])
 }
 
 /// Event hash of a mutate: `H(old, new)`.
-pub(crate) fn event_hash_mutate(old: Value, new: Value) -> Hash {
+pub fn event_hash_mutate(old: Value, new: Value) -> Hash {
     hash_values(&[old, new])
 }
 
 /// Event hash of a delete: `H(old, {})`.
-pub(crate) fn event_hash_delete(old: Value) -> Hash {
+pub fn event_hash_delete(old: Value) -> Hash {
     hash_values(&[old, Value::from(EMPTY_VALUE)])
 }
 
 /// One chain step: `H(prev, event_hash)`.
-pub(crate) fn chain_step(prev: Hash, event_hash: Hash) -> Hash {
+pub fn chain_step(prev: Hash, event_hash: Hash) -> Hash {
     hash_values(&[Value::from(prev), Value::from(event_hash)])
 }
 
@@ -448,7 +471,7 @@ pub(crate) fn build_tx(
 /// bounds zeroed. `TxFinalized` pins the zeroed bounds and
 /// `ReplayAction` restores real ones per scope; the after set's
 /// commitment is tx_final, the value the relayer publishes.
-pub(crate) fn top_level_tx(live: &Set, nullifiers: &Set) -> Dictionary {
+pub fn top_level_tx(live: &Set, nullifiers: &Set) -> Dictionary {
     let zero: Hash = EMPTY_VALUE.into();
     build_tx(live, nullifiers, zero, zero)
 }
@@ -920,13 +943,14 @@ impl TxBuilder {
     /// Record the receiving half of a two-party transfer: take control
     /// of a state held by another party by putting it under `new_key`.
     ///
-    /// `offer` is the sender's whole contribution (see
-    /// [`TransferOffer::prove`]), none of which reveals its key. `mid` is
-    /// the erased-key state, which the receiver reconstructs from the
-    /// sender's disclosed non-key fields via [`erased_key_state`].
-    /// Reconstructing it is also the receiver's check on that
-    /// disclosure: the commitment has to match the one in the sender's
-    /// key-erasing statement, and `Rekey` will not prove otherwise.
+    /// `consumed` and `st_key_erasure` are the current owner's
+    /// contribution, neither of which reveals its key: the erasure is
+    /// `DictUpdate(old, "key", {}, mid)`, provable only by a party that
+    /// can open `old`. `mid` is the erased-key state, reconstructed
+    /// from the owner's disclosed non-key fields via
+    /// [`erased_key_state`]. Reconstructing it is also the check on
+    /// that disclosure: its commitment has to match the one in the
+    /// erasing statement, and `Rekey` will not prove otherwise.
     ///
     /// The two rekey paths cannot be collapsed into one: only the
     /// current owner can prove the key-erasing update, and only the
@@ -935,34 +959,28 @@ impl TxBuilder {
     pub fn rekey_receive(
         &mut self,
         ctx: &mut BuildContext,
-        offer: &TransferOffer,
+        consumed: &ConsumedSide,
+        st_key_erasure: Statement,
         mid: &Dictionary,
         new_key: Value,
     ) -> (Dictionary, Statement, EventHandle) {
         let (st_mutate, handle) = {
             let new = obj_with_key(mid, new_key.clone());
-            self.mutate_joint(ctx, &ObjSide::Held(new), &offer.consumed_side())
+            self.mutate_joint(ctx, &ObjSide::Held(new), consumed)
         };
-        self.apply_rekey(
-            ctx,
-            mid,
-            new_key,
-            offer.st_key_erasure.clone(),
-            st_mutate,
-            handle,
-        )
+        self.apply_rekey(ctx, mid, new_key, st_key_erasure, st_mutate, handle)
     }
 
     /// Record the sending half of a two-party transfer: hand a state
-    /// this builder holds to the party that proved `acceptance`.
+    /// this builder holds to the party that will hold `new`.
     ///
     /// The mirror of [`TxBuilder::rekey_receive`], for when the sender
-    /// assembles. The receiver had to prove the `Rekey` action itself
-    /// (its new key is a private wildcard of that predicate), so this
-    /// method records the event against the receiver's statements rather
-    /// than building the action. The consumed side is held locally, so
-    /// no [`SpendAuthorization`] is needed: replay derives the
-    /// endorsement from `old`'s key at finalize time.
+    /// assembles. Only the receiver can prove the `Rekey` action (its
+    /// new key is a private wildcard of that predicate), so this method
+    /// records the event against the receiver's statements rather than
+    /// building the action. The consumed side is held locally, so it
+    /// carries no endorsement: replay derives that from `old`'s key at
+    /// finalize time.
     ///
     /// Returns the event handle. Unlike the other recorders this yields
     /// no action statement to wrap in a guard: the receiver proved the
@@ -973,13 +991,9 @@ impl TxBuilder {
         &mut self,
         ctx: &mut BuildContext,
         old: &Dictionary,
-        acceptance: &TransferAcceptance,
+        new: &ObjSide,
     ) -> EventHandle {
-        let (_, handle) = self.mutate_joint(
-            ctx,
-            &acceptance.obj_side(),
-            &ConsumedSide::Held(old.clone()),
-        );
+        let (_, handle) = self.mutate_joint(ctx, new, &ConsumedSide::Held(old.clone()));
         record(&mut self.stats, "Rekey");
         handle
     }

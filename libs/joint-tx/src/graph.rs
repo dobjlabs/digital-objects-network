@@ -11,9 +11,8 @@
 //! follow.
 //!
 //! Graphs are hand-declared per transaction script. This module is
-//! test-only for now: where the vocabulary finally lives (txlib
-//! proper or a negotiation crate) is deliberately deferred until the
-//! borrow scenario shows the shared shape.
+//! test-only until something outside the scenario tests consumes a
+//! schedule, which the two-process demo will be the first to do.
 
 use std::collections::HashMap;
 use std::fmt;

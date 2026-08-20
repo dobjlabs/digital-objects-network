@@ -1,0 +1,14 @@
+[package]
+name = "joint-tx"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+pod2 = { workspace = true }
+serde = { workspace = true }
+pod2utils = { path = "../pod2utils" }
+txlib = { path = "../txlib" }
+
+[dev-dependencies]
+serde_json = { workspace = true }

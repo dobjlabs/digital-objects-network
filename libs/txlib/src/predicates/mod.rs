@@ -3,10 +3,8 @@ use std::sync::Arc;
 use pod2::lang::{self, load_module};
 
 const TX_EVENTS_HASH_PLACEHOLDER: &str = "0xTX_EVENTS_MODULE_HASH";
-#[cfg(test)]
 const TX_REKEY_HASH_PLACEHOLDER: &str = "0xTX_REKEY_MODULE_HASH";
 
-#[cfg(test)]
 /// Load the test crafting predicates (simplified, no VDF).
 pub fn crafting_test_module() -> lang::Module {
     let params = pod2::middleware::Params::default();

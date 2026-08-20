@@ -4,8 +4,9 @@
 //! Each type here is produced by an object's holder with only a
 //! [`BuildContext`], never a `TxBuilder`: contributing to someone
 //! else's transaction does not mean building one. The assembler
-//! consumes them through [`crate::TxBuilder::mutate_joint`] and
-//! [`crate::TxBuilder::rekey_receive`].
+//! consumes them through [`txlib::TxBuilder::mutate_joint`] and
+//! [`txlib::TxBuilder::rekey_receive`], as the plain payloads the
+//! accessors below hand over.
 
 use std::sync::LazyLock;
 
@@ -18,9 +19,10 @@ use pod2::{
 use pod2utils::{macros::BuildContext, op};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    ConsumedSide, ContributedSpend, ObjSide, STABLE_IDENTIFIER_FIELD, erased_key_state,
-    obj_with_key, object_stable_identifier, object_type, prove_endorse_spend, prove_tx_mutate,
+use txlib::{
+    ConsumedSide, ContributedOpenings, ContributedSpend, ObjSide, STABLE_IDENTIFIER_FIELD,
+    erased_key_state, obj_with_key, object_stable_identifier, object_type, prove_endorse_spend,
+    prove_tx_mutate,
 };
 
 // ============================================================================
@@ -88,6 +90,22 @@ impl ObjectOpenings {
             st_stable_identifier,
         }
     }
+
+    /// The mutation side these openings supply, for handing to
+    /// [`txlib::TxBuilder::mutate_joint`].
+    pub fn side(&self) -> ObjSide {
+        ObjSide::Contributed(Box::new(self.payload()))
+    }
+
+    fn payload(&self) -> ContributedOpenings {
+        ContributedOpenings {
+            commitment: self.commitment,
+            type_value: self.type_value.clone(),
+            stable_identifier: self.stable_identifier.clone(),
+            st_type: self.st_type.clone(),
+            st_stable_identifier: self.st_stable_identifier.clone(),
+        }
+    }
 }
 
 /// An owner's authorization to spend one object state inside one
@@ -113,7 +131,7 @@ impl SpendAuthorization {
     /// to `context`, revealing the endorsement so it survives into this
     /// party's pod.
     ///
-    /// Build `context` with [`crate::context_commitment`] from the negotiated
+    /// Build `context` with [`txlib::context_commitment`] from the negotiated
     /// state root and tx_final.
     pub fn prove(ctx: &mut BuildContext, context: Hash, old: &Dictionary) -> Self {
         let (nullifier, st_endorsement) = prove_endorse_spend(ctx, true, Value::from(context), old);
@@ -130,7 +148,7 @@ impl SpendAuthorization {
 /// These three artifacts always travel together, are always about the
 /// same object and the same transaction context, and none of them
 /// reveals the owner's key. Producing them is the whole of the sender's
-/// side of a transfer; [`crate::TxBuilder::rekey_receive`] consumes them.
+/// side of a transfer; [`txlib::TxBuilder::rekey_receive`] consumes them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferOffer {
@@ -145,11 +163,12 @@ pub struct TransferOffer {
 
 impl TransferOffer {
     /// The consumed side this offer authorizes, for handing to
-    /// [`crate::TxBuilder::mutate_joint`].
+    /// [`txlib::TxBuilder::mutate_joint`].
     pub fn consumed_side(&self) -> ConsumedSide {
         ConsumedSide::Contributed(Box::new(ContributedSpend {
-            openings: self.openings.clone(),
-            auth: self.auth.clone(),
+            openings: self.openings.payload(),
+            nullifier: self.auth.nullifier,
+            endorsement: self.auth.st_endorsement.clone(),
         }))
     }
 
@@ -200,7 +219,7 @@ impl TransferAcceptance {
     /// position.
     ///
     /// `mid` is the erased-key state, reconstructed from the sender's
-    /// disclosed non-key fields via [`crate::erased_key_state`];
+    /// disclosed non-key fields via [`txlib::erased_key_state`];
     /// checking it against the commitment in the offer's key-erasing
     /// statement is what verifies that disclosure. The chain positions
     /// are derivable from the agreed event sequence, so they are inputs
@@ -226,7 +245,7 @@ impl TransferAcceptance {
             ctx,
             prev_chain,
             chain,
-            &ObjSide::Contributed(Box::new(offer.openings.clone())),
+            &offer.openings.side(),
             &ObjSide::Held(new.clone()),
         );
         let st_rekey = ctx
@@ -240,9 +259,9 @@ impl TransferAcceptance {
     }
 
     /// The mutation side this acceptance provides, for handing to
-    /// [`crate::TxBuilder::mutate_joint`].
+    /// [`txlib::TxBuilder::rekey_send`].
     pub fn obj_side(&self) -> ObjSide {
-        ObjSide::Contributed(Box::new(self.openings.clone()))
+        self.openings.side()
     }
 }
 
@@ -262,7 +281,7 @@ impl TransferAcceptance {
 /// endorsement to the exact batch: a peer on a different txlib build
 /// fails here with both batch ids named, instead of at the solver.
 static ENDORSE_SPEND: LazyLock<CustomPredicateRef> = LazyLock::new(|| {
-    crate::predicates::module()
+    txlib::predicates::module()
         .predicate_ref_by_name("EndorseSpend")
         .expect("txlib module declares EndorseSpend")
 });

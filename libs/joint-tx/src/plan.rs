@@ -19,7 +19,7 @@ use pod2::middleware::{Hash, Value, containers::Set};
 use pod2utils::set;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{
+use txlib::{
     chain_seed, chain_step, context_commitment, event_hash_delete, event_hash_insert,
     event_hash_mutate, top_level_tx,
 };

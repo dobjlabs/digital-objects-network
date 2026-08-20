@@ -83,7 +83,7 @@ pub fn object_stable_identifier(obj: &Dictionary) -> Value {
 /// local spends do not. `context` is taken as a `Value` so each caller
 /// can pass whichever form it holds: a container's value is its
 /// commitment, so the dict and the bare hash agree.
-pub(crate) fn prove_endorse_spend(
+pub fn prove_endorse_spend(
     ctx: &mut BuildContext,
     reveal: bool,
     context: Value,
@@ -131,7 +131,7 @@ pub(crate) fn endorsement_hashes(context: &Value, obj: &Dictionary) -> (Hash, Ha
 }
 
 /// Return a clone of `obj` with its `key` field replaced.
-pub(crate) fn obj_with_key(obj: &Dictionary, key: Value) -> Dictionary {
+pub fn obj_with_key(obj: &Dictionary, key: Value) -> Dictionary {
     let mut result = obj.clone();
     result.update(&StrKey::from("key"), &key).unwrap();
     result
