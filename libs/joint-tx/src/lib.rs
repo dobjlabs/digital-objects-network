@@ -27,12 +27,11 @@
 //! below and only its cross-party plumbing lives here.
 
 mod contribute;
+pub mod graph;
 mod plan;
 
 pub use contribute::{ObjectOpenings, SpendAuthorization, TransferAcceptance, TransferOffer};
 pub use plan::{PlannedEvent, TxPlan};
 
-#[cfg(test)]
-mod graph;
 #[cfg(test)]
 mod tests;

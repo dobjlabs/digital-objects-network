@@ -10,9 +10,9 @@
 //! schedule derived from those edges is the protocol the parties
 //! follow.
 //!
-//! Graphs are hand-declared per transaction script. This module is
-//! test-only until something outside the scenario tests consumes a
-//! schedule, which the two-process demo will be the first to do.
+//! Graphs are hand-declared per transaction script. The scenario
+//! tests execute their schedules; the trade demo renders the swap's
+//! schedule as the narration both users see.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -212,6 +212,7 @@ impl StatementGraph {
     }
 }
 
+#[cfg(test)]
 fn test_hash(byte: u8) -> Hash {
     Hash([pod2::middleware::F(byte as u64); 4])
 }

@@ -7,6 +7,7 @@ members = [
     "interfaces/cli",
     "interfaces/gui/src-tauri",
     "interfaces/mcp",
+    "interfaces/trade",
     "libs/driver",
     "libs/sdk",
     "libs/txlib",

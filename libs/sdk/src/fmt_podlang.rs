@@ -649,6 +649,13 @@ fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt:
         let bridge_name = bridge_predicate_name(&o.class, action_name, &o.varname, multi);
         writeln!(w, "  {bridge_name}(state, state_header, chain0, chain)")?;
     }
+    // Transfer of control: every generated class is transferable. The
+    // self-predicate hash pins the transfer to this class, so a Rekey
+    // proven for some other class cannot satisfy this guard.
+    writeln!(
+        w,
+        "  rk::Rekey(state, chain0, chain, @self_predicate(Is{name}))"
+    )?;
     writeln!(w, ")")?;
     Ok(())
 }
