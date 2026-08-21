@@ -97,7 +97,7 @@ automatically.
 | `st_set_insert(old, v, new)`, `st_set_delete(old, v, new)` | `new` is `old` with `v` added / removed |
 | `st_array_update(old, i, v, new)` | `new` is `old` with index `i` set to `v` |
 
-Two limits are worth knowing before reaching for these:
+One limit is worth knowing before reaching for these:
 
 - The transition statements (`st_*_insert` / `_update` / `_delete`) constrain
   a relation between two container values. They do not compute the new
@@ -105,10 +105,6 @@ Two limits are worth knowing before reaching for these:
   witness from an `unsafe` block. Until the SDK can build container values
   (see Missing features), the reachable use is relating two containers a
   script already holds.
-- A field read of an object's whole-dict form is fine on inputs and mutates,
-  but reading a field of an *output* you just built (`out.durability`) is not
-  supported: the emitter renders it as `initials.out.durability`, a double
-  anchor podlang has no syntax for, and the module fails to compile.
 
 ## Type checking
 
@@ -238,7 +234,6 @@ as opaque entropy, not for byte-exact comparison with the L1 hash.
 - [x] manifest support
 - [ ] error pretty print
 - [x] forbid Object::set after the object has been used in other operations
-- [ ] read a field of an output created in the same action (`out.field`)
 
 # Test example
 

@@ -59,6 +59,13 @@ pub(crate) const fn output_max_ts(base_ts: usize, is_output: bool) -> usize {
     if is_output { base_ts + 1 } else { base_ts }
 }
 
+/// Inverse of the ts `output_max_ts` reserves: where an Output's
+/// script-final form sits, which is what the `initials` record holds and
+/// what TxInsert takes as the object's initial state.
+pub(crate) const fn initials_ts(max_ts: usize) -> usize {
+    max_ts.saturating_sub(1)
+}
+
 /// An action's chain max_ts must be at least this for the SDK to pack
 /// intermediate chain states into a `<Action>Chain` record. Below the
 /// threshold, the per-step scalar wildcards (`chain1`, `chain2`, ...)
@@ -246,12 +253,12 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
             )?;
         }
         if let Some(initials) = &meta.initials_entries {
-            writeln!(
-                w,
-                "record {} = ({})",
-                schema_name_initials(&meta.name),
-                render(initials),
-            )?;
+            let names = initials
+                .iter()
+                .map(|e| e.varname.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(w, "record {} = ({names})", schema_name_initials(&meta.name),)?;
         }
     }
     Ok(())
@@ -422,29 +429,34 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // sides that need a wildcard; collapsed sides drop the clause.
     for o in &meta.object_refs {
         let max_ts = meta.max_ts(&o.varname);
-        if meta
-            .in_entry(&o.varname)
-            .is_some_and(|(_, e)| e.needs_wildcard)
-        {
-            writeln!(
-                w,
-                "  ArrayContains(io, {}::in_{}, {})",
-                schema_name_io(&action.name),
-                o.varname,
-                fmt_var_at(&o.varname, 0, max_ts),
-            )?;
-        }
-        if meta
-            .out_entry(&o.varname)
-            .is_some_and(|(_, e)| e.needs_wildcard)
-        {
-            writeln!(
-                w,
-                "  ArrayContains(io, {}::out_{}, {})",
-                schema_name_io(&action.name),
-                o.varname,
-                fmt_var_at(&o.varname, max_ts, max_ts),
-            )?;
+        let io_schema = schema_name_io(&action.name);
+        for (entry, record, entry_name, ts) in [
+            (
+                meta.in_entry(&o.varname),
+                "io",
+                format!("{io_schema}::in_{}", o.varname),
+                0,
+            ),
+            (
+                meta.out_entry(&o.varname),
+                "io",
+                format!("{io_schema}::out_{}", o.varname),
+                max_ts,
+            ),
+            (
+                meta.initials_entry(&o.varname),
+                "initials",
+                format!("{}::{}", schema_name_initials(&action.name), o.varname),
+                initials_ts(max_ts),
+            ),
+        ] {
+            if entry.is_some_and(|(_, e)| e.needs_wildcard) {
+                writeln!(
+                    w,
+                    "  ArrayContains({record}, {entry_name}, {})",
+                    fmt_var_at(&o.varname, ts, max_ts),
+                )?;
+            }
         }
     }
     // Pin each referenced sub-action alias to its sub's first out
