@@ -237,8 +237,7 @@ as opaque entropy, not for byte-exact comparison with the L1 hash.
 - [x] pexe.zip support (packaged by the `pexe` crate's CLI)
 - [x] manifest support
 - [ ] error pretty print
-- [ ] forbid multiple Object::set operations on the same object
-- [ ] forbid Object::set after the objec thas been used in other operations
+- [x] forbid Object::set after the object has been used in other operations
 - [ ] read a field of an output created in the same action (`out.field`)
 
 # Test example

@@ -1193,3 +1193,74 @@ fn test_statement_surface_round_trips() {
         ],
     );
 }
+
+/// `set` writes into the object's dict in place without advancing its
+/// ts, so it is only sound on an output nothing has pinned yet. Repeated
+/// sets stay consistent (see `test_cross_read_into_set`): containment
+/// survives later inserts.
+#[test]
+fn test_set_guards() {
+    for (action, expected, src) in [
+        (
+            "SetOnInput",
+            "only an output object",
+            r#"
+        fn SetOnInput(action) {
+            var ore = action.input("Ore");
+            ore.set([["grade", 1]]);
+        }
+"#,
+        ),
+        (
+            "SetOnMutate",
+            "only an output object",
+            r#"
+        fn SetOnMutate(action) {
+            var ore = action.mutate("Ore");
+            ore.set([["grade", 1]]);
+        }
+"#,
+        ),
+        (
+            "SetAfterUpdate",
+            "update already committed",
+            r#"
+        fn SetAfterUpdate(action) {
+            var ore = action.output("Ore");
+            var key = action.random();
+            ore.update("work", key);
+            ore.set([["grade", 1]]);
+        }
+"#,
+        ),
+        (
+            "SetAfterStatement",
+            "a statement already committed",
+            r#"
+        fn SetAfterStatement(action) {
+            var ore = action.output("Ore");
+            action.st_dict_contains(ore, "work", 0);
+            ore.set([["grade", 1]]);
+        }
+"#,
+        ),
+        (
+            "SetAfterGrind",
+            "pow_obj_grind already committed",
+            r#"
+        fn SetAfterGrind(action) {
+            var ore = action.output("Ore");
+            let target = action.top_limb_u256(9007199254740992);
+            var key = action.pow_obj_grind(ore, target);
+            ore.set([["grade", 1]]);
+        }
+"#,
+        ),
+    ] {
+        let err = match Sdk::default().load_module_from_src_actions(src, &[action]) {
+            Ok(_) => panic!("expected {action} to be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains(expected), "{action}: {err}");
+    }
+}
