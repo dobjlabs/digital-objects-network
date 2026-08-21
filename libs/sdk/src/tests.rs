@@ -926,3 +926,313 @@ fn test_sdk_state_header() {
     let [_ticker1] = res.objs();
     apply_tx(&mut state, &ticker1_tx);
 }
+
+/// A whole-container statement arg renders anchored (`io.in_ore`) when
+/// its Object's side collapses into the io record, so execution has to
+/// lift the proved statement to the record entry the same way an intro
+/// pod's is lifted.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_statement_whole_dict_arg() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+            ore.set([["grade", 7], ["floor", 3]]);
+        }
+
+        fn AssertOre(action) {
+            var ore = action.input("Ore");
+            var metal = action.output("Metal");
+            action.st_dict_contains(ore, "grade", 7);
+            action.st_contains(ore, "floor", 3);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre", "AssertOre"])
+        .unwrap();
+    for expected in [
+        r#"DictContains(io.in_ore, "grade", 7)"#,
+        r#"Contains(io.in_ore, "floor", 3)"#,
+    ] {
+        assert!(
+            module.podlang_src.contains(expected),
+            "missing {expected}\nactual:\n{}",
+            module.podlang_src
+        );
+    }
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let ore_tx = res.tx.clone();
+    let [ore] = res.objs();
+    apply_tx(&mut state, &ore_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ore.obj.commitment()]));
+    let res = executor.action("AssertOre", vec![ore]).unwrap();
+    let metal_tx = res.tx.clone();
+    apply_tx(&mut state, &metal_tx);
+}
+
+/// `*` and `+` outside an `unsafe` block emit the `Product` / `Sum`
+/// statement that constrains the witness they compute.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_safe_arithmetic_operators() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+            ore.set([["grade", 7]]);
+        }
+
+        fn MixAlloy(action) {
+            var ore = action.input("Ore");
+            var alloy = action.output("Alloy");
+            var doubled = ore.grade * 2;
+            var bumped = doubled + 1;
+            alloy.update("work", bumped);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre", "MixAlloy"])
+        .unwrap();
+    for expected in ["Product(ore.grade, 2, doubled)", "Sum(doubled, 1, bumped)"] {
+        assert!(
+            module.podlang_src.contains(expected),
+            "missing {expected}\nactual:\n{}",
+            module.podlang_src
+        );
+    }
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let ore_tx = res.tx.clone();
+    let [ore] = res.objs();
+    apply_tx(&mut state, &ore_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ore.obj.commitment()]));
+    let res = executor.action("MixAlloy", vec![ore]).unwrap();
+    let alloy_tx = res.tx.clone();
+    let [alloy] = res.objs();
+    apply_tx(&mut state, &alloy_tx);
+    assert_eq!(
+        alloy.obj.get(&StrKey::from("work")).unwrap().unwrap(),
+        Value::from(15)
+    );
+}
+
+/// Inside an `unsafe` block the same operators stay witness-only, so
+/// nothing constrains the result until the script says so.
+#[test]
+fn test_unsafe_arithmetic_emits_no_statement() {
+    let craft_src = r#"
+        fn UnsafeMix(action) {
+            var ore = action.input("Ore");
+            var alloy = action.output("Alloy");
+            var lowered = unsafe { ore.grade - 1 };
+            alloy.update("work", lowered);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["UnsafeMix"])
+        .unwrap();
+    assert!(
+        !module.podlang_src.contains("Sum("),
+        "unsafe subtraction should emit no statement:\n{}",
+        module.podlang_src
+    );
+}
+
+/// Every native statement the host API exposes has to survive the round
+/// trip through rendered podlang, which `load_module_from_src_actions`
+/// parses and compiles. Grouped a few per action to stay inside pod2's
+/// per-predicate statement budget.
+#[test]
+fn test_statement_surface_round_trips() {
+    let craft_src = r#"
+        fn Compare(action) {
+            var crate_in = action.input("Crate");
+            action.st_equal(crate_in.size, 2);
+            action.st_not_equal(crate_in.size, 3);
+        }
+
+        fn Order(action) {
+            var crate_in = action.input("Crate");
+            action.st_lt(1, 2);
+            action.st_lt_eq(2, 2);
+            action.st_gt_eq(3, 2);
+        }
+
+        fn Arith(action) {
+            var crate_in = action.input("Crate");
+            action.st_product(2, 3, 6);
+            action.st_max(2, 3, 3);
+            action.st_hash(1, 2, crate_in.digest);
+        }
+
+        fn Reads(action) {
+            var crate_in = action.input("Crate");
+            action.st_not_contains(crate_in, "missing");
+            action.st_dict_not_contains(crate_in, "absent");
+        }
+
+        fn SetReads(action) {
+            var crate_in = action.input("Crate");
+            action.st_set_contains(crate_in.tags, 1);
+            action.st_set_not_contains(crate_in.tags, 2);
+            action.st_array_contains(crate_in.items, 0, 1);
+        }
+
+        fn ContainerTransitions(action) {
+            var crate_in = action.input("Crate");
+            var crate_out = action.output("Crate");
+            action.st_container_insert(crate_in, "k", 1, crate_out);
+            action.st_container_update(crate_in, "k", 1, crate_out);
+            action.st_container_delete(crate_in, "k", crate_out);
+        }
+
+        fn DictTransitions(action) {
+            var crate_in = action.input("Crate");
+            var crate_out = action.output("Crate");
+            action.st_dict_insert(crate_in, "k", 1, crate_out);
+            action.st_dict_update(crate_in, "k", 1, crate_out);
+            action.st_dict_delete(crate_in, "k", crate_out);
+        }
+
+        // Entry args on both sides come from inputs: a keyed read of an
+        // output's script-final form renders as `initials.<var>.<key>`,
+        // a double anchor podlang has no syntax for.
+        fn SetTransitions(action) {
+            var crate_a = action.input("Crate");
+            var crate_b = action.input("Crate");
+            action.st_set_insert(crate_a.tags, 1, crate_b.tags);
+            action.st_set_delete(crate_a.tags, 1, crate_b.tags);
+            action.st_array_update(crate_a.items, 0, 1, crate_b.items);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(
+            craft_src,
+            &[
+                "Compare",
+                "Order",
+                "Arith",
+                "Reads",
+                "SetReads",
+                "ContainerTransitions",
+                "DictTransitions",
+                "SetTransitions",
+            ],
+        )
+        .unwrap();
+    for expected in [
+        "Equal(crate_in.size, 2)",
+        "NotEqual(crate_in.size, 3)",
+        "Lt(1, 2)",
+        "LtEq(2, 2)",
+        "GtEq(3, 2)",
+        "Product(2, 3, 6)",
+        "Max(2, 3, 3)",
+        "Hash(1, 2, crate_in.digest)",
+        r#"NotContains(io.in_crate_in, "missing")"#,
+        r#"DictNotContains(io.in_crate_in, "absent")"#,
+        "SetContains(crate_in.tags, 1)",
+        "SetNotContains(crate_in.tags, 2)",
+        "ArrayContains(crate_in.items, 0, 1)",
+        r#"ContainerDelete(io.in_crate_in, "k", initials.crate_out)"#,
+        r#"DictInsert(io.in_crate_in, "k", 1, initials.crate_out)"#,
+        "SetInsert(crate_a.tags, 1, crate_b.tags)",
+        "SetDelete(crate_a.tags, 1, crate_b.tags)",
+        "ArrayUpdate(crate_a.items, 0, 1, crate_b.items)",
+    ] {
+        assert!(
+            module.podlang_src.contains(expected),
+            "missing {expected}\nactual:\n{}",
+            module.podlang_src
+        );
+    }
+}
+
+/// `set` writes into the object's dict in place without advancing its
+/// ts, so it is only sound on an output nothing has pinned yet. Repeated
+/// sets stay consistent (see `test_cross_read_into_set`): containment
+/// survives later inserts.
+#[test]
+fn test_set_guards() {
+    let load = |src: &str, action: &str| -> String {
+        let sdk = Sdk::default();
+        match sdk.load_module_from_src_actions(src, &[action]) {
+            Ok(_) => panic!("expected {action} to be rejected"),
+            Err(err) => format!("{err}"),
+        }
+    };
+
+    let err = load(
+        r#"
+        fn SetOnInput(action) {
+            var ore = action.input("Ore");
+            ore.set([["grade", 1]]);
+        }
+"#,
+        "SetOnInput",
+    );
+    assert!(err.contains("only an output object"), "{err}");
+
+    let err = load(
+        r#"
+        fn SetOnMutate(action) {
+            var ore = action.mutate("Ore");
+            ore.set([["grade", 1]]);
+        }
+"#,
+        "SetOnMutate",
+    );
+    assert!(err.contains("only an output object"), "{err}");
+
+    let err = load(
+        r#"
+        fn SetAfterUpdate(action) {
+            var ore = action.output("Ore");
+            var key = action.random();
+            ore.update("work", key);
+            ore.set([["grade", 1]]);
+        }
+"#,
+        "SetAfterUpdate",
+    );
+    assert!(err.contains("update already committed"), "{err}");
+
+    let err = load(
+        r#"
+        fn SetAfterStatement(action) {
+            var ore = action.output("Ore");
+            action.st_dict_contains(ore, "work", 0);
+            ore.set([["grade", 1]]);
+        }
+"#,
+        "SetAfterStatement",
+    );
+    assert!(err.contains("a statement already committed"), "{err}");
+
+    let err = load(
+        r#"
+        fn SetAfterGrind(action) {
+            var ore = action.output("Ore");
+            let target = action.top_limb_u256(9007199254740992);
+            var key = action.pow_obj_grind(ore, target);
+            ore.set([["grade", 1]]);
+        }
+"#,
+        "SetAfterGrind",
+    );
+    assert!(err.contains("pow_obj_grind already committed"), "{err}");
+}

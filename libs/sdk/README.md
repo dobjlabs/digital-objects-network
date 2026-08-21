@@ -57,10 +57,54 @@ because we want to calculate the value of a `var` as a witness to some
 statement. The generation of constraining statements can be disabled by using
 an `unsafe` block.
 
-The integer operators `+` and `-` on `var` values are only available inside
-`unsafe` blocks: they compute a witness value and emit nothing. Pair the
-result with an explicit statement (`action.st_sum`, `action.st_gt`, ...)
-afterward, or a malicious prover can substitute any value.
+The integer operators `+`, `-` and `*` on `var` values follow that rule.
+Outside an `unsafe` block each one emits the statement that constrains its
+result: `Sum` for `+`, `Product` for `*`, and for `-` a `Sum` with the
+operands rearranged (`a - b == r` is stated as `r + b == a`), since pod2 has
+no subtraction predicate. Inside an `unsafe` block they compute the witness
+and emit nothing, so pair the result with an explicit statement
+(`action.st_sum`, `action.st_gt`, ...) afterward, or a malicious prover can
+substitute any value.
+
+## Native statements
+
+`action.st_*` emits one pod2 native statement. Arguments are in the
+predicate's own order, so a call reads the same as the podlang it renders to,
+and each one takes a literal, a `var`, or a field read (`obj.field`). A
+whole-container argument naming an object is anchored to its record entry
+automatically.
+
+| Call | Holds when |
+| --- | --- |
+| `st_equal(a, b)`, `st_not_equal(a, b)` | the two values are (not) equal; any pod2 values |
+| `st_lt(a, b)`, `st_lt_eq(a, b)`, `st_gt(a, b)`, `st_gt_eq(a, b)` | integer comparison |
+| `st_sum(a, b, c)` | `a + b == c` |
+| `st_product(a, b, c)` | `a * b == c` |
+| `st_max(a, b, c)` | `max(a, b) == c` |
+| `st_hash(a, b, c)` | `c` is the pod2 hash of `a` and `b` |
+| `st_contains(c, k, v)`, `st_not_contains(c, k)` | any container (does not) hold `k` (mapped to `v`) |
+| `st_dict_contains(d, k, v)`, `st_dict_not_contains(d, k)` | same, and `d` is a dictionary |
+| `st_set_contains(s, v)`, `st_set_not_contains(s, v)` | `s` is a set that does (not) hold `v` |
+| `st_array_contains(a, i, v)` | array `a` holds `v` at index `i` |
+| `st_container_insert(old, k, v, new)` | `new` is `old` with `(k, v)` added |
+| `st_container_update(old, k, v, new)` | `new` is `old` with `k` remapped to `v` |
+| `st_container_delete(old, k, new)` | `new` is `old` with `k` removed |
+| `st_dict_insert`, `st_dict_update`, `st_dict_delete` | same three, pinning the container to a dictionary |
+| `st_set_insert(old, v, new)`, `st_set_delete(old, v, new)` | `new` is `old` with `v` added / removed |
+| `st_array_update(old, i, v, new)` | `new` is `old` with index `i` set to `v` |
+
+Two limits are worth knowing before reaching for these:
+
+- The transition statements (`st_*_insert` / `_update` / `_delete`) constrain
+  a relation between two container values. They do not compute the new
+  container, so it has to come from somewhere else: an object's entry, or a
+  witness from an `unsafe` block. Until the SDK can build container values
+  (see Missing features), the reachable use is relating two containers a
+  script already holds.
+- A field read of an object's whole-dict form is fine on inputs and mutates,
+  but reading a field of an *output* you just built (`out.durability`) is not
+  supported: the emitter renders it as `initials.out.durability`, a double
+  anchor podlang has no syntax for, and the module fails to compile.
 
 ## Type checking
 
@@ -144,7 +188,8 @@ as opaque entropy, not for byte-exact comparison with the L1 hash.
   - [ ] delete
   - [ ] update
 - [ ] Var Dictionary/Object and operations
-  - [ ] get
+  - [ ] get (reads go through the `obj.field` indexer; `get` itself is
+        unimplemented and would return an unconstrained copy)
   - [ ] insert
   - [ ] delete
   - [x] update
@@ -153,44 +198,51 @@ as opaque entropy, not for byte-exact comparison with the L1 hash.
   - [ ] contains
   - [ ] insert
   - [ ] delete
-- [ ] Statements:
-  - [ ] Equal
-  - [ ] NotEqual
-  - [ ] LtEq
-  - [ ] Lt
-  - [ ] Contains
-  - [ ] NotContains
+- [x] Statements (see Native statements above):
+  - [x] Equal
+  - [x] NotEqual
+  - [x] LtEq
+  - [x] Lt
+  - [x] Contains
+  - [x] NotContains
   - [x] Sum
-  - [ ] Product
-  - [ ] Max
-  - [ ] Hash
+  - [x] Product
+  - [x] Max
+  - [x] Hash
   - [ ] PublicKey
   - [ ] SignedBy
-  - [ ] ContainerInsert
-  - [ ] ContainerUpdate
-  - [ ] ContainerDelete
-  - [ ] DictContains
-  - [ ] DictNotContains
-  - [ ] SetContains
-  - [ ] SetNotContains
-  - [ ] ArrayContains
-  - [ ] GtEq
+  - [x] ContainerInsert
+  - [x] ContainerUpdate
+  - [x] ContainerDelete
+  - [x] DictContains
+  - [x] DictNotContains
+  - [x] SetContains
+  - [x] SetNotContains
+  - [x] ArrayContains
+  - [x] GtEq
   - [x] Gt
-  - [ ] DictInsert
-  - [ ] DictUpdate
-  - [ ] DictDelete
-  - [ ] SetInsert
-  - [ ] SetDelete
-  - [ ] ArrayUpdate
+  - [x] DictInsert
+  - [x] DictUpdate
+  - [x] DictDelete
+  - [x] SetInsert
+  - [x] SetDelete
+  - [x] ArrayUpdate
 - [ ] Execution time type checking without panics
-- [ ] operator+
-- [ ] operator\*
+- [x] operator+ (and `-`, which emit `Sum`, and `*`, which emits `Product`)
+- [x] operator\*
 - [x] dependent action
 - [x] pexe.zip support (packaged by the `pexe` crate's CLI)
 - [x] manifest support
 - [ ] error pretty print
-- [ ] forbid multiple Object::set operations on the same object
-- [ ] forbid Object::set after the objec thas been used in other operations
+- [x] forbid Object::set once the object's contents have been pinned (by an
+      update, a statement, an intro pod or `pow_obj_grind`), and on anything
+      other than an output object. Repeated sets on an output nothing has
+      touched are allowed and stay consistent: a `set` only asserts
+      containment, which survives later inserts.
+- [ ] keyed read of an output's script-final form (`out.field`) renders the
+      unrepresentable `initials.out.field`; the emitter needs to force that
+      form open as a wildcard pinned to the initials record, the way the io
+      sides already are
 
 # Test example
 

@@ -389,6 +389,21 @@ fn validate_args<const N: usize>(args_types: [(Dynamic, Type); N]) -> RuntimeRes
     Ok(rs.try_into().expect("len = N"))
 }
 
+/// Declare a host method that emits one native statement. Each
+/// invocation gives the script-side name, the pod2 predicate, and one
+/// argument per statement arg with the type it is checked against at
+/// Load time (`Type::Unk` where any pod2 value goes). Argument order is
+/// the predicate's own, so it matches the rendered podlang.
+macro_rules! st_method {
+    ($(#[$meta:meta])* $name:ident, $pred:ident, [$($arg:ident: $typ:expr),+ $(,)?]) => {
+        $(#[$meta])*
+        fn $name(self, $($arg: Dynamic),+) -> RuntimeResult<()> {
+            let args = validate_args([$(($arg, $typ)),+])?;
+            self.native_st(NativePredicate::$pred, args.to_vec())
+        }
+    };
+}
+
 /// Used to track how many updates from mutations a variable takes.
 #[derive(Default, Debug)]
 struct VarState {
@@ -412,6 +427,10 @@ struct ActionContext {
     /// same `ts` machinery.
     vars: Vec<String>,
     var_state: HashMap<String, VarState>,
+    /// Object vars read by an operation that records no `Inst` of its
+    /// own (`pow_obj_grind` hashes the object's dict). `check_settable`
+    /// needs them because `body_referenced_vars` cannot see them.
+    reads: HashSet<String>,
     exe_ctx: Option<Rc<RefCell<ExeContext>>>,
     unsafe_block: bool,
 }
@@ -423,6 +442,7 @@ impl ActionContext {
             insts: Vec::new(),
             vars: Vec::new(),
             var_state: HashMap::new(),
+            reads: HashSet::new(),
             exe_ctx,
             unsafe_block: false,
         };
@@ -469,6 +489,67 @@ impl ActionContext {
                 )
             })
             .collect()
+    }
+    /// Reject a `set` that cannot hold. `set` writes its literal
+    /// initializer straight into the object's dict without advancing the
+    /// object's ts, so any earlier operation that pinned that dict's
+    /// exact contents now describes a value the object no longer has:
+    /// its statement and the object's recorded form disagree, and the
+    /// action fails while proving with nothing pointing back at the
+    /// `set`. A repeated `set` is not such an operation -- it only
+    /// asserts containment, which survives later inserts -- so several
+    /// in a row stay consistent.
+    ///
+    /// Only outputs take a `set` at all. On an input or a mutate it
+    /// writes into the object's pre-state, which the transaction proves
+    /// against a state root it cannot alter.
+    fn check_settable(&self, var: &str) -> RuntimeResult<()> {
+        if var == "?" {
+            return Err("set: bind the object with `var` first".into());
+        }
+        let io = self.insts.iter().find_map(|inst| match inst {
+            Inst::Object { io, obj, .. } if obj.borrow().var_name() == var => Some(*io),
+            _ => None,
+        });
+        match io {
+            Some(ObjectIO::Output) => {}
+            Some(_) => {
+                return Err(format!(
+                    "set on {var}: only an output object can be initialized with set"
+                )
+                .into());
+            }
+            None => {
+                return Err(format!(
+                    "set on {var}: expected an output object declared in this action"
+                )
+                .into());
+            }
+        }
+        let names_var = |r: &Ref| match &*r.borrow() {
+            VarOrValue::Var(v) => v.name == var,
+            VarOrValue::Value(_) => false,
+        };
+        let pinned_by = self.insts.iter().find_map(|inst| match inst {
+            Inst::Update { obj, value, .. } => (obj == var || names_var(value)).then_some("update"),
+            Inst::Set { kvs, .. } => kvs
+                .iter()
+                .any(|(_, v)| names_var(v))
+                .then_some("another object's set"),
+            Inst::Statement { args, .. } => args.iter().any(names_var).then_some("a statement"),
+            Inst::Intro { args, .. } => args.iter().any(names_var).then_some("an intro pod"),
+            Inst::Object { .. } | Inst::SubAction { .. } => None,
+        });
+        let pinned_by = pinned_by.or_else(|| self.reads.contains(var).then_some("pow_obj_grind"));
+        if let Some(op) = pinned_by {
+            return Err(format!(
+                "set on {var}: {op} already committed to this object's contents, so the set \
+                 would change a dict that has been proved about; move it directly below the \
+                 output declaration"
+            )
+            .into());
+        }
+        Ok(())
     }
     fn assert_unsafe(&self, unsafe_block: bool) -> RuntimeResult<()> {
         if self.unsafe_block != unsafe_block {
@@ -1024,6 +1105,33 @@ impl ActionHandle {
             .iter()
             .map(|o| (o.varname.clone(), 0usize))
             .collect();
+
+        // The anchored form of each arg of a body statement, in arg
+        // order, or None where the arg stays as proved. A whole-dict arg
+        // naming an Object collapsed at this ts lifts to its record slot;
+        // a dict-field arg (`var.key`) lifts to its entry, but only for
+        // callers whose statement was proved with every arg literal
+        // (`lift_keys`) -- ops built from `as_op_arg` already carry the
+        // entry form.
+        let arg_anchors = |args: &[Ref],
+                           current_ts: &HashMap<String, usize>,
+                           lift_keys: bool|
+         -> Vec<Option<OperationArg>> {
+            args.iter()
+                .map(|arg| {
+                    let arg = arg.borrow();
+                    match &*arg {
+                        VarOrValue::Var(Var { key: Some(_), .. }) => {
+                            lift_keys.then(|| arg.as_op_arg())
+                        }
+                        VarOrValue::Var(Var {
+                            key: None, name, ..
+                        }) => current_ts.get(name).and_then(|ts| anchor_at(name, *ts)),
+                        VarOrValue::Value(_) => None,
+                    }
+                })
+                .collect()
+        };
         {
             let mut exe_ctx = exe_rc.borrow_mut();
             let exe_ctx = &mut *exe_ctx;
@@ -1035,11 +1143,28 @@ impl ActionHandle {
                         let op = native_pred_to_op(*pred);
                         let op_type = OperationType::Native(op);
                         let op_args = args.iter().map(|v| v.borrow().as_op_arg()).collect();
-                        let st = exe_ctx
+                        let st_literal = exe_ctx
                             .bld
                             .builder
                             .priv_op(Operation(op_type, op_args, OperationAux::None))
-                            .unwrap();
+                            .map_err(|err| format!("{pred} statement failed: {err}"))?;
+                        // A whole-container arg (`action.st_dict_contains(obj, ...)`)
+                        // renders anchored when its Object's side is
+                        // collapsed, so the proved statement has to be
+                        // lifted to match.
+                        let replacements = arg_anchors(args, &current_ts, false);
+                        let st = if replacements.iter().any(|r| r.is_some()) {
+                            exe_ctx
+                                .bld
+                                .builder
+                                .priv_op(Operation::replace_value_with_entry(
+                                    replacements,
+                                    st_literal,
+                                ))
+                                .map_err(|err| format!("{pred} anchor failed: {err}"))?
+                        } else {
+                            st_literal
+                        };
                         body_sts.push(st);
                     }
                     Inst::Intro {
@@ -1048,27 +1173,10 @@ impl ActionHandle {
                         let st_literal =
                             statement.clone().expect("Intro statement captured at Rhai");
                         // The intro pod's cached Statement carries only
-                        // literal values, while the compiled podlang
-                        // anchors two arg forms: a dict-field arg
-                        // (`var.key`) is lifted to its entry, and a
-                        // whole-dict arg of an Object collapsed at this
-                        // ts is lifted to its record slot. Loose-wildcard
-                        // and literal args stay literal.
-                        let replacements: Vec<Option<OperationArg>> = args
-                            .iter()
-                            .map(|arg| {
-                                let arg = arg.borrow();
-                                match &*arg {
-                                    VarOrValue::Var(Var { key: Some(_), .. }) => {
-                                        Some(arg.as_op_arg())
-                                    }
-                                    VarOrValue::Var(Var {
-                                        key: None, name, ..
-                                    }) => current_ts.get(name).and_then(|ts| anchor_at(name, *ts)),
-                                    VarOrValue::Value(_) => None,
-                                }
-                            })
-                            .collect();
+                        // literal values, so both anchored forms have to
+                        // be lifted here. Loose-wildcard and literal args
+                        // stay literal.
+                        let replacements = arg_anchors(args, &current_ts, true);
                         let st = if replacements.iter().any(|r| r.is_some()) {
                             exe_ctx
                                 .bld
@@ -1331,6 +1439,9 @@ impl ActionHandle {
         // Target is a full u256 (Raw). To build one with a desired top-limb
         // difficulty, scripts use `action.top_limb_u256(n)`.
         let [obj, target] = validate_args([(obj, Type::Dict), (target, Type::Raw)])?;
+        if let VarOrValue::Var(var) = &*obj.borrow() {
+            self.0.borrow_mut().reads.insert(var.name.clone());
+        }
         // For now we assume that obj is var, and thus return a key that is also var
         let key = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
@@ -1371,14 +1482,47 @@ impl ActionHandle {
         let raw = RawValue([F(0), F(0), F(0), F(n_int as u64)]);
         Ok(ArgHandle::literal(self.clone(), Value::from(raw)))
     }
-    fn st_gt(self, v0: Dynamic, v1: Dynamic) -> RuntimeResult<()> {
-        let [v0, v1] = validate_args([(v0, Type::Int), (v1, Type::Int)])?;
-        self.native_st(NativePredicate::Gt, vec![v0, v1])
-    }
-    fn st_sum(self, v0: Dynamic, v1: Dynamic, v2: Dynamic) -> RuntimeResult<()> {
-        let [v0, v1, v2] = validate_args([(v0, Type::Int), (v1, Type::Int), (v2, Type::Int)])?;
-        self.native_st(NativePredicate::Sum, vec![v0, v1, v2])
-    }
+    // Comparisons. `Equal` / `NotEqual` hold for any pair of pod2
+    // values; the ordering predicates are integer-only in pod2.
+    st_method!(st_equal, Equal, [v0: Type::Unk, v1: Type::Unk]);
+    st_method!(st_not_equal, NotEqual, [v0: Type::Unk, v1: Type::Unk]);
+    st_method!(st_lt, Lt, [v0: Type::Int, v1: Type::Int]);
+    st_method!(st_lt_eq, LtEq, [v0: Type::Int, v1: Type::Int]);
+    st_method!(st_gt, Gt, [v0: Type::Int, v1: Type::Int]);
+    st_method!(st_gt_eq, GtEq, [v0: Type::Int, v1: Type::Int]);
+
+    // Arithmetic: `st_sum(a, b, c)` reads `a + b == c`, and product and
+    // max likewise put the result last. `st_hash(a, b, c)` holds when
+    // `c` is the pod2 hash of `a` and `b`, which are not integer-only.
+    st_method!(st_sum, Sum, [v0: Type::Int, v1: Type::Int, v2: Type::Int]);
+    st_method!(st_product, Product, [v0: Type::Int, v1: Type::Int, v2: Type::Int]);
+    st_method!(st_max, Max, [v0: Type::Int, v1: Type::Int, v2: Type::Int]);
+    st_method!(st_hash, Hash, [v0: Type::Unk, v1: Type::Unk, v2: Type::Unk]);
+
+    // Container reads. The `Contains` family takes any container; the
+    // `Dict` / `Set` / `Array` forms are pod2 sugar over it that also
+    // pin the container's kind.
+    st_method!(st_contains, Contains, [c: Type::Unk, k: Type::Unk, v: Type::Unk]);
+    st_method!(st_not_contains, NotContains, [c: Type::Unk, k: Type::Unk]);
+    st_method!(st_dict_contains, DictContains, [d: Type::Dict, k: Type::Unk, v: Type::Unk]);
+    st_method!(st_dict_not_contains, DictNotContains, [d: Type::Dict, k: Type::Unk]);
+    st_method!(st_set_contains, SetContains, [s: Type::Unk, v: Type::Unk]);
+    st_method!(st_set_not_contains, SetNotContains, [s: Type::Unk, v: Type::Unk]);
+    st_method!(st_array_contains, ArrayContains, [a: Type::Unk, i: Type::Int, v: Type::Unk]);
+
+    // Container transitions, all of the shape (old, ..., new). These
+    // constrain a relation between two container values; they do not
+    // compute the new container, so the new value has to come from
+    // somewhere else (an `unsafe` witness, or another object's entry).
+    st_method!(st_container_insert, ContainerInsert, [old: Type::Unk, k: Type::Unk, v: Type::Unk, new: Type::Unk]);
+    st_method!(st_container_update, ContainerUpdate, [old: Type::Unk, k: Type::Unk, v: Type::Unk, new: Type::Unk]);
+    st_method!(st_container_delete, ContainerDelete, [old: Type::Unk, k: Type::Unk, new: Type::Unk]);
+    st_method!(st_dict_insert, DictInsert, [old: Type::Dict, k: Type::Unk, v: Type::Unk, new: Type::Dict]);
+    st_method!(st_dict_update, DictUpdate, [old: Type::Dict, k: Type::Unk, v: Type::Unk, new: Type::Dict]);
+    st_method!(st_dict_delete, DictDelete, [old: Type::Dict, k: Type::Unk, new: Type::Dict]);
+    st_method!(st_set_insert, SetInsert, [old: Type::Unk, v: Type::Unk, new: Type::Unk]);
+    st_method!(st_set_delete, SetDelete, [old: Type::Unk, v: Type::Unk, new: Type::Unk]);
+    st_method!(st_array_update, ArrayUpdate, [old: Type::Unk, i: Type::Int, v: Type::Unk, new: Type::Unk]);
     fn intro_vdf(self, n_iters: Dynamic, input: Dynamic) -> RuntimeResult<ArgHandle> {
         let [n_iters, input] = validate_args([(n_iters, Type::Int), (input, Type::Raw)])?;
 
@@ -1505,27 +1649,31 @@ impl ArgHandle {
     fn set(self, kvs: Dynamic) -> RuntimeResult<()> {
         type_check_args([(&self, Type::Dict)])?;
         let kvs = dynamic_to_kvs(kvs)?;
-        let mut arg = self.arg.borrow_mut();
-        if let VarOrValue::Var(var) = &*arg {
-            let var_name = var.name.clone();
-            let mut ctx = self.ctx.0.borrow_mut();
-            ctx.assert_unsafe(false)?;
-            let mut final_dict: Option<Dictionary> = None;
-            if ctx.exe_ctx.is_some() {
-                for (key, value) in &kvs {
-                    let value = value.borrow().as_value().clone();
-                    arg.mut_dict(|obj| {
-                        obj.insert(&StrKey::from(key), &value).expect("TODO");
-                    });
-                }
-                final_dict = Some(arg.to_dict());
+        // The guard walks the action's recorded Insts, which alias this
+        // object's Ref, so resolve the name and drop the borrow first.
+        let var_name = match &*self.arg.borrow() {
+            VarOrValue::Var(var) => var.name.clone(),
+            VarOrValue::Value(_) => return Ok(()),
+        };
+        let mut ctx = self.ctx.0.borrow_mut();
+        ctx.assert_unsafe(false)?;
+        ctx.check_settable(&var_name)?;
+        let mut final_dict: Option<Dictionary> = None;
+        if ctx.exe_ctx.is_some() {
+            let mut arg = self.arg.borrow_mut();
+            for (key, value) in &kvs {
+                let value = value.borrow().as_value().clone();
+                arg.mut_dict(|obj| {
+                    obj.insert(&StrKey::from(key), &value).expect("TODO");
+                });
             }
-            ctx.insts.push(Inst::Set {
-                obj: var_name,
-                kvs,
-                final_dict,
-            });
+            final_dict = Some(arg.to_dict());
         }
+        ctx.insts.push(Inst::Set {
+            obj: var_name,
+            kvs,
+            final_dict,
+        });
         Ok(())
     }
     fn get(self, _key: String) -> RuntimeResult<ArgHandle> {
@@ -1581,34 +1729,69 @@ impl ArgHandle {
     }
 }
 
-/// operator- for maybe-var types
-fn arg_sub(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
-    type_check_args([(&a, Type::Int), (&b, Type::Int)])?;
-    // TODO: Handle the case where a and b are not var
-    let value = Rc::new(RefCell::new(VarOrValue::var(Type::Int)));
-    let ctx = a.ctx.0.borrow();
-    ctx.assert_unsafe(true)?;
-    if ctx.exe_ctx.is_some() {
-        let a = a.arg.borrow().as_value().as_int().expect("int");
-        let b = b.arg.borrow().as_value().as_int().expect("int");
-        let result = a.checked_sub(b).expect("no overflow");
-        value.borrow_mut().set_value(Value::from(result));
-    }
-    Ok(ArgHandle::new(a.ctx.clone(), value))
+/// Integer operator on maybe-var operands, with the native statement
+/// that constrains its result.
+#[derive(Clone, Copy)]
+enum ArithOp {
+    Add,
+    Sub,
+    Mul,
 }
 
-/// operator+ for maybe-var types
-fn arg_add(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
+impl ArithOp {
+    fn symbol(&self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+        }
+    }
+    fn apply(&self, a: i64, b: i64) -> Option<i64> {
+        match self {
+            Self::Add => a.checked_add(b),
+            Self::Sub => a.checked_sub(b),
+            Self::Mul => a.checked_mul(b),
+        }
+    }
+    /// pod2 has `Sum` and `Product` but no subtraction predicate, so
+    /// `a - b == result` is stated as `result + b == a`.
+    fn statement(&self, a: Ref, b: Ref, result: Ref) -> (NativePredicate, Vec<Ref>) {
+        match self {
+            Self::Add => (NativePredicate::Sum, vec![a, b, result]),
+            Self::Sub => (NativePredicate::Sum, vec![result, b, a]),
+            Self::Mul => (NativePredicate::Product, vec![a, b, result]),
+        }
+    }
+}
+
+/// operator+, operator- and operator* for maybe-var types. Outside an
+/// `unsafe` block the paired statement is emitted, so the result is
+/// constrained; inside one the result is a bare witness and the script
+/// is responsible for constraining it.
+fn arg_arith(op: ArithOp, a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
     type_check_args([(&a, Type::Int), (&b, Type::Int)])?;
-    // TODO: Handle the case where a and b are not var
     let value = Rc::new(RefCell::new(VarOrValue::var(Type::Int)));
-    let ctx = a.ctx.0.borrow();
-    ctx.assert_unsafe(true)?;
-    if ctx.exe_ctx.is_some() {
-        let a = a.arg.borrow().as_value().as_int().expect("int");
-        let b = b.arg.borrow().as_value().as_int().expect("int");
-        let result = a.checked_add(b).expect("no overflow");
+    let (in_unsafe, is_exe) = {
+        let ctx = a.ctx.0.borrow();
+        (ctx.unsafe_block, ctx.exe_ctx.is_some())
+    };
+    if is_exe {
+        let int = |arg: &Ref| -> RuntimeResult<i64> {
+            arg.borrow()
+                .as_value()
+                .as_int()
+                .ok_or_else(|| format!("operator{}: operand is not an int", op.symbol()).into())
+        };
+        let (x, y) = (int(&a.arg)?, int(&b.arg)?);
+        let result = op.apply(x, y).ok_or_else(|| -> Box<EvalAltResult> {
+            let sym = op.symbol();
+            format!("operator{sym}: integer overflow on {x} {sym} {y}").into()
+        })?;
         value.borrow_mut().set_value(Value::from(result));
+    }
+    if !in_unsafe {
+        let (pred, args) = op.statement(a.arg.clone(), b.arg.clone(), value.clone());
+        a.ctx.clone().native_st(pred, args)?;
     }
     Ok(ArgHandle::new(a.ctx.clone(), value))
 }
@@ -2647,8 +2830,36 @@ fn new_engine() -> Engine {
         .register_fn("mutate", ActionHandle::mutate)
         .register_fn("subaction", ActionHandle::subaction)
         .register_fn("random", ActionHandle::random)
+        // Native statements. `SignedBy` and `PublicKey` are absent on
+        // purpose: both need key material, which an action script has no
+        // way to name, and `SignedBy` additionally needs a signature
+        // passed as operation aux data.
+        .register_fn("st_equal", ActionHandle::st_equal)
+        .register_fn("st_not_equal", ActionHandle::st_not_equal)
+        .register_fn("st_lt", ActionHandle::st_lt)
+        .register_fn("st_lt_eq", ActionHandle::st_lt_eq)
         .register_fn("st_gt", ActionHandle::st_gt)
+        .register_fn("st_gt_eq", ActionHandle::st_gt_eq)
         .register_fn("st_sum", ActionHandle::st_sum)
+        .register_fn("st_product", ActionHandle::st_product)
+        .register_fn("st_max", ActionHandle::st_max)
+        .register_fn("st_hash", ActionHandle::st_hash)
+        .register_fn("st_contains", ActionHandle::st_contains)
+        .register_fn("st_not_contains", ActionHandle::st_not_contains)
+        .register_fn("st_dict_contains", ActionHandle::st_dict_contains)
+        .register_fn("st_dict_not_contains", ActionHandle::st_dict_not_contains)
+        .register_fn("st_set_contains", ActionHandle::st_set_contains)
+        .register_fn("st_set_not_contains", ActionHandle::st_set_not_contains)
+        .register_fn("st_array_contains", ActionHandle::st_array_contains)
+        .register_fn("st_container_insert", ActionHandle::st_container_insert)
+        .register_fn("st_container_update", ActionHandle::st_container_update)
+        .register_fn("st_container_delete", ActionHandle::st_container_delete)
+        .register_fn("st_dict_insert", ActionHandle::st_dict_insert)
+        .register_fn("st_dict_update", ActionHandle::st_dict_update)
+        .register_fn("st_dict_delete", ActionHandle::st_dict_delete)
+        .register_fn("st_set_insert", ActionHandle::st_set_insert)
+        .register_fn("st_set_delete", ActionHandle::st_set_delete)
+        .register_fn("st_array_update", ActionHandle::st_array_update)
         .register_fn("intro_vdf", ActionHandle::intro_vdf)
         .register_fn("intro_lt_eq_u256", ActionHandle::intro_lt_eq_u256)
         .register_fn("pow_obj_grind", ActionHandle::pow_obj_grind)
@@ -2668,23 +2879,38 @@ fn new_engine() -> Engine {
                 Ok(())
             },
         )
-        .register_fn("-", arg_sub)
+        .register_fn("-", |a: ArgHandle, b: ArgHandle| {
+            arg_arith(ArithOp::Sub, a, b)
+        })
         .register_fn("-", |a: ArgHandle, b: i64| -> RuntimeResult<ArgHandle> {
             let ctx = a.ctx.clone();
-            arg_sub(a, ArgHandle::literal(ctx, Value::from(b)))
+            arg_arith(ArithOp::Sub, a, ArgHandle::literal(ctx, Value::from(b)))
         })
         .register_fn("-", |a: i64, b: ArgHandle| -> RuntimeResult<ArgHandle> {
             let ctx = b.ctx.clone();
-            arg_sub(ArgHandle::literal(ctx, Value::from(a)), b)
+            arg_arith(ArithOp::Sub, ArgHandle::literal(ctx, Value::from(a)), b)
         })
-        .register_fn("+", arg_add)
+        .register_fn("+", |a: ArgHandle, b: ArgHandle| {
+            arg_arith(ArithOp::Add, a, b)
+        })
         .register_fn("+", |a: ArgHandle, b: i64| -> RuntimeResult<ArgHandle> {
             let ctx = a.ctx.clone();
-            arg_add(a, ArgHandle::literal(ctx, Value::from(b)))
+            arg_arith(ArithOp::Add, a, ArgHandle::literal(ctx, Value::from(b)))
         })
         .register_fn("+", |a: i64, b: ArgHandle| -> RuntimeResult<ArgHandle> {
             let ctx = b.ctx.clone();
-            arg_add(ArgHandle::literal(ctx, Value::from(a)), b)
+            arg_arith(ArithOp::Add, ArgHandle::literal(ctx, Value::from(a)), b)
+        })
+        .register_fn("*", |a: ArgHandle, b: ArgHandle| {
+            arg_arith(ArithOp::Mul, a, b)
+        })
+        .register_fn("*", |a: ArgHandle, b: i64| -> RuntimeResult<ArgHandle> {
+            let ctx = a.ctx.clone();
+            arg_arith(ArithOp::Mul, a, ArgHandle::literal(ctx, Value::from(b)))
+        })
+        .register_fn("*", |a: i64, b: ArgHandle| -> RuntimeResult<ArgHandle> {
+            let ctx = b.ctx.clone();
+            arg_arith(ArithOp::Mul, ArgHandle::literal(ctx, Value::from(a)), b)
         })
         .register_indexer_get(ArgHandle::entry);
 
