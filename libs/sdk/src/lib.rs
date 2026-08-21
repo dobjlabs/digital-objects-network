@@ -284,26 +284,10 @@ impl VarOrValue {
                 typ,
                 key: Some(key),
                 ..
-            }) => match typ {
-                Type::Dict => {
-                    let dict = value
-                        .as_ref()
-                        .expect("has value at exec time")
-                        .as_dictionary()
-                        .expect("dict");
-                    dict.get(&StrKey::from(key)).unwrap().expect("key exists")
-                }
-                Type::Array(record) => {
-                    let array = value
-                        .as_ref()
-                        .expect("has value at exec time")
-                        .as_array()
-                        .expect("array");
-                    let idx = record.iter().position(|k| k == key).unwrap();
-                    array.get(idx).unwrap().expect("index exists")
-                }
-                _ => todo!("implement type {typ}"),
-            },
+            }) => {
+                let value = value.as_ref().expect("has value at exec time");
+                resolve_entry(typ, value, key).2
+            }
         }
     }
     // Only call this at exec time
@@ -329,21 +313,12 @@ impl VarOrValue {
             }) => {
                 let value = value.as_ref().expect("has value at exec time").clone();
                 if let Some(key) = key {
-                    let st_contains = match typ {
-                        Type::Dict => {
-                            let dict = value.as_dictionary().expect("dict");
-                            let value = dict.get(&key.into()).unwrap().unwrap();
-                            Statement::Contains(dict.into(), key.clone().into(), value.into())
-                        }
-                        Type::Array(record) => {
-                            let array = value.as_array().expect("array");
-                            let index = record.iter().position(|k| k == key).unwrap();
-                            let value = array.get(index).unwrap().unwrap();
-                            Statement::Contains(array.into(), (index as i64).into(), value.into())
-                        }
-                        _ => todo!("support other types"),
-                    };
-                    OperationArg::Statement(st_contains)
+                    let (container, key, entry) = resolve_entry(typ, &value, key);
+                    OperationArg::Statement(Statement::Contains(
+                        container.into(),
+                        key.into(),
+                        entry.into(),
+                    ))
                 } else {
                     OperationArg::Literal(value)
                 }
@@ -367,6 +342,43 @@ impl VarOrValue {
         let output = f(&mut dict);
         *obj = Value::from(dict);
         output
+    }
+}
+
+/// The container, key and entry value that a `var.key` entry ref stands
+/// for at exec time, in the forms `Contains` takes them.
+///
+/// A record-typed var keys by the record's field order, since its
+/// container is an array whose slots are named only by the schema.
+/// Everything else keys by name against the value's own kind: a var
+/// bound by a container lookup is declared `Unk`, so the value it holds
+/// is the only thing that says how to read `.key` off it.
+///
+/// Only call this at exec time.
+fn resolve_entry(typ: &Type, value: &Value, key: &str) -> (Value, Value, Value) {
+    match typ {
+        Type::Array(record) => {
+            let array = value.as_array().expect("array");
+            let index = record
+                .iter()
+                .position(|k| k == key)
+                .unwrap_or_else(|| panic!("record has no entry {key}"));
+            let entry = array
+                .get(index)
+                .unwrap()
+                .unwrap_or_else(|| panic!("record slot {index} ({key}) is empty"));
+            (Value::from(array), Value::from(index as i64), entry)
+        }
+        _ => {
+            let dict = value
+                .as_dictionary()
+                .unwrap_or_else(|| panic!(".{key} on a value that is not a dictionary"));
+            let entry = dict
+                .get(&StrKey::from(key))
+                .unwrap()
+                .unwrap_or_else(|| panic!("no entry {key}"));
+            (Value::from(dict), Value::from(key.to_string()), entry)
+        }
     }
 }
 
@@ -1472,6 +1484,65 @@ impl ActionHandle {
         }
         Ok(ArgHandle::new(self.clone(), key))
     }
+    /// Build a Set out of the elements of a Rhai array. Rhai has no set
+    /// of its own, so a bare array promotes to an Array and this is the
+    /// only way to name a Set.
+    fn set_of(self, elements: Dynamic) -> RuntimeResult<ArgHandle> {
+        let elements = elements
+            .try_cast::<rhai::Array>()
+            .ok_or::<Box<EvalAltResult>>("set_of: expected an array of elements".into())?;
+        let elements = elements
+            .into_iter()
+            .map(literal_from_dynamic)
+            .collect::<RuntimeResult<HashSet<Value>>>()?;
+        Ok(ArgHandle::literal(
+            self.clone(),
+            Value::from(Set::new(elements)),
+        ))
+    }
+    /// Returns the dictionary entry at `key` and emits `DictContains`.
+    fn dict_get(self, dict: Dynamic, key: Dynamic) -> RuntimeResult<ArgHandle> {
+        self.container_get(NativePredicate::DictContains, dict, key)
+    }
+    /// Returns the array entry at `index` and emits `ArrayContains`.
+    fn array_get(self, array: Dynamic, index: Dynamic) -> RuntimeResult<ArgHandle> {
+        self.container_get(NativePredicate::ArrayContains, array, index)
+    }
+    /// A container read as one operation: the binding is a var, so the
+    /// key can be one too, and the statement is what ties the var to
+    /// what the container holds. Reading a literal container at a var
+    /// key is the table lookup this exists for.
+    fn container_get(
+        self,
+        pred: NativePredicate,
+        container: Dynamic,
+        key: Dynamic,
+    ) -> RuntimeResult<ArgHandle> {
+        let [container, key] = validate_args([(container, Type::Unk), (key, Type::Unk)])?;
+        let entry = Rc::new(RefCell::new(VarOrValue::var(Type::Unk)));
+        let mut ctx = self.0.borrow_mut();
+        ctx.assert_unsafe(false)?;
+        if ctx.exe_ctx.is_some() {
+            let container_value = container.borrow().as_value();
+            let key_value = key.borrow().as_value();
+            let found = container_value
+                .as_container()
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!("{pred}: {container_value} is not a container").into()
+                })?
+                .get(key_value.raw())
+                .map_err::<Box<EvalAltResult>, _>(|err| format!("{pred}: {err}").into())?
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!("{pred}: no entry at {key_value}").into()
+                })?;
+            entry.borrow_mut().set_value(found);
+        }
+        ctx.insts.push(Inst::Statement {
+            pred,
+            args: vec![container, key, entry.clone()],
+        });
+        Ok(ArgHandle::new(self.clone(), entry))
+    }
     /// Build a u256 with `n` in the most-significant limb and zeros elsewhere.
     /// Useful as a difficulty target for [`pow_obj_grind`] and [`intro_lt_eq_u256`]:
     /// a u256 `x` satisfies `x <= top_limb_u256(n)` iff the top limb of `x` is
@@ -1787,44 +1858,99 @@ fn arg_arith(op: ArithOp, a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle
     Ok(ArgHandle::new(a.ctx.clone(), value))
 }
 
+/// Result of attempting to convert a Rhai `Dynamic` to a pod2 `Value`.
+enum ValueCast {
+    Value(Value),
+    /// Not a value; the caller may attempt another supported conversion.
+    Other(Dynamic),
+    /// A recognized value shape containing invalid data.
+    Err(Box<EvalAltResult>),
+}
+
 /// Try to get the pod2 Value or promote a native type to it.
-fn _try_value_from_dynamic(v: Dynamic) -> Result<Value, Dynamic> {
+fn _try_value_from_dynamic(v: Dynamic) -> ValueCast {
     let v = match v.try_cast_result::<Value>() {
-        Ok(v) => return Ok(v),
+        Ok(v) => return ValueCast::Value(v),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<String>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<i64>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<RawValue>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<Dictionary>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<Set>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<Array>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
-    Err(v)
+    // Recursively convert Rhai arrays and maps to pod2 containers. Use
+    // `set_of` for sets because Rhai has no corresponding native type.
+    let v = match v.try_cast_result::<rhai::Array>() {
+        Ok(elements) => {
+            return match elements
+                .into_iter()
+                .map(literal_from_dynamic)
+                .collect::<RuntimeResult<Vec<Value>>>()
+            {
+                Ok(elements) => ValueCast::Value(Value::from(Array::new(elements))),
+                Err(err) => ValueCast::Err(err),
+            };
+        }
+        Err(v) => v,
+    };
+    let v = match v.try_cast_result::<rhai::Map>() {
+        Ok(entries) => {
+            return match entries
+                .into_iter()
+                .map(|(key, value)| Ok((StrKey::from(key.as_str()), literal_from_dynamic(value)?)))
+                .collect::<RuntimeResult<HashMap<StrKey, Value>>>()
+            {
+                Ok(entries) => ValueCast::Value(Value::from(Dictionary::new(entries))),
+                Err(err) => ValueCast::Err(err),
+            };
+        }
+        Err(v) => v,
+    };
+    ValueCast::Other(v)
+}
+
+/// Converts one container-literal element. Variables are rejected because
+/// container contents must be known during Load.
+fn literal_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
+    let v = match _try_value_from_dynamic(v) {
+        ValueCast::Value(value) => return Ok(value),
+        ValueCast::Err(err) => return Err(err),
+        ValueCast::Other(v) => v,
+    };
+    let type_name = v.type_name();
+    match &*try_ref_from_dynamic(v.clone())?.borrow() {
+        VarOrValue::Value(value) => Ok(value.clone()),
+        VarOrValue::Var(_) => {
+            Err(format!("container literal: {type_name} element is a var, not a literal").into())
+        }
+    }
 }
 
 /// Try to get a Ref or promote a native pod2 Value-compatible type to it.
 fn try_ref_from_dynamic(v: Dynamic) -> RuntimeResult<Ref> {
     let v = match _try_value_from_dynamic(v) {
-        Ok(v) => return Ok(Rc::new(RefCell::new(VarOrValue::value(v)))),
-        Err(v) => v,
+        ValueCast::Value(v) => return Ok(Rc::new(RefCell::new(VarOrValue::value(v)))),
+        ValueCast::Err(err) => return Err(err),
+        ValueCast::Other(v) => v,
     };
     let v = match v.try_cast_result::<Ref>() {
         Ok(v) => return Ok(v),
@@ -1843,8 +1969,9 @@ fn try_ref_from_dynamic(v: Dynamic) -> RuntimeResult<Ref> {
 /// Only call this at exec time
 fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
     let v = match _try_value_from_dynamic(v) {
-        Ok(v) => return Ok(v),
-        Err(v) => v,
+        ValueCast::Value(v) => return Ok(v),
+        ValueCast::Err(err) => return Err(err),
+        ValueCast::Other(v) => v,
     };
     let v = match v.try_cast_result::<Ref>() {
         Ok(v) => return Ok(v.borrow().as_value().clone()),
@@ -2844,6 +2971,9 @@ fn new_engine() -> Engine {
         .register_fn("intro_lt_eq_u256", ActionHandle::intro_lt_eq_u256)
         .register_fn("pow_obj_grind", ActionHandle::pow_obj_grind)
         .register_fn("top_limb_u256", ActionHandle::top_limb_u256)
+        .register_fn("set_of", ActionHandle::set_of)
+        .register_fn("dict_get", ActionHandle::dict_get)
+        .register_fn("array_get", ActionHandle::array_get)
         .register_type_with_name::<ArgHandle>("ArgContext")
         .register_fn("set", ArgHandle::set)
         .register_fn("get", ArgHandle::get)

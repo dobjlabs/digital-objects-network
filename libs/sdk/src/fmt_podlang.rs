@@ -13,6 +13,7 @@ use crate::{
     ActionContext, ActionMeta, ActionObjectRef, ClassMeta, Dependency, Inst, Intro, Loader,
     ObjectIO, Ref, VarOrValue,
 };
+use pod2::middleware::Value;
 use std::collections::HashMap;
 use std::fmt;
 use txlib::RECORD_STATE_HEADER_PODLANG;
@@ -184,11 +185,81 @@ struct ArgFmt<'a> {
     arg: &'a Ref,
 }
 
+/// Render a literal in podlang's literal syntax. A scalar is already in
+/// that form, but `Display for Value` prints a container in a debug form
+/// the parser cannot read back, so the container cases are spelled out
+/// here.
+///
+/// A container the parser has no syntax for falls back to its
+/// commitment: a statement arg is compared and hashed by raw value, so
+/// `Raw(0x...)` and the container itself are the same arg to the
+/// verifier, and the prover reads the entries off the value it holds
+/// rather than off this text.
+struct LiteralFmt<'a>(&'a Value);
+
+/// The podlang text a literal renders to, reachable for values a script
+/// has no way to build.
+#[cfg(test)]
+pub(crate) fn literal_podlang(value: &Value) -> String {
+    LiteralFmt(value).to_string()
+}
+
+impl<'a> fmt::Display for LiteralFmt<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = self.0;
+        // An empty container and a raw zero share a value; keep the raw
+        // reading, which is what a script that wrote one asked for.
+        if value.is_raw() {
+            return write!(f, "{value}");
+        }
+        let Some(container) = value.as_container() else {
+            return write!(f, "{value}");
+        };
+        if let Some(dict) = container.as_dictionary() {
+            write!(f, "{{")?;
+            for (i, entry) in dict.iter().enumerate() {
+                let (key, entry) = entry.map_err(|_| fmt::Error)?;
+                let sep = if i == 0 { "" } else { ", " };
+                let key = Value::from(key);
+                write!(f, "{sep}{key}: {}", LiteralFmt(&entry))?;
+            }
+            return write!(f, "}}");
+        }
+        if let Some(set) = container.as_set() {
+            write!(f, "#[")?;
+            for (i, element) in set.iter().enumerate() {
+                let element = element.map_err(|_| fmt::Error)?;
+                let sep = if i == 0 { "" } else { ", " };
+                write!(f, "{sep}{}", LiteralFmt(&element))?;
+            }
+            return write!(f, "]");
+        }
+        if let Some(array) = container.as_array() {
+            let mut slots = array
+                .iter()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| fmt::Error)?;
+            slots.sort_by_key(|(index, _)| *index);
+            // Podlang writes an array as its elements in order, which a
+            // sparse one has no form for.
+            if slots.iter().enumerate().all(|(i, (index, _))| i == *index) {
+                write!(f, "[")?;
+                for (i, (_, element)) in slots.iter().enumerate() {
+                    let sep = if i == 0 { "" } else { ", " };
+                    write!(f, "{sep}{}", LiteralFmt(element))?;
+                }
+                return write!(f, "]");
+            }
+        }
+        write!(f, "{}", Value::from(value.raw()))
+    }
+}
+
 impl<'a> fmt::Display for ArgFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let arg = self.arg.borrow();
         match &*arg {
-            VarOrValue::Value(value) => write!(f, "{value}"),
+            VarOrValue::Value(value) => write!(f, "{}", LiteralFmt(value)),
             VarOrValue::Var(var) => match &var.key {
                 Some(key) => write!(f, "{}.{key}", self.vars[var.name.as_str()]),
                 None => write!(f, "{}", self.vars[var.name.as_str()]),

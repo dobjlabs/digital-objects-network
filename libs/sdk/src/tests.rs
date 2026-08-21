@@ -1302,3 +1302,205 @@ fn test_set_guards() {
         assert!(err.contains(expected), "{action}: {err}");
     }
 }
+
+/// Verifies variable-key lookup in a literal table and the constraints on
+/// the returned row.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_literal_table_lookup() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 2], ["x", 0], ["y", 0]]);
+        }
+
+        fn charts() {
+            [
+                #{"x": 11, "y": 12},
+                #{"x": 21, "y": 22},
+                #{"x": 31, "y": 32}
+            ]
+        }
+
+        fn RevealChart(action) {
+            var chart = action.mutate("Chart");
+            var row = action.array_get(charts(), chart.code);
+            chart.update("x", row.x);
+            chart.update("y", row.y);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "RevealChart"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            "ArrayContains([{",
+            r#""x": 11"#,
+            r#""y": 32"#,
+            "chart0.code, row)",
+            r#"DictUpdate(chart0, "x", row.x, chart1)"#,
+            r#"DictUpdate(chart1, "y", row.y, io.out_chart)"#,
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let res = executor.action("RevealChart", vec![chart]).unwrap();
+    let reveal_tx = res.tx.clone();
+    let [revealed] = res.objs();
+    apply_tx(&mut state, &reveal_tx);
+    assert_eq!(
+        revealed.obj.get(&StrKey::from("x")).unwrap().unwrap(),
+        Value::from(31)
+    );
+    assert_eq!(
+        revealed.obj.get(&StrKey::from("y")).unwrap().unwrap(),
+        Value::from(32)
+    );
+}
+
+/// Verifies construction and membership testing of literal sets.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_literal_set_membership() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+            ore.set([["grade", 5]]);
+        }
+
+        fn AssertGrade(action) {
+            var ore = action.input("Ore");
+            var metal = action.output("Metal");
+            action.st_set_contains(action.set_of([3, 5, 7]), ore.grade);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre", "AssertGrade"])
+        .unwrap();
+    assert_renders(&module, &["SetContains(#[", "ore.grade)"]);
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let ore_tx = res.tx.clone();
+    let [ore] = res.objs();
+    apply_tx(&mut state, &ore_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ore.obj.commitment()]));
+    let res = executor.action("AssertGrade", vec![ore]).unwrap();
+    let metal_tx = res.tx.clone();
+    apply_tx(&mut state, &metal_tx);
+}
+
+/// Verifies string-keyed dictionary lookup and recursive literal promotion.
+#[test]
+fn test_literal_dict_nested() {
+    let craft_src = r#"
+        fn ReadTiers(action) {
+            var ore = action.input("Ore");
+            var tier = action.dict_get(#{"small": #{"cost": 1}, "large": #{"cost": 9}}, "large");
+            var cost = action.dict_get(tier, "cost");
+            action.st_gt(ore.grade, cost);
+            action.st_gt(ore.grade, tier.cost);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["ReadTiers"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            r#""large": {"cost": 9}"#,
+            r#""large", tier)"#,
+            r#"DictContains(tier, "cost", cost)"#,
+            "Gt(ore.grade, tier.cost)",
+        ],
+    );
+}
+
+/// Rejects variables inside container literals because their values are not
+/// available during Load.
+#[test]
+fn test_literal_container_rejects_var() {
+    let craft_src = r#"
+        fn BadTable(action) {
+            var ore = action.input("Ore");
+            action.st_array_contains([ore.grade], 0, 3);
+        }
+"#;
+    let err = match Sdk::default().load_module_from_src_actions(craft_src, &["BadTable"]) {
+        Ok(_) => panic!("expected a var inside a container literal to be rejected"),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("is a var, not a literal"), "{err}");
+}
+
+/// Renders sparse arrays as commitments because Podlang has no sparse-array
+/// literal syntax.
+#[test]
+fn test_sparse_array_literal_renders_as_commitment() {
+    let dense = Array::new(vec![Value::from(1), Value::from(2)]);
+    assert_eq!(
+        fmt_podlang::literal_podlang(&Value::from(dense)),
+        "[1, 2]".to_string()
+    );
+
+    let mut sparse = Array::empty_with_db(Box::new(pod2::middleware::db::mem::MemDB::new()));
+    sparse.insert(5, Value::from(1)).unwrap();
+    let sparse = Value::from(sparse);
+    assert_eq!(
+        fmt_podlang::literal_podlang(&sparse),
+        Value::from(sparse.raw()).to_string()
+    );
+}
+
+/// Reports an execution error when a variable-key lookup misses.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_container_get_rejects_missing_key() {
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 9], ["x", 0]]);
+        }
+
+        fn RevealChart(action) {
+            var chart = action.mutate("Chart");
+            var row = action.array_get([#{"x": 11}, #{"x": 21}], chart.code);
+            chart.update("x", row.x);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "RevealChart"])
+        .unwrap();
+
+    let mut state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let err = match executor.action("RevealChart", vec![chart]) {
+        Ok(_) => panic!("expected a lookup at a key outside the table to fail"),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("no entry at 9"), "{err}");
+}

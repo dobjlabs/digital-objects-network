@@ -101,10 +101,62 @@ One limit is worth knowing before reaching for these:
 
 - The transition statements (`st_*_insert` / `_update` / `_delete`) constrain
   a relation between two container values. They do not compute the new
-  container, so it has to come from somewhere else: an object's entry, or a
-  witness from an `unsafe` block. Until the SDK can build container values
-  (see Missing features), the reachable use is relating two containers a
-  script already holds.
+  container, so both sides have to come from somewhere else: a container
+  literal, an object's entry, or a witness from an `unsafe` block. There is no
+  operator that derives one container from another, so the reachable use is
+  relating two containers a script already holds.
+
+## Container literals
+
+A Rhai array promotes to a pod2 Array and a Rhai object map to a pod2
+Dictionary, at any depth, wherever a statement takes a value. Rhai has no set
+of its own, so `action.set_of([...])` is what names a Set. Every element has to
+be a literal: the container is embedded in the predicate at Load time, so a
+`var` element is rejected rather than standing for whatever it holds at exec
+time.
+
+`action.dict_get(dict, key)` and `action.array_get(array, index)` bind what the
+container holds there and emit the matching `DictContains` / `ArrayContains`.
+The binding is a `var`, so the key can be one too, and the statement is what
+ties the binding to the container. That is the point of the pair: a table the
+module carries as a literal, read at a key the action picks, puts one predicate
+where a row-per-action module needs one per row.
+
+```rhai
+fn charts() { [
+    #{"x": 11, "y": 12, "floor": 0},
+    #{"x": 21, "y": 22, "floor": 3}
+] }
+
+fn RevealChart(action) {
+    var chart = action.mutate("Chart");
+    var row = action.array_get(charts(), chart.code);
+    action.st_gt(row.floor, 0);
+    chart.update("x", row.x);
+    chart.update("y", row.y);
+}
+```
+
+The row is a `var` holding a dictionary, so `row.x` reads it the same way an
+object's field read works, with no further statement. The lookup costs one
+statement and one private wildcard whatever the table's size, and the whole
+table is one argument in the rendered podlang:
+
+```
+ArrayContains([{"y": 12, "x": 11, "floor": 0}, ...], chart0.code, row)
+```
+
+A table belongs in a script function rather than a top-level `const`: Rhai
+functions cannot see the enclosing scope, so a `const` at the top of
+`plugin.rhai` is not in scope inside an action. Building it costs a merkle tree
+per Load and per Execute of an action that reads it, which is comparable to
+what compiling the equivalent row-per-action predicates costs.
+
+Entries render in the order the container's merkle tree iterates, so the same
+value always renders the same text. A container the podlang parser has no
+syntax for (a sparse array) renders as its commitment instead, which is the
+same argument to the verifier: a statement argument is compared and hashed by
+raw value.
 
 ## Type checking
 
@@ -168,18 +220,18 @@ as opaque entropy, not for byte-exact comparison with the L1 hash.
 
 # Missing features
 
-- [ ] Literal Array
-  - [ ] get
+- [x] Literal Array
+  - [x] get
   - [ ] insert
   - [ ] delete
   - [ ] update
-- [ ] Literal Dictionary and operations
-  - [ ] get
+- [x] Literal Dictionary and operations
+  - [x] get
   - [ ] insert
   - [ ] delete
   - [ ] update
-- [ ] Literal Set and operations
-  - [ ] contains
+- [x] Literal Set and operations
+  - [x] contains
   - [ ] insert
   - [ ] delete
 - [ ] Var Array
@@ -188,7 +240,7 @@ as opaque entropy, not for byte-exact comparison with the L1 hash.
   - [ ] delete
   - [ ] update
 - [ ] Var Dictionary/Object and operations
-  - [ ] get
+  - [x] get
   - [ ] insert
   - [ ] delete
   - [x] update
