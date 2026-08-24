@@ -10,9 +10,10 @@
 //! schedule derived from those edges is the protocol the parties
 //! follow.
 //!
-//! Graphs are hand-declared per transaction script. The scenario
-//! tests execute their schedules; the trade demo renders the swap's
-//! schedule as the narration both users see.
+//! Graphs derive from a [`crate::JointTransaction`]'s labeled events
+//! or are hand-declared. The scenario tests execute derived
+//! schedules; the trade demo still hand-declares the swap's graph and
+//! renders its schedule as the narration both users see.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -98,7 +99,7 @@ impl fmt::Display for Schedule {
 }
 
 /// A transaction's exported statements and their premise edges.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct StatementGraph {
     nodes: Vec<StatementNode>,
     /// Per node, its premises resolved to node indices at validation
@@ -152,6 +153,11 @@ impl StatementGraph {
             nodes,
             premise_indices,
         })
+    }
+
+    /// The declared nodes, in declaration order.
+    pub fn nodes(&self) -> &[StatementNode] {
+        &self.nodes
     }
 
     /// Derive the proving schedule. A node's earliest round is forced

@@ -1,6 +1,6 @@
 //! Multi-party transaction scenarios, proven with `MockProver`
 //! against the crafting_test predicates, plus unit tests for the plan
-//! derivation.
+//! derivation and the `JointTransaction` artifact.
 //!
 //! Every cross-party artifact passes between sessions as serialized
 //! bytes and is validated on receipt, so the pod boundary in these
@@ -26,7 +26,11 @@ use txlib::{
     top_level_tx, with_stable_identifier,
 };
 
-use crate::{PlannedEvent, TransferAcceptance, TransferOffer, TxPlan};
+use crate::{
+    InputState, JointEvent, JointTransaction, KeyAnnotation, PlannedEvent, TransferAcceptance,
+    TransferOffer, TxPlan,
+    graph::{NodeKind, StatementGraph},
+};
 
 /// Round-trip a value through its wire encoding, so a session boundary
 /// passes bytes rather than the producer's Rust values.
@@ -67,6 +71,28 @@ fn assert_plan_agrees(plan: &TxPlan, leaf_positions: &[Hash], tx: &Tx) {
     assert_eq!(plan.nullifiers().commitment(), tx.nullifiers.commitment());
     assert_eq!(plan.tx_final(), tx.dict().commitment());
 }
+
+/// Build a `JointTransaction` from borrowed test data.
+fn joint(
+    participants: &[&str],
+    finalizer: &str,
+    inputs: &[(Hash, &str)],
+    events: Vec<JointEvent>,
+) -> anyhow::Result<JointTransaction> {
+    JointTransaction::new(
+        participants.iter().map(|p| p.to_string()).collect(),
+        finalizer.to_string(),
+        inputs
+            .iter()
+            .map(|(commitment, holder)| InputState {
+                commitment: *commitment,
+                holder: holder.to_string(),
+            })
+            .collect(),
+        events,
+    )
+}
+
 /// Two-party transfer with the roles of assembler and receiver split:
 /// the *sender* assembles, so the mutation's `new` side belongs to a
 /// counterparty and the sender only ever sees its commitment.
@@ -314,10 +340,11 @@ fn two_party_rekey_transfers_without_sharing_keys() {
 
 /// A swap: two top-level Rekey actions sharing one plan and one
 /// context. Bob assembles, so his leg arrives via `rekey_receive` and
-/// the leg he gives via `rekey_send`. The statement graph's schedule
-/// is asserted first and then executed session by session: two
-/// exchanges, three proving sessions, and only the erasure-before-
-/// Rekey edge forces the sequentiality.
+/// the leg he gives via `rekey_send`. Plan and graph both derive from
+/// one authored `JointTransaction`; the derived schedule is asserted
+/// first and then executed session by session: two exchanges, three
+/// proving sessions, and only the erasure-before-Rekey edge forces
+/// the sequentiality.
 ///
 /// Every cross-party artifact crosses the session boundary as
 /// serialized bytes and is validated against its pod on receipt, so
@@ -325,8 +352,6 @@ fn two_party_rekey_transfers_without_sharing_keys() {
 /// by one session reaches another.
 #[test]
 fn swap_follows_the_two_exchange_schedule() {
-    use crate::graph::{NodeKind, StatementGraph, StatementNode};
-
     let (modules, is_wood_pick) = craft_modules();
     let mut state = TestState::empty(0);
     let pick_a = spawn_wood_pick(&mut state, &modules, is_wood_pick.clone());
@@ -345,64 +370,38 @@ fn swap_follows_the_two_exchange_schedule() {
     let key_b = Value::from(rand_raw_value());
     let bob_projected = obj_with_key(&erased_key_state(&pick_a), key_b.clone());
     let alice_projected = obj_with_key(&erased_key_state(&pick_b), key_a.clone());
-    let plan = TxPlan::new(
-        vec![pick_a.commitment(), pick_b.commitment()],
+    let jt = joint(
+        &["alice", "bob"],
+        "bob",
+        &[(pick_a.commitment(), "alice"), (pick_b.commitment(), "bob")],
         vec![
-            PlannedEvent::Action(vec![PlannedEvent::Mutate {
-                old: pick_a.commitment(),
-                new: bob_projected.commitment(),
-                nullifier: compute_nullifier(&pick_a),
-            }]),
-            PlannedEvent::Action(vec![PlannedEvent::Mutate {
-                old: pick_b.commitment(),
-                new: alice_projected.commitment(),
-                nullifier: compute_nullifier(&pick_b),
-            }]),
+            JointEvent::transfer_leg(
+                "alice",
+                "bob",
+                pick_a.commitment(),
+                bob_projected.commitment(),
+                compute_nullifier(&pick_a),
+            ),
+            JointEvent::transfer_leg(
+                "bob",
+                "alice",
+                pick_b.commitment(),
+                alice_projected.commitment(),
+                compute_nullifier(&pick_b),
+            ),
         ],
     )
     .unwrap();
+    let plan = jt.plan();
     let context = plan.context(state.state_header().hash());
 
-    // The statement graph. Alice's acceptance of Bob's leg is the one
-    // node with a foreign premise besides the finalize.
-    let graph = StatementGraph::new(vec![
-        StatementNode::new(
-            "offer:pick_a",
-            "alice",
-            NodeKind::TransferOffer {
-                object: pick_a.commitment(),
-            },
-            &[],
-        ),
-        StatementNode::new(
-            "offer:pick_b",
-            "bob",
-            NodeKind::TransferOffer {
-                object: pick_b.commitment(),
-            },
-            &[],
-        ),
-        StatementNode::new(
-            "accept:pick_b",
-            "alice",
-            NodeKind::TransferAcceptance {
-                object: pick_b.commitment(),
-            },
-            &["offer:pick_b"],
-        ),
-        StatementNode::new(
-            "finalize",
-            "bob",
-            NodeKind::Finalize,
-            &["offer:pick_a", "accept:pick_b"],
-        ),
-    ])
-    .unwrap();
+    // The derived statement graph. Alice's acceptance of Bob's leg is
+    // the one node with a foreign premise besides the finalize.
     assert_eq!(
-        graph.schedule().to_string(),
-        "round 0: bob proves [offer:pick_b]\n\
-         round 1: alice proves [offer:pick_a, accept:pick_b] importing [offer:pick_b]\n\
-         round 2: bob proves [finalize] importing [offer:pick_a, accept:pick_b]\n"
+        jt.graph().schedule().to_string(),
+        "round 0: bob proves [offer:1]\n\
+         round 1: alice proves [offer:0, accept:1] importing [offer:1]\n\
+         round 2: bob proves [finalize] importing [offer:0, accept:1]\n"
     );
 
     // Round 0: Bob proves the offer for the leg he gives.
@@ -490,9 +489,12 @@ fn swap_follows_the_two_exchange_schedule() {
 
     // Each party controls the other's former pick: the received states
     // are the projections, which differ from the originals only in key.
+    // The custody view says the same thing before anything is proven.
     assert_eq!(bobs_pick.commitment(), bob_projected.commitment());
     assert_eq!(alices_pick.commitment(), alice_projected.commitment());
-    assert_plan_agrees(&plan, &leaf_positions, &tx_out);
+    assert_eq!(jt.final_custody()[&bob_projected.commitment()], "bob");
+    assert_eq!(jt.final_custody()[&alice_projected.commitment()], "alice");
+    assert_plan_agrees(plan, &leaf_positions, &tx_out);
 }
 
 /// Borrow-act-return in one transaction: Alice lends her pick to Bob,
@@ -511,8 +513,6 @@ fn swap_follows_the_two_exchange_schedule() {
 /// the session boundaries as validated bytes here too.
 #[test]
 fn borrow_act_return_follows_the_two_exchange_schedule() {
-    use crate::graph::{NodeKind, StatementGraph, StatementNode};
-
     let (modules, is_wood_pick) = craft_modules();
     let craft = Arc::new(txlib::predicates::crafting_test_module());
     let is_stone =
@@ -541,72 +541,51 @@ fn borrow_act_return_follows_the_two_exchange_schedule() {
     let stone = with_stable_identifier(&stone_initial);
     let pick_returned = obj_with_key(&erased_key_state(&pick_used), key_alice.clone());
 
-    let plan = TxPlan::new(
-        vec![pick.commitment()],
+    let jt = joint(
+        &["alice", "bob"],
+        "bob",
+        &[(pick.commitment(), "alice")],
         vec![
-            PlannedEvent::Action(vec![PlannedEvent::Mutate {
-                old: pick.commitment(),
-                new: pick_lent.commitment(),
-                nullifier: compute_nullifier(&pick),
-            }]),
-            PlannedEvent::Action(vec![
-                PlannedEvent::Action(vec![PlannedEvent::Mutate {
+            JointEvent::transfer_leg(
+                "alice",
+                "bob",
+                pick.commitment(),
+                pick_lent.commitment(),
+                compute_nullifier(&pick),
+            ),
+            JointEvent::Action(vec![
+                JointEvent::Action(vec![JointEvent::Mutate {
+                    performer: "bob".into(),
                     old: pick_lent.commitment(),
                     new: pick_used.commitment(),
                     nullifier: compute_nullifier(&pick_lent),
+                    key: KeyAnnotation::Inherited,
                 }]),
-                PlannedEvent::Insert {
+                JointEvent::Insert {
+                    minter: "bob".into(),
                     new: stone.commitment(),
                 },
             ]),
-            PlannedEvent::Action(vec![PlannedEvent::Mutate {
-                old: pick_used.commitment(),
-                new: pick_returned.commitment(),
-                nullifier: compute_nullifier(&pick_used),
-            }]),
+            JointEvent::transfer_leg(
+                "bob",
+                "alice",
+                pick_used.commitment(),
+                pick_returned.commitment(),
+                compute_nullifier(&pick_used),
+            ),
         ],
     )
     .unwrap();
+    let plan = jt.plan();
     let context = plan.context(state.state_header().hash());
 
-    let graph = StatementGraph::new(vec![
-        StatementNode::new(
-            "offer:pick",
-            "alice",
-            NodeKind::TransferOffer {
-                object: pick.commitment(),
-            },
-            &[],
-        ),
-        StatementNode::new(
-            "offer:pick_returned",
-            "bob",
-            NodeKind::TransferOffer {
-                object: pick_used.commitment(),
-            },
-            &[],
-        ),
-        StatementNode::new(
-            "accept:pick_returned",
-            "alice",
-            NodeKind::TransferAcceptance {
-                object: pick_used.commitment(),
-            },
-            &["offer:pick_returned"],
-        ),
-        StatementNode::new(
-            "finalize",
-            "bob",
-            NodeKind::Finalize,
-            &["offer:pick", "accept:pick_returned"],
-        ),
-    ])
-    .unwrap();
+    // MineStone is internal to the finalizer, so it contributes no
+    // node and the derived graph schedules exactly like the swap's.
     assert_eq!(
-        graph.schedule().to_string(),
-        "round 0: bob proves [offer:pick_returned]\n\
-         round 1: alice proves [offer:pick, accept:pick_returned] importing [offer:pick_returned]\n\
-         round 2: bob proves [finalize] importing [offer:pick, accept:pick_returned]\n"
+        jt.graph().schedule().to_string(),
+        "round 0: bob proves [offer:2]\n\
+         round 1: alice proves [offer:0, accept:2] importing [offer:2]\n\
+         round 2: bob proves [finalize] importing [offer:0, accept:2]\n"
     );
 
     // Round 0: Bob offers the returned state. It does not exist yet;
@@ -741,7 +720,8 @@ fn borrow_act_return_follows_the_two_exchange_schedule() {
 
     // Alice got her pick back with the agreed wear, Bob kept the stone.
     // Alice endorsed once, in her offer; Bob's two spends were held, so
-    // replay derived both endorsements at finalize.
+    // replay derived both endorsements at finalize. The custody view
+    // agrees with what landed.
     assert_eq!(alices_pick.commitment(), pick_returned.commitment());
     assert!(
         tx_out
@@ -750,7 +730,9 @@ fn borrow_act_return_follows_the_two_exchange_schedule() {
             .unwrap()
     );
     assert_eq!(stats.get("EndorseSpend"), Some(&2));
-    assert_plan_agrees(&plan, &leaf_positions, &tx_out);
+    assert_eq!(jt.final_custody()[&pick_returned.commitment()], "alice");
+    assert_eq!(jt.final_custody()[&stone.commitment()], "bob");
+    assert_plan_agrees(plan, &leaf_positions, &tx_out);
 }
 
 /// A tampered or mismatched contribution fails at receipt with a
@@ -960,4 +942,364 @@ fn tx_plan_delete_arm_matches_the_chain_helpers() {
         plan.tx_final(),
         top_level_tx(plan.live(), plan.nullifiers()).commitment()
     );
+}
+
+/// A graph's structure with node ids erased: per node its producer,
+/// kind, and premise kinds. Ids are presentation, so a derived graph
+/// agrees with a hand-declared one exactly when these match.
+fn graph_shape(graph: &StatementGraph) -> Vec<(String, NodeKind, Vec<NodeKind>)> {
+    let nodes = graph.nodes();
+    let kind_of = |id: &String| {
+        nodes
+            .iter()
+            .find(|node| &node.id == id)
+            .expect("premises name declared nodes")
+            .kind
+            .clone()
+    };
+    nodes
+        .iter()
+        .map(|node| {
+            (
+                node.producer.clone(),
+                node.kind.clone(),
+                node.premises.iter().map(kind_of).collect(),
+            )
+        })
+        .collect()
+}
+
+// The derivation rules reproduce the shapes the two scenarios
+// hand-declared before deriving existed: per transfer an offer by the
+// sender plus an acceptance when the receiver does not finalize,
+// nothing for actions internal to the finalizer, and a finalize fed by
+// each leg's crossing node.
+#[test]
+fn joint_transaction_derives_the_scenario_graphs() {
+    let (a1, a2) = (test_hash(1), test_hash(2));
+    let (b1, b2) = (test_hash(3), test_hash(4));
+    let (n1, n2) = (test_hash(5), test_hash(6));
+
+    let swap = joint(
+        &["alice", "bob"],
+        "bob",
+        &[(a1, "alice"), (b1, "bob")],
+        vec![
+            JointEvent::transfer_leg("alice", "bob", a1, a2, n1),
+            JointEvent::transfer_leg("bob", "alice", b1, b2, n2),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        graph_shape(swap.graph()),
+        vec![
+            (
+                "alice".into(),
+                NodeKind::TransferOffer { object: a1 },
+                vec![],
+            ),
+            ("bob".into(), NodeKind::TransferOffer { object: b1 }, vec![]),
+            (
+                "alice".into(),
+                NodeKind::TransferAcceptance { object: b1 },
+                vec![NodeKind::TransferOffer { object: b1 }],
+            ),
+            (
+                "bob".into(),
+                NodeKind::Finalize,
+                vec![
+                    NodeKind::TransferOffer { object: a1 },
+                    NodeKind::TransferAcceptance { object: b1 },
+                ],
+            ),
+        ]
+    );
+
+    let (used, stone, returned, n3) = (test_hash(7), test_hash(8), test_hash(9), test_hash(10));
+    let borrow = joint(
+        &["alice", "bob"],
+        "bob",
+        &[(a1, "alice")],
+        vec![
+            JointEvent::transfer_leg("alice", "bob", a1, a2, n1),
+            JointEvent::Action(vec![
+                JointEvent::Action(vec![JointEvent::Mutate {
+                    performer: "bob".into(),
+                    old: a2,
+                    new: used,
+                    nullifier: n2,
+                    key: KeyAnnotation::Inherited,
+                }]),
+                JointEvent::Insert {
+                    minter: "bob".into(),
+                    new: stone,
+                },
+            ]),
+            JointEvent::transfer_leg("bob", "alice", used, returned, n3),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        graph_shape(borrow.graph()),
+        vec![
+            (
+                "alice".into(),
+                NodeKind::TransferOffer { object: a1 },
+                vec![],
+            ),
+            (
+                "bob".into(),
+                NodeKind::TransferOffer { object: used },
+                vec![],
+            ),
+            (
+                "alice".into(),
+                NodeKind::TransferAcceptance { object: used },
+                vec![NodeKind::TransferOffer { object: used }],
+            ),
+            (
+                "bob".into(),
+                NodeKind::Finalize,
+                vec![
+                    NodeKind::TransferOffer { object: a1 },
+                    NodeKind::TransferAcceptance { object: used },
+                ],
+            ),
+        ]
+    );
+
+    // A self-transfer by the finalizer (the custody repair on its own
+    // states) is internal too: nothing crosses, only the finalize node
+    // remains.
+    let solo = joint(
+        &["bob"],
+        "bob",
+        &[(b1, "bob")],
+        vec![JointEvent::transfer_leg("bob", "bob", b1, b2, n2)],
+    )
+    .unwrap();
+    assert_eq!(
+        graph_shape(solo.graph()),
+        vec![("bob".into(), NodeKind::Finalize, vec![])]
+    );
+}
+
+// The constructor rejects assignments the machinery cannot execute,
+// with readable errors: it is a wire boundary via serde.
+#[test]
+fn joint_transaction_rejects_infeasible_assignments() {
+    let (a1, a2, n1) = (test_hash(1), test_hash(2), test_hash(3));
+
+    let err = joint(
+        &["alice", "alice"],
+        "alice",
+        &[(a1, "alice")],
+        vec![JointEvent::transfer_leg("alice", "alice", a1, a2, n1)],
+    )
+    .unwrap_err();
+    assert!(format!("{err}").contains("duplicate participant"));
+
+    let err = joint(
+        &["alice"],
+        "bob",
+        &[(a1, "alice")],
+        vec![JointEvent::transfer_leg("alice", "alice", a1, a2, n1)],
+    )
+    .unwrap_err();
+    assert!(format!("{err}").contains("finalizer bob is not a participant"));
+
+    let err = joint(
+        &["alice"],
+        "alice",
+        &[(a1, "bob")],
+        vec![JointEvent::transfer_leg("alice", "alice", a1, a2, n1)],
+    )
+    .unwrap_err();
+    assert!(format!("{err}").contains("input holder bob is not a participant"));
+
+    // Structure is the plan projection's own validation, surfaced
+    // unchanged.
+    let err = joint(&["alice"], "alice", &[(a1, "alice")], vec![]).unwrap_err();
+    assert!(format!("{err}").contains("at least one action"));
+
+    let err = joint(
+        &["alice", "bob"],
+        "bob",
+        &[(a1, "alice")],
+        vec![JointEvent::transfer_leg("bob", "alice", a1, a2, n1)],
+    )
+    .unwrap_err();
+    assert!(format!("{err}").contains("does not hold"));
+
+    let err = joint(
+        &["alice", "bob"],
+        "bob",
+        &[(a1, "alice")],
+        vec![JointEvent::transfer_leg("alice", "carol", a1, a2, n1)],
+    )
+    .unwrap_err();
+    assert!(format!("{err}").contains("receiver carol is not a participant"));
+
+    let err = joint(
+        &["alice", "bob"],
+        "bob",
+        &[],
+        vec![JointEvent::Action(vec![JointEvent::Insert {
+            minter: "alice".into(),
+            new: a2,
+        }])],
+    )
+    .unwrap_err();
+    assert!(format!("{err}").contains("must be performed by the finalizer"));
+
+    let err = joint(
+        &["alice", "bob"],
+        "bob",
+        &[(a1, "alice")],
+        vec![JointEvent::Action(vec![JointEvent::Mutate {
+            performer: "alice".into(),
+            old: a1,
+            new: a2,
+            nullifier: n1,
+            key: KeyAnnotation::Inherited,
+        }])],
+    )
+    .unwrap_err();
+    assert!(format!("{err}").contains("must be performed by the finalizer"));
+
+    // The finalizer records only what it holds; a counterparty's state
+    // reaches it through a transfer, never a bare mutate.
+    let err = joint(
+        &["alice", "bob"],
+        "bob",
+        &[(a1, "alice")],
+        vec![JointEvent::Action(vec![JointEvent::Mutate {
+            performer: "bob".into(),
+            old: a1,
+            new: a2,
+            nullifier: n1,
+            key: KeyAnnotation::Inherited,
+        }])],
+    )
+    .unwrap_err();
+    assert!(format!("{err}").contains("does not hold"));
+
+    let err = joint(
+        &["alice", "bob"],
+        "bob",
+        &[(a1, "alice")],
+        vec![JointEvent::Action(vec![
+            JointEvent::Transfer {
+                sender: "alice".into(),
+                receiver: "bob".into(),
+                old: a1,
+                new: a2,
+                nullifier: n1,
+            },
+            JointEvent::Insert {
+                minter: "bob".into(),
+                new: test_hash(4),
+            },
+        ])],
+    )
+    .unwrap_err();
+    assert!(format!("{err}").contains("sole event"));
+}
+
+// The custody invariant: every survivor has exactly one authorised
+// owner. An unclassified key write cannot be a survivor's last key
+// event, `Inherited` propagates the poison, and a fresh key event
+// (here a transfer to self) repairs it.
+#[test]
+fn joint_transaction_enforces_sole_custody_of_survivors() {
+    let (h1, h2, h3) = (test_hash(1), test_hash(2), test_hash(3));
+    let (n1, n2) = (test_hash(4), test_hash(5));
+
+    let unknown_mutate = JointEvent::Action(vec![JointEvent::Mutate {
+        performer: "alice".into(),
+        old: h1,
+        new: h2,
+        nullifier: n1,
+        key: KeyAnnotation::Unknown,
+    }]);
+
+    let err = joint(
+        &["alice"],
+        "alice",
+        &[(h1, "alice")],
+        vec![unknown_mutate.clone()],
+    )
+    .unwrap_err();
+    assert!(format!("{err}").contains("unclassified key write"));
+
+    let inherited_after = JointEvent::Action(vec![JointEvent::Mutate {
+        performer: "alice".into(),
+        old: h2,
+        new: h3,
+        nullifier: n2,
+        key: KeyAnnotation::Inherited,
+    }]);
+    let err = joint(
+        &["alice"],
+        "alice",
+        &[(h1, "alice")],
+        vec![unknown_mutate.clone(), inherited_after],
+    )
+    .unwrap_err();
+    assert!(format!("{err}").contains("unclassified key write"));
+
+    let fresh_after = JointEvent::Action(vec![JointEvent::Mutate {
+        performer: "alice".into(),
+        old: h2,
+        new: h3,
+        nullifier: n2,
+        key: KeyAnnotation::Fresh,
+    }]);
+    let jt = joint(
+        &["alice"],
+        "alice",
+        &[(h1, "alice")],
+        vec![unknown_mutate.clone(), fresh_after],
+    )
+    .unwrap();
+    assert_eq!(jt.final_custody()[&h3], "alice");
+
+    let repair = JointEvent::transfer_leg("alice", "alice", h2, h3, n2);
+    let jt = joint(
+        &["alice"],
+        "alice",
+        &[(h1, "alice")],
+        vec![unknown_mutate, repair],
+    )
+    .unwrap();
+    assert_eq!(jt.final_custody()[&h3], "alice");
+}
+
+#[test]
+fn joint_transaction_serde_round_trip() {
+    let (a1, a2, n1) = (test_hash(1), test_hash(2), test_hash(3));
+    let jt = joint(
+        &["alice", "bob"],
+        "bob",
+        &[(a1, "alice")],
+        vec![JointEvent::transfer_leg("alice", "bob", a1, a2, n1)],
+    )
+    .unwrap();
+
+    let encoded = serde_json::to_string(&jt).unwrap();
+    let decoded: JointTransaction = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded.participants(), jt.participants());
+    assert_eq!(decoded.finalizer(), jt.finalizer());
+    assert_eq!(decoded.inputs(), jt.inputs());
+    assert_eq!(decoded.events(), jt.events());
+    assert_eq!(decoded.plan().tx_final(), jt.plan().tx_final());
+    assert_eq!(decoded.final_custody(), jt.final_custody());
+
+    // A document naming an infeasible assignment fails at
+    // deserialization, not at first use.
+    let mut doc: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    doc["finalizer"] = "carol".into();
+    let err =
+        serde_json::from_value::<JointTransaction>(doc).expect_err("non-participant finalizer");
+    assert!(format!("{err}").contains("not a participant"));
 }

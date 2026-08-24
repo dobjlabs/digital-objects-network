@@ -4,9 +4,14 @@
 //! txlib below this defines what a transaction is and how one party
 //! builds and finalizes it. It is party-blind: a mutation side there
 //! says whether the builder can open a state, never whose it is. This
-//! crate owns the party, and holds the three things that only exist
-//! because the private data is split across several of them:
+//! crate owns the party, and holds what only exists because the
+//! private data is split across several of them:
 //!
+//! - `transaction` -- the deal itself as one authored value: the
+//!   participants, the finalizer, inputs with their holders, and the
+//!   labeled event list. Its constructor enforces producer feasibility
+//!   and the key-custody invariant, and the plan and the graph are its
+//!   derived views.
 //! - `contribute` -- what a holder proves about its own objects so
 //!   another party can assemble over them, and the receive-side
 //!   validation that rejects a mismatched bundle at the wire rather
@@ -29,9 +34,11 @@
 mod contribute;
 pub mod graph;
 mod plan;
+mod transaction;
 
 pub use contribute::{ObjectOpenings, SpendAuthorization, TransferAcceptance, TransferOffer};
 pub use plan::{PlannedEvent, TxPlan};
+pub use transaction::{InputState, JointEvent, JointTransaction, KeyAnnotation};
 
 #[cfg(test)]
 mod tests;
