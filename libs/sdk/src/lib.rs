@@ -37,7 +37,7 @@ mod tests;
 
 pub use error::SdkError;
 use manifest::Manifest;
-pub use requirements::FieldFacts;
+pub use requirements::{FieldFacts, FieldWrites, ObjectIdentity, Pin};
 use utils::native_pred_to_op;
 
 /// Shared reference with interior mutability for anything that could be used as an argument to a
@@ -56,6 +56,25 @@ pub enum Dependency {
 enum Intro {
     Vdf,      // (n_iters, input, work)
     LtEqU256, // (lhs, rhs)
+}
+
+impl Intro {
+    /// Which args name the object the intro constrains. Kept beside the
+    /// arg lists above so a reordering cannot silently desync the
+    /// analysis that reads them by position.
+    fn subject_args(&self) -> &'static [usize] {
+        match self {
+            Self::Vdf => &[1],
+            Self::LtEqU256 => &[0, 1],
+        }
+    }
+    /// Which arg carries the intro's result, for intros that produce one.
+    fn output_arg(&self) -> Option<usize> {
+        match self {
+            Self::Vdf => Some(2),
+            Self::LtEqU256 => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1928,7 +1947,8 @@ pub struct ActionObjectRef {
     pub(crate) varname: String,
     /// What the action's own statements demand of this object's fields.
     /// Shared, because a sub-action's refs are spliced into every caller.
-    pub(crate) fields: requirements::ObjectFacts,
+    pub(crate) fields: requirements::ObjectFields,
+    pub(crate) identity: ObjectIdentity,
 }
 
 impl ActionObjectRef {
@@ -1944,7 +1964,21 @@ impl ActionObjectRef {
     pub fn field_facts(&self) -> impl Iterator<Item = (&str, &FieldFacts)> {
         self.fields
             .iter()
-            .map(|(field, facts)| (field.as_ref(), facts))
+            .map(|entry| (entry.name.as_ref(), &entry.facts))
+    }
+
+    /// What the action writes into this object's fields, in field-name
+    /// order. Describes the state it leaves behind, where
+    /// [`Self::field_facts`] describes the state it consumes.
+    pub fn field_writes(&self) -> impl Iterator<Item = (&str, &FieldWrites)> {
+        self.fields
+            .iter()
+            .map(|entry| (entry.name.as_ref(), &entry.writes))
+    }
+
+    /// The crypto the action applies to this object's identity.
+    pub fn identity(&self) -> ObjectIdentity {
+        self.identity
     }
 }
 
@@ -2112,13 +2146,14 @@ impl ActionMeta {
             match inst {
                 Inst::Object { io, obj, class, .. } => {
                     let varname = obj.borrow().var_name().to_string();
+                    let required = facts.get(&varname);
                     let r = ActionObjectRef {
                         io: *io,
                         class: class.clone(),
-                        fields: facts
-                            .get(&varname)
-                            .cloned()
+                        fields: required
+                            .map(|r| r.fields.clone())
                             .unwrap_or_else(|| Vec::new().into()),
+                        identity: required.map(|r| r.identity).unwrap_or_default(),
                         varname,
                     };
                     if io.consumes() {

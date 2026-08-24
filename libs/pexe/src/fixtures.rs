@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use pod2::middleware::{EMPTY_HASH, EMPTY_VALUE, Hash, StrKey, Value, containers::Array};
 use pod2utils::{dict, rand_raw_value};
-use sdk::{ActionMeta, ActionObjectRef, FieldFacts, SdkModule, SpendableObject};
+use sdk::{ActionMeta, ActionObjectRef, FieldFacts, Pin, SdkModule, SpendableObject};
 use txlib::{GroundingWitness, STABLE_IDENTIFIER_FIELD, StateHeader, with_stable_identifier};
 
 /// Mint one synthetic instance for each object `action` consumes,
@@ -40,7 +40,8 @@ pub fn mint_action_inputs(
 /// What an action demands of one field, once its facts are collapsed to
 /// a single answer.
 enum Chosen<'a> {
-    Exact(i64),
+    Int(i64),
+    Text(&'a str),
     Shared { group: &'a str, integer: bool },
     AnyInt,
     Any,
@@ -48,24 +49,28 @@ enum Chosen<'a> {
 
 /// Collapse one field's facts. `Err` carries the values that cannot be
 /// reconciled.
-fn choose(facts: &FieldFacts) -> Result<Chosen<'_>, BTreeSet<i64>> {
-    let mut pinned = facts.pinned.iter().copied();
-    match (pinned.next(), pinned.next()) {
-        (Some(pin), None) => match facts.min {
-            // A pin below a floor the same action demands.
-            Some(min) if pin < min => Err([pin, min].into_iter().collect()),
-            _ => Ok(Chosen::Exact(pin)),
-        },
-        // A bound is satisfied at its floor, and an equality group with a
+fn choose(facts: &FieldFacts) -> Result<Chosen<'_>, BTreeSet<Pin>> {
+    let mut pinned = facts.pinned.iter();
+    match (pinned.next(), pinned.next(), facts.min) {
+        // A pin the same action's own floor rules out.
+        (Some(Pin::Int(v)), None, Some(min)) if *v < min => {
+            Err([Pin::Int(*v), Pin::Int(min)].into_iter().collect())
+        }
+        (Some(Pin::Text(t)), None, Some(min)) => {
+            Err([Pin::Text(t.clone()), Pin::Int(min)].into_iter().collect())
+        }
+        (Some(Pin::Int(v)), None, _) => Ok(Chosen::Int(*v)),
+        (Some(Pin::Text(t)), None, _) => Ok(Chosen::Text(t)),
+        // A floor is satisfied at the floor, and an equality group with a
         // floor is satisfied by every member taking it.
-        (None, _) => Ok(match (facts.min, facts.group.as_deref()) {
-            (Some(min), _) => Chosen::Exact(min),
-            (None, Some(group)) => Chosen::Shared {
+        (None, _, Some(min)) => Ok(Chosen::Int(min)),
+        (None, _, None) => Ok(match facts.group.as_deref() {
+            Some(group) => Chosen::Shared {
                 group,
                 integer: facts.integer,
             },
-            (None, None) if facts.integer => Chosen::AnyInt,
-            (None, None) => Chosen::Any,
+            None if facts.integer => Chosen::AnyInt,
+            None => Chosen::Any,
         }),
         _ => Err(facts.pinned.clone()),
     }
@@ -79,7 +84,7 @@ fn report_unsatisfiable(action_name: &str, inputs: &[&ActionObjectRef]) -> Resul
     for (slot, obj) in inputs.iter().enumerate() {
         for (field, facts) in obj.field_facts() {
             if let Err(values) = choose(facts) {
-                let values: Vec<String> = values.iter().map(|v| v.to_string()).collect();
+                let values: Vec<String> = values.iter().map(Pin::to_string).collect();
                 bad.push(format!(
                     "  input {slot} `{}` ({}): field `{field}` is required to be {}",
                     obj.varname(),
@@ -127,7 +132,8 @@ fn mint_object<'a>(
             continue;
         }
         let value = match choose(facts) {
-            Ok(Chosen::Exact(v)) => Value::from(v),
+            Ok(Chosen::Int(v)) => Value::from(v),
+            Ok(Chosen::Text(t)) => Value::from(t),
             // Mock mode drops the constraints that would otherwise bind
             // an unconstrained field to a real intro output, so any value
             // of the right kind does.
