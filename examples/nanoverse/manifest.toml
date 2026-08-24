@@ -2,7 +2,7 @@
 name = "nanoverse"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build examples/nanoverse`.
-module_hash = "0c8433e0c10bd10dd8ef54f9b58dd69bb6825040a6033d23c014243469b61a84"
+module_hash = "7363a92115e9b38c8d5d78a9ce3abd7451e7e5400a3bcbdd131656bf9de0f21a"
 
 [[classes]]
 name = "ship"

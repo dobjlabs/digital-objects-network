@@ -268,7 +268,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "b7492be2ac0298baddeb7647f0bace3a3127fc1e45e2b3219fcf0706ca7fd732"
+        module_hash = "e886019db92b3b995ae38e9184b3842a6fa8658776d8fe5ee4c0ce7cacc49ad1"
 
         [[classes]]
         name = "Log"
@@ -393,6 +393,7 @@ IsFooFromJustOutput(state, state_header, chain0, chain, private: io JustOutputIO
 
 IsFoo(state, state_header StateHeader, chain0, chain) = OR(
   IsFooFromJustOutput(state, state_header, chain0, chain)
+  rk::Rekey(state, chain0, chain, @self_predicate(IsFoo))
 )"#;
     assert!(
         module.podlang_src.contains(expected),
@@ -450,10 +451,12 @@ IsWoodFromLogToWood(state, state_header, chain0, chain, private: io LogToWoodIO)
 
 IsLog(state, state_header StateHeader, chain0, chain) = OR(
   IsLogFromLogToWood(state, state_header, chain0, chain)
+  rk::Rekey(state, chain0, chain, @self_predicate(IsLog))
 )
 
 IsWood(state, state_header StateHeader, chain0, chain) = OR(
   IsWoodFromLogToWood(state, state_header, chain0, chain)
+  rk::Rekey(state, chain0, chain, @self_predicate(IsWood))
 )"#;
     assert!(
         module.podlang_src.contains(expected),
@@ -567,6 +570,7 @@ IsFooFromUseFoo(state, state_header, chain0, chain, private: io UseFooIO) = AND(
 
 IsFoo(state, state_header StateHeader, chain0, chain) = OR(
   IsFooFromUseFoo(state, state_header, chain0, chain)
+  rk::Rekey(state, chain0, chain, @self_predicate(IsFoo))
 )"#;
     assert!(
         module.podlang_src.contains(expected),
@@ -945,7 +949,7 @@ fn test_sdk_state_header() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "a8ae566dddbe81cdf1f7d15396eadb748cdf4f0a8976936c406199b556d62c10"
+        module_hash = "34bb2d3c2baeccd532cb02405a01b80a06f8265c3f7346d1e6123b6c0b63fb32"
 
         [[classes]]
         name = "Ticker"
@@ -2459,4 +2463,99 @@ fn test_unsafe_state_restored_after_caught_error() {
         result.objs::<1>()[0].obj.get(&StrKey::from("key")).unwrap(),
         Some(Value::from(42))
     );
+}
+
+/// Prove Rekey end to end through an SDK-generated class guard.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_generated_class_rekey() {
+    let craft_src = r#"
+        fn SpawnFoo(action) {
+            var foo = action.output("Foo");
+            foo.set([["durability", 100]]);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["SpawnFoo"])
+        .unwrap();
+
+    let mut state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnFoo", vec![]).unwrap();
+    let foo_tx = res.tx.clone();
+    let [foo] = res.objs();
+    apply_tx(&mut state, &foo_tx);
+
+    let mut ctx = BuildContext {
+        builder: MultiPodBuilder::new(&Params::default(), &VDSet::new(&[])),
+        modules: vec![
+            Arc::new(txlib::predicates::events_module()),
+            Arc::new(txlib::predicates::rekey_module()),
+            Arc::new(txlib::predicates::module()),
+            module.module().clone(),
+        ],
+    };
+    let inputs = vec![foo.obj.clone()];
+    let witness = grounding_witness(&state, &[foo.obj.commitment()]);
+    let mut tx = TxBuilder::new(&mut ctx, &inputs, witness);
+
+    let receiver_key = Value::from(pod2utils::rand_raw_value());
+    let scope = tx.begin_action();
+    let (moved, st_rekey, h) = tx.rekey(&mut ctx, &foo.obj, receiver_key.clone());
+    let n_action_branches = module
+        .classes()
+        .iter()
+        .find(|c| c.name == "Foo")
+        .unwrap()
+        .actions
+        .len();
+    let mut premises = vec![Statement::None; n_action_branches + 1];
+    premises[n_action_branches] = st_rekey;
+    let header_array = tx.state_header().array();
+    let st_guard = ctx
+        .apply_custom_pred(
+            false,
+            "IsFoo",
+            map!({"state_header" => header_array}),
+            premises,
+        )
+        .unwrap();
+    tx.set_guard(h, st_guard);
+    tx.end_action(scope);
+
+    let (st, tx_out, _) = tx.finalize(&mut ctx).unwrap();
+    ctx.builder.reveal(&st).unwrap();
+    let pod = prove(ctx.builder, &MockProver {});
+    pod.pod.verify().unwrap();
+
+    assert!(
+        tx_out
+            .created
+            .contains(&Value::from(moved.clone()))
+            .unwrap()
+    );
+    assert!(
+        !tx_out
+            .created
+            .contains(&Value::from(foo.obj.commitment()))
+            .unwrap()
+    );
+    assert!(
+        tx_out
+            .nullifiers
+            .contains(&Value::from(txlib::compute_nullifier(&foo.obj)))
+            .unwrap()
+    );
+    assert_eq!(
+        moved.get(&StrKey::from("key")).unwrap().unwrap(),
+        receiver_key
+    );
+    for entry in foo.obj.iter() {
+        let (key, value) = entry.unwrap();
+        if key != "key" {
+            assert_eq!(moved.get(&StrKey::from(key)).unwrap().unwrap(), value);
+        }
+    }
+    assert_eq!(tx_out.nullifiers.iter().count(), 1);
 }
