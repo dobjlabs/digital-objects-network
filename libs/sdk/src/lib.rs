@@ -417,6 +417,9 @@ macro_rules! st_methods {
 #[derive(Default, Debug)]
 struct VarState {
     ts: usize,
+    /// Set by an operation that consumes the var's dict without recording
+    /// an `Inst` for it, which only `pow_obj_grind` does.
+    dict_read: bool,
 }
 
 /// This handler is accessible in the action script function to define action operations.  It
@@ -465,6 +468,73 @@ impl ActionContext {
     fn inc_t_var(&mut self, var: &str) -> RuntimeResult<()> {
         let state = self.var_state.get_mut(var).expect("var {var} exists");
         state.ts += 1;
+        Ok(())
+    }
+    fn mark_dict_read(&mut self, var: &str) {
+        if let Some(state) = self.var_state.get_mut(var) {
+            state.dict_read = true;
+        }
+    }
+    /// Reject a `set` that cannot hold. `set` writes its initializer into
+    /// the object's dict without advancing the object's ts, so any
+    /// earlier operation that pinned the dict's exact contents would then
+    /// disagree with it. A repeated `set` is not such an operation: it
+    /// only asserts containment, which survives later inserts.
+    ///
+    /// Only an output is settable. On an input or a mutate the write
+    /// lands in a pre-state fixed by the state root the transaction
+    /// grounds against.
+    fn check_settable(&self, var: &str) -> RuntimeResult<()> {
+        if var == "?" {
+            return Err("set: bind the object with `var` first".into());
+        }
+        let io = self.insts.iter().find_map(|inst| match inst {
+            Inst::Object { io, obj, .. } if obj.borrow().var_name() == var => Some(*io),
+            _ => None,
+        });
+        match io {
+            Some(ObjectIO::Output) => {}
+            Some(_) => {
+                return Err(format!(
+                    "set on {var}: only an output object can be initialized with set"
+                )
+                .into());
+            }
+            None => {
+                return Err(format!(
+                    "set on {var}: expected an output object declared in this action"
+                )
+                .into());
+            }
+        }
+        let names_var = |r: &Ref| match &*r.borrow() {
+            VarOrValue::Var(v) => v.name == var,
+            VarOrValue::Value(_) => false,
+        };
+        let pinned_by = self.insts.iter().find_map(|inst| match inst {
+            Inst::Update { obj, value, .. } => (obj == var || names_var(value)).then_some("update"),
+            Inst::Set { kvs, .. } => kvs
+                .iter()
+                .any(|(_, v)| names_var(v))
+                .then_some("another object's set"),
+            Inst::Statement { args, .. } => args.iter().any(names_var).then_some("a statement"),
+            Inst::Intro { args, .. } => args.iter().any(names_var).then_some("an intro pod"),
+            Inst::Object { .. } | Inst::SubAction { .. } => None,
+        });
+        let pinned_by = pinned_by.or_else(|| {
+            self.var_state
+                .get(var)
+                .is_some_and(|s| s.dict_read)
+                .then_some("pow_obj_grind")
+        });
+        if let Some(op) = pinned_by {
+            return Err(format!(
+                "set on {var}: {op} already committed to this object's contents, so the set \
+                 would change a dict that has been proved about; move it directly below the \
+                 output declaration"
+            )
+            .into());
+        }
         Ok(())
     }
     /// Per-var max ts, including the extra ts an Output reserves for
@@ -1370,6 +1440,9 @@ impl ActionHandle {
         // Target is a full u256 (Raw). To build one with a desired top-limb
         // difficulty, scripts use `action.top_limb_u256(n)`.
         let [obj, target] = validate_args([(obj, Type::Dict), (target, Type::Raw)])?;
+        if let VarOrValue::Var(var) = &*obj.borrow() {
+            self.0.borrow_mut().mark_dict_read(&var.name);
+        }
         // For now we assume that obj is var, and thus return a key that is also var
         let key = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
@@ -1568,27 +1641,31 @@ impl ArgHandle {
     fn set(self, kvs: Dynamic) -> RuntimeResult<()> {
         type_check_args([(&self, Type::Dict)])?;
         let kvs = dynamic_to_kvs(kvs)?;
-        let mut arg = self.arg.borrow_mut();
-        if let VarOrValue::Var(var) = &*arg {
-            let var_name = var.name.clone();
-            let mut ctx = self.ctx.0.borrow_mut();
-            ctx.assert_unsafe(false)?;
-            let mut final_dict: Option<Dictionary> = None;
-            if ctx.exe_ctx.is_some() {
-                for (key, value) in &kvs {
-                    let value = value.borrow().as_value().clone();
-                    arg.mut_dict(|obj| {
-                        obj.insert(&StrKey::from(key), &value).expect("TODO");
-                    });
-                }
-                final_dict = Some(arg.to_dict());
+        // The guard walks the action's recorded Insts, which alias this
+        // object's Ref, so resolve the name and drop the borrow first.
+        let var_name = match &*self.arg.borrow() {
+            VarOrValue::Var(var) => var.name.clone(),
+            VarOrValue::Value(_) => return Ok(()),
+        };
+        let mut ctx = self.ctx.0.borrow_mut();
+        ctx.assert_unsafe(false)?;
+        ctx.check_settable(&var_name)?;
+        let mut final_dict: Option<Dictionary> = None;
+        if ctx.exe_ctx.is_some() {
+            let mut arg = self.arg.borrow_mut();
+            for (key, value) in &kvs {
+                let value = value.borrow().as_value().clone();
+                arg.mut_dict(|obj| {
+                    obj.insert(&StrKey::from(key), &value).expect("TODO");
+                });
             }
-            ctx.insts.push(Inst::Set {
-                obj: var_name,
-                kvs,
-                final_dict,
-            });
+            final_dict = Some(arg.to_dict());
         }
+        ctx.insts.push(Inst::Set {
+            obj: var_name,
+            kvs,
+            final_dict,
+        });
         Ok(())
     }
     fn get(self, _key: String) -> RuntimeResult<ArgHandle> {

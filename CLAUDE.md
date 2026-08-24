@@ -167,7 +167,7 @@ The driver does not cache compiled modules between calls — every `Driver::exec
 **Host API** (registered via `register_fn` in `libs/sdk/src/lib.rs`):
 
 - On `action`: `input(class)`, `output(class)`, `mutate(class)`, `subaction(name)`, `random()`, `intro_vdf(iters, obj)`, `intro_lt_eq_u256(obj, target)`, `pow_obj_grind(obj, target)`, `top_limb_u256(n)`, plus one `st_*` per pod2 native predicate (`st_gt`, `st_sum`, `st_dict_contains`, `st_set_insert`, ... — the table in `libs/sdk/README.md` lists all of them; `SignedBy` and `PublicKey` have no host method).
-- On object handles: `set([[k,v],...])` (initializer for literals), `update(k,v)` (writes a witness-derived value), indexer `obj.<field>`. A `get(k)` method is registered but unimplemented; field reads go through the indexer.
+- On object handles: `set([[k,v],...])` (literal initializer, only on an untouched output), `update(k,v)` (writes a witness-derived value), indexer `obj.<field>`. A `get(k)` method is registered but unimplemented; field reads go through the indexer.
 - In scope as a constant: `state_header` — the grounding state root as a record (`block_number`, `block_timestamp`, `block_hash`, `created`, `nullifiers`, `prior_state_history`). Field reads (`state_header.block_timestamp`) emit anchored statements against the action's public `state_header` arg, which txlib pins from `TxFinalized` down through guards and bridges. Note it describes the (recent) grounding root, not the inclusion block — see `libs/sdk/README.md` for the timing caveat.
 
 **Constraint:** the event tree must be the same shape every run. Branching that emits _different events_ on different inputs is unsupported. Branching on wildcard values inside `unsafe { ... }` is fine.
