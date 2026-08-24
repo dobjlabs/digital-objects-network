@@ -20,7 +20,7 @@
 //! stored script on demand and memoizes the result in a thread-local cache, so
 //! repeat runs of an action do not recompile the plugin and its imports.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -83,6 +83,7 @@ impl PexeCatalog {
         // chars (`/`, `\`, `..`) that could otherwise let a malicious or
         // misconfigured plugin escape the objects directory.
         let mut seen_plugin_names: HashMap<String, usize> = HashMap::new();
+        let mut seen_module_hashes: HashMap<Hash, usize> = HashMap::new();
         for (idx, plugin) in plugins.iter().enumerate() {
             let name = &plugin.manifest.plugin.name;
             validate_plugin_name(name).map_err(|err| {
@@ -91,9 +92,20 @@ impl PexeCatalog {
                     plugin.path.display()
                 )
             })?;
+            // Names have to stay unique because they address actions and
+            // classes for the user, and hashes because they are what an
+            // import resolves by: two archives declaring one hash would
+            // make which module an importer gets depend on scan order.
             if let Some(prior) = seen_plugin_names.insert(name.clone(), idx) {
                 return Err(anyhow!(
                     "duplicate plugin name {name:?}: already registered by {} (other entry at index {prior})",
+                    plugins[prior].path.display(),
+                ));
+            }
+            let module_hash = plugin.manifest.plugin.module_hash;
+            if let Some(prior) = seen_module_hashes.insert(module_hash, idx) {
+                return Err(anyhow!(
+                    "duplicate module_hash {module_hash:#} declared by {name:?} and by {} (other entry at index {prior})",
                     plugins[prior].path.display(),
                 ));
             }
@@ -112,7 +124,7 @@ impl PexeCatalog {
         for plugin in &plugins {
             let plugin_name = plugin.manifest.plugin.name.clone();
             let module = resolver
-                .load(&plugin_name)
+                .load_pinned(plugin.manifest.plugin.module_hash)
                 .map_err(|err| anyhow!("failed to load plugin {plugin_name}: {err}"))?;
             plugin_name_by_batch.insert(module.module().batch.id(), plugin_name);
         }
@@ -125,7 +137,7 @@ impl PexeCatalog {
         for (plugin_idx, plugin) in plugins.iter().enumerate() {
             let plugin_name = plugin.manifest.plugin.name.clone();
             let module = resolver
-                .load(&plugin_name)
+                .load_pinned(plugin.manifest.plugin.module_hash)
                 .map_err(|err| anyhow!("failed to load plugin {plugin_name}: {err}"))?;
             let podlang_src = module.podlang_src().to_string();
             if !combined_podlang.is_empty() {
@@ -313,32 +325,31 @@ impl PexeCatalog {
     }
 
     /// The compiled module for `plugin`, taken from this thread's cache
-    /// when the entry there was compiled from the same manifest. A
-    /// reinstall replaces its plugin's entry rather than adding one, so
-    /// the cache stays one module per plugin name however many times a
-    /// daemon hot-reloads.
+    /// when it is already there. Inserting drops any module no longer
+    /// installed, so a daemon that hot-reloads plugins keeps at most one
+    /// entry per installed archive rather than one per version ever
+    /// seen.
     fn compiled_module(&self, plugin: &Plugin) -> Result<Rc<sdk::SdkModule>> {
-        let name = plugin.manifest.plugin.name.as_str();
+        let plugin_name = plugin.manifest.plugin.name.as_str();
         let module_hash = plugin.manifest.plugin.module_hash;
-        let cached = COMPILED_MODULES.with(|cache| {
-            cache
-                .borrow()
-                .get(name)
-                .filter(|(hash, _)| *hash == module_hash)
-                .map(|(_, module)| module.clone())
-        });
+        let cached = COMPILED_MODULES.with(|cache| cache.borrow().get(&module_hash).cloned());
         if let Some(module) = cached {
             return Ok(module);
         }
         let sdk = Sdk::default();
         let mut resolver = plugin_resolver(&sdk, &self.plugins);
         let module = resolver
-            .load(name)
-            .map_err(|err| anyhow!("failed to reload plugin {name} for execution: {err}"))?;
+            .load_pinned(module_hash)
+            .map_err(|err| anyhow!("failed to reload plugin {plugin_name} for execution: {err}"))?;
+        let installed: HashSet<Hash> = self
+            .plugins
+            .iter()
+            .map(|plugin| plugin.manifest.plugin.module_hash)
+            .collect();
         COMPILED_MODULES.with(|cache| {
-            cache
-                .borrow_mut()
-                .insert(name.to_string(), (module_hash, module.clone()))
+            let mut cache = cache.borrow_mut();
+            cache.retain(|hash, _| installed.contains(hash));
+            cache.insert(module_hash, module.clone());
         });
         Ok(module)
     }
@@ -392,25 +403,28 @@ impl ActionCatalog for PexeCatalog {
 }
 
 thread_local! {
-    /// Modules compiled by `execute_action`, keyed by plugin name and
-    /// tagged with the `module_hash` its manifest pinned (validated
-    /// against the compiled batch at load, so it identifies what was
-    /// compiled). A module holds an `Rc<Engine>`, so it cannot live in
-    /// the catalog itself; keeping it per thread still spares every
+    /// Modules compiled by `execute_action`, keyed by the `module_hash`
+    /// their manifest declared, which loading validated against the
+    /// compiled batch. A module holds an `Rc<Engine>`, so it cannot live
+    /// in the catalog itself; keeping it per thread still spares every
     /// later run of the same action a podlang compile of the plugin
     /// *and its whole transitive import chain*.
-    static COMPILED_MODULES: std::cell::RefCell<HashMap<String, (Hash, Rc<sdk::SdkModule>)>> =
+    static COMPILED_MODULES: std::cell::RefCell<HashMap<Hash, Rc<sdk::SdkModule>>> =
         std::cell::RefCell::new(HashMap::new());
 }
 
 /// Resolver over the installed plugins: each loads once, dependencies
 /// before importers, with cycles and hash-pin mismatches rejected.
+/// Every installed archive was produced by a build, so its pins are
+/// stamped and are what imports resolve by; a plugin's claimed name
+/// reaches nothing here.
 fn plugin_resolver<'a>(sdk: &'a Sdk, plugins: &'a [Plugin]) -> sdk::ImportResolver<'a> {
     sdk::ImportResolver::new(
         sdk,
         plugins
             .iter()
             .map(|plugin| (&plugin.manifest, plugin.script.as_str())),
+        sdk::ImportLookup::Pin,
     )
 }
 
@@ -859,13 +873,19 @@ fn WrapFoo(action) {
             .iter()
             .map(|bytes| pexe::unpack(bytes).expect("plugin unpacks"))
             .collect();
+        let module_hash = sources
+            .iter()
+            .find(|(manifest, _)| manifest.plugin.name == name)
+            .map(|(manifest, _)| manifest.plugin.module_hash)
+            .unwrap_or_else(|| panic!("{name} is among the packed plugins"));
         sdk::ImportResolver::new(
             sdk,
             sources
                 .iter()
                 .map(|(manifest, script)| (manifest, script.as_str())),
+            sdk::ImportLookup::Pin,
         )
-        .load(name)
+        .load_pinned(module_hash)
         .unwrap_or_else(|err| panic!("{name} loads: {err}"))
     }
 
@@ -1018,18 +1038,20 @@ description = "run alpha::MakeFoo and box the result"
             .err()
             .expect("catalog without the dependency must fail");
         assert!(
-            err.to_string().contains("not among the available plugins"),
+            err.to_string()
+                .contains("no available plugin declares module_hash"),
             "unexpected error: {err}"
         );
     }
 
+    /// Claiming a dependency's name gets an archive nowhere: imports
+    /// resolve by pin, so an impostor is not consulted and then
+    /// rejected, it is never a candidate at all.
     #[test]
-    fn test_cross_plugin_pin_mismatch_fails_catalog() {
+    fn test_cross_plugin_name_impostor_is_not_reachable() {
         let alpha = synthetic_plugin_bytes("alpha", ALPHA_SCRIPT);
         let gamma = gamma_plugin_bytes(&alpha);
-        // Install a different plugin under the same name: beta's script
-        // compiles to a different batch id, so gamma's pin no longer
-        // matches the module the name resolves to.
+        // Same claimed name, different script, honestly stamped.
         let impostor_alpha = synthetic_plugin_bytes("alpha", BETA_SCRIPT);
         let err = PexeCatalog::from_bytes(
             [
@@ -1039,9 +1061,36 @@ description = "run alpha::MakeFoo and box the result"
             true,
         )
         .err()
-        .expect("catalog with a mismatched import pin must fail");
+        .expect("an impostor must not satisfy gamma's import");
         assert!(
-            err.to_string().contains("manifest pins module_hash"),
+            err.to_string()
+                .contains("no available plugin declares module_hash"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// The declared `[plugin] module_hash` is only an index into the
+    /// installed archives. An archive that declares the hash an importer
+    /// pins but compiles to something else is caught when it compiles.
+    #[test]
+    fn test_cross_plugin_lying_declared_hash_fails_catalog() {
+        let alpha = synthetic_plugin_bytes("alpha", ALPHA_SCRIPT);
+        let gamma = gamma_plugin_bytes(&alpha);
+        // Alpha's manifest, so it declares alpha's hash and gamma's pin
+        // finds it, over beta's script, which compiles to another batch.
+        let (alpha_manifest, _) = pexe::unpack_raw(&alpha).expect("alpha unpacks");
+        let liar = pexe::pack(&alpha_manifest, BETA_SCRIPT).expect("pack liar");
+        let err = PexeCatalog::from_bytes(
+            [
+                (PathBuf::from("alpha.pexe"), liar),
+                (PathBuf::from("gamma.pexe"), gamma),
+            ],
+            true,
+        )
+        .err()
+        .expect("a declared hash that the script does not compile to must fail");
+        assert!(
+            err.to_string().contains("manifest.plugin.module_hash"),
             "unexpected error: {err}"
         );
     }

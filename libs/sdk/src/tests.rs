@@ -2070,8 +2070,12 @@ fn test_import_cycle_rejected() {
         }
     "#;
     let sdk = Sdk::default();
-    let mut resolver = ImportResolver::new(&sdk, [(&ouro, script), (&boros, script)]);
-    let err = resolver.load("ouro").err().expect("cycle must fail");
+    let mut resolver = ImportResolver::new(
+        &sdk,
+        [(&ouro, script), (&boros, script)],
+        ImportLookup::DeclaredName,
+    );
+    let err = resolver.load_named("ouro").err().expect("cycle must fail");
     assert!(
         err.to_string().contains("import cycle"),
         "unexpected error: {err}"

@@ -3310,45 +3310,104 @@ impl Default for Sdk {
     }
 }
 
+/// How an import declaration is matched to one of the candidate
+/// plugins a resolver was built over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportLookup {
+    /// By `[[imports]] module_hash`, matched against each candidate's
+    /// own declared `[plugin] module_hash` and confirmed when that
+    /// candidate compiles. The pin identifies a module; a plugin name
+    /// is a string the plugin chose for itself, so anything reading an
+    /// already-built archive resolves this way.
+    Pin,
+    /// By `[[imports]] name`, matched against each candidate's declared
+    /// plugin name and confirmed against the pin once the candidate
+    /// compiles. Only `pexe build` may use this, because it exists to
+    /// *produce* pins and so cannot look them up: on a first build the
+    /// pin is a placeholder, and after a dependency is edited the pin
+    /// names the previous module.
+    DeclaredName,
+}
+
 /// Loads a set of plugins (manifest + script) in dependency order,
 /// resolving each plugin's declared `[[imports]]` recursively through
 /// `load_module_from_src_manifest` (which validates the hash pins).
 /// Each plugin loads at most once; import cycles are rejected.
+///
+/// Candidates are indexed by both declared name and declared hash, but
+/// neither index is trusted: whichever one `lookup` selects only picks
+/// which candidate to compile, and compiling it validates the manifest
+/// it came from.
 pub struct ImportResolver<'a> {
     sdk: &'a Sdk,
-    sources: HashMap<&'a str, (&'a Manifest, &'a str)>,
-    cache: HashMap<String, Rc<SdkModule>>,
-    loading: Vec<String>,
+    sources: Vec<(&'a Manifest, &'a str)>,
+    /// Into `sources`; first candidate wins on a repeated key.
+    by_name: HashMap<&'a str, usize>,
+    by_hash: HashMap<Hash, usize>,
+    lookup: ImportLookup,
+    cache: HashMap<usize, Rc<SdkModule>>,
+    loading: Vec<usize>,
 }
 
 impl<'a> ImportResolver<'a> {
-    pub fn new(sdk: &'a Sdk, sources: impl IntoIterator<Item = (&'a Manifest, &'a str)>) -> Self {
+    pub fn new(
+        sdk: &'a Sdk,
+        sources: impl IntoIterator<Item = (&'a Manifest, &'a str)>,
+        lookup: ImportLookup,
+    ) -> Self {
+        let sources: Vec<(&'a Manifest, &'a str)> = sources.into_iter().collect();
+        let mut by_name = HashMap::new();
+        let mut by_hash = HashMap::new();
+        for (idx, (manifest, _)) in sources.iter().enumerate() {
+            by_name.entry(manifest.plugin.name.as_str()).or_insert(idx);
+            by_hash.entry(manifest.plugin.module_hash).or_insert(idx);
+        }
         Self {
             sdk,
-            sources: sources
-                .into_iter()
-                .map(|(manifest, script)| (manifest.plugin.name.as_str(), (manifest, script)))
-                .collect(),
+            sources,
+            by_name,
+            by_hash,
+            lookup,
             cache: HashMap::new(),
             loading: Vec::new(),
         }
     }
 
-    /// Load the named plugin, loading its imports first.
-    pub fn load(&mut self, name: &str) -> Result<Rc<SdkModule>, SdkError> {
-        if let Some(module) = self.cache.get(name) {
-            return Ok(module.clone());
-        }
-        if self.loading.iter().any(|n| n == name) {
-            return Err(anyhow!(
-                "plugin import cycle: {} -> {name}",
-                self.loading.join(" -> ")
-            ))?;
-        }
-        let (manifest, script) = self.sources.get(name).copied().ok_or_else(|| {
+    /// Load the candidate declaring `module_hash`, imports first. The
+    /// declared hash is only an index into the candidates; the module
+    /// that comes back has compiled to it.
+    pub fn load_pinned(&mut self, module_hash: Hash) -> Result<Rc<SdkModule>, SdkError> {
+        let idx =
+            self.by_hash.get(&module_hash).copied().ok_or_else(|| {
+                anyhow!("no available plugin declares module_hash {module_hash:#}")
+            })?;
+        self.load_candidate(idx)
+    }
+
+    /// Load the candidate claiming `name`, imports first. Build-time
+    /// only; see [`ImportLookup::DeclaredName`].
+    pub fn load_named(&mut self, name: &str) -> Result<Rc<SdkModule>, SdkError> {
+        let idx = self.by_name.get(name).copied().ok_or_else(|| {
             anyhow!("plugin {name:?} is imported but not among the available plugins")
         })?;
-        self.loading.push(name.to_string());
+        self.load_candidate(idx)
+    }
+
+    fn load_candidate(&mut self, idx: usize) -> Result<Rc<SdkModule>, SdkError> {
+        if let Some(module) = self.cache.get(&idx) {
+            return Ok(module.clone());
+        }
+        if self.loading.contains(&idx) {
+            let mut chain: Vec<&str> = self
+                .loading
+                .iter()
+                .map(|&loading| self.sources[loading].0.plugin.name.as_str())
+                .collect();
+            chain.push(self.sources[idx].0.plugin.name.as_str());
+            return Err(anyhow!("plugin import cycle: {}", chain.join(" -> ")))?;
+        }
+        let (manifest, script) = self.sources[idx];
+        self.loading.push(idx);
         let imports = self.resolve_imports(manifest);
         let result = imports.and_then(|imports| {
             self.sdk
@@ -3356,25 +3415,26 @@ impl<'a> ImportResolver<'a> {
         });
         self.loading.pop();
         let module = result?;
-        self.cache.insert(name.to_string(), module.clone());
+        self.cache.insert(idx, module.clone());
         Ok(module)
     }
 
-    /// Resolve a manifest's declared imports into loaded modules.
+    /// Resolve a manifest's declared imports into loaded modules, each
+    /// bound to the alias the manifest lists it under.
     pub fn resolve_imports(&mut self, manifest: &Manifest) -> Result<Vec<ModuleImport>, SdkError> {
-        manifest
+        let declared_imports: Vec<(String, Hash)> = manifest
             .imports
             .iter()
-            .map(|declared| {
-                // The manifest's `[[imports]] name` is doing two jobs:
-                // the alias this module binds, and the key the plugin
-                // pool is searched by. They are only the same thing
-                // because installed archives are one per plugin name;
-                // pinning by `module_hash` instead would separate them.
-                Ok(ModuleImport {
-                    alias: declared.name.clone(),
-                    module: self.load(&declared.name)?,
-                })
+            .map(|declared| (declared.name.clone(), declared.module_hash))
+            .collect();
+        declared_imports
+            .into_iter()
+            .map(|(alias, module_hash)| {
+                let module = match self.lookup {
+                    ImportLookup::Pin => self.load_pinned(module_hash)?,
+                    ImportLookup::DeclaredName => self.load_named(&alias)?,
+                };
+                Ok(ModuleImport { alias, module })
             })
             .collect()
     }

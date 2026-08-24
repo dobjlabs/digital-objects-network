@@ -13,7 +13,7 @@ use pod2::middleware::{
     CustomPredicateBatch, Hash, NativePredicate, Predicate, PredicateOrWildcard, StatementTmpl,
     StatementTmplArg, Wildcard,
 };
-use sdk::{Sdk, SdkModule, manifest::Manifest};
+use sdk::{ImportLookup, Sdk, SdkModule, manifest::Manifest};
 
 use crate::{PluginSource, read_pexe_file, unpack};
 
@@ -79,10 +79,20 @@ fn load_target(target: &Target<'_>) -> Result<std::rc::Rc<SdkModule>> {
     let (manifest, script) = read_target(target.path)?;
     let sdk = Sdk::default();
     let dep_dirs = crate::dep_search_dirs(target.deps, Path::new(crate::DEFAULT_OUT_DIR), None);
-    let imports = crate::resolve_manifest_imports(&sdk, &manifest, &dep_dirs)?;
+    // Same split as the pin check below: an archive's pins are stamped,
+    // so they are what its imports resolve by, while a source dir's may
+    // be mid-edit and only its declared names can be trusted to find
+    // anything.
     if target.path.is_dir() {
+        let imports = crate::resolve_manifest_imports(
+            &sdk,
+            &manifest,
+            &dep_dirs,
+            ImportLookup::DeclaredName,
+        )?;
         return crate::compile_module(&sdk, &manifest, &script, &imports);
     }
+    let imports = crate::resolve_manifest_imports(&sdk, &manifest, &dep_dirs, ImportLookup::Pin)?;
     sdk.load_module_from_src_manifest(&script, &manifest, &imports)
         .map_err(|err| {
             anyhow!(

@@ -10,7 +10,7 @@ use pexe::{
     resolve_manifest_imports, set_manifest_hash, set_manifest_import_hash, unpack,
 };
 use pod2::middleware::Hash;
-use sdk::{Sdk, manifest::Manifest};
+use sdk::{ImportLookup, Sdk, manifest::Manifest};
 
 /// Release tag + target triple, stamped by build.rs ("dev" outside a release
 /// build). pexe ships in the same release bundle as dobj/dobjd and `dobj
@@ -422,7 +422,9 @@ fn build_one(
     // for them are stamped below, so a stale pin here is a rewrite, not
     // an error.
     let sdk = Sdk::default();
-    let imports = resolve_manifest_imports(&sdk, manifest, dep_dirs)?;
+    // `DeclaredName`: this build is what brings the pins up to date,
+    // so it cannot find its dependencies by them.
+    let imports = resolve_manifest_imports(&sdk, manifest, dep_dirs, ImportLookup::DeclaredName)?;
 
     let mut manifest_toml = source.manifest_toml.clone();
     let mut manifest_rewritten = false;

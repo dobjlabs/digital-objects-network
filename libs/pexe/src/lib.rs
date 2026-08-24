@@ -13,7 +13,7 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use sdk::{ModuleImport, Sdk, manifest::Manifest};
+use sdk::{ImportLookup, ModuleImport, Sdk, manifest::Manifest};
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 pub mod fixtures;
@@ -189,12 +189,18 @@ pub fn dep_search_dirs(
 }
 
 /// Unpack every readable `.pexe` under `dirs` into (manifest, script)
-/// sources for import resolution. Unreadable or malformed archives are
-/// skipped with a log warning so an unrelated broken pexe can't block
-/// building an import-free plugin. The first archive found for a plugin
-/// name wins.
+/// sources for import resolution, in search-path order. Unreadable or
+/// malformed archives are skipped with a log warning so an unrelated
+/// broken pexe can't block building an import-free plugin.
+///
+/// Candidates are not deduplicated here: two archives may claim one
+/// plugin name while only one of them declares the hash an importer
+/// pins, so dropping either would decide resolution before the resolver
+/// knows what is being looked up. [`sdk::ImportResolver`] indexes what
+/// it is given and lets the earliest candidate win per key, which is
+/// how an archive earlier in the search path shadows a later one by
+/// name without hiding it by hash.
 pub fn discover_dep_sources(dirs: &[PathBuf]) -> Vec<(Manifest, String)> {
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sources = Vec::new();
     let dep_paths = dirs.iter().flat_map(|dir| {
         pexe_paths_in(dir).unwrap_or_else(|err| {
@@ -207,11 +213,7 @@ pub fn discover_dep_sources(dirs: &[PathBuf]) -> Vec<(Manifest, String)> {
     });
     for path in dep_paths {
         match read_pexe_file(&path).and_then(|bytes| unpack(&bytes)) {
-            Ok((manifest, script)) => {
-                if seen.insert(manifest.plugin.name.clone()) {
-                    sources.push((manifest, script));
-                }
-            }
+            Ok((manifest, script)) => sources.push((manifest, script)),
             Err(err) => {
                 log::warn!("skipping unreadable pexe {}: {err}", path.display());
             }
@@ -287,12 +289,19 @@ fn visit_imports(
 /// Resolve a manifest's declared `[[imports]]` against already-built
 /// archives found in `dep_dirs`, in `manifest.imports` order. Each
 /// dependency is loaded with its own manifest validated (including its
-/// own import pins); the pins THIS manifest declares for them are the
-/// caller's business, since `pexe build` stamps them.
+/// own import pins).
+///
+/// `lookup` decides how a declaration is matched to an archive.
+/// [`ImportLookup::Pin`] for anything reading a built artifact;
+/// [`ImportLookup::DeclaredName`] for `pexe build`, whose whole job is
+/// to bring those pins up to date and which therefore cannot resolve by
+/// them. Under `DeclaredName` the pin THIS manifest declares is the
+/// caller's business, since the build stamps it afterwards.
 pub fn resolve_manifest_imports(
     sdk: &Sdk,
     manifest: &Manifest,
     dep_dirs: &[PathBuf],
+    lookup: ImportLookup,
 ) -> Result<Vec<ModuleImport>> {
     if manifest.imports.is_empty() {
         return Ok(Vec::new());
@@ -303,6 +312,7 @@ pub fn resolve_manifest_imports(
         sources
             .iter()
             .map(|(manifest, script)| (manifest, script.as_str())),
+        lookup,
     );
     resolver.resolve_imports(manifest).map_err(|err| {
         anyhow!(
@@ -675,14 +685,18 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
             sources
                 .iter()
                 .map(|(manifest, script)| (manifest, script.as_str())),
+            ImportLookup::Pin,
         );
         for (manifest, _) in &sources {
             let name = &manifest.plugin.name;
-            // `load` compiles the plugin and validates its own hash plus
-            // its import pins, so a stale value fails right here.
-            resolver.load(name).unwrap_or_else(|err| {
-                panic!("{name}: stale manifest? re-run `pexe build examples/*`: {err}")
-            });
+            // Resolving by pin is itself part of the check: a committed
+            // `[[imports]]` hash that no example declares fails here,
+            // and compiling validates the rest.
+            resolver
+                .load_pinned(manifest.plugin.module_hash)
+                .unwrap_or_else(|err| {
+                    panic!("{name}: stale manifest? re-run `pexe build examples/*`: {err}")
+                });
         }
     }
 }
