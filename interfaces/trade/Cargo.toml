@@ -1,0 +1,29 @@
+[package]
+name = "trade"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "dobj-trade"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+pod2 = { workspace = true }
+pod2utils = { path = "../../libs/pod2utils" }
+txlib = { path = "../../libs/txlib" }
+joint-tx = { path = "../../libs/joint-tx" }
+sdk = { path = "../../libs/sdk" }
+payload = { path = "../../libs/payload", features = ["test-utils"] }
+driver = { path = "../../libs/driver" }
+pexe = { path = "../../libs/pexe" }
+wire-types = { workspace = true }
+hex = { workspace = true }
+iroh = "1.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "time"] }
+clap = { version = "4", features = ["derive", "env"] }
+bs58 = "0.5"
+env_logger = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
