@@ -5,6 +5,7 @@
 */
 
 use module 0xTX_EVENTS_MODULE_HASH as tx
+use module 0xTX_REKEY_MODULE_HASH as rk
 
 // TODO: Support importing records via `use module`
 record StateHeader = (block_number, block_timestamp, block_hash, created, nullifiers, prior_state_history)
@@ -109,10 +110,15 @@ IsStick(obj, state_header StateHeader, chain_start, chain_end, private: other) =
   CraftSticks(other, obj, chain_start, chain_end)
 )
 
+// A wood pick is transferable: the Rekey branch lets its owner hand
+// control to another party. The self-predicate hash pins the transfer
+// to this class, so a Rekey proven for some other class cannot satisfy
+// this guard.
 IsWoodPick(obj, state_header StateHeader, chain_start, chain_end) = OR(
   SpawnWoodPick(obj, chain_start, chain_end)
   CraftWoodPick(obj, chain_start, chain_end)
   UseWoodPick(obj, chain_start, chain_end)
+  rk::Rekey(obj, chain_start, chain_end, @self_predicate(IsWoodPick))
 )
 
 IsStone(obj, state_header StateHeader, chain_start, chain_end) = OR(
