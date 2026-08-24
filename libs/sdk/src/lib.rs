@@ -389,6 +389,30 @@ fn validate_args<const N: usize>(args_types: [(Dynamic, Type); N]) -> RuntimeRes
     Ok(rs.try_into().expect("len = N"))
 }
 
+/// Declare the host methods that emit one native statement each, and
+/// the one function that registers them. Each row gives the script-side
+/// name, the pod2 predicate, and one argument per statement arg with the
+/// type it is checked against at Load time (`Type::Unk` where any pod2
+/// value goes). Argument order is the predicate's own, so a call reads
+/// like the podlang it renders to. Generating both halves from one table
+/// is what keeps a method from existing in Rust but not in Rhai.
+macro_rules! st_methods {
+    ($($name:ident, $pred:ident, [$($arg:ident: $typ:expr),+ $(,)?]);+ $(;)?) => {
+        impl ActionHandle {
+            $(
+                fn $name(self, $($arg: Dynamic),+) -> RuntimeResult<()> {
+                    let args = validate_args([$(($arg, $typ)),+])?;
+                    self.native_st(NativePredicate::$pred, args.into())
+                }
+            )+
+        }
+
+        fn register_st_methods(engine: &mut Engine) {
+            $( engine.register_fn(stringify!($name), ActionHandle::$name); )+
+        }
+    };
+}
+
 /// Used to track how many updates from mutations a variable takes.
 #[derive(Default, Debug)]
 struct VarState {
@@ -1024,6 +1048,28 @@ impl ActionHandle {
             .iter()
             .map(|o| (o.varname.clone(), 0usize))
             .collect();
+
+        // The anchored form of each arg of a body statement, in arg
+        // order, or None where the arg stays as proved. A whole-dict arg
+        // naming an Object collapsed at this ts lifts to its record slot;
+        // a dict-field arg (`var.key`) lifts to its entry, but only for
+        // callers whose statement was proved with every arg literal
+        // (`lift_keys`) -- ops built from `as_op_arg` already carry the
+        // entry form.
+        // The anchored form the compiled podlang gives this arg, or None
+        // when it renders as a literal or a loose wildcard. A dict-field
+        // ref (`var.key`) resolves to its entry; a whole-container ref
+        // resolves to the record slot its Object collapses to at this ts.
+        let arg_anchor = |arg: &Ref, current_ts: &HashMap<String, usize>| -> Option<OperationArg> {
+            let arg = arg.borrow();
+            match &*arg {
+                VarOrValue::Var(Var { key: Some(_), .. }) => Some(arg.as_op_arg()),
+                VarOrValue::Var(Var {
+                    key: None, name, ..
+                }) => current_ts.get(name).and_then(|ts| anchor_at(name, *ts)),
+                VarOrValue::Value(_) => None,
+            }
+        };
         {
             let mut exe_ctx = exe_rc.borrow_mut();
             let exe_ctx = &mut *exe_ctx;
@@ -1032,14 +1078,22 @@ impl ActionHandle {
                 match inst {
                     Inst::Object { .. } => {}
                     Inst::Statement { pred, args } => {
-                        let op = native_pred_to_op(*pred);
-                        let op_type = OperationType::Native(op);
-                        let op_args = args.iter().map(|v| v.borrow().as_op_arg()).collect();
+                        let op_type = OperationType::Native(native_pred_to_op(*pred));
+                        // Built with each arg already in the form the
+                        // rendered podlang names it, so the statement
+                        // needs no lifting afterwards.
+                        let op_args = args
+                            .iter()
+                            .map(|arg| {
+                                arg_anchor(arg, &current_ts)
+                                    .unwrap_or_else(|| arg.borrow().as_op_arg())
+                            })
+                            .collect();
                         let st = exe_ctx
                             .bld
                             .builder
                             .priv_op(Operation(op_type, op_args, OperationAux::None))
-                            .unwrap();
+                            .map_err(|err| format!("{pred} statement failed: {err}"))?;
                         body_sts.push(st);
                     }
                     Inst::Intro {
@@ -1047,27 +1101,12 @@ impl ActionHandle {
                     } => {
                         let st_literal =
                             statement.clone().expect("Intro statement captured at Rhai");
-                        // The intro pod's cached Statement carries only
-                        // literal values, while the compiled podlang
-                        // anchors two arg forms: a dict-field arg
-                        // (`var.key`) is lifted to its entry, and a
-                        // whole-dict arg of an Object collapsed at this
-                        // ts is lifted to its record slot. Loose-wildcard
-                        // and literal args stay literal.
+                        // The pod proved its statement over literal
+                        // values, so unlike a body statement this one
+                        // cannot be built anchored and has to be lifted.
                         let replacements: Vec<Option<OperationArg>> = args
                             .iter()
-                            .map(|arg| {
-                                let arg = arg.borrow();
-                                match &*arg {
-                                    VarOrValue::Var(Var { key: Some(_), .. }) => {
-                                        Some(arg.as_op_arg())
-                                    }
-                                    VarOrValue::Var(Var {
-                                        key: None, name, ..
-                                    }) => current_ts.get(name).and_then(|ts| anchor_at(name, *ts)),
-                                    VarOrValue::Value(_) => None,
-                                }
-                            })
+                            .map(|arg| arg_anchor(arg, &current_ts))
                             .collect();
                         let st = if replacements.iter().any(|r| r.is_some()) {
                             exe_ctx
@@ -1371,14 +1410,6 @@ impl ActionHandle {
         let raw = RawValue([F(0), F(0), F(0), F(n_int as u64)]);
         Ok(ArgHandle::literal(self.clone(), Value::from(raw)))
     }
-    fn st_gt(self, v0: Dynamic, v1: Dynamic) -> RuntimeResult<()> {
-        let [v0, v1] = validate_args([(v0, Type::Int), (v1, Type::Int)])?;
-        self.native_st(NativePredicate::Gt, vec![v0, v1])
-    }
-    fn st_sum(self, v0: Dynamic, v1: Dynamic, v2: Dynamic) -> RuntimeResult<()> {
-        let [v0, v1, v2] = validate_args([(v0, Type::Int), (v1, Type::Int), (v2, Type::Int)])?;
-        self.native_st(NativePredicate::Sum, vec![v0, v1, v2])
-    }
     fn intro_vdf(self, n_iters: Dynamic, input: Dynamic) -> RuntimeResult<ArgHandle> {
         let [n_iters, input] = validate_args([(n_iters, Type::Int), (input, Type::Raw)])?;
 
@@ -1432,6 +1463,38 @@ impl ActionHandle {
         });
         Ok(())
     }
+}
+
+// `SignedBy` and `PublicKey` are absent on purpose: both need key
+// material, which an action script has no way to name, and `SignedBy`
+// additionally needs a signature passed as operation aux data.
+st_methods! {
+    st_equal, Equal, [v0: Type::Unk, v1: Type::Unk];
+    st_not_equal, NotEqual, [v0: Type::Unk, v1: Type::Unk];
+    st_lt, Lt, [v0: Type::Int, v1: Type::Int];
+    st_lt_eq, LtEq, [v0: Type::Int, v1: Type::Int];
+    st_gt, Gt, [v0: Type::Int, v1: Type::Int];
+    st_gt_eq, GtEq, [v0: Type::Int, v1: Type::Int];
+    st_sum, Sum, [v0: Type::Int, v1: Type::Int, v2: Type::Int];
+    st_product, Product, [v0: Type::Int, v1: Type::Int, v2: Type::Int];
+    st_max, Max, [v0: Type::Int, v1: Type::Int, v2: Type::Int];
+    st_hash, Hash, [v0: Type::Unk, v1: Type::Unk, v2: Type::Unk];
+    st_contains, Contains, [c: Type::Unk, k: Type::Unk, v: Type::Unk];
+    st_not_contains, NotContains, [c: Type::Unk, k: Type::Unk];
+    st_dict_contains, DictContains, [d: Type::Dict, k: Type::Unk, v: Type::Unk];
+    st_dict_not_contains, DictNotContains, [d: Type::Dict, k: Type::Unk];
+    st_set_contains, SetContains, [s: Type::Unk, v: Type::Unk];
+    st_set_not_contains, SetNotContains, [s: Type::Unk, v: Type::Unk];
+    st_array_contains, ArrayContains, [a: Type::Unk, i: Type::Int, v: Type::Unk];
+    st_container_insert, ContainerInsert, [old: Type::Unk, k: Type::Unk, v: Type::Unk, new: Type::Unk];
+    st_container_update, ContainerUpdate, [old: Type::Unk, k: Type::Unk, v: Type::Unk, new: Type::Unk];
+    st_container_delete, ContainerDelete, [old: Type::Unk, k: Type::Unk, new: Type::Unk];
+    st_dict_insert, DictInsert, [old: Type::Dict, k: Type::Unk, v: Type::Unk, new: Type::Dict];
+    st_dict_update, DictUpdate, [old: Type::Dict, k: Type::Unk, v: Type::Unk, new: Type::Dict];
+    st_dict_delete, DictDelete, [old: Type::Dict, k: Type::Unk, new: Type::Dict];
+    st_set_insert, SetInsert, [old: Type::Unk, v: Type::Unk, new: Type::Unk];
+    st_set_delete, SetDelete, [old: Type::Unk, v: Type::Unk, new: Type::Unk];
+    st_array_update, ArrayUpdate, [old: Type::Unk, i: Type::Int, v: Type::Unk, new: Type::Unk];
 }
 
 fn rt_err_from_anyhow(err: anyhow::Error) -> Box<EvalAltResult> {
@@ -1581,33 +1644,61 @@ impl ArgHandle {
     }
 }
 
-/// operator- for maybe-var types
-fn arg_sub(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
-    type_check_args([(&a, Type::Int), (&b, Type::Int)])?;
-    // TODO: Handle the case where a and b are not var
-    let value = Rc::new(RefCell::new(VarOrValue::var(Type::Int)));
-    let ctx = a.ctx.0.borrow();
-    ctx.assert_unsafe(true)?;
-    if ctx.exe_ctx.is_some() {
-        let a = a.arg.borrow().as_value().as_int().expect("int");
-        let b = b.arg.borrow().as_value().as_int().expect("int");
-        let result = a.checked_sub(b).expect("no overflow");
-        value.borrow_mut().set_value(Value::from(result));
-    }
-    Ok(ArgHandle::new(a.ctx.clone(), value))
+/// Integer operator on maybe-var operands, with the native statement
+/// that constrains its result.
+#[derive(Clone, Copy)]
+enum ArithOp {
+    Add,
+    Sub,
+    Mul,
 }
 
-/// operator+ for maybe-var types
-fn arg_add(a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
+impl ArithOp {
+    fn symbol(&self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+        }
+    }
+    fn apply(&self, a: i64, b: i64) -> Option<i64> {
+        match self {
+            Self::Add => a.checked_add(b),
+            Self::Sub => a.checked_sub(b),
+            Self::Mul => a.checked_mul(b),
+        }
+    }
+}
+
+/// operator+, operator- and operator* for maybe-var types. Only
+/// available inside an `unsafe` block: the result is a bare witness and
+/// nothing constrains it until the script pairs it with an explicit
+/// statement (`action.st_sum`, `action.st_product`, ...).
+///
+/// Emitting the paired statement here instead would make the operator
+/// mean two different things: `unsafe` is set for the dynamic extent of
+/// its block, so the same expression inside a script function would
+/// constrain its result or not depending on the caller.
+fn arg_arith(op: ArithOp, a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
     type_check_args([(&a, Type::Int), (&b, Type::Int)])?;
-    // TODO: Handle the case where a and b are not var
     let value = Rc::new(RefCell::new(VarOrValue::var(Type::Int)));
-    let ctx = a.ctx.0.borrow();
-    ctx.assert_unsafe(true)?;
-    if ctx.exe_ctx.is_some() {
-        let a = a.arg.borrow().as_value().as_int().expect("int");
-        let b = b.arg.borrow().as_value().as_int().expect("int");
-        let result = a.checked_add(b).expect("no overflow");
+    let is_exe = {
+        let ctx = a.ctx.0.borrow();
+        ctx.assert_unsafe(true)?;
+        ctx.exe_ctx.is_some()
+    };
+    if is_exe {
+        let int = |arg: &Ref| -> RuntimeResult<i64> {
+            arg.borrow()
+                .as_value()
+                .as_int()
+                .ok_or_else(|| format!("operator{}: operand is not an int", op.symbol()).into())
+        };
+        let (x, y) = (int(&a.arg)?, int(&b.arg)?);
+        let result = op.apply(x, y).ok_or_else(|| -> Box<EvalAltResult> {
+            let sym = op.symbol();
+            format!("operator{sym}: integer overflow on {x} {sym} {y}").into()
+        })?;
         value.borrow_mut().set_value(Value::from(result));
     }
     Ok(ArgHandle::new(a.ctx.clone(), value))
@@ -2647,8 +2738,6 @@ fn new_engine() -> Engine {
         .register_fn("mutate", ActionHandle::mutate)
         .register_fn("subaction", ActionHandle::subaction)
         .register_fn("random", ActionHandle::random)
-        .register_fn("st_gt", ActionHandle::st_gt)
-        .register_fn("st_sum", ActionHandle::st_sum)
         .register_fn("intro_vdf", ActionHandle::intro_vdf)
         .register_fn("intro_lt_eq_u256", ActionHandle::intro_lt_eq_u256)
         .register_fn("pow_obj_grind", ActionHandle::pow_obj_grind)
@@ -2668,27 +2757,36 @@ fn new_engine() -> Engine {
                 Ok(())
             },
         )
-        .register_fn("-", arg_sub)
-        .register_fn("-", |a: ArgHandle, b: i64| -> RuntimeResult<ArgHandle> {
-            let ctx = a.ctx.clone();
-            arg_sub(a, ArgHandle::literal(ctx, Value::from(b)))
-        })
-        .register_fn("-", |a: i64, b: ArgHandle| -> RuntimeResult<ArgHandle> {
-            let ctx = b.ctx.clone();
-            arg_sub(ArgHandle::literal(ctx, Value::from(a)), b)
-        })
-        .register_fn("+", arg_add)
-        .register_fn("+", |a: ArgHandle, b: i64| -> RuntimeResult<ArgHandle> {
-            let ctx = a.ctx.clone();
-            arg_add(a, ArgHandle::literal(ctx, Value::from(b)))
-        })
-        .register_fn("+", |a: i64, b: ArgHandle| -> RuntimeResult<ArgHandle> {
-            let ctx = b.ctx.clone();
-            arg_add(ArgHandle::literal(ctx, Value::from(a)), b)
-        })
         .register_indexer_get(ArgHandle::entry);
 
+    register_st_methods(&mut engine);
+    for (symbol, op) in [
+        ("+", ArithOp::Add),
+        ("-", ArithOp::Sub),
+        ("*", ArithOp::Mul),
+    ] {
+        register_arith(&mut engine, symbol, op);
+    }
+
     engine
+}
+
+/// Register one integer operator over every operand pairing a script can
+/// write: two wildcards, or a wildcard and an integer literal either way
+/// round.
+fn register_arith(engine: &mut Engine, symbol: &'static str, op: ArithOp) {
+    engine
+        .register_fn(symbol, move |a: ArgHandle, b: ArgHandle| {
+            arg_arith(op, a, b)
+        })
+        .register_fn(symbol, move |a: ArgHandle, b: i64| {
+            let ctx = a.ctx.clone();
+            arg_arith(op, a, ArgHandle::literal(ctx, Value::from(b)))
+        })
+        .register_fn(symbol, move |a: i64, b: ArgHandle| {
+            let ctx = b.ctx.clone();
+            arg_arith(op, ArgHandle::literal(ctx, Value::from(a)), b)
+        });
 }
 
 impl Default for Sdk {
