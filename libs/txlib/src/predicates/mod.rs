@@ -25,6 +25,16 @@ pub fn events_module() -> lang::Module {
         .expect("tx_events.podlang compiles")
 }
 
+/// The `Rekey` predicate, isolated so replay changes do not alter class
+/// guard or plugin module hashes.
+pub fn rekey_module() -> lang::Module {
+    let params = pod2::middleware::Params::default();
+    let events = Arc::new(events_module());
+    let events_hash = format!("{:#}", events.batch.id());
+    let source = include_str!("tx_rekey.podlang").replace(TX_EVENTS_HASH_PLACEHOLDER, &events_hash);
+    load_module(&source, "txrk", &params, &[events]).expect("tx_rekey.podlang compiles")
+}
+
 /// The replay/grounding/finalize predicates. Imports [`events_module`]
 /// for the chain primitives.
 pub fn module() -> lang::Module {
@@ -84,6 +94,18 @@ mod tests {
         module.predicate_ref_by_name("TxInsert").unwrap();
         module.predicate_ref_by_name("TxMutate").unwrap();
         module.predicate_ref_by_name("TxDelete").unwrap();
+    }
+
+    // Every transferable class guard embeds this batch id. A mismatch is
+    // interface-breaking: regenerate plugin manifests before updating it.
+    #[test]
+    fn test_rekey_module_hash_pinned() {
+        let module = rekey_module();
+        module.predicate_ref_by_name("Rekey").unwrap();
+        assert_eq!(
+            format!("{:#}", module.batch.id()),
+            "0xe128a2974a02f7fab267756d1b18d077a8c95d53f33518ce5fed53269c4b2077",
+        );
     }
 
     #[test]

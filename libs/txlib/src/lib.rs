@@ -821,6 +821,40 @@ impl TxBuilder {
         (st, handle)
     }
 
+    /// Transfer a locally available object to `new_key`, preserving its
+    /// other fields. Records one mutation and proves the `Rekey` predicate.
+    /// Must be called inside an open action scope; attach the class guard
+    /// to the returned event handle before closing the scope.
+    ///
+    /// The caller's context must include [`predicates::rekey_module`]. The
+    /// erased-key intermediate is a private witness, never a recorded event.
+    pub fn rekey(
+        &mut self,
+        ctx: &mut BuildContext,
+        old: &Dictionary,
+        new_key: Value,
+    ) -> (Dictionary, Statement, EventHandle) {
+        let mut mid = old.clone();
+        mid.update(&StrKey::from("key"), &Value::from(EMPTY_VALUE))
+            .unwrap();
+        let mut new = mid.clone();
+        new.update(&StrKey::from("key"), &new_key).unwrap();
+        let (st_mutate, handle) = self.mutate(ctx, &new, old);
+        let st_erase = ctx
+            .builder
+            .priv_op(op!(DictUpdate(old, "key", EMPTY_VALUE, mid)))
+            .unwrap();
+        let st_set = ctx
+            .builder
+            .priv_op(op!(DictUpdate(mid, "key", new_key, new)))
+            .unwrap();
+        let st = ctx
+            .apply_custom_pred_simple(false, "Rekey", vec![st_erase, st_set, st_mutate])
+            .unwrap();
+        record(&mut self.stats, "Rekey");
+        (new, st, handle)
+    }
+
     /// Record a deletion. Emits TxDelete, updates live set and nullifiers.
     /// Must be called inside an open action scope. Returns the
     /// TxDelete statement and a handle for guard attachment.
