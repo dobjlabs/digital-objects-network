@@ -10,10 +10,13 @@ use pod2::{
     frontend::{MultiPodBuilder, Operation},
     middleware::{Params, Predicate, Statement, StrKey, VDSet, Value},
 };
-use pod2utils::{dict, macros::BuildContext, map, op};
+use pod2utils::{dict, macros::BuildContext, map, op, rand_raw_value};
 
 use super::*;
-use crate::test_support::{TestState, make_object, solve_and_verify, test_hash};
+use crate::test_support::{
+    TestState, craft_modules, is_wood_pick_guard, make_object, solve_and_verify, spawn_wood_pick,
+    test_hash,
+};
 
 #[test]
 fn object_nullifier_hash_matches_key_hash_path() {
@@ -30,6 +33,26 @@ fn object_nullifier_hash_errors_without_key() {
     obj.delete(&StrKey::from("key")).unwrap();
     let err = object_nullifier_hash(&obj).expect_err("missing key must fail");
     assert!(format!("{err}").contains("missing required key field"));
+}
+
+// The prover builds the context dict from full container values
+// (header array, after_tx dict) so replay-time anchored-key rebinds
+// can open it; the verifier rebuilds it from bare hashes
+// (payload.state_root, payload.tx_final). Both must commit
+// identically or no published proof would ever verify.
+#[test]
+fn context_commitment_matches_value_forms() {
+    let sr = StateHeader::new(7, 8, test_hash(4), test_hash(1), test_hash(2), test_hash(3));
+    let zero: Hash = EMPTY_VALUE.into();
+    let tx_dict = build_tx(&set!(), &set!(), zero, zero);
+    let full = dict!({
+        "state_header" => sr.array(),
+        "tx_commitment" => tx_dict.clone()
+    });
+    assert_eq!(
+        full.commitment(),
+        context_commitment(sr.hash(), tx_dict.commitment())
+    );
 }
 
 #[test]
@@ -119,7 +142,12 @@ fn test_mine_stone() {
             false,
             "IsWoodPick",
             map!({"state_header" => state.state_header().array()}),
-            vec![st_spawn.clone(), Statement::None, Statement::None],
+            vec![
+                st_spawn.clone(),
+                Statement::None,
+                Statement::None,
+                Statement::None,
+            ],
         )
         .unwrap();
     tx1.set_guard(h, st_guard);
@@ -153,7 +181,7 @@ fn test_mine_stone() {
     // Sub-action: UseWoodPick (mutate pick)
     let st_use_wp = {
         let scope_sub = tx2.begin_action();
-        let (st_mutate, h_sub) = tx2.mutate(&mut ctx, &pick_new, &pick);
+        let (st_mutate, h_sub) = tx2.mutate_dicts(&mut ctx, &pick_new, &pick);
         let op_gt = ctx
             .builder
             .priv_op(op!(Gt((&pick, "durability"), 0_i64)))
@@ -174,7 +202,12 @@ fn test_mine_stone() {
                 false,
                 "IsWoodPick",
                 map!({"state_header" => state.state_header().array()}),
-                vec![Statement::None, Statement::None, st_action.clone()],
+                vec![
+                    Statement::None,
+                    Statement::None,
+                    st_action.clone(),
+                    Statement::None,
+                ],
             )
             .unwrap();
         tx2.set_guard(h_sub, st_guard);
@@ -533,4 +566,69 @@ fn test_grounds_three_inputs() {
                 .unwrap()
         );
     }
+}
+
+/// Single-party transfer: spawn a WoodPick, then move it to a new
+/// key via the `Rekey` branch of `IsWoodPick`. Checks that the
+/// transfer spends the old state, leaves the new one live, and
+/// preserves every field except the key.
+#[test]
+fn test_rekey_transfers_control() {
+    let (modules, is_wood_pick) = craft_modules();
+    let mut state = TestState::empty(0);
+    let pick = spawn_wood_pick(&mut state, &modules, is_wood_pick);
+
+    let mut ctx = BuildContext {
+        builder: MultiPodBuilder::new(&Params::default(), &VDSet::new(&[])),
+        modules,
+    };
+    let inputs = vec![pick.clone()];
+    let witness = state.grounding_witness(&inputs);
+    let mut tx = TxBuilder::new(&mut ctx, &inputs, witness);
+
+    let receiver_key = Value::from(rand_raw_value());
+    let scope = tx.begin_action();
+    let (moved, st_rekey, h) = tx.rekey(&mut ctx, &pick, receiver_key.clone());
+    tx.set_guard(h, is_wood_pick_guard(&mut ctx, &state, 3, st_rekey));
+    tx.end_action(scope);
+
+    eprintln!("{tx}");
+    let (st, tx_out, stats) = tx.finalize(&mut ctx);
+    print_stats(&stats);
+    ctx.builder.reveal(&st).unwrap();
+    solve_and_verify(ctx.builder);
+
+    // The transferred state is live, the old one is spent.
+    assert!(tx_out.live.contains(&Value::from(moved.clone())).unwrap());
+    assert!(
+        !tx_out
+            .live
+            .contains(&Value::from(pick.commitment()))
+            .unwrap()
+    );
+    assert!(
+        tx_out
+            .nullifiers
+            .contains(&Value::from(compute_nullifier(&pick)))
+            .unwrap()
+    );
+
+    // Only the key moved: the new state is the old one with the
+    // receiver's key, so both erase to the same intermediate.
+    assert_eq!(
+        moved.get(&StrKey::from("key")).unwrap().unwrap(),
+        receiver_key
+    );
+    assert_eq!(
+        erased_key_state(&moved).commitment(),
+        erased_key_state(&pick).commitment()
+    );
+    assert_eq!(
+        object_stable_identifier(&moved),
+        object_stable_identifier(&pick)
+    );
+
+    // The transferred state's nullifier is the receiver's to produce:
+    // it is keyed on the new key, not the old one.
+    assert_ne!(compute_nullifier(&moved), compute_nullifier(&pick));
 }

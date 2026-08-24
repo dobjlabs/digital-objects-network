@@ -3,16 +3,35 @@
 //! An object state is a pod2 dictionary carrying at least `type` (the
 //! hash of its class guard), `key` (the secret that authorizes spending
 //! it), and `stable_identifier` (its identity across mutations). This
-//! module holds the field accessors, the nullifier derivation keyed on
-//! `key`, and the small dict transforms the builder and its callers
-//! share.
+//! module holds the field accessors, the hash derivations keyed on
+//! `key` (nullifier and spend endorsement), and the small dict
+//! transforms the builder and its callers share.
 
 use std::collections::HashMap;
 
-use pod2::middleware::{EMPTY_VALUE, Hash, StrKey, Value, containers::Dictionary, hash_values};
-use pod2utils::rand_raw_value;
+use pod2::middleware::{
+    EMPTY_VALUE, Hash, Statement, StrKey, Value, containers::Dictionary, hash_values,
+};
+use pod2utils::{dict, macros::BuildContext, op, rand_raw_value};
 
 pub(crate) const OBJECT_NULLIFIER_VERSION: &str = "txlib-nullifier-v1";
+pub(crate) const ENDORSEMENT_VERSION: &str = "txlib-endorsement-v1";
+
+/// Commitment of the per-transaction context dict
+/// `{state_header, tx_commitment}` for `(state_root, tx_final)`.
+///
+/// This is the value `TxFinalized` exposes as its first public arg and
+/// the value every spend endorsement hashes. Verifiers rebuild it from
+/// the published state root and tx_final; because the reconstruction
+/// is an exact two-entry dict, a prover-supplied context padded with
+/// extra keys can never match.
+pub fn context_commitment(state_root: Hash, tx_final: Hash) -> Hash {
+    dict!({
+        "state_header" => state_root,
+        "tx_commitment" => tx_final
+    })
+    .commitment()
+}
 
 pub fn object_key_hash(obj: &Dictionary) -> anyhow::Result<Hash> {
     let key = obj
@@ -46,9 +65,91 @@ pub fn compute_nullifier(obj: &Dictionary) -> Hash {
     object_nullifier_hash(obj).expect("object missing required key field")
 }
 
-pub fn rekey(obj: &mut Dictionary) {
-    obj.update(&StrKey::from("key"), &Value::from(rand_raw_value()))
+/// Extract the `stable_identifier` field, stamped by `TxInsert` and
+/// preserved by every `TxMutate`.
+pub fn object_stable_identifier(obj: &Dictionary) -> Value {
+    obj.get(&StrKey::from(STABLE_IDENTIFIER_FIELD))
+        .expect("object dict lookup")
+        .expect("object missing stable identifier (must come from TxBuilder::insert)")
+}
+
+/// Prove `EndorseSpend(context, nullifier, old)`: the object owner's
+/// complete authorization to spend `old` in the transaction committing
+/// to `context`. Returns the nullifier alongside the statement.
+///
+/// Every clause but the version tags opens `old` at `key`, so only the
+/// owner can prove this. `reveal` makes the statement public, which is
+/// what a caller proving it for a builder other than its own needs, and
+/// replay's own local spends do not. `context` is taken as a `Value` so
+/// each caller can pass whichever form it holds: a container's value is
+/// its commitment, so the dict and the bare hash agree.
+pub fn prove_endorse_spend(
+    ctx: &mut BuildContext,
+    reveal: bool,
+    context: Value,
+    old: &Dictionary,
+) -> (Hash, Statement) {
+    let okh = object_key_hash(old).expect("object missing required key field");
+    let nullifier = object_nullifier_from_key_hash(okh);
+    let (tagged, endorsement) = endorsement_hashes(&context, old);
+
+    let op_h1 = ctx
+        .builder
+        .priv_op(op!(Hash(old, (old, "key"), okh)))
         .unwrap();
+    let op_h2 = ctx
+        .builder
+        .priv_op(op!(Hash(okh, OBJECT_NULLIFIER_VERSION, nullifier)))
+        .unwrap();
+    let op_e1 = ctx
+        .builder
+        .priv_op(op!(Hash(context, ENDORSEMENT_VERSION, tagged)))
+        .unwrap();
+    let op_e2 = ctx
+        .builder
+        .priv_op(op!(Hash((old, "key"), tagged, endorsement)))
+        .unwrap();
+    let st = ctx
+        .apply_custom_pred_simple(reveal, "EndorseSpend", vec![op_h1, op_h2, op_e1, op_e2])
+        .unwrap();
+    (nullifier, st)
+}
+
+/// The spend-endorsement hash pair for `(context, obj)`:
+/// `tagged = H(context, "txlib-endorsement-v1")`,
+/// `endorsement = H(obj.key, tagged)`. Computing the second hash needs
+/// the object's `key` entry, so only the object's owner can endorse a
+/// spend for a given transaction context.
+pub(crate) fn endorsement_hashes(context: &Value, obj: &Dictionary) -> (Hash, Hash) {
+    let key = obj
+        .get(&StrKey::from("key"))
+        .expect("object dict lookup")
+        .expect("object missing required key field");
+    let tagged = hash_values(&[context.clone(), Value::from(ENDORSEMENT_VERSION)]);
+    let endorsement = hash_values(&[key, Value::from(tagged)]);
+    (tagged, endorsement)
+}
+
+/// Return a clone of `obj` with its `key` field replaced.
+pub fn obj_with_key(obj: &Dictionary, key: Value) -> Dictionary {
+    let mut result = obj.clone();
+    result.update(&StrKey::from("key"), &key).unwrap();
+    result
+}
+
+/// The intermediate state a `Rekey` passes through: `obj` with its key
+/// erased to the sentinel (`EMPTY_VALUE`, written `{}` in podlang).
+///
+/// This state is a witness inside the `Rekey` predicate and never
+/// becomes an event object, so its (publicly computable) nullifier is
+/// never emitted. It is public API because a rekey can be proven by
+/// something that cannot open `obj`: `mid` is reconstructible from
+/// `obj`'s non-key field values alone, which is what makes that
+/// possible without the key. Checking the reconstruction against the
+/// commitment in the key-erasing statement is also what proves those
+/// field values were reported honestly.
+pub fn erased_key_state(obj: &Dictionary) -> Dictionary {
+    obj_with_key(obj, Value::from(EMPTY_VALUE))
 }
 
 pub fn new_obj() -> Dictionary {

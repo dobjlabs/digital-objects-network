@@ -1,10 +1,7 @@
 //! Fixtures for exercising the transaction builder against the
-//! `crafting_test` predicates.
-//!
-//! A plain public module rather than a `cfg(test)` one, so a crate
-//! layered above this one can set a scenario up the same way its own
-//! tests do. `MockProver` arrives through pod2, which this crate
-//! already depends on unconditionally, so gating it would buy nothing.
+//! `crafting_test` predicates, shared with the crates layered above
+//! this one so a scenario is set up the same way on both sides of the
+//! crate boundary.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,14 +10,15 @@ use hex::FromHex;
 use pod2::{
     backends::plonky2::mock::mainpod::MockProver,
     frontend::{MainPod, MultiPodBuilder},
+    lang::Module,
     middleware::{
-        F, Hash, StrKey, Value,
+        F, Hash, Params, Predicate, Statement, StrKey, VDSet, Value,
         containers::{Array, Dictionary, Set},
     },
 };
-use pod2utils::{dict, rand_raw_value, set};
+use pod2utils::{dict, macros::BuildContext, map, op, rand_raw_value, set};
 
-use crate::{GroundingWitness, StateHeader, Tx};
+use crate::{GroundingWitness, StateHeader, Tx, TxBuilder};
 
 /// Running grounding state for the tests: keeps the full created-object set
 /// (as an array, plus a reverse index for proofs) and the nullifier set so
@@ -103,6 +101,72 @@ pub fn solve_and_verify(builder: MultiPodBuilder) -> MainPod {
     let pod = solution.prove(&MockProver {}).unwrap().output_pod().clone();
     pod.pod.verify().unwrap();
     pod
+}
+
+/// The four modules a crafting test needs, plus the `IsWoodPick`
+/// guard hash that objects of that class carry as their type.
+pub fn craft_modules() -> (Vec<Arc<Module>>, Value) {
+    let craft = Arc::new(crate::predicates::crafting_test_module());
+    let is_wood_pick =
+        Value::from(Predicate::Custom(craft.predicate_ref_by_name("IsWoodPick").unwrap()).hash());
+    let modules = vec![
+        Arc::new(crate::predicates::events_module()),
+        Arc::new(crate::predicates::rekey_module()),
+        Arc::new(crate::predicates::module()),
+        craft,
+    ];
+    (modules, is_wood_pick)
+}
+
+/// Apply an ordinary single-party transaction that spawns a WoodPick,
+/// and fold it into `state`. Returns the live pick.
+pub fn spawn_wood_pick(
+    state: &mut TestState,
+    modules: &[Arc<Module>],
+    is_wood_pick: Value,
+) -> Dictionary {
+    let mut ctx = BuildContext {
+        builder: MultiPodBuilder::new(&Params::default(), &VDSet::new(&[])),
+        modules: modules.to_vec(),
+    };
+    let initial = make_object(is_wood_pick, &[("durability", Value::from(100_i64))]);
+    let mut tx = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
+    let scope = tx.begin_action();
+    let (pick, st_insert, h) = tx.insert(&mut ctx, &initial);
+    let op_dur = ctx
+        .builder
+        .priv_op(op!(DictContains(pick, "durability", 100_i64)))
+        .unwrap();
+    let st_spawn = ctx
+        .apply_custom_pred_simple(false, "SpawnWoodPick", vec![op_dur, st_insert])
+        .unwrap();
+    tx.set_guard(h, is_wood_pick_guard(&mut ctx, state, 0, st_spawn));
+    tx.end_action(scope);
+    let (st, tx_out, _) = tx.finalize(&mut ctx);
+    ctx.builder.reveal(&st).unwrap();
+    solve_and_verify(ctx.builder);
+    state.apply_tx(&tx_out);
+    pick
+}
+
+/// Apply `IsWoodPick` with `st` in OR branch `branch`. Keeps the
+/// guard's branch count in one place, since adding a branch would
+/// otherwise widen the premise list at every call site.
+pub fn is_wood_pick_guard(
+    ctx: &mut BuildContext,
+    state: &TestState,
+    branch: usize,
+    st: Statement,
+) -> Statement {
+    let mut premises = vec![Statement::None; 4];
+    premises[branch] = st;
+    ctx.apply_custom_pred(
+        false,
+        "IsWoodPick",
+        map!({"state_header" => state.state_header().array()}),
+        premises,
+    )
+    .unwrap()
 }
 
 pub fn make_object(guard_hash: Value, fields: &[(&str, Value)]) -> Dictionary {
