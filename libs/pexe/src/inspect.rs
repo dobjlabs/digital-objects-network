@@ -301,7 +301,7 @@ fn prepare_run(target: &Path, action_name: &str) -> Result<ActionRun> {
         .ok_or_else(|| anyhow!("no action named {action_name} in this plugin"))?;
     let input_classes: Vec<String> = action.total_inputs().map(|r| r.class.clone()).collect();
     let output_classes: Vec<String> = action.total_outputs().map(|r| r.class.clone()).collect();
-    let minted = crate::fixtures::mint_classes(&module, &input_classes)?;
+    let minted = crate::fixtures::mint_action_inputs(&module, action)?;
     let state = crate::fixtures::build_synthetic_state(&minted)?;
     Ok(ActionRun {
         module,
@@ -1136,26 +1136,26 @@ pub fn classes(target: &Path, class_filter: Option<&str>) -> Result<()> {
 }
 
 /// Per-class collected info: fields and crypto provenance flags.
-pub(crate) struct ClassSignature {
-    pub(crate) name: String,
-    pub(crate) fields: BTreeMap<String, FieldInfo>,
-    pub(crate) uses_vdf: bool,
-    pub(crate) uses_pow: bool,
+struct ClassSignature {
+    name: String,
+    fields: BTreeMap<String, FieldInfo>,
+    uses_vdf: bool,
+    uses_pow: bool,
 }
 
 #[derive(Default)]
-pub(crate) struct FieldInfo {
+struct FieldInfo {
     /// Literal string values ever assigned to this field.
-    pub(crate) string_literals: BTreeSet<String>,
+    string_literals: BTreeSet<String>,
     /// Integer literals ever assigned.
-    pub(crate) int_literals: BTreeSet<i64>,
+    int_literals: BTreeSet<i64>,
     /// True if any assignment was a wildcard whose source is a VDF intro.
-    pub(crate) from_vdf: bool,
+    from_vdf: bool,
     /// True if any assignment was a wildcard with no other inferable provenance.
-    pub(crate) from_witness: bool,
+    from_witness: bool,
 }
 
-pub(crate) fn derive_class_signature(
+fn derive_class_signature(
     module: &SdkModule,
     batch: &std::sync::Arc<CustomPredicateBatch>,
     class_name: &str,

@@ -1350,10 +1350,7 @@ fn test_missing_field_is_an_error_not_a_panic() {
         ("ReadInStatement", "object `w` has no field `absent`"),
         ("UpdateAbsent", "updating `w.absent`"),
     ] {
-        let executor = module.executor(
-            true,
-            grounding_witness(&state, &[widget.obj.commitment()]),
-        );
+        let executor = module.executor(true, grounding_witness(&state, &[widget.obj.commitment()]));
         let err = match executor.action(action, vec![widget.clone()]) {
             Ok(_) => panic!("expected {action} to fail on the absent field"),
             Err(err) => err.to_string(),

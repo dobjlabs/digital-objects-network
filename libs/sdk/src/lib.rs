@@ -29,6 +29,7 @@ use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
 mod error;
 mod fmt_podlang;
 pub mod manifest;
+mod requirements;
 mod utils;
 
 #[cfg(test)]
@@ -36,6 +37,7 @@ mod tests;
 
 pub use error::SdkError;
 use manifest::Manifest;
+pub use requirements::FieldFacts;
 use utils::native_pred_to_op;
 
 /// Shared reference with interior mutability for anything that could be used as an argument to a
@@ -291,19 +293,10 @@ impl VarOrValue {
             }) => {
                 let value = value.as_ref().expect("has value at exec time");
                 match typ {
-                    Type::Dict => {
-                        let dict = value.as_dictionary().expect("dict");
-                        dict.get(&StrKey::from(key))
-                            .map_err(|err| rt_err(format!("reading `{name}.{key}`: {err}")))?
-                            .ok_or_else(|| missing_field(name, key))
-                    }
+                    Type::Dict => read_field(name, &value.as_dictionary().expect("dict"), key),
                     Type::Array(record) => {
-                        let array = value.as_array().expect("array");
-                        let idx = record_index(name, record, key)?;
-                        array
-                            .get(idx)
-                            .map_err(|err| rt_err(format!("reading `{name}.{key}`: {err}")))?
-                            .ok_or_else(|| missing_field(name, key))
+                        read_entry(name, &value.as_array().expect("array"), record, key)
+                            .map(|(_, value)| value)
                     }
                     _ => todo!("implement type {typ}"),
                 }
@@ -342,19 +335,12 @@ impl VarOrValue {
                 let st_contains = match typ {
                     Type::Dict => {
                         let dict = value.as_dictionary().expect("dict");
-                        let value = dict
-                            .get(&key.into())
-                            .map_err(|err| rt_err(format!("reading `{name}.{key}`: {err}")))?
-                            .ok_or_else(|| missing_field(name, key))?;
+                        let value = read_field(name, &dict, key)?;
                         Statement::Contains(dict.into(), key.clone().into(), value.into())
                     }
                     Type::Array(record) => {
                         let array = value.as_array().expect("array");
-                        let index = record_index(name, record, key)?;
-                        let value = array
-                            .get(index)
-                            .map_err(|err| rt_err(format!("reading `{name}.{key}`: {err}")))?
-                            .ok_or_else(|| missing_field(name, key))?;
+                        let (index, value) = read_entry(name, &array, record, key)?;
                         Statement::Contains(array.into(), (index as i64).into(), value.into())
                     }
                     _ => todo!("support other types"),
@@ -422,6 +408,21 @@ macro_rules! st_methods {
 
         fn register_st_methods(engine: &mut Engine) {
             $( engine.register_fn(stringify!($name), ActionHandle::$name); )+
+        }
+
+        /// True if this predicate's `idx`th arg is checked as an integer,
+        /// read from the same table that declares the host methods so the
+        /// two cannot drift.
+        pub(crate) fn arg_is_int(pred: NativePredicate, idx: usize) -> bool {
+            match pred {
+                $(
+                    NativePredicate::$pred => {
+                        let types: &[Type] = &[$($typ),+];
+                        types.get(idx) == Some(&Type::Int)
+                    }
+                )+
+                _ => false,
+            }
         }
     };
 }
@@ -1461,11 +1462,13 @@ impl ActionHandle {
         // Target is a full u256 (Raw). To build one with a desired top-limb
         // difficulty, scripts use `action.top_limb_u256(n)`.
         let [obj, target] = validate_args([(obj, Type::Dict), (target, Type::Raw)])?;
-        let mut obj_name = String::from("?");
-        if let VarOrValue::Var(var) = &*obj.borrow() {
-            self.0.borrow_mut().mark_dict_read(&var.name);
-            obj_name = var.name.clone();
-        }
+        let obj_name = match &*obj.borrow() {
+            VarOrValue::Var(var) => {
+                self.0.borrow_mut().mark_dict_read(&var.name);
+                var.name.clone()
+            }
+            VarOrValue::Value(_) => return Err(rt_err("pow_obj_grind: expected an object")),
+        };
         // For now we assume that obj is var, and thus return a key that is also var
         let key = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
@@ -1475,10 +1478,7 @@ impl ActionHandle {
             // Initialize k to obj's current key so that when the loop body doesn't run (mock mode,
             // or the initial random already satisfies the constraint), the returned k still
             // matches what's in obj.
-            let mut k = obj
-                .get(&StrKey::from("key"))
-                .map_err(|err| rt_err(format!("reading `{obj_name}.key`: {err}")))?
-                .ok_or_else(|| missing_field(&obj_name, "key"))?;
+            let mut k = read_field(&obj_name, &obj, "key")?;
             if !exe_ctx.mock {
                 while u256_gt(&RawValue::from(obj.commitment()), &target_raw) {
                     k = exe_ctx.rand_value();
@@ -1605,12 +1605,31 @@ fn missing_field(name: &str, key: &str) -> Box<EvalAltResult> {
     rt_err(format!("object `{name}` has no field `{key}`"))
 }
 
-/// Position of `key` among a record's declared entry names.
-fn record_index(name: &str, record: &[String], key: &str) -> RuntimeResult<usize> {
-    record
+/// Read `name.key` out of a dict, reporting both a container error and
+/// an absent key against the variable the script named.
+fn read_field(name: &str, dict: &Dictionary, key: &str) -> RuntimeResult<Value> {
+    dict.get(&StrKey::from(key))
+        .map_err(|err| rt_err(format!("reading `{name}.{key}`: {err}")))?
+        .ok_or_else(|| missing_field(name, key))
+}
+
+/// Read `name.key` out of a record, resolving `key` against the record's
+/// declared entry names.
+fn read_entry(
+    name: &str,
+    array: &Array,
+    record: &[String],
+    key: &str,
+) -> RuntimeResult<(usize, Value)> {
+    let index = record
         .iter()
         .position(|k| k == key)
-        .ok_or_else(|| rt_err(format!("record `{name}` has no entry `{key}`")))
+        .ok_or_else(|| rt_err(format!("record `{name}` has no entry `{key}`")))?;
+    let value = array
+        .get(index)
+        .map_err(|err| rt_err(format!("reading `{name}.{key}`: {err}")))?
+        .ok_or_else(|| missing_field(name, key))?;
+    Ok((index, value))
 }
 
 fn rt_err_from_anyhow(err: anyhow::Error) -> Box<EvalAltResult> {
@@ -1907,6 +1926,26 @@ pub struct ActionObjectRef {
     pub(crate) io: ObjectIO,
     pub class: String,
     pub(crate) varname: String,
+    /// What the action's own statements demand of this object's fields.
+    /// Shared, because a sub-action's refs are spliced into every caller.
+    pub(crate) fields: requirements::ObjectFacts,
+}
+
+impl ActionObjectRef {
+    /// Script-side variable name, for diagnostics that have to say which
+    /// object they mean.
+    pub fn varname(&self) -> &str {
+        &self.varname
+    }
+
+    /// What the action requires of this object's fields, in field-name
+    /// order. Read off the Load-time instruction list, so requirements
+    /// are per-slot rather than per-class.
+    pub fn field_facts(&self) -> impl Iterator<Item = (&str, &FieldFacts)> {
+        self.fields
+            .iter()
+            .map(|(field, facts)| (field.as_ref(), facts))
+    }
 }
 
 /// One slot in an action's `<Action>IO` record (in-entries first,
@@ -2068,13 +2107,19 @@ impl ActionMeta {
             ..Self::default()
         };
         let referenced = body_referenced_vars(&ctx.insts);
+        let facts = requirements::object_facts(&ctx.name, ctx);
         for inst in &ctx.insts {
             match inst {
                 Inst::Object { io, obj, class, .. } => {
+                    let varname = obj.borrow().var_name().to_string();
                     let r = ActionObjectRef {
                         io: *io,
                         class: class.clone(),
-                        varname: obj.borrow().var_name().to_string(),
+                        fields: facts
+                            .get(&varname)
+                            .cloned()
+                            .unwrap_or_else(|| Vec::new().into()),
+                        varname,
                     };
                     if io.consumes() {
                         meta.total_inputs.push(r.clone());
