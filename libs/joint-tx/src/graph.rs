@@ -10,10 +10,11 @@
 //! schedule derived from those edges is the protocol the parties
 //! follow.
 //!
-//! Graphs derive from a [`crate::JointTransaction`]'s labeled events
-//! or are hand-declared. The scenario tests execute derived
-//! schedules; the trade demo still hand-declares the swap's graph and
-//! renders its schedule as the narration both users see.
+//! Graphs derive from a [`crate::JointTransaction`]'s labeled events;
+//! construction is crate-internal, so every graph outside this crate
+//! is a derived one. The scenario tests execute derived schedules;
+//! the trade demo renders one with viewer-relative labels as the
+//! narration both users see.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -37,20 +38,37 @@ pub enum NodeKind {
 /// statements its proof consumes.
 #[derive(Clone, Debug)]
 pub struct StatementNode {
-    pub id: String,
-    pub producer: String,
-    pub kind: NodeKind,
-    pub premises: Vec<String>,
+    pub(crate) id: String,
+    pub(crate) producer: String,
+    pub(crate) kind: NodeKind,
+    pub(crate) premises: Vec<String>,
 }
 
 impl StatementNode {
-    pub fn new(id: &str, producer: &str, kind: NodeKind, premises: &[&str]) -> Self {
+    pub(crate) fn new(id: &str, producer: &str, kind: NodeKind, premises: &[&str]) -> Self {
         Self {
             id: id.to_string(),
             producer: producer.to_string(),
             kind,
             premises: premises.iter().map(|p| p.to_string()).collect(),
         }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn producer(&self) -> &str {
+        &self.producer
+    }
+
+    pub fn kind(&self) -> &NodeKind {
+        &self.kind
+    }
+
+    /// Ids of the foreign statements this node's proof consumes.
+    pub fn premises(&self) -> &[String] {
+        &self.premises
     }
 }
 
@@ -113,7 +131,7 @@ impl StatementGraph {
     /// construction. An acceptance must consume its own object's
     /// offer, since only the sender's key-erasing statement lets the
     /// receiver prove `Rekey`.
-    pub fn new(nodes: Vec<StatementNode>) -> anyhow::Result<Self> {
+    pub(crate) fn new(nodes: Vec<StatementNode>) -> anyhow::Result<Self> {
         let mut declared: HashMap<&str, usize> = HashMap::new();
         let mut premise_indices: Vec<Vec<usize>> = Vec::with_capacity(nodes.len());
         for (index, node) in nodes.iter().enumerate() {

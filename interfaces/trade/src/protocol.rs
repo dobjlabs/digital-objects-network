@@ -8,13 +8,19 @@
 //! accepter's object moves to the initiator (event 0), the initiator's
 //! object moves to the accepter (event 1).
 
-use joint_tx::{TransferAcceptance, TransferOffer};
+use joint_tx::{JointTransaction, TransferAcceptance, TransferOffer};
 use pod2::{
     frontend::MainPod,
     middleware::{EMPTY_VALUE, Hash, Statement, StrKey, Value, containers::Dictionary},
 };
 use serde::{Deserialize, Serialize};
 use txlib::{StateHeader, compute_nullifier, erased_key_state};
+
+/// The two seat names inside the shared `JointTransaction`. Both
+/// sides must derive the deal document with identical strings, so the
+/// names are protocol vocabulary, not display labels.
+pub const INITIATOR: &str = "initiator";
+pub const ACCEPTER: &str = "accepter";
 
 /// One side's disclosure of the object it gives: the erased-key state
 /// (every field except the key, which is set to the sentinel), the
@@ -91,14 +97,16 @@ pub struct PlanDataMsg {
     pub accepter_object_new: Hash,
 }
 
-/// Accepter -> initiator: the last plan datum (the initiator's object
-/// under the accepter's new key) plus the accepter's derivation of
-/// `tx_final`, so a divergent plan aborts before anyone proves.
+/// Accepter -> initiator: the accepter's independently constructed
+/// deal document, completing the data round. Its events carry the
+/// last plan datum (the initiator's object under the accepter's new
+/// key); the initiator constructs its own document and asserts
+/// equality, so a deal divergent in any label aborts before anyone
+/// proves. Deserialization runs the document's full validation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanAckMsg {
-    pub initiator_object_new: Hash,
-    pub tx_final: Hash,
+    pub transaction: JointTransaction,
 }
 
 /// Initiator -> accepter, round 0: the offer of the initiator's object

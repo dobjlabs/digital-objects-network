@@ -11,7 +11,9 @@
 //!   participants, the finalizer, inputs with their holders, and the
 //!   labeled event list. Its constructor enforces producer feasibility
 //!   and the key-custody invariant, and the plan and the graph are its
-//!   derived views.
+//!   derived views, obtainable no other way: consumers cannot
+//!   hand-construct either, so every plan and graph in circulation
+//!   went through this validation.
 //! - `contribute` -- what a holder proves about its own objects so
 //!   another party can assemble over them, and the receive-side
 //!   validation that rejects a mismatched bundle at the wire rather

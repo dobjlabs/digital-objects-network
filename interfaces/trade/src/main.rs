@@ -12,10 +12,10 @@ use driver::{
     HttpSynchronizerClient, ObjectRecord, SYNCHRONIZER_POLL_INTERVAL_MS,
     SYNCHRONIZER_POLL_TIMEOUT_SECS, SynchronizerClient,
 };
-use joint_tx::graph::{NodeKind, StatementGraph, StatementNode};
+use joint_tx::{JointTransaction, graph::NodeKind};
 use pod2::middleware::Hash;
 use trade::engine::{Accepter, Initiator, SwapDeps, SwapExpectation};
-use trade::protocol::{Invitation, WireMsg};
+use trade::protocol::{ACCEPTER, INITIATOR, Invitation, WireMsg};
 use trade::{local::Local, net, post, ui};
 
 #[derive(Parser)]
@@ -161,75 +161,55 @@ fn pick_object(local: &Local, class_hash: Hash, prefix: Option<&str>) -> Result<
     }
 }
 
-/// The swap's statement graph, labeled from one side's point of view:
-/// "mine" is the object this user gives. Rendering its schedule is the
-/// narration: the schedule IS the protocol both processes follow.
-fn narrate_schedule(my_object: Hash, their_object: Hash, i_finalize: bool) {
-    let nodes = if i_finalize {
-        vec![
-            StatementNode::new(
-                "offer:theirs",
-                "their side",
-                NodeKind::TransferOffer {
-                    object: their_object,
-                },
-                &[],
-            ),
-            StatementNode::new(
-                "offer:mine",
-                "this side",
-                NodeKind::TransferOffer { object: my_object },
-                &[],
-            ),
-            StatementNode::new(
-                "accept:mine",
-                "their side",
-                NodeKind::TransferAcceptance { object: my_object },
-                &["offer:mine"],
-            ),
-            StatementNode::new(
-                "finalize",
-                "this side",
-                NodeKind::Finalize,
-                &["offer:theirs", "accept:mine"],
-            ),
-        ]
-    } else {
-        vec![
-            StatementNode::new(
-                "offer:mine",
-                "this side",
-                NodeKind::TransferOffer { object: my_object },
-                &[],
-            ),
-            StatementNode::new(
-                "offer:theirs",
-                "their side",
-                NodeKind::TransferOffer {
-                    object: their_object,
-                },
-                &[],
-            ),
-            StatementNode::new(
-                "accept:theirs",
-                "this side",
-                NodeKind::TransferAcceptance {
-                    object: their_object,
-                },
-                &["offer:theirs"],
-            ),
-            StatementNode::new(
-                "finalize",
-                "their side",
-                NodeKind::Finalize,
-                &["offer:mine", "accept:theirs"],
-            ),
-        ]
+/// Render the deal's derived schedule with viewer-relative labels:
+/// "mine" is the object this user gives, "this side" this user's
+/// seat. The schedule IS the protocol both processes follow; only the
+/// labels are local.
+fn narrate_schedule(transaction: &JointTransaction, my_object: Hash, my_role: &str) {
+    let graph = transaction.graph();
+    let labels: std::collections::HashMap<&str, String> = graph
+        .nodes()
+        .iter()
+        .map(|node| {
+            let whose = |object: &Hash| {
+                if *object == my_object {
+                    "mine"
+                } else {
+                    "theirs"
+                }
+            };
+            let label = match node.kind() {
+                NodeKind::TransferOffer { object } => format!("offer:{}", whose(object)),
+                NodeKind::TransferAcceptance { object } => format!("accept:{}", whose(object)),
+                NodeKind::Finalize => "finalize".to_string(),
+            };
+            (node.id(), label)
+        })
+        .collect();
+    let relabel = |ids: &[String]| {
+        ids.iter()
+            .map(|id| labels[id.as_str()].clone())
+            .collect::<Vec<_>>()
+            .join(", ")
     };
-    let graph = StatementGraph::new(nodes).expect("the swap graph is well-formed");
+
     ui::heading("the schedule (this is the whole protocol)");
-    for line in graph.schedule().to_string().lines() {
-        ui::note(line);
+    for (round, sessions) in graph.schedule().rounds.iter().enumerate() {
+        for session in sessions {
+            let side = if session.party == my_role {
+                "this side"
+            } else {
+                "their side"
+            };
+            let mut line = format!(
+                "round {round}: {side} proves [{}]",
+                relabel(&session.statements)
+            );
+            if !session.imports.is_empty() {
+                line.push_str(&format!(" importing [{}]", relabel(&session.imports)));
+            }
+            ui::note(&line);
+        }
     }
 }
 
@@ -332,27 +312,25 @@ async fn run_offer(give: String, want: String, object: Option<String>, mock: boo
         WireMsg::PlanAck(msg) => msg,
         other => anyhow::bail!("expected their plan ack, got {other:?}"),
     };
+    let deal_tx_final = plan_ack.transaction.plan().tx_final();
     ui::say(
         "them",
         &format!(
-            "agreed; both sides derived tx_final {}",
-            ui::short(&plan_ack.tx_final)
+            "agreed; sent their full deal document (tx_final {})",
+            ui::short(&deal_tx_final)
         ),
     );
+    ui::note("this side re-derives the deal and proves only if the documents match exactly.");
     ui::note("endorsements bind this exact effect: it lands exactly as read, or not at all.");
 
-    narrate_schedule(
-        record.obj.commitment(),
-        accept.accepter_object.old_commitment,
-        true,
-    );
+    narrate_schedule(&plan_ack.transaction, record.obj.commitment(), INITIATOR);
 
     if !mock {
         file_projection(
             &local,
             initiator.projected_received(),
             want_class,
-            plan_ack.tx_final,
+            deal_tx_final,
             &mut channel,
         )
         .await?;
@@ -533,27 +511,29 @@ async fn run_accept(
         ui::short(&plan_data.header.hash())
     ));
     let (accepter, plan_ack) = blocking(|| accepter.on_plan_data(&plan_data))?;
-    let their_object = plan_data.initiator_object.old_commitment;
+    let deal_tx_final = plan_ack.transaction.plan().tx_final();
     if !mock {
         file_projection(
             &local,
             accepter.projected_received(),
             invitation.offers,
-            plan_ack.tx_final,
+            deal_tx_final,
             &mut channel,
         )
         .await?;
     }
     ui::say(
         "you -> them",
-        &format!("plan agreed; tx_final {}", ui::short(&plan_ack.tx_final)),
+        &format!(
+            "plan agreed; sending the full deal document (tx_final {})",
+            ui::short(&deal_tx_final)
+        ),
     );
     ui::note(
         "your endorsement will bind this exact effect: it lands exactly as read, or not at all.",
     );
+    narrate_schedule(&plan_ack.transaction, my_commitment, ACCEPTER);
     channel.send(&WireMsg::PlanAck(plan_ack)).await?;
-
-    narrate_schedule(my_commitment, their_object, false);
 
     ui::say("you", "waiting for their offer pod (round 0)...");
     let offer = match channel.recv().await? {

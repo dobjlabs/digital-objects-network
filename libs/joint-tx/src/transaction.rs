@@ -170,6 +170,20 @@ pub struct JointTransaction {
     final_custody: HashMap<Hash, String>,
 }
 
+/// Equality is over the authored fields only: the derived views are
+/// functions of them, so comparing two independently constructed
+/// documents compares the whole deal, labels included.
+impl PartialEq for JointTransaction {
+    fn eq(&self, other: &Self) -> bool {
+        self.participants == other.participants
+            && self.finalizer == other.finalizer
+            && self.inputs == other.inputs
+            && self.events == other.events
+    }
+}
+
+impl Eq for JointTransaction {}
+
 /// Who can open a state as the events unfold. Feasibility forces
 /// every event's performer to hold what it touches, so sole custody
 /// coincides with holding and the only custody fact beyond the holder
@@ -180,7 +194,7 @@ struct StateInfo {
 }
 
 impl JointTransaction {
-    /// Validate and build. Structure is delegated to [`TxPlan::new`]
+    /// Validate and build. Structure is delegated to `TxPlan::new`
     /// on the label-erased events; on top of it this rejects
     /// assignments the machinery cannot execute (a performer not
     /// holding what its event touches, non-transfer events by a

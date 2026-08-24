@@ -14,10 +14,13 @@
 //! `finalize` perform. It is a second implementation on purpose (a
 //! negotiating party has no builder), and the agreement between the
 //! two is pinned by tests.
+//!
+//! A plan is obtained through [`crate::JointTransaction::plan`];
+//! construction is crate-internal, so every plan in circulation went
+//! through the joint transaction's validation.
 
 use pod2::middleware::{Hash, Value, containers::Set};
 use pod2utils::set;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use txlib::{
     chain_seed, chain_step, context_commitment, event_hash_delete, event_hash_insert,
@@ -28,8 +31,7 @@ use txlib::{
 /// `Mutate` and `Delete` also carry the consumed state's nullifier, the
 /// one value in a plan that only that state's owner can derive:
 /// collecting them is what completes the plan.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlannedEvent {
     Insert {
         new: Hash,
@@ -79,7 +81,7 @@ impl TxPlan {
     /// time: top-level events are actions, actions are non-empty,
     /// consumed states are live, created states and nullifiers are
     /// fresh.
-    pub fn new(inputs: Vec<Hash>, events: Vec<PlannedEvent>) -> anyhow::Result<Self> {
+    pub(crate) fn new(inputs: Vec<Hash>, events: Vec<PlannedEvent>) -> anyhow::Result<Self> {
         anyhow::ensure!(!events.is_empty(), "plan must contain at least one action");
         let mut inputs_set = set!();
         for input in &inputs {
@@ -261,41 +263,4 @@ fn delete_live(live: &mut Set, old: Hash) -> anyhow::Result<()> {
     );
     live.delete(&value)?;
     Ok(())
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TxPlanSerde {
-    inputs: Vec<Hash>,
-    events: Vec<PlannedEvent>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TxPlanSerdeRef<'a> {
-    inputs: &'a [Hash],
-    events: &'a [PlannedEvent],
-}
-
-impl Serialize for TxPlan {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        TxPlanSerdeRef {
-            inputs: &self.inputs,
-            events: &self.events,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for TxPlan {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let payload = TxPlanSerde::deserialize(deserializer)?;
-        TxPlan::new(payload.inputs, payload.events).map_err(serde::de::Error::custom)
-    }
 }

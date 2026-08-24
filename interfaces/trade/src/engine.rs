@@ -9,7 +9,9 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow, ensure};
-use joint_tx::{PlannedEvent, TransferAcceptance, TransferOffer, TxPlan};
+use joint_tx::{
+    InputState, JointEvent, JointTransaction, TransferAcceptance, TransferOffer, TxPlan,
+};
 use pod2::{
     backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
     frontend::{MainPod, MultiPodBuilder},
@@ -19,7 +21,23 @@ use pod2::{
 use pod2utils::{macros::BuildContext, map, rand_raw_value};
 use txlib::{GroundingWitness, StateHeader, Tx, TxBuilder, compute_nullifier, obj_with_key};
 
-use crate::protocol::{AcceptMsg, AcceptanceMsg, LegDisclosure, OfferMsg, PlanAckMsg, PlanDataMsg};
+use crate::protocol::{
+    ACCEPTER, AcceptMsg, AcceptanceMsg, INITIATOR, LegDisclosure, OfferMsg, PlanAckMsg, PlanDataMsg,
+};
+
+/// The `new` commitment of the transfer in top-level action `index`:
+/// where the swap shape keeps the one datum each side learns only
+/// from the counterparty's document.
+fn transfer_new(transaction: &JointTransaction, index: usize) -> Result<Hash> {
+    if let Some(JointEvent::Action(leg)) = transaction.events().get(index)
+        && let [JointEvent::Transfer { new, .. }] = leg.as_slice()
+    {
+        return Ok(*new);
+    }
+    Err(anyhow!(
+        "counterparty deal does not have the swap's two-leg shape"
+    ))
+}
 
 /// What proving a class guard takes: the predicate's name and where
 /// the Rekey branch sits in its OR. The SDK emits the Rekey branch
@@ -144,11 +162,12 @@ impl SwapDeps {
     }
 }
 
-/// The agreed effect, kept in the shape both engines derive it in.
-/// Event 0 moves the accepter's object to the initiator; event 1 moves
-/// the initiator's object to the accepter.
+/// The agreed deal, kept as the one authored document both engines
+/// derive independently and compare. Event 0 moves the accepter's
+/// object to the initiator; event 1 moves the initiator's object to
+/// the accepter; the initiator finalizes.
 struct AgreedPlan {
-    plan: TxPlan,
+    transaction: JointTransaction,
     context: Hash,
     accepter_object: LegPlan,
     initiator_object: LegPlan,
@@ -166,29 +185,48 @@ impl AgreedPlan {
         initiator_object: LegPlan,
         header: &StateHeader,
     ) -> Result<Self> {
-        let plan = TxPlan::new(
-            vec![accepter_object.old, initiator_object.old],
+        let transaction = JointTransaction::new(
+            vec![INITIATOR.to_string(), ACCEPTER.to_string()],
+            INITIATOR.to_string(),
             vec![
-                PlannedEvent::Action(vec![PlannedEvent::Mutate {
-                    old: accepter_object.old,
-                    new: accepter_object.new,
-                    nullifier: accepter_object.nullifier,
-                }]),
-                PlannedEvent::Action(vec![PlannedEvent::Mutate {
-                    old: initiator_object.old,
-                    new: initiator_object.new,
-                    nullifier: initiator_object.nullifier,
-                }]),
+                InputState {
+                    commitment: accepter_object.old,
+                    holder: ACCEPTER.to_string(),
+                },
+                InputState {
+                    commitment: initiator_object.old,
+                    holder: INITIATOR.to_string(),
+                },
+            ],
+            vec![
+                JointEvent::transfer_leg(
+                    ACCEPTER,
+                    INITIATOR,
+                    accepter_object.old,
+                    accepter_object.new,
+                    accepter_object.nullifier,
+                ),
+                JointEvent::transfer_leg(
+                    INITIATOR,
+                    ACCEPTER,
+                    initiator_object.old,
+                    initiator_object.new,
+                    initiator_object.nullifier,
+                ),
             ],
         )
-        .map_err(|err| anyhow!("plan does not validate: {err}"))?;
-        let context = plan.context(header.hash());
+        .map_err(|err| anyhow!("deal does not validate: {err}"))?;
+        let context = transaction.plan().context(header.hash());
         Ok(Self {
-            plan,
+            transaction,
             context,
             accepter_object,
             initiator_object,
         })
+    }
+
+    fn plan(&self) -> &TxPlan {
+        self.transaction.plan()
     }
 
     fn new_commitments(&self) -> Vec<Hash> {
@@ -301,8 +339,9 @@ impl InitiatorNegotiated {
         &self.incoming_new
     }
 
-    /// Consume the accepter's plan ack, pin the agreed effect, and
-    /// prove round 0: the offer of the initiator's own object.
+    /// Consume the accepter's deal document, derive this side's own
+    /// and assert they are the same deal, then prove round 0: the
+    /// offer of the initiator's own object.
     pub fn on_plan_ack(self, msg: &PlanAckMsg) -> Result<(InitiatorOffered, OfferMsg)> {
         let agreed = AgreedPlan::derive(
             LegPlan {
@@ -312,16 +351,16 @@ impl InitiatorNegotiated {
             },
             LegPlan {
                 old: self.outgoing.commitment(),
-                new: msg.initiator_object_new,
+                new: transfer_new(&msg.transaction, 1)?,
                 nullifier: compute_nullifier(&self.outgoing),
             },
             &self.witness.state_header,
         )?;
         ensure!(
-            agreed.plan.tx_final() == msg.tx_final,
-            "plans diverge: this side derives tx_final {:#}, counterparty {:#}",
-            agreed.plan.tx_final(),
-            msg.tx_final
+            agreed.transaction == msg.transaction,
+            "deals diverge: this side derives tx_final {:#}, counterparty {:#}",
+            agreed.plan().tx_final(),
+            msg.transaction.plan().tx_final()
         );
 
         let mut session = self.deps.build_ctx();
@@ -386,7 +425,7 @@ impl InitiatorOffered {
             self.witness.clone(),
         );
         ensure!(
-            self.agreed.plan.chain_start() == tx.chain_start,
+            self.agreed.plan().chain_start() == tx.chain_start,
             "plan and builder disagree on chain start"
         );
 
@@ -424,7 +463,7 @@ impl InitiatorOffered {
             .reveal(&st_finalized)
             .map_err(|err| anyhow!("cannot reveal TxFinalized: {err}"))?;
         ensure!(
-            tx_out.dict().commitment() == self.agreed.plan.tx_final(),
+            tx_out.dict().commitment() == self.agreed.plan().tx_final(),
             "finalized transaction diverges from the agreed plan"
         );
         let pod = self.deps.prove_session(session.builder)?;
@@ -434,7 +473,7 @@ impl InitiatorOffered {
             tx: tx_out,
             expectation: SwapExpectation {
                 received,
-                tx_final: self.agreed.plan.tx_final(),
+                tx_final: self.agreed.plan().tx_final(),
                 new_commitments: self.agreed.new_commitments(),
                 nullifiers: self.agreed.nullifiers(),
             },
@@ -509,8 +548,7 @@ impl AccepterDisclosed {
             &msg.header,
         )?;
         let reply = PlanAckMsg {
-            initiator_object_new: incoming_new.commitment(),
-            tx_final: agreed.plan.tx_final(),
+            transaction: agreed.transaction.clone(),
         };
         let next = AccepterPlanned {
             deps: self.deps,
@@ -564,7 +602,7 @@ impl AccepterPlanned {
             .add_pod(msg.pod)
             .map_err(|err| anyhow!("cannot import initiator's pod: {err}"))?;
         let my_offer = TransferOffer::prove(&mut session, self.agreed.context, &self.give);
-        let (prev_chain, chain) = self.agreed.plan.event_range(1);
+        let (prev_chain, chain) = self.agreed.plan().event_range(1);
         let (acceptance, received) = TransferAcceptance::prove(
             &mut session,
             &msg.offer,
@@ -597,7 +635,7 @@ impl AccepterPlanned {
         };
         let expectation = SwapExpectation {
             received,
-            tx_final: self.agreed.plan.tx_final(),
+            tx_final: self.agreed.plan().tx_final(),
             new_commitments: self.agreed.new_commitments(),
             nullifiers: self.agreed.nullifiers(),
         };

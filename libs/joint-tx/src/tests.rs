@@ -883,36 +883,6 @@ fn tx_plan_scope_is_the_innermost_enclosing_action_range() {
     );
 }
 
-#[test]
-fn tx_plan_serde_round_trip() {
-    let old = test_hash(1);
-    let plan = TxPlan::new(
-        vec![old],
-        vec![PlannedEvent::Action(vec![
-            PlannedEvent::Mutate {
-                old,
-                new: test_hash(2),
-                nullifier: test_hash(3),
-            },
-            PlannedEvent::Insert { new: test_hash(4) },
-        ])],
-    )
-    .unwrap();
-
-    let encoded = serde_json::to_string(&plan).unwrap();
-    let decoded: TxPlan = serde_json::from_str(&encoded).unwrap();
-    assert_eq!(decoded.inputs(), plan.inputs());
-    assert_eq!(decoded.events(), plan.events());
-    assert_eq!(decoded.tx_final(), plan.tx_final());
-    assert_eq!(decoded.event_range(0), plan.event_range(0));
-    assert_eq!(decoded.scope(1), plan.scope(1));
-
-    // A malformed document fails at deserialization, not at first use.
-    let malformed = serde_json::json!({"inputs": [], "events": []});
-    let err = serde_json::from_value::<TxPlan>(malformed).expect_err("empty plan document");
-    assert!(format!("{err}").contains("at least one action"));
-}
-
 // Both the builder's recorders and the plan derive from txlib's chain
 // helpers, which are the single home of the formulas. The scenarios
 // above pin that agreement for inserts and mutates; nothing here
@@ -1288,12 +1258,10 @@ fn joint_transaction_serde_round_trip() {
 
     let encoded = serde_json::to_string(&jt).unwrap();
     let decoded: JointTransaction = serde_json::from_str(&encoded).unwrap();
-    assert_eq!(decoded.participants(), jt.participants());
-    assert_eq!(decoded.finalizer(), jt.finalizer());
-    assert_eq!(decoded.inputs(), jt.inputs());
-    assert_eq!(decoded.events(), jt.events());
+    // Equality covers the authored fields; the derived views are
+    // functions of them, so one derived spot check suffices.
+    assert_eq!(decoded, jt);
     assert_eq!(decoded.plan().tx_final(), jt.plan().tx_final());
-    assert_eq!(decoded.final_custody(), jt.final_custody());
 
     // A document naming an infeasible assignment fails at
     // deserialization, not at first use.
