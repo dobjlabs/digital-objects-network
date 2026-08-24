@@ -10,6 +10,7 @@ members = [
     "libs/driver",
     "libs/sdk",
     "libs/txlib",
+    "libs/joint-tx",
     "libs/payload",
     "libs/wire-types",
     "libs/pod2utils",
