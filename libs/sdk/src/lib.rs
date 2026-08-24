@@ -272,38 +272,42 @@ impl VarOrValue {
             Self::Value(_) => panic!("not a var"),
         }
     }
-    // Only call this at exec time
-    fn as_value(&self) -> Value {
+    /// Only call this at exec time.
+    ///
+    /// An entry read can fail on caller data: a script reading
+    /// `obj.field` of an input object that doesn't carry `field`. That
+    /// is a script error, not an SDK invariant, so it surfaces as one.
+    fn as_value(&self) -> RuntimeResult<Value> {
         match self {
-            Self::Value(value) => value.clone(),
+            Self::Value(value) => Ok(value.clone()),
             Self::Var(Var {
                 value, key: None, ..
-            }) => value.clone().expect("has value at exec time"),
+            }) => Ok(value.clone().expect("has value at exec time")),
             Self::Var(Var {
                 value,
                 typ,
                 key: Some(key),
-                ..
-            }) => match typ {
-                Type::Dict => {
-                    let dict = value
-                        .as_ref()
-                        .expect("has value at exec time")
-                        .as_dictionary()
-                        .expect("dict");
-                    dict.get(&StrKey::from(key)).unwrap().expect("key exists")
+                name,
+            }) => {
+                let value = value.as_ref().expect("has value at exec time");
+                match typ {
+                    Type::Dict => {
+                        let dict = value.as_dictionary().expect("dict");
+                        dict.get(&StrKey::from(key))
+                            .map_err(|err| rt_err(format!("reading `{name}.{key}`: {err}")))?
+                            .ok_or_else(|| missing_field(name, key))
+                    }
+                    Type::Array(record) => {
+                        let array = value.as_array().expect("array");
+                        let idx = record_index(name, record, key)?;
+                        array
+                            .get(idx)
+                            .map_err(|err| rt_err(format!("reading `{name}.{key}`: {err}")))?
+                            .ok_or_else(|| missing_field(name, key))
+                    }
+                    _ => todo!("implement type {typ}"),
                 }
-                Type::Array(record) => {
-                    let array = value
-                        .as_ref()
-                        .expect("has value at exec time")
-                        .as_array()
-                        .expect("array");
-                    let idx = record.iter().position(|k| k == key).unwrap();
-                    array.get(idx).unwrap().expect("index exists")
-                }
-                _ => todo!("implement type {typ}"),
-            },
+            }
         }
     }
     // Only call this at exec time
@@ -320,33 +324,42 @@ impl VarOrValue {
             }) => panic!("entry can't be mutated"),
         }
     }
-    // Only call this at exec time
-    fn as_op_arg(&self) -> OperationArg {
+    /// Only call this at exec time. Fails on the same missing-entry
+    /// reads as [`Self::as_value`].
+    fn as_op_arg(&self) -> RuntimeResult<OperationArg> {
         match self {
-            Self::Value(value) => OperationArg::Literal(value.clone()),
+            Self::Value(value) => Ok(OperationArg::Literal(value.clone())),
             Self::Var(Var {
-                typ, value, key, ..
+                typ,
+                value,
+                key,
+                name,
             }) => {
                 let value = value.as_ref().expect("has value at exec time").clone();
-                if let Some(key) = key {
-                    let st_contains = match typ {
-                        Type::Dict => {
-                            let dict = value.as_dictionary().expect("dict");
-                            let value = dict.get(&key.into()).unwrap().unwrap();
-                            Statement::Contains(dict.into(), key.clone().into(), value.into())
-                        }
-                        Type::Array(record) => {
-                            let array = value.as_array().expect("array");
-                            let index = record.iter().position(|k| k == key).unwrap();
-                            let value = array.get(index).unwrap().unwrap();
-                            Statement::Contains(array.into(), (index as i64).into(), value.into())
-                        }
-                        _ => todo!("support other types"),
-                    };
-                    OperationArg::Statement(st_contains)
-                } else {
-                    OperationArg::Literal(value)
-                }
+                let Some(key) = key else {
+                    return Ok(OperationArg::Literal(value));
+                };
+                let st_contains = match typ {
+                    Type::Dict => {
+                        let dict = value.as_dictionary().expect("dict");
+                        let value = dict
+                            .get(&key.into())
+                            .map_err(|err| rt_err(format!("reading `{name}.{key}`: {err}")))?
+                            .ok_or_else(|| missing_field(name, key))?;
+                        Statement::Contains(dict.into(), key.clone().into(), value.into())
+                    }
+                    Type::Array(record) => {
+                        let array = value.as_array().expect("array");
+                        let index = record_index(name, record, key)?;
+                        let value = array
+                            .get(index)
+                            .map_err(|err| rt_err(format!("reading `{name}.{key}`: {err}")))?
+                            .ok_or_else(|| missing_field(name, key))?;
+                        Statement::Contains(array.into(), (index as i64).into(), value.into())
+                    }
+                    _ => todo!("support other types"),
+                };
+                Ok(OperationArg::Statement(st_contains))
             }
         }
     }
@@ -357,8 +370,8 @@ impl VarOrValue {
         }
     }
     // Only call this at exec time
-    fn to_dict(&self) -> Dictionary {
-        self.as_value().as_dictionary().expect("is dict")
+    fn to_dict(&self) -> RuntimeResult<Dictionary> {
+        Ok(self.as_value()?.as_dictionary().expect("is dict"))
     }
     // Only call this at exec time
     fn mut_dict<T>(&mut self, mut f: impl FnMut(&mut Dictionary) -> T) -> T {
@@ -732,7 +745,7 @@ impl ActionHandle {
                 {
                     let obj = obj.borrow();
                     let varname = obj.var_name().to_string();
-                    let raw_dict = obj.to_dict();
+                    let raw_dict = obj.to_dict()?;
                     stamped.insert(varname, with_stable_identifier(&raw_dict));
                     if has_initials {
                         raw.push(raw_dict);
@@ -751,7 +764,7 @@ impl ActionHandle {
                 } = inst
                 {
                     let varname = obj.borrow().var_name().to_string();
-                    let post_dict = obj.borrow().to_dict();
+                    let post_dict = obj.borrow().to_dict()?;
                     match io {
                         ObjectIO::Input => {
                             in_dicts.push(Value::from(post_dict));
@@ -827,7 +840,7 @@ impl ActionHandle {
                     let varname = obj.borrow().var_name().to_string();
                     let post_dict = match io {
                         ObjectIO::Output => stamped_outputs[&varname].clone(),
-                        _ => obj.borrow().to_dict(),
+                        _ => obj.borrow().to_dict()?,
                     };
                     let pre_dict = match io {
                         ObjectIO::Mutate => original
@@ -838,7 +851,7 @@ impl ActionHandle {
                     };
                     // The script-final form, which for an Output is the
                     // dict before TxInsert stamps identity onto it.
-                    let initials_dict = obj.borrow().to_dict();
+                    let initials_dict = obj.borrow().to_dict()?;
                     // Same forms and order as `fmt_action`'s clauses; the
                     // two sets have to line up statement for statement.
                     for (entry, record, dict) in [
@@ -984,7 +997,7 @@ impl ActionHandle {
                 } = inst
                 {
                     let varname = obj.borrow().var_name().to_string();
-                    let raw_obj_dict = obj.borrow().to_dict();
+                    let raw_obj_dict = obj.borrow().to_dict()?;
                     // tx_builder.insert returns a new dictionary with
                     // an added identity entry, other cases stick with
                     // the raw dictionary.
@@ -1136,15 +1149,17 @@ impl ActionHandle {
         // when it renders as a literal or a loose wildcard. A dict-field
         // ref (`var.key`) resolves to its entry; a whole-container ref
         // resolves to the record slot its Object collapses to at this ts.
-        let arg_anchor = |arg: &Ref, current_ts: &HashMap<String, usize>| -> Option<OperationArg> {
+        let arg_anchor = |arg: &Ref,
+                          current_ts: &HashMap<String, usize>|
+         -> RuntimeResult<Option<OperationArg>> {
             let arg = arg.borrow();
-            match &*arg {
-                VarOrValue::Var(Var { key: Some(_), .. }) => Some(arg.as_op_arg()),
+            Ok(match &*arg {
+                VarOrValue::Var(Var { key: Some(_), .. }) => Some(arg.as_op_arg()?),
                 VarOrValue::Var(Var {
                     key: None, name, ..
                 }) => current_ts.get(name).and_then(|ts| anchor_at(name, *ts)),
                 VarOrValue::Value(_) => None,
-            }
+            })
         };
         {
             let mut exe_ctx = exe_rc.borrow_mut();
@@ -1160,11 +1175,11 @@ impl ActionHandle {
                         // needs no lifting afterwards.
                         let op_args = args
                             .iter()
-                            .map(|arg| {
-                                arg_anchor(arg, &current_ts)
-                                    .unwrap_or_else(|| arg.borrow().as_op_arg())
+                            .map(|arg| match arg_anchor(arg, &current_ts)? {
+                                Some(anchored) => Ok(anchored),
+                                None => arg.borrow().as_op_arg(),
                             })
-                            .collect();
+                            .collect::<RuntimeResult<Vec<_>>>()?;
                         let st = exe_ctx
                             .bld
                             .builder
@@ -1183,7 +1198,7 @@ impl ActionHandle {
                         let replacements: Vec<Option<OperationArg>> = args
                             .iter()
                             .map(|arg| arg_anchor(arg, &current_ts))
-                            .collect();
+                            .collect::<RuntimeResult<_>>()?;
                         let st = if replacements.iter().any(|r| r.is_some()) {
                             exe_ctx
                                 .bld
@@ -1243,7 +1258,7 @@ impl ActionHandle {
                         let ts = *current_ts.get(obj).unwrap_or(&0);
                         let dict_arg = anchor_or_literal(obj, &dict, ts);
                         for (key, value) in kvs {
-                            let arg = value.borrow().as_op_arg().clone();
+                            let arg = value.borrow().as_op_arg()?;
                             let st = exe_ctx
                                 .bld
                                 .builder
@@ -1265,7 +1280,7 @@ impl ActionHandle {
                     } => {
                         let old_dict = old_dict.clone().expect("Update old_dict captured at Rhai");
                         let new_dict = new_dict.clone().expect("Update new_dict captured at Rhai");
-                        let arg = value.borrow().as_op_arg().clone();
+                        let arg = value.borrow().as_op_arg()?;
                         let ts_before = *current_ts.get(obj).unwrap_or(&0);
                         let ts_after = ts_before + 1;
                         let new_dict_arg = anchor_or_literal(obj, &new_dict, ts_after);
@@ -1446,22 +1461,24 @@ impl ActionHandle {
         // Target is a full u256 (Raw). To build one with a desired top-limb
         // difficulty, scripts use `action.top_limb_u256(n)`.
         let [obj, target] = validate_args([(obj, Type::Dict), (target, Type::Raw)])?;
+        let mut obj_name = String::from("?");
         if let VarOrValue::Var(var) = &*obj.borrow() {
             self.0.borrow_mut().mark_dict_read(&var.name);
+            obj_name = var.name.clone();
         }
         // For now we assume that obj is var, and thus return a key that is also var
         let key = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
             // This is a copy of the object, we don't modify the obj argument.
-            let mut obj = obj.borrow().to_dict();
-            let target_raw = target.borrow().as_value().raw();
+            let mut obj = obj.borrow().to_dict()?;
+            let target_raw = target.borrow().as_value()?.raw();
             // Initialize k to obj's current key so that when the loop body doesn't run (mock mode,
             // or the initial random already satisfies the constraint), the returned k still
             // matches what's in obj.
             let mut k = obj
                 .get(&StrKey::from("key"))
-                .expect("dict op")
-                .expect("obj has key");
+                .map_err(|err| rt_err(format!("reading `{obj_name}.key`: {err}")))?
+                .ok_or_else(|| missing_field(&obj_name, "key"))?;
             if !exe_ctx.mock {
                 while u256_gt(&RawValue::from(obj.commitment()), &target_raw) {
                     k = exe_ctx.rand_value();
@@ -1498,8 +1515,8 @@ impl ActionHandle {
         let mut statement: Option<Statement> = None;
         if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
             let mut exe_ctx = exe_rc.borrow_mut();
-            let n = n_iters.borrow().as_value().as_int().expect("int") as usize;
-            let inp = input.borrow().as_value().raw();
+            let n = n_iters.borrow().as_value()?.as_int().expect("int") as usize;
+            let inp = input.borrow().as_value()?.raw();
             let pod = if exe_ctx.mock {
                 VdfPod::new_boxed_mock(&exe_ctx.params, exe_ctx.vd_set.clone(), n, inp)
             } else {
@@ -1524,8 +1541,8 @@ impl ActionHandle {
         let mut statement: Option<Statement> = None;
         if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
             let mut exe_ctx = exe_rc.borrow_mut();
-            let l = lhs.borrow().as_value().raw();
-            let r = rhs.borrow().as_value().raw();
+            let l = lhs.borrow().as_value()?.raw();
+            let r = rhs.borrow().as_value()?.raw();
             let pod = if exe_ctx.mock {
                 LtEqU256Pod::new_boxed_mock(&exe_ctx.params, exe_ctx.vd_set.clone(), l, r)
             } else {
@@ -1574,6 +1591,26 @@ st_methods! {
     st_set_insert, SetInsert, [old: Type::Unk, v: Type::Unk, new: Type::Unk];
     st_set_delete, SetDelete, [old: Type::Unk, v: Type::Unk, new: Type::Unk];
     st_array_update, ArrayUpdate, [old: Type::Unk, i: Type::Int, v: Type::Unk, new: Type::Unk];
+}
+
+/// A script-level runtime error carrying `msg`.
+fn rt_err(msg: impl Into<String>) -> Box<EvalAltResult> {
+    msg.into().into()
+}
+
+/// A read of a field or record entry the object doesn't carry. Names
+/// the variable and the key so a plugin author can tell which object
+/// and which field are at fault.
+fn missing_field(name: &str, key: &str) -> Box<EvalAltResult> {
+    rt_err(format!("object `{name}` has no field `{key}`"))
+}
+
+/// Position of `key` among a record's declared entry names.
+fn record_index(name: &str, record: &[String], key: &str) -> RuntimeResult<usize> {
+    record
+        .iter()
+        .position(|k| k == key)
+        .ok_or_else(|| rt_err(format!("record `{name}` has no entry `{key}`")))
 }
 
 fn rt_err_from_anyhow(err: anyhow::Error) -> Box<EvalAltResult> {
@@ -1660,12 +1697,13 @@ impl ArgHandle {
         if ctx.exe_ctx.is_some() {
             let mut arg = self.arg.borrow_mut();
             for (key, value) in &kvs {
-                let value = value.borrow().as_value().clone();
+                let value = value.borrow().as_value()?;
                 arg.mut_dict(|obj| {
-                    obj.insert(&StrKey::from(key), &value).expect("TODO");
-                });
+                    obj.insert(&StrKey::from(key), &value)
+                        .map_err(|err| rt_err(format!("setting `{var_name}.{key}`: {err}")))
+                })?;
             }
-            final_dict = Some(arg.to_dict());
+            final_dict = Some(arg.to_dict()?);
         }
         ctx.insts.push(Inst::Set {
             obj: var_name,
@@ -1698,12 +1736,13 @@ impl ArgHandle {
             let mut old_dict: Option<Dictionary> = None;
             let mut new_dict: Option<Dictionary> = None;
             if ctx.exe_ctx.is_some() {
-                let v = value.borrow().as_value().clone();
-                let (obj0, obj) = arg.mut_dict(|obj| {
+                let v = value.borrow().as_value()?;
+                let (obj0, obj) = arg.mut_dict(|obj| -> RuntimeResult<_> {
                     let obj0 = obj.clone();
-                    obj.update(&StrKey::from(&key), &v).expect("TODO");
-                    (obj0, obj.clone())
-                });
+                    obj.update(&StrKey::from(&key), &v)
+                        .map_err(|err| rt_err(format!("updating `{var_name}.{key}`: {err}")))?;
+                    Ok((obj0, obj.clone()))
+                })?;
                 old_dict = Some(obj0);
                 new_dict = Some(obj);
             }
@@ -1773,9 +1812,9 @@ fn arg_arith(op: ArithOp, a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle
     if is_exe {
         let int = |arg: &Ref| -> RuntimeResult<i64> {
             arg.borrow()
-                .as_value()
+                .as_value()?
                 .as_int()
-                .ok_or_else(|| format!("operator{}: operand is not an int", op.symbol()).into())
+                .ok_or_else(|| rt_err(format!("operator{}: operand is not an int", op.symbol())))
         };
         let (x, y) = (int(&a.arg)?, int(&b.arg)?);
         let result = op.apply(x, y).ok_or_else(|| -> Box<EvalAltResult> {
@@ -1847,11 +1886,11 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
         Err(v) => v,
     };
     let v = match v.try_cast_result::<Ref>() {
-        Ok(v) => return Ok(v.borrow().as_value().clone()),
+        Ok(v) => return v.borrow().as_value(),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<ArgHandle>() {
-        Ok(v) => return Ok(v.arg.borrow().as_value().clone()),
+        Ok(v) => return v.arg.borrow().as_value(),
         Err(v) => v,
     };
     _ = v;
