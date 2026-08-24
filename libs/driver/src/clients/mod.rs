@@ -3,16 +3,14 @@ use std::time::Duration;
 mod relayer_client;
 mod synchronizer_client;
 
-#[cfg(test)]
-pub(crate) use relayer_client::RelayerConfirmation;
-pub(crate) use relayer_client::{HttpRelayerClient, RelayerClient};
 pub use relayer_client::{
-    RELAYER_CONFIRM_TIMEOUT_SECS, RELAYER_POLL_INTERVAL_MS, RELAYER_TX_HASH_TIMEOUT_SECS,
+    HttpRelayerClient, RELAYER_CONFIRM_TIMEOUT_SECS, RELAYER_POLL_INTERVAL_MS,
+    RELAYER_TX_HASH_TIMEOUT_SECS, RelayerClient, RelayerConfirmation,
 };
-pub(crate) use synchronizer_client::{HttpSynchronizerClient, SynchronizerClient};
-pub use synchronizer_client::{SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS};
-#[cfg(test)]
-pub(crate) use synchronizer_client::{SynchronizerHead, SynchronizerMembership};
+pub use synchronizer_client::{
+    HttpSynchronizerClient, SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS,
+    SynchronizerClient, SynchronizerHead, SynchronizerMembership,
+};
 
 /// Per-request ceiling for a single relayer/synchronizer HTTP call. The poll
 /// loops only re-check their overall deadline between iterations, so without a
