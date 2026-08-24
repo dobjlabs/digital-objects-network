@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
-use std::slice;
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -2219,10 +2218,10 @@ pub struct ClassMeta {
 
 /// The Loader is used to store declarative module information at Load time.
 struct Loader {
-    // The frozen chain-primitive batch (TxInsert/TxMutate/TxDelete).
-    // The only txlib module the rendered plugin source imports, so
-    // plugin module hashes survive churn in the replay/finalize batch.
+    // Frozen TxInsert/TxMutate/TxDelete batch imported by generated plugins.
     tx_events_mod: Arc<Module>,
+    // Frozen Rekey batch imported by every generated class guard.
+    rekey_mod: Arc<Module>,
     txlib_mod: Arc<Module>,
     dependencies: Vec<Dependency>,
     actions: Vec<ActionHandle>,
@@ -2261,11 +2260,16 @@ impl Loader {
 
     fn new(actions: Vec<ActionHandle>) -> Result<Self> {
         let tx_events_mod = Arc::new(txlib::predicates::events_module());
+        let rekey_mod = Arc::new(txlib::predicates::rekey_module());
         let txlib_mod = Arc::new(txlib::predicates::module());
         let dependencies = vec![
             Dependency::Module {
                 name: "tx".to_string(),
                 hash: tx_events_mod.id(),
+            },
+            Dependency::Module {
+                name: "rk".to_string(),
+                hash: rekey_mod.id(),
             },
             Dependency::Intro {
                 pred: "Vdf(count, input, output)".to_string(),
@@ -2284,6 +2288,7 @@ impl Loader {
         let classes = Self::actions_to_classes(&actions_meta);
         Ok(Self {
             tx_events_mod,
+            rekey_mod,
             txlib_mod,
             dependencies,
             actions,
@@ -2325,7 +2330,7 @@ impl Loader {
                 podlang_src.as_str(),
                 "root",
                 &params,
-                slice::from_ref(&self.tx_events_mod),
+                &[self.tx_events_mod.clone(), self.rekey_mod.clone()],
             )
             .expect("compiles"),
         );
@@ -2341,6 +2346,7 @@ impl Loader {
             .collect();
         SdkModule {
             tx_events_mod: self.tx_events_mod,
+            rekey_mod: self.rekey_mod,
             txlib_mod: self.txlib_mod,
             podlang_src,
             actions: self.actions_meta,
@@ -2358,6 +2364,7 @@ impl Loader {
 /// An SdkModule contains a loaded module and allows executing actions.
 pub struct SdkModule {
     tx_events_mod: Arc<Module>,
+    rekey_mod: Arc<Module>,
     txlib_mod: Arc<Module>,
     podlang_src: String,
     actions: Vec<ActionMeta>,
@@ -2482,9 +2489,10 @@ impl SdkModule {
             .apply_custom_pred_simple(false, &bridge_name, vec![st_array_contains, st_action])
             .expect("apply bridge predicate");
 
-        // Step 3: IsX OR with the bridge at the right branch.
+        // Step 3: Select the action's IsX branch. The final slot is reserved
+        // for Rekey and remains empty during normal action execution.
         let class_meta = self.class_by_name(class);
-        let mut branch_sts = vec![Statement::None; class_meta.actions.len()];
+        let mut branch_sts = vec![Statement::None; class_meta.actions.len() + 1];
         let class_st_index =
             self.object_index_class_st_index[&(action_name.to_string(), object_refs_index)];
         branch_sts[class_st_index] = st_bridge;
@@ -2595,6 +2603,7 @@ impl Executor {
         let params = Params::default();
         let modules = vec![
             module.tx_events_mod.clone(),
+            module.rekey_mod.clone(),
             module.txlib_mod.clone(),
             module.module.clone(),
         ];

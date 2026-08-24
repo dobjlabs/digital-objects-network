@@ -661,6 +661,12 @@ fn fmt_class(loader: &Loader, w: &mut dyn fmt::Write, class: &ClassMeta) -> fmt:
         let bridge_name = bridge_predicate_name(&o.class, action_name, &o.varname, multi);
         writeln!(w, "  {bridge_name}(state, state_header, chain0, chain)")?;
     }
+    // Every generated class is transferable. The self-predicate hash binds
+    // Rekey to this class.
+    writeln!(
+        w,
+        "  rk::Rekey(state, chain0, chain, @self_predicate(Is{name}))"
+    )?;
     writeln!(w, ")")?;
     Ok(())
 }
