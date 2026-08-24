@@ -1142,15 +1142,12 @@ fn test_statement_surface_round_trips() {
             action.st_dict_delete(crate_in, "k", crate_out);
         }
 
-        // Entry args on both sides come from inputs: a keyed read of an
-        // output's script-final form renders as `initials.<var>.<key>`,
-        // a double anchor podlang has no syntax for.
         fn SetTransitions(action) {
-            var crate_a = action.input("Crate");
-            var crate_b = action.input("Crate");
-            action.st_set_insert(crate_a.tags, 1, crate_b.tags);
-            action.st_set_delete(crate_a.tags, 1, crate_b.tags);
-            action.st_array_update(crate_a.items, 0, 1, crate_b.items);
+            var crate_in = action.input("Crate");
+            var crate_out = action.output("Crate");
+            action.st_set_insert(crate_in.tags, 1, crate_out.tags);
+            action.st_set_delete(crate_in.tags, 1, crate_out.tags);
+            action.st_array_update(crate_in.items, 0, 1, crate_out.items);
         }
 "#;
     let sdk = Sdk::default();
@@ -1187,10 +1184,51 @@ fn test_statement_surface_round_trips() {
             "ArrayContains(crate_in.items, 0, 1)",
             r#"ContainerDelete(io.in_crate_in, "k", initials.crate_out)"#,
             r#"DictInsert(io.in_crate_in, "k", 1, initials.crate_out)"#,
-            "SetInsert(crate_a.tags, 1, crate_b.tags)",
-            "SetDelete(crate_a.tags, 1, crate_b.tags)",
-            "ArrayUpdate(crate_a.items, 0, 1, crate_b.items)",
+            "SetInsert(crate_in.tags, 1, crate_out0.tags)",
+            "SetDelete(crate_in.tags, 1, crate_out0.tags)",
+            "ArrayUpdate(crate_in.items, 0, 1, crate_out0.items)",
         ],
+    );
+}
+
+/// Reading a field of an output built in the same action. That form is
+/// normally the anchored `initials.<var>` TxInsert consumes, which cannot
+/// also carry a field access, so the field read has to force it open as a
+/// wildcard pinned to the initials record.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_read_field_of_own_output() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn CraftPick(action) {
+            var pick = action.output("Pick");
+            pick.set([["durability", 100]]);
+            action.st_gt(pick.durability, 0);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["CraftPick"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            "ArrayContains(initials, CraftPickInitials::pick, pick0)",
+            r#"DictContains(pick0, "durability", 100)"#,
+            "Gt(pick0.durability, 0)",
+            "tx::TxInsert(chain0, chain, pick0, io.out_pick, @self_predicate(IsPick))",
+        ],
+    );
+
+    let mut state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("CraftPick", vec![]).unwrap();
+    let pick_tx = res.tx.clone();
+    let [pick] = res.objs();
+    apply_tx(&mut state, &pick_tx);
+    assert_eq!(
+        pick.obj.get(&StrKey::from("durability")).unwrap().unwrap(),
+        Value::from(100)
     );
 }
 

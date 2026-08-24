@@ -475,6 +475,33 @@ impl ActionContext {
             state.dict_read = true;
         }
     }
+    /// Per-var max ts, including the extra ts an Output reserves for
+    /// the identity-stamp bump (`fmt_podlang::output_max_ts`). This is
+    /// the single source for in/out/initials slot positions, consumed
+    /// by `compute_wildcard_needs`, `ActionMeta`, and `fmt_podlang`.
+    fn max_ts_per_var(&self) -> HashMap<String, usize> {
+        let output_vars: HashSet<String> = self
+            .insts
+            .iter()
+            .filter_map(|inst| match inst {
+                Inst::Object {
+                    io: ObjectIO::Output,
+                    obj,
+                    ..
+                } => Some(obj.borrow().var_name().to_string()),
+                _ => None,
+            })
+            .collect();
+        self.var_state
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    fmt_podlang::output_max_ts(v.ts, output_vars.contains(k)),
+                )
+            })
+            .collect()
+    }
     /// Reject a `set` that cannot hold. `set` writes its initializer into
     /// the object's dict without advancing the object's ts, so any
     /// earlier operation that pinned the dict's exact contents would then
@@ -536,33 +563,6 @@ impl ActionContext {
             .into());
         }
         Ok(())
-    }
-    /// Per-var max ts, including the extra ts an Output reserves for
-    /// the identity-stamp bump (`fmt_podlang::output_max_ts`). This is
-    /// the single source for in/out/initials slot positions, consumed
-    /// by `compute_wildcard_needs`, `ActionMeta`, and `fmt_podlang`.
-    fn max_ts_per_var(&self) -> HashMap<String, usize> {
-        let output_vars: HashSet<String> = self
-            .insts
-            .iter()
-            .filter_map(|inst| match inst {
-                Inst::Object {
-                    io: ObjectIO::Output,
-                    obj,
-                    ..
-                } => Some(obj.borrow().var_name().to_string()),
-                _ => None,
-            })
-            .collect();
-        self.var_state
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    fmt_podlang::output_max_ts(v.ts, output_vars.contains(k)),
-                )
-            })
-            .collect()
     }
     fn assert_unsafe(&self, unsafe_block: bool) -> RuntimeResult<()> {
         if self.unsafe_block != unsafe_block {
@@ -783,7 +783,10 @@ impl ActionHandle {
         // Resolve an Output's pre-identity dict to its slot in the
         // `<Action>Initials` record.
         let initials_anchor = |obj_name: &str| -> Option<OperationArg> {
-            let slot = meta.initials_slot(obj_name)?;
+            let (slot, entry) = meta.initials_entry(obj_name)?;
+            if entry.needs_wildcard {
+                return None;
+            }
             Some((initials_array.as_ref()?, slot as i64).into())
         };
 
@@ -833,30 +836,33 @@ impl ActionHandle {
                             .clone(),
                         _ => post_dict.clone(),
                     };
-                    if let Some((idx, e)) = meta.in_entry(&varname)
-                        && e.needs_wildcard
-                    {
+                    // The script-final form, which for an Output is the
+                    // dict before TxInsert stamps identity onto it.
+                    let initials_dict = obj.borrow().to_dict();
+                    // Same forms and order as `fmt_action`'s clauses; the
+                    // two sets have to line up statement for statement.
+                    for (entry, record, dict) in [
+                        (meta.in_entry(&varname), Some(&io_array), &pre_dict),
+                        (meta.out_entry(&varname), Some(&io_array), &post_dict),
+                        (
+                            meta.initials_entry(&varname),
+                            initials_array.as_ref(),
+                            &initials_dict,
+                        ),
+                    ] {
+                        let (Some((idx, e)), Some(record)) = (entry, record) else {
+                            continue;
+                        };
+                        if !e.needs_wildcard {
+                            continue;
+                        }
                         let st = exe_ctx
                             .bld
                             .builder
                             .priv_op(Operation::array_contains(
-                                Value::from(io_array.clone()),
+                                Value::from(record.clone()),
                                 idx as i64,
-                                Value::from(pre_dict.clone()),
-                            ))
-                            .unwrap();
-                        array_contains_sts.push(st);
-                    }
-                    if let Some((idx, e)) = meta.out_entry(&varname)
-                        && e.needs_wildcard
-                    {
-                        let st = exe_ctx
-                            .bld
-                            .builder
-                            .priv_op(Operation::array_contains(
-                                Value::from(io_array.clone()),
-                                idx as i64,
-                                Value::from(post_dict.clone()),
+                                Value::from(dict.clone()),
                             ))
                             .unwrap();
                         array_contains_sts.push(st);
@@ -1900,7 +1906,7 @@ pub struct ActionMeta {
     /// when there is no such record: an Intro that consumes an output's
     /// pre-identity dict whole forces that dict to stay a literal
     /// wildcard, since Intro args can't be anchored.
-    pub(crate) initials_entries: Option<Vec<String>>,
+    pub(crate) initials_entries: Option<Vec<EntryShape>>,
     /// `var_state["chain"].ts` for this action — i.e. the count of
     /// txlib events recorded by this action (Object insts + sub-action
     /// calls). Drives whether the chain is packed into `<Action>Chain`.
@@ -1938,13 +1944,17 @@ impl ActionMeta {
         self.total_outputs.iter()
     }
 
-    /// Slot for `varname` in the `<Action>Initials` record, if such a
-    /// record exists for this action.
-    pub(crate) fn initials_slot(&self, varname: &str) -> Option<usize> {
+    /// Find this Output's entry in the `<Action>Initials` record, with
+    /// its slot. `needs_wildcard` is set when the body reads a field of
+    /// the object's script-final form, which cannot render as an
+    /// anchored `initials.<var>` because `initials.<var>.<field>` would
+    /// anchor twice.
+    pub(crate) fn initials_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
         self.initials_entries
             .as_ref()?
             .iter()
-            .position(|name| name == varname)
+            .enumerate()
+            .find(|(_, e)| e.varname == varname)
     }
 
     /// Find this Object's in-side entry. Returns its slot in the
@@ -1994,10 +2004,14 @@ impl ActionMeta {
         {
             return Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::Out));
         }
-        // If we have an "initials" record for this var, and we are at
-        // the penultimate ts, then the var must be collapsed into
-        // initials, for passing to TxInsert.
-        if ts + 1 == max_ts && self.initials_slot(varname).is_some() {
+        // An Output's script-final form collapses into the initials
+        // record for passing to TxInsert, unless the body reads one of
+        // its fields, which needs the form to stay a wildcard.
+        if ts == fmt_podlang::initials_ts(max_ts)
+            && self
+                .initials_entry(varname)
+                .is_some_and(|(_, e)| !e.needs_wildcard)
+        {
             return Some(fmt_podlang::Collapse::Initials);
         }
         None
@@ -2048,29 +2062,32 @@ impl ActionMeta {
                 _ => {}
             }
         }
-        let (needs_in, needs_out) = compute_wildcard_needs(ctx);
+        let needs = compute_wildcard_needs(ctx);
         for r in &meta.object_refs {
             if r.io.consumes() {
                 meta.in_entries.push(EntryShape {
                     varname: r.varname.clone(),
-                    needs_wildcard: needs_in.contains(&r.varname),
+                    needs_wildcard: needs.in_side.contains(&r.varname),
                 });
             }
             if r.io.produces() {
                 meta.out_entries.push(EntryShape {
                     varname: r.varname.clone(),
-                    needs_wildcard: needs_out.contains(&r.varname),
+                    needs_wildcard: needs.out_side.contains(&r.varname),
                 });
             }
         }
         // Give the action an initials record iff it has Output objects.
-        let output_names: Vec<String> = meta
+        let outputs: Vec<EntryShape> = meta
             .object_refs
             .iter()
             .filter(|r| r.io == ObjectIO::Output)
-            .map(|r| r.varname.clone())
+            .map(|r| EntryShape {
+                varname: r.varname.clone(),
+                needs_wildcard: needs.initials.contains(&r.varname),
+            })
             .collect();
-        meta.initials_entries = (!output_names.is_empty()).then_some(output_names);
+        meta.initials_entries = (!outputs.is_empty()).then_some(outputs);
         Ok(meta)
     }
 }
@@ -2110,16 +2127,24 @@ pub(crate) fn body_referenced_vars(insts: &[Inst]) -> HashSet<String> {
     referenced
 }
 
-/// An Object's in/out form normally collapses into the io record and
-/// needs no wildcard of its own. A sub-field body reference (`var.key`)
-/// defeats that, keeping the form as an explicit wildcard instead:
+/// Which of an Object's rendered forms a body field reference forces
+/// open as an explicit wildcard.
+#[derive(Default)]
+struct WildcardNeeds {
+    in_side: HashSet<String>,
+    out_side: HashSet<String>,
+    initials: HashSet<String>,
+}
+
+/// An Object's forms normally collapse into a record entry and need no
+/// wildcard of their own. A sub-field body reference (`var.key`) defeats
+/// that, keeping the form as an explicit wildcard instead:
 /// double-anchoring a record entry isn't supported, so the dict must
 /// stay a wildcard for `<var>.<key>` to render. This walks the body and
-/// returns the Objects forced open on each side: `needs_in` and
-/// `needs_out`. Whole-dict refs never force a wildcard; a collapsed
-/// dict arg is lifted to its record entry at execution via
-/// ReplaceValueWithEntry.
-fn compute_wildcard_needs(ctx: &ActionContext) -> (HashSet<String>, HashSet<String>) {
+/// returns the Objects forced open per form. Whole-dict refs never force
+/// a wildcard; a collapsed dict arg is lifted to its record entry at
+/// execution via ReplaceValueWithEntry.
+fn compute_wildcard_needs(ctx: &ActionContext) -> WildcardNeeds {
     let mut object_io: HashMap<String, ObjectIO> = HashMap::new();
     for inst in &ctx.insts {
         if let Inst::Object { io, obj, .. } = inst {
@@ -2128,13 +2153,9 @@ fn compute_wildcard_needs(ctx: &ActionContext) -> (HashSet<String>, HashSet<Stri
     }
     let mut current_ts: HashMap<String, usize> = object_io.keys().map(|v| (v.clone(), 0)).collect();
     let max_ts = ctx.max_ts_per_var();
-    let mut needs_in: HashSet<String> = HashSet::new();
-    let mut needs_out: HashSet<String> = HashSet::new();
+    let mut needs = WildcardNeeds::default();
 
-    let check = |arg: &Ref,
-                 cur: &HashMap<String, usize>,
-                 needs_in: &mut HashSet<String>,
-                 needs_out: &mut HashSet<String>| {
+    let check = |arg: &Ref, cur: &HashMap<String, usize>, needs: &mut WildcardNeeds| {
         let arg = arg.borrow();
         let VarOrValue::Var(var) = &*arg else {
             return;
@@ -2149,11 +2170,15 @@ fn compute_wildcard_needs(ctx: &ActionContext) -> (HashSet<String>, HashSet<Stri
         let mts = *max_ts.get(&var.name).unwrap_or(&0);
         let at_in = matches!(io, ObjectIO::Input | ObjectIO::Mutate) && ts == 0;
         let at_out = matches!(io, ObjectIO::Output | ObjectIO::Mutate) && ts == mts;
+        let at_initials = matches!(io, ObjectIO::Output) && ts == fmt_podlang::initials_ts(mts);
         if at_in {
-            needs_in.insert(var.name.clone());
+            needs.in_side.insert(var.name.clone());
         }
         if at_out {
-            needs_out.insert(var.name.clone());
+            needs.out_side.insert(var.name.clone());
+        }
+        if at_initials {
+            needs.initials.insert(var.name.clone());
         }
     };
 
@@ -2161,25 +2186,25 @@ fn compute_wildcard_needs(ctx: &ActionContext) -> (HashSet<String>, HashSet<Stri
         match inst {
             Inst::Object { .. } | Inst::SubAction { .. } => {}
             Inst::Update { obj, value, .. } => {
-                check(value, &current_ts, &mut needs_in, &mut needs_out);
+                check(value, &current_ts, &mut needs);
                 if let Some(ts) = current_ts.get_mut(obj) {
                     *ts += 1;
                 }
             }
             Inst::Set { kvs, .. } => {
                 for (_k, v) in kvs {
-                    check(v, &current_ts, &mut needs_in, &mut needs_out);
+                    check(v, &current_ts, &mut needs);
                 }
             }
             Inst::Statement { args, .. } | Inst::Intro { args, .. } => {
                 for arg in args {
-                    check(arg, &current_ts, &mut needs_in, &mut needs_out);
+                    check(arg, &current_ts, &mut needs);
                 }
             }
         }
     }
 
-    (needs_in, needs_out)
+    needs
 }
 
 /// Collected metadata that declares a Class
