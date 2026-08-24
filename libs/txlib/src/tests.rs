@@ -1,8 +1,5 @@
-//! Tests for the transaction builder: end-to-end transactions proven
-//! with `MockProver`, plus unit tests for the object derivations.
-//!
-//! `TestState` stands in for the synchronizer, keeping the full created
-//! set so it can hand out real Merkle proofs for grounding.
+//! Transaction-builder integration tests and object-derivation unit tests.
+//! `TestState` retains created objects so it can produce grounding proofs.
 
 use std::sync::Arc;
 
@@ -10,10 +7,13 @@ use pod2::{
     frontend::{MultiPodBuilder, Operation},
     middleware::{Params, Predicate, Statement, StrKey, VDSet, Value},
 };
-use pod2utils::{dict, macros::BuildContext, map, op};
+use pod2utils::{dict, macros::BuildContext, map, op, rand_raw_value};
 
 use super::*;
-use crate::test_support::{TestState, make_object, solve_and_verify, test_hash};
+use crate::test_support::{
+    TestState, craft_modules, is_wood_pick_guard, make_object, solve_and_verify, spawn_wood_pick,
+    test_hash,
+};
 
 #[test]
 fn object_nullifier_hash_matches_key_hash_path() {
@@ -30,6 +30,23 @@ fn object_nullifier_hash_errors_without_key() {
     obj.delete(&StrKey::from("key")).unwrap();
     let err = object_nullifier_hash(&obj).expect_err("missing key must fail");
     assert!(format!("{err}").contains("missing required key field"));
+}
+
+// Prover-side containers and verifier-side hashes must produce the same
+// context commitment.
+#[test]
+fn context_commitment_matches_value_forms() {
+    let sr = StateHeader::new(7, 8, test_hash(4), test_hash(1), test_hash(2), test_hash(3));
+    let zero: Hash = EMPTY_VALUE.into();
+    let tx_dict = build_tx(&set!(), &set!(), zero, zero);
+    let full = dict!({
+        "state_header" => sr.array(),
+        "tx_commitment" => tx_dict.clone()
+    });
+    assert_eq!(
+        full.commitment(),
+        context_commitment(sr.hash(), tx_dict.commitment())
+    );
 }
 
 #[test]
@@ -72,8 +89,7 @@ fn state_header_serializes_and_deserializes_camelcase() {
     assert_eq!(decoded, original);
 }
 
-/// Tx 1: Spawn a WoodPick (insert, no inputs).
-/// Tx 2: MineStone using the WoodPick (mutate pick + insert stone).
+/// Spawn a WoodPick, then consume it to mine stone.
 #[test]
 fn test_mine_stone() {
     let events = Arc::new(crate::predicates::events_module());
@@ -89,8 +105,6 @@ fn test_mine_stone() {
     let mut state = TestState::empty(0);
     let params = Params::default();
     let vd_set = VDSet::new(&[]);
-
-    // ---- Tx 1: Spawn a WoodPick ----
 
     let builder = MultiPodBuilder::new(&params, &vd_set);
     let mut ctx = BuildContext {
@@ -119,7 +133,12 @@ fn test_mine_stone() {
             false,
             "IsWoodPick",
             map!({"state_header" => state.state_header().array()}),
-            vec![st_spawn.clone(), Statement::None, Statement::None],
+            vec![
+                st_spawn.clone(),
+                Statement::None,
+                Statement::None,
+                Statement::None,
+            ],
         )
         .unwrap();
     tx1.set_guard(h, st_guard);
@@ -132,8 +151,6 @@ fn test_mine_stone() {
     solve_and_verify(ctx.builder);
 
     state.apply_tx(&tx0);
-
-    // ---- Tx 2: MineStone ----
 
     let builder = MultiPodBuilder::new(&params, &vd_set);
     let mut ctx = BuildContext { builder, modules };
@@ -150,10 +167,9 @@ fn test_mine_stone() {
 
     let scope_outer = tx2.begin_action();
 
-    // Sub-action: UseWoodPick (mutate pick)
     let st_use_wp = {
         let scope_sub = tx2.begin_action();
-        let (st_mutate, h_sub) = tx2.mutate(&mut ctx, &pick_new, &pick);
+        let (st_mutate, h_sub) = tx2.mutate_dicts(&mut ctx, &pick_new, &pick);
         let op_gt = ctx
             .builder
             .priv_op(op!(Gt((&pick, "durability"), 0_i64)))
@@ -174,7 +190,12 @@ fn test_mine_stone() {
                 false,
                 "IsWoodPick",
                 map!({"state_header" => state.state_header().array()}),
-                vec![Statement::None, Statement::None, st_action.clone()],
+                vec![
+                    Statement::None,
+                    Statement::None,
+                    st_action.clone(),
+                    Statement::None,
+                ],
             )
             .unwrap();
         tx2.set_guard(h_sub, st_guard);
@@ -182,7 +203,6 @@ fn test_mine_stone() {
         st_action
     };
 
-    // Direct: insert stone
     let (_stone, st_stone_insert, h) = tx2.insert(&mut ctx, &stone_initial);
     let st_mine = ctx
         .apply_custom_pred_simple(false, "MineStone", vec![st_use_wp, st_stone_insert])
@@ -212,9 +232,7 @@ fn test_mine_stone() {
     );
 }
 
-/// Tx 1: FindLog (genesis insert).
-/// Tx 2: CraftWood (delete log, insert wood).
-/// Tx 3: CraftSticks (delete wood, insert two sticks).
+/// Convert a log into wood and then two sticks across three transactions.
 #[test]
 fn test_craft_sticks() {
     let events = Arc::new(crate::predicates::events_module());
@@ -232,8 +250,6 @@ fn test_craft_sticks() {
     let mut state = TestState::empty(0);
     let params = Params::default();
     let vd_set = VDSet::new(&[]);
-
-    // ---- Tx 1: FindLog ----
 
     let builder = MultiPodBuilder::new(&params, &vd_set);
     let mut ctx = BuildContext {
@@ -269,8 +285,6 @@ fn test_craft_sticks() {
 
     state.apply_tx(&tx1_out);
 
-    // ---- Tx 2: CraftWood ----
-
     let builder = MultiPodBuilder::new(&params, &vd_set);
     let mut ctx = BuildContext {
         builder,
@@ -285,7 +299,6 @@ fn test_craft_sticks() {
 
     let scope_outer = tx2.begin_action();
 
-    // Sub-action: DeleteLog
     let st_del_log = {
         let scope_sub = tx2.begin_action();
         let (st_del, h_sub) = tx2.delete(&mut ctx, &log);
@@ -305,7 +318,6 @@ fn test_craft_sticks() {
         st_action
     };
 
-    // Direct: insert wood
     let (wood, st_ins, h) = tx2.insert(&mut ctx, &wood_initial);
     let st_craft_wood = ctx
         .apply_custom_pred_simple(false, "CraftWood", vec![st_del_log, st_ins])
@@ -329,8 +341,6 @@ fn test_craft_sticks() {
 
     state.apply_tx(&tx2_out);
 
-    // ---- Tx 3: CraftSticks ----
-
     let builder = MultiPodBuilder::new(&params, &vd_set);
     let mut ctx = BuildContext { builder, modules };
 
@@ -343,7 +353,6 @@ fn test_craft_sticks() {
 
     let scope_outer = tx3.begin_action();
 
-    // Sub-action: DeleteWood
     let st_del_wood = {
         let scope_sub = tx3.begin_action();
         let (st_del, h_sub) = tx3.delete(&mut ctx, &wood);
@@ -363,17 +372,11 @@ fn test_craft_sticks() {
         st_action
     };
 
-    // Direct: insert stick_a
     let (stick_a, st_ins_a, h_a) = tx3.insert(&mut ctx, &stick_a_initial);
-
-    // Direct: insert stick_b
     let (stick_b, st_ins_b, h_b) = tx3.insert(&mut ctx, &stick_b_initial);
 
-    // Pack stick_a / stick_b's pre-identity initials into an
-    // `initials` dict so CraftSticks stays within the 8-wildcard
-    // limit; rebind each TxInsert's slot 2 (initial) onto the
-    // matching anchored key. TxInsert's arg layout is (chain,
-    // prev_chain, initial, new, type).
+    // Pack both initials to keep CraftSticks within the eight-wildcard limit,
+    // then bind each TxInsert `initial` argument to its anchored entry.
     let initials = dict!({
         "stick_a" => stick_a_initial.clone(),
         "stick_b" => stick_b_initial.clone()
@@ -430,10 +433,8 @@ fn test_craft_sticks() {
     ctx.builder.reveal(&st).unwrap();
     solve_and_verify(ctx.builder);
 
-    // Both sticks should be live
     assert!(tx3_out.live.contains(&Value::from(stick_a)).unwrap());
     assert!(tx3_out.live.contains(&Value::from(stick_b)).unwrap());
-    // Wood should be nullified
     assert!(
         tx3_out
             .nullifiers
@@ -442,9 +443,7 @@ fn test_craft_sticks() {
     );
 }
 
-/// Grounding three inputs exercises InputsGroundedRecursive (peel two per
-/// level) bottoming out at InputsGroundedSingle -- the N>=3 path that the
-/// one- and two-input tests never reach.
+/// Exercise the recursive grounding path with three inputs.
 #[test]
 fn test_grounds_three_inputs() {
     let events = Arc::new(crate::predicates::events_module());
@@ -459,8 +458,7 @@ fn test_grounds_three_inputs() {
     let params = Params::default();
     let vd_set = VDSet::new(&[]);
 
-    // Spawn three logs (one FindLog tx each) and fold them into the live
-    // set so the burn tx below can ground all three.
+    // Create three independently grounded inputs.
     let mut logs = Vec::new();
     for _ in 0..3 {
         let builder = MultiPodBuilder::new(&params, &vd_set);
@@ -492,8 +490,7 @@ fn test_grounds_three_inputs() {
         logs.push(log);
     }
 
-    // Burn all three logs in one tx: TxBuilder::new grounds three inputs,
-    // driving InputsGrounded -> Recursive -> InputsGrounded -> Single.
+    // Ground all three inputs through the recursive predicate.
     let builder = MultiPodBuilder::new(&params, &vd_set);
     let mut ctx = BuildContext { builder, modules };
 
@@ -533,4 +530,61 @@ fn test_grounds_three_inputs() {
                 .unwrap()
         );
     }
+}
+
+/// Rekey a WoodPick while preserving its identity and non-key fields.
+#[test]
+fn test_rekey_transfers_control() {
+    let (modules, is_wood_pick) = craft_modules();
+    let mut state = TestState::empty(0);
+    let pick = spawn_wood_pick(&mut state, &modules, is_wood_pick);
+
+    let mut ctx = BuildContext {
+        builder: MultiPodBuilder::new(&Params::default(), &VDSet::new(&[])),
+        modules,
+    };
+    let inputs = vec![pick.clone()];
+    let witness = state.grounding_witness(&inputs);
+    let mut tx = TxBuilder::new(&mut ctx, &inputs, witness);
+
+    let receiver_key = Value::from(rand_raw_value());
+    let scope = tx.begin_action();
+    let (moved, st_rekey, h) = tx.rekey(&mut ctx, &pick, receiver_key.clone());
+    tx.set_guard(h, is_wood_pick_guard(&mut ctx, &state, 3, st_rekey));
+    tx.end_action(scope);
+
+    eprintln!("{tx}");
+    let (st, tx_out, stats) = tx.finalize(&mut ctx);
+    print_stats(&stats);
+    ctx.builder.reveal(&st).unwrap();
+    solve_and_verify(ctx.builder);
+
+    assert!(tx_out.live.contains(&Value::from(moved.clone())).unwrap());
+    assert!(
+        !tx_out
+            .live
+            .contains(&Value::from(pick.commitment()))
+            .unwrap()
+    );
+    assert!(
+        tx_out
+            .nullifiers
+            .contains(&Value::from(compute_nullifier(&pick)))
+            .unwrap()
+    );
+
+    assert_eq!(
+        moved.get(&StrKey::from("key")).unwrap().unwrap(),
+        receiver_key
+    );
+    assert_eq!(
+        erased_key_state(&moved).commitment(),
+        erased_key_state(&pick).commitment()
+    );
+    assert_eq!(
+        object_stable_identifier(&moved),
+        object_stable_identifier(&pick)
+    );
+
+    assert_ne!(compute_nullifier(&moved), compute_nullifier(&pick));
 }

@@ -1,0 +1,42 @@
+/*
+  tx_rekey: transfer of control over an object.
+
+  Rekey replaces an object's spending key without changing its other
+  fields. The key determines both its nullifier and spend endorsement.
+
+  Every transferable class guard embeds this module's hash. Keeping
+  Rekey separate prevents replay and finalization changes from
+  invalidating plugin manifests. Edits here are interface-breaking;
+  mod.rs pins the batch id.
+
+  A class opts in by adding a branch to its guard:
+
+    IsWoodPick(obj, state_header StateHeader, chain_start, chain_end) = OR(
+      ...
+      rk::Rekey(obj, chain_start, chain_end, @self_predicate(IsWoodPick))
+    )
+
+  The `type` argument binds Rekey to that class's guard hash.
+*/
+
+use module 0xTX_EVENTS_MODULE_HASH as tx
+
+// Replace the key through a public sentinel:
+//
+//   old  --(key := {})--> mid --(key := new_key)--> new
+//
+// Proving the first update requires opening `old`; proving the second
+// requires `new_key`. The receiver reconstructs `mid` from disclosed
+// non-key fields, and its commitment validates those fields. Neither
+// update reveals the previous key, and `new_key` remains private.
+//
+// `mid` is only a witness. Emitting it as an event would make its
+// sentinel-key nullifier public and cause matching transfers to collide.
+//
+// DictUpdate preserves `type` and `stable_identifier`, keeping the
+// object under the same guard and satisfying TxMutate's identity clause.
+Rekey(new, chain_start, chain_end, type, private: old, mid, new_key) = AND(
+  DictUpdate(old, "key", {}, mid)
+  DictUpdate(mid, "key", new_key, new)
+  tx::TxMutate(chain_start, chain_end, old, new, type)
+)

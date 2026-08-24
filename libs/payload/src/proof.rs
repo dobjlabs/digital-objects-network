@@ -155,10 +155,13 @@ impl BlobParser for ProofParser {
         // 2. Rebuild the public statement the proof was made against. The
         //    nullifier and live sets travel as plain hash lists, so the set
         //    commitments have to be reconstructed before they can be matched.
+        //    TxFinalized exposes the exact two-entry context commitment,
+        //    which binds the proof to both state_root and tx_final.
+        let context = txlib::context_commitment(payload.state_root, payload.tx_final);
         let statement = Statement::Custom(
             self.txn_finalized_pred.clone(),
             vec![
-                Value::from(payload.state_root).into(),
+                Value::from(context).into(),
                 Value::from(payload.tx_final).into(),
                 Value::from(hashes_to_set(&payload.nullifiers)).into(),
                 Value::from(hashes_to_set(&payload.live)).into(),

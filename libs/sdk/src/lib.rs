@@ -1001,10 +1001,11 @@ impl ActionHandle {
                             let obj0 = original
                                 .as_ref()
                                 .expect("Mutate records a pre-mutation dict");
-                            let (st, h) =
-                                exe_ctx
-                                    .tx_builder
-                                    .mutate(&mut exe_ctx.bld, &raw_obj_dict, obj0);
+                            let (st, h) = exe_ctx.tx_builder.mutate_dicts(
+                                &mut exe_ctx.bld,
+                                &raw_obj_dict,
+                                obj0,
+                            );
                             (raw_obj_dict, st, h)
                         }
                     };

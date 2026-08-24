@@ -13,12 +13,10 @@ use pod2::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Compact committed view of app state used for grounding transactions.
+/// Committed application-state roots used to ground transactions.
 ///
-/// Holds only the Merkle roots needed to recompute the state
-/// root hash and to verify synchronizer-supplied membership proofs. Full
-/// containers are not carried -- callers prove each input's liveness with a
-/// per-object Merkle proof packaged in a [`GroundingWitness`].
+/// Callers prove input membership with the Merkle proofs in
+/// [`GroundingWitness`]; this record does not carry full containers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateHeader {
@@ -112,15 +110,11 @@ pub static RECORD_STATE_HEADER_PODLANG: LazyLock<String> = LazyLock::new(|| {
     s
 });
 
-/// Proof-bearing grounding data required to build a new transaction.
+/// State header and membership proofs required to ground a transaction.
 ///
-/// Callers use `state_header` as the committed global context and
-/// `created_proofs` to prove that each consumed input object is present in
-/// `state_header.created_root` (the global created-object set). Proofs are keyed
-/// by object commitment (`Dictionary::commitment()`) and carry the object's
-/// array index, since grounding is `ArrayContains(created, index, obj)`. They
-/// are fetched fresh at consume time because the created set grows: a proof is
-/// only valid against the state root it was drawn from.
+/// `created_proofs` maps each input commitment to its array index and proof
+/// in `state_header.created_root`. Fetch proofs for the selected state root;
+/// they become stale as the created set grows.
 #[derive(Clone, Debug)]
 pub struct GroundingWitness {
     pub state_header: StateHeader,

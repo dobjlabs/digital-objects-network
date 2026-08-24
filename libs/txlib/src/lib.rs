@@ -1,10 +1,9 @@
 //! Transaction predicates for verifiable state transitions.
 //!
-//! A transaction consumes grounded input objects, emits a sequence of
-//! insert/mutate/delete events grouped into actions, and produces a
-//! `TxFinalized` proof. The event sequence is recorded as a hash chain
-//! and verified by replay at finalize time; only the state root, final
-//! tx commitment, and nullifier set are public.
+//! A transaction consumes grounded input objects, records
+//! insert/mutate/delete events in a hash chain, and produces a
+//! `TxFinalized` proof. Replay verifies the chain and exposes the
+//! transaction context, final commitment, nullifiers, and live set.
 //!
 //! # API layering
 //!
@@ -23,18 +22,19 @@
 //!
 //! # Module layout
 //!
-//! - `object` -- object states and the values derived from them (the
-//!   field accessors, the nullifier derivation, and the small dict
-//!   transforms). No dependency on the builder.
+//! - `object` -- object states, field accessors, hashes, and dictionary
+//!   transforms.
 //! - `state_header` -- the committed state view a transaction grounds
 //!   against, and the witness carrying its membership proofs.
 //! - `replay` -- the finalize-time walk over the recorded event tree.
 //! - [`predicates`] -- the podlang sources and their compiled modules.
-//! - [`test_support`] -- the scenario fixtures, a plain public module
-//!   so a crate layered above this one sets a scenario up the same way.
 //!
-//! This module holds the rest: the recorded event tree, [`TxBuilder`],
-//! and its `finalize`.
+//! This module contains [`TxBuilder`], its event tree, and two fact
+//! bundles. [`StateFacts`] supplies the commitment, `type`, and
+//! `stable_identifier` needed by a mutation. [`SpendFacts`] adds the
+//! nullifier and endorsement needed to consume a state. Both accept a
+//! local dictionary or statements proven elsewhere; they describe how
+//! facts are supplied, not who owns the state.
 
 pub mod predicates;
 
@@ -43,11 +43,10 @@ mod replay;
 mod state_header;
 pub mod test_support;
 
-pub(crate) use object::OBJECT_NULLIFIER_VERSION;
 pub use object::{
-    STABLE_IDENTIFIER_FIELD, compute_nullifier, new_obj, object_key_hash,
-    object_nullifier_from_key_hash, object_nullifier_hash, object_type, rekey,
-    with_stable_identifier,
+    STABLE_IDENTIFIER_FIELD, compute_nullifier, context_commitment, erased_key_state, new_obj,
+    obj_with_key, object_key_hash, object_nullifier_from_key_hash, object_nullifier_hash,
+    object_stable_identifier, object_type, prove_endorse_spend, with_stable_identifier,
 };
 pub use state_header::{
     GroundingWitness, RECORD_STATE_HEADER_FIELDS, RECORD_STATE_HEADER_PODLANG,
@@ -59,7 +58,7 @@ pub use state_header::{
 use std::sync::Arc;
 
 use pod2::{
-    frontend::Operation,
+    frontend::{Operation, OperationArg},
     middleware::{
         EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
         containers::{Dictionary, Set},
@@ -70,7 +69,7 @@ use pod2utils::{dict, macros::BuildContext, map, op, set, st_custom};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // ============================================================================
-// Transaction output
+// Transaction output and mutation sides
 // ============================================================================
 
 /// Output of a finalized transaction. The live set is known to the prover
@@ -148,6 +147,177 @@ impl<'de> Deserialize<'de> for Tx {
     }
 }
 
+/// Openings needed to act on a state without its dictionary.
+/// Callers prove the statements before passing them to the builder.
+#[derive(Clone, Debug)]
+pub struct StateOpenings {
+    pub commitment: Hash,
+    pub type_value: Value,
+    pub stable_identifier: Value,
+    /// `DictContains(obj, "type", type_value)`
+    pub st_type: Statement,
+    /// `DictContains(obj, "stable_identifier", stable_identifier)`
+    pub st_stable_identifier: Statement,
+}
+
+/// State facts supplied by a dictionary or by previously proven openings.
+#[derive(Clone, Debug)]
+pub enum StateFacts {
+    Dict(Dictionary),
+    Statements(Box<StateOpenings>),
+}
+
+impl StateFacts {
+    pub fn commitment(&self) -> Hash {
+        match self {
+            Self::Dict(d) => d.commitment(),
+            Self::Statements(o) => o.commitment,
+        }
+    }
+
+    pub fn value(&self) -> Value {
+        Value::from(self.commitment())
+    }
+
+    pub fn type_value(&self) -> Value {
+        match self {
+            Self::Dict(d) => object_type(d),
+            Self::Statements(o) => o.type_value.clone(),
+        }
+    }
+
+    pub fn stable_identifier(&self) -> Value {
+        match self {
+            Self::Dict(d) => object_stable_identifier(d),
+            Self::Statements(o) => o.stable_identifier.clone(),
+        }
+    }
+
+    pub(crate) fn stable_identifier_entry(&self) -> OperationArg {
+        match self {
+            Self::Dict(d) => OperationArg::from((d, STABLE_IDENTIFIER_FIELD)),
+            Self::Statements(o) => OperationArg::Statement(o.st_stable_identifier.clone()),
+        }
+    }
+
+    /// `DictContains(self, "type", type_value)`, proven here for a held
+    /// state and reused from the openings otherwise.
+    pub(crate) fn type_opening(&self, ctx: &mut BuildContext, type_value: &Value) -> Statement {
+        match self {
+            Self::Dict(d) => ctx
+                .builder
+                .priv_op(op!(DictContains(d, "type", type_value.clone())))
+                .unwrap(),
+            Self::Statements(o) => o.st_type.clone(),
+        }
+    }
+
+    pub(crate) fn dict(&self) -> Option<&Dictionary> {
+        match self {
+            Self::Dict(d) => Some(d),
+            Self::Statements(_) => None,
+        }
+    }
+}
+
+/// Prove `TxMutate` from dictionaries, previously proven openings, or both.
+///
+/// The proof opens neither state dictionary. It uses supplied openings for
+/// `type` and `stable_identifier`, and commitments for the chain hashes.
+/// `prev_chain` and `chain` are the positions before and after the event.
+/// This function only produces a statement; [`TxBuilder`] must still record
+/// the event and attach guard evidence.
+pub fn prove_tx_mutate(
+    ctx: &mut BuildContext,
+    prev_chain: Hash,
+    chain: Hash,
+    old: &StateFacts,
+    new: &StateFacts,
+) -> Statement {
+    let event_hash = event_hash_mutate(old.value(), new.value());
+    let type_value = new.type_value();
+    let st_dc_new = new.type_opening(ctx, &type_value);
+    let st_dc_old = old.type_opening(ctx, &type_value);
+    let st_eq_stable_identifier = ctx
+        .builder
+        .priv_op(Operation::eq(
+            old.stable_identifier_entry(),
+            new.stable_identifier_entry(),
+        ))
+        .unwrap();
+    let st_h1 = ctx
+        .builder
+        .priv_op(op!(Hash(old.value(), new.value(), event_hash)))
+        .unwrap();
+    let st_h2 = ctx
+        .builder
+        .priv_op(op!(Hash(prev_chain, event_hash, chain)))
+        .unwrap();
+    ctx.apply_custom_pred(
+        false,
+        "TxMutate",
+        map!({"prev_chain" => prev_chain, "chain" => chain, "old" => old.value(), "new" => new.value(), "type" => type_value}),
+        vec![st_dc_new, st_dc_old, st_eq_stable_identifier, st_h1, st_h2],
+    )
+    .unwrap()
+}
+
+/// [`StateFacts`] plus the nullifier and endorsement needed to consume it.
+///
+/// `Dict` derives both from the key during finalization. `Statements`
+/// supplies both as proofs bound to a predetermined transaction context.
+/// Keeping these cases distinct prevents an incomplete authorization.
+#[derive(Clone, Debug)]
+pub enum SpendFacts {
+    Dict(Dictionary),
+    /// Boxed to keep this enum small: it is stored per event.
+    Statements(Box<SpendStatements>),
+}
+
+/// Openings and authorization supplied for a state whose key is unavailable.
+#[derive(Clone, Debug)]
+pub struct SpendStatements {
+    pub openings: StateOpenings,
+    pub nullifier: Hash,
+    /// `EndorseSpend(context, nullifier, old)`
+    pub endorsement: Statement,
+}
+
+impl SpendFacts {
+    /// Project down to the identity facts, dropping the authorization.
+    pub(crate) fn state(&self) -> StateFacts {
+        match self {
+            Self::Dict(d) => StateFacts::Dict(d.clone()),
+            Self::Statements(c) => StateFacts::Statements(Box::new(c.openings.clone())),
+        }
+    }
+
+    /// The consumed state's nullifier: derived from the key when held,
+    /// taken from the supplied authorization otherwise.
+    pub(crate) fn nullifier(&self) -> Hash {
+        match self {
+            Self::Dict(d) => compute_nullifier(d),
+            Self::Statements(c) => c.nullifier,
+        }
+    }
+
+    /// The `EndorseSpend` statement, when it was proven elsewhere.
+    /// `None` means replay builds it from the key at finalize.
+    pub(crate) fn endorsement(&self) -> Option<&Statement> {
+        match self {
+            Self::Dict(_) => None,
+            Self::Statements(c) => Some(&c.endorsement),
+        }
+    }
+
+    pub(crate) fn dict(&self) -> Option<&Dictionary> {
+        match self {
+            Self::Dict(d) => Some(d),
+            Self::Statements(_) => None,
+        }
+    }
+}
+
 // ============================================================================
 // Event tree (for replay construction in finalize)
 // ============================================================================
@@ -168,8 +338,11 @@ pub(crate) enum ChainEvent {
         guard_evidence: Option<Statement>,
     },
     Mutate {
-        new: Dictionary,
-        old: Dictionary,
+        new: StateFacts,
+        /// The consumed state, carrying whatever this builder knows about
+        /// it: the dict when it holds the key, otherwise the openings and
+        /// spend authorization proven by whoever does.
+        old: SpendFacts,
         chain_after: Hash,
         /// The TxMutate statement emitted at record time.
         tx_stmt: Statement,
@@ -205,8 +378,33 @@ pub struct EventHandle {
 }
 
 // ============================================================================
-// Replay tx-dict helpers
+// Chain arithmetic and tx-dict helpers
 // ============================================================================
+
+/// Chain seed of a transaction over `inputs`: `H(inputs, {})`.
+pub fn chain_seed(inputs: &Set) -> Hash {
+    hash_values(&[Value::from(inputs.commitment()), Value::from(EMPTY_VALUE)])
+}
+
+/// Event hash of an insert: `H({}, new)`.
+pub fn event_hash_insert(new: Value) -> Hash {
+    hash_values(&[Value::from(EMPTY_VALUE), new])
+}
+
+/// Event hash of a mutate: `H(old, new)`.
+pub fn event_hash_mutate(old: Value, new: Value) -> Hash {
+    hash_values(&[old, new])
+}
+
+/// Event hash of a delete: `H(old, {})`.
+pub fn event_hash_delete(old: Value) -> Hash {
+    hash_values(&[old, Value::from(EMPTY_VALUE)])
+}
+
+/// One chain step: `H(prev, event_hash)`.
+pub fn chain_step(prev: Hash, event_hash: Hash) -> Hash {
+    hash_values(&[Value::from(prev), Value::from(event_hash)])
+}
 
 /// Build a replay tx dict with all 4 keys (chain is separate).
 pub(crate) fn build_tx(
@@ -221,6 +419,15 @@ pub(crate) fn build_tx(
         "chain_start" => chain_start,
         "chain_end" => chain_end
     })
+}
+
+/// A top-level replay scope dict: live and nullifiers with both chain
+/// bounds zeroed. `TxFinalized` pins the zeroed bounds and
+/// `ReplayAction` restores real ones per scope; the after set's
+/// commitment is tx_final, the value the relayer publishes.
+pub fn top_level_tx(live: &Set, nullifiers: &Set) -> Dictionary {
+    let zero: Hash = EMPTY_VALUE.into();
+    build_tx(live, nullifiers, zero, zero)
 }
 
 /// Return a clone of `tx` with one field replaced.
@@ -328,9 +535,18 @@ fn fmt_events(
             ChainEvent::Insert { new, .. } => {
                 writeln!(f, "{pad}insert {}", obj_summary(new))?;
             }
-            ChainEvent::Mutate { old, new, .. } => {
-                writeln!(f, "{pad}mutate {}", mutation_diff(old, new))?;
-            }
+            ChainEvent::Mutate { old, new, .. } => match (old.dict(), new.dict()) {
+                (Some(o), Some(n)) => writeln!(f, "{pad}mutate {}", mutation_diff(o, n))?,
+                // At least one side is known only indirectly, so only
+                // its commitment is available and fields cannot be
+                // diffed.
+                _ => writeln!(
+                    f,
+                    "{pad}mutate {} -> {} (indirect)",
+                    old.state().commitment(),
+                    new.commitment()
+                )?,
+            },
             ChainEvent::Delete { old, .. } => {
                 writeln!(f, "{pad}delete {}", obj_summary(old))?;
             }
@@ -379,12 +595,20 @@ impl TxBuilder {
         inputs: &[Dictionary],
         grounding: Arc<GroundingWitness>,
     ) -> Self {
+        let commitments: Vec<Hash> = inputs.iter().map(|d| d.commitment()).collect();
+        Self::new_from_commitments(ctx, &commitments, grounding)
+    }
+
+    /// Create a builder from input commitments and their grounding witness.
+    /// Grounding does not open the input dictionaries.
+    pub fn new_from_commitments(
+        ctx: &mut BuildContext,
+        inputs: &[Hash],
+        grounding: Arc<GroundingWitness>,
+    ) -> Self {
         let (st_inputs_grounded, inputs_set, stats) =
             Self::build_inputs_grounded(ctx, inputs, &grounding);
-        let chain_start = hash_values(&[
-            Value::from(inputs_set.commitment()),
-            Value::from(EMPTY_VALUE),
-        ]);
+        let chain_start = chain_seed(&inputs_set);
         let state_header = Arc::new(grounding.state_header.clone());
         Self {
             chain: chain_start,
@@ -522,8 +746,8 @@ impl TxBuilder {
         let new = with_stable_identifier(initial);
 
         let prev = self.chain;
-        let event_hash = hash_values(&[Value::from(EMPTY_VALUE), Value::from(new.clone())]);
-        self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
+        let event_hash = event_hash_insert(Value::from(new.clone()));
+        self.chain = chain_step(prev, event_hash);
         self.live.insert(&Value::from(new.clone())).unwrap();
 
         let new_type = object_type(&new);
@@ -570,78 +794,57 @@ impl TxBuilder {
         (new, st, handle)
     }
 
-    /// Record a mutation. Emits TxMutate, updates live set and nullifiers.
-    /// Must be called inside an open action scope. Returns the
-    /// TxMutate statement and a handle for guard attachment.
-    pub fn mutate(
+    /// Record a mutation when both state dictionaries are available.
+    /// Returns the `TxMutate` statement and a handle for guard attachment.
+    pub fn mutate_dicts(
         &mut self,
         ctx: &mut BuildContext,
         new: &Dictionary,
         old: &Dictionary,
     ) -> (Statement, EventHandle) {
+        self.mutate(
+            ctx,
+            &StateFacts::Dict(new.clone()),
+            &SpendFacts::Dict(old.clone()),
+        )
+    }
+
+    /// Record a mutation from dictionaries, previously proven statements,
+    /// or both. Returns the `TxMutate` statement and guard handle.
+    pub fn mutate(
+        &mut self,
+        ctx: &mut BuildContext,
+        new: &StateFacts,
+        old: &SpendFacts,
+    ) -> (Statement, EventHandle) {
         assert!(
             !self.action_stack.is_empty(),
             "mutate must be called inside an action scope",
         );
+        let old_state = old.state();
+
         let prev = self.chain;
-        let event_hash = hash_values(&[Value::from(old.clone()), Value::from(new.clone())]);
-        self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
-        self.live.delete(&Value::from(old.commitment())).unwrap();
-        self.live.insert(&Value::from(new.clone())).unwrap();
+        let event_hash = event_hash_mutate(old_state.value(), new.value());
+        self.chain = chain_step(prev, event_hash);
+        self.live.delete(&old_state.value()).unwrap();
+        self.live.insert(&new.value()).unwrap();
         self.nullifiers
-            .insert(&Value::from(compute_nullifier(old)))
+            .insert(&Value::from(old.nullifier()))
             .unwrap();
 
-        let new_type = object_type(new);
-        let old_type = object_type(old);
-        assert_eq!(new_type, old_type, "mutate must preserve object type");
-        let new_stable_identifier = new
-            .get(&StrKey::from(STABLE_IDENTIFIER_FIELD))
-            .expect("new dict lookup")
-            .expect(
-                "mutate target missing stable identifier field (must come from TxBuilder::insert)",
-            );
-        let old_stable_identifier = old
-            .get(&StrKey::from(STABLE_IDENTIFIER_FIELD))
-            .expect("old dict lookup")
-            .expect(
-                "mutate source missing stable identifier field (must come from TxBuilder::insert)",
-            );
+        let new_type = new.type_value();
         assert_eq!(
-            new_stable_identifier, old_stable_identifier,
+            new_type,
+            old_state.type_value(),
+            "mutate must preserve object type"
+        );
+        assert_eq!(
+            new.stable_identifier(),
+            old_state.stable_identifier(),
             "mutate must preserve object stable identifier"
         );
-        let st_dc_new = ctx
-            .builder
-            .priv_op(op!(DictContains(new, "type", new_type.clone())))
-            .unwrap();
-        let st_dc_old = ctx
-            .builder
-            .priv_op(op!(DictContains(old, "type", new_type.clone())))
-            .unwrap();
-        let st_eq_stable_identifier = ctx
-            .builder
-            .priv_op(op!(Equal(
-                (old, STABLE_IDENTIFIER_FIELD),
-                (new, STABLE_IDENTIFIER_FIELD)
-            )))
-            .unwrap();
-        let st_h1 = ctx
-            .builder
-            .priv_op(op!(Hash(old, new, event_hash)))
-            .unwrap();
-        let st_h2 = ctx
-            .builder
-            .priv_op(op!(Hash(prev, event_hash, self.chain)))
-            .unwrap();
-        let st = ctx
-            .apply_custom_pred(
-                false,
-                "TxMutate",
-                map!({"prev_chain" => prev, "chain" => self.chain, "old" => old.clone(), "new" => new.clone(), "type" => new_type}),
-                vec![st_dc_new, st_dc_old, st_eq_stable_identifier, st_h1, st_h2],
-            )
-            .unwrap();
+
+        let st = prove_tx_mutate(ctx, prev, self.chain, &old_state, new);
         record(&mut self.stats, "TxMutate");
 
         self.push_event(ChainEvent::Mutate {
@@ -655,6 +858,88 @@ impl TxBuilder {
         (st, handle)
     }
 
+    /// Rekey a locally available state and prove the `Rekey` action.
+    ///
+    /// Returns the new state, the action statement for the class guard,
+    /// and the event handle. The state is otherwise unchanged.
+    pub fn rekey(
+        &mut self,
+        ctx: &mut BuildContext,
+        old: &Dictionary,
+        new_key: Value,
+    ) -> (Dictionary, Statement, EventHandle) {
+        let mid = erased_key_state(old);
+        let (st_mutate, handle) = {
+            let new = obj_with_key(&mid, new_key.clone());
+            self.mutate_dicts(ctx, &new, old)
+        };
+        let st_erase = ctx
+            .builder
+            .priv_op(op!(DictUpdate(old, "key", EMPTY_VALUE, mid)))
+            .unwrap();
+        self.prove_rekey(ctx, &mid, new_key, st_erase, st_mutate, handle)
+    }
+
+    /// Rekey a state using a key-erasure proof supplied by its holder.
+    ///
+    /// `mid` is the erased-key state reconstructed from disclosed non-key
+    /// fields. Its commitment must match `st_key_erasure`. This builder
+    /// can therefore prove `Rekey` without opening the consumed state.
+    /// Key erasure and selection of `new_key` remain separate because each
+    /// requires a value unavailable to the other prover.
+    pub fn rekey_apply(
+        &mut self,
+        ctx: &mut BuildContext,
+        consumed: &SpendFacts,
+        st_key_erasure: Statement,
+        mid: &Dictionary,
+        new_key: Value,
+    ) -> (Dictionary, Statement, EventHandle) {
+        let (st_mutate, handle) = {
+            let new = obj_with_key(mid, new_key.clone());
+            self.mutate(ctx, &StateFacts::Dict(new), consumed)
+        };
+        self.prove_rekey(ctx, mid, new_key, st_key_erasure, st_mutate, handle)
+    }
+
+    /// Record a rekey already proven by the receiver of the new key.
+    ///
+    /// `old` is available locally; `new` is supplied through statements.
+    /// Replay derives the spend authorization from `old`. This returns
+    /// only an event handle because the caller already has guard evidence.
+    pub fn rekey_record(
+        &mut self,
+        ctx: &mut BuildContext,
+        old: &Dictionary,
+        new: &StateFacts,
+    ) -> EventHandle {
+        let (_, handle) = self.mutate(ctx, new, &SpendFacts::Dict(old.clone()));
+        record(&mut self.stats, "Rekey");
+        handle
+    }
+
+    /// Set the new key and prove `Rekey` over both updates and the mutation.
+    fn prove_rekey(
+        &mut self,
+        ctx: &mut BuildContext,
+        mid: &Dictionary,
+        new_key: Value,
+        st_erase: Statement,
+        st_mutate: Statement,
+        handle: EventHandle,
+    ) -> (Dictionary, Statement, EventHandle) {
+        let new = obj_with_key(mid, new_key.clone());
+        let st_set = ctx
+            .builder
+            .priv_op(op!(DictUpdate(mid, "key", new_key, new)))
+            .unwrap();
+        let st = ctx
+            .apply_custom_pred_simple(false, "Rekey", vec![st_erase, st_set, st_mutate])
+            .unwrap();
+        record(&mut self.stats, "Rekey");
+        (new, st, handle)
+    }
+
     /// Record a deletion. Emits TxDelete, updates live set and nullifiers.
     /// Must be called inside an open action scope. Returns the
     /// TxDelete statement and a handle for guard attachment.
@@ -664,8 +949,8 @@ impl TxBuilder {
             "delete must be called inside an action scope",
         );
         let prev = self.chain;
-        let event_hash = hash_values(&[Value::from(old.clone()), Value::from(EMPTY_VALUE)]);
-        self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
+        let event_hash = event_hash_delete(Value::from(old.clone()));
+        self.chain = chain_step(prev, event_hash);
         self.live.delete(&Value::from(old.commitment())).unwrap();
         self.nullifiers
             .insert(&Value::from(compute_nullifier(old)))
@@ -715,13 +1000,18 @@ impl TxBuilder {
         let mut stats = self.stats;
         let zero: Hash = EMPTY_VALUE.into();
 
-        let before_tx = build_tx(&self.inputs_set, &set!(), zero, zero);
-        let after_tx = build_tx(&self.live, &self.nullifiers, zero, zero);
+        let before_tx = top_level_tx(&self.inputs_set, &set!());
+        let after_tx = top_level_tx(&self.live, &self.nullifiers);
 
-        // Replay the top-level action sequence. Every top-level event
-        // is guaranteed to be a ChainEvent::Action (enforced by the
-        // begin_action/end_action API), so we dispatch directly to
-        // ReplayActions instead of going through ReplayContents.
+        // Bind every spend to both the grounding header and final transaction.
+        // Full container values let replay open these entries through
+        // anchored-key rebinds.
+        let context = dict!({
+            "state_header" => self.state_header.array(),
+            "tx_commitment" => after_tx.clone()
+        });
+
+        // Top-level events are always actions, so skip ReplayContents.
         let empty_nullifiers = set!();
         let frame = replay::ReplayFrame {
             live: &self.inputs_set,
@@ -729,18 +1019,12 @@ impl TxBuilder {
             chain_start: zero,
             chain_end: zero,
         };
-        let (st_replay, _, _, _) = replay::Replayer::new(ctx, &mut stats).build_replay_actions(
-            &self.events,
-            self.chain_start,
-            frame,
-        );
+        let (st_replay, _, _, _) = replay::Replayer::new(ctx, &mut stats, &context)
+            .build_replay_actions(&self.events, self.chain_start, frame);
 
-        // Tie grounding to the public state root: rebind the InputsGrounded
-        // statement's `inputs` to `before_tx.live` (the in-tx working set) and
-        // its created set to `state_header.created`. The latter is the single
-        // state-root array access anchoring the whole grounding tree. Two calls
-        // rather than one because the entries are different anchored-key types:
-        // a dict key and an array index.
+        // Rebind InputsGrounded to `before_tx.live` and
+        // `state_header.created`. Separate calls are required for the dict key
+        // and array index anchor types.
         let st_inputs_rebound = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
@@ -770,11 +1054,8 @@ impl TxBuilder {
                 st_hash,
             ))
             .unwrap();
-        // Pin the full schema of `before_tx` (nullifiers={}, chain_start={},
-        // chain_end={}, live=inputs_set) in a single DictInsert clause. This
-        // closes the malleability where the prover could otherwise witness
-        // arbitrary chain_start/chain_end values that pass through ReplayActions
-        // verbatim into tx_final.
+        // Pin every `before_tx` field. Otherwise arbitrary chain bounds could
+        // pass through ReplayActions into tx_final.
         let scope_dict = dict!({
             "nullifiers" => set!(),
             "chain_start" => zero,
@@ -796,7 +1077,20 @@ impl TxBuilder {
                 st_dict_insert_lit,
             ))
             .unwrap();
-        // Surface the final nullifier and live sets as public args.
+        // Expose the final nullifiers and live set, then bind the context to
+        // the grounding header and tx_final.
+        let st_dc_ctx_header = ctx
+            .builder
+            .priv_op(op!(DictContains(
+                context,
+                "state_header",
+                self.state_header.array()
+            )))
+            .unwrap();
+        let st_dc_ctx_txfinal = ctx
+            .builder
+            .priv_op(op!(DictContains(context, "tx_commitment", after_tx)))
+            .unwrap();
         let st_dc_null_after = ctx
             .builder
             .priv_op(op!(DictContains(after_tx, "nullifiers", self.nullifiers)))
@@ -809,7 +1103,12 @@ impl TxBuilder {
             .apply_custom_pred_simple(
                 false,
                 "TxFinalBindings",
-                vec![st_dc_null_after, st_dc_live_after],
+                vec![
+                    st_dc_ctx_header,
+                    st_dc_ctx_txfinal,
+                    st_dc_null_after,
+                    st_dc_live_after,
+                ],
             )
             .unwrap();
         record(&mut stats, "TxFinalBindings");
@@ -851,7 +1150,7 @@ impl TxBuilder {
 
     fn build_inputs_grounded(
         ctx: &mut BuildContext,
-        inputs: &[Dictionary],
+        inputs: &[Hash],
         grounding: &GroundingWitness,
     ) -> (Statement, Set, TxStats) {
         let mut stats = TxStats::new();
@@ -876,14 +1175,14 @@ impl TxBuilder {
             return (st, set!(), stats);
         }
 
-        let extend_set = |set: &Set, obj: &Dictionary| -> Set {
+        let extend_set = |set: &Set, obj: &Hash| -> Set {
             let mut new_set = set.clone();
-            new_set.insert(&Value::from(obj.clone())).unwrap();
+            new_set.insert(&Value::from(*obj)).unwrap();
             new_set
         };
 
-        let prove_input = |ctx: &mut BuildContext, obj: &Dictionary| {
-            prove_obj_in_created(ctx, created_root, grounding, obj)
+        let prove_input = |ctx: &mut BuildContext, obj: &Hash| {
+            prove_obj_in_created(ctx, created_root, grounding, *obj)
         };
 
         // Bottom of the recursion: Single for odd N, Pair (both inputs inline)
@@ -968,22 +1267,18 @@ impl TxBuilder {
     }
 }
 
-/// Prove `ArrayContains(created, index, obj)` for one input object against the
-/// global created-set commitment `created_root`, passed as a plain literal.
-///
-/// The created set stores object commitments at sequential indices, but
-/// `Value::from(obj)` hashes to that same commitment, so the per-object proof
-/// lines up against the full object dict here. The index comes from the
-/// grounding witness.
+/// Prove that an input commitment occurs in the global created set.
+/// The grounding witness supplies the index and Merkle proof; the object
+/// dictionary remains unopened.
 fn prove_obj_in_created(
     ctx: &mut BuildContext,
     created_root: Hash,
     grounding: &GroundingWitness,
-    obj: &Dictionary,
+    obj: Hash,
 ) -> Statement {
     let (index, proof) = grounding
         .created_proofs
-        .get(&obj.commitment())
+        .get(&obj)
         .cloned()
         .expect("missing created-set proof in grounding witness");
     ctx.builder
@@ -992,7 +1287,7 @@ fn prove_obj_in_created(
             vec![
                 Value::from(created_root).into(),
                 Value::from(index).into(),
-                Value::from(obj.clone()).into(),
+                Value::from(obj).into(),
             ],
             OperationAux::MerkleProof(proof),
         ))

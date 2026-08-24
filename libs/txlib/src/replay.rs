@@ -1,17 +1,9 @@
 //! Replay circuit construction for `TxBuilder::finalize`.
 //!
-//! At finalize time the recorded events form a tree (actions containing
-//! events and sub-actions). This module walks that tree and builds the
-//! POD2 predicate statements that prove each event's hash step, update
-//! the live/nullifier sets, and dispatch each event to its object-type
-//! guard.
-//!
-//! The walker is a `Replayer` that owns the long-lived mutable builder
-//! state (`BuildContext` + `TxStats`). A `ReplayFrame` carries the
-//! per-step immutable world view -- the current live/nullifier sets
-//! plus the chain-scope bounds -- and threads through the recursion.
-//! Only `Replayer::build_replay_actions` is `pub(crate)`; every other
-//! method here is a private helper it delegates to.
+//! Finalization walks the recorded action tree and proves each event's hash
+//! step, set updates, and class-guard dispatch. `Replayer` owns the mutable
+//! proof state; `ReplayFrame` carries set and chain-scope snapshots through
+//! the recursion.
 
 use pod2::{
     frontend::Operation,
@@ -23,15 +15,17 @@ use pod2::{
 use pod2utils::{dict, macros::BuildContext, map, op, st_custom};
 
 use crate::{
-    ChainEvent, OBJECT_NULLIFIER_VERSION, TxStats, build_tx, object_key_hash,
-    object_nullifier_from_key_hash, record, tx_with,
+    ChainEvent, SpendFacts, StateFacts, TxStats, build_tx, object_key_hash,
+    object_nullifier_from_key_hash, prove_endorse_spend, record, tx_with,
 };
 
-/// The replay walker. Owns the long-lived mutable builder state
-/// (`BuildContext` + `TxStats`) that threads through every event.
+/// Replay walker and its transaction-wide proof state.
+///
+/// Guards bind to `context.state_header`; spends endorse the full context.
 pub(crate) struct Replayer<'a> {
     ctx: &'a mut BuildContext,
     stats: &'a mut TxStats,
+    context: &'a Dictionary,
 }
 
 /// Per-step immutable world view: the live/nullifier sets and the
@@ -88,13 +82,7 @@ impl<'a> ReplayFrame<'a> {
     }
 }
 
-/// Derived state needed to build a Mutate event's replay clauses.
-/// `btx` is the pre-mutate tx-context dict; `live_minus_old` is the
-/// live set with `old` removed; `new_live` is `live_minus_old` with
-/// `new` inserted; `new_nullifiers` is the nullifiers set with
-/// `nullifier(old)` accumulated. Owned because the caller also needs
-/// `new_live` / `new_nullifiers` to thread into the recursive tail
-/// frame.
+/// Owned snapshots shared by a mutation's proof and the following frame.
 pub(crate) struct MutateScratch {
     pub(crate) btx: Dictionary,
     pub(crate) live_minus_old: Set,
@@ -105,17 +93,16 @@ pub(crate) struct MutateScratch {
 impl<'a> ReplayFrame<'a> {
     /// Compute the pre-mutate tx context + post-mutate set snapshots
     /// for a `(old -> new)` mutate.
-    pub(crate) fn mutate_scratch(self, old: &Dictionary, new: &Dictionary) -> MutateScratch {
+    pub(crate) fn mutate_scratch(self, old: &SpendFacts, new: &StateFacts) -> MutateScratch {
         let btx = self.to_tx_dict();
         let mut live_minus_old = self.live.clone();
-        live_minus_old
-            .delete(&Value::from(old.commitment()))
-            .unwrap();
+        live_minus_old.delete(&old.state().value()).unwrap();
         let mut new_live = live_minus_old.clone();
-        new_live.insert(&Value::from(new.clone())).unwrap();
-        let nul = object_nullifier_from_key_hash(object_key_hash(old).unwrap());
+        new_live.insert(&new.value()).unwrap();
         let mut new_nullifiers = self.nullifiers.clone();
-        new_nullifiers.insert(&Value::from(nul)).unwrap();
+        new_nullifiers
+            .insert(&Value::from(old.nullifier()))
+            .unwrap();
         MutateScratch {
             btx,
             live_minus_old,
@@ -126,27 +113,27 @@ impl<'a> ReplayFrame<'a> {
 }
 
 impl<'a> Replayer<'a> {
-    pub(crate) fn new(ctx: &'a mut BuildContext, stats: &'a mut TxStats) -> Self {
-        Self { ctx, stats }
+    pub(crate) fn new(
+        ctx: &'a mut BuildContext,
+        stats: &'a mut TxStats,
+        context: &'a Dictionary,
+    ) -> Self {
+        Self {
+            ctx,
+            stats,
+            context,
+        }
     }
 
     fn record(&mut self, name: &str) {
         record(self.stats, name);
     }
 
-    /// Walk the top-level event list and build a `ReplayActions`
-    /// statement. Every top-level event must be `ChainEvent::Action` --
-    /// the prover API enforces this by construction, and we panic here
-    /// if not. `events` is guaranteed non-empty (TxBuilder::finalize
-    /// asserts). Callers: `TxBuilder::finalize`.
+    /// Build `ReplayActions` for the nonempty top-level action list.
     ///
-    /// For a single top-level action whose body is a lone Insert event,
-    /// dispatches into the `ReplayActionInsert` K=1 fast path (slot 3
-    /// of the `ReplayActions` OR), which proves the whole transaction
-    /// in 2 statements instead of going through ReplayAction/ReplayContents/
-    /// ReplayElement/ReplayInsert. Multi-action transactions always use
-    /// the slow ReplayAction for each action, because `ReplayActionsStep`
-    /// expects a `ReplayAction` statement in its first slot.
+    /// A single action containing one insert uses `ReplayActionInsert`,
+    /// reducing the path from five statements to two. Multiple actions use
+    /// `ReplayAction` because `ReplayActionsStep` requires it.
     pub(crate) fn build_replay_actions(
         &mut self,
         events: &[ChainEvent],
@@ -235,10 +222,8 @@ impl<'a> Replayer<'a> {
         }
     }
 
-    /// Recursively build `ReplayContents` for a list of events. `events`
-    /// is guaranteed non-empty (TxBuilder asserts on `end_action`). The
-    /// K=1 case lands on `ReplayElement`; K>=2 dispatches to the
-    /// type-specialized `ReplayContentsStep<X>` for the head.
+    /// Build `ReplayContents` for a nonempty event list.
+    /// K=1 uses `ReplayElement`; K>=2 specializes on the head event type.
     fn build_replay_contents(
         &mut self,
         events: &[ChainEvent],
@@ -268,13 +253,9 @@ impl<'a> Replayer<'a> {
             return (st, next_chain, next_live, next_nulls);
         }
 
-        // K>=2 step: peel off head, dispatch on its type, recurse on tail.
-        // For Insert and Mutate the Replay<X> body is inlined into the
-        // ReplayContentsStep<X> predicate, with `new`/`new_live` (Insert)
-        // or `old`/`new` (Mutate) packed into a small private dict so the
-        // wildcard count stays at the pod2 limit. Delete keeps its
-        // ReplayDelete wrapping (already at the 5-sub-stmt limit), and
-        // Action is opaque to this dispatch.
+        // Insert and Mutate inline their replay bodies and pack private values
+        // to stay within pod2's wildcard limit. Delete keeps ReplayDelete
+        // because it already reaches the five-substatement limit.
         let (first, rest) = events.split_first().unwrap();
         let (st_step, tag, final_chain, final_live, final_nulls) = match first {
             ChainEvent::Insert {
@@ -434,11 +415,8 @@ impl<'a> Replayer<'a> {
         (st, final_chain, final_live, final_nulls)
     }
 
-    /// Build the inner `Replay<X>` statement for one event, returning
-    /// the statement plus a tag identifying which event variant
-    /// produced it. Shared between `build_replay_element` (which wraps
-    /// the result in `ReplayElement`) and the K>=2 step branch of
-    /// `build_replay_contents` (which wraps in `ReplayContentsStep<X>`).
+    /// Build one `Replay<X>` statement and return its event tag.
+    /// Both `ReplayElement` and `ReplayContentsStep<X>` use this result.
     fn build_replay_event(
         &mut self,
         event: &ChainEvent,
@@ -584,7 +562,7 @@ impl<'a> Replayer<'a> {
             .priv_op(Operation::replace_value_with_entry(
                 vec![
                     None,
-                    None,
+                    Some((self.context, "state_header")),
                     Some((&btx, "chain_start")),
                     Some((&btx, "chain_end")),
                 ],
@@ -605,8 +583,8 @@ impl<'a> Replayer<'a> {
 
     fn build_replay_mutate(
         &mut self,
-        new: &Dictionary,
-        old: &Dictionary,
+        new: &StateFacts,
+        old: &SpendFacts,
         frame: ReplayFrame<'_>,
         tx_stmt: Statement,
         guard_evidence: Statement,
@@ -620,7 +598,7 @@ impl<'a> Replayer<'a> {
             .priv_op(Operation::replace_value_with_entry(
                 vec![
                     None,
-                    None,
+                    Some((self.context, "state_header")),
                     Some((&scratch.btx, "chain_start")),
                     Some((&scratch.btx, "chain_end")),
                 ],
@@ -644,35 +622,30 @@ impl<'a> Replayer<'a> {
         (st, new_live, new_nullifiers)
     }
 
-    /// Build a `ReplayNullify` statement: derives the object key hash
-    /// and nullifier from `old`, then accumulates the nullifier into
-    /// the tx's nullifiers set. `mid_tx` is the tx state with the new
-    /// live set already in place; `after_tx` is `mid_tx` with
-    /// `nullifiers` updated to `new_nullifiers`. Used by both mutate and delete
-    /// replay.
+    /// Authorize a spend and add its nullifier to `mid_tx`.
+    /// Used by mutation and deletion replay.
     fn build_replay_nullify(
         &mut self,
-        old: &Dictionary,
+        old: &SpendFacts,
         mid_tx: &Dictionary,
         after_tx: &Dictionary,
         new_nullifiers: &Set,
     ) -> Statement {
-        let okh = object_key_hash(old).unwrap();
-        let nul = object_nullifier_from_key_hash(okh);
-        let op_h1 = self
-            .ctx
-            .builder
-            .priv_op(op!(Hash(old, (old, "key"), okh)))
-            .unwrap();
-        let op_h2 = self
-            .ctx
-            .builder
-            .priv_op(op!(Hash(okh, OBJECT_NULLIFIER_VERSION, nul)))
-            .unwrap();
+        // Use a supplied endorsement when the old key is unavailable.
+        let st_endorse = match (old.endorsement(), old.dict()) {
+            (Some(st), _) => st.clone(),
+            (None, Some(d)) => self.build_endorse_spend(d),
+            (None, None) => unreachable!("SpendFacts::Statements always carries an endorsement"),
+        };
+
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert((mid_tx, "nullifiers"), nul, new_nullifiers)))
+            .priv_op(op!(SetInsert(
+                (mid_tx, "nullifiers"),
+                old.nullifier(),
+                new_nullifiers
+            )))
             .unwrap();
         let op_du_null = self
             .ctx
@@ -686,25 +659,28 @@ impl<'a> Replayer<'a> {
             .unwrap();
         let st = self
             .ctx
-            .apply_custom_pred_simple(
-                false,
-                "ReplayNullify",
-                vec![op_h1, op_h2, op_si, op_du_null],
-            )
+            .apply_custom_pred_simple(false, "ReplayNullify", vec![st_endorse, op_si, op_du_null])
             .unwrap();
         self.record("ReplayNullify");
         st
     }
 
-    /// Build `ReplayMutateEvent` (and its inner `ReplayNullify`).
-    /// Shared between `build_replay_mutate` and
-    /// `build_replay_step_mutate` (these inner predicates don't
-    /// reference `new`/`old` via anchored keys -- they take the dicts
-    /// directly as wildcards).
+    /// Build `EndorseSpend` for a locally available state.
+    /// This waits until finalization, when the transaction context exists.
+    fn build_endorse_spend(&mut self, old: &Dictionary) -> Statement {
+        let context = Value::from(self.context.commitment());
+        let (_, st) = prove_endorse_spend(self.ctx, false, context, old);
+        self.record("EndorseSpend");
+        st
+    }
+
+    /// Build the live-set swap and nullification for a mutation.
+    /// The predicates take state commitments directly, so indirect states
+    /// need no additional openings here.
     fn build_replay_mutate_event(
         &mut self,
-        new: &Dictionary,
-        old: &Dictionary,
+        new: &StateFacts,
+        old: &SpendFacts,
         scratch: &MutateScratch,
     ) -> Statement {
         let MutateScratch {
@@ -722,12 +698,16 @@ impl<'a> Replayer<'a> {
         let op_sd = self
             .ctx
             .builder
-            .priv_op(op!(SetDelete((btx, "live"), old, live_minus_old)))
+            .priv_op(op!(SetDelete(
+                (btx, "live"),
+                old.state().value(),
+                live_minus_old
+            )))
             .unwrap();
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert(live_minus_old, new, new_live)))
+            .priv_op(op!(SetInsert(live_minus_old, new.value(), new_live)))
             .unwrap();
         let op_du_live = self
             .ctx
@@ -768,12 +748,15 @@ impl<'a> Replayer<'a> {
             "mid_tx" => m1.clone()
         });
 
-        let st_nullify = self.build_replay_nullify(old, &m1, &atx, &new_nullifiers);
+        // Deletes are always of a state this builder holds, so there is
+        // no indirect-side delete path.
+        let st_nullify =
+            self.build_replay_nullify(&SpendFacts::Dict(old.clone()), &m1, &atx, &new_nullifiers);
         let st_nullify_wrapped = self
             .ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![Some((&pair, "mid_tx")), None, None],
+                vec![None, Some((&pair, "mid_tx")), None, None],
                 st_nullify.clone(),
             ))
             .unwrap();
@@ -799,7 +782,7 @@ impl<'a> Replayer<'a> {
             .priv_op(Operation::replace_value_with_entry(
                 vec![
                     None,
-                    None,
+                    Some((self.context, "state_header")),
                     Some((&btx, "chain_start")),
                     Some((&btx, "chain_end")),
                 ],
@@ -824,10 +807,7 @@ impl<'a> Replayer<'a> {
         (st, new_live, new_nullifiers)
     }
 
-    /// Build `ReplayAction`: open the action scope (rebind
-    /// `chain_start`/`chain_end` in the tx context), replay the inner
-    /// contents in a child frame, then copy the resulting live and
-    /// nullifier sets back into the parent's tx state.
+    /// Replay an action in its chain scope and copy its sets to the parent.
     fn build_replay_action(
         &mut self,
         contents: &[ChainEvent],
@@ -902,22 +882,11 @@ impl<'a> Replayer<'a> {
         (st, next_live, next_nulls)
     }
 
-    /// Build a `ReplayActionInsert` statement: the K=1 fast path for a
-    /// single top-level action whose body is one Insert. Same shape as
-    /// `build_replay_insert`, except the guard call uses `before_chain`
-    /// and `after_chain` (the action's chain bounds, which are also the
-    /// transaction's chain bounds in the K=1 single-action case)
-    /// directly as public args rather than anchoring to
-    /// `before_tx.chain_start`/`chain_end`. That means we don't need to
-    /// rebind the chain slots of `guard_evidence` -- the literal chain
-    /// values it carries from record time already match the public arg
-    /// bindings.
+    /// Fast path for one top-level action containing one insert.
     ///
-    /// Caller must have verified that `contents` is `[ChainEvent::Insert
-    /// { .. }]`; this method panics otherwise. The action's `chain_after`
-    /// equals `contents[0].chain_after` by construction (K=1 makes the
-    /// single Insert span the whole action), so we read it from there
-    /// rather than threading it through a parameter.
+    /// The action and transaction chain bounds are identical, so the guard's
+    /// recorded bounds already match the public arguments; only its state
+    /// header needs rebinding. The caller validates the event shape.
     fn build_replay_action_insert(
         &mut self,
         contents: &[ChainEvent],
@@ -966,12 +935,20 @@ impl<'a> Replayer<'a> {
             .builder
             .priv_op(op!(DictUpdate(btx, "live", (&pair, "new_live"), atx)))
             .unwrap();
+        let rebound_evidence = self
+            .ctx
+            .builder
+            .priv_op(Operation::replace_value_with_entry(
+                vec![None, Some((self.context, "state_header")), None, None],
+                evidence,
+            ))
+            .unwrap();
         let st = self
             .ctx
             .apply_custom_pred_simple(
                 false,
                 "ReplayActionInsert",
-                vec![tx_stmt_wrapped, op_si, op_du, evidence],
+                vec![tx_stmt_wrapped, op_si, op_du, rebound_evidence],
             )
             .unwrap();
         self.record("ReplayActionInsert");

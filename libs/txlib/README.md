@@ -67,6 +67,16 @@ Replay is structured as recursive OR-walking over the chain. Four layers, bottom
        if step is sub_action:       replay(sub_action)
    ```
 
+   Replay threads a per-transaction **context** dict `{state_header, tx_commitment}`, where `tx_commitment` is the finalized transaction commitment (`tx_final`). Guards use `context.state_header`, so they remain scoped to the grounding block while the transaction is assembled.
+
+   Each `nullify` requires an `EndorseSpend` statement. It derives both the consumed object's nullifier and a **spend endorsement**:
+
+   ```text
+   H(old.key, H(context, "txlib-endorsement-v1"))
+   ```
+
+   Both values require opening the object's `key`, so only a key holder can produce them. Binding the endorsement to the context prevents reuse with another transaction or state header. The two derivations share one predicate to conserve custom-predicate applications and to give a contributor one statement to export per spend.
+
    In podlang this is encoded as a recursive OR walk, which would be expensive if written naively: each step would OR over five cases at every iteration. Because the prover knows the event sequence in advance, the loop is unrolled and specialised: at each step the prover picks the right branch, and the variants of the next step are specialised to the type of the head event so the OR-dispatch over event types folds out. See `ReplayActions`, `ReplayContents`, and the per-event predicates `Replay{Insert,Mutate,Delete,Action}` for the details. `ReplayAction` also writes the scope into the tx context and copies inner `live`/`nullifiers` back to the outer tx. The top-level walker requires every top-level event to be an action, so no bare event can escape an action's guard dispatch.
 
    `ReplayActions` also has a K=1 fast path (`ReplayActionInsert`) for the common "mining" case: a single top-level action whose body is one Insert. It folds the whole walk into 2 custom statements by bypassing `ReplayAction` -> `ReplayContents` -> `ReplayElement` -> `ReplayInsert`, lifting the Insert's guard call directly under the top-level OR. This is safe because the action spans the full chain range in this case, so the action's `(chain_start, chain_end)` and the transaction's are the same values the guard would have seen inside a materialised `ReplayAction` scope.
@@ -75,4 +85,6 @@ Replay is structured as recursive OR-walking over the chain. Four layers, bottom
 
    The created set is grow-only and grounding runs against a possibly-stale state root, so a grounded input may already have been spent. The nullifier set, not grounding, is what rejects a re-spend.
 
-4. **`TxFinalized`.** The public entry point. It seeds the chain (`chain_start = H(live_set, {})`), pins the initial `before_tx` schema (`nullifiers = {}`, `chain_start = chain_end = {}`, `live = inputs_set`) in a single `DictInsert` clause to remove malleability, and threads everything through one `ReplayActions` call. `TxFinalBindings` surfaces the final `nullifiers` and `live` sets as public args (factored out so `TxFinalized` stays within the clause limit), letting the synchronizer fold them into its global nullifier and created sets. Public outputs: `(state_root, tx_final, nullifiers, live)`.
+4. **`TxFinalized`.** The public entry point. It seeds the chain (`chain_start = H(live_set, {})`), pins the complete initial `before_tx` schema, and calls `ReplayActions`. `TxFinalBindings` checks that the context contains the grounding state header and `tx_commitment == tx_final`; it also exposes the final `nullifiers` and `live` sets for the synchronizer.
+
+   The public outputs are `(context, tx_final, nullifiers, live)`. The verifier reconstructs `context` as the exact two-entry dict `(state_root, tx_final)`, so a context with extra entries cannot pass verification.
