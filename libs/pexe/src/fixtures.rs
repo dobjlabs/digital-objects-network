@@ -39,17 +39,17 @@ pub fn mint_classes<'a>(
     module: &SdkModule,
     refs: impl IntoIterator<Item = &'a ActionObjectRef>,
 ) -> Result<Vec<pod2::middleware::containers::Dictionary>> {
-    let mut cache: HashMap<(Option<&str>, &str), crate::inspect::ClassSignature> = HashMap::new();
+    // Keyed by the class's identity: its defining module's batch id
+    // plus its name, which is unique within that module.
+    let mut cache: HashMap<(Hash, &str), crate::inspect::ClassSignature> = HashMap::new();
     let mut out = Vec::new();
-    for r in refs {
-        let plugin = r.plugin.as_deref();
-        let defining = module.defining_module(plugin).ok_or_else(|| {
-            anyhow!("class {r}: defining plugin is not among this module's imports")
-        })?;
-        let sig = cache.entry((plugin, r.class.as_str())).or_insert_with(|| {
-            derive_class_signature(defining, &defining.module().batch, &r.class)
-        });
-        out.push(mint_with_signature(defining, &r.class, sig)?);
+    for object_ref in refs {
+        let (defining_batch, class) = module.class_identity(object_ref);
+        let defining = module.class_module(object_ref);
+        let signature = cache
+            .entry((defining_batch, class))
+            .or_insert_with(|| derive_class_signature(defining, &defining.module().batch, class));
+        out.push(mint_with_signature(defining, class, signature)?);
     }
     Ok(out)
 }

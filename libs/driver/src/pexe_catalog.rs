@@ -15,12 +15,14 @@
 //! plugins load in dependency order and an unresolvable or hash-mismatched
 //! import fails the whole catalog load.
 //!
-//! The compiled [`sdk::SdkModule`] is not kept — it holds a `Rc<Engine>` and is
-//! therefore `!Send`. `execute_action` re-loads the script from its stored bytes
-//! on demand, matching the per-call pattern used before.
+//! The compiled [`sdk::SdkModule`] is not kept on the catalog - it holds a
+//! `Rc<Engine>` and is therefore `!Send`. `execute_action` compiles from the
+//! stored script on demand and memoizes the result in a thread-local cache, so
+//! repeat runs of an action do not recompile the plugin and its imports.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
@@ -100,6 +102,21 @@ impl PexeCatalog {
         let sdk = Sdk::default();
         let mut resolver = plugin_resolver(&sdk, &plugins);
 
+        // Batch id -> the name this catalog knows that module by, so a
+        // class spliced in from an import can be displayed under the
+        // installed plugin that defines it rather than under whatever
+        // alias some importer happened to bind. Loading here costs
+        // nothing extra: the resolver memoizes and the loop below asks
+        // for the same modules.
+        let mut plugin_name_by_batch: HashMap<Hash, String> = HashMap::new();
+        for plugin in &plugins {
+            let plugin_name = plugin.manifest.plugin.name.clone();
+            let module = resolver
+                .load(&plugin_name)
+                .map_err(|err| anyhow!("failed to load plugin {plugin_name}: {err}"))?;
+            plugin_name_by_batch.insert(module.module().batch.id(), plugin_name);
+        }
+
         let mut all_actions: Vec<ActionSummary> = Vec::new();
         let mut classes_in_order: Vec<CatalogClass> = Vec::new();
         let mut combined_podlang = String::new();
@@ -158,10 +175,9 @@ impl PexeCatalog {
                 });
             }
 
-            // Build ActionSummary rows. Each input/output class is resolved
-            // against this plugin's own class set; cross-plugin references
-            // are rejected. Hidden actions are still recorded so their
-            // qualified name routes back to this plugin via execute_action.
+            // Build ActionSummary rows. Hidden actions are still recorded
+            // so their qualified name routes back to this plugin via
+            // execute_action.
             let action_meta_by_name: HashMap<&str, &sdk::manifest::Action> = plugin
                 .manifest
                 .actions
@@ -179,22 +195,28 @@ impl PexeCatalog {
                 }
 
                 let meta = action_meta_by_name.get(bare.as_str());
-                // A class spliced in from an imported sub-action resolves
-                // against its defining plugin's module, reached through
-                // this module's import graph.
-                let resolve_class = |r: &sdk::ActionObjectRef| -> Result<ClassRef> {
-                    let owner = r.plugin.clone().unwrap_or_else(|| plugin_name.clone());
+                // A class spliced in from an imported sub-action is
+                // defined by that sub-action's module, which the ref
+                // carries. `QualifiedName` is the display form and is
+                // only unique within this catalog, so the owner comes
+                // from the installed plugin whose batch matches.
+                let resolve_class = |object_ref: &sdk::ActionObjectRef| -> Result<ClassRef> {
+                    let (defining_batch, class) = module.class_identity(object_ref);
+                    let owner = plugin_name_by_batch
+                        .get(&defining_batch)
+                        .cloned()
+                        .unwrap_or_else(|| plugin_name.clone());
                     let hash = module
-                        .defining_module(r.plugin.as_deref())
-                        .and_then(|defining| defining.class_hash(&r.class))
+                        .class_module(object_ref)
+                        .class_hash(class)
                         .ok_or_else(|| {
                             anyhow!(
-                                "plugin {plugin_name}: action {bare} references class {r}, \
-                                 which has no compiled hash in plugin {owner}"
+                                "plugin {plugin_name}: action {bare} references class \
+                                 {object_ref}, which has no compiled hash in {owner}"
                             )
                         })?;
                     Ok(ClassRef {
-                        class: QualifiedName::new(owner, r.class.clone()),
+                        class: QualifiedName::new(owner, class.to_string()),
                         hash: format!("{:#}", hash),
                     })
                 };
@@ -289,6 +311,37 @@ impl PexeCatalog {
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
     }
+
+    /// The compiled module for `plugin`, taken from this thread's cache
+    /// when the entry there was compiled from the same manifest. A
+    /// reinstall replaces its plugin's entry rather than adding one, so
+    /// the cache stays one module per plugin name however many times a
+    /// daemon hot-reloads.
+    fn compiled_module(&self, plugin: &Plugin) -> Result<Rc<sdk::SdkModule>> {
+        let name = plugin.manifest.plugin.name.as_str();
+        let module_hash = plugin.manifest.plugin.module_hash;
+        let cached = COMPILED_MODULES.with(|cache| {
+            cache
+                .borrow()
+                .get(name)
+                .filter(|(hash, _)| *hash == module_hash)
+                .map(|(_, module)| module.clone())
+        });
+        if let Some(module) = cached {
+            return Ok(module);
+        }
+        let sdk = Sdk::default();
+        let mut resolver = plugin_resolver(&sdk, &self.plugins);
+        let module = resolver
+            .load(name)
+            .map_err(|err| anyhow!("failed to reload plugin {name} for execution: {err}"))?;
+        COMPILED_MODULES.with(|cache| {
+            cache
+                .borrow_mut()
+                .insert(name.to_string(), (module_hash, module.clone()))
+        });
+        Ok(module)
+    }
 }
 
 impl ActionCatalog for PexeCatalog {
@@ -324,14 +377,7 @@ impl ActionCatalog for PexeCatalog {
             .get(&action)
             .ok_or_else(|| anyhow!("no plugin provides action {action}"))?;
         let plugin = &self.plugins[plugin_idx];
-        let sdk = Sdk::default();
-        let mut resolver = plugin_resolver(&sdk, &self.plugins);
-        let module = resolver.load(&plugin.manifest.plugin.name).map_err(|err| {
-            anyhow!(
-                "failed to reload plugin {} for execution: {err}",
-                plugin.manifest.plugin.name
-            )
-        })?;
+        let module = self.compiled_module(plugin)?;
         let executor = module.executor(self.mock_proofs, Arc::new(grounding_witness));
         Ok(executor.action(&action.name, inputs)?)
     }
@@ -343,6 +389,18 @@ impl ActionCatalog for PexeCatalog {
             Some(self.combined_podlang_src.clone())
         }
     }
+}
+
+thread_local! {
+    /// Modules compiled by `execute_action`, keyed by plugin name and
+    /// tagged with the `module_hash` its manifest pinned (validated
+    /// against the compiled batch at load, so it identifies what was
+    /// compiled). A module holds an `Rc<Engine>`, so it cannot live in
+    /// the catalog itself; keeping it per thread still spares every
+    /// later run of the same action a podlang compile of the plugin
+    /// *and its whole transitive import chain*.
+    static COMPILED_MODULES: std::cell::RefCell<HashMap<String, (Hash, Rc<sdk::SdkModule>)>> =
+        std::cell::RefCell::new(HashMap::new());
 }
 
 /// Resolver over the installed plugins: each loads once, dependencies
@@ -357,10 +415,7 @@ fn plugin_resolver<'a>(sdk: &'a Sdk, plugins: &'a [Plugin]) -> sdk::ImportResolv
 }
 
 fn discover_plugins(actions_dir: &Path) -> Result<Vec<Plugin>> {
-    if !actions_dir.exists() {
-        return Ok(Vec::new());
-    }
-    let entries = pexe::pexe_paths_in(actions_dir);
+    let entries = pexe::pexe_paths_in(actions_dir)?;
     let mut plugins = Vec::with_capacity(entries.len());
     for path in entries {
         let bytes = pexe::read_pexe_file(&path)?;
@@ -622,7 +677,7 @@ description = "consume a Foo to make a Bar"
         for import in imports {
             toml_src = pexe::set_manifest_import_hash(
                 &toml_src,
-                &import.name,
+                &import.alias,
                 &format!("{:#}", import.module.module().batch.id()),
             )
             .expect("rewrite import module_hash");
@@ -844,7 +899,7 @@ description = "run alpha::MakeFoo and box the result"
             template,
             GAMMA_SCRIPT,
             &[sdk::ModuleImport {
-                name: "alpha".to_string(),
+                alias: "alpha".to_string(),
                 module: alpha_module,
             }],
         )

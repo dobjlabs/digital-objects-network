@@ -19,9 +19,14 @@ use txlib::RECORD_STATE_HEADER_PODLANG;
 
 fn fmt_dependency(dep: &Dependency, w: &mut dyn fmt::Write) -> fmt::Result {
     match dep {
-        Dependency::Module { name, hash } => {
-            // Plugin names may contain `-`; podlang aliases may not.
-            writeln!(w, "use module {:#} as {}", hash, crate::podlang_alias(name))?;
+        Dependency::Module { alias, hash } => {
+            // An alias may contain `-`; a podlang identifier may not.
+            writeln!(
+                w,
+                "use module {:#} as {}",
+                hash,
+                crate::podlang_alias(alias)
+            )?;
         }
         Dependency::Intro { pred, hash } => {
             writeln!(w, "use intro {pred} from {:#}", hash)?;
@@ -301,8 +306,8 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
                 .resolve_sub_action_meta(target)
                 .expect("sub-action resolved during load");
             // Wildcard names carry no `::` or `-`, so the podlang module
-            // alias doubles as the name-safe form of the plugin name.
-            let qualifier = import.map(|import| crate::podlang_alias(&import.name));
+            // alias doubles as the name-safe form of the import alias.
+            let qualifier = import.map(|import| crate::podlang_alias(&import.alias));
             let (call_name, io_schema) = match &qualifier {
                 Some(alias) => (
                     format!("{alias}::{}", sub_meta.name),

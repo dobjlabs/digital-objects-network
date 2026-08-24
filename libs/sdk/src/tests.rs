@@ -20,23 +20,35 @@ fn assert_renders(module: &SdkModule, expected: &[&str]) {
     }
 }
 
-/// One resolved import, as `load_module_from_src_actions` wants it.
-fn imports_of(entries: [(&str, &Rc<SdkModule>); 1]) -> Vec<ModuleImport> {
+/// Resolved imports, as `load_module_from_src_actions` wants them,
+/// each bound to the alias it is listed under.
+fn imports_of<'a>(
+    entries: impl IntoIterator<Item = (&'a str, &'a Rc<SdkModule>)>,
+) -> Vec<ModuleImport> {
     entries
         .into_iter()
-        .map(|(name, module)| ModuleImport {
-            name: name.to_string(),
+        .map(|(alias, module)| ModuleImport {
+            alias: alias.to_string(),
             module: module.clone(),
         })
         .collect()
 }
 
-/// The `(class, defining plugin)` pairs an action's refs resolve to.
-fn class_plugin_pairs<'a>(
+/// The `(class, defining module)` identity of each of an action's
+/// refs. None is the module the action belongs to.
+fn class_identities<'a>(
     refs: impl Iterator<Item = &'a ActionObjectRef>,
-) -> Vec<(&'a str, Option<&'a str>)> {
-    refs.map(|r| (r.class.as_str(), r.plugin.as_deref()))
-        .collect()
+) -> Vec<(&'a str, Option<Hash>)> {
+    refs.map(|object_ref| {
+        (
+            object_ref.class.as_str(),
+            object_ref
+                .defining
+                .as_ref()
+                .map(|defining| defining.batch_id()),
+        )
+    })
+    .collect()
 }
 
 fn grounding_witness(state: &TestState, input_commitments: &[Hash]) -> Arc<GroundingWitness> {
@@ -1391,18 +1403,28 @@ fn test_cross_plugin_subaction() {
         .find(|a| a.name == "CraftTotem")
         .unwrap();
     assert_eq!(
-        class_plugin_pairs(meta.total_inputs()),
-        vec![("Log", Some("craft-basics"))]
+        class_identities(meta.total_inputs()),
+        vec![("Log", Some(basics.module().batch.id()))]
     );
     assert_eq!(
-        class_plugin_pairs(meta.total_outputs()),
-        vec![("Wood", Some("craft-basics")), ("Totem", None)]
+        class_identities(meta.total_outputs()),
+        vec![("Wood", Some(basics.module().batch.id())), ("Totem", None),]
     );
 
     // Same class name, different plugin, different guard hash.
     assert_ne!(
         basics.class_hash("Wood").unwrap(),
         totem_module.class_hash("Timber").unwrap()
+    );
+
+    // Rendering a foreign predicate qualifies it the way the podlang
+    // above spells it, not the way the plugin name is spelled.
+    assert_eq!(
+        totem_module
+            .module_aliases()
+            .get(&basics.module().batch.id())
+            .map(String::as_str),
+        Some("craft_basics")
     );
 
     let mut state = TestState::default();
@@ -1620,13 +1642,27 @@ fn test_transitive_plugin_imports() {
         .find(|a| a.name == "RaiseWall")
         .unwrap();
     assert_eq!(
-        class_plugin_pairs(meta.total_outputs()),
+        class_identities(meta.total_outputs()),
         vec![
-            ("Stone", Some("quarry")),
-            ("Block", Some("mason")),
+            ("Stone", Some(quarry.module().batch.id())),
+            ("Block", Some(mason.module().batch.id())),
             ("Wall", None),
         ]
     );
+
+    // Both imported batches are qualifiable, the transitive one
+    // included: a bare `QuarryStone` in a rendered statement would read
+    // as a predicate the builder itself defines.
+    let aliases = builder.module_aliases();
+    assert_eq!(
+        aliases.get(&mason.module().batch.id()).map(String::as_str),
+        Some("mason")
+    );
+    assert_eq!(
+        aliases.get(&quarry.module().batch.id()).map(String::as_str),
+        Some("quarry")
+    );
+    assert!(!aliases.contains_key(&builder.module().batch.id()));
 
     let state = TestState::default();
     let executor = builder.executor(true, grounding_witness(&state, &[]));
@@ -1643,6 +1679,357 @@ fn test_transitive_plugin_imports() {
     assert_eq!(
         txlib::object_type(&wall.obj),
         Value::from(builder.class_hash("Wall").unwrap())
+    );
+}
+
+/// A parent-local output declared *before* a sub-action call. The sub
+/// runs during the parent's rhai body, so its produced dicts have to be
+/// spliced in at the call site's position rather than accumulating ahead
+/// of the parent's own: `driver::save_results` pairs the returned
+/// objects with `total_outputs` by index, so a mismatch stamps each
+/// object with the other one's class and filename.
+#[test]
+fn test_output_order_local_declared_before_subaction() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let sdk = Sdk::default();
+
+    let quarry_src = r#"
+        fn QuarryStone(action) {
+            var stone = action.output("Stone");
+        }
+    "#;
+    let quarry = sdk
+        .load_module_from_src_actions(quarry_src, &["QuarryStone"], &[])
+        .unwrap();
+
+    let mason_src = r#"
+        fn CarveBlock(action) {
+            var block = action.output("Block");
+            var stone = action.subaction("quarry::QuarryStone");
+            block.set([["stone_key", stone.key]]);
+        }
+    "#;
+    let mason = sdk
+        .load_module_from_src_actions(
+            mason_src,
+            &["CarveBlock"],
+            &imports_of([("quarry", &quarry)]),
+        )
+        .unwrap();
+
+    let meta = mason
+        .actions()
+        .iter()
+        .find(|a| a.name == "CarveBlock")
+        .unwrap();
+    assert_eq!(
+        class_identities(meta.total_outputs()),
+        vec![("Block", None), ("Stone", Some(quarry.module().batch.id()))]
+    );
+
+    let state = TestState::default();
+    let executor = mason.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("CarveBlock", vec![]).unwrap();
+    let [block, stone] = res.objs();
+    assert_eq!(
+        txlib::object_type(&block.obj),
+        Value::from(mason.class_hash("Block").unwrap()),
+        "produced objects must come back in total_outputs order"
+    );
+    assert_eq!(
+        txlib::object_type(&stone.obj),
+        Value::from(quarry.class_hash("Stone").unwrap())
+    );
+    assert_eq!(
+        block.obj.get(&StrKey::from("stone_key")).unwrap().unwrap(),
+        stone.obj.get(&StrKey::from("key")).unwrap().unwrap()
+    );
+}
+
+/// The same alias bound to two different modules in one graph. C binds
+/// `gem` to gem@v2 directly, and imports B, which binds `gem` to
+/// gem@v1. Both are legitimate: an alias belongs to the binding that
+/// declared it, so the two say nothing about each other. Each spliced
+/// class must keep the module that actually defines it, and the alias
+/// in a script must resolve against the imports of the module the
+/// script belongs to.
+#[test]
+fn test_same_alias_two_modules_stay_distinct() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let sdk = Sdk::default();
+
+    let gem_v1_src = r#"
+        fn MintGem(action) {
+            var gem = action.output("Gem");
+        }
+    "#;
+    let gem_v2_src = r#"
+        fn MintGem(action) {
+            var gem = action.output("Gem");
+            gem.set([["carat", 2]]);
+        }
+    "#;
+    let gem_v1 = sdk
+        .load_module_from_src_actions(gem_v1_src, &["MintGem"], &[])
+        .unwrap();
+    let gem_v2 = sdk
+        .load_module_from_src_actions(gem_v2_src, &["MintGem"], &[])
+        .unwrap();
+    assert_ne!(
+        gem_v1.module().batch.id(),
+        gem_v2.module().batch.id(),
+        "the two gem modules must differ for this to test anything"
+    );
+
+    let jeweler_src = r#"
+        fn SetStone(action) {
+            var gem = action.subaction("gem::MintGem");
+            var setting = action.output("Setting");
+        }
+    "#;
+    let jeweler = sdk
+        .load_module_from_src_actions(jeweler_src, &["SetStone"], &imports_of([("gem", &gem_v1)]))
+        .unwrap();
+
+    // Which module an importer was built against is baked into its own
+    // batch id: the predicates it compiles to reference the imported
+    // batch, so swapping the import changes the importer's hash. This
+    // is what makes a pin meaningful and a claimed name not worth
+    // trusting past the moment it is resolved.
+    let jeweler_on_v2 = sdk
+        .load_module_from_src_actions(jeweler_src, &["SetStone"], &imports_of([("gem", &gem_v2)]))
+        .unwrap();
+    assert_ne!(
+        jeweler.module().batch.id(),
+        jeweler_on_v2.module().batch.id(),
+        "an importer's hash must commit to the module it imported"
+    );
+
+    // The direct `gem` binding is declared second, after the import
+    // whose own subtree binds the same alias to a different module.
+    let crown_src = r#"
+        fn ForgeCrown(action) {
+            var setting = action.subaction("jeweler::SetStone");
+            var gem = action.subaction("gem::MintGem");
+            var crown = action.output("Crown");
+        }
+    "#;
+    let crown = sdk
+        .load_module_from_src_actions(
+            crown_src,
+            &["ForgeCrown"],
+            &imports_of([("jeweler", &jeweler), ("gem", &gem_v2)]),
+        )
+        .expect("two modules under one alias is not a conflict");
+
+    // Two Gem classes, each keeping its own defining module: the first
+    // spliced up through jeweler (v1), the second from C's own binding.
+    let meta = crown
+        .actions()
+        .iter()
+        .find(|a| a.name == "ForgeCrown")
+        .unwrap();
+    assert_eq!(
+        class_identities(meta.total_outputs()),
+        vec![
+            ("Gem", Some(gem_v1.module().batch.id())),
+            ("Setting", Some(jeweler.module().batch.id())),
+            ("Gem", Some(gem_v2.module().batch.id())),
+            ("Crown", None),
+        ]
+    );
+
+    // And each resolves to that module, not to whichever one an alias
+    // lookup would have reached first.
+    let gems: Vec<&ActionObjectRef> = meta
+        .total_outputs()
+        .filter(|object_ref| object_ref.class == "Gem")
+        .collect();
+    assert_eq!(
+        crown.class_module(gems[0]).class_hash("Gem"),
+        gem_v1.class_hash("Gem")
+    );
+    assert_eq!(
+        crown.class_module(gems[1]).class_hash("Gem"),
+        gem_v2.class_hash("Gem")
+    );
+    assert_ne!(gem_v1.class_hash("Gem"), gem_v2.class_hash("Gem"));
+
+    // Executing agrees: the alias in C's script means C's binding, and
+    // jeweler's means jeweler's.
+    let state = TestState::default();
+    let executor = crown.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("ForgeCrown", vec![]).unwrap();
+    let [gem_from_jeweler, setting, gem_direct, crown_obj] = res.objs();
+    assert_eq!(
+        txlib::object_type(&gem_from_jeweler.obj),
+        Value::from(gem_v1.class_hash("Gem").unwrap())
+    );
+    assert_eq!(
+        txlib::object_type(&setting.obj),
+        Value::from(jeweler.class_hash("Setting").unwrap())
+    );
+    assert_eq!(
+        txlib::object_type(&gem_direct.obj),
+        Value::from(gem_v2.class_hash("Gem").unwrap())
+    );
+    assert_eq!(
+        txlib::object_type(&crown_obj.obj),
+        Value::from(crown.class_hash("Crown").unwrap())
+    );
+}
+
+/// A spliced class prints as `<alias>@<batch prefix>::<Class>`: the
+/// alias is the readable half and the batch prefix is what actually
+/// tells two same-aliased modules apart.
+#[test]
+fn test_spliced_class_display_disambiguates() {
+    let sdk = Sdk::default();
+    let quarry = sdk
+        .load_module_from_src_actions(
+            r#"fn QuarryStone(action) { var stone = action.output("Stone"); }"#,
+            &["QuarryStone"],
+            &[],
+        )
+        .unwrap();
+    let mason = sdk
+        .load_module_from_src_actions(
+            r#"fn CarveBlock(action) {
+                 var stone = action.subaction("quarry::QuarryStone");
+                 var block = action.output("Block");
+               }"#,
+            &["CarveBlock"],
+            &imports_of([("quarry", &quarry)]),
+        )
+        .unwrap();
+
+    let meta = mason.action_by_name("CarveBlock");
+    let rendered: Vec<String> = meta.total_outputs().map(|r| r.to_string()).collect();
+    let prefix: String = format!("{:#}", quarry.module().batch.id())
+        .trim_start_matches("0x")
+        .chars()
+        .take(8)
+        .collect();
+    assert_eq!(
+        rendered,
+        vec![format!("quarry@{prefix}::Stone"), "Block".to_string()]
+    );
+}
+
+/// Import alias validation, which every path into the loader shares.
+/// A rejected alias would otherwise reach the podlang render and fail
+/// pod2's parser, where there is no plugin name left to blame.
+#[test]
+fn test_import_alias_rejections() {
+    let sdk = Sdk::default();
+    let basics_src = r#"
+        fn FindLog(action) {
+            var log = action.output("Log");
+        }
+    "#;
+    let basics = sdk
+        .load_module_from_src_actions(basics_src, &["FindLog"], &[])
+        .unwrap();
+    // Distinct module so a duplicate-alias case is not also a
+    // conflicting-versions case.
+    let other_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+        }
+    "#;
+    let other = sdk
+        .load_module_from_src_actions(other_src, &["FindOre"], &[])
+        .unwrap();
+
+    // Each script calls its imports so alias validation, not the
+    // unused-import check, is what rejects the load.
+    let one_import = r#"
+        fn Dig(action) {
+            var log = action.subaction("PLUGIN::FindLog");
+        }
+    "#;
+    let two_imports = r#"
+        fn Dig(action) {
+            var log = action.subaction("craft-basics::FindLog");
+            var ore = action.subaction("craft_basics::FindOre");
+        }
+    "#;
+
+    // (plugin names, script, expected error fragment)
+    let cases: [(&[&str], &str, &str); 6] = [
+        (&["record"], one_import, "podlang reserves"),
+        (&["private"], one_import, "podlang reserves"),
+        (&["tx"], one_import, "reserved tx module alias"),
+        (&["2fast"], one_import, "valid podlang module alias"),
+        (&["craft.basics"], one_import, "valid podlang module alias"),
+        (
+            &["craft-basics", "craft_basics"],
+            two_imports,
+            "collides with another import",
+        ),
+    ];
+    for (names, script, expected) in cases {
+        let modules = [&basics, &other];
+        let imports = imports_of(
+            names
+                .iter()
+                .zip(modules)
+                .map(|(name, module)| (*name, module)),
+        );
+        let script = script.replace("PLUGIN", names[0]);
+        let err = sdk
+            .load_module_from_src_actions(&script, &["Dig"], &imports)
+            .err()
+            .unwrap_or_else(|| panic!("import named {names:?} must fail to load"));
+        assert!(
+            err.to_string().contains(expected),
+            "import named {names:?}: expected {expected:?}, got: {err}"
+        );
+    }
+}
+
+/// A declared import no action calls loads (with a warning), and the
+/// asymmetry that makes it worth warning about: the `use module` line
+/// it emits is a load-time requirement, while the batch id -- a merkle
+/// root over the predicates -- is identical with or without it. The
+/// pin can be repointed without changing the module hash.
+#[test]
+fn test_unused_declared_import_is_not_in_the_module_hash() {
+    let sdk = Sdk::default();
+    let basics_src = r#"
+        fn FindLog(action) {
+            var log = action.output("Log");
+        }
+    "#;
+    let basics = sdk
+        .load_module_from_src_actions(basics_src, &["FindLog"], &[])
+        .unwrap();
+
+    let idle_src = r#"
+        fn Idle(action) {
+            var rock = action.output("Rock");
+        }
+    "#;
+    let without = sdk
+        .load_module_from_src_actions(idle_src, &["Idle"], &[])
+        .unwrap();
+    let with_unused = sdk
+        .load_module_from_src_actions(
+            idle_src,
+            &["Idle"],
+            &imports_of([("craft-basics", &basics)]),
+        )
+        .expect("an uncalled declared import loads");
+
+    assert_eq!(
+        without.module().batch.id(),
+        with_unused.module().batch.id(),
+        "an uncalled import contributes no predicate, so it cannot move the batch id"
+    );
+    assert!(
+        with_unused.podlang_src().contains("as craft_basics"),
+        "but it is still emitted, so the archive requires it at load:\n{}",
+        with_unused.podlang_src()
     );
 }
 

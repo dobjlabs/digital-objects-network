@@ -45,47 +45,70 @@ type RuntimeResult<T> = Result<T, Box<EvalAltResult>>;
 
 #[derive(Debug)]
 pub enum Dependency {
-    Module { name: String, hash: Hash },
-    Intro { pred: String, hash: Hash },
+    /// `hash` identifies the module; `alias` is only how this module's
+    /// source refers to it.
+    Module {
+        alias: String,
+        hash: Hash,
+    },
+    Intro {
+        pred: String,
+        hash: Hash,
+    },
 }
 
-/// A resolved plugin import. Scripts reference the imported plugin's
-/// actions as `<name>::<Action>` in `subaction` calls; the compiled
-/// podlang imports the plugin's batch under an identifier-safe alias
-/// derived from `name`, so the importer's module hash pins the exact
-/// imported batch id.
+/// A resolved plugin import: a module, plus the alias this importer
+/// binds it to. Scripts reference the imported plugin's actions as
+/// `<alias>::<Action>` in `subaction` calls, and the compiled podlang
+/// imports its batch under an identifier-safe form of the same alias,
+/// so the importer's module hash pins the exact imported batch id.
+///
+/// The alias is local to this binding and means nothing outside it:
+/// two modules may each import a different module under the same
+/// alias. Anything that has to identify a module (rather than print
+/// it) uses the module itself, or its batch id.
 #[derive(Clone)]
 pub struct ModuleImport {
-    pub name: String,
+    pub alias: String,
     pub module: Rc<SdkModule>,
 }
 
-/// Podlang module alias for a plugin name: identifiers cannot contain
-/// `-`, which plugin names may.
-fn podlang_alias(plugin_name: &str) -> String {
-    plugin_name.replace('-', "_")
+/// Identifier-safe form of an import alias: podlang identifiers cannot
+/// contain `-`, which an alias may (plugin names are the usual source
+/// of aliases, and those may).
+fn podlang_alias(alias: &str) -> String {
+    alias.replace('-', "_")
 }
 
-/// A sub-action call target: an action of this module (`plugin: None`)
-/// or of a declared import. Scripts write `"<plugin>::<Action>"`; the
+/// Words podlang's grammar excludes from `identifier` (its
+/// `reserved_identifier` rule). A plugin whose name maps onto one of
+/// these cannot be named in a `use module ... as <alias>` line, so the
+/// loader rejects it up front rather than emitting source pod2 cannot
+/// parse.
+const PODLANG_RESERVED_WORDS: [&str; 4] = ["private", "true", "false", "record"];
+
+/// A sub-action call target: an action of this module (`alias: None`)
+/// or of a declared import. Scripts write `"<alias>::<Action>"`; the
 /// string is split once here, at the Rhai boundary, so load, fmt, and
-/// execute all read fields instead of re-parsing.
+/// execute all read fields instead of re-parsing. The alias resolves
+/// against the imports of the module the script belongs to, and
+/// nowhere else.
 #[derive(Debug, Clone)]
 pub(crate) struct SubActionRef {
-    plugin: Option<String>,
+    alias: Option<String>,
     action: String,
 }
 
 impl SubActionRef {
-    fn parse(name: &str) -> Self {
-        match name.split_once("::") {
-            Some((plugin, action)) => Self {
-                plugin: Some(plugin.to_string()),
+    fn parse(target: &str) -> Self {
+        match target.split_once("::") {
+            Some((alias, action)) => Self {
+                alias: Some(alias.to_string()),
                 action: action.to_string(),
             },
             None => Self {
-                plugin: None,
-                action: name.to_string(),
+                alias: None,
+                action: target.to_string(),
             },
         }
     }
@@ -93,16 +116,16 @@ impl SubActionRef {
 
 impl fmt::Display for SubActionRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.plugin {
-            Some(plugin) => write!(f, "{plugin}::{}", self.action),
+        match &self.alias {
+            Some(alias) => write!(f, "{alias}::{}", self.action),
             None => write!(f, "{}", self.action),
         }
     }
 }
 
-/// Find a declared import by plugin name.
-fn find_import<'a>(imports: &'a [ModuleImport], plugin: &str) -> Option<&'a ModuleImport> {
-    imports.iter().find(|import| import.name == plugin)
+/// Find a declared import by the alias it is bound to.
+fn find_import<'a>(imports: &'a [ModuleImport], alias: &str) -> Option<&'a ModuleImport> {
+    imports.iter().find(|import| import.alias == alias)
 }
 
 /// Resolve a sub-action call against this module's actions and imports,
@@ -113,11 +136,11 @@ fn resolve_sub_action_meta<'a>(
     imports: &'a [ModuleImport],
     target: &SubActionRef,
 ) -> Result<(Option<&'a ModuleImport>, &'a ActionMeta)> {
-    let (import, actions) = match &target.plugin {
+    let (import, actions) = match &target.alias {
         None => (None, metas),
-        Some(plugin) => {
-            let import = find_import(imports, plugin).ok_or_else(|| {
-                anyhow!("subaction {target}: plugin {plugin:?} is not declared as an import")
+        Some(alias) => {
+            let import = find_import(imports, alias).ok_or_else(|| {
+                anyhow!("subaction {target}: {alias:?} is not declared as an import")
             })?;
             (Some(import), import.module.actions.as_slice())
         }
@@ -257,6 +280,13 @@ enum Inst {
         /// the alias wildcard when the parent body references it. Some
         /// at Execute when the sub produces an object, None otherwise.
         sub_out: Option<(Value, i64, Dictionary)>,
+        /// Produced (Output/Mutate) object dicts of the sub-action's
+        /// whole call tree, in its `ActionMeta::total_outputs` order.
+        /// The sub runs during the parent's rhai body, so the parent
+        /// splices these in at this inst's position during its
+        /// post-rhai walk rather than letting them accumulate ahead of
+        /// its own outputs. Empty at Load.
+        outputs: Vec<Dictionary>,
     },
 }
 
@@ -800,9 +830,10 @@ impl ActionHandle {
     /// txlib events, build its predicate, attach guards, and close
     /// the scope. Sub-actions invoked from the rhai body recurse here
     /// and stack their scope on top of this one. Returns the action's
-    /// predicate statement plus its io record, which `subaction` uses
-    /// to pin a referenced alias.
-    fn exe_action(&self) -> RuntimeResult<(Statement, Array)> {
+    /// predicate statement, its io record (which `subaction` uses to
+    /// pin a referenced alias), and the produced object dicts of this
+    /// action's whole call tree in `ActionMeta::total_outputs` order.
+    fn exe_action(&self) -> RuntimeResult<(Statement, Array, Vec<Dictionary>)> {
         let (module, scope_id, action) = {
             let ctx = self.0.borrow();
             let module = ctx.module.clone().expect("owning module set at exe time");
@@ -1091,11 +1122,20 @@ impl ActionHandle {
 
         let mut pending_object_events: Vec<PendingObjectEvent> = Vec::new();
         let mut obj_refs_index: usize = 0;
+        // Produced dicts of this action's subtree, in the same inst
+        // order `ActionMeta::from_action_ctx` walks to build
+        // `total_outputs`: a sub-action's outputs land at its call
+        // site, not ahead of every parent-local one. `save_results`
+        // pairs the two lists by index.
+        let mut subtree_outputs: Vec<Dictionary> = Vec::new();
         {
             let mut exe_ctx = exe_rc.borrow_mut();
             let exe_ctx = &mut *exe_ctx;
             let ctx = self.0.borrow();
             for (i, inst) in ctx.insts.iter().enumerate() {
+                if let Inst::SubAction { outputs, .. } = inst {
+                    subtree_outputs.extend(outputs.iter().cloned());
+                }
                 if let Inst::Object {
                     io,
                     obj,
@@ -1133,7 +1173,7 @@ impl ActionHandle {
                         chain_step_values[slot] = Value::from(exe_ctx.tx_builder.chain);
                     }
                     if io.produces() {
-                        exe_ctx.outputs.push(obj_dict.clone());
+                        subtree_outputs.push(obj_dict.clone());
                     }
                     pending_object_events.push(PendingObjectEvent {
                         st_literal: st_tx_literal,
@@ -1468,7 +1508,7 @@ impl ActionHandle {
             }
             exe_ctx.tx_builder.end_action(scope_id);
         }
-        Ok((st_action, io_array))
+        Ok((st_action, io_array, subtree_outputs))
     }
     //
     // Exposed methods helpers
@@ -1508,23 +1548,21 @@ impl ActionHandle {
         };
         let arg_placeholder = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
 
-        let (arg, st_sub, sub_out) = if let Some(exe_rc) = exe_rc_opt {
+        let (arg, st_sub, sub_out, outputs) = if let Some(exe_rc) = exe_rc_opt {
             let parent_module = parent_module_opt.expect("owning module set at exe time");
-            let sub_module = match target.plugin.as_deref() {
+            let sub_module = match target.alias.as_deref() {
                 None => parent_module.clone(),
-                Some(plugin) => parent_module
-                    .import_module(plugin)
+                Some(alias) => parent_module
+                    .import_module(alias)
                     .cloned()
-                    .ok_or_else(|| {
-                        format!("subaction {target}: plugin {plugin:?} is not an import")
-                    })?,
+                    .ok_or_else(|| format!("subaction {target}: {alias:?} is not an import"))?,
             };
             let sub_handle = ActionHandle::new(
                 target.action.clone(),
                 Some(sub_module.clone()),
                 Some(exe_rc.clone()),
             );
-            let (st_sub, sub_io_array) = sub_handle.exe_action()?;
+            let (st_sub, sub_io_array, sub_outputs) = sub_handle.exe_action()?;
 
             // Alias the parent's binding to the Ref of the sub-action's
             // first produced object, or a fresh placeholder if the sub
@@ -1562,9 +1600,9 @@ impl ActionHandle {
             } else {
                 (arg_placeholder.clone(), None)
             };
-            (arg, Some(st_sub), sub_out)
+            (arg, Some(st_sub), sub_out, sub_outputs)
         } else {
-            (arg_placeholder, None, None)
+            (arg_placeholder, None, None, Vec::new())
         };
 
         let mut ctx = self.0.borrow_mut();
@@ -1573,6 +1611,7 @@ impl ActionHandle {
             obj: arg.clone(),
             st_sub,
             sub_out,
+            outputs,
         });
         ctx.inc_t_var("chain").expect("chain exists");
         Ok(ArgHandle::new(self.clone(), arg))
@@ -2000,8 +2039,52 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
     Err(format!("invalid value type: {}", v.type_name()).into())
 }
 
+/// The module a spliced class is defined by, and the alias the module
+/// that spliced it knew that module by.
+///
+/// A class is identified by `(defining module, class name)`: the batch
+/// id is globally unique, and a class name is unique within its module.
+/// The alias is carried for display only. It came from one binding in
+/// one importer, so it can be wrong, ambiguous, or meaningless anywhere
+/// else, and nothing may resolve it.
+#[derive(Clone)]
+pub struct DefiningModule {
+    alias: String,
+    module: Rc<SdkModule>,
+}
+
+impl DefiningModule {
+    /// The alias the splicing module bound this module to. Display use
+    /// only; see the type docs.
+    pub fn alias(&self) -> &str {
+        &self.alias
+    }
+    pub fn module(&self) -> &Rc<SdkModule> {
+        &self.module
+    }
+    pub fn batch_id(&self) -> Hash {
+        self.module.module.batch.id()
+    }
+}
+
+impl fmt::Debug for DefiningModule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.alias, short_batch_id(self.batch_id()))
+    }
+}
+
+/// First 8 hex digits of a batch id, for display next to an alias.
+/// Enough to tell two modules apart by eye; never used to look one up.
+fn short_batch_id(batch_id: Hash) -> String {
+    format!("{batch_id:#}")
+        .trim_start_matches("0x")
+        .chars()
+        .take(8)
+        .collect()
+}
+
 /// One object reference in an action, in declaration order. Only
-/// `class` is exposed; `io` is internal, used by the
+/// `class` and `defining` are exposed; `io` is internal, used by the
 /// `local_inputs()` / `local_outputs()` filters. `varname` is the
 /// script-side variable name; side-prefixed (`in_<var>` / `out_<var>`)
 /// it forms the entry names in the records-form `<Action>IO` schema.
@@ -2009,19 +2092,22 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
 pub struct ActionObjectRef {
     pub(crate) io: ObjectIO,
     pub class: String,
-    /// Defining plugin for a class spliced in from an imported
-    /// sub-action; None for this module's own classes.
-    pub plugin: Option<String>,
+    /// The module defining this class when it was spliced in from an
+    /// imported sub-action. None for a class of the module that
+    /// declares the action: that module's batch does not exist yet
+    /// while its own metadata is being built. `SdkModule::class_module`
+    /// resolves either case against the module you ask through.
+    pub defining: Option<DefiningModule>,
     pub(crate) varname: String,
 }
 
 impl ActionObjectRef {
-    /// Copy tagged with `defining` as the class's plugin, unless it
-    /// already names one (a class spliced through several imports keeps
-    /// the plugin that declared it).
-    fn qualified_by(&self, defining: Option<&str>) -> Self {
+    /// Copy tagged with `defining` as the class's defining module,
+    /// unless it already has one (a class spliced through several
+    /// imports keeps the module that declared it).
+    fn qualified_by(&self, defining: Option<&DefiningModule>) -> Self {
         Self {
-            plugin: self.plugin.clone().or_else(|| defining.map(str::to_string)),
+            defining: self.defining.clone().or_else(|| defining.cloned()),
             ..self.clone()
         }
     }
@@ -2029,8 +2115,8 @@ impl ActionObjectRef {
 
 impl fmt::Display for ActionObjectRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.plugin {
-            Some(plugin) => write!(f, "{plugin}::{}", self.class),
+        match &self.defining {
+            Some(defining) => write!(f, "{defining:?}::{}", self.class),
             None => write!(f, "{}", self.class),
         }
     }
@@ -2206,7 +2292,7 @@ impl ActionMeta {
                     let r = ActionObjectRef {
                         io: *io,
                         class: class.clone(),
-                        plugin: None,
+                        defining: None,
                         varname: obj.borrow().var_name().to_string(),
                     };
                     if io.consumes() {
@@ -2226,12 +2312,21 @@ impl ActionMeta {
                         ));
                     }
                     // A class spliced from an import keeps its original
-                    // defining plugin if it was itself spliced there.
-                    let defining = import.map(|i| i.name.as_str());
-                    meta.total_inputs
-                        .extend(sub.total_inputs.iter().map(|r| r.qualified_by(defining)));
-                    meta.total_outputs
-                        .extend(sub.total_outputs.iter().map(|r| r.qualified_by(defining)));
+                    // defining module if it was itself spliced there.
+                    let defining = import.map(|import| DefiningModule {
+                        alias: import.alias.clone(),
+                        module: import.module.clone(),
+                    });
+                    meta.total_inputs.extend(
+                        sub.total_inputs
+                            .iter()
+                            .map(|object_ref| object_ref.qualified_by(defining.as_ref())),
+                    );
+                    meta.total_outputs.extend(
+                        sub.total_outputs
+                            .iter()
+                            .map(|object_ref| object_ref.qualified_by(defining.as_ref())),
+                    );
                 }
                 _ => {}
             }
@@ -2438,7 +2533,7 @@ impl Loader {
         let txlib_mod = TXLIB_MODULE.clone();
         let mut dependencies = vec![
             Dependency::Module {
-                name: "tx".to_string(),
+                alias: "tx".to_string(),
                 hash: tx_events_mod.id(),
             },
             Dependency::Intro {
@@ -2452,7 +2547,7 @@ impl Loader {
         ];
         let mut aliases: HashSet<String> = HashSet::new();
         for import in &imports {
-            let alias = podlang_alias(&import.name);
+            let alias = podlang_alias(&import.alias);
             if alias.is_empty()
                 || alias.starts_with(|c: char| c.is_ascii_digit())
                 || alias
@@ -2460,48 +2555,62 @@ impl Loader {
                     .any(|c| !(c.is_ascii_alphanumeric() || c == '_'))
             {
                 return Err(anyhow!(
-                    "import {:?} does not map to a valid podlang module alias",
-                    import.name
+                    "import alias {:?} is not a valid podlang module alias",
+                    import.alias
                 ));
             }
             if alias == "tx" {
                 return Err(anyhow!(
-                    "import {:?} collides with the reserved tx module alias",
-                    import.name
+                    "import alias {:?} collides with the reserved tx module alias",
+                    import.alias
+                ));
+            }
+            if PODLANG_RESERVED_WORDS.contains(&alias.as_str()) {
+                return Err(anyhow!(
+                    "import alias {:?} maps to {alias:?}, which podlang reserves",
+                    import.alias
                 ));
             }
             if !aliases.insert(alias) {
                 return Err(anyhow!(
-                    "import {:?} collides with another import's module alias",
-                    import.name
+                    "import alias {:?} collides with another import's module alias",
+                    import.alias
                 ));
             }
             dependencies.push(Dependency::Module {
-                name: import.name.clone(),
+                alias: import.alias.clone(),
                 hash: import.module.module.batch.id(),
             });
         }
+
         let mut actions_meta = Vec::with_capacity(actions.len());
-        let mut used_imports: HashSet<String> = HashSet::new();
+        let mut used_aliases: HashSet<String> = HashSet::new();
         for handle in &actions {
             let ctx = handle.0.borrow();
             for inst in &ctx.insts {
                 if let Inst::SubAction { target, .. } = inst
-                    && let Some(plugin) = &target.plugin
+                    && let Some(alias) = &target.alias
                 {
-                    used_imports.insert(plugin.clone());
+                    used_aliases.insert(alias.clone());
                 }
             }
             let meta = ActionMeta::from_action_ctx(&actions_meta, &imports, &ctx)?;
             actions_meta.push(meta);
         }
-        // Manifest drift: an import nothing calls leaves no trace in the
-        // compiled batch, so warn rather than fail.
+        // Manifest drift: an import nothing calls still gets a `use
+        // module` line, and so must be installed for the module to
+        // load, but contributes no predicate. The batch id is a merkle
+        // root over the predicates alone, so the module hash is byte
+        // for byte the same with the import, without it, or with its
+        // pin repointed elsewhere. Nothing is unsound (the dependency's
+        // own pin is checked when it loads), but the hash stops
+        // covering the whole dependency set, so warn.
         for import in &imports {
-            if !used_imports.contains(import.name.as_str()) {
+            if !used_aliases.contains(import.alias.as_str()) {
                 log::warn!(
-                    "declared import {:?} is never called by any action",
-                    import.name
+                    "declared import {:?} is never called by any action; the module hash \
+                     does not cover it",
+                    import.alias
                 );
             }
         }
@@ -2543,7 +2652,7 @@ impl Loader {
         result
     }
 
-    fn module(self, engine: Rc<Engine>, ast: AST) -> SdkModule {
+    fn module(self, engine: Rc<Engine>, ast: AST) -> Result<SdkModule> {
         let mut podlang_src = String::new();
         let started = std::time::Instant::now();
         fmt_podlang::fmt(&self, &mut podlang_src).unwrap();
@@ -2557,8 +2666,9 @@ impl Loader {
         let mut available_modules: Vec<Arc<Module>> = vec![self.tx_events_mod.clone()];
         available_modules.extend(self.imports.iter().map(|i| i.module.module.clone()));
         let module = Arc::new(
-            load_module(podlang_src.as_str(), "root", &params, &available_modules)
-                .expect("compiles"),
+            load_module(podlang_src.as_str(), "root", &params, &available_modules).map_err(
+                |err| anyhow!("the podlang this module renders to does not compile: {err}"),
+            )?,
         );
         let object_index_class_st_index = Self::object_index_class_st_index(&self.actions_meta);
         let class_hashes: HashMap<String, Hash> = self
@@ -2570,7 +2680,7 @@ impl Loader {
                     .map(|p| (c.name.clone(), Predicate::Custom(p).hash()))
             })
             .collect();
-        SdkModule {
+        Ok(SdkModule {
             tx_events_mod: self.tx_events_mod,
             txlib_mod: self.txlib_mod,
             podlang_src,
@@ -2583,7 +2693,7 @@ impl Loader {
             class_hashes,
             dependencies: self.dependencies,
             imports: self.imports,
-        }
+        })
     }
 }
 
@@ -2605,9 +2715,10 @@ pub struct SdkModule {
     // build the `DictContains(obj, "type", ...)` guard priv_op for
     // every Object inst.
     class_hashes: HashMap<String, Hash>,
-    // The imported modules and intro predicates this module pulls in.
-    // Exposed so callers can map a foreign batch hash back to its
-    // declared module alias (e.g. for qualified-name rendering).
+    // The imported modules and intro predicates this module pulls in,
+    // each with the alias this module's source binds it to.
+    // `module_aliases` turns those into the batch-hash-keyed map a
+    // renderer needs.
     dependencies: Vec<Dependency>,
     // Imported plugin modules, resolvable from scripts via
     // `subaction("<name>::<Action>")`.
@@ -2636,26 +2747,58 @@ impl SdkModule {
     pub fn dependencies(&self) -> &[Dependency] {
         &self.dependencies
     }
-    /// The transitively imported plugin's module, by plugin name.
-    fn import_module(&self, plugin: &str) -> Option<&Rc<SdkModule>> {
-        for import in &self.imports {
-            if import.name == plugin {
-                return Some(&import.module);
-            }
-            if let Some(found) = import.module.import_module(plugin) {
-                return Some(found);
-            }
-        }
-        None
+    /// Every module reachable from this one, keyed by batch hash and
+    /// valued by the podlang alias some source in the graph refers to
+    /// it by. For rendering only: an alias is local to the binding that
+    /// declared it, so it identifies nothing, and where two bindings
+    /// disagree the shallowest one wins here purely to pick a label.
+    /// Covers
+    /// transitive imports: a predicate defined by a grandchild plugin
+    /// still needs a qualified name when a statement is rendered, and
+    /// `dependencies` only lists the direct ones. This module's own
+    /// batch is absent, so its predicates render bare.
+    pub fn module_aliases(&self) -> HashMap<Hash, String> {
+        let mut aliases = HashMap::new();
+        self.collect_module_aliases(&mut aliases);
+        aliases
     }
-    /// The module defining a class ref: this module for `plugin: None`
-    /// (see `ActionObjectRef::plugin`), the transitively imported
-    /// plugin's module otherwise.
-    pub fn defining_module(&self, plugin: Option<&str>) -> Option<&SdkModule> {
-        match plugin {
-            None => Some(self),
-            Some(plugin) => self.import_module(plugin).map(|module| &**module),
+    fn collect_module_aliases(&self, aliases: &mut HashMap<Hash, String>) {
+        // Depth first, shallowest last: a direct import's alias
+        // overwrites the same batch seen deeper in the graph.
+        for import in &self.imports {
+            import.module.collect_module_aliases(aliases);
         }
+        for dependency in &self.dependencies {
+            if let Dependency::Module { alias, hash } = dependency {
+                aliases.insert(*hash, podlang_alias(alias));
+            }
+        }
+    }
+    /// The module this one binds `alias` to, or None if it binds
+    /// nothing to it. Direct imports only: an alias is local to the
+    /// module that declared it, so a script's `subaction("a::Foo")`
+    /// means its own module's `a` and never an `a` bound somewhere
+    /// deeper in the graph. Matches `find_import`, which resolves the
+    /// same call at load.
+    fn import_module(&self, alias: &str) -> Option<&Rc<SdkModule>> {
+        find_import(&self.imports, alias).map(|import| &import.module)
+    }
+    /// The module defining `object_ref`'s class: the one it was spliced
+    /// from, or this module for a class of its own. No alias is
+    /// resolved, so this cannot pick the wrong module.
+    pub fn class_module<'a>(&'a self, object_ref: &'a ActionObjectRef) -> &'a SdkModule {
+        match &object_ref.defining {
+            Some(defining) => &defining.module,
+            None => self,
+        }
+    }
+    /// A class's identity: the batch id of the module defining it,
+    /// paired with the class name, which is unique within that module.
+    pub fn class_identity<'a>(&'a self, object_ref: &'a ActionObjectRef) -> (Hash, &'a str) {
+        (
+            self.class_module(object_ref).module.batch.id(),
+            object_ref.class.as_str(),
+        )
     }
     /// Hash of the action's custom predicate in the loaded module.
     pub fn action_hash(&self, action_name: &str) -> Option<Hash> {
@@ -2816,10 +2959,6 @@ struct ExeContext {
     // (including imported-plugin ones), which pop in their rhai-call
     // order.
     inputs: Vec<Dictionary>,
-    // Produced (Output/Mutate) object dicts across the whole action
-    // call tree, in declaration order. Sub-actions append into this
-    // same vec so the top-level call sees them in order.
-    outputs: Vec<Dictionary>,
 }
 
 impl ExeContext {
@@ -2914,7 +3053,6 @@ impl Executor {
             inputs: rhai_input_objs,
             bld,
             tx_builder,
-            outputs: Vec::new(),
         }));
         let action_handle = ActionHandle::new(
             action.to_string(),
@@ -2923,7 +3061,8 @@ impl Executor {
         );
         log::info!("executing action {}", action);
         let start = std::time::Instant::now();
-        action_handle.exe_action()?;
+        // In `total_outputs` order, including every sub-action's.
+        let (_st_action, _io_array, outputs) = action_handle.exe_action()?;
         log::info!("executing action {} took {:?}", action, start.elapsed());
 
         // Release the handle's Rc clone so `exe_rc` has a unique
@@ -2932,7 +3071,6 @@ impl Executor {
         let ExeContext {
             tx_builder,
             mut bld,
-            outputs,
             ..
         } = Rc::try_unwrap(exe_rc)
             .ok()
@@ -2999,7 +3137,6 @@ impl Executor {
             inputs: rhai_input_objs,
             bld,
             tx_builder,
-            outputs: Vec::new(),
         }));
         let action_handle = ActionHandle::new(
             action.to_string(),
@@ -3229,8 +3366,13 @@ impl<'a> ImportResolver<'a> {
             .imports
             .iter()
             .map(|declared| {
+                // The manifest's `[[imports]] name` is doing two jobs:
+                // the alias this module binds, and the key the plugin
+                // pool is searched by. They are only the same thing
+                // because installed archives are one per plugin name;
+                // pinning by `module_hash` instead would separate them.
                 Ok(ModuleImport {
-                    name: declared.name.clone(),
+                    alias: declared.name.clone(),
                     module: self.load(&declared.name)?,
                 })
             })
@@ -3278,7 +3420,7 @@ impl Sdk {
         let started = std::time::Instant::now();
         let loader = Loader::new(action_handles, imports.to_vec())?;
         log::debug!("loader analysis: {:?}", started.elapsed());
-        Ok(Rc::new(loader.module(self.engine.clone(), ast)))
+        Ok(Rc::new(loader.module(self.engine.clone(), ast)?))
     }
 
     /// Like `load_module_from_src_actions`, plus manifest validation:
@@ -3294,7 +3436,7 @@ impl Sdk {
         for declared in &manifest.imports {
             let import = imports
                 .iter()
-                .find(|i| i.name == declared.name)
+                .find(|import| import.alias == declared.name)
                 .ok_or_else(|| {
                     anyhow!(
                         "manifest declares import {:?} but no module for it was provided",
@@ -3312,10 +3454,14 @@ impl Sdk {
             }
         }
         for import in imports {
-            if !manifest.imports.iter().any(|d| d.name == import.name) {
+            if !manifest
+                .imports
+                .iter()
+                .any(|declared| declared.name == import.alias)
+            {
                 return Err(anyhow!(
-                    "module {:?} was provided as an import but the manifest does not declare it",
-                    import.name
+                    "a module was provided under alias {:?} but the manifest does not declare it",
+                    import.alias
                 ))?;
             }
         }

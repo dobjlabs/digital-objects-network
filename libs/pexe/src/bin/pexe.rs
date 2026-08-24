@@ -1,17 +1,16 @@
 //! `pexe`: build and install plugin archives.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use pexe::{
     DEFAULT_OUT_DIR, MANIFEST_FILE, PEXE_EXTENSION, PluginSource, default_install_dir,
-    dep_search_dirs, inspect, install, pack, read_pexe_file, resolve_manifest_imports,
-    set_manifest_hash, set_manifest_import_hash, unpack,
+    dep_search_dirs, import_build_order, inspect, install, pack, read_pexe_file,
+    resolve_manifest_imports, set_manifest_hash, set_manifest_import_hash, unpack,
 };
 use pod2::middleware::Hash;
-use sdk::Sdk;
+use sdk::{Sdk, manifest::Manifest};
 
 /// Release tag + target triple, stamped by build.rs ("dev" outside a release
 /// build). pexe ships in the same release bundle as dobj/dobjd and `dobj
@@ -76,6 +75,27 @@ enum Cmd {
     },
 }
 
+#[derive(clap::Args, Debug)]
+struct InspectTarget {
+    /// Path to a `.pexe` archive or a plugin source directory
+    /// (containing `manifest.toml` and `plugin.rhai`).
+    target: PathBuf,
+
+    /// Extra directories to search for the archives this plugin's
+    /// [[imports]] name (searched before the build output dir and the
+    /// install dir). An archive is checked against the pins it was
+    /// built with, so pointing this at the wrong build is an error
+    /// rather than a silently different module.
+    #[arg(long)]
+    deps: Vec<PathBuf>,
+}
+
+impl InspectTarget {
+    fn as_inspect(&self) -> inspect::Target<'_> {
+        inspect::Target::new(&self.target, &self.deps)
+    }
+}
+
 #[derive(Subcommand, Debug)]
 enum InspectCmd {
     /// Render the Podlang for the plugin's predicates.
@@ -84,9 +104,8 @@ enum InspectCmd {
     /// `--middleware`, the compiled `CustomPredicateBatch` is rendered
     /// instead via pod2's pretty-printer.
     Predicates {
-        /// Path to a `.pexe` archive or a plugin source directory
-        /// (containing `manifest.toml` and `plugin.rhai`).
-        target: PathBuf,
+        #[command(flatten)]
+        target: InspectTarget,
 
         /// Restrict output to a single predicate name. Without this,
         /// every predicate is emitted with a `--- name ---` header.
@@ -100,16 +119,16 @@ enum InspectCmd {
     },
     /// Render each class's state-space signature.
     Classes {
-        /// Path to a `.pexe` archive or a plugin source directory.
-        target: PathBuf,
+        #[command(flatten)]
+        target: InspectTarget,
 
         /// Restrict output to a single class.
         class: Option<String>,
     },
     /// Emit the action/class relationship graph.
     Graph {
-        /// Path to a `.pexe` archive or a plugin source directory.
-        target: PathBuf,
+        #[command(flatten)]
+        target: InspectTarget,
 
         /// Output format. `dot` (default) emits Graphviz; `mermaid`
         /// emits a Mermaid flowchart that pastes into mermaid.live or
@@ -127,8 +146,8 @@ enum InspectCmd {
     /// plonky2 proof. Much slower than `plan` (uses the real prover,
     /// not MockProver) and produces a verifiable MainPod.
     Prove {
-        /// Path to a `.pexe` archive or a plugin source directory.
-        target: PathBuf,
+        #[command(flatten)]
+        target: InspectTarget,
 
         /// Action to prove.
         #[arg(long)]
@@ -144,8 +163,8 @@ enum InspectCmd {
     /// the SDK's multi-pod solver runs. Prints the solution breakdown
     /// and a statement dependency graph.
     Plan {
-        /// Path to a `.pexe` archive or a plugin source directory.
-        target: PathBuf,
+        #[command(flatten)]
+        target: InspectTarget,
 
         /// Action to plan.
         #[arg(long)]
@@ -232,14 +251,33 @@ fn main() -> Result<()> {
                 None
             };
             let dep_dirs = dep_search_dirs(&deps, &out_dir, target_install.as_deref());
-            // An importer resolves its deps from the archives already in
-            // out_dir, so any dependency named in this invocation has to
-            // be built first. `examples/*` arrives alphabetically, which
-            // is not that order in general.
-            let plugins = order_by_imports(plugins)?;
-            for plugin_dir in plugins {
+            // Read every source up front: `import_build_order` needs the
+            // declared import names before the first build, and build_one
+            // would otherwise read each dir a second time.
+            let mut sources = Vec::with_capacity(plugins.len());
+            for plugin_dir in &plugins {
+                let source = PluginSource::read(plugin_dir)?;
+                let manifest = source.parse_manifest()?;
+                sources.push((source, manifest));
+            }
+            let declared: Vec<(String, Vec<String>)> = sources
+                .iter()
+                .map(|(_, manifest)| {
+                    (
+                        manifest.plugin.name.clone(),
+                        manifest
+                            .imports
+                            .iter()
+                            .map(|import| import.name.clone())
+                            .collect(),
+                    )
+                })
+                .collect();
+            for idx in import_build_order(&declared)? {
+                let (source, manifest) = &sources[idx];
                 build_one(
-                    &plugin_dir,
+                    source,
+                    manifest,
                     &out_dir,
                     target_install.as_deref(),
                     check,
@@ -261,10 +299,10 @@ fn main() -> Result<()> {
                 action,
                 middleware,
             } => {
-                inspect::predicates(&target, action.as_deref(), middleware)?;
+                inspect::predicates(&target.as_inspect(), action.as_deref(), middleware)?;
             }
             InspectCmd::Classes { target, class } => {
-                inspect::classes(&target, class.as_deref())?;
+                inspect::classes(&target.as_inspect(), class.as_deref())?;
             }
             InspectCmd::Graph {
                 target,
@@ -276,7 +314,7 @@ fn main() -> Result<()> {
                     GraphFormat::Mermaid if link => inspect::GraphOutput::MermaidLink,
                     GraphFormat::Mermaid => inspect::GraphOutput::Mermaid,
                 };
-                inspect::graph(&target, mode)?;
+                inspect::graph(&target.as_inspect(), mode)?;
             }
             InspectCmd::Prove {
                 target,
@@ -286,7 +324,7 @@ fn main() -> Result<()> {
                 if let Some(seed) = seed {
                     pod2utils::set_seed(seed);
                 }
-                inspect::prove_action(&target, &action)?;
+                inspect::prove_action(&target.as_inspect(), &action)?;
             }
             InspectCmd::Plan {
                 target,
@@ -334,85 +372,11 @@ fn main() -> Result<()> {
                     PlanFormat::MermaidFull if link => inspect::PlanOutput::MermaidLinkFull,
                     PlanFormat::MermaidFull => inspect::PlanOutput::MermaidFull,
                 };
-                inspect::plan(&target, &action, mode)?;
+                inspect::plan(&target.as_inspect(), &action, mode)?;
             }
         },
     }
     Ok(())
-}
-
-/// Sort plugin source dirs so that a plugin declaring an import of
-/// another plugin in the same invocation builds after it. Plugins whose
-/// imports are not in the invocation keep their relative order and
-/// resolve from previously built or installed archives. An import cycle
-/// among the given plugins is an error (the SDK's resolver would reject
-/// it later anyway, with less context).
-fn order_by_imports(plugin_dirs: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
-    let mut by_name: HashMap<String, usize> = HashMap::new();
-    let mut declared_imports: Vec<Vec<String>> = Vec::with_capacity(plugin_dirs.len());
-    for (idx, dir) in plugin_dirs.iter().enumerate() {
-        let manifest = PluginSource::read(dir)?.parse_manifest()?;
-        by_name.insert(manifest.plugin.name.clone(), idx);
-        declared_imports.push(manifest.imports.iter().map(|i| i.name.clone()).collect());
-    }
-
-    #[derive(Clone, Copy, PartialEq)]
-    enum Mark {
-        Unvisited,
-        InProgress,
-        Done,
-    }
-    let mut marks = vec![Mark::Unvisited; plugin_dirs.len()];
-    let mut ordered: Vec<usize> = Vec::with_capacity(plugin_dirs.len());
-    // Iterative post-order walk: a plugin is emitted once every
-    // in-invocation dependency it names has been emitted.
-    for start in 0..plugin_dirs.len() {
-        if marks[start] != Mark::Unvisited {
-            continue;
-        }
-        let mut stack = vec![(start, 0usize)];
-        while let Some((idx, dep_pos)) = stack.pop() {
-            if dep_pos == 0 {
-                if marks[idx] == Mark::Done {
-                    continue;
-                }
-                marks[idx] = Mark::InProgress;
-            }
-            match declared_imports[idx]
-                .get(dep_pos)
-                .and_then(|name| by_name.get(name))
-            {
-                Some(&dep) => {
-                    stack.push((idx, dep_pos + 1));
-                    match marks[dep] {
-                        Mark::InProgress => {
-                            return Err(anyhow!(
-                                "import cycle among the plugins being built: {} <-> {}",
-                                plugin_dirs[idx].display(),
-                                plugin_dirs[dep].display(),
-                            ));
-                        }
-                        Mark::Unvisited => stack.push((dep, 0)),
-                        Mark::Done => {}
-                    }
-                }
-                None if dep_pos < declared_imports[idx].len() => {
-                    // Import not in this invocation; resolved from disk.
-                    stack.push((idx, dep_pos + 1));
-                }
-                None => {
-                    marks[idx] = Mark::Done;
-                    ordered.push(idx);
-                }
-            }
-        }
-    }
-
-    let mut sorted: Vec<Option<PathBuf>> = plugin_dirs.into_iter().map(Some).collect();
-    Ok(ordered
-        .into_iter()
-        .map(|idx| sorted[idx].take().expect("each plugin ordered once"))
-        .collect())
 }
 
 /// Un-prefixed lowercase hex, the form manifests store.
@@ -443,15 +407,14 @@ fn needs_stamp(check: bool, what: &str, declared: Hash, real: Hash) -> Result<bo
 }
 
 fn build_one(
-    plugin_dir: &Path,
+    source: &PluginSource,
+    manifest: &Manifest,
     out_dir: &Path,
     install_dir: Option<&Path>,
     check: bool,
     dep_dirs: &[PathBuf],
 ) -> Result<()> {
-    log::info!("building {}", plugin_dir.display());
-    let source = PluginSource::read(plugin_dir)?;
-    let manifest = source.parse_manifest()?;
+    log::info!("building {}", source.root.display());
     let plugin_name = manifest.plugin.name.clone();
 
     // Resolve declared imports against already-built archives. Each dep
@@ -459,7 +422,7 @@ fn build_one(
     // for them are stamped below, so a stale pin here is a rewrite, not
     // an error.
     let sdk = Sdk::default();
-    let imports = resolve_manifest_imports(&sdk, &manifest, dep_dirs)?;
+    let imports = resolve_manifest_imports(&sdk, manifest, dep_dirs)?;
 
     let mut manifest_toml = source.manifest_toml.clone();
     let mut manifest_rewritten = false;
@@ -476,7 +439,7 @@ fn build_one(
     }
 
     // Compile the script to derive the real module hash from the pod2 batch id.
-    let module = pexe::compile_module(&sdk, &manifest, &source.script, &imports)?;
+    let module = pexe::compile_module(&sdk, manifest, &source.script, &imports)?;
     let real_hash = module.module().batch.id();
     if needs_stamp(check, "module_hash", manifest.plugin.module_hash, real_hash)
         .with_context(|| format!("in {plugin_name}"))?

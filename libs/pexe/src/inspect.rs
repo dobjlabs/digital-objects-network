@@ -4,7 +4,7 @@
 //! `manifest.toml` + `plugin.rhai`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use anyhow::{Result, anyhow};
@@ -13,7 +13,7 @@ use pod2::middleware::{
     CustomPredicateBatch, Hash, NativePredicate, Predicate, PredicateOrWildcard, StatementTmpl,
     StatementTmplArg, Wildcard,
 };
-use sdk::{Dependency, Sdk, SdkModule, manifest::Manifest};
+use sdk::{Sdk, SdkModule, manifest::Manifest};
 
 use crate::{PluginSource, read_pexe_file, unpack};
 
@@ -35,10 +35,25 @@ fn txlib_event_hash(name: &str) -> Hash {
     Predicate::Custom(custom_ref).hash()
 }
 
-/// Resolve a target path to its parsed manifest and plugin script.
-/// Directories are read via `PluginSource::read`; anything else is
-/// treated as a `.pexe` archive and unpacked.
-fn load_target(path: &Path) -> Result<(Manifest, String)> {
+/// A plugin to inspect: a `.pexe` archive or a source directory
+/// (`manifest.toml` + `plugin.rhai`), plus any extra directories its
+/// declared `[[imports]]` should resolve against, searched ahead of
+/// [`crate::DEFAULT_OUT_DIR`] and the default install dir.
+pub struct Target<'a> {
+    pub path: &'a Path,
+    pub deps: &'a [PathBuf],
+}
+
+impl<'a> Target<'a> {
+    pub fn new(path: &'a Path, deps: &'a [PathBuf]) -> Self {
+        Self { path, deps }
+    }
+}
+
+/// Read a target's manifest and script. Directories are read via
+/// `PluginSource::read`; anything else is treated as a `.pexe` archive
+/// and unpacked.
+fn read_target(path: &Path) -> Result<(Manifest, String)> {
     if path.is_dir() {
         let source = PluginSource::read(path)?;
         let manifest = source.parse_manifest()?;
@@ -49,14 +64,33 @@ fn load_target(path: &Path) -> Result<(Manifest, String)> {
     }
 }
 
-/// Compile the plugin script with the manifest's action list and return
-/// the loaded SDK module. Declared imports resolve against built
-/// archives in [`crate::DEFAULT_OUT_DIR`] and the default install dir.
-fn load_sdk_module(manifest: &Manifest, script: &str) -> Result<std::rc::Rc<SdkModule>> {
+/// Compile a target's script with its manifest's action list and return
+/// the loaded SDK module.
+///
+/// An archive is a built artifact, so its manifest pins are enforced:
+/// the modules its imports resolve to must be the ones it was built
+/// against, and its script must still compile to its declared
+/// `module_hash`. Without that check, inspecting (or proving) an
+/// archive against a newer installed dependency silently describes a
+/// module that is not the one in the file. A source directory is
+/// mid-edit by definition -- `pexe build` is what stamps its pins --
+/// so it compiles against whatever its imports resolve to now.
+fn load_target(target: &Target<'_>) -> Result<std::rc::Rc<SdkModule>> {
+    let (manifest, script) = read_target(target.path)?;
     let sdk = Sdk::default();
-    let dep_dirs = crate::dep_search_dirs(&[], Path::new(crate::DEFAULT_OUT_DIR), None);
-    let imports = crate::resolve_manifest_imports(&sdk, manifest, &dep_dirs)?;
-    crate::compile_module(&sdk, manifest, script, &imports)
+    let dep_dirs = crate::dep_search_dirs(target.deps, Path::new(crate::DEFAULT_OUT_DIR), None);
+    let imports = crate::resolve_manifest_imports(&sdk, &manifest, &dep_dirs)?;
+    if target.path.is_dir() {
+        return crate::compile_module(&sdk, &manifest, &script, &imports);
+    }
+    sdk.load_module_from_src_manifest(&script, &manifest, &imports)
+        .map_err(|err| {
+            anyhow!(
+                "{}: this archive does not match what was found on disk (searched \
+                 {dep_dirs:?}): {err}",
+                target.path.display()
+            )
+        })
 }
 
 /// `pexe inspect predicates`.
@@ -68,9 +102,8 @@ fn load_sdk_module(manifest: &Manifest, script: &str) -> Result<std::rc::Rc<SdkM
 ///
 /// When `action` is `Some`, filters output to predicates whose name
 /// matches exactly. When `None`, emits everything.
-pub fn predicates(target: &Path, action: Option<&str>, middleware: bool) -> Result<()> {
-    let (manifest, script) = load_target(target)?;
-    let module = load_sdk_module(&manifest, &script)?;
+pub fn predicates(target: &Target<'_>, action: Option<&str>, middleware: bool) -> Result<()> {
+    let module = load_target(target)?;
 
     if middleware {
         print_middleware(&module, action)
@@ -292,9 +325,8 @@ struct ActionRun {
     state: crate::fixtures::SyntheticState,
 }
 
-fn prepare_run(target: &Path, action_name: &str) -> Result<ActionRun> {
-    let (manifest, script) = load_target(target)?;
-    let module = load_sdk_module(&manifest, &script)?;
+fn prepare_run(target: &Target<'_>, action_name: &str) -> Result<ActionRun> {
+    let module = load_target(target)?;
     let action = module
         .actions()
         .iter()
@@ -315,7 +347,7 @@ fn prepare_run(target: &Path, action_name: &str) -> Result<ActionRun> {
 /// `pexe prove`. Same shape as `inspect plan` but with `mock=false`,
 /// so the action is actually proved via the real plonky2 prover. This
 /// is much slower than `plan` (minutes for actions with many PODs).
-pub fn prove_action(target: &Path, action_name: &str) -> Result<()> {
+pub fn prove_action(target: &Target<'_>, action_name: &str) -> Result<()> {
     let run = prepare_run(target, action_name)?;
 
     println!("Prove: {}", action_name);
@@ -351,7 +383,7 @@ pub fn prove_action(target: &Path, action_name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn plan(target: &Path, action_name: &str, mode: PlanOutput) -> Result<()> {
+pub fn plan(target: &Target<'_>, action_name: &str, mode: PlanOutput) -> Result<()> {
     let run = prepare_run(target, action_name)?;
     let input_classes = run.input_classes;
     let output_classes = run.output_classes;
@@ -496,19 +528,17 @@ fn print_dep_graph(plan: &sdk::PlanData, aliases: &HashMap<Hash, String>) {
     }
 }
 
-/// Map each imported module's batch hash to its dependency name (the
-/// tx_events batch -> `"tx"`, an imported plugin -> its plugin name).
-/// Used to qualify foreign predicate names in label rendering. The local
-/// module's batch is *not* in the dependency list, so its customs come
-/// out unprefixed naturally.
+/// Map each reachable module's batch hash to the alias the rendered
+/// podlang refers to it by (the tx_events batch -> `tx`, an imported
+/// plugin -> its name with `-` replaced by `_`). Used to qualify
+/// foreign predicate names in label rendering, so a label reads the
+/// same way the source dumped alongside it does. Transitively imported
+/// plugins are included: their predicates show up in a plan just as
+/// directly imported ones do, and an unqualified name would be
+/// indistinguishable from a locally defined predicate. The local
+/// module's own batch is absent, so its customs come out unprefixed.
 fn build_alias_map(module: &SdkModule) -> HashMap<Hash, String> {
-    let mut map = HashMap::new();
-    for dep in module.dependencies() {
-        if let Dependency::Module { name, hash } = dep {
-            map.insert(*hash, name.clone());
-        }
-    }
-    map
+    module.module_aliases()
 }
 
 fn format_custom_name(
@@ -959,9 +989,8 @@ pub enum GraphOutput {
 /// `out` / `mutate` edges. With `GraphOutput::Dot`, pipe to `dot -Tsvg`;
 /// with `GraphOutput::Mermaid`, paste into a markdown renderer; with
 /// `GraphOutput::MermaidLink`, opens directly in mermaid.live.
-pub fn graph(target: &Path, mode: GraphOutput) -> Result<()> {
-    let (manifest, script) = load_target(target)?;
-    let module = load_sdk_module(&manifest, &script)?;
+pub fn graph(target: &Target<'_>, mode: GraphOutput) -> Result<()> {
+    let module = load_target(target)?;
 
     match mode {
         GraphOutput::Dot => print!("{}", build_class_graph_dot(&module)),
@@ -1108,9 +1137,8 @@ fn build_class_graph_mermaid(module: &SdkModule) -> String {
 /// Render each class's state-space signature in "Notation A": a
 /// pod2-typed record listing application fields with literal narrowing
 /// where possible and a crypto appendix for VDF/PoW-derived fields.
-pub fn classes(target: &Path, class_filter: Option<&str>) -> Result<()> {
-    let (manifest, script) = load_target(target)?;
-    let module = load_sdk_module(&manifest, &script)?;
+pub fn classes(target: &Target<'_>, class_filter: Option<&str>) -> Result<()> {
+    let module = load_target(target)?;
     let batch: &std::sync::Arc<CustomPredicateBatch> = &module.module().batch;
 
     let mut first = true;

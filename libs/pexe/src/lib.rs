@@ -8,6 +8,7 @@
 //! Wire-format helpers plus compile/install utilities used by the packaging CLI
 //! and by the driver at plugin-load time.
 
+use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -146,28 +147,27 @@ pub fn compile_module(
         .map_err(|err| anyhow!("failed to compile plugin: {err}"))
 }
 
-/// Like [`compile_module`], returning just the hex-encoded module hash.
-pub fn compile_module_hash(
-    manifest: &Manifest,
-    script: &str,
-    imports: &[ModuleImport],
-) -> Result<String> {
-    let module = compile_module(&Sdk::default(), manifest, script, imports)?;
-    Ok(format!("{:#}", module.module().batch.id()))
-}
-
-/// `.pexe` files in `dir`, sorted by path. A missing or unreadable
-/// directory yields nothing.
-pub fn pexe_paths_in(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
+/// `.pexe` files in `dir`, sorted by path. A directory that does not
+/// exist yields nothing; one that exists but cannot be read is an
+/// error, so a permission or I/O problem is never mistaken for "no
+/// plugins installed".
+pub fn pexe_paths_in(dir: &Path) -> Result<Vec<PathBuf>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(anyhow!("failed to read {}: {err}", dir.display())),
     };
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some(PEXE_EXTENSION))
-        .collect();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|err| anyhow!("failed to read an entry of {}: {err}", dir.display()))?
+            .path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some(PEXE_EXTENSION) {
+            paths.push(path);
+        }
+    }
     paths.sort();
-    paths
+    Ok(paths)
 }
 
 /// Directories searched for already-built dependency pexes, in priority
@@ -196,7 +196,16 @@ pub fn dep_search_dirs(
 pub fn discover_dep_sources(dirs: &[PathBuf]) -> Vec<(Manifest, String)> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sources = Vec::new();
-    for path in dirs.iter().flat_map(|dir| pexe_paths_in(dir)) {
+    let dep_paths = dirs.iter().flat_map(|dir| {
+        pexe_paths_in(dir).unwrap_or_else(|err| {
+            // Search dirs are speculative (a `target/pexe` that was
+            // never built, an install dir on a dead mount), so a bad
+            // one only removes its own candidates.
+            log::warn!("skipping dependency search dir: {err}");
+            Vec::new()
+        })
+    });
+    for path in dep_paths {
         match read_pexe_file(&path).and_then(|bytes| unpack(&bytes)) {
             Ok((manifest, script)) => {
                 if seen.insert(manifest.plugin.name.clone()) {
@@ -209,6 +218,70 @@ pub fn discover_dep_sources(dirs: &[PathBuf]) -> Vec<(Manifest, String)> {
         }
     }
     sources
+}
+
+/// Order plugins so that one importing another in the same set builds
+/// after it: an importer resolves its `[[imports]]` from archives
+/// already on disk, and `examples/*` arrives alphabetically, which is
+/// not that order in general. Each entry is a plugin's name and the
+/// names it declares as imports; the returned indices are a build
+/// order over them.
+///
+/// Imports naming a plugin outside the set are left alone: those
+/// resolve from a previously built or installed archive. A cycle among
+/// the given plugins is an error (the SDK's resolver would reject it
+/// later anyway, with less context to report).
+pub fn import_build_order(plugins: &[(String, Vec<String>)]) -> Result<Vec<usize>> {
+    let mut index_by_name: HashMap<&str, usize> = HashMap::new();
+    for (idx, (name, _)) in plugins.iter().enumerate() {
+        if index_by_name.insert(name.as_str(), idx).is_some() {
+            return Err(anyhow!("two plugins in this build are both named {name:?}"));
+        }
+    }
+    let mut marks = vec![Mark::Unvisited; plugins.len()];
+    let mut ordered = Vec::with_capacity(plugins.len());
+    for idx in 0..plugins.len() {
+        visit_imports(idx, plugins, &index_by_name, &mut marks, &mut ordered)?;
+    }
+    Ok(ordered)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mark {
+    Unvisited,
+    InProgress,
+    Done,
+}
+
+/// Post-order visit for [`import_build_order`]: emit `idx` once every
+/// in-set plugin it imports has been emitted.
+fn visit_imports(
+    idx: usize,
+    plugins: &[(String, Vec<String>)],
+    index_by_name: &HashMap<&str, usize>,
+    marks: &mut [Mark],
+    ordered: &mut Vec<usize>,
+) -> Result<()> {
+    if marks[idx] != Mark::Unvisited {
+        return Ok(());
+    }
+    marks[idx] = Mark::InProgress;
+    for import in &plugins[idx].1 {
+        let Some(&dep) = index_by_name.get(import.as_str()) else {
+            continue;
+        };
+        if marks[dep] == Mark::InProgress {
+            return Err(anyhow!(
+                "import cycle among the plugins being built: {} -> {}",
+                plugins[idx].0,
+                plugins[dep].0
+            ));
+        }
+        visit_imports(dep, plugins, index_by_name, marks, ordered)?;
+    }
+    marks[idx] = Mark::Done;
+    ordered.push(idx);
+    Ok(())
 }
 
 /// Resolve a manifest's declared `[[imports]]` against already-built
@@ -292,12 +365,30 @@ pub fn set_manifest_import_hash(
     let mut doc = parse_manifest_doc(toml_src)?;
     let imports = doc
         .get_mut("imports")
-        .and_then(|item| item.as_array_of_tables_mut())
-        .ok_or_else(|| anyhow!("manifest has no [[imports]] tables"))?;
-    let table = imports
-        .iter_mut()
-        .find(|table| table.get("name").and_then(|v| v.as_str()) == Some(import_name))
-        .ok_or_else(|| anyhow!("manifest has no [[imports]] entry named {import_name:?}"))?;
+        .ok_or_else(|| anyhow!("manifest declares no imports"))?;
+    // `[[imports]]` tables and an inline `imports = [{ name = ... }]`
+    // array both deserialize into `Manifest::imports`, so either can be
+    // the form waiting to be stamped.
+    let tables: Vec<&mut dyn toml_edit::TableLike> = match imports {
+        toml_edit::Item::ArrayOfTables(tables) => tables
+            .iter_mut()
+            .map(|table| table as &mut dyn toml_edit::TableLike)
+            .collect(),
+        toml_edit::Item::Value(toml_edit::Value::Array(values)) => values
+            .iter_mut()
+            .filter_map(|value| value.as_inline_table_mut())
+            .map(|table| table as &mut dyn toml_edit::TableLike)
+            .collect(),
+        _ => {
+            return Err(anyhow!(
+                "manifest `imports` is neither [[imports]] tables nor an array of tables"
+            ));
+        }
+    };
+    let table = tables
+        .into_iter()
+        .find(|table| table.get("name").and_then(|name| name.as_str()) == Some(import_name))
+        .ok_or_else(|| anyhow!("manifest has no imports entry named {import_name:?}"))?;
     write_module_hash(table, clean);
     Ok(doc.to_string())
 }
@@ -344,6 +435,134 @@ name = "craft-basics"
 version = "0.1.0"
 module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 "#;
+
+    fn build_order(plugins: &[(&str, &[&str])]) -> Result<Vec<String>> {
+        let owned: Vec<(String, Vec<String>)> = plugins
+            .iter()
+            .map(|(name, imports)| {
+                (
+                    name.to_string(),
+                    imports.iter().map(|i| i.to_string()).collect(),
+                )
+            })
+            .collect();
+        Ok(import_build_order(&owned)?
+            .into_iter()
+            .map(|idx| owned[idx].0.clone())
+            .collect())
+    }
+
+    #[test]
+    fn test_import_build_order_puts_dependencies_first() {
+        // Alphabetical input, reverse dependency order.
+        let order =
+            build_order(&[("craft-totem", &["craft-basics"]), ("craft-basics", &[])]).unwrap();
+        assert_eq!(order, vec!["craft-basics", "craft-totem"]);
+
+        // Transitive chain, worst-case input order.
+        let order = build_order(&[
+            ("builder", &["mason"]),
+            ("mason", &["quarry"]),
+            ("quarry", &[]),
+        ])
+        .unwrap();
+        assert_eq!(order, vec!["quarry", "mason", "builder"]);
+
+        // A diamond emits each plugin once, dependencies first.
+        let order = build_order(&[
+            ("top", &["left", "right"]),
+            ("left", &["base"]),
+            ("right", &["base"]),
+            ("base", &[]),
+        ])
+        .unwrap();
+        assert_eq!(order.len(), 4);
+        let position = |name: &str| order.iter().position(|n| n == name).unwrap();
+        assert!(position("base") < position("left"));
+        assert!(position("base") < position("right"));
+        assert!(position("left") < position("top"));
+        assert!(position("right") < position("top"));
+    }
+
+    #[test]
+    fn test_import_build_order_ignores_imports_outside_the_set() {
+        // `installed` is not being built here: it resolves from disk,
+        // and the given order is kept.
+        let order = build_order(&[("a", &["installed"]), ("b", &[])]).unwrap();
+        assert_eq!(order, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_import_build_order_rejects_cycles() {
+        let err = build_order(&[("a", &["b"]), ("b", &["a"])]).unwrap_err();
+        assert!(err.to_string().contains("import cycle"), "got: {err}");
+
+        let err = build_order(&[("a", &["a"])]).unwrap_err();
+        assert!(err.to_string().contains("import cycle"), "got: {err}");
+    }
+
+    #[test]
+    fn test_import_build_order_rejects_duplicate_names() {
+        let err = build_order(&[("a", &[]), ("a", &[])]).unwrap_err();
+        assert!(err.to_string().contains("both named"), "got: {err}");
+    }
+
+    #[test]
+    fn test_set_manifest_import_hash_accepts_either_toml_form() {
+        let stamped = "1111111111111111111111111111111111111111111111111111111111111111";
+        let table_form = r#"
+classes = []
+actions = []
+
+[plugin]
+name = "craft-totem"
+version = "0.1.0"
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[imports]]
+name = "craft-basics"
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+"#;
+        let out = set_manifest_import_hash(table_form, "craft-basics", stamped).unwrap();
+        assert!(out.contains(stamped), "not stamped:\n{out}");
+
+        // Root-level key, so it has to precede the first table header.
+        let inline_form = r#"
+classes = []
+actions = []
+imports = [{ name = "craft-basics", module_hash = "0000000000000000000000000000000000000000000000000000000000000000" }]
+
+[plugin]
+name = "craft-totem"
+version = "0.1.0"
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+"#;
+        let out = set_manifest_import_hash(inline_form, "craft-basics", stamped).unwrap();
+        assert!(out.contains(stamped), "not stamped:\n{out}");
+        // Both forms parse back into the same declared imports.
+        let manifest: Manifest = toml::from_str(&out).unwrap();
+        assert_eq!(manifest.imports.len(), 1);
+        assert_eq!(manifest.imports[0].name, "craft-basics");
+
+        let err = set_manifest_import_hash(table_form, "ghost", stamped).unwrap_err();
+        assert!(err.to_string().contains("no imports entry"), "got: {err}");
+    }
+
+    #[test]
+    fn test_pexe_paths_in_reports_unreadable_dirs() {
+        let missing = std::path::Path::new("/definitely/not/here/actions");
+        assert_eq!(pexe_paths_in(missing).unwrap(), Vec::<PathBuf>::new());
+
+        // A file where a directory is expected: exists, cannot be read
+        // as a dir. An empty listing here would look like "no plugins
+        // installed" rather than a broken actions dir.
+        let mut file = std::env::temp_dir();
+        file.push(format!("pexe-paths-in-{}.not-a-dir", std::process::id()));
+        std::fs::write(&file, b"x").unwrap();
+        let err = pexe_paths_in(&file).unwrap_err();
+        std::fs::remove_file(&file).unwrap();
+        assert!(err.to_string().contains("failed to read"), "got: {err}");
+    }
 
     #[test]
     fn test_pack_unpack_round_trip() {
