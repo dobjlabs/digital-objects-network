@@ -1,0 +1,116 @@
+[plugin]
+name = "nanoverse"
+version = "0.1.0"
+# Rewritten by `cargo run -p pexe -- build examples/nanoverse`.
+module_hash = "0a5342112570899a8de7dbd09bacc74e4e438061327c76ce02a5a79be9eed4f4"
+
+[[classes]]
+name = "ship"
+emoji = "🚀"
+description = "A tiered ship. Its tier indexes the table that sets its step and yield."
+
+[[classes]]
+name = "sector"
+emoji = "🧭"
+description = "A claimed region. Its identity decides which profile it surveys as."
+
+[[classes]]
+name = "signal"
+emoji = "📡"
+description = "A detected signal, carrying the slot and the sector identity it came from."
+
+[[classes]]
+name = "body"
+emoji = "🪐"
+description = "A scanned body with a resource pool and the set of kinds it yields."
+
+[[classes]]
+name = "coordinate"
+emoji = "🗺️"
+description = "A warp coordinate whose catalog row was fixed when it was extracted."
+
+[[classes]]
+name = "resource"
+emoji = "📦"
+description = "A stack of one resource kind."
+
+[[actions]]
+name = "BuildShip"
+emoji = "🚀"
+description = "Build a tier 0 ship behind a short VDF."
+
+[[actions]]
+name = "UpgradeShip"
+emoji = "⬆️"
+description = "Raise a ship one tier, reading the new tier's row out of the tier table."
+
+[[actions]]
+name = "MoveShipX"
+emoji = "➡️"
+description = "Move along x by the ship tier's own step."
+
+[[actions]]
+name = "ClaimSector"
+emoji = "🧭"
+description = "Claim the sector at the ship's position, recording the grounding block."
+
+[[actions]]
+name = "SurveySectorSparse"
+emoji = "🔭"
+description = "Survey a sector whose identity falls in the lower band."
+
+[[actions]]
+name = "SurveySectorRich"
+emoji = "🔭"
+description = "Survey a sector whose identity falls in the upper band."
+
+[[actions]]
+name = "DetectSignal"
+emoji = "📡"
+description = "Spend a survey slot to detect the signal the sector's profile allows."
+
+[[actions]]
+name = "ScanBody"
+emoji = "🪐"
+description = "Resolve a signal into the body its category names."
+
+[[actions]]
+name = "ExtractResource"
+emoji = "⛏️"
+description = "Extract tier base times body richness from a body's pool."
+
+[[actions]]
+name = "ExtractCoordinate"
+emoji = "🗺️"
+description = "Mint a coordinate bound to the body's next catalog row."
+
+[[actions]]
+name = "RevealCoordinate"
+emoji = "✨"
+description = "Reveal the catalog row the coordinate was minted against."
+
+[[actions]]
+name = "UseCoordinate"
+emoji = "🗺️"
+description = "Spend one use of a revealed coordinate."
+hidden = true
+
+[[actions]]
+name = "WarpToCoordinate"
+emoji = "🌀"
+description = "Spend a coordinate use and warp the ship to its destination."
+
+[[actions]]
+name = "RefineResource"
+emoji = "⚗️"
+description = "Refine a stack into what its kind's recipe row names."
+
+[[actions]]
+name = "ScrapResource"
+emoji = "🗑️"
+description = "Destroy a stack of a kind no recipe refines."
+
+[[actions]]
+name = "MergeResources"
+emoji = "📦"
+description = "Merge one resource stack into another of the same kind."

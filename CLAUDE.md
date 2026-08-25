@@ -34,7 +34,7 @@ The workspace is declared in `Cargo.toml`. Crate-by-crate:
 | `mcp` (crate name `dobj-mcp`)    | MCP server exposing driver as tools to AI agents. Embedded by dobjd on the adjacent port.                                                                                                            |
 | `libs/intro-pods/vdfpod`         | VDF intro pod (PoW gating via iterated hashing).                                                                                                                                                     |
 | `libs/intro-pods/lt-eq-u256-pod` | 256-bit `<=` intro pod (PoW difficulty checks). Crate name `lt-eq-u256-pod`.                                                                                                                         |
-| `examples/*`                     | Example plugin sources: `craft-basics` (Log, Wood, Stick, Stone, WoodPick, StonePick + 9 actions) and `craft-rocket`.                                                                                |
+| `examples/*`                     | Example plugin sources: `craft-basics` (Log, Wood, Stick, Stone, WoodPick, StonePick + 9 actions), `craft-rocket`, and `nanoverse` (one action per SDK feature; see its README).                     |
 | `devtools/beacon-shim`           | **Dev only, never shipped.** Beacon REST shim over a local anvil devnet; backs `just dev-local`. Keep it out of `images.yml` and `deploy/compose.yaml`.                                              |
 
 ## Build / test / dev
