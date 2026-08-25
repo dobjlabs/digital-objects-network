@@ -757,6 +757,73 @@ fn test_cross_read_into_update() {
     let [_ship2, _sector2] = res.objs();
 }
 
+/// Verifies that object-valued writes capture the object before later
+/// mutations. Covers both `set` and `update`.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_whole_object_written_before_mutation() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn SpawnShip(action) {
+            var ship = action.output("Ship");
+            ship.set([["fuel", 10]]);
+        }
+
+        fn LogViaSet(action) {
+            var ship = action.mutate("Ship");
+            var log = action.output("Log");
+            log.set([["ship_before", ship]]);
+            var fuel = unsafe { ship.fuel - 1 };
+            action.st_sum(fuel, 1, ship.fuel);
+            ship.update("fuel", fuel);
+        }
+
+        fn LogViaUpdate(action) {
+            var ship = action.mutate("Ship");
+            var log = action.output("Log");
+            log.set([["ship_before", 0]]);
+            log.update("ship_before", ship);
+            var fuel = unsafe { ship.fuel - 1 };
+            action.st_sum(fuel, 1, ship.fuel);
+            ship.update("fuel", fuel);
+        }
+    "#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["SpawnShip", "LogViaSet", "LogViaUpdate"])
+        .unwrap();
+    println!("{}", module.podlang_src);
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnShip", vec![]).unwrap();
+    let spawn_tx = res.tx.clone();
+    let [ship] = res.objs();
+    apply_tx(&mut state, &spawn_tx);
+    let ship_before = ship.obj.clone();
+
+    for action in ["LogViaSet", "LogViaUpdate"] {
+        let executor =
+            module.executor(true, grounding_witness(&state, &[ship_before.commitment()]));
+        let res = executor
+            .action(
+                action,
+                vec![SpendableObject {
+                    obj: ship_before.clone(),
+                }],
+            )
+            .unwrap();
+        let [_ship2, log] = res.objs();
+        let logged = log.obj.get(&StrKey::from("ship_before")).unwrap().unwrap();
+        assert_eq!(
+            logged,
+            Value::from(ship_before.clone()),
+            "{action} recorded the post-mutation ship"
+        );
+    }
+}
+
 /// Parent reads values off an object created (not mutated) by a
 /// sub-action, exercising the post-identity rebinding of the alias.
 #[allow(clippy::cloned_ref_to_slice_refs)]

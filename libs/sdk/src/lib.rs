@@ -126,6 +126,8 @@ enum Inst {
         obj: String,
         key: String,
         value: Ref,
+        /// Value captured during Execute in pod2 form; `None` during Load.
+        op_arg: Option<OperationArg>,
         /// Pre-update Object dict snapshot. Some at Execute, None at Load.
         old_dict: Option<Dictionary>,
         /// Post-update Object dict snapshot. Some at Execute, None at Load.
@@ -134,6 +136,8 @@ enum Inst {
     Set {
         obj: String,
         kvs: Vec<(String, Ref)>,
+        /// Values captured during Execute in pod2 form; `None` during Load.
+        op_args: Option<Vec<OperationArg>>,
         /// Post-set Object dict snapshot (after all kvs inserted).
         /// Some at Execute, None at Load.
         final_dict: Option<Dictionary>,
@@ -468,6 +472,11 @@ fn check_container_kind(pred: NativePredicate, container: &VarOrValue) -> Runtim
 /// None at Load, where an arg has no value yet and nothing is replayed.
 fn capture_op_args(args: &[Ref], is_exe: bool) -> Option<Vec<OperationArg>> {
     is_exe.then(|| args.iter().map(|arg| arg.borrow().as_op_arg()).collect())
+}
+
+/// Single-argument version of `capture_op_args`.
+fn capture_op_arg(arg: &Ref, is_exe: bool) -> Option<OperationArg> {
+    is_exe.then(|| arg.borrow().as_op_arg())
 }
 
 fn type_check_args<const N: usize>(args_types: [(&ArgHandle, Type); N]) -> RuntimeResult<()> {
@@ -1401,13 +1410,15 @@ impl ActionHandle {
                     Inst::Set {
                         obj,
                         kvs,
+                        op_args,
                         final_dict,
                     } => {
                         let dict = final_dict.clone().expect("Set final_dict captured at Rhai");
                         let ts = *current_ts.get(obj).unwrap_or(&0);
                         let dict_arg = anchor_or_literal(obj, &dict, ts);
-                        for (key, value) in kvs {
-                            let arg = value.borrow().as_op_arg().clone();
+                        let op_args = op_args.as_ref().expect("Set op_args captured at Rhai");
+                        for ((key, _), arg) in kvs.iter().zip(op_args) {
+                            let arg = arg.clone();
                             let st = exe_ctx
                                 .bld
                                 .builder
@@ -1423,13 +1434,14 @@ impl ActionHandle {
                     Inst::Update {
                         obj,
                         key,
-                        value,
+                        op_arg,
                         old_dict,
                         new_dict,
+                        ..
                     } => {
                         let old_dict = old_dict.clone().expect("Update old_dict captured at Rhai");
                         let new_dict = new_dict.clone().expect("Update new_dict captured at Rhai");
-                        let arg = value.borrow().as_op_arg().clone();
+                        let arg = op_arg.clone().expect("Update op_arg captured at Rhai");
                         let ts_before = *current_ts.get(obj).unwrap_or(&0);
                         let ts_after = ts_before + 1;
                         let new_dict_arg = anchor_or_literal(obj, &new_dict, ts_after);
@@ -1683,13 +1695,6 @@ impl ActionHandle {
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
         let entry = ctx.fresh_var("get", Type::Unk);
-        // With both the container and the key in hand the lookup exec
-        // would do is available now, and a row that is not in the table
-        // at Load is not going to be there at Execute either.
-        let literal_pair = match (&*container.borrow(), &*key.borrow()) {
-            (VarOrValue::Value(c), VarOrValue::Value(k)) => Some((c.clone(), k.clone())),
-            _ => None,
-        };
         if ctx.exe_ctx.is_some() {
             let found = container_lookup(
                 pred,
@@ -1697,8 +1702,12 @@ impl ActionHandle {
                 &key.borrow().as_value(),
             )?;
             entry.borrow_mut().set_value(found);
-        } else if let Some((container_value, key_value)) = literal_pair {
-            container_lookup(pred, &container_value, &key_value)?;
+        } else if let (VarOrValue::Value(c), VarOrValue::Value(k)) =
+            (&*container.borrow(), &*key.borrow())
+        {
+            // Validate literal lookups during Load because their result cannot
+            // change during Execute.
+            container_lookup(pred, c, k)?;
         }
         let args = vec![container, key, entry.clone()];
         let op_args = capture_op_args(&args, ctx.exe_ctx.is_some());
@@ -1899,6 +1908,8 @@ impl ArgHandle {
         let mut ctx = self.ctx.0.borrow_mut();
         ctx.assert_unsafe(false)?;
         ctx.check_settable(&var_name)?;
+        let written: Vec<Ref> = kvs.iter().map(|(_, value)| value.clone()).collect();
+        let op_args = capture_op_args(&written, ctx.exe_ctx.is_some());
         let mut final_dict: Option<Dictionary> = None;
         if ctx.exe_ctx.is_some() {
             let mut arg = self.arg.borrow_mut();
@@ -1913,6 +1924,7 @@ impl ArgHandle {
         ctx.insts.push(Inst::Set {
             obj: var_name,
             kvs,
+            op_args,
             final_dict,
         });
         Ok(())
@@ -1931,6 +1943,7 @@ impl ArgHandle {
             let value = try_ref_from_dynamic(value)?;
             let mut ctx = self.ctx.0.borrow_mut();
             ctx.assert_unsafe(false)?;
+            let op_arg = capture_op_arg(&value, ctx.exe_ctx.is_some());
             let mut old_dict: Option<Dictionary> = None;
             let mut new_dict: Option<Dictionary> = None;
             if ctx.exe_ctx.is_some() {
@@ -1948,6 +1961,7 @@ impl ArgHandle {
                 obj: var_name,
                 key,
                 value,
+                op_arg,
                 old_dict,
                 new_dict,
             });
@@ -1959,17 +1973,7 @@ impl ArgHandle {
         // A literal holds its entries already, so read one out here
         // rather than record a field ref against a var there is none of.
         if let VarOrValue::Value(value) = &arg {
-            let dict = value
-                .as_dictionary()
-                .ok_or_else::<Box<EvalAltResult>, _>(|| {
-                    format!(".{index} on a literal that is not a dictionary").into()
-                })?;
-            let entry = dict
-                .get(&StrKey::from(index.as_str()))
-                .map_err::<Box<EvalAltResult>, _>(|err| format!(".{index}: {err}").into())?
-                .ok_or_else::<Box<EvalAltResult>, _>(|| {
-                    format!("literal has no entry {index}").into()
-                })?;
+            let (_, _, entry) = try_resolve_entry(&Type::Dict, value, &index)?;
             return Ok(ArgHandle::literal(self.ctx.clone(), entry));
         }
         let var = arg.as_mut_var();
