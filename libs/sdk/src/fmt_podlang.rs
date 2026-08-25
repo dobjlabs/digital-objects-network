@@ -13,7 +13,7 @@ use crate::{
     ActionContext, ActionMeta, ActionObjectRef, ClassMeta, Dependency, Inst, Intro, Loader,
     ObjectIO, Ref, VarOrValue,
 };
-use pod2::middleware::Value;
+use pod2::middleware::{Value, containers::ContainerKind};
 use std::collections::HashMap;
 use std::fmt;
 use txlib::RECORD_STATE_HEADER_PODLANG;
@@ -215,7 +215,16 @@ impl<'a> fmt::Display for LiteralFmt<'a> {
         let Some(container) = value.as_container() else {
             return write!(f, "{value}");
         };
-        if let Some(dict) = container.as_dictionary() {
+        // A container's kind is a bitmask ORed over every kind its root
+        // has been seen as (`Dict{"a": "a"}` and `Set{"a"}` share a
+        // root, as do `Array[0]` and `Set{0}`), so a value that reads as
+        // more than one kind has no literal form that reads back as
+        // itself and falls through to its commitment below. Probing
+        // kind by kind would instead print it as whichever was tried
+        // first.
+        let kind = container.kind();
+        if kind == *ContainerKind::default().set_dictionary() {
+            let dict = container.as_dictionary().expect("kind says dictionary");
             write!(f, "{{")?;
             for (i, entry) in dict.iter().enumerate() {
                 let (key, entry) = entry.map_err(|_| fmt::Error)?;
@@ -225,7 +234,8 @@ impl<'a> fmt::Display for LiteralFmt<'a> {
             }
             return write!(f, "}}");
         }
-        if let Some(set) = container.as_set() {
+        if kind == *ContainerKind::default().set_set() {
+            let set = container.as_set().expect("kind says set");
             write!(f, "#[")?;
             for (i, element) in set.iter().enumerate() {
                 let element = element.map_err(|_| fmt::Error)?;
@@ -234,7 +244,8 @@ impl<'a> fmt::Display for LiteralFmt<'a> {
             }
             return write!(f, "]");
         }
-        if let Some(array) = container.as_array() {
+        if kind == *ContainerKind::default().set_array() {
+            let array = container.as_array().expect("kind says array");
             let mut slots = array
                 .iter()
                 .collect::<Result<Vec<_>, _>>()

@@ -1902,3 +1902,31 @@ fn test_field_read_on_non_dict_lookup_rejected() {
     };
     assert!(err.contains("not a dictionary"), "{err}");
 }
+
+/// A container's kind is a bitmask ORed over every kind its root has
+/// been seen as, and pod2 documents the collisions (`Array[0]` and
+/// `Set{0}` are one value). A nested container that reads as more than
+/// one kind has no literal form that reads back as itself, so it renders
+/// as the commitment a statement arg is compared and hashed by rather
+/// than as whichever kind happened to be probed first.
+#[test]
+fn test_ambiguous_nested_container_renders_as_commitment() {
+    let craft_src = r#"
+        fn Probe(action) {
+            var ore = action.input("Ore");
+            action.st_array_contains([action.set_of([0]), [0]], 0, 1);
+            action.st_array_contains([[7], #{"a": 1}], 1, 2);
+        }
+"#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(craft_src, &["Probe"])
+        .unwrap();
+    let shared = Value::from(Set::new(HashSet::from([Value::from(0)])).commitment());
+    assert_renders(
+        &module,
+        &[
+            &format!("ArrayContains([{shared}, {shared}], 0, 1)"),
+            r#"ArrayContains([[7], {"a": 1}], 1, 2)"#,
+        ],
+    );
+}
