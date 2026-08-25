@@ -425,6 +425,21 @@ macro_rules! st_methods {
     };
 }
 
+/// Prefix of the name the SDK gives a var the script has not bound with
+/// `var`. Every host method that returns a var registers it under one of
+/// these, so the var renders as a wildcard wherever a script uses it
+/// inline; a `var` binding renames it in place to the script's own name.
+const ANON_VAR_PREFIX: char = '_';
+
+/// Returns whether `name` uses the prefix assigned by `fresh_var`.
+///
+/// Script-provided names may also begin with this prefix. Treating them as
+/// generated allows a subsequent binding to rename the handle instead of
+/// creating an alias.
+fn is_anon_var(name: &str) -> bool {
+    name.starts_with(ANON_VAR_PREFIX)
+}
+
 /// Used to track how many updates from mutations a variable takes.
 #[derive(Default, Debug)]
 struct VarState {
@@ -451,6 +466,8 @@ struct ActionContext {
     /// same `ts` machinery.
     vars: Vec<String>,
     var_state: HashMap<String, VarState>,
+    /// Counter used to generate unique variable names.
+    anon_seq: usize,
     exe_ctx: Option<Rc<RefCell<ExeContext>>>,
     unsafe_block: bool,
 }
@@ -462,6 +479,7 @@ impl ActionContext {
             insts: Vec::new(),
             vars: Vec::new(),
             var_state: HashMap::new(),
+            anon_seq: 0,
             exe_ctx,
             unsafe_block: false,
         };
@@ -475,6 +493,47 @@ impl ActionContext {
         }
         self.var_state.insert(var.clone(), VarState::default());
         self.vars.push(var);
+        Ok(())
+    }
+    /// Creates and immediately registers a generated variable so it can be
+    /// used inline.
+    fn fresh_var(&mut self, tag: &str, typ: Type) -> Ref {
+        let name = loop {
+            let name = format!("{ANON_VAR_PREFIX}{tag}{}", self.anon_seq);
+            self.anon_seq += 1;
+            if !self.var_state.contains_key(&name) {
+                break name;
+            }
+        };
+        let mut var = VarOrValue::var(typ);
+        var.set_var_name(name.clone())
+            .expect("a fresh var is a var");
+        self.add_var(name).expect("a fresh name is free");
+        Rc::new(RefCell::new(var))
+    }
+    /// Renames a generated variable without changing wildcard order.
+    fn rename_var(&mut self, old: &str, new: String) -> RuntimeResult<()> {
+        if old == new {
+            return Ok(());
+        }
+        if self.var_state.contains_key(&new) {
+            return Err(format!("var {new} already exists").into());
+        }
+        let state = self.var_state.remove(old).expect("renaming a live var");
+        self.var_state.insert(new.clone(), state);
+        for var in self.vars.iter_mut().filter(|v| v.as_str() == old) {
+            *var = new.clone();
+        }
+        // `Update` and `Set` store the target name, so rename previously
+        // recorded instructions as well.
+        for inst in self.insts.iter_mut() {
+            match inst {
+                Inst::Update { obj, .. } | Inst::Set { obj, .. } if obj == old => {
+                    *obj = new.clone();
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
     fn inc_t_var(&mut self, var: &str) -> RuntimeResult<()> {
@@ -1448,7 +1507,7 @@ impl ActionHandle {
         Ok(ArgHandle::new(self.clone(), arg))
     }
     fn random(self) -> RuntimeResult<ArgHandle> {
-        let value = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
+        let value = self.0.borrow_mut().fresh_var("rand", Type::Raw);
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
             value.borrow_mut().set_value(exe_ctx.rand_value());
         }
@@ -1462,7 +1521,7 @@ impl ActionHandle {
             self.0.borrow_mut().mark_dict_read(&var.name);
         }
         // For now we assume that obj is var, and thus return a key that is also var
-        let key = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
+        let key = self.0.borrow_mut().fresh_var("grind", Type::Raw);
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
             // This is a copy of the object, we don't modify the obj argument.
             let mut obj = obj.borrow().to_dict();
@@ -1519,9 +1578,9 @@ impl ActionHandle {
         key: Dynamic,
     ) -> RuntimeResult<ArgHandle> {
         let [container, key] = validate_args([(container, Type::Unk), (key, Type::Unk)])?;
-        let entry = Rc::new(RefCell::new(VarOrValue::var(Type::Unk)));
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
+        let entry = ctx.fresh_var("get", Type::Unk);
         if ctx.exe_ctx.is_some() {
             let container_value = container.borrow().as_value();
             let key_value = key.borrow().as_value();
@@ -1563,9 +1622,9 @@ impl ActionHandle {
     fn intro_vdf(self, n_iters: Dynamic, input: Dynamic) -> RuntimeResult<ArgHandle> {
         let [n_iters, input] = validate_args([(n_iters, Type::Int), (input, Type::Raw)])?;
 
-        let work = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
+        let work = ctx.fresh_var("vdf", Type::Raw);
         let mut statement: Option<Statement> = None;
         if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
             let mut exe_ctx = exe_rc.borrow_mut();
@@ -1745,18 +1804,11 @@ impl ArgHandle {
         });
         Ok(())
     }
-    fn get(self, _key: String) -> RuntimeResult<ArgHandle> {
-        todo!();
-        // type_check_args([(&self, Type::Dict)])?;
-        // // For now we assume that obj is var, and thus return a value that is also var
-        // let value = Rc::new(RefCell::new(VarOrValue::var(Type::Unk)));
-        // let ctx = self.ctx.0.borrow();
-        // if ctx.exe_ctx.is_some() {
-        //     let obj = self.arg.borrow().as_value().as_dictionary().expect("dict");
-        //     let v = obj.get(&StrKey::from(key)).expect("TODO").expect("TODO");
-        //     value.borrow_mut().set_value(v);
-        // }
-        // Ok(ArgHandle::new(self.ctx.clone(), value))
+    /// Equivalent to `action.dict_get(o, k)`. Unlike `o.k`, this form accepts
+    /// a variable key.
+    fn get(self, key: Dynamic) -> RuntimeResult<ArgHandle> {
+        let ctx = self.ctx.clone();
+        ctx.dict_get(Dynamic::from(self), key)
     }
     fn update(self, key: String, value: Dynamic) -> RuntimeResult<()> {
         type_check_args([(&self, Type::Dict)])?;
@@ -1791,6 +1843,22 @@ impl ArgHandle {
     }
     fn entry(&mut self, index: String) -> RuntimeResult<ArgHandle> {
         let mut arg = self.arg.borrow().clone();
+        // A literal holds its entries already, so read one out here
+        // rather than record a field ref against a var there is none of.
+        if let VarOrValue::Value(value) = &arg {
+            let dict = value
+                .as_dictionary()
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!(".{index} on a literal that is not a dictionary").into()
+                })?;
+            let entry = dict
+                .get(&StrKey::from(index.as_str()))
+                .map_err::<Box<EvalAltResult>, _>(|err| format!(".{index}: {err}").into())?
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!("literal has no entry {index}").into()
+                })?;
+            return Ok(ArgHandle::literal(self.ctx.clone(), entry));
+        }
         let var = arg.as_mut_var();
         var.key = Some(index);
         let arg = Rc::new(RefCell::new(arg));
@@ -1835,12 +1903,12 @@ impl ArithOp {
 /// constrain its result or not depending on the caller.
 fn arg_arith(op: ArithOp, a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
     type_check_args([(&a, Type::Int), (&b, Type::Int)])?;
-    let value = Rc::new(RefCell::new(VarOrValue::var(Type::Int)));
     let is_exe = {
         let ctx = a.ctx.0.borrow();
         ctx.assert_unsafe(true)?;
         ctx.exe_ctx.is_some()
     };
+    let value = a.ctx.0.borrow_mut().fresh_var("arith", Type::Int);
     if is_exe {
         let int = |arg: &Ref| -> RuntimeResult<i64> {
             arg.borrow()
@@ -2921,10 +2989,29 @@ fn new_engine() -> Engine {
                     expr: &Expression,
                 ) -> RuntimeResult<Dynamic> {
                     let value = ctx.eval_expression_tree(expr)?;
-                    let arg_ctx = value.try_cast::<ArgHandle>().expect("TODO");
-
-                    arg_ctx.arg.borrow_mut().set_var_name(var_name.clone())?;
-                    arg_ctx.ctx.0.borrow_mut().add_var(var_name.clone())?;
+                    // Literals remain ordinary Rhai bindings and render inline. Only
+                    // variables receive the script-provided name.
+                    let Some(arg_ctx) = value.clone().try_cast::<ArgHandle>() else {
+                        ctx.scope_mut().push(var_name, value.clone());
+                        return Ok(value);
+                    };
+                    let old_name = match &*arg_ctx.arg.borrow() {
+                        VarOrValue::Value(_) => None,
+                        VarOrValue::Var(var) => Some(var.name.clone()),
+                    };
+                    if let Some(old_name) = old_name {
+                        {
+                            let mut ctx = arg_ctx.ctx.0.borrow_mut();
+                            // Preserve a generated variable's identity and wildcard
+                            // position when the script assigns it a name.
+                            if is_anon_var(&old_name) {
+                                ctx.rename_var(&old_name, var_name.clone())?;
+                            } else {
+                                ctx.add_var(var_name.clone())?;
+                            }
+                        }
+                        arg_ctx.arg.borrow_mut().set_var_name(var_name.clone())?;
+                    }
                     ctx.scope_mut().push(var_name, arg_ctx.clone());
                     Ok(Dynamic::from(arg_ctx))
                 }

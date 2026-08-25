@@ -1504,3 +1504,165 @@ fn test_container_get_rejects_missing_key() {
     };
     assert!(err.contains("no entry at 9"), "{err}");
 }
+
+/// Verifies that lookup results can be used directly without an explicit
+/// `var` binding.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_inline_lookup_needs_no_var_binding() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 1], ["x", 0]]);
+        }
+
+        fn RevealChart(action) {
+            var chart = action.mutate("Chart");
+            chart.update("x", action.array_get([10, 20, 30], chart.code));
+            action.st_gt(action.dict_get(#{"floor": 3}, "floor"), 0);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "RevealChart"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            "ArrayContains([10, 20, 30], chart0.code, _get0)",
+            r#"DictUpdate(chart0, "x", _get0, io.out_chart)"#,
+            r#"DictContains({"floor": 3}, "floor", _get1)"#,
+            "Gt(_get1, 0)",
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let res = executor.action("RevealChart", vec![chart]).unwrap();
+    let reveal_tx = res.tx.clone();
+    let [revealed] = res.objs();
+    apply_tx(&mut state, &reveal_tx);
+    assert_eq!(
+        revealed.obj.get(&StrKey::from("x")).unwrap().unwrap(),
+        Value::from(20)
+    );
+}
+
+/// Verifies that `var` can name a literal without creating a wildcard.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_var_names_a_literal() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+            ore.set([["grade", 5]]);
+        }
+
+        fn AssertGrade(action) {
+            var ore = action.input("Ore");
+            var metal = action.output("Metal");
+            var tiers = #{"small": #{"cost": 1}, "large": #{"cost": 9}};
+            var grades = action.set_of([3, 5, 7]);
+            var floor = 1;
+            var tier = action.dict_get(tiers, "small");
+            action.st_set_contains(grades, ore.grade);
+            action.st_gt(ore.grade, floor);
+            action.st_gt(ore.grade, tier.cost);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre", "AssertGrade"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            r#""small": {"cost": 1}"#,
+            r#""small", tier)"#,
+            "SetContains(#[",
+            "Gt(ore.grade, 1)",
+            "Gt(ore.grade, tier.cost)",
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let ore_tx = res.tx.clone();
+    let [ore] = res.objs();
+    apply_tx(&mut state, &ore_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ore.obj.commitment()]));
+    let res = executor.action("AssertGrade", vec![ore]).unwrap();
+    let metal_tx = res.tx.clone();
+    apply_tx(&mut state, &metal_tx);
+}
+
+/// Verifies that `o.get(k)` accepts computed keys and is equivalent to
+/// `dict_get`.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_object_get_emits_a_lookup() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+            ore.set([["grade", 5]]);
+        }
+
+        fn Weigh(action) {
+            var ore = action.input("Ore");
+            var metal = action.output("Metal");
+            var grade = ore.get("grade");
+            action.st_gt(grade, 0);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre", "Weigh"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[r#"DictContains(io.in_ore, "grade", grade)"#, "Gt(grade, 0)"],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let ore_tx = res.tx.clone();
+    let [ore] = res.objs();
+    apply_tx(&mut state, &ore_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ore.obj.commitment()]));
+    let res = executor.action("Weigh", vec![ore]).unwrap();
+    let metal_tx = res.tx.clone();
+    apply_tx(&mut state, &metal_tx);
+}
+
+/// A field read off a literal that holds no fields is a script error,
+/// not a panic: only a dictionary has entries to name.
+#[test]
+fn test_field_read_on_non_dict_literal_rejected() {
+    let craft_src = r#"
+        fn BadRead(action) {
+            var ore = action.input("Ore");
+            action.st_gt(action.set_of([1, 2]).x, 0);
+        }
+"#;
+    let err = match Sdk::default().load_module_from_src_actions(craft_src, &["BadRead"]) {
+        Ok(_) => panic!("expected a field read on a set literal to be rejected"),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("not a dictionary"), "{err}");
+}
