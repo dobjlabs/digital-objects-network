@@ -1930,3 +1930,57 @@ fn test_ambiguous_nested_container_renders_as_commitment() {
         ],
     );
 }
+
+/// Verifies lookups and set membership on containers returned by earlier
+/// lookups.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_var_array_get_and_var_set_contains() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+            ore.set([["grade", 5]]);
+        }
+
+        fn AssertGrade(action) {
+            var ore = action.input("Ore");
+            var metal = action.output("Metal");
+            var table = #{"rows": [7, 5], "allowed": action.set_of([3, 5, 7])};
+            var rows = action.dict_get(table, "rows");
+            var allowed = action.dict_get(table, "allowed");
+            action.st_array_contains(rows, 1, ore.grade);
+            action.st_set_contains(allowed, ore.grade);
+            var row = action.array_get(rows, 0);
+            action.st_gt(row, 0);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre", "AssertGrade"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            r#""rows", rows)"#,
+            r#""allowed", allowed)"#,
+            "ArrayContains(rows, 1, ore.grade)",
+            "SetContains(allowed, ore.grade)",
+            "ArrayContains(rows, 0, row)",
+            "Gt(row, 0)",
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let ore_tx = res.tx.clone();
+    let [ore] = res.objs();
+    apply_tx(&mut state, &ore_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ore.obj.commitment()]));
+    let res = executor.action("AssertGrade", vec![ore]).unwrap();
+    let metal_tx = res.tx.clone();
+    apply_tx(&mut state, &metal_tx);
+}

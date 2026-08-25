@@ -111,14 +111,15 @@ One limit is worth knowing before reaching for these:
 A Rhai array promotes to a pod2 Array and a Rhai object map to a pod2
 Dictionary, at any depth, wherever a statement takes a value. Rhai has no set
 of its own, so `action.set_of([...])` is what names a Set. Every element has to
-be a literal: the container is embedded in the predicate at Load time, so a
-`var` element is rejected rather than standing for whatever it holds at exec
-time.
+be a literal -- an integer, a string, a bool, or a nested container -- because
+the container is embedded in the predicate at Load time, so a `var` element is
+rejected rather than standing for whatever it holds at exec time.
 
 `action.dict_get(dict, key)` and `action.array_get(array, index)` bind what the
-container holds there and emit the matching `DictContains` / `ArrayContains`.
-The binding is a `var`, so the key can be one too, and the statement is what
-ties the binding to the container. That is the point of the pair: a table the
+container holds there and emit the matching `DictContains` / `ArrayContains`
+(`obj.get(key)` is `dict_get(obj, key)` written the other way round). The
+binding is a `var`, so the key can be one too, and the statement is what ties
+the binding to the container. That is the point of the pair: a table the
 module carries as a literal, read at a key the action picks, puts one predicate
 where a row-per-action module needs one per row.
 
@@ -146,9 +147,11 @@ table is one argument in the rendered podlang:
 ArrayContains([{"y": 12, "x": 11, "floor": 0}, ...], chart0.code, row)
 ```
 
-A table belongs in a script function rather than a top-level `const`: Rhai
-functions cannot see the enclosing scope, so a `const` at the top of
-`plugin.rhai` is not in scope inside an action. Building it costs a merkle tree
+A table belongs in a script function or a `var` inside the action rather than a
+top-level `const`: Rhai functions cannot see the enclosing scope, so a `const`
+at the top of `plugin.rhai` is not in scope inside an action. `var` on a
+literal declares no wildcard -- it names the value for the script, and each use
+site renders it inline. Building it costs a merkle tree
 per Load and per Execute of an action that reads it, which is comparable to
 what compiling the equivalent row-per-action predicates costs.
 
@@ -156,7 +159,10 @@ Entries render in the order the container's merkle tree iterates, so the same
 value always renders the same text. A container the podlang parser has no
 syntax for (a sparse array) renders as its commitment instead, which is the
 same argument to the verifier: a statement argument is compared and hashed by
-raw value.
+raw value. So does a container whose kind is ambiguous: pod2 records the kinds
+a root has been seen as as a bitmask, and some containers are one value
+(`Array[0]` and `Set{0}`, `Dict{"a": "a"}` and `Set{"a"}`), so there is no
+literal for it that reads back as itself.
 
 ## Type checking
 
@@ -173,9 +179,9 @@ whose `RawValue` has the integer in the _least_-significant limb — not what
 you want for a "top-limb ≤ N" difficulty target.
 
 Use `action.top_limb_u256(n)` to build a `RawValue` with `n` in the
-most-significant limb and zeros elsewhere. Bind it once with `let` (not
-`var`, since it is a literal, not a wildcard) and reuse for both grinding
-and the proof:
+most-significant limb and zeros elsewhere. Bind it once and reuse for both
+grinding and the proof (it is a literal, so `let` and `var` both just name it;
+neither declares a wildcard):
 
 ```rhai
 let target = action.top_limb_u256(9007199254740992);
@@ -234,19 +240,19 @@ as opaque entropy, not for byte-exact comparison with the L1 hash.
   - [x] contains
   - [ ] insert
   - [ ] delete
-- [ ] Var Array
-  - [ ] get
+- [x] Var Array
+  - [x] get
   - [ ] insert
   - [ ] delete
   - [ ] update
-- [ ] Var Dictionary/Object and operations
+- [x] Var Dictionary/Object and operations
   - [x] get
   - [ ] insert
   - [ ] delete
   - [x] update
   - [x] set
-- [ ] Var Set and operations
-  - [ ] contains
+- [x] Var Set and operations
+  - [x] contains
   - [ ] insert
   - [ ] delete
 - [x] Statements:

@@ -1648,10 +1648,7 @@ impl ActionHandle {
         let elements = elements
             .try_cast::<rhai::Array>()
             .ok_or::<Box<EvalAltResult>>("set_of: expected an array of elements".into())?;
-        let elements = elements
-            .into_iter()
-            .map(literal_from_dynamic)
-            .collect::<RuntimeResult<HashSet<Value>>>()?;
+        let elements = HashSet::from_iter(literals_from_rhai_array(elements)?);
         Ok(ArgHandle::literal(
             self.clone(),
             Value::from(Set::new(elements)),
@@ -2101,11 +2098,7 @@ fn _try_value_from_dynamic(v: Dynamic) -> ValueCast {
     // `set_of` for sets because Rhai has no corresponding native type.
     let v = match v.try_cast_result::<rhai::Array>() {
         Ok(elements) => {
-            return match elements
-                .into_iter()
-                .map(literal_from_dynamic)
-                .collect::<RuntimeResult<Vec<Value>>>()
-            {
+            return match literals_from_rhai_array(elements) {
                 Ok(elements) => ValueCast::Value(Value::from(Array::new(elements))),
                 Err(err) => ValueCast::Err(err),
             };
@@ -2128,6 +2121,24 @@ fn _try_value_from_dynamic(v: Dynamic) -> ValueCast {
     ValueCast::Other(v)
 }
 
+/// Converts the literal elements of a Rhai array to pod2 values.
+fn literals_from_rhai_array(elements: rhai::Array) -> RuntimeResult<Vec<Value>> {
+    elements.into_iter().map(literal_from_dynamic).collect()
+}
+
+/// Extracts a `Ref` from a `Dynamic` containing a `Ref` or `ArgHandle`.
+fn wrapped_ref(v: Dynamic) -> RuntimeResult<Ref> {
+    let v = match v.try_cast_result::<Ref>() {
+        Ok(v) => return Ok(v),
+        Err(v) => v,
+    };
+    let v = match v.try_cast_result::<ArgHandle>() {
+        Ok(v) => return Ok(v.arg),
+        Err(v) => v,
+    };
+    Err(format!("invalid Ref type: {}", v.type_name()).into())
+}
+
 /// Converts one container-literal element. Variables are rejected because
 /// container contents must be known during Load.
 fn literal_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
@@ -2136,8 +2147,8 @@ fn literal_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
         ValueCast::Err(err) => return Err(err),
         ValueCast::Other(v) => v,
     };
-    let type_name = v.type_name();
-    match &*try_ref_from_dynamic(v.clone())?.borrow() {
+    let type_name = v.type_name().to_string();
+    match &*wrapped_ref(v)?.borrow() {
         VarOrValue::Value(value) => Ok(value.clone()),
         VarOrValue::Var(_) => {
             Err(format!("container literal: {type_name} element is a var, not a literal").into())
@@ -2147,42 +2158,22 @@ fn literal_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
 
 /// Try to get a Ref or promote a native pod2 Value-compatible type to it.
 fn try_ref_from_dynamic(v: Dynamic) -> RuntimeResult<Ref> {
-    let v = match _try_value_from_dynamic(v) {
-        ValueCast::Value(v) => return Ok(Rc::new(RefCell::new(VarOrValue::value(v)))),
-        ValueCast::Err(err) => return Err(err),
-        ValueCast::Other(v) => v,
-    };
-    let v = match v.try_cast_result::<Ref>() {
-        Ok(v) => return Ok(v),
-        Err(v) => v,
-    };
-    let v = match v.try_cast_result::<ArgHandle>() {
-        Ok(v) => return Ok(v.arg),
-        Err(v) => v,
-    };
-    _ = v;
-    Err(format!("invalid Ref type: {}", v.type_name()).into())
+    match _try_value_from_dynamic(v) {
+        ValueCast::Value(v) => Ok(Rc::new(RefCell::new(VarOrValue::value(v)))),
+        ValueCast::Err(err) => Err(err),
+        ValueCast::Other(v) => wrapped_ref(v),
+    }
 }
 
 /// Get the Value from a type that encapsulates VarOrValue, or promote a native pod2
 /// Value-compatible type to it.
 /// Only call this at exec time
 fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
-    let v = match _try_value_from_dynamic(v) {
-        ValueCast::Value(v) => return Ok(v),
-        ValueCast::Err(err) => return Err(err),
-        ValueCast::Other(v) => v,
-    };
-    let v = match v.try_cast_result::<Ref>() {
-        Ok(v) => return Ok(v.borrow().as_value().clone()),
-        Err(v) => v,
-    };
-    let v = match v.try_cast_result::<ArgHandle>() {
-        Ok(v) => return Ok(v.arg.borrow().as_value().clone()),
-        Err(v) => v,
-    };
-    _ = v;
-    Err(format!("invalid value type: {}", v.type_name()).into())
+    match _try_value_from_dynamic(v) {
+        ValueCast::Value(v) => Ok(v),
+        ValueCast::Err(err) => Err(err),
+        ValueCast::Other(v) => Ok(wrapped_ref(v)?.borrow().as_value().clone()),
+    }
 }
 
 /// One object reference in an action, in declaration order. Only
