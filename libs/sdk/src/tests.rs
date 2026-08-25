@@ -1666,3 +1666,110 @@ fn test_field_read_on_non_dict_literal_rejected() {
     };
     assert!(err.contains("not a dictionary"), "{err}");
 }
+
+/// Replays a lookup against the object's pre-update value.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_lookup_before_update_reads_the_pre_update_object() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 2], ["x", 7]]);
+        }
+
+        fn RevealChart(action) {
+            var chart = action.mutate("Chart");
+            action.st_gt(chart.code, 0);
+            var x = action.dict_get(chart, "x");
+            chart.update("x", 5);
+            action.st_gt_eq(x, 0);
+            action.st_gt(chart.code, 1);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "RevealChart"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            "Gt(chart0.code, 0)",
+            r#"DictContains(chart0, "x", x)"#,
+            r#"DictUpdate(chart0, "x", 5, chart)"#,
+            "GtEq(x, 0)",
+            "Gt(chart.code, 1)",
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let res = executor.action("RevealChart", vec![chart]).unwrap();
+    let reveal_tx = res.tx.clone();
+    let [revealed] = res.objs();
+    apply_tx(&mut state, &reveal_tx);
+    assert_eq!(
+        revealed.obj.get(&StrKey::from("x")).unwrap().unwrap(),
+        Value::from(5)
+    );
+}
+
+/// Verifies nested lookups where the first lookup returns a container.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_var_container_lookup_executes() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 1], ["cost", 0]]);
+        }
+
+        fn PriceChart(action) {
+            var chart = action.mutate("Chart");
+            var tiers = [#{"cost": 11}, #{"cost": 22}];
+            var tier = action.array_get(tiers, chart.code);
+            var cost = action.dict_get(tier, "cost");
+            action.st_gt(cost, 0);
+            chart.update("cost", cost);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "PriceChart"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            "chart0.code, tier)",
+            r#"DictContains(tier, "cost", cost)"#,
+            "Gt(cost, 0)",
+            r#"DictUpdate(chart0, "cost", cost, io.out_chart)"#,
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let res = executor.action("PriceChart", vec![chart]).unwrap();
+    let price_tx = res.tx.clone();
+    let [priced] = res.objs();
+    apply_tx(&mut state, &price_tx);
+    assert_eq!(
+        priced.obj.get(&StrKey::from("cost")).unwrap().unwrap(),
+        Value::from(22)
+    );
+}

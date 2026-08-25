@@ -141,6 +141,8 @@ enum Inst {
     Statement {
         pred: NativePredicate,
         args: Vec<Ref>,
+        /// Arguments captured during Execute in pod2 form; `None` during Load.
+        op_args: Option<Vec<OperationArg>>,
     },
     Intro {
         pred: Intro,
@@ -148,6 +150,8 @@ enum Inst {
         /// Pod's first pub statement, cached at Rhai time. Some at
         /// Execute, None at Load.
         statement: Option<Statement>,
+        /// Arguments captured during Execute in pod2 form; `None` during Load.
+        op_args: Option<Vec<OperationArg>>,
     },
     /// Reference to another action executed as a sub-action. The
     /// sub-action's exe_action runs recursively during the parent's
@@ -380,6 +384,17 @@ fn resolve_entry(typ: &Type, value: &Value, key: &str) -> (Value, Value, Value) 
             (Value::from(dict), Value::from(key.to_string()), entry)
         }
     }
+}
+
+/// Each arg in the form pod2 takes it, read while the script's own
+/// statement is what it names. An arg that reads an object -- its whole
+/// dict, or one of its fields -- aliases that object's Ref, which a
+/// later `update` writes through, so the post-Rhai walk has to replay
+/// what the arg stood for at Rhai time rather than re-read it.
+///
+/// None at Load, where an arg has no value yet and nothing is replayed.
+fn capture_op_args(args: &[Ref], is_exe: bool) -> Option<Vec<OperationArg>> {
+    is_exe.then(|| args.iter().map(|arg| arg.borrow().as_op_arg()).collect())
 }
 
 fn type_check_args<const N: usize>(args_types: [(&ArgHandle, Type); N]) -> RuntimeResult<()> {
@@ -1196,21 +1211,16 @@ impl ActionHandle {
             .map(|o| (o.varname.clone(), 0usize))
             .collect();
 
-        // The anchored form of each arg of a body statement, in arg
-        // order, or None where the arg stays as proved. A whole-dict arg
-        // naming an Object collapsed at this ts lifts to its record slot;
-        // a dict-field arg (`var.key`) lifts to its entry, but only for
-        // callers whose statement was proved with every arg literal
-        // (`lift_keys`) -- ops built from `as_op_arg` already carry the
-        // entry form.
-        // The anchored form the compiled podlang gives this arg, or None
-        // when it renders as a literal or a loose wildcard. A dict-field
-        // ref (`var.key`) resolves to its entry; a whole-container ref
-        // resolves to the record slot its Object collapses to at this ts.
-        let arg_anchor = |arg: &Ref, current_ts: &HashMap<String, usize>| -> Option<OperationArg> {
-            let arg = arg.borrow();
-            match &*arg {
-                VarOrValue::Var(Var { key: Some(_), .. }) => Some(arg.as_op_arg()),
+        // Returns the argument's anchored form, or `None` if it remains a
+        // literal or wildcard. Field references reuse their captured entry;
+        // whole-object references use the object's record slot at the current
+        // timestamp.
+        let arg_anchor = |arg: &Ref,
+                          snap: &OperationArg,
+                          current_ts: &HashMap<String, usize>|
+         -> Option<OperationArg> {
+            match &*arg.borrow() {
+                VarOrValue::Var(Var { key: Some(_), .. }) => Some(snap.clone()),
                 VarOrValue::Var(Var {
                     key: None, name, ..
                 }) => current_ts.get(name).and_then(|ts| anchor_at(name, *ts)),
@@ -1224,16 +1234,21 @@ impl ActionHandle {
             for (i, inst) in ctx.insts.iter().enumerate() {
                 match inst {
                     Inst::Object { .. } => {}
-                    Inst::Statement { pred, args } => {
+                    Inst::Statement {
+                        pred,
+                        args,
+                        op_args,
+                    } => {
                         let op_type = OperationType::Native(native_pred_to_op(*pred));
+                        let snapshot = op_args.as_ref().expect("args captured at Rhai");
                         // Built with each arg already in the form the
                         // rendered podlang names it, so the statement
                         // needs no lifting afterwards.
                         let op_args = args
                             .iter()
-                            .map(|arg| {
-                                arg_anchor(arg, &current_ts)
-                                    .unwrap_or_else(|| arg.borrow().as_op_arg())
+                            .zip(snapshot)
+                            .map(|(arg, snap)| {
+                                arg_anchor(arg, snap, &current_ts).unwrap_or_else(|| snap.clone())
                             })
                             .collect();
                         let st = exe_ctx
@@ -1244,16 +1259,21 @@ impl ActionHandle {
                         body_sts.push(st);
                     }
                     Inst::Intro {
-                        statement, args, ..
+                        statement,
+                        args,
+                        op_args,
+                        ..
                     } => {
                         let st_literal =
                             statement.clone().expect("Intro statement captured at Rhai");
+                        let snapshot = op_args.as_ref().expect("args captured at Rhai");
                         // The pod proved its statement over literal
                         // values, so unlike a body statement this one
                         // cannot be built anchored and has to be lifted.
                         let replacements: Vec<Option<OperationArg>> = args
                             .iter()
-                            .map(|arg| arg_anchor(arg, &current_ts))
+                            .zip(snapshot)
+                            .map(|(arg, snap)| arg_anchor(arg, snap, &current_ts))
                             .collect();
                         let st = if replacements.iter().any(|r| r.is_some()) {
                             exe_ctx
@@ -1422,7 +1442,12 @@ impl ActionHandle {
     fn native_st(self, pred: NativePredicate, args: Vec<Ref>) -> RuntimeResult<()> {
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
-        ctx.insts.push(Inst::Statement { pred, args });
+        let op_args = capture_op_args(&args, ctx.exe_ctx.is_some());
+        ctx.insts.push(Inst::Statement {
+            pred,
+            args,
+            op_args,
+        });
         Ok(())
     }
     //
@@ -1596,9 +1621,12 @@ impl ActionHandle {
                 })?;
             entry.borrow_mut().set_value(found);
         }
+        let args = vec![container, key, entry.clone()];
+        let op_args = capture_op_args(&args, ctx.exe_ctx.is_some());
         ctx.insts.push(Inst::Statement {
             pred,
-            args: vec![container, key, entry.clone()],
+            args,
+            op_args,
         });
         Ok(ArgHandle::new(self.clone(), entry))
     }
@@ -1640,10 +1668,13 @@ impl ActionHandle {
             work.borrow_mut().set_value(st.args()[2].literal().unwrap());
             statement = Some(st);
         }
+        let args = vec![n_iters, input, work.clone()];
+        let op_args = capture_op_args(&args, statement.is_some());
         ctx.insts.push(Inst::Intro {
             pred: Intro::Vdf,
-            args: vec![n_iters, input, work.clone()],
+            args,
             statement,
+            op_args,
         });
         Ok(ArgHandle::new(self.clone(), work))
     }
@@ -1665,10 +1696,13 @@ impl ActionHandle {
             let st = add_intro_pod(&mut exe_ctx, pod);
             statement = Some(st);
         }
+        let args = vec![lhs, rhs];
+        let op_args = capture_op_args(&args, statement.is_some());
         ctx.insts.push(Inst::Intro {
             pred: Intro::LtEqU256,
-            args: vec![lhs, rhs],
+            args,
             statement,
+            op_args,
         });
         Ok(())
     }

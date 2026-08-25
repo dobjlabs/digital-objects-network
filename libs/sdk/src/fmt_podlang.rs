@@ -581,7 +581,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 )?;
                 vars.get_mut(obj_name).expect("obj exists").inc();
             }
-            Inst::Statement { pred, args } => {
+            Inst::Statement { pred, args, .. } => {
                 write!(w, "  {pred}(")?;
                 for (i, arg) in args.iter().enumerate() {
                     if i != 0 {
