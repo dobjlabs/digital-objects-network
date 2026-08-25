@@ -2056,6 +2056,15 @@ impl ActionMeta {
         self.total_outputs.iter()
     }
 
+    /// The subset of [`Self::total_outputs`] this action creates rather
+    /// than mutates, so a caller can tell a value a fresh instance holds
+    /// from one it only reaches by being mutated later.
+    pub fn total_created(&self) -> impl Iterator<Item = &ActionObjectRef> {
+        self.total_outputs
+            .iter()
+            .filter(|r| r.io == ObjectIO::Output)
+    }
+
     /// Find this Output's entry in the `<Action>Initials` record, with
     /// its slot. `needs_wildcard` is set when the body reads a field of
     /// the object's script-final form, which cannot render as an

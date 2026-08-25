@@ -1117,6 +1117,9 @@ pub fn classes(target: &Path, class_filter: Option<&str>) -> Result<()> {
 /// A class's shape, folded over every action that creates or mutates an
 /// instance. Only written values count: what an action *requires* of a
 /// state it consumes says nothing about the shape of the class.
+///
+/// Creating and mutating actions are folded separately, because a value
+/// only a mutation writes is one no fresh instance of the class holds.
 fn class_signatures(module: &SdkModule) -> BTreeMap<String, ClassSignature> {
     let mut out: BTreeMap<String, ClassSignature> = BTreeMap::new();
     for action in module.actions() {
@@ -1127,6 +1130,17 @@ fn class_signatures(module: &SdkModule) -> BTreeMap<String, ClassSignature> {
                 sig.fields
                     .entry(field.to_string())
                     .or_default()
+                    .ever
+                    .absorb(writes);
+            }
+        }
+        for obj in action.total_created() {
+            let sig = out.entry(obj.class.clone()).or_default();
+            for (field, writes) in obj.field_writes() {
+                sig.fields
+                    .entry(field.to_string())
+                    .or_default()
+                    .at_mint
                     .absorb(writes);
             }
         }
@@ -1138,8 +1152,17 @@ fn class_signatures(module: &SdkModule) -> BTreeMap<String, ClassSignature> {
 /// with.
 #[derive(Default)]
 struct ClassSignature {
-    fields: BTreeMap<String, FieldWrites>,
+    fields: BTreeMap<String, ClassField>,
     identity: ObjectIdentity,
+}
+
+/// One field of a class, split by whether a value is reachable at mint.
+#[derive(Default)]
+struct ClassField {
+    /// Written by an action that creates the object.
+    at_mint: FieldWrites,
+    /// Written by any action, creating or mutating.
+    ever: FieldWrites,
 }
 
 fn render_signature(name: &str, sig: &ClassSignature) -> String {
@@ -1165,25 +1188,55 @@ fn render_signature(name: &str, sig: &ClassSignature) -> String {
     out
 }
 
-fn render_field_value(writes: &FieldWrites) -> String {
-    let (texts, ints): (Vec<&Pin>, Vec<&Pin>) = writes
-        .values
-        .iter()
-        .partition(|p| matches!(p, Pin::Text(_)));
+fn render_field_value(field: &ClassField) -> String {
+    let mint = &field.at_mint.values;
+    let later: BTreeSet<&Pin> = field.ever.values.difference(mint).collect();
 
-    let kind = match (texts.is_empty(), ints.is_empty()) {
-        (true, true) if writes.from_vdf => return "Raw  // VDF-derived".to_string(),
+    let kind = match kind_of(field.ever.values.iter()) {
+        Some(kind) => kind,
+        None if field.ever.from_vdf => return "Raw  // VDF-derived".to_string(),
         // Nothing any producer writes fixes the value, so a prover
         // supplies it.
-        (true, true) => return "Raw  // witness".to_string(),
-        (false, true) => "Str",
-        (true, false) => "Int",
+        None => return "Raw  // witness".to_string(),
+    };
+
+    let mut clauses: Vec<String> = Vec::new();
+    if !mint.is_empty() {
+        clauses.push(format!("at mint: {}", join_pins(mint.iter())));
+    }
+    if !later.is_empty() {
+        clauses.push(format!("updated to {}", join_pins(later.into_iter())));
+    }
+    format!("{kind}  // {}", clauses.join("; "))
+}
+
+/// The type column, or `None` when no producer writes a literal.
+fn kind_of<'a>(values: impl Iterator<Item = &'a Pin>) -> Option<&'static str> {
+    let (mut text, mut int) = (false, false);
+    for v in values {
+        match v {
+            Pin::Text(_) => text = true,
+            Pin::Int(_) => int = true,
+        }
+    }
+    match (text, int) {
+        (false, false) => None,
+        (true, false) => Some("Str"),
+        (false, true) => Some("Int"),
         // A class whose schema is fixed should not hold both; rendering
         // the union says so without guessing which producer is wrong.
-        (false, false) => "Str | Int",
-    };
-    let values: Vec<String> = texts.into_iter().chain(ints).map(Pin::to_string).collect();
-    format!("{kind}  // at mint: {}", values.join(" | "))
+        (true, true) => Some("Str | Int"),
+    }
+}
+
+fn join_pins<'a>(values: impl Iterator<Item = &'a Pin>) -> String {
+    let (texts, ints): (Vec<&Pin>, Vec<&Pin>) = values.partition(|p| matches!(p, Pin::Text(_)));
+    texts
+        .into_iter()
+        .chain(ints)
+        .map(Pin::to_string)
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// Extract the text of a top-level predicate definition by name.
@@ -1286,27 +1339,55 @@ CraftWood(in, out) = AND(
         assert_eq!(sanitize("PlainName"), "PlainName");
     }
 
+    fn written(values: &[Pin], from_vdf: bool) -> FieldWrites {
+        FieldWrites {
+            values: values.iter().cloned().collect(),
+            from_vdf,
+        }
+    }
+
+    /// A value only a mutation writes is not one a fresh instance holds,
+    /// so the two are labelled apart.
     #[test]
-    fn render_signature_labels_pins_as_at_mint() {
+    fn render_signature_separates_mint_from_later_values() {
         let mut sig = ClassSignature::default();
         sig.fields.insert(
             "durability".to_string(),
-            FieldWrites {
-                values: [Pin::Int(100)].into_iter().collect(),
-                from_vdf: false,
+            ClassField {
+                at_mint: written(&[Pin::Int(100)], false),
+                ever: written(&[Pin::Int(100)], false),
+            },
+        );
+        sig.fields.insert(
+            "authorized".to_string(),
+            ClassField {
+                at_mint: written(&[Pin::Int(0)], false),
+                ever: written(&[Pin::Int(0), Pin::Int(1)], false),
+            },
+        );
+        sig.fields.insert(
+            "revealed".to_string(),
+            ClassField {
+                at_mint: written(&[], false),
+                ever: written(&[Pin::Int(1)], false),
             },
         );
         sig.fields.insert(
             "work".to_string(),
-            FieldWrites {
-                values: BTreeSet::new(),
-                from_vdf: true,
+            ClassField {
+                at_mint: written(&[], true),
+                ever: written(&[], true),
             },
         );
         sig.identity.vdf = true;
 
         let rendered = render_signature("WoodPick", &sig);
         assert!(rendered.contains("Int  // at mint: 100"), "{rendered}");
+        assert!(
+            rendered.contains("Int  // at mint: 0; updated to 1"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("Int  // updated to 1"), "{rendered}");
         assert!(rendered.contains("Raw  // VDF-derived"), "{rendered}");
         assert!(rendered.contains("// identity: VDF"), "{rendered}");
     }
