@@ -358,31 +358,104 @@ impl VarOrValue {
 /// bound by a container lookup is declared `Unk`, so the value it holds
 /// is the only thing that says how to read `.key` off it.
 ///
-/// Only call this at exec time.
+/// Only call this at exec time, on an entry ref `ArgHandle::entry`
+/// admitted: every way this can fail is one it rejects when the script
+/// writes the field read.
 fn resolve_entry(typ: &Type, value: &Value, key: &str) -> (Value, Value, Value) {
+    try_resolve_entry(typ, value, key).expect("entry checked where the script wrote it")
+}
+
+/// As `resolve_entry`, reporting rather than panicking on a read the
+/// value cannot answer. A var bound by a container lookup is declared
+/// `Unk`, so what it holds is script-controlled and a field read off it
+/// is a script error, not an invariant.
+fn try_resolve_entry(typ: &Type, value: &Value, key: &str) -> RuntimeResult<(Value, Value, Value)> {
     match typ {
         Type::Array(record) => {
-            let array = value.as_array().expect("array");
+            let array = value.as_array().ok_or_else::<Box<EvalAltResult>, _>(|| {
+                format!(".{key} on a record that is not an array").into()
+            })?;
             let index = record
                 .iter()
                 .position(|k| k == key)
-                .unwrap_or_else(|| panic!("record has no entry {key}"));
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!("record has no entry {key}").into()
+                })?;
             let entry = array
                 .get(index)
-                .unwrap()
-                .unwrap_or_else(|| panic!("record slot {index} ({key}) is empty"));
-            (Value::from(array), Value::from(index as i64), entry)
+                .map_err::<Box<EvalAltResult>, _>(|err| format!(".{key}: {err}").into())?
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!("record slot {index} ({key}) is empty").into()
+                })?;
+            Ok((Value::from(array), Value::from(index as i64), entry))
         }
         _ => {
             let dict = value
                 .as_dictionary()
-                .unwrap_or_else(|| panic!(".{key} on a value that is not a dictionary"));
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!(".{key} on a value that is not a dictionary").into()
+                })?;
             let entry = dict
                 .get(&StrKey::from(key))
-                .unwrap()
-                .unwrap_or_else(|| panic!("no entry {key}"));
-            (Value::from(dict), Value::from(key.to_string()), entry)
+                .map_err::<Box<EvalAltResult>, _>(|err| format!(".{key}: {err}").into())?
+                .ok_or_else::<Box<EvalAltResult>, _>(|| format!("no entry {key}").into())?;
+            Ok((Value::from(dict), Value::from(key.to_string()), entry))
         }
+    }
+}
+
+/// The entry a container holds at a key, in the form both `container_get`
+/// phases need it: the value at Execute, and at Load the check that a
+/// lookup written against two literals names a row that exists.
+fn container_lookup(pred: NativePredicate, container: &Value, key: &Value) -> RuntimeResult<Value> {
+    container
+        .as_container()
+        .ok_or_else::<Box<EvalAltResult>, _>(|| {
+            format!("{pred}: {container} is not a container").into()
+        })?
+        .get(key.raw())
+        .map_err::<Box<EvalAltResult>, _>(|err| format!("{pred}: {err}").into())?
+        .ok_or_else::<Box<EvalAltResult>, _>(|| format!("{pred}: no entry at {key}").into())
+}
+
+/// Reject a lookup whose container cannot be of the kind the predicate
+/// names, as far as Load can see: a literal knows its own kind, and a
+/// var declares one when it came from an object or a record. pod2
+/// lowers `DictContains` and `ArrayContains` to a kind-blind `Contains`,
+/// so nothing downstream catches this and the shipped predicate would
+/// claim a container kind it does not have.
+///
+/// `Type::Unk` -- what a lookup itself binds -- says nothing, so it
+/// passes and the value's own kind decides at Execute.
+fn check_container_kind(pred: NativePredicate, container: &VarOrValue) -> RuntimeResult<()> {
+    let want_dict = matches!(pred, NativePredicate::DictContains);
+    let ok = match container {
+        VarOrValue::Value(v) => {
+            if want_dict {
+                v.as_dictionary().is_some()
+            } else {
+                v.as_array().is_some()
+            }
+        }
+        // An entry ref reads its kind off the entry, not off the var
+        // holding it, so Load knows nothing about it.
+        VarOrValue::Var(Var { key: Some(_), .. }) => true,
+        VarOrValue::Var(Var { typ, .. }) => match typ {
+            Type::Dict => want_dict,
+            Type::Array(_) => !want_dict,
+            Type::Unk | Type::Raw => true,
+            Type::Int => false,
+        },
+    };
+    if ok {
+        Ok(())
+    } else {
+        let kind = if want_dict {
+            "a Dictionary"
+        } else {
+            "an Array"
+        };
+        Err(format!("{pred}: container is not {kind}").into())
     }
 }
 
@@ -1602,24 +1675,33 @@ impl ActionHandle {
         container: Dynamic,
         key: Dynamic,
     ) -> RuntimeResult<ArgHandle> {
-        let [container, key] = validate_args([(container, Type::Unk), (key, Type::Unk)])?;
+        // An array is indexed by position, so a non-integer index is
+        // never a row; a dictionary takes any value as a key.
+        let key_type = match pred {
+            NativePredicate::ArrayContains => Type::Int,
+            _ => Type::Unk,
+        };
+        let [container, key] = validate_args([(container, Type::Unk), (key, key_type)])?;
+        check_container_kind(pred, &container.borrow())?;
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
         let entry = ctx.fresh_var("get", Type::Unk);
+        // With both the container and the key in hand the lookup exec
+        // would do is available now, and a row that is not in the table
+        // at Load is not going to be there at Execute either.
+        let literal_pair = match (&*container.borrow(), &*key.borrow()) {
+            (VarOrValue::Value(c), VarOrValue::Value(k)) => Some((c.clone(), k.clone())),
+            _ => None,
+        };
         if ctx.exe_ctx.is_some() {
-            let container_value = container.borrow().as_value();
-            let key_value = key.borrow().as_value();
-            let found = container_value
-                .as_container()
-                .ok_or_else::<Box<EvalAltResult>, _>(|| {
-                    format!("{pred}: {container_value} is not a container").into()
-                })?
-                .get(key_value.raw())
-                .map_err::<Box<EvalAltResult>, _>(|err| format!("{pred}: {err}").into())?
-                .ok_or_else::<Box<EvalAltResult>, _>(|| {
-                    format!("{pred}: no entry at {key_value}").into()
-                })?;
+            let found = container_lookup(
+                pred,
+                &container.borrow().as_value(),
+                &key.borrow().as_value(),
+            )?;
             entry.borrow_mut().set_value(found);
+        } else if let Some((container_value, key_value)) = literal_pair {
+            container_lookup(pred, &container_value, &key_value)?;
         }
         let args = vec![container, key, entry.clone()];
         let op_args = capture_op_args(&args, ctx.exe_ctx.is_some());
@@ -1894,6 +1976,17 @@ impl ArgHandle {
             return Ok(ArgHandle::literal(self.ctx.clone(), entry));
         }
         let var = arg.as_mut_var();
+        // Record a field ref only for a read that can be answered: a
+        // record names its fields at Load, and at Execute the value the
+        // read resolves against is in hand.
+        if let Type::Array(record) = &var.typ
+            && !record.iter().any(|k| k == &index)
+        {
+            return Err(format!("record has no entry {index}").into());
+        }
+        if let Some(value) = &var.value {
+            try_resolve_entry(&var.typ, value, &index)?;
+        }
         var.key = Some(index);
         let arg = Rc::new(RefCell::new(arg));
         Ok(ArgHandle::new(self.ctx.clone(), arg))
@@ -1980,6 +2073,11 @@ fn _try_value_from_dynamic(v: Dynamic) -> ValueCast {
         Err(v) => v,
     };
     let v = match v.try_cast_result::<i64>() {
+        Ok(v) => return ValueCast::Value(Value::from(v)),
+        Err(v) => v,
+    };
+    // Rhai booleans promote to pod2 integer literals `0` and `1`.
+    let v = match v.try_cast_result::<bool>() {
         Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };

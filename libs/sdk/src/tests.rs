@@ -1773,3 +1773,132 @@ fn test_var_container_lookup_executes() {
         Value::from(22)
     );
 }
+
+/// pod2 lowers `DictContains` and `ArrayContains` to a kind-blind
+/// `Contains`, so a lookup that names the wrong container kind proves
+/// fine and ships a predicate claiming a kind its container does not
+/// have. Load is where that has to be caught.
+#[test]
+fn test_container_get_checks_kind_and_key() {
+    for (action, expected, src) in [
+        (
+            "DictOnArray",
+            "DictContains: container is not a Dictionary",
+            r#"
+fn DictOnArray(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.dict_get([7, 8], 1), 0);
+}
+"#,
+        ),
+        (
+            "ArrayOnDict",
+            "ArrayContains: container is not an Array",
+            r#"
+fn ArrayOnDict(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.array_get(#{"k": 1}, 0), 0);
+}
+"#,
+        ),
+        (
+            "ArrayOnObject",
+            "ArrayContains: container is not an Array",
+            r#"
+fn ArrayOnObject(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.array_get(ore, 0), 0);
+}
+"#,
+        ),
+        (
+            "StringIndex",
+            "type check: expected Int",
+            r#"
+fn StringIndex(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.array_get([7, 8], "k"), 0);
+}
+"#,
+        ),
+        (
+            "IndexPastEnd",
+            "ArrayContains: no entry at 5",
+            r#"
+fn IndexPastEnd(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.array_get([7, 8], 5), 0);
+}
+"#,
+        ),
+        (
+            "NegativeIndex",
+            "ArrayContains: no entry at -1",
+            r#"
+fn NegativeIndex(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.array_get([7, 8], -1), 0);
+}
+"#,
+        ),
+    ] {
+        let err = match Sdk::default().load_module_from_src_actions(src, &[action]) {
+            Ok(_) => panic!("{action}: expected the lookup to be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains(expected), "{action}: {err}");
+    }
+}
+
+/// Verifies that booleans in container literals become pod2 integer values.
+#[test]
+fn test_container_literal_takes_a_bool() {
+    let craft_src = r#"
+        fn ReadFlags(action) {
+            var ore = action.input("Ore");
+            action.st_dict_contains(#{"ok": true, "bad": false}, "ok", 1);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["ReadFlags"])
+        .unwrap();
+    assert_renders(&module, &[r#""ok": 1"#, r#""bad": 0"#]);
+}
+
+/// Reports invalid field access on a lookup result as a script error.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_field_read_on_non_dict_lookup_rejected() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 0], ["x", 0]]);
+        }
+
+        fn RevealChart(action) {
+            var chart = action.mutate("Chart");
+            var row = action.array_get([[11, 12]], chart.code);
+            chart.update("x", row.x);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "RevealChart"])
+        .unwrap();
+
+    let mut state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let err = match executor.action("RevealChart", vec![chart]) {
+        Ok(_) => panic!("expected a field read on an array row to be rejected"),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("not a dictionary"), "{err}");
+}
