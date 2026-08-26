@@ -1840,10 +1840,9 @@ fn test_var_container_lookup_executes() {
     );
 }
 
-/// pod2 lowers `DictContains` and `ArrayContains` to a kind-blind
-/// `Contains`, so a lookup that names the wrong container kind proves
-/// fine and ships a predicate claiming a kind its container does not
-/// have. Load is where that has to be caught.
+/// pod2 lowers `DictContains` and `ArrayContains` to the kind-agnostic
+/// `Contains` predicate. The SDK must therefore reject mismatched container
+/// kinds and key types during Load.
 #[test]
 fn test_container_get_checks_kind_and_key() {
     for (action, expected, src) in [
@@ -1884,6 +1883,26 @@ fn ArrayOnObject(action) {
 fn StringIndex(action) {
     var ore = action.input("Ore");
     action.st_gt(action.array_get([7, 8], "k"), 0);
+}
+"#,
+        ),
+        (
+            "IntKey",
+            "type check: expected Str",
+            r#"
+fn IntKey(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.dict_get(#{"grade": 7}, 0), 0);
+}
+"#,
+        ),
+        (
+            "IntKeyOnObject",
+            "type check: expected Str",
+            r#"
+fn IntKeyOnObject(action) {
+    var ore = action.input("Ore");
+    action.st_gt(ore.get(0), 0);
 }
 "#,
         ),
@@ -1969,30 +1988,35 @@ fn test_field_read_on_non_dict_lookup_rejected() {
     assert!(err.contains("not a dictionary"), "{err}");
 }
 
-/// A container's kind is a bitmask ORed over every kind its root has
-/// been seen as, and pod2 documents the collisions (`Array[0]` and
-/// `Set{0}` are one value). A nested container that reads as more than
-/// one kind has no literal form that reads back as itself, so it renders
-/// as the commitment a statement arg is compared and hashed by rather
-/// than as whichever kind happened to be probed first.
+/// Some container values can be interpreted as multiple kinds. The formatter
+/// chooses the first valid representation in this order: set, dictionary,
+/// array. Because the verifier compares raw values, this choice does not
+/// change statement semantics.
 #[test]
-fn test_ambiguous_nested_container_renders_as_commitment() {
+fn test_ambiguous_nested_container_renders_as_one_kind() {
     let craft_src = r#"
         fn Probe(action) {
             var ore = action.input("Ore");
             action.st_array_contains([set_of([0]), [0]], 0, 1);
-            action.st_array_contains([[7], #{"a": 1}], 1, 2);
+            action.st_array_contains([#{"a": "a"}, set_of(["a"])], 0, 2);
+            action.st_array_contains([#{}], 0, 3);
+            action.st_array_contains([[7], #{"a": 1}], 1, 4);
         }
 "#;
     let module = Sdk::default()
         .load_module_from_src_actions(craft_src, &["Probe"])
         .unwrap();
-    let shared = Value::from(Set::new(HashSet::from([Value::from(0)])).commitment());
     assert_renders(
         &module,
         &[
-            &format!("ArrayContains([{shared}, {shared}], 0, 1)"),
-            r#"ArrayContains([[7], {"a": 1}], 1, 2)"#,
+            // Set{0} and Array[0].
+            "ArrayContains([#[0], #[0]], 0, 1)",
+            // Dict{"a": "a"} and Set{"a"}.
+            r#"ArrayContains([#["a"], #["a"]], 0, 2)"#,
+            // An empty container reads as all three kinds.
+            "ArrayContains([#[]], 0, 3)",
+            // Unambiguous containers are unaffected.
+            r#"ArrayContains([[7], {"a": 1}], 1, 4)"#,
         ],
     );
 }

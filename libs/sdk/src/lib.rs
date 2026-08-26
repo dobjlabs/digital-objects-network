@@ -183,6 +183,7 @@ enum Type {
     Unk,
     Raw,
     Int,
+    Str,
     Dict,
     // The Vec contains the optional Record field names
     Array(Arc<Vec<String>>),
@@ -232,6 +233,7 @@ impl VarOrValue {
                 Type::Unk => Some(()),
                 Type::Raw => Some(()),
                 Type::Int => v.as_int().map(|_| ()),
+                Type::Str => v.as_str().map(|_| ()),
                 Type::Dict => v.as_dictionary().map(|_| ()),
                 Type::Array(_) => v.as_array().map(|_| ()),
             }
@@ -353,26 +355,21 @@ impl VarOrValue {
     }
 }
 
-/// The container, key and entry value that a `var.key` entry ref stands
-/// for at exec time, in the forms `Contains` takes them.
+/// Resolves `value.key` to the `(container, key, entry)` tuple expected by
+/// `Contains`.
 ///
-/// A record-typed var keys by the record's field order, since its
-/// container is an array whose slots are named only by the schema.
-/// Everything else keys by name against the value's own kind: a var
-/// bound by a container lookup is declared `Unk`, so the value it holds
-/// is the only thing that says how to read `.key` off it.
-///
-/// Only call this at exec time, on an entry ref `ArgHandle::entry`
-/// admitted: every way this can fail is one it rejects when the script
-/// writes the field read.
+/// Record fields are converted to array indexes using the schema's field
+/// order. Other values are treated as dictionaries. Call this only during
+/// execution, after `ArgHandle::entry` has validated the access.
 fn resolve_entry(typ: &Type, value: &Value, key: &str) -> (Value, Value, Value) {
     try_resolve_entry(typ, value, key).expect("entry checked where the script wrote it")
 }
 
-/// As `resolve_entry`, reporting rather than panicking on a read the
-/// value cannot answer. A var bound by a container lookup is declared
-/// `Unk`, so what it holds is script-controlled and a field read off it
-/// is a script error, not an invariant.
+/// Fallible version of `resolve_entry` for script-controlled values.
+///
+/// Variables returned by container lookups have type `Unk`, so invalid field
+/// access must be reported as a script error instead of treated as an internal
+/// invariant violation.
 fn try_resolve_entry(typ: &Type, value: &Value, key: &str) -> RuntimeResult<(Value, Value, Value)> {
     match typ {
         Type::Array(record) => {
@@ -408,9 +405,10 @@ fn try_resolve_entry(typ: &Type, value: &Value, key: &str) -> RuntimeResult<(Val
     }
 }
 
-/// The entry a container holds at a key, in the form both `container_get`
-/// phases need it: the value at Execute, and at Load the check that a
-/// lookup written against two literals names a row that exists.
+/// Returns the entry at `key`.
+///
+/// During Load, this validates lookups whose container and key are literals.
+/// During Execute, it resolves the value assigned to the lookup result.
 fn container_lookup(pred: NativePredicate, container: &Value, key: &Value) -> RuntimeResult<Value> {
     container
         .as_container()
@@ -422,54 +420,72 @@ fn container_lookup(pred: NativePredicate, container: &Value, key: &Value) -> Ru
         .ok_or_else::<Box<EvalAltResult>, _>(|| format!("{pred}: no entry at {key}").into())
 }
 
-/// Reject a lookup whose container cannot be of the kind the predicate
-/// names, as far as Load can see: a literal knows its own kind, and a
-/// var declares one when it came from an object or a record. pod2
-/// lowers `DictContains` and `ArrayContains` to a kind-blind `Contains`,
-/// so nothing downstream catches this and the shipped predicate would
-/// claim a container kind it does not have.
+/// Container kinds supported by lookup operations.
 ///
-/// `Type::Unk` -- what a lookup itself binds -- says nothing, so it
-/// passes and the value's own kind decides at Execute.
-fn check_container_kind(pred: NativePredicate, container: &VarOrValue) -> RuntimeResult<()> {
-    let want_dict = matches!(pred, NativePredicate::DictContains);
-    let ok = match container {
-        VarOrValue::Value(v) => {
-            if want_dict {
-                v.as_dictionary().is_some()
-            } else {
-                v.as_array().is_some()
-            }
+/// Sets do not require a lookup operation because each element is also its
+/// key. Use `st_set_contains` to test set membership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lookup {
+    Dict,
+    Array,
+}
+
+impl Lookup {
+    /// Returns the containment predicate emitted by this lookup.
+    fn pred(self) -> NativePredicate {
+        match self {
+            Self::Dict => NativePredicate::DictContains,
+            Self::Array => NativePredicate::ArrayContains,
         }
+    }
+    /// Returns the required key type: strings for dictionaries and integers
+    /// for arrays.
+    fn key_type(self) -> Type {
+        match self {
+            Self::Dict => Type::Str,
+            Self::Array => Type::Int,
+        }
+    }
+}
+
+/// Validates container kinds that are known during Load.
+///
+/// Literal containers and typed object or record variables can be checked
+/// immediately. Values of type `Unk` cannot be validated here.
+///
+/// This check is required because pod2 lowers both predicates to the
+/// kind-agnostic `Contains` predicate.
+fn check_container_kind(lookup: Lookup, container: &VarOrValue) -> RuntimeResult<()> {
+    let ok = match container {
+        VarOrValue::Value(v) => match lookup {
+            Lookup::Dict => v.as_dictionary().is_some(),
+            Lookup::Array => v.as_array().is_some(),
+        },
         // An entry ref reads its kind off the entry, not off the var
         // holding it, so Load knows nothing about it.
         VarOrValue::Var(Var { key: Some(_), .. }) => true,
         VarOrValue::Var(Var { typ, .. }) => match typ {
-            Type::Dict => want_dict,
-            Type::Array(_) => !want_dict,
+            Type::Dict => lookup == Lookup::Dict,
+            Type::Array(_) => lookup == Lookup::Array,
             Type::Unk | Type::Raw => true,
-            Type::Int => false,
+            Type::Int | Type::Str => false,
         },
     };
     if ok {
-        Ok(())
-    } else {
-        let kind = if want_dict {
-            "a Dictionary"
-        } else {
-            "an Array"
-        };
-        Err(format!("{pred}: container is not {kind}").into())
+        return Ok(());
     }
+    let kind = match lookup {
+        Lookup::Dict => "a Dictionary",
+        Lookup::Array => "an Array",
+    };
+    Err(format!("{}: container is not {kind}", lookup.pred()).into())
 }
 
-/// Each arg in the form pod2 takes it, read while the script's own
-/// statement is what it names. An arg that reads an object -- its whole
-/// dict, or one of its fields -- aliases that object's Ref, which a
-/// later `update` writes through, so the post-Rhai walk has to replay
-/// what the arg stood for at Rhai time rather than re-read it.
+/// Captures statement arguments during execution.
 ///
-/// None at Load, where an arg has no value yet and nothing is replayed.
+/// Object arguments share mutable `Ref`s, so a later `update` may change their
+/// values. Capturing them here ensures that replay uses the values from when
+/// the statement was evaluated. Returns `None` during Load.
 fn capture_op_args(args: &[Ref], is_exe: bool) -> Option<Vec<OperationArg>> {
     is_exe.then(|| args.iter().map(|arg| arg.borrow().as_op_arg()).collect())
 }
@@ -522,10 +538,10 @@ macro_rules! st_methods {
     };
 }
 
-/// Prefix of the name the SDK gives a var the script has not bound with
-/// `var`. Every host method that returns a var registers it under one of
-/// these, so the var renders as a wildcard wherever a script uses it
-/// inline; a `var` binding renames it in place to the script's own name.
+/// Prefix for variables created by SDK host methods.
+///
+/// Generated variables render as wildcards until the script binds them with
+/// `var`, which renames them to the script-provided name.
 const ANON_VAR_PREFIX: char = '_';
 
 /// Returns whether `name` uses the prefix assigned by `fresh_var`.
@@ -1655,30 +1671,30 @@ impl ActionHandle {
     }
     /// Returns the dictionary entry at `key` and emits `DictContains`.
     fn dict_get(self, dict: Dynamic, key: Dynamic) -> RuntimeResult<ArgHandle> {
-        self.container_get(NativePredicate::DictContains, dict, key)
+        self.container_get(Lookup::Dict, dict, key)
     }
     /// Returns the array entry at `index` and emits `ArrayContains`.
     fn array_get(self, array: Dynamic, index: Dynamic) -> RuntimeResult<ArgHandle> {
-        self.container_get(NativePredicate::ArrayContains, array, index)
+        self.container_get(Lookup::Array, array, index)
     }
-    /// A container read as one operation: the binding is a var, so the
-    /// key can be one too, and the statement is what ties the var to
-    /// what the container holds. Reading a literal container at a var
-    /// key is the table lookup this exists for.
+    /// Emits a containment statement and returns a variable bound to the
+    /// matching entry.
+    ///
+    /// The key may also be a variable, allowing a literal container to serve
+    /// as a lookup table without emitting one statement per entry.
     fn container_get(
         self,
-        pred: NativePredicate,
+        lookup: Lookup,
         container: Dynamic,
         key: Dynamic,
     ) -> RuntimeResult<ArgHandle> {
-        // An array is indexed by position, so a non-integer index is
-        // never a row; a dictionary takes any value as a key.
-        let key_type = match pred {
-            NativePredicate::ArrayContains => Type::Int,
-            _ => Type::Unk,
-        };
-        let [container, key] = validate_args([(container, Type::Unk), (key, key_type)])?;
-        check_container_kind(pred, &container.borrow())?;
+        // The container is checked before the key, so a lookup that
+        // names the wrong kind is reported as that rather than as a key
+        // of the wrong type.
+        let [container] = validate_args([(container, Type::Unk)])?;
+        check_container_kind(lookup, &container.borrow())?;
+        let [key] = validate_args([(key, lookup.key_type())])?;
+        let pred = lookup.pred();
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
         let entry = ctx.fresh_var("get", Type::Unk);
@@ -1799,17 +1815,17 @@ st_methods! {
     st_hash, Hash, [v0: Type::Unk, v1: Type::Unk, v2: Type::Unk];
     st_contains, Contains, [c: Type::Unk, k: Type::Unk, v: Type::Unk];
     st_not_contains, NotContains, [c: Type::Unk, k: Type::Unk];
-    st_dict_contains, DictContains, [d: Type::Dict, k: Type::Unk, v: Type::Unk];
-    st_dict_not_contains, DictNotContains, [d: Type::Dict, k: Type::Unk];
+    st_dict_contains, DictContains, [d: Type::Dict, k: Type::Str, v: Type::Unk];
+    st_dict_not_contains, DictNotContains, [d: Type::Dict, k: Type::Str];
     st_set_contains, SetContains, [s: Type::Unk, v: Type::Unk];
     st_set_not_contains, SetNotContains, [s: Type::Unk, v: Type::Unk];
     st_array_contains, ArrayContains, [a: Type::Unk, i: Type::Int, v: Type::Unk];
     st_container_insert, ContainerInsert, [old: Type::Unk, k: Type::Unk, v: Type::Unk, new: Type::Unk];
     st_container_update, ContainerUpdate, [old: Type::Unk, k: Type::Unk, v: Type::Unk, new: Type::Unk];
     st_container_delete, ContainerDelete, [old: Type::Unk, k: Type::Unk, new: Type::Unk];
-    st_dict_insert, DictInsert, [old: Type::Dict, k: Type::Unk, v: Type::Unk, new: Type::Dict];
-    st_dict_update, DictUpdate, [old: Type::Dict, k: Type::Unk, v: Type::Unk, new: Type::Dict];
-    st_dict_delete, DictDelete, [old: Type::Dict, k: Type::Unk, new: Type::Dict];
+    st_dict_insert, DictInsert, [old: Type::Dict, k: Type::Str, v: Type::Unk, new: Type::Dict];
+    st_dict_update, DictUpdate, [old: Type::Dict, k: Type::Str, v: Type::Unk, new: Type::Dict];
+    st_dict_delete, DictDelete, [old: Type::Dict, k: Type::Str, new: Type::Dict];
     st_set_insert, SetInsert, [old: Type::Unk, v: Type::Unk, new: Type::Unk];
     st_set_delete, SetDelete, [old: Type::Unk, v: Type::Unk, new: Type::Unk];
     st_array_update, ArrayUpdate, [old: Type::Unk, i: Type::Int, v: Type::Unk, new: Type::Unk];
@@ -1957,16 +1973,15 @@ impl ArgHandle {
     }
     fn entry(&mut self, index: String) -> RuntimeResult<ArgHandle> {
         let mut arg = self.arg.borrow().clone();
-        // A literal holds its entries already, so read one out here
-        // rather than record a field ref against a var there is none of.
+        // Resolve literal access immediately; there is no variable on which to
+        // retain a field reference.
         if let VarOrValue::Value(value) = &arg {
             let (_, _, entry) = try_resolve_entry(&Type::Dict, value, &index)?;
             return Ok(ArgHandle::literal(self.ctx.clone(), entry));
         }
         let var = arg.as_mut_var();
-        // Record a field ref only for a read that can be answered: a
-        // record names its fields at Load, and at Execute the value the
-        // read resolves against is in hand.
+        // Validate known record fields during Load and runtime values during
+        // Execute before retaining the field reference.
         if let Type::Array(record) = &var.typ
             && !record.iter().any(|k| k == &index)
         {

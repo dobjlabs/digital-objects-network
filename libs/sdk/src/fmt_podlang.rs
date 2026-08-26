@@ -13,7 +13,7 @@ use crate::{
     ActionContext, ActionMeta, ActionObjectRef, ClassMeta, Dependency, Inst, Intro, Loader,
     ObjectIO, Ref, VarOrValue,
 };
-use pod2::middleware::{Value, containers::ContainerKind};
+use pod2::middleware::Value;
 use std::collections::HashMap;
 use std::fmt;
 use txlib::RECORD_STATE_HEADER_PODLANG;
@@ -185,20 +185,17 @@ struct ArgFmt<'a> {
     arg: &'a Ref,
 }
 
-/// Render a literal in podlang's literal syntax. A scalar is already in
-/// that form, but `Display for Value` prints a container in a debug form
-/// the parser cannot read back, so the container cases are spelled out
-/// here.
+/// Formats a value as a Podlang literal.
 ///
-/// A container the parser has no syntax for falls back to its
-/// commitment: a statement arg is compared and hashed by raw value, so
-/// `Raw(0x...)` and the container itself are the same arg to the
-/// verifier, and the prover reads the entries off the value it holds
-/// rather than off this text.
+/// Scalars already use valid Podlang syntax, but `Value` formats containers
+/// using debug syntax. If a container can be interpreted as multiple kinds,
+/// prefer set, then dictionary, then array. Each representation has the same
+/// raw value, which is what statement arguments use.
+///
+/// Podlang cannot represent sparse arrays, so they are rendered as their
+/// commitment.
 struct LiteralFmt<'a>(&'a Value);
 
-/// The podlang text a literal renders to, reachable for values a script
-/// has no way to build.
 #[cfg(test)]
 pub(crate) fn literal_podlang(value: &Value) -> String {
     LiteralFmt(value).to_string()
@@ -207,23 +204,24 @@ pub(crate) fn literal_podlang(value: &Value) -> String {
 impl<'a> fmt::Display for LiteralFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = self.0;
-        // An empty container and a raw zero share a value; keep the raw
-        // reading, which is what a script that wrote one asked for.
         if value.is_raw() {
             return write!(f, "{value}");
         }
         let Some(container) = value.as_container() else {
             return write!(f, "{value}");
         };
-        // A container's kind is a bitmask ORed over every kind its root
-        // has been seen as (`Dict{"a": "a"}` and `Set{"a"}` share a
-        // root, as do `Array[0]` and `Set{0}`), so a value that reads as
-        // more than one kind has no literal form that reads back as
-        // itself and falls through to its commitment below. Probing
-        // kind by kind would instead print it as whichever was tried
-        // first.
         let kind = container.kind();
-        if kind == *ContainerKind::default().set_dictionary() {
+        if kind.is_set() {
+            let set = container.as_set().expect("kind says set");
+            write!(f, "#[")?;
+            for (i, element) in set.iter().enumerate() {
+                let element = element.map_err(|_| fmt::Error)?;
+                let sep = if i == 0 { "" } else { ", " };
+                write!(f, "{sep}{}", LiteralFmt(&element))?;
+            }
+            return write!(f, "]");
+        }
+        if kind.is_dictionary() {
             let dict = container.as_dictionary().expect("kind says dictionary");
             write!(f, "{{")?;
             for (i, entry) in dict.iter().enumerate() {
@@ -234,25 +232,14 @@ impl<'a> fmt::Display for LiteralFmt<'a> {
             }
             return write!(f, "}}");
         }
-        if kind == *ContainerKind::default().set_set() {
-            let set = container.as_set().expect("kind says set");
-            write!(f, "#[")?;
-            for (i, element) in set.iter().enumerate() {
-                let element = element.map_err(|_| fmt::Error)?;
-                let sep = if i == 0 { "" } else { ", " };
-                write!(f, "{sep}{}", LiteralFmt(&element))?;
-            }
-            return write!(f, "]");
-        }
-        if kind == *ContainerKind::default().set_array() {
+        if kind.is_array() {
             let array = container.as_array().expect("kind says array");
             let mut slots = array
                 .iter()
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|_| fmt::Error)?;
             slots.sort_by_key(|(index, _)| *index);
-            // Podlang writes an array as its elements in order, which a
-            // sparse one has no form for.
+            // Podlang array literals cannot represent gaps between indexes.
             if slots.iter().enumerate().all(|(i, (index, _))| i == *index) {
                 write!(f, "[")?;
                 for (i, (_, element)) in slots.iter().enumerate() {

@@ -64,69 +64,70 @@ result with an explicit statement (`action.st_sum`, `action.st_product`,
 For `-` the pairing is a `Sum` with the operands rearranged (`a - b == r` is
 stated as `r + b == a`), since pod2 has no subtraction predicate.
 
-They stay `unsafe`-only on purpose rather than emitting their own statement
-outside a block. `unsafe` applies to the dynamic extent of its block, so it
-reaches into any script function called from inside one; an operator whose
-meaning depended on that would constrain its result or not according to the
-caller, and the unconstrained reading is the silent one.
+These operators are restricted to `unsafe` blocks because they never emit
+constraints. Since `unsafe` also applies to functions called from within the
+block, allowing the operators to emit constraints elsewhere would make their
+behavior depend on the caller. Keeping them unsafe-only gives them one
+consistent meaning: compute a witness without constraining it.
 
 ## Native statements
 
-`action.st_*` emits one pod2 native statement. Arguments are in the
-predicate's own order, so a call reads the same as the podlang it renders to,
-and each one takes a literal, a `var`, or a field read (`obj.field`). A
-whole-container argument naming an object is anchored to its record entry
-automatically.
+Each `action.st_*` method emits one pod2 native statement. Arguments follow
+the predicate's order and may be literals, variables, or field references such
+as `obj.field`. When an entire object is used as a container argument, the SDK
+automatically anchors it to the object's record entry.
 
 | Call | Holds when |
 | --- | --- |
-| `st_equal(a, b)`, `st_not_equal(a, b)` | the two values are (not) equal; any pod2 values |
+| `st_equal(a, b)`, `st_not_equal(a, b)` | `a` and `b` are equal or unequal; accepts any pod2 values |
 | `st_lt(a, b)`, `st_lt_eq(a, b)`, `st_gt(a, b)`, `st_gt_eq(a, b)` | integer comparison |
 | `st_sum(a, b, c)` | `a + b == c` |
 | `st_product(a, b, c)` | `a * b == c` |
 | `st_max(a, b, c)` | `max(a, b) == c` |
 | `st_hash(a, b, c)` | `c` is the pod2 hash of `a` and `b` |
-| `st_contains(c, k, v)`, `st_not_contains(c, k)` | any container (does not) hold `k` (mapped to `v`) |
-| `st_dict_contains(d, k, v)`, `st_dict_not_contains(d, k)` | same, and `d` is a dictionary |
-| `st_set_contains(s, v)`, `st_set_not_contains(s, v)` | `s` is a set that does (not) hold `v` |
+| `st_contains(c, k, v)`, `st_not_contains(c, k)` | `c` contains `k` mapped to `v`, or does not contain `k` |
+| `st_dict_contains(d, k, v)`, `st_dict_not_contains(d, k)` | dictionary `d` contains string key `k` mapped to `v`, or does not contain `k` |
+| `st_set_contains(s, v)`, `st_set_not_contains(s, v)` | set `s` contains or does not contain `v` |
 | `st_array_contains(a, i, v)` | array `a` holds `v` at index `i` |
 | `st_container_insert(old, k, v, new)` | `new` is `old` with `(k, v)` added |
 | `st_container_update(old, k, v, new)` | `new` is `old` with `k` remapped to `v` |
 | `st_container_delete(old, k, new)` | `new` is `old` with `k` removed |
-| `st_dict_insert`, `st_dict_update`, `st_dict_delete` | same three, pinning the container to a dictionary |
+| `st_dict_insert`, `st_dict_update`, `st_dict_delete` | dictionary-specific insert, update, and delete statements; `k` must be a string |
 | `st_set_insert(old, v, new)`, `st_set_delete(old, v, new)` | `new` is `old` with `v` added / removed |
 | `st_array_update(old, i, v, new)` | `new` is `old` with index `i` set to `v` |
 
-One limit is worth knowing before reaching for these:
-
-- The transition statements (`st_*_insert` / `_update` / `_delete`) constrain
-  a relation between two container values. They do not compute the new
-  container, so both sides have to come from somewhere else: a container
-  literal, an object's entry, or a witness from an `unsafe` block. There is no
-  operator that derives one container from another, so the reachable use is
-  relating two containers a script already holds.
+Transition statements (`st_*_insert`, `st_*_update`, and `st_*_delete`) only
+constrain the relationship between two containers; they do not construct the
+new container. Both values must be supplied as literals, object entries, or
+witnesses computed in an `unsafe` block. Use these statements to prove a
+transition between containers the script already has.
 
 ## Container literals
 
-A Rhai array promotes to a pod2 Array and a Rhai object map to a pod2
-Dictionary, at any depth, wherever a statement takes a value. Rhai has no set
-of its own, so `set_of([...])` is what names a Set. Every element has to be a
-literal -- an integer, a string, a bool, or a nested container -- because the
-container is embedded in the predicate at Load time, so a `var` element is
-rejected rather than standing for whatever it holds at exec time.
+Rhai arrays and object maps are recursively converted to pod2 Arrays and
+Dictionaries when used as statement arguments. Rhai does not have a native set
+type, so use `set_of([...])` to construct a pod2 Set.
 
-`set_of` builds a value and reads no action state, so it is a plain function
-rather than a method on `action`. That is what lets a script function holding
-a table call it without taking `action` as a parameter, which is most of what
-a table lives in a script function for.
+Container elements must be literals: integers, strings, booleans, or nested
+containers. Containers are embedded in the predicate during Load, so variables
+cannot be used as elements.
 
-`action.dict_get(dict, key)` and `action.array_get(array, index)` bind what the
-container holds there and emit the matching `DictContains` / `ArrayContains`
-(`obj.get(key)` is `dict_get(obj, key)` written the other way round). The
-binding is a `var`, so the key can be one too, and the statement is what ties
-the binding to the container. That is the point of the pair: a table the
-module carries as a literal, read at a key the action picks, puts one predicate
-where a row-per-action module needs one per row.
+`set_of` does not access action state, so it is a free function rather than an
+`action` method. This allows helper functions to return literal tables without
+accepting `action` as a parameter.
+
+`action.dict_get(dict, key)` and `action.array_get(array, index)` return the
+matching entry as a `var` and emit a corresponding `DictContains` or
+`ArrayContains` statement. `obj.get(key)` is equivalent to
+`action.dict_get(obj, key)`.
+
+The key or index may also be a variable. This allows an action to look up a row
+in a literal table using one statement, regardless of the number of rows.
+
+`dict_get` requires a string key, while `array_get` requires an integer index.
+Literal arguments of the wrong type are rejected during Load. Sets do not
+support value-producing lookups because each element is also its key; use
+`st_set_contains(set, value)` to test membership.
 
 ```rhai
 fn charts() { [
@@ -143,38 +144,39 @@ fn RevealChart(action) {
 }
 ```
 
-The row is a `var` holding a dictionary, so `row.x` reads it the same way an
-object's field read works, with no further statement. The lookup costs one
-statement and one private wildcard whatever the table's size, and the whole
-table is one argument in the rendered podlang:
+`row` is a variable containing a dictionary, so `row.x` reads a field without
+emitting another statement. Regardless of the table size, the lookup adds one
+statement and one private wildcard. The rendered Podlang includes the entire
+table as a single argument:
 
 ```
 ArrayContains([{"y": 12, "x": 11, "floor": 0}, ...], chart0.code, row)
 ```
 
-A table belongs in a script function or a `var` inside the action rather than a
-top-level `const`: Rhai functions cannot see the enclosing scope, so a `const`
-at the top of `plugin.rhai` is not in scope inside an action. `var` on a
-literal declares no wildcard -- it names the value for the script, and each use
-site renders it inline. Building it costs a merkle tree
-per Load and per Execute of an action that reads it, which is comparable to
-what compiling the equivalent row-per-action predicates costs.
+Define tables in helper functions or local action variables rather than
+top-level constants. Rhai functions cannot access values from their enclosing
+scope, so a top-level `const` is not visible inside an action.
 
-Entries render in the order the container's merkle tree iterates, so the same
-value always renders the same text. A container the podlang parser has no
-syntax for (a sparse array) renders as its commitment instead, which is the
-same argument to the verifier: a statement argument is compared and hashed by
-raw value. So does a container whose kind is ambiguous: pod2 records the kinds
-a root has been seen as as a bitmask, and some containers are one value
-(`Array[0]` and `Set{0}`, `Dict{"a": "a"}` and `Set{"a"}`), so there is no
-literal for it that reads back as itself.
+Binding a literal with `var` only gives it a local name; it does not create a
+pod2 wildcard. Each use is rendered inline. Constructing a table builds its
+Merkle tree once during Load and once during Execute for each action that uses
+it. This is comparable to compiling an equivalent predicate for every row.
+
+Container entries are rendered in Merkle-tree iteration order, producing
+deterministic output. Some raw container values can be interpreted as multiple
+kinds, such as `Array[0]` and `Set{0}`. The formatter chooses the first valid
+representation in this order: set, dictionary, array. Because statement
+arguments are compared and hashed by raw value, this choice does not affect
+verification.
+
+Podlang array literals require contiguous indexes. Sparse arrays therefore
+cannot be represented as literals and are rendered as commitments instead.
 
 ## Type checking
 
-The scripting language has dynamic types so we do type checking at runtime.
-Some level of type checking can be perfomed at Load time, but there are cases
-where we can only do it at Execution time, like operations involving object
-entries (at Load time we don't know what's the type of `pick.durability`).
+Rhai is dynamically typed, so some validation occurs at runtime. The loader
+checks types that are known during Load, while values such as object fields can
+only be validated during Execute.
 
 ## u256 difficulty targets
 
