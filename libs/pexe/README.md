@@ -19,13 +19,9 @@ enforces the declared `module_hash`), and aggregates the results into its
 This crate ships a small library and a CLI in a single package:
 
 - **`pexe` library** — archive format helpers: `pack`, `unpack`, `unpack_raw`,
-  `install`, plus `PluginSource` for reading a plugin from disk,
-  `compile_module` for compiling a script against its manifest and resolved
-  imports, `resolve_manifest_imports` for turning declared `[[imports]]` into
-  loaded modules, `import_build_order` for ordering a set of plugins so
-  dependencies build first, and `set_manifest_hash` / `set_manifest_import_hash`
-  for rewriting the `module_hash` lines in a manifest's TOML source. Exports
-  the `PEXE_EXTENSION` const (`"pexe"`).
+  and `install`; `PluginSource` for reading source directories; and helpers for
+  compiling plugins, resolving imports, ordering builds, and updating manifest
+  hashes. Exports `PEXE_EXTENSION` (`"pexe"`).
 - **`pexe` CLI** (`src/bin/pexe.rs`) — the packaging tool invoked by the
   `just pack-plugins` / `just install-plugins` recipes.
 
@@ -66,9 +62,8 @@ cargo run -p pexe --release -- build --deps /path/to/archives examples/craft-tot
 
 Each build step:
 
-1. Reads `manifest.toml` and `plugin.rhai` from every source directory given,
-   and orders them so a plugin importing another in the same invocation builds
-   after it. A cycle among them is an error.
+1. Reads every source directory and orders the plugins so dependencies in the
+   same invocation build first. Import cycles are rejected.
 2. Resolves the manifest's `[[imports]]` against already-built archives found
    in the `--deps` directories, the output dir, then the install dir. A plugin
    can only import an archive that exists: build the dependency first.
@@ -111,14 +106,12 @@ cargo run -p pexe --release -- inspect plan examples/craft-basics --action FindL
 cargo run -p pexe --release -- inspect prove examples/craft-basics --action FindLog
 ```
 
-Every subcommand takes `--deps` with the same meaning as `build`: where to
-look for the archives this plugin's `[[imports]]` name.
+Every subcommand accepts `--deps` to search additional directories for the
+plugin's declared imports.
 
-Inspecting an **archive** enforces its manifest pins, since a built archive
-records exactly which modules it was compiled against. If the dependency found
-on disk is not that module, the command fails rather than describing a module
-that is not the one in the file. Inspecting a **source directory** does not,
-because `pexe build` is what stamps its pins.
+Inspecting an **archive** enforces its manifest pins so the result reflects the
+module that was built. Inspecting a **source directory** resolves imports by
+name because `pexe build` has not yet updated its pins.
 
 ## Manifest format
 
@@ -145,12 +138,9 @@ emoji = "⛏️"
 description = "Internal durability/work update for wood pick usage."
 hidden = true   # excluded from the user-facing action list
 
-# One entry per module whose actions this plugin sub-calls. `name` is the
-# alias the script binds it to (`subaction("craft-basics::CraftWood")`),
-# local to this plugin. `module_hash` is the identity, rewritten by
-# `pexe build` like `[plugin] module_hash`. The two are tied together
-# today only because imports are resolved by searching installed and
-# built archives, which are one per plugin name.
+# One entry per imported plugin. `name` is the local alias used by
+# `subaction("craft-basics::CraftWood")`; `module_hash` pins the module and is
+# updated by `pexe build`.
 [[imports]]
 name = "craft-basics"
 module_hash = "62525b9696c1402d3b37fbad775e7d3cc915aec4346f231b0fcb57d37ef451b9"
@@ -159,28 +149,23 @@ module_hash = "62525b9696c1402d3b37fbad775e7d3cc915aec4346f231b0fcb57d37ef451b9"
 Parsed by `sdk::manifest::Manifest`; see that module for the canonical field
 list.
 
-A declared import is normally called by some action, via
-`action.subaction("craft-basics::CraftWood")`. One that nothing calls loads
-with a warning: it still emits a `use module` line, so the archive requires
-that dependency to be installed, but it contributes no predicate, so the
-module hash is identical with it, without it, or with its pin repointed
-elsewhere.
+An unused import loads with a warning. It still adds a `use module` dependency,
+but contributes no predicate and therefore does not affect the module hash.
 
 ## Using the library
 
 ```rust
 use pexe::{compile_module, dep_search_dirs, pack, resolve_manifest_imports, unpack, PluginSource};
-use sdk::Sdk;
+use sdk::{ImportLookup, Sdk};
 
 // Read a plugin from disk.
 let source = PluginSource::read("examples/craft-basics")?;
 let manifest = source.parse_manifest()?;
 
-// Check what hash the script actually produces. Declared [[imports]]
-// resolve against the archives already built into these directories.
+// Compile against dependencies already built in these directories.
 let sdk = Sdk::default();
 let dep_dirs = dep_search_dirs(&[], std::path::Path::new(pexe::DEFAULT_OUT_DIR), None);
-let imports = resolve_manifest_imports(&sdk, &manifest, &dep_dirs)?;
+let imports = resolve_manifest_imports(&sdk, &manifest, &dep_dirs, ImportLookup::Pin)?;
 let module = compile_module(&sdk, &manifest, &source.script, &imports)?;
 println!("module hash: {:#}", module.module().batch.id());
 
@@ -191,6 +176,5 @@ let bytes = pack(&source.manifest_toml, &source.script)?;
 let (manifest, script) = unpack(&bytes)?;
 ```
 
-The driver's `PexeCatalog` (in `driver/src/pexe_catalog.rs`) is the
-canonical consumer — see that file for the scan + per-execution-reload
-pattern.
+The driver's `PexeCatalog` (in `driver/src/pexe_catalog.rs`) is the canonical
+consumer; see it for the catalog loading and execution flow.

@@ -20,8 +20,7 @@ fn assert_renders(module: &SdkModule, expected: &[&str]) {
     }
 }
 
-/// Resolved imports, as `load_module_from_src_actions` wants them,
-/// each bound to the alias it is listed under.
+/// Build resolved imports from aliases and loaded modules.
 fn imports_of<'a>(
     entries: impl IntoIterator<Item = (&'a str, &'a Rc<SdkModule>)>,
 ) -> Vec<ModuleImport> {
@@ -34,8 +33,7 @@ fn imports_of<'a>(
         .collect()
 }
 
-/// The `(class, defining module)` identity of each of an action's
-/// refs. None is the module the action belongs to.
+/// Return each reference's class and optional defining batch ID.
 fn class_identities<'a>(
     refs: impl Iterator<Item = &'a ActionObjectRef>,
 ) -> Vec<(&'a str, Option<Hash>)> {
@@ -1335,12 +1333,8 @@ fn test_set_guards() {
     }
 }
 
-/// Cross-plugin action calls end to end: an importer plugin runs an
-/// imported plugin's action as a sub-action, reads its output's
-/// fields, and produces a native-class object in the same tx. The
-/// foreign-produced object then grounds and spends normally through
-/// the defining plugin. Both modules deliberately define an action
-/// named `CraftWood` so name resolution across batches is pinned.
+/// Exercise a cross-plugin sub-action from compilation through spending its
+/// output. Both plugins define `CraftWood` to verify module-scoped resolution.
 #[allow(clippy::cloned_ref_to_slice_refs)]
 #[test]
 fn test_cross_plugin_subaction() {
@@ -1395,8 +1389,7 @@ fn test_cross_plugin_subaction() {
     assert!(src.contains("craft_basics::CraftWood(_craft_basics_CraftWood_io_0"));
     assert!(src.contains("_craft_basics_CraftWood_io_0 craft_basics::CraftWoodIO"));
 
-    // The sub-action's inputs/outputs splice into the parent's totals,
-    // tagged with the defining plugin.
+    // Imported inputs and outputs retain their defining module.
     let meta = totem_module
         .actions()
         .iter()
@@ -1411,14 +1404,13 @@ fn test_cross_plugin_subaction() {
         vec![("Wood", Some(basics.module().batch.id())), ("Totem", None),]
     );
 
-    // Same class name, different plugin, different guard hash.
+    // The importer's local class uses its own guard hash.
     assert_ne!(
         basics.class_hash("Wood").unwrap(),
         totem_module.class_hash("Timber").unwrap()
     );
 
-    // Rendering a foreign predicate qualifies it the way the podlang
-    // above spells it, not the way the plugin name is spelled.
+    // Rendering uses the identifier-safe podlang alias.
     assert_eq!(
         totem_module
             .module_aliases()
@@ -1443,9 +1435,7 @@ fn test_cross_plugin_subaction() {
     let [wood, totem] = res.objs();
     apply_tx(&mut state, &totem_tx);
 
-    // The foreign-produced wood carries the basics IsWood guard hash;
-    // the native totem carries the importer's IsTotem hash and links
-    // the wood's key.
+    // Each object uses its defining module's guard hash.
     assert_eq!(
         txlib::object_type(&wood.obj),
         Value::from(basics.class_hash("Wood").unwrap())
@@ -1467,8 +1457,7 @@ fn test_cross_plugin_subaction() {
     apply_tx(&mut state, &sticks_tx);
 }
 
-/// A qualified sub-action must name a declared import; a foreign class
-/// can never be declared directly (closed classes).
+/// Reject undeclared sub-action imports and direct use of foreign classes.
 #[test]
 fn test_cross_plugin_load_errors() {
     let sdk = Sdk::default();
@@ -1502,8 +1491,7 @@ fn test_cross_plugin_load_errors() {
     );
 }
 
-/// Manifest `[[imports]]` validation: the declared name/hash pins must
-/// line up with the modules the loader was handed.
+/// Validate manifest imports against the modules supplied to the loader.
 #[test]
 fn test_cross_plugin_manifest_imports() {
     let sdk = Sdk::default();
@@ -1574,8 +1562,7 @@ fn test_cross_plugin_manifest_imports() {
         "unexpected error: {err}"
     );
 
-    // Correct pin loads; the module hash check then runs as usual and
-    // reports the real hash, which covers the import pin transitively.
+    // A valid import pin proceeds to the plugin's own module-hash check.
     let manifest: Manifest = toml::from_str(&manifest_toml(&basics_hash)).unwrap();
     let err = sdk
         .load_module_from_src_manifest(parent_src, &manifest, imports)
@@ -1587,10 +1574,7 @@ fn test_cross_plugin_manifest_imports() {
     );
 }
 
-/// Transitive imports: C imports B, B imports A. Running C's action
-/// sub-calls into B, whose body sub-calls into A, so the executor must
-/// carry all three batches and each nested sub-action must resolve
-/// against its own module's imports.
+/// Execute a three-module import chain and retain each output's defining module.
 #[test]
 fn test_transitive_plugin_imports() {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -1650,9 +1634,7 @@ fn test_transitive_plugin_imports() {
         ]
     );
 
-    // Both imported batches are qualifiable, the transitive one
-    // included: a bare `QuarryStone` in a rendered statement would read
-    // as a predicate the builder itself defines.
+    // Rendering includes aliases for direct and transitive imports.
     let aliases = builder.module_aliases();
     assert_eq!(
         aliases.get(&mason.module().batch.id()).map(String::as_str),
@@ -1682,12 +1664,8 @@ fn test_transitive_plugin_imports() {
     );
 }
 
-/// A parent-local output declared *before* a sub-action call. The sub
-/// runs during the parent's rhai body, so its produced dicts have to be
-/// spliced in at the call site's position rather than accumulating ahead
-/// of the parent's own: `driver::save_results` pairs the returned
-/// objects with `total_outputs` by index, so a mismatch stamps each
-/// object with the other one's class and filename.
+/// Preserve call-site output order when a local output precedes a sub-action.
+/// The driver pairs returned objects with `total_outputs` by index.
 #[test]
 fn test_output_order_local_declared_before_subaction() {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -1746,13 +1724,8 @@ fn test_output_order_local_declared_before_subaction() {
     );
 }
 
-/// The same alias bound to two different modules in one graph. C binds
-/// `gem` to gem@v2 directly, and imports B, which binds `gem` to
-/// gem@v1. Both are legitimate: an alias belongs to the binding that
-/// declared it, so the two say nothing about each other. Each spliced
-/// class must keep the module that actually defines it, and the alias
-/// in a script must resolve against the imports of the module the
-/// script belongs to.
+/// Keep importer-local aliases distinct when two modules bind `gem` to
+/// different versions in the same dependency graph.
 #[test]
 fn test_same_alias_two_modules_stay_distinct() {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -1791,11 +1764,7 @@ fn test_same_alias_two_modules_stay_distinct() {
         .load_module_from_src_actions(jeweler_src, &["SetStone"], &imports_of([("gem", &gem_v1)]))
         .unwrap();
 
-    // Which module an importer was built against is baked into its own
-    // batch id: the predicates it compiles to reference the imported
-    // batch, so swapping the import changes the importer's hash. This
-    // is what makes a pin meaningful and a claimed name not worth
-    // trusting past the moment it is resolved.
+    // An importer's batch ID commits to the imported batch.
     let jeweler_on_v2 = sdk
         .load_module_from_src_actions(jeweler_src, &["SetStone"], &imports_of([("gem", &gem_v2)]))
         .unwrap();
@@ -1805,8 +1774,7 @@ fn test_same_alias_two_modules_stay_distinct() {
         "an importer's hash must commit to the module it imported"
     );
 
-    // The direct `gem` binding is declared second, after the import
-    // whose own subtree binds the same alias to a different module.
+    // Crown's direct `gem` binding follows a subtree that reuses the alias.
     let crown_src = r#"
         fn ForgeCrown(action) {
             var setting = action.subaction("jeweler::SetStone");
@@ -1822,8 +1790,7 @@ fn test_same_alias_two_modules_stay_distinct() {
         )
         .expect("two modules under one alias is not a conflict");
 
-    // Two Gem classes, each keeping its own defining module: the first
-    // spliced up through jeweler (v1), the second from C's own binding.
+    // Both Gem outputs retain their defining module.
     let meta = crown
         .actions()
         .iter()
@@ -1839,8 +1806,7 @@ fn test_same_alias_two_modules_stay_distinct() {
         ]
     );
 
-    // And each resolves to that module, not to whichever one an alias
-    // lookup would have reached first.
+    // Class lookup uses the defining module rather than an alias.
     let gems: Vec<&ActionObjectRef> = meta
         .total_outputs()
         .filter(|object_ref| object_ref.class == "Gem")
@@ -1855,8 +1821,7 @@ fn test_same_alias_two_modules_stay_distinct() {
     );
     assert_ne!(gem_v1.class_hash("Gem"), gem_v2.class_hash("Gem"));
 
-    // Executing agrees: the alias in C's script means C's binding, and
-    // jeweler's means jeweler's.
+    // Execution resolves each alias in its declaring module.
     let state = TestState::default();
     let executor = crown.executor(true, grounding_witness(&state, &[]));
     let res = executor.action("ForgeCrown", vec![]).unwrap();
@@ -1879,9 +1844,7 @@ fn test_same_alias_two_modules_stay_distinct() {
     );
 }
 
-/// A spliced class prints as `<alias>@<batch prefix>::<Class>`: the
-/// alias is the readable half and the batch prefix is what actually
-/// tells two same-aliased modules apart.
+/// Include the alias and batch prefix when displaying an imported class.
 #[test]
 fn test_spliced_class_display_disambiguates() {
     let sdk = Sdk::default();
@@ -1916,9 +1879,7 @@ fn test_spliced_class_display_disambiguates() {
     );
 }
 
-/// Import alias validation, which every path into the loader shares.
-/// A rejected alias would otherwise reach the podlang render and fail
-/// pod2's parser, where there is no plugin name left to blame.
+/// Reject import aliases that cannot be emitted as unambiguous podlang names.
 #[test]
 fn test_import_alias_rejections() {
     let sdk = Sdk::default();
@@ -1941,8 +1902,7 @@ fn test_import_alias_rejections() {
         .load_module_from_src_actions(other_src, &["FindOre"], &[])
         .unwrap();
 
-    // Each script calls its imports so alias validation, not the
-    // unused-import check, is what rejects the load.
+    // Reference every import so these cases exercise alias validation.
     let one_import = r#"
         fn Dig(action) {
             var log = action.subaction("PLUGIN::FindLog");
@@ -1988,11 +1948,7 @@ fn test_import_alias_rejections() {
     }
 }
 
-/// A declared import no action calls loads (with a warning), and the
-/// asymmetry that makes it worth warning about: the `use module` line
-/// it emits is a load-time requirement, while the batch id -- a merkle
-/// root over the predicates -- is identical with or without it. The
-/// pin can be repointed without changing the module hash.
+/// An unused import is emitted but does not affect the predicate batch ID.
 #[test]
 fn test_unused_declared_import_is_not_in_the_module_hash() {
     let sdk = Sdk::default();
@@ -2033,8 +1989,7 @@ fn test_unused_declared_import_is_not_in_the_module_hash() {
     );
 }
 
-/// Two manifests importing each other fail resolution with a cycle
-/// error before any pin validation runs.
+/// Reject a cycle between two plugin manifests.
 #[test]
 fn test_import_cycle_rejected() {
     let manifest = |name: &str, dep: &str| -> Manifest {

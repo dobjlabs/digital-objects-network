@@ -338,10 +338,8 @@ impl BuildContext {
         }
     }
 
-    /// Apply a custom predicate from a named module rather than the first
-    /// module in `modules` that happens to define the name. Callers that
-    /// load several batches defining the same predicate names (e.g. two
-    /// plugins each with an `IsWood`) must name the owning module.
+    /// Apply a custom predicate from a specific module, avoiding ambiguous
+    /// predicate names across loaded modules.
     pub fn apply_custom_pred_in(
         &mut self,
         module: &Module,

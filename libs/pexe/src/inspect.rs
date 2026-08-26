@@ -35,10 +35,8 @@ fn txlib_event_hash(name: &str) -> Hash {
     Predicate::Custom(custom_ref).hash()
 }
 
-/// A plugin to inspect: a `.pexe` archive or a source directory
-/// (`manifest.toml` + `plugin.rhai`), plus any extra directories its
-/// declared `[[imports]]` should resolve against, searched ahead of
-/// [`crate::DEFAULT_OUT_DIR`] and the default install dir.
+/// A plugin archive or source directory to inspect, with optional dependency
+/// search paths.
 pub struct Target<'a> {
     pub path: &'a Path,
     pub deps: &'a [PathBuf],
@@ -50,9 +48,7 @@ impl<'a> Target<'a> {
     }
 }
 
-/// Read a target's manifest and script. Directories are read via
-/// `PluginSource::read`; anything else is treated as a `.pexe` archive
-/// and unpacked.
+/// Read a source directory or unpack a `.pexe` archive.
 fn read_target(path: &Path) -> Result<(Manifest, String)> {
     if path.is_dir() {
         let source = PluginSource::read(path)?;
@@ -64,25 +60,14 @@ fn read_target(path: &Path) -> Result<(Manifest, String)> {
     }
 }
 
-/// Compile a target's script with its manifest's action list and return
-/// the loaded SDK module.
+/// Compile an inspection target.
 ///
-/// An archive is a built artifact, so its manifest pins are enforced:
-/// the modules its imports resolve to must be the ones it was built
-/// against, and its script must still compile to its declared
-/// `module_hash`. Without that check, inspecting (or proving) an
-/// archive against a newer installed dependency silently describes a
-/// module that is not the one in the file. A source directory is
-/// mid-edit by definition -- `pexe build` is what stamps its pins --
-/// so it compiles against whatever its imports resolve to now.
+/// Archives are validated against their recorded module and import hashes.
+/// Source directories resolve imports by name because their pins may be stale.
 fn load_target(target: &Target<'_>) -> Result<std::rc::Rc<SdkModule>> {
     let (manifest, script) = read_target(target.path)?;
     let sdk = Sdk::default();
     let dep_dirs = crate::dep_search_dirs(target.deps, Path::new(crate::DEFAULT_OUT_DIR), None);
-    // Same split as the pin check below: an archive's pins are stamped,
-    // so they are what its imports resolve by, while a source dir's may
-    // be mid-edit and only its declared names can be trusted to find
-    // anything.
     if target.path.is_dir() {
         let imports = crate::resolve_manifest_imports(
             &sdk,
@@ -538,15 +523,8 @@ fn print_dep_graph(plan: &sdk::PlanData, aliases: &HashMap<Hash, String>) {
     }
 }
 
-/// Map each reachable module's batch hash to the alias the rendered
-/// podlang refers to it by (the tx_events batch -> `tx`, an imported
-/// plugin -> its name with `-` replaced by `_`). Used to qualify
-/// foreign predicate names in label rendering, so a label reads the
-/// same way the source dumped alongside it does. Transitively imported
-/// plugins are included: their predicates show up in a plan just as
-/// directly imported ones do, and an unqualified name would be
-/// indistinguishable from a locally defined predicate. The local
-/// module's own batch is absent, so its customs come out unprefixed.
+/// Map reachable imported batch IDs to their podlang aliases for rendering.
+/// Includes transitive imports and omits the local module.
 fn build_alias_map(module: &SdkModule) -> HashMap<Hash, String> {
     module.module_aliases()
 }

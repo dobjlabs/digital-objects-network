@@ -56,10 +56,8 @@ enum Cmd {
         #[arg(long)]
         check: bool,
 
-        /// Extra directories to search for already-built dependency pexes
-        /// (searched before the output dir and the install dir). A plugin's
-        /// [[imports]] resolve only against built archives: build the
-        /// dependency first.
+        /// Search these directories for built dependencies before the output
+        /// and install directories. Dependencies must be built first.
         #[arg(long)]
         deps: Vec<PathBuf>,
     },
@@ -81,11 +79,8 @@ struct InspectTarget {
     /// (containing `manifest.toml` and `plugin.rhai`).
     target: PathBuf,
 
-    /// Extra directories to search for the archives this plugin's
-    /// [[imports]] name (searched before the build output dir and the
-    /// install dir). An archive is checked against the pins it was
-    /// built with, so pointing this at the wrong build is an error
-    /// rather than a silently different module.
+    /// Search these directories for imported plugins before the build output
+    /// and install directories. Archives must match their manifest pins.
     #[arg(long)]
     deps: Vec<PathBuf>,
 }
@@ -251,9 +246,7 @@ fn main() -> Result<()> {
                 None
             };
             let dep_dirs = dep_search_dirs(&deps, &out_dir, target_install.as_deref());
-            // Read every source up front: `import_build_order` needs the
-            // declared import names before the first build, and build_one
-            // would otherwise read each dir a second time.
+            // Read all manifests before computing the dependency order.
             let mut sources = Vec::with_capacity(plugins.len());
             for plugin_dir in &plugins {
                 let source = PluginSource::read(plugin_dir)?;
@@ -379,14 +372,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Un-prefixed lowercase hex, the form manifests store.
+/// Format a hash as lowercase hex without a prefix, as stored in manifests.
 fn hash_hex(hash: Hash) -> String {
     format!("{hash:#}").trim_start_matches("0x").to_lowercase()
 }
 
-/// Decide whether a manifest pin needs stamping. `Ok(true)` means the
-/// caller should rewrite it; `--check` turns a mismatch into an error
-/// instead, since CI wants drift reported rather than fixed.
+/// Return whether a manifest hash must be updated, or report a mismatch in
+/// `--check` mode.
 fn needs_stamp(check: bool, what: &str, declared: Hash, real: Hash) -> Result<bool> {
     if declared == real {
         return Ok(false);
@@ -417,13 +409,10 @@ fn build_one(
     log::info!("building {}", source.root.display());
     let plugin_name = manifest.plugin.name.clone();
 
-    // Resolve declared imports against already-built archives. Each dep
-    // loads with its own pins enforced; the pins THIS manifest declares
-    // for them are stamped below, so a stale pin here is a rewrite, not
-    // an error.
+    // Dependencies are validated against their own manifests. This plugin's
+    // import pins are updated below.
     let sdk = Sdk::default();
-    // `DeclaredName`: this build is what brings the pins up to date,
-    // so it cannot find its dependencies by them.
+    // Source pins may be stale, so builds resolve dependencies by name.
     let imports = resolve_manifest_imports(&sdk, manifest, dep_dirs, ImportLookup::DeclaredName)?;
 
     let mut manifest_toml = source.manifest_toml.clone();

@@ -132,10 +132,8 @@ fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> R
     String::from_utf8(out).map_err(|err| anyhow!("entry {name} in pexe is not valid UTF-8: {err}"))
 }
 
-/// Compile the script against its manifest's action names. `imports` must
-/// hold the resolved module of every plugin the script sub-calls; the hash
-/// pins in the manifest are not consulted (this is the compile that produces
-/// the value they get stamped with).
+/// Compile a script with the manifest's actions and resolved imports.
+/// Manifest hash pins are not validated because this function computes them.
 pub fn compile_module(
     sdk: &Sdk,
     manifest: &Manifest,
@@ -147,10 +145,8 @@ pub fn compile_module(
         .map_err(|err| anyhow!("failed to compile plugin: {err}"))
 }
 
-/// `.pexe` files in `dir`, sorted by path. A directory that does not
-/// exist yields nothing; one that exists but cannot be read is an
-/// error, so a permission or I/O problem is never mistaken for "no
-/// plugins installed".
+/// Return the `.pexe` files in `dir`, sorted by path.
+/// A missing directory is empty; other directory errors are reported.
 pub fn pexe_paths_in(dir: &Path) -> Result<Vec<PathBuf>> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -170,9 +166,8 @@ pub fn pexe_paths_in(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
-/// Directories searched for already-built dependency pexes, in priority
-/// order (first match by plugin name wins): any explicit `extra` dirs,
-/// then the build output dir, then the install dir.
+/// Build the dependency search path: explicit directories, output directory,
+/// then install directory.
 pub fn dep_search_dirs(
     extra: &[PathBuf],
     out_dir: &Path,
@@ -188,25 +183,16 @@ pub fn dep_search_dirs(
     dirs
 }
 
-/// Unpack every readable `.pexe` under `dirs` into (manifest, script)
-/// sources for import resolution, in search-path order. Unreadable or
-/// malformed archives are skipped with a log warning so an unrelated
-/// broken pexe can't block building an import-free plugin.
+/// Read dependency candidates from `dirs` in search-path order.
+/// Unreadable or malformed archives are skipped with a warning.
 ///
-/// Candidates are not deduplicated here: two archives may claim one
-/// plugin name while only one of them declares the hash an importer
-/// pins, so dropping either would decide resolution before the resolver
-/// knows what is being looked up. [`sdk::ImportResolver`] indexes what
-/// it is given and lets the earliest candidate win per key, which is
-/// how an archive earlier in the search path shadows a later one by
-/// name without hiding it by hash.
+/// Candidates are not deduplicated because the resolver may select them by
+/// either name or hash. The first candidate for a given key wins.
 pub fn discover_dep_sources(dirs: &[PathBuf]) -> Vec<(Manifest, String)> {
     let mut sources = Vec::new();
     let dep_paths = dirs.iter().flat_map(|dir| {
         pexe_paths_in(dir).unwrap_or_else(|err| {
-            // Search dirs are speculative (a `target/pexe` that was
-            // never built, an install dir on a dead mount), so a bad
-            // one only removes its own candidates.
+            // A bad optional search directory does not block other candidates.
             log::warn!("skipping dependency search dir: {err}");
             Vec::new()
         })
@@ -222,17 +208,10 @@ pub fn discover_dep_sources(dirs: &[PathBuf]) -> Vec<(Manifest, String)> {
     sources
 }
 
-/// Order plugins so that one importing another in the same set builds
-/// after it: an importer resolves its `[[imports]]` from archives
-/// already on disk, and `examples/*` arrives alphabetically, which is
-/// not that order in general. Each entry is a plugin's name and the
-/// names it declares as imports; the returned indices are a build
-/// order over them.
+/// Return plugin indices in dependency-first build order.
 ///
-/// Imports naming a plugin outside the set are left alone: those
-/// resolve from a previously built or installed archive. A cycle among
-/// the given plugins is an error (the SDK's resolver would reject it
-/// later anyway, with less context to report).
+/// Imports outside `plugins` do not affect the order. Cycles and duplicate
+/// plugin names are rejected.
 pub fn import_build_order(plugins: &[(String, Vec<String>)]) -> Result<Vec<usize>> {
     let mut index_by_name: HashMap<&str, usize> = HashMap::new();
     for (idx, (name, _)) in plugins.iter().enumerate() {
@@ -255,8 +234,7 @@ enum Mark {
     Done,
 }
 
-/// Post-order visit for [`import_build_order`]: emit `idx` once every
-/// in-set plugin it imports has been emitted.
+/// Add `idx` after all of its in-set dependencies.
 fn visit_imports(
     idx: usize,
     plugins: &[(String, Vec<String>)],
@@ -286,17 +264,10 @@ fn visit_imports(
     Ok(())
 }
 
-/// Resolve a manifest's declared `[[imports]]` against already-built
-/// archives found in `dep_dirs`, in `manifest.imports` order. Each
-/// dependency is loaded with its own manifest validated (including its
-/// own import pins).
+/// Resolve a manifest's imports from built archives in `dep_dirs`.
 ///
-/// `lookup` decides how a declaration is matched to an archive.
-/// [`ImportLookup::Pin`] for anything reading a built artifact;
-/// [`ImportLookup::DeclaredName`] for `pexe build`, whose whole job is
-/// to bring those pins up to date and which therefore cannot resolve by
-/// them. Under `DeclaredName` the pin THIS manifest declares is the
-/// caller's business, since the build stamps it afterwards.
+/// Use [`ImportLookup::Pin`] for built artifacts and
+/// [`ImportLookup::DeclaredName`] while updating source manifests.
 pub fn resolve_manifest_imports(
     sdk: &Sdk,
     manifest: &Manifest,
@@ -376,9 +347,7 @@ pub fn set_manifest_import_hash(
     let imports = doc
         .get_mut("imports")
         .ok_or_else(|| anyhow!("manifest declares no imports"))?;
-    // `[[imports]]` tables and an inline `imports = [{ name = ... }]`
-    // array both deserialize into `Manifest::imports`, so either can be
-    // the form waiting to be stamped.
+    // Support both TOML forms accepted by `Manifest::imports`.
     let tables: Vec<&mut dyn toml_edit::TableLike> = match imports {
         toml_edit::Item::ArrayOfTables(tables) => tables
             .iter_mut()
@@ -563,9 +532,7 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
         let missing = std::path::Path::new("/definitely/not/here/actions");
         assert_eq!(pexe_paths_in(missing).unwrap(), Vec::<PathBuf>::new());
 
-        // A file where a directory is expected: exists, cannot be read
-        // as a dir. An empty listing here would look like "no plugins
-        // installed" rather than a broken actions dir.
+        // A non-directory path must report an error rather than appear empty.
         let mut file = std::env::temp_dir();
         file.push(format!("pexe-paths-in-{}.not-a-dir", std::process::id()));
         std::fs::write(&file, b"x").unwrap();
@@ -653,12 +620,8 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 
     const EXAMPLES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
 
-    /// Every example's committed `module_hash` (and every `[[imports]]`
-    /// pin) must match what its committed source compiles to. `pexe
-    /// build` rewrites a stale hash silently, and release CI builds
-    /// without `--check`, so without this the repo can carry a manifest
-    /// that no longer describes its own plugin -- which fails a catalog
-    /// load for anyone who installs the archive as committed.
+    /// Verify that committed example module hashes and import pins match their
+    /// sources. This catches drift that a normal build would rewrite.
     #[test]
     fn every_example_manifest_hash_is_current() {
         let mut sources: Vec<(Manifest, String)> = Vec::new();
@@ -677,8 +640,7 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
             sources.push((manifest, source.script));
         }
 
-        // Resolving from these same sources (rather than from built
-        // archives) is what makes the check about the committed state.
+        // Resolve from committed sources rather than previously built archives.
         let sdk = Sdk::default();
         let mut resolver = sdk::ImportResolver::new(
             &sdk,
@@ -689,9 +651,7 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
         );
         for (manifest, _) in &sources {
             let name = &manifest.plugin.name;
-            // Resolving by pin is itself part of the check: a committed
-            // `[[imports]]` hash that no example declares fails here,
-            // and compiling validates the rest.
+            // Pin lookup checks import pins; compilation checks module hashes.
             resolver
                 .load_pinned(manifest.plugin.module_hash)
                 .unwrap_or_else(|err| {

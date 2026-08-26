@@ -273,12 +273,9 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
 /// One sub-action call in the parent's body, with its synthesized
 /// private wildcard names + record-shape info for the call.
 struct SubActionCall {
-    /// Rendered callee: the bare predicate name for same-module subs,
-    /// `<alias>::<Action>` for imported ones.
+    /// Bare action name locally; `<alias>::<Action>` for an import.
     call_name: String,
-    /// Rendered io record type for the synthesized private wildcard:
-    /// `<Action>IO` locally, `<alias>::<Action>IO` for imports (record
-    /// types imported via `use module` resolve under the module alias).
+    /// IO record type, qualified by module alias for imports.
     io_schema: String,
     /// Name of the parent's synthesized private wildcard for the sub's
     /// `io` record
@@ -294,9 +291,7 @@ struct SubActionCall {
     first_out_entry: Option<String>,
 }
 
-/// Walk the parent action's Insts and gather one `SubActionCall` per
-/// `Inst::SubAction`. Looks up each sub's record shape from the loader's
-/// `actions_meta` or, for qualified names, from the imported module.
+/// Collect sub-action calls and their IO record metadata.
 fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubActionCall> {
     let mut calls = Vec::new();
     let mut idx_counter: HashMap<String, usize> = HashMap::new();
@@ -305,8 +300,7 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
             let (import, sub_meta) = loader
                 .resolve_sub_action_meta(target)
                 .expect("sub-action resolved during load");
-            // Wildcard names carry no `::` or `-`, so the podlang module
-            // alias doubles as the name-safe form of the import alias.
+            // Podlang aliases are also safe for synthesized wildcard names.
             let qualifier = import.map(|import| crate::podlang_alias(&import.alias));
             let (call_name, io_schema) = match &qualifier {
                 Some(alias) => (

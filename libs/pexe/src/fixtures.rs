@@ -30,17 +30,13 @@ pub fn mint_class(
     mint_with_signature(module, class_name, &signature)
 }
 
-/// Mint one synthetic instance per object ref. Class signatures are
-/// memoized so repeating a class (e.g. `[Wire, Wire, Steel]`) doesn't
-/// re-derive the same signature. A ref naming a defining plugin (a class
-/// spliced in from an imported sub-action) is derived and minted against
-/// that plugin's module.
+/// Mint one synthetic instance per object reference, using the class's
+/// defining module. Repeated class signatures are cached.
 pub fn mint_classes<'a>(
     module: &SdkModule,
     refs: impl IntoIterator<Item = &'a ActionObjectRef>,
 ) -> Result<Vec<pod2::middleware::containers::Dictionary>> {
-    // Keyed by the class's identity: its defining module's batch id
-    // plus its name, which is unique within that module.
+    // Class identity is the defining module's batch ID plus the class name.
     let mut cache: HashMap<(Hash, &str), crate::inspect::ClassSignature> = HashMap::new();
     let mut out = Vec::new();
     for object_ref in refs {

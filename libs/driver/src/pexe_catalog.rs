@@ -5,20 +5,13 @@
 //! `module_hash`). The compiled module is used to derive action/class hashes and
 //! the podlang source shown in the GUI.
 //!
-//! Classes and actions are keyed by [`QualifiedName`] (`<plugin>::<name>`
-//! when printed). Two plugins may declare a class or action with the same
-//! bare name; they stay distinct because every internal map keys on the full
-//! `QualifiedName` and because their on-chain `Is{class}` predicate hashes
-//! differ (each module has a unique `module_hash`). A plugin interacts with
-//! another plugin's classes only by declaring the plugin in its manifest's
-//! `[[imports]]` and calling its actions via `subaction("<plugin>::<Action>")`;
-//! plugins load in dependency order and an unresolvable or hash-mismatched
-//! import fails the whole catalog load.
+//! Classes and actions are keyed by [`QualifiedName`] (`<plugin>::<name>`), so
+//! plugins may reuse bare names. Cross-plugin operations use manifest imports
+//! and qualified `subaction` calls. Imports load in dependency order and are
+//! validated against their pinned module hashes.
 //!
-//! The compiled [`sdk::SdkModule`] is not kept on the catalog - it holds a
-//! `Rc<Engine>` and is therefore `!Send`. `execute_action` compiles from the
-//! stored script on demand and memoizes the result in a thread-local cache, so
-//! repeat runs of an action do not recompile the plugin and its imports.
+//! [`sdk::SdkModule`] is not `Send`, so execution uses a thread-local cache of
+//! modules compiled from the catalog's stored sources.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -92,10 +85,8 @@ impl PexeCatalog {
                     plugin.path.display()
                 )
             })?;
-            // Names have to stay unique because they address actions and
-            // classes for the user, and hashes because they are what an
-            // import resolves by: two archives declaring one hash would
-            // make which module an importer gets depend on scan order.
+            // Names address catalog entries; hashes address pinned imports.
+            // Duplicates would make either lookup ambiguous.
             if let Some(prior) = seen_plugin_names.insert(name.clone(), idx) {
                 return Err(anyhow!(
                     "duplicate plugin name {name:?}: already registered by {} (other entry at index {prior})",
@@ -114,12 +105,8 @@ impl PexeCatalog {
         let sdk = Sdk::default();
         let mut resolver = plugin_resolver(&sdk, &plugins);
 
-        // Batch id -> the name this catalog knows that module by, so a
-        // class spliced in from an import can be displayed under the
-        // installed plugin that defines it rather than under whatever
-        // alias some importer happened to bind. Loading here costs
-        // nothing extra: the resolver memoizes and the loop below asks
-        // for the same modules.
+        // Map defining modules to their catalog names for imported class refs.
+        // The resolver caches these modules for the loop below.
         let mut plugin_name_by_batch: HashMap<Hash, String> = HashMap::new();
         for plugin in &plugins {
             let plugin_name = plugin.manifest.plugin.name.clone();
@@ -187,9 +174,7 @@ impl PexeCatalog {
                 });
             }
 
-            // Build ActionSummary rows. Hidden actions are still recorded
-            // so their qualified name routes back to this plugin via
-            // execute_action.
+            // Hidden actions remain addressable even though list_actions omits them.
             let action_meta_by_name: HashMap<&str, &sdk::manifest::Action> = plugin
                 .manifest
                 .actions
@@ -207,11 +192,7 @@ impl PexeCatalog {
                 }
 
                 let meta = action_meta_by_name.get(bare.as_str());
-                // A class spliced in from an imported sub-action is
-                // defined by that sub-action's module, which the ref
-                // carries. `QualifiedName` is the display form and is
-                // only unique within this catalog, so the owner comes
-                // from the installed plugin whose batch matches.
+                // Attribute imported classes by defining batch, not local alias.
                 let resolve_class = |object_ref: &sdk::ActionObjectRef| -> Result<ClassRef> {
                     let (defining_batch, class) = module.class_identity(object_ref);
                     let owner = plugin_name_by_batch
@@ -324,11 +305,8 @@ impl PexeCatalog {
         self.plugins.len()
     }
 
-    /// The compiled module for `plugin`, taken from this thread's cache
-    /// when it is already there. Inserting drops any module no longer
-    /// installed, so a daemon that hot-reloads plugins keeps at most one
-    /// entry per installed archive rather than one per version ever
-    /// seen.
+    /// Return this thread's cached module, compiling it if necessary.
+    /// Cache entries for plugins no longer installed are removed.
     fn compiled_module(&self, plugin: &Plugin) -> Result<Rc<sdk::SdkModule>> {
         let plugin_name = plugin.manifest.plugin.name.as_str();
         let module_hash = plugin.manifest.plugin.module_hash;
@@ -403,21 +381,12 @@ impl ActionCatalog for PexeCatalog {
 }
 
 thread_local! {
-    /// Modules compiled by `execute_action`, keyed by the `module_hash`
-    /// their manifest declared, which loading validated against the
-    /// compiled batch. A module holds an `Rc<Engine>`, so it cannot live
-    /// in the catalog itself; keeping it per thread still spares every
-    /// later run of the same action a podlang compile of the plugin
-    /// *and its whole transitive import chain*.
+    /// Per-thread module cache, keyed by validated manifest hash.
     static COMPILED_MODULES: std::cell::RefCell<HashMap<Hash, Rc<sdk::SdkModule>>> =
         std::cell::RefCell::new(HashMap::new());
 }
 
-/// Resolver over the installed plugins: each loads once, dependencies
-/// before importers, with cycles and hash-pin mismatches rejected.
-/// Every installed archive was produced by a build, so its pins are
-/// stamped and are what imports resolve by; a plugin's claimed name
-/// reaches nothing here.
+/// Create a hash-based resolver for installed plugins.
 fn plugin_resolver<'a>(sdk: &'a Sdk, plugins: &'a [Plugin]) -> sdk::ImportResolver<'a> {
     sdk::ImportResolver::new(
         sdk,
@@ -677,9 +646,7 @@ description = "consume a Foo to make a Bar"
         pack_stamped(&template, script, &[])
     }
 
-    /// Compile a synthetic plugin, stamp its manifest's `module_hash`
-    /// (and any `[[imports]]` pins) the way `pexe build` would, and pack
-    /// it, so the catalog's manifest validation passes.
+    /// Compile, stamp, and pack a synthetic plugin.
     fn pack_stamped(template: &str, script: &str, imports: &[sdk::ModuleImport]) -> Vec<u8> {
         let manifest: sdk::manifest::Manifest =
             toml::from_str(template).expect("synthetic manifest parses");
@@ -866,8 +833,7 @@ fn WrapFoo(action) {
 }
 "#;
 
-    /// Load a plugin from packed bytes, resolving its imports among the
-    /// other packed plugins given.
+    /// Load a plugin and its imports from packed test fixtures.
     fn load_packed(sdk: &Sdk, name: &str, packed: &[&[u8]]) -> std::rc::Rc<sdk::SdkModule> {
         let sources: Vec<(sdk::manifest::Manifest, String)> = packed
             .iter()
@@ -889,10 +855,7 @@ fn WrapFoo(action) {
         .unwrap_or_else(|err| panic!("{name} loads: {err}"))
     }
 
-    /// Pack a gamma plugin importing the given built alpha archive, with
-    /// both the import pin and the module hash stamped the way `pexe
-    /// build` would. The placeholder pin exercises
-    /// `set_manifest_import_hash`.
+    /// Pack `gamma` with a correctly stamped import of `alpha`.
     fn gamma_plugin_bytes(alpha_bytes: &[u8]) -> Vec<u8> {
         let sdk = Sdk::default();
         let alpha_module = load_packed(&sdk, "alpha", &[alpha_bytes]);
@@ -987,10 +950,7 @@ description = "run alpha::MakeFoo and box the result"
         assert_eq!(box_type, decode_hash_hex(&gamma_box.hash).unwrap());
     }
 
-    /// The shipped craft-totem example end to end through the catalog:
-    /// its stamped manifest pins resolve against the shipped
-    /// craft-basics, and CraftTotem consumes a grounded Log through the
-    /// imported CraftWood sub-action.
+    /// Run the committed craft-totem and craft-basics examples together.
     #[test]
     fn test_craft_totem_example_runs() {
         let basics_bytes = test_plugin_bytes();
@@ -1044,14 +1004,12 @@ description = "run alpha::MakeFoo and box the result"
         );
     }
 
-    /// Claiming a dependency's name gets an archive nowhere: imports
-    /// resolve by pin, so an impostor is not consulted and then
-    /// rejected, it is never a candidate at all.
+    /// A matching plugin name cannot satisfy an import with a different pin.
     #[test]
     fn test_cross_plugin_name_impostor_is_not_reachable() {
         let alpha = synthetic_plugin_bytes("alpha", ALPHA_SCRIPT);
         let gamma = gamma_plugin_bytes(&alpha);
-        // Same claimed name, different script, honestly stamped.
+        // Same declared name, different script and module hash.
         let impostor_alpha = synthetic_plugin_bytes("alpha", BETA_SCRIPT);
         let err = PexeCatalog::from_bytes(
             [
@@ -1069,15 +1027,12 @@ description = "run alpha::MakeFoo and box the result"
         );
     }
 
-    /// The declared `[plugin] module_hash` is only an index into the
-    /// installed archives. An archive that declares the hash an importer
-    /// pins but compiles to something else is caught when it compiles.
+    /// Reject an archive whose script does not match its declared module hash.
     #[test]
     fn test_cross_plugin_lying_declared_hash_fails_catalog() {
         let alpha = synthetic_plugin_bytes("alpha", ALPHA_SCRIPT);
         let gamma = gamma_plugin_bytes(&alpha);
-        // Alpha's manifest, so it declares alpha's hash and gamma's pin
-        // finds it, over beta's script, which compiles to another batch.
+        // Pair alpha's manifest with beta's script to create a hash mismatch.
         let (alpha_manifest, _) = pexe::unpack_raw(&alpha).expect("alpha unpacks");
         let liar = pexe::pack(&alpha_manifest, BETA_SCRIPT).expect("pack liar");
         let err = PexeCatalog::from_bytes(

@@ -188,65 +188,42 @@ fn CraftTotem(action) {
 }
 ```
 
-Bare `subaction` names always mean this module; a qualified one must name an
-alias this manifest declares. An alias belongs to the binding that declares
-it: it resolves against this module's own imports and nowhere else, so two
-plugins may bind the same alias to different modules, and a module has no
-name of its own that the SDK ever resolves. The compiled podlang imports the
-dependency's batch (`use module <hash> as craft_basics`) and calls its
-predicate directly, so the importer's `module_hash` transitively commits to
-the exact imported module: change the dependency, and the importer's own
-hash changes.
+Bare `subaction` names refer to the current module. Qualified names must use an
+alias declared by the current plugin; the same alias may refer to a different
+module in another plugin. The generated podlang imports the dependency by batch
+hash, so changing the dependency also changes the importer's `module_hash`.
 
-The sub-action's inputs and outputs splice into the caller's totals at the
-position of the call, and its Rhai body executes inline against the shared
-transaction at execute time. Produced objects come back in that same order,
-so `total_outputs` and the executed action's outputs line up by index.
+The sub-action executes in the caller's transaction. Its inputs and outputs are
+inserted into the caller's totals at the call site, preserving the order used
+to pair `total_outputs` with executed outputs.
 
 ## What identifies an imported class
 
-A spliced class is identified by `(defining module batch id, class name)`: a
-batch id is globally unique, and a class name is unique within its module.
-`ActionObjectRef::defining` carries the defining module itself, so
-`SdkModule::class_module` and `class_identity` resolve a ref without
-consulting an alias and cannot reach the wrong module. Such a ref renders as
-`<alias>@<batch prefix>::<Class>` (`craft-basics@d7edcb91::Log`): the alias
-is the readable half, the prefix is what tells two same-aliased modules
-apart.
+An imported class is identified by its defining module's batch ID and its class
+name, not by an import alias. `ActionObjectRef::defining` retains that module;
+`SdkModule::class_module` and `class_identity` use it directly. Displayed class
+references include both the alias and a batch ID prefix, for example
+`craft-basics@d7edcb91::Log`.
 
 ## How an import is resolved
 
-`ImportResolver` matches each declaration to one of the candidate plugins it
-was built over, one of two ways (`ImportLookup`):
+`ImportResolver` supports two lookup modes:
 
-- `Pin` matches `[[imports]] module_hash` against each candidate's declared
-  `[plugin] module_hash`. Everything reading a built artifact resolves this
-  way: the driver's catalog, and `pexe inspect` on a `.pexe`. A plugin's
-  claimed name reaches nothing.
-- `DeclaredName` matches `[[imports]] name` against each candidate's declared
-  plugin name. Only `pexe build` uses it (and `pexe inspect` on a source
-  directory), because a build exists to *produce* the pins and so cannot look
-  them up: on a first build the pin is a placeholder, and after a dependency
-  is edited it names the previous module.
+- `Pin` matches `[[imports]].module_hash`. The driver and archive inspection
+  use this mode for built artifacts.
+- `DeclaredName` matches `[[imports]].name`. Builds and source inspection use
+  this mode because source pins may be placeholders or stale.
 
-Either way the index is untrusted. It only decides which candidate to
-compile; `load_module_from_src_manifest` then checks that the candidate
-compiles to the hash its own manifest declares, and that every declared
-import matches its pin. Each candidate loads at most once, dependencies
-before importers, and cycles are rejected.
+In either mode, the match only selects a candidate. Compilation verifies its
+declared module hash and import pins. Dependencies load before importers, each
+candidate loads once, and cycles are rejected.
 
-A declared import that no action calls loads with a warning. It still emits a
-`use module` line, so the archive requires that dependency to be installed,
-while contributing no predicate: the batch id is identical with it, without
-it, or with its pin repointed elsewhere.
+An unused import loads with a warning. It still creates a runtime dependency,
+but contributes no predicate and therefore does not affect the batch ID.
 
-Foreign classes are closed: `input`/`output`/`mutate` reject qualified
-class names. An importer cannot insert, mutate, or delete another plugin's
-objects directly — each class's replay guard enumerates only the defining
-plugin's actions — so cross-plugin interaction happens by running the
-defining plugin's actions and reading their outputs. Anything more (e.g.
-consuming a foreign object as an ingredient) needs the defining plugin to
-export an action for it.
+Foreign classes are closed: `input`, `output`, and `mutate` reject qualified
+class names. Plugins interact with foreign objects through actions exported by
+the defining plugin, whose replay guard controls valid state transitions.
 
 # Missing features
 
