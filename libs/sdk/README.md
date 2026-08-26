@@ -110,10 +110,15 @@ One limit is worth knowing before reaching for these:
 
 A Rhai array promotes to a pod2 Array and a Rhai object map to a pod2
 Dictionary, at any depth, wherever a statement takes a value. Rhai has no set
-of its own, so `action.set_of([...])` is what names a Set. Every element has to
-be a literal -- an integer, a string, a bool, or a nested container -- because
-the container is embedded in the predicate at Load time, so a `var` element is
+of its own, so `set_of([...])` is what names a Set. Every element has to be a
+literal -- an integer, a string, a bool, or a nested container -- because the
+container is embedded in the predicate at Load time, so a `var` element is
 rejected rather than standing for whatever it holds at exec time.
+
+`set_of` builds a value and reads no action state, so it is a plain function
+rather than a method on `action`. That is what lets a script function holding
+a table call it without taking `action` as a parameter, which is most of what
+a table lives in a script function for.
 
 `action.dict_get(dict, key)` and `action.array_get(array, index)` bind what the
 container holds there and emit the matching `DictContains` / `ArrayContains`

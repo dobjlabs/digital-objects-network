@@ -1450,7 +1450,7 @@ fn test_literal_set_membership() {
         fn AssertGrade(action) {
             var ore = action.input("Ore");
             var metal = action.output("Metal");
-            action.st_set_contains(action.set_of([3, 5, 7]), ore.grade);
+            action.st_set_contains(set_of([3, 5, 7]), ore.grade);
         }
 "#;
     let sdk = Sdk::default();
@@ -1638,7 +1638,7 @@ fn test_var_names_a_literal() {
             var ore = action.input("Ore");
             var metal = action.output("Metal");
             var tiers = #{"small": #{"cost": 1}, "large": #{"cost": 9}};
-            var grades = action.set_of([3, 5, 7]);
+            var grades = set_of([3, 5, 7]);
             var floor = 1;
             var tier = action.dict_get(tiers, "small");
             action.st_set_contains(grades, ore.grade);
@@ -1717,21 +1717,20 @@ fn test_object_get_emits_a_lookup() {
     apply_tx(&mut state, &metal_tx);
 }
 
-/// A field read off a literal that holds no fields is a script error,
-/// not a panic: only a dictionary has entries to name.
+/// Rejects field access on non-dictionary literals without panicking.
 #[test]
 fn test_field_read_on_non_dict_literal_rejected() {
     let craft_src = r#"
         fn BadRead(action) {
             var ore = action.input("Ore");
-            action.st_gt(action.set_of([1, 2]).x, 0);
+            action.st_gt(set_of([1, 2]).x, 0);
         }
 "#;
     let err = match Sdk::default().load_module_from_src_actions(craft_src, &["BadRead"]) {
         Ok(_) => panic!("expected a field read on a set literal to be rejected"),
         Err(err) => err.to_string(),
     };
-    assert!(err.contains("not a dictionary"), "{err}");
+    assert!(err.contains("'x'") && err.contains("Set"), "{err}");
 }
 
 /// Replays a lookup against the object's pre-update value.
@@ -1981,7 +1980,7 @@ fn test_ambiguous_nested_container_renders_as_commitment() {
     let craft_src = r#"
         fn Probe(action) {
             var ore = action.input("Ore");
-            action.st_array_contains([action.set_of([0]), [0]], 0, 1);
+            action.st_array_contains([set_of([0]), [0]], 0, 1);
             action.st_array_contains([[7], #{"a": 1}], 1, 2);
         }
 "#;
@@ -2013,7 +2012,7 @@ fn test_var_array_get_and_var_set_contains() {
         fn AssertGrade(action) {
             var ore = action.input("Ore");
             var metal = action.output("Metal");
-            var table = #{"rows": [7, 5], "allowed": action.set_of([3, 5, 7])};
+            var table = #{"rows": [7, 5], "allowed": set_of([3, 5, 7])};
             var rows = action.dict_get(table, "rows");
             var allowed = action.dict_get(table, "allowed");
             action.st_array_contains(rows, 1, ore.grade);

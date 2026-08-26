@@ -1653,19 +1653,6 @@ impl ActionHandle {
         }
         Ok(ArgHandle::new(self.clone(), key))
     }
-    /// Build a Set out of the elements of a Rhai array. Rhai has no set
-    /// of its own, so a bare array promotes to an Array and this is the
-    /// only way to name a Set.
-    fn set_of(self, elements: Dynamic) -> RuntimeResult<ArgHandle> {
-        let elements = elements
-            .try_cast::<rhai::Array>()
-            .ok_or::<Box<EvalAltResult>>("set_of: expected an array of elements".into())?;
-        let elements = HashSet::from_iter(literals_from_rhai_array(elements)?);
-        Ok(ArgHandle::literal(
-            self.clone(),
-            Value::from(Set::new(elements)),
-        ))
-    }
     /// Returns the dictionary entry at `key` and emits `DictContains`.
     fn dict_get(self, dict: Dynamic, key: Dynamic) -> RuntimeResult<ArgHandle> {
         self.container_get(NativePredicate::DictContains, dict, key)
@@ -2123,6 +2110,18 @@ fn _try_value_from_dynamic(v: Dynamic) -> ValueCast {
         Err(v) => v,
     };
     ValueCast::Other(v)
+}
+
+/// Constructs a pod2 `Set` from a Rhai array.
+///
+/// This is a free function because it does not access action state.
+fn set_of(elements: Dynamic) -> RuntimeResult<Set> {
+    let elements = elements
+        .try_cast::<rhai::Array>()
+        .ok_or::<Box<EvalAltResult>>("set_of: expected an array of elements".into())?;
+    Ok(Set::new(HashSet::from_iter(literals_from_rhai_array(
+        elements,
+    )?)))
 }
 
 /// Converts the literal elements of a Rhai array to pod2 values.
@@ -3175,6 +3174,8 @@ fn new_engine() -> Engine {
         .unwrap();
 
     engine
+        .register_type_with_name::<Set>("Set")
+        .register_fn("set_of", set_of)
         .register_type_with_name::<ActionHandle>("ActionContext")
         .register_fn("output", ActionHandle::output)
         .register_fn("input", ActionHandle::input)
@@ -3185,7 +3186,6 @@ fn new_engine() -> Engine {
         .register_fn("intro_lt_eq_u256", ActionHandle::intro_lt_eq_u256)
         .register_fn("pow_obj_grind", ActionHandle::pow_obj_grind)
         .register_fn("top_limb_u256", ActionHandle::top_limb_u256)
-        .register_fn("set_of", ActionHandle::set_of)
         .register_fn("dict_get", ActionHandle::dict_get)
         .register_fn("array_get", ActionHandle::array_get)
         .register_type_with_name::<ArgHandle>("ArgContext")
