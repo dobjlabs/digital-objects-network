@@ -1,12 +1,8 @@
-//! What an action's own statements demand of each object's fields, read
-//! off the Load-time instruction list.
+//! Static analysis of field constraints and writes extracted from the action's
+//! Load-time instruction list.
 //!
-//! The compiled custom predicates are a poor source for this. Lowering
-//! splits an action across a chain of helper predicates and renames as it
-//! goes, so one object's writes scatter under several local names and
-//! repeated slots of one class stop being distinguishable. The `Inst`
-//! list is upstream of that: it still names each object variable and each
-//! field as the script wrote them, so nothing has to be recovered.
+//! Inspects the unlowered `Inst` list to preserve original variable and field names
+//! across helper predicates and sub-actions.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -16,7 +12,7 @@ use pod2::middleware::{NativePredicate, Value};
 
 use crate::{ActionContext, Inst, Intro, Ref, Var, VarOrValue, arg_is_int};
 
-/// A literal an action ties a field to.
+/// Literal value constraint for a field.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Pin {
     Int(i64),
@@ -24,8 +20,7 @@ pub enum Pin {
 }
 
 impl fmt::Display for Pin {
-    /// As a plugin author would have written it. Goes through pod2's
-    /// value formatting so a string with a quote in it stays readable.
+    /// Formats the literal value matching pod2 value representation.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Int(v) => Value::from(*v).fmt(f),
@@ -34,13 +29,12 @@ impl fmt::Display for Pin {
     }
 }
 
-/// The crypto an action applies to an object's identity.
+/// Cryptographic identity constraints applied to an object.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ObjectIdentity {
-    /// A VDF intro constrains the object or a field of it.
+    /// Constrained by a VDF intro.
     pub vdf: bool,
-    /// An lt_eq_u256 intro constrains the object or a field of it, which
-    /// is how a script gates minting on proof of work.
+    /// Constrained by a proof-of-work (`lt_eq_u256`) intro.
     pub proof_of_work: bool,
 }
 
@@ -48,28 +42,23 @@ impl ObjectIdentity {
     pub fn is_constrained(&self) -> bool {
         self.vdf || self.proof_of_work
     }
-    /// Fold in another action's view of the same object.
+    /// Merges identity constraints from another object reference.
     pub fn absorb(&mut self, other: Self) {
         self.vdf |= other.vdf;
         self.proof_of_work |= other.proof_of_work;
     }
 }
 
-/// What an action's statements say about one field of one object.
-///
-/// Facts only. Choosing a value that satisfies them, and reporting when
-/// none can, belongs to whoever is building the value.
+/// Constraints and type requirements imposed on a field by an action.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FieldFacts {
-    /// Values the statements pin the field to. More than one is a
-    /// contradiction no input can satisfy.
+    /// Literal values this field is constrained to equal.
     pub pinned: BTreeSet<Pin>,
-    /// Greatest lower bound the statements place on the field.
+    /// Minimum allowed integer value.
     pub min: Option<i64>,
-    /// Set when the statements force other fields to hold the same
-    /// value; every member of one equality group carries the same id.
+    /// Identifier of the equality group if this field is coupled with other fields.
     pub group: Option<String>,
-    /// The field appears where an integer is required.
+    /// Whether the field is used in an integer context.
     pub integer: bool,
 }
 
@@ -80,9 +69,7 @@ impl FieldFacts {
     fn floor(&mut self, min: i64) {
         self.min = Some(self.min.map_or(min, |cur| cur.max(min)));
     }
-    /// Merge facts the statements force to be equal. Only values belong
-    /// here: an equality says two fields hold the same value, so a
-    /// requirement on one is a requirement on both.
+    /// Merges constraints from an equal field.
     fn absorb(&mut self, other: &Self) {
         self.pinned.extend(other.pinned.iter().cloned());
         if let Some(m) = other.min {
@@ -92,18 +79,12 @@ impl FieldFacts {
     }
 }
 
-/// What an action puts into one field of the object it leaves behind.
-///
-/// Deliberately separate from [`FieldFacts`]: an equality between two
-/// fields says they hold the same value, which is a fact about the value
-/// and so propagates, whereas a write lands in one named slot and does
-/// not. Folding these through the equality groups would attribute one
-/// field's write to every field equal to it.
+/// Values written to an object field by an action.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FieldWrites {
-    /// Literals the action writes into the field.
+    /// Literal values written to the field.
     pub values: BTreeSet<Pin>,
-    /// The field is written from the output of a VDF intro.
+    /// Whether the field is populated from a VDF output.
     pub from_vdf: bool,
 }
 
@@ -111,15 +92,14 @@ impl FieldWrites {
     fn write(&mut self, value: Pin) {
         self.values.insert(value);
     }
-    /// Fold in another action's writes to the same field of the same class.
+    /// Merges field write records from another action.
     pub fn absorb(&mut self, other: &Self) {
         self.values.extend(other.values.iter().cloned());
         self.from_vdf |= other.from_vdf;
     }
 }
 
-/// One field of one object: what the action requires of the state it
-/// consumes, and what it writes into the state it leaves behind.
+/// Combined constraint requirements and write records for a single field.
 #[derive(Debug)]
 pub struct FieldEntry {
     pub name: Box<str>,
@@ -127,7 +107,7 @@ pub struct FieldEntry {
     pub writes: FieldWrites,
 }
 
-/// Everything the walk learns about one object, sorted by field name.
+/// Field entries for an object, sorted by field name.
 pub(crate) type ObjectFields = Rc<[FieldEntry]>;
 
 pub(crate) struct ObjectRequirements {
@@ -169,8 +149,7 @@ fn term(r: &Ref) -> Term {
 
 type FieldKey = (String, String);
 
-/// Union-find over `(object, field)` pairs that statements force to be
-/// equal.
+/// Disjoint-set union tracking coupled `(object, field)` equality groups.
 #[derive(Default)]
 struct Dsu {
     parent: HashMap<FieldKey, FieldKey>,
@@ -188,8 +167,7 @@ impl Dsu {
                 return cur;
             }
             let up = up.clone();
-            // Path halving: point at the grandparent as we walk, so a
-            // long equality chain flattens instead of being rewalked.
+            // Path halving to compress equality chains.
             if let Some(grand) = self.parent.get(&up).cloned() {
                 self.parent.insert(cur.clone(), grand);
             }
@@ -199,16 +177,14 @@ impl Dsu {
     fn union(&mut self, a: &FieldKey, b: &FieldKey) {
         let (ra, rb) = (self.find(a), self.find(b));
         if ra != rb {
-            // Keep the smaller root so the group id is stable across runs.
+            // Preserve the smaller key to ensure deterministic group IDs.
             let (keep, drop) = if ra < rb { (ra, rb) } else { (rb, ra) };
             self.parent.insert(drop, keep);
         }
     }
 }
 
-/// Facts about every object the action declares, keyed by script-side
-/// variable name. `action` namespaces the group ids so that splicing a
-/// sub-action's facts into a caller cannot collide.
+/// Extracts field constraints and writes for all objects declared by `action`.
 pub(crate) fn object_facts(
     action: &str,
     ctx: &ActionContext,
@@ -220,8 +196,7 @@ pub(crate) fn object_facts(
     let mut facts: HashMap<FieldKey, FieldFacts> = HashMap::new();
     let mut writes: HashMap<FieldKey, FieldWrites> = HashMap::new();
     let mut dsu = Dsu::default();
-    // Statements are replayed after the walk, because a bound on a field
-    // is only known once every bound on the locals feeding it is.
+    // Defer statement evaluation until all local variable bounds are collected.
     let mut statements: Vec<(NativePredicate, Vec<Term>)> = Vec::new();
     let mut local_min: HashMap<String, i64> = HashMap::new();
 
@@ -242,13 +217,9 @@ pub(crate) fn object_facts(
                     touched.entry(obj.clone()).or_default().insert(key.clone());
                     let value = term(value);
                     touch(&mut touched, &value);
-                    // Only an Output can be `set`, so this is never an
-                    // input's own value; it matters because an equality
-                    // can carry it to one.
                     let target = (obj.clone(), key.clone());
                     intros.note_write(&mut writes, &target, &value);
-                    // A `set` literal is also a requirement, because an
-                    // equality can carry it to a field of an input.
+                    // Record `set` literal as a requirement in case equality propagates it to an input.
                     match value {
                         Term::Int(v) => facts.entry(target).or_default().pin(Pin::Int(v)),
                         Term::Str(t) => facts.entry(target).or_default().pin(Pin::Text(t)),
@@ -260,8 +231,7 @@ pub(crate) fn object_facts(
             Inst::Update {
                 obj, key, value, ..
             } => {
-                // The written value is the object's next state, not a
-                // constraint on the one the caller supplies.
+                // Record write for next state without constraining input.
                 touched.entry(obj.clone()).or_default().insert(key.clone());
                 let value = term(value);
                 touch(&mut touched, &value);
@@ -297,8 +267,7 @@ pub(crate) fn object_facts(
         apply(*pred, terms, &local_min, &mut facts, &mut dsu);
     }
 
-    // Fold each equality group into one set of facts, then hand every
-    // member the same answer.
+    // Aggregate constraints for each equality group and apply to all members.
     let mut groups: HashMap<FieldKey, FieldFacts> = HashMap::new();
     let mut members: HashMap<FieldKey, usize> = HashMap::new();
     let keys: Vec<FieldKey> = facts
@@ -358,17 +327,12 @@ pub(crate) fn object_facts(
     out
 }
 
-/// What the action's intro calls say about its objects, gathered before
-/// the main walk.
-///
-/// The pre-pass is load-bearing for `pow_values`: `intro_lt_eq_u256`
-/// takes refs that already exist, so a script may write an intro-bounded
-/// value into a field before the intro itself appears in the list.
+/// Pre-pass state tracking intro calls and identity constraints.
 #[derive(Default)]
 struct IntroFacts {
-    /// Locals holding a VDF's output.
+    /// Local variables holding VDF outputs.
     vdf_outputs: HashSet<String>,
-    /// Locals an lt_eq_u256 bounds, which gate identity once written in.
+    /// Local variables constrained by `lt_eq_u256`.
     pow_values: HashSet<String>,
     identity: HashMap<String, ObjectIdentity>,
 }
@@ -403,9 +367,7 @@ impl IntroFacts {
         out
     }
 
-    /// Record a write, and the identity it constrains when the value came
-    /// from an intro. A script gates an object's identity by writing the
-    /// intro's result into it, so the two are one observation.
+    /// Records a field write and updates identity constraints if the value originated from an intro.
     fn note_write(
         &mut self,
         writes: &mut HashMap<FieldKey, FieldWrites>,
@@ -433,9 +395,7 @@ impl IntroFacts {
     }
 }
 
-/// The floor a comparison puts on a plain local, so the
-/// `remainder = field - k` idiom can become a bound on the field.
-/// `Gt(v0, v1)` reads `v0 > v1`.
+/// Extracts lower bounds on local variables from comparison statements.
 fn local_floor(pred: NativePredicate, terms: &[Term]) -> Option<(String, i64)> {
     use NativePredicate::*;
     match (pred, terms) {
@@ -445,8 +405,7 @@ fn local_floor(pred: NativePredicate, terms: &[Term]) -> Option<(String, i64)> {
         (GtEq, [Term::Local(l), Term::Int(m)]) | (LtEq, [Term::Int(m), Term::Local(l)]) => {
             Some((l.clone(), *m))
         }
-        // Qualified because the glob import above brings a `None`
-        // predicate variant into scope.
+        // Explicit `Option::None` to disambiguate from `NativePredicate::None`.
         _ => Option::None,
     }
 }
@@ -464,14 +423,14 @@ fn apply(
         facts.entry((v.clone(), f.clone())).or_default().pin(value);
     };
     match (pred, terms) {
-        // `Sum(v0, v1, v2)` asserts `v2 = v0 + v1`.
+        // Sum constraint: v2 = v0 + v1.
         (Sum, [Term::Field(v, f), Term::Int(b), Term::Int(c)]) => pin(v, f, Pin::Int(c - b)),
         (Sum, [Term::Int(a), Term::Field(v, f), Term::Int(c)]) => pin(v, f, Pin::Int(c - a)),
         (Sum, [Term::Int(a), Term::Int(b), Term::Field(v, f)]) => pin(v, f, Pin::Int(a + b)),
         (Equal, [Term::Field(v, f), Term::Int(k)]) | (Equal, [Term::Int(k), Term::Field(v, f)]) => {
             pin(v, f, Pin::Int(*k))
         }
-        // `field = local + k`, bounded by whatever bounds the local.
+        // Lower bound derived from local variable: field = local + k.
         (Sum, [Term::Local(l), Term::Int(k), Term::Field(v, f)])
         | (Sum, [Term::Int(k), Term::Local(l), Term::Field(v, f)]) => {
             if let Some(lo) = local_min.get(l) {
@@ -481,13 +440,13 @@ fn apply(
                     .floor(lo + k);
             }
         }
-        // One field is the other plus zero, so the two are equal.
+        // Equality between two fields.
         (Sum, [Term::Field(v1, f1), Term::Int(0), Term::Field(v2, f2)])
         | (Sum, [Term::Int(0), Term::Field(v1, f1), Term::Field(v2, f2)])
         | (Equal, [Term::Field(v1, f1), Term::Field(v2, f2)]) => {
             dsu.union(&(v1.clone(), f1.clone()), &(v2.clone(), f2.clone()))
         }
-        // A field compared straight against a literal floor.
+        // Direct lower bound comparison.
         (Gt, [Term::Field(v, f), Term::Int(m)]) | (Lt, [Term::Int(m), Term::Field(v, f)]) => facts
             .entry((v.clone(), f.clone()))
             .or_default()
@@ -495,7 +454,7 @@ fn apply(
         (GtEq, [Term::Field(v, f), Term::Int(m)]) | (LtEq, [Term::Int(m), Term::Field(v, f)]) => {
             facts.entry((v.clone(), f.clone())).or_default().floor(*m)
         }
-        // `DictContains(obj, "f", value)` pins or couples `obj.f`.
+        // Dictionary contains constraint.
         (Contains | DictContains, [Term::Local(o), Term::Str(k), rest]) => match rest {
             Term::Int(v) => pin(o, k, Pin::Int(*v)),
             Term::Str(t) => pin(o, k, Pin::Text(t.clone())),
@@ -511,7 +470,7 @@ mod tests {
     use super::*;
     use crate::Sdk;
 
-    /// Requirements and writes for one object of one action, by field.
+    /// Returns field constraints and writes for a given action and object variable.
     fn facts_for(src: &str, action: &str, var: &str) -> Vec<(String, FieldFacts, FieldWrites)> {
         let module = Sdk::default()
             .load_module_from_src_actions(src, &[action])
@@ -601,8 +560,7 @@ mod tests {
         );
     }
 
-    /// An equality shares a value between two fields, so a requirement on
-    /// one binds both. A write does not: it lands in one named slot.
+    /// Verifies that equality propagates field constraints without propagating writes.
     #[test]
     fn equality_shares_requirements_but_not_writes() {
         let all = facts_for(

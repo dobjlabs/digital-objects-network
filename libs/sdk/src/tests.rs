@@ -1303,11 +1303,7 @@ fn test_set_guards() {
     }
 }
 
-/// Reading or writing a field an input object doesn't carry is caller
-/// data, not an SDK invariant, so it has to surface as a script error.
-/// These used to abort the process: the missing-key `expect`s sat behind
-/// rhai's native-call boundary, and one of them unwound through a
-/// destructor that panics again, turning the abort non-catchable.
+/// Verifies that accessing or updating an absent field returns a runtime error rather than panicking.
 #[test]
 fn test_missing_field_is_an_error_not_a_panic() {
     let _ = env_logger::builder().is_test(true).try_init();

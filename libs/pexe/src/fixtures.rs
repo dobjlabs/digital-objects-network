@@ -1,9 +1,9 @@
-//! Synthetic input fixtures and grounded state for driving the SDK
-//! against arbitrary actions without real chain state.
+//! Synthetic input fixtures and grounded state for executing SDK actions
+//! without live chain state.
 //!
-//! Used by `pexe inspect plan` (and reusable in unit tests). Mock mode
-//! must be set on the `Executor` since the synthetic Merkle proofs are
-//! structurally valid but the surrounding chain history is fabricated.
+//! Used by `pexe inspect plan` and unit tests. Mock mode must be enabled
+//! on the `Executor` because synthetic Merkle proofs are structurally valid
+//! but do not correspond to real chain history.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -14,14 +14,13 @@ use pod2utils::{dict, rand_raw_value};
 use sdk::{ActionMeta, ActionObjectRef, FieldFacts, Pin, SdkModule, SpendableObject};
 use txlib::{GroundingWitness, STABLE_IDENTIFIER_FIELD, StateHeader, with_stable_identifier};
 
-/// Mint one synthetic instance for each object `action` consumes,
-/// positionally aligned with its `total_inputs`.
+/// Mints a synthetic dictionary instance for each input consumed by `action`,
+/// matching the order of `action.total_inputs()`.
 ///
-/// Values come from the action's own requirements rather than from the
-/// class's producers, which is what makes repeated slots of one class
-/// work: two `Resource` inputs the action pins to different
-/// `resource_type` values get different fixtures. Fields the action
-/// forces to be equal share one freshly chosen value.
+/// Field values are derived directly from the action's constraints rather
+/// than class declarations. This allows repeated inputs of the same class
+/// with differing requirements to receive distinct fixtures, while coupled
+/// fields share a single value.
 pub fn mint_action_inputs(
     module: &SdkModule,
     action: &ActionMeta,
@@ -37,8 +36,7 @@ pub fn mint_action_inputs(
         .collect()
 }
 
-/// What an action demands of one field, once its facts are collapsed to
-/// a single answer.
+/// Resolved value requirement for a field after constraint evaluation.
 enum Chosen<'a> {
     Int(i64),
     Text(&'a str),
@@ -47,12 +45,11 @@ enum Chosen<'a> {
     Any,
 }
 
-/// Collapse one field's facts. `Err` carries the values that cannot be
-/// reconciled.
+/// Resolves constraints for a single field. Returns conflicting values on error.
 fn choose(facts: &FieldFacts) -> Result<Chosen<'_>, BTreeSet<Pin>> {
     let mut pinned = facts.pinned.iter();
     match (pinned.next(), pinned.next(), facts.min) {
-        // A pin the same action's own floor rules out.
+        // Pinned value violates the lower bound constraint.
         (Some(Pin::Int(v)), None, Some(min)) if *v < min => {
             Err([Pin::Int(*v), Pin::Int(min)].into_iter().collect())
         }
@@ -61,8 +58,7 @@ fn choose(facts: &FieldFacts) -> Result<Chosen<'_>, BTreeSet<Pin>> {
         }
         (Some(Pin::Int(v)), None, _) => Ok(Chosen::Int(*v)),
         (Some(Pin::Text(t)), None, _) => Ok(Chosen::Text(t)),
-        // A floor is satisfied at the floor, and an equality group with a
-        // floor is satisfied by every member taking it.
+        // Satisfy lower-bound constraints using the minimum value.
         (None, _, Some(min)) => Ok(Chosen::Int(min)),
         (None, _, None) => Ok(match facts.group.as_deref() {
             Some(group) => Chosen::Shared {
@@ -76,9 +72,8 @@ fn choose(facts: &FieldFacts) -> Result<Chosen<'_>, BTreeSet<Pin>> {
     }
 }
 
-/// Name every field no input can satisfy in one error, rather than
-/// letting the action fail later on a statement whose connection to the
-/// fixture is not obvious.
+/// Validates that all input field constraints are satisfiable, returning a
+/// consolidated error for any conflicting requirements.
 fn report_unsatisfiable(action_name: &str, inputs: &[&ActionObjectRef]) -> Result<()> {
     let mut bad: Vec<String> = Vec::new();
     for (slot, obj) in inputs.iter().enumerate() {
@@ -120,10 +115,7 @@ fn mint_object<'a>(
     });
 
     for (field_name, facts) in obj.field_facts() {
-        // Whatever the SDK already stamped above stays as stamped, and
-        // `stable_identifier` is stamped below; inserting either twice
-        // fails. Checking presence rather than naming the fields keeps
-        // this from drifting as the stamped set changes.
+        // Skip already-populated fields and reserved fields (`stable_identifier`).
         if d.get(&StrKey::from(field_name))
             .map_err(|err| anyhow!("reading {field_name}: {err}"))?
             .is_some()
@@ -134,9 +126,7 @@ fn mint_object<'a>(
         let value = match choose(facts) {
             Ok(Chosen::Int(v)) => Value::from(v),
             Ok(Chosen::Text(t)) => Value::from(t),
-            // Mock mode drops the constraints that would otherwise bind
-            // an unconstrained field to a real intro output, so any value
-            // of the right kind does.
+            // In mock mode, unconstrained fields default to arbitrary values of the required type.
             Ok(Chosen::AnyInt) => Value::from(0i64),
             Ok(Chosen::Any) => Value::from(rand_raw_value()),
             Ok(Chosen::Shared { group, integer }) => groups
@@ -154,25 +144,18 @@ fn mint_object<'a>(
         d.insert(&StrKey::from(field_name), &value)
             .map_err(|err| anyhow!("inserting {field_name}: {err}"))?;
     }
-    // A real chain object carries `stable_identifier = commitment(initial)`,
-    // stamped by TxInsert when it was first minted. Synthetic inputs stand
-    // in for chain objects, so they need the same field or a later mutate
-    // (which pins old.stable_identifier == new.stable_identifier) panics on
-    // the missing entry.
     Ok(with_stable_identifier(&d))
 }
 
-/// Result of fabricating a synthetic chain state that grounds a set of
-/// input objects. Pair this with `executor.action(name, spendable)` to
-/// drive an action end-to-end without touching the real synchronizer.
+/// Synthetic chain state and spendable objects for testing action execution
+/// without an active synchronizer.
 pub struct SyntheticState {
     pub grounding_witness: Arc<GroundingWitness>,
     pub spendable: Vec<SpendableObject>,
 }
 
-/// Build a state in which each `obj` is Live, by inserting every object
-/// into a single global created set (an array, indexed by position) and
-/// packaging per-object `(index, membership proof)` into a `GroundingWitness`.
+/// Builds a synthetic state where all provided objects are live in the created set
+/// with corresponding membership proofs in a `GroundingWitness`.
 pub fn build_synthetic_state(
     objs: &[pod2::middleware::containers::Dictionary],
 ) -> Result<SyntheticState> {
@@ -262,12 +245,8 @@ mod tests {
         assert_eq!(typ.raw(), Value::from(class_hash).raw());
     }
 
-    /// Plan every manifest action against freshly minted inputs, ensuring
-    /// that the synthetic objects are valid and preventing drift.
-    /// craft-rocket is here for its sub-action calls, whose consumed
-    /// objects are spliced into the caller's input list: their
-    /// requirements have to arrive at the same positions or fixtures land
-    /// in the wrong slots.
+    /// Verifies that synthetic inputs satisfy planning for all actions across
+    /// example plugins, including actions with sub-action calls.
     #[test]
     fn every_action_plans_with_synthetic_inputs() {
         for dir in [PLUGIN_DIR, ROCKET_DIR] {
@@ -306,9 +285,8 @@ mod tests {
         assert_eq!(typ.raw(), Value::from(class_hash).raw());
     }
 
-    /// Two inputs of one class that the action pins to different values.
-    /// A per-class fixture cannot satisfy both, which is what made
-    /// repeated slots fail.
+    /// Verifies that multiple inputs of the same class receive distinct fixtures
+    /// when the action imposes different field constraints.
     #[test]
     fn repeated_class_slots_get_their_own_values() {
         let src = r#"
@@ -342,10 +320,8 @@ mod tests {
         executor.plan_action("CombineTwo", state.spendable).unwrap();
     }
 
-    /// A body long enough that lowering splits it across several helper
-    /// predicates, reading fields at both ends. Requirements are read off
-    /// the instruction list, so the split is irrelevant; reading the
-    /// lowered predicates instead would see only the first few.
+    /// Verifies that field requirements are preserved even when action lowering
+    /// splits the body across multiple helper predicates.
     #[test]
     fn deeply_split_body_keeps_every_field() {
         let src = r#"
@@ -375,7 +351,7 @@ mod tests {
             .load_module_from_src_actions(src, &["MakeWidget", "ReadEveryField"])
             .unwrap();
 
-        // The guard only means something if lowering really did split.
+        // Ensure lowering generated helper predicates.
         let levels = module
             .module()
             .batch
@@ -406,8 +382,7 @@ mod tests {
             .unwrap();
     }
 
-    /// Fields the action forces to be equal across two slots have to get
-    /// one shared value, not two independently chosen ones.
+    /// Verifies that coupled fields across distinct input slots share the same value.
     #[test]
     fn coupled_fields_across_slots_share_a_value() {
         let src = r#"
@@ -438,9 +413,7 @@ mod tests {
         executor.plan_action("CoupleThem", state.spendable).unwrap();
     }
 
-    /// An action whose own statements demand two different values for one
-    /// field cannot be satisfied by any input, so minting says so instead
-    /// of handing back a fixture that fails deeper in.
+    /// Verifies that conflicting field constraints produce an error during fixture generation.
     #[test]
     fn contradictory_pins_are_reported_not_minted() {
         let src = r#"

@@ -59,16 +59,14 @@ enum Intro {
 }
 
 impl Intro {
-    /// Which args name the object the intro constrains. Kept beside the
-    /// arg lists above so a reordering cannot silently desync the
-    /// analysis that reads them by position.
+    /// Argument indices of objects constrained by this intro.
     fn subject_args(&self) -> &'static [usize] {
         match self {
             Self::Vdf => &[1],
             Self::LtEqU256 => &[0, 1],
         }
     }
-    /// Which arg carries the intro's result, for intros that produce one.
+    /// Argument index that receives the intro output, if applicable.
     fn output_arg(&self) -> Option<usize> {
         match self {
             Self::Vdf => Some(2),
@@ -293,11 +291,9 @@ impl VarOrValue {
             Self::Value(_) => panic!("not a var"),
         }
     }
-    /// Only call this at exec time.
+    /// Resolves the runtime `Value`. Must only be called during execution.
     ///
-    /// An entry read can fail on caller data: a script reading
-    /// `obj.field` of an input object that doesn't carry `field`. That
-    /// is a script error, not an SDK invariant, so it surfaces as one.
+    /// Returns a runtime error if the requested field does not exist on the target object.
     fn as_value(&self) -> RuntimeResult<Value> {
         match self {
             Self::Value(value) => Ok(value.clone()),
@@ -336,8 +332,7 @@ impl VarOrValue {
             }) => panic!("entry can't be mutated"),
         }
     }
-    /// Only call this at exec time. Fails on the same missing-entry
-    /// reads as [`Self::as_value`].
+    /// Resolves the runtime `OperationArg`. Must only be called during execution.
     fn as_op_arg(&self) -> RuntimeResult<OperationArg> {
         match self {
             Self::Value(value) => Ok(OperationArg::Literal(value.clone())),
@@ -1612,28 +1607,24 @@ st_methods! {
     st_array_update, ArrayUpdate, [old: Type::Unk, i: Type::Int, v: Type::Unk, new: Type::Unk];
 }
 
-/// A script-level runtime error carrying `msg`.
+/// Constructs a script runtime error.
 fn rt_err(msg: impl Into<String>) -> Box<EvalAltResult> {
     msg.into().into()
 }
 
-/// A read of a field or record entry the object doesn't carry. Names
-/// the variable and the key so a plugin author can tell which object
-/// and which field are at fault.
+/// Constructs a runtime error for an absent field or record entry.
 fn missing_field(name: &str, key: &str) -> Box<EvalAltResult> {
     rt_err(format!("object `{name}` has no field `{key}`"))
 }
 
-/// Read `name.key` out of a dict, reporting both a container error and
-/// an absent key against the variable the script named.
+/// Reads `key` from a dictionary, returning descriptive errors on lookup failure.
 fn read_field(name: &str, dict: &Dictionary, key: &str) -> RuntimeResult<Value> {
     dict.get(&StrKey::from(key))
         .map_err(|err| rt_err(format!("reading `{name}.{key}`: {err}")))?
         .ok_or_else(|| missing_field(name, key))
 }
 
-/// Read `name.key` out of a record, resolving `key` against the record's
-/// declared entry names.
+/// Reads `key` from a record array using declared entry names.
 fn read_entry(
     name: &str,
     array: &Array,
@@ -1945,38 +1936,32 @@ pub struct ActionObjectRef {
     pub(crate) io: ObjectIO,
     pub class: String,
     pub(crate) varname: String,
-    /// What the action's own statements demand of this object's fields.
-    /// Shared, because a sub-action's refs are spliced into every caller.
+    /// Field constraints and write records for this object.
     pub(crate) fields: requirements::ObjectFields,
     pub(crate) identity: ObjectIdentity,
 }
 
 impl ActionObjectRef {
-    /// Script-side variable name, for diagnostics that have to say which
-    /// object they mean.
+    /// Script-side variable name.
     pub fn varname(&self) -> &str {
         &self.varname
     }
 
-    /// What the action requires of this object's fields, in field-name
-    /// order. Read off the Load-time instruction list, so requirements
-    /// are per-slot rather than per-class.
+    /// Field requirement constraints for this object, in field-name order.
     pub fn field_facts(&self) -> impl Iterator<Item = (&str, &FieldFacts)> {
         self.fields
             .iter()
             .map(|entry| (entry.name.as_ref(), &entry.facts))
     }
 
-    /// What the action writes into this object's fields, in field-name
-    /// order. Describes the state it leaves behind, where
-    /// [`Self::field_facts`] describes the state it consumes.
+    /// Field writes performed on this object, in field-name order.
     pub fn field_writes(&self) -> impl Iterator<Item = (&str, &FieldWrites)> {
         self.fields
             .iter()
             .map(|entry| (entry.name.as_ref(), &entry.writes))
     }
 
-    /// The crypto the action applies to this object's identity.
+    /// Cryptographic identity constraints applied to this object.
     pub fn identity(&self) -> ObjectIdentity {
         self.identity
     }
@@ -2056,9 +2041,7 @@ impl ActionMeta {
         self.total_outputs.iter()
     }
 
-    /// The subset of [`Self::total_outputs`] this action creates rather
-    /// than mutates, so a caller can tell a value a fresh instance holds
-    /// from one it only reaches by being mutated later.
+    /// Output objects created (minted) by this action rather than mutated.
     pub fn total_created(&self) -> impl Iterator<Item = &ActionObjectRef> {
         self.total_outputs
             .iter()

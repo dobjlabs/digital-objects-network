@@ -1114,12 +1114,8 @@ pub fn classes(target: &Path, class_filter: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// A class's shape, folded over every action that creates or mutates an
-/// instance. Only written values count: what an action *requires* of a
-/// state it consumes says nothing about the shape of the class.
-///
-/// Creating and mutating actions are folded separately, because a value
-/// only a mutation writes is one no fresh instance of the class holds.
+/// Derives class signatures by aggregating field writes across all creating
+/// and mutating actions in the module.
 fn class_signatures(module: &SdkModule) -> BTreeMap<String, ClassSignature> {
     let mut out: BTreeMap<String, ClassSignature> = BTreeMap::new();
     for action in module.actions() {
@@ -1148,20 +1144,19 @@ fn class_signatures(module: &SdkModule) -> BTreeMap<String, ClassSignature> {
     out
 }
 
-/// One class's fields, each carrying every value any producer writes it
-/// with.
+/// Aggregated field signatures and identity constraints for a class.
 #[derive(Default)]
 struct ClassSignature {
     fields: BTreeMap<String, ClassField>,
     identity: ObjectIdentity,
 }
 
-/// One field of a class, split by whether a value is reachable at mint.
+/// Tracks field writes partitioned by object creation versus subsequent mutations.
 #[derive(Default)]
 struct ClassField {
-    /// Written by an action that creates the object.
+    /// Values written when the object is created (minted).
     at_mint: FieldWrites,
-    /// Written by any action, creating or mutating.
+    /// Values written by any action (creation or mutation).
     ever: FieldWrites,
 }
 
@@ -1195,8 +1190,7 @@ fn render_field_value(field: &ClassField) -> String {
     let kind = match kind_of(field.ever.values.iter()) {
         Some(kind) => kind,
         None if field.ever.from_vdf => return "Raw  // VDF-derived".to_string(),
-        // Nothing any producer writes fixes the value, so a prover
-        // supplies it.
+        // Unconstrained field supplied by witness.
         None => return "Raw  // witness".to_string(),
     };
 
@@ -1210,7 +1204,7 @@ fn render_field_value(field: &ClassField) -> String {
     format!("{kind}  // {}", clauses.join("; "))
 }
 
-/// The type column, or `None` when no producer writes a literal.
+/// Infers the field type representation from written literals, or `None` if unconstrained.
 fn kind_of<'a>(values: impl Iterator<Item = &'a Pin>) -> Option<&'static str> {
     let (mut text, mut int) = (false, false);
     for v in values {
@@ -1223,8 +1217,7 @@ fn kind_of<'a>(values: impl Iterator<Item = &'a Pin>) -> Option<&'static str> {
         (false, false) => None,
         (true, false) => Some("Str"),
         (false, true) => Some("Int"),
-        // A class whose schema is fixed should not hold both; rendering
-        // the union says so without guessing which producer is wrong.
+        // Field contains both string and integer writes across producers.
         (true, true) => Some("Str | Int"),
     }
 }
@@ -1346,8 +1339,7 @@ CraftWood(in, out) = AND(
         }
     }
 
-    /// A value only a mutation writes is not one a fresh instance holds,
-    /// so the two are labelled apart.
+    /// Verifies distinct labels for initial creation values versus mutation updates.
     #[test]
     fn render_signature_separates_mint_from_later_values() {
         let mut sig = ClassSignature::default();
