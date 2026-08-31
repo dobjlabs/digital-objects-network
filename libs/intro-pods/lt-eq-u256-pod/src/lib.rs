@@ -28,6 +28,7 @@
 //! ```
 
 use anyhow::Result;
+use hex::FromHex;
 use plonky2::{
     field::types::{Field, PrimeField64},
     hash::{
@@ -70,23 +71,44 @@ use serde::{Deserialize, Serialize};
 
 const LT_EQ_U256_POD_TYPE: (usize, &str) = (2002, "LtEqU256");
 
+const STANDARD_LT_EQ_U256_VD_HASH_HEX: &str =
+    "e0595e5c75467e5a27bd30fa48a45e1dcc66a327076e5ce7c02ce33dfe357311";
+
+/// Verifier-data identity used by compiled predicates. Resolving it does not initialize the
+/// prover circuit.
 pub static STANDARD_LT_EQ_U256_VD_HASH: std::sync::LazyLock<Hash> =
     std::sync::LazyLock::new(|| {
-        let (_, data) = &**STANDARD_LT_EQ_U256_POD_DATA;
-        let hash_out =
-            pod2::backends::plonky2::recursion::circuit::hash_verifier_data(&data.verifier_only);
-        Hash(hash_out.elements.map(|e| e))
+        Hash::from_hex(STANDARD_LT_EQ_U256_VD_HASH_HEX)
+            .expect("valid pinned lt-eq-u256 verifier-data hash")
     });
 
 static STANDARD_LT_EQ_U256_POD_DATA: std::sync::LazyLock<
     CacheEntry<(LtEqU256PodTarget, CircuitDataSerializer)>,
 > = std::sync::LazyLock::new(|| {
-    cache::get("standard_lt_eq_u256_pod_circuit_data", &(), |_| {
+    let pod_data = cache::get("standard_lt_eq_u256_pod_circuit_data", &(), |_| {
         let (target, circuit_data) = build().expect("successful build");
         (target, CircuitDataSerializer(circuit_data))
     })
-    .expect("cache ok")
+    .expect("cache ok");
+    let (_, circuit_data) = &*pod_data;
+    let actual_hash = Hash(
+        pod2::backends::plonky2::recursion::circuit::hash_verifier_data(
+            &circuit_data.verifier_only,
+        )
+        .elements,
+    );
+    assert_eq!(
+        actual_hash, *STANDARD_LT_EQ_U256_VD_HASH,
+        "standard lt-eq-u256 circuit does not match its pinned verifier-data hash"
+    );
+    pod_data
 });
+
+/// Load or build the standard proving circuit and check its pinned verifier-data identity.
+pub fn warm_standard_lt_eq_u256_circuit() {
+    std::sync::LazyLock::force(&STANDARD_LT_EQ_U256_POD_DATA);
+}
+
 fn build() -> Result<(LtEqU256PodTarget, CircuitData<F, C, D>)> {
     let params = Params::default();
 
