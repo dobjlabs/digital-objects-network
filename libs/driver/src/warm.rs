@@ -4,18 +4,18 @@
 //! action. This module forces those builds/loads up front so `dobjd` does them
 //! at boot instead.
 
-use lt_eq_u256_pod::STANDARD_LT_EQ_U256_VD_HASH;
+use lt_eq_u256_pod::warm_standard_lt_eq_u256_circuit;
 use payload::shrink::ShrunkMainPodSetup;
 use pod2::backends::plonky2::basetypes::DEFAULT_VD_SET;
 use pod2::backends::plonky2::emptypod::EmptyPod;
 use pod2::backends::plonky2::mainpod::cache_get_rec_main_pod_common_hash;
 use pod2::middleware::Params;
-use vdfpod::STANDARD_VDF_VD_HASH;
+use vdfpod::warm_standard_vdf_circuit;
 
 /// Load (building on a cold cache) the proving artifacts the first action would
 /// otherwise build lazily, so the first `execute` doesn't pay for them:
 /// - the recursive MainPod circuit and its common hash,
-/// - the VDF and lt_eq_u256 intro pod circuits (via their verifier-data hashes),
+/// - the VDF and lt_eq_u256 intro pod circuits,
 /// - the empty pod: both its circuit and the proved *instance* the prover
 ///   inserts as recursion padding.
 ///
@@ -44,13 +44,11 @@ pub fn warm_proving_circuits() {
     log::info!("warming empty pod (circuit + instance)...");
     let _ = EmptyPod::new_boxed(DEFAULT_VD_SET.clone());
 
-    // Forcing each intro pod's verifier-data hash drives its circuit data to
-    // load/build, without constructing a pod (which would prove).
     log::info!("warming VDF intro pod circuit...");
-    let _ = *STANDARD_VDF_VD_HASH;
+    warm_standard_vdf_circuit();
 
     log::info!("warming lt_eq_u256 intro pod circuit...");
-    let _ = *STANDARD_LT_EQ_U256_VD_HASH;
+    warm_standard_lt_eq_u256_circuit();
 
     log::info!("proving circuits ready (warmed in {:?})", start.elapsed());
 }

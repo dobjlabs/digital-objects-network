@@ -38,6 +38,7 @@
 //! of this file).
 
 use anyhow::{Result, anyhow};
+use hex::FromHex;
 use plonky2::{
     field::types::{Field, PrimeField64},
     hash::{
@@ -88,11 +89,13 @@ const ARITY: usize = 1;
 const NUM_PUBLIC_INPUTS: usize = 13; // 13: count + input + output + verified_data_hash
 const VDF_POD_TYPE: (usize, &str) = (2001, "Vdf");
 
+const STANDARD_VDF_VD_HASH_HEX: &str =
+    "ab82223f501b5056f458f063eb2fc073f8ac01f2ea178a3a2303394fec6828a0";
+
+/// Verifier-data identity used by compiled predicates. Resolving it does not initialize the
+/// prover circuit.
 pub static STANDARD_VDF_VD_HASH: std::sync::LazyLock<Hash> = std::sync::LazyLock::new(|| {
-    let (_, data) = &**STANDARD_VDF_POD_DATA;
-    let hash_out =
-        pod2::backends::plonky2::recursion::circuit::hash_verifier_data(&data.verifier_only);
-    Hash(hash_out.elements.map(|e| e))
+    Hash::from_hex(STANDARD_VDF_VD_HASH_HEX).expect("valid pinned VDF verifier-data hash")
 });
 
 static STANDARD_VDF_POD_DATA: std::sync::LazyLock<
@@ -100,12 +103,30 @@ static STANDARD_VDF_POD_DATA: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| {
     // v2: the count arg in the public statement uses the tagged pod2 int
     // encoding. The version suffix evicts cache entries built before that.
-    cache::get("standard_vdf_pod_circuit_data_v2", &(), |_| {
+    let pod_data = cache::get("standard_vdf_pod_circuit_data_v2", &(), |_| {
         let (target, circuit_data) = build().expect("successful build");
         (target, CircuitDataSerializer(circuit_data))
     })
-    .expect("cache ok")
+    .expect("cache ok");
+    let (_, circuit_data) = &*pod_data;
+    let actual_hash = Hash(
+        pod2::backends::plonky2::recursion::circuit::hash_verifier_data(
+            &circuit_data.verifier_only,
+        )
+        .elements,
+    );
+    assert_eq!(
+        actual_hash, *STANDARD_VDF_VD_HASH,
+        "standard VDF circuit does not match its pinned verifier-data hash"
+    );
+    pod_data
 });
+
+/// Load or build the standard proving circuit and check its pinned verifier-data identity.
+pub fn warm_standard_vdf_circuit() {
+    std::sync::LazyLock::force(&STANDARD_VDF_POD_DATA);
+}
+
 fn build() -> Result<(VdfPodTarget, CircuitData<F, C, D>)> {
     let params = Params::default();
 
