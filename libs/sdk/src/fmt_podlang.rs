@@ -19,8 +19,14 @@ use txlib::RECORD_STATE_HEADER_PODLANG;
 
 fn fmt_dependency(dep: &Dependency, w: &mut dyn fmt::Write) -> fmt::Result {
     match dep {
-        Dependency::Module { name, hash } => {
-            writeln!(w, "use module {:#} as {name}", hash)?;
+        Dependency::Module { alias, hash } => {
+            // An alias may contain `-`; a podlang identifier may not.
+            writeln!(
+                w,
+                "use module {:#} as {}",
+                hash,
+                crate::podlang_alias(alias)
+            )?;
         }
         Dependency::Intro { pred, hash } => {
             writeln!(w, "use intro {pred} from {:#}", hash)?;
@@ -267,7 +273,10 @@ fn fmt_record_decls(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
 /// One sub-action call in the parent's body, with its synthesized
 /// private wildcard names + record-shape info for the call.
 struct SubActionCall {
-    sub_name: String,
+    /// Bare action name locally; `<alias>::<Action>` for an import.
+    call_name: String,
+    /// IO record type, qualified by module alias for imports.
+    io_schema: String,
     /// Name of the parent's synthesized private wildcard for the sub's
     /// `io` record
     sub_io_var: String,
@@ -282,23 +291,31 @@ struct SubActionCall {
     first_out_entry: Option<String>,
 }
 
-/// Walk the parent action's Insts and gather one `SubActionCall` per
-/// `Inst::SubAction`. Looks up each sub's record shape from the loader's
-/// `actions_meta`.
+/// Collect sub-action calls and their IO record metadata.
 fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubActionCall> {
     let mut calls = Vec::new();
     let mut idx_counter: HashMap<String, usize> = HashMap::new();
     for inst in &action.insts {
-        if let Inst::SubAction {
-            action: sub_name,
-            obj,
-            ..
-        } = inst
-        {
-            let idx = *idx_counter.entry(sub_name.clone()).or_insert(0);
-            *idx_counter.get_mut(sub_name).unwrap() += 1;
-
-            let sub_io_var = format!("_{}_io_{}", sub_name, idx);
+        if let Inst::SubAction { target, obj, .. } = inst {
+            let (import, sub_meta) = loader
+                .resolve_sub_action_meta(target)
+                .expect("sub-action resolved during load");
+            // Podlang aliases are also safe for synthesized wildcard names.
+            let qualifier = import.map(|import| crate::podlang_alias(&import.alias));
+            let (call_name, io_schema) = match &qualifier {
+                Some(alias) => (
+                    format!("{alias}::{}", sub_meta.name),
+                    format!("{alias}::{}", schema_name_io(&sub_meta.name)),
+                ),
+                None => (sub_meta.name.clone(), schema_name_io(&sub_meta.name)),
+            };
+            let wildcard_stem = match &qualifier {
+                Some(alias) => format!("{alias}_{}", sub_meta.name),
+                None => sub_meta.name.clone(),
+            };
+            let idx = idx_counter.entry(wildcard_stem.clone()).or_insert(0);
+            let sub_io_var = format!("_{wildcard_stem}_io_{idx}");
+            *idx += 1;
 
             let alias_name = obj.borrow().var_name().to_string();
             let alias = if alias_name == "?" {
@@ -306,15 +323,11 @@ fn collect_sub_action_calls(action: &ActionContext, loader: &Loader) -> Vec<SubA
             } else {
                 Some(alias_name)
             };
-            let sub_meta = loader
-                .actions_meta
-                .iter()
-                .find(|m| m.name == *sub_name)
-                .expect("sub-action meta exists at fmt time");
             let first_out_entry = sub_meta.out_entries.first().map(|e| e.varname.clone());
 
             calls.push(SubActionCall {
-                sub_name: sub_name.clone(),
+                call_name,
+                io_schema,
                 sub_io_var,
                 alias,
                 first_out_entry,
@@ -385,7 +398,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // Append synthesized sub-action typed privates last.
     for c in &sub_calls {
         let name = &c.sub_io_var;
-        private_vars.push(format!("{name} {}", schema_name_io(&c.sub_name)));
+        private_vars.push(format!("{name} {}", c.io_schema));
     }
     // Append the chain record typed private when packed.
     if chain_packed(meta.chain_max_ts) {
@@ -473,7 +486,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
             w,
             "  ArrayContains({}, {}::out_{}, {})",
             call.sub_io_var,
-            schema_name_io(&call.sub_name),
+            call.io_schema,
             entry,
             fmt_var_at(alias, 0, meta.max_ts(alias)),
         )?;
@@ -530,9 +543,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 }
                 writeln!(w, ")")?;
             }
-            Inst::SubAction {
-                action: sub_name, ..
-            } => {
+            Inst::SubAction { .. } => {
                 let call = &sub_calls[sub_call_idx];
                 sub_call_idx += 1;
                 let chain = vars["chain"];
@@ -542,7 +553,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 args.push("state_header".to_string());
                 args.push(format!("{chain}"));
                 args.push(format!("{chain_next}"));
-                writeln!(w, "  {sub_name}({})", args.join(", "))?;
+                writeln!(w, "  {}({})", call.call_name, args.join(", "))?;
                 vars.get_mut("chain").expect("chain exists").inc();
             }
         }

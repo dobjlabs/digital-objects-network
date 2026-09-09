@@ -33,12 +33,11 @@ use schemars::JsonSchema;
 // Identifiers
 // ===========================================================================
 
-/// `QualifiedName` is the canonical handle for both classes and actions.
-/// It carries the originating plugin and the bare name as two separate
-/// fields so callers can reason about them directly without juggling
-/// `(plugin_name, name, id)` triples. The string presentation
-/// `<plugin>::<name>` matches podlang's namespaced predicates and is
-/// produced by [`QualifiedName::id`] when a single string is needed.
+/// Catalog-local name for a class or action, split into plugin and bare name.
+/// [`QualifiedName::id`] formats it as `<plugin>::<name>`.
+///
+/// This is an address, not a global identity. Module batch IDs and predicate
+/// hashes provide identity across catalogs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]

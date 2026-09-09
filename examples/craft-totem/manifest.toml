@@ -1,0 +1,22 @@
+[plugin]
+name = "craft-totem"
+version = "0.1.0"
+# Rewritten by `cargo run -p pexe -- build examples/craft-totem`.
+module_hash = "d854e4fb383457f9f06a61db92975111a0e7384aed3edba58ac2899808d978ee"
+
+# craft-totem calls craft-basics actions via subaction("craft-basics::...").
+# The pin is stamped by `pexe build`, which resolves the import among
+# already-built archives (build craft-basics first).
+[[imports]]
+name = "craft-basics"
+module_hash = "d7edcb9150d12af76a54fbbac7b00b8bb24fab61bc1395b65da47547ad5d1b42"
+
+[[classes]]
+name = "Totem"
+emoji = "🗿"
+description = "A totem carved from freshly crafted wood."
+
+[[actions]]
+name = "CraftTotem"
+emoji = "🗿"
+description = "Craft wood from a log via craft-basics, then carve a totem sealed with the wood's key."

@@ -5,17 +5,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use pexe::{
-    MANIFEST_FILE, PEXE_EXTENSION, PluginSource, compile_module_hash, inspect, install, pack,
-    read_pexe_file, set_manifest_hash, unpack,
+    DEFAULT_OUT_DIR, MANIFEST_FILE, PEXE_EXTENSION, PluginSource, default_install_dir,
+    dep_search_dirs, import_build_order, inspect, install, pack, read_pexe_file,
+    resolve_manifest_imports, set_manifest_hash, set_manifest_import_hash, unpack,
 };
-
-// These names intentionally mirror `driver::paths::{DOBJ_HOME_DIR, ACTIONS_DIR}`.
-// They're duplicated here because the `pexe` lib is a dependency of `driver`, so
-// `pexe` can't depend on `driver` without a cycle. If either changes over there,
-// change it here too.
-const DRIVER_DOBJ_HOME_DIR: &str = ".dobj";
-const DRIVER_ACTIONS_DIR: &str = "actions";
-const DRIVER_DOBJ_HOME_ENV: &str = "DOBJ_HOME";
+use pod2::middleware::Hash;
+use sdk::{ImportLookup, Sdk, manifest::Manifest};
 
 /// Release tag + target triple, stamped by build.rs ("dev" outside a release
 /// build). pexe ships in the same release bundle as dobj/dobjd and `dobj
@@ -27,17 +22,6 @@ const VERSION: &str = concat!(
     env!("DOBJ_TARGET_TRIPLE"),
     ")"
 );
-
-fn default_install_dir() -> Result<PathBuf> {
-    // Resolved the same way as `driver::paths::default_dobj_root`, which this
-    // crate cannot call without depending on the whole driver. Installing into
-    // a root the driver would not read is worse than the duplication.
-    if let Some(root) = std::env::var_os(DRIVER_DOBJ_HOME_ENV).filter(|root| !root.is_empty()) {
-        return Ok(PathBuf::from(root).join(DRIVER_ACTIONS_DIR));
-    }
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory"))?;
-    Ok(home.join(DRIVER_DOBJ_HOME_DIR).join(DRIVER_ACTIONS_DIR))
-}
 
 #[derive(Parser, Debug)]
 #[command(name = "pexe", about = "plugin packaging tool", version = VERSION)]
@@ -56,7 +40,7 @@ enum Cmd {
         plugins: Vec<PathBuf>,
 
         /// Output directory for the built .pexe files.
-        #[arg(long, default_value = "target/pexe")]
+        #[arg(long, default_value = DEFAULT_OUT_DIR)]
         out_dir: PathBuf,
 
         /// Also install the built archives into the target install dir.
@@ -71,6 +55,11 @@ enum Cmd {
         /// fail instead.
         #[arg(long)]
         check: bool,
+
+        /// Search these directories for built dependencies before the output
+        /// and install directories. Dependencies must be built first.
+        #[arg(long)]
+        deps: Vec<PathBuf>,
     },
     /// Dump the contents of a .pexe archive to stdout.
     Dump {
@@ -84,6 +73,24 @@ enum Cmd {
     },
 }
 
+#[derive(clap::Args, Debug)]
+struct InspectTarget {
+    /// Path to a `.pexe` archive or a plugin source directory
+    /// (containing `manifest.toml` and `plugin.rhai`).
+    target: PathBuf,
+
+    /// Search these directories for imported plugins before the build output
+    /// and install directories. Archives must match their manifest pins.
+    #[arg(long)]
+    deps: Vec<PathBuf>,
+}
+
+impl InspectTarget {
+    fn as_inspect(&self) -> inspect::Target<'_> {
+        inspect::Target::new(&self.target, &self.deps)
+    }
+}
+
 #[derive(Subcommand, Debug)]
 enum InspectCmd {
     /// Render the Podlang for the plugin's predicates.
@@ -92,9 +99,8 @@ enum InspectCmd {
     /// `--middleware`, the compiled `CustomPredicateBatch` is rendered
     /// instead via pod2's pretty-printer.
     Predicates {
-        /// Path to a `.pexe` archive or a plugin source directory
-        /// (containing `manifest.toml` and `plugin.rhai`).
-        target: PathBuf,
+        #[command(flatten)]
+        target: InspectTarget,
 
         /// Restrict output to a single predicate name. Without this,
         /// every predicate is emitted with a `--- name ---` header.
@@ -108,16 +114,16 @@ enum InspectCmd {
     },
     /// Render each class's state-space signature.
     Classes {
-        /// Path to a `.pexe` archive or a plugin source directory.
-        target: PathBuf,
+        #[command(flatten)]
+        target: InspectTarget,
 
         /// Restrict output to a single class.
         class: Option<String>,
     },
     /// Emit the action/class relationship graph.
     Graph {
-        /// Path to a `.pexe` archive or a plugin source directory.
-        target: PathBuf,
+        #[command(flatten)]
+        target: InspectTarget,
 
         /// Output format. `dot` (default) emits Graphviz; `mermaid`
         /// emits a Mermaid flowchart that pastes into mermaid.live or
@@ -135,8 +141,8 @@ enum InspectCmd {
     /// plonky2 proof. Much slower than `plan` (uses the real prover,
     /// not MockProver) and produces a verifiable MainPod.
     Prove {
-        /// Path to a `.pexe` archive or a plugin source directory.
-        target: PathBuf,
+        #[command(flatten)]
+        target: InspectTarget,
 
         /// Action to prove.
         #[arg(long)]
@@ -152,8 +158,8 @@ enum InspectCmd {
     /// the SDK's multi-pod solver runs. Prints the solution breakdown
     /// and a statement dependency graph.
     Plan {
-        /// Path to a `.pexe` archive or a plugin source directory.
-        target: PathBuf,
+        #[command(flatten)]
+        target: InspectTarget,
 
         /// Action to plan.
         #[arg(long)]
@@ -227,6 +233,7 @@ fn main() -> Result<()> {
             install: do_install,
             install_dir,
             check,
+            deps,
         } => {
             std::fs::create_dir_all(&out_dir)
                 .with_context(|| format!("failed to create {}", out_dir.display()))?;
@@ -238,8 +245,37 @@ fn main() -> Result<()> {
             } else {
                 None
             };
-            for plugin_dir in plugins {
-                build_one(&plugin_dir, &out_dir, target_install.as_deref(), check)?;
+            let dep_dirs = dep_search_dirs(&deps, &out_dir, target_install.as_deref());
+            // Read all manifests before computing the dependency order.
+            let mut sources = Vec::with_capacity(plugins.len());
+            for plugin_dir in &plugins {
+                let source = PluginSource::read(plugin_dir)?;
+                let manifest = source.parse_manifest()?;
+                sources.push((source, manifest));
+            }
+            let declared: Vec<(String, Vec<String>)> = sources
+                .iter()
+                .map(|(_, manifest)| {
+                    (
+                        manifest.plugin.name.clone(),
+                        manifest
+                            .imports
+                            .iter()
+                            .map(|import| import.name.clone())
+                            .collect(),
+                    )
+                })
+                .collect();
+            for idx in import_build_order(&declared)? {
+                let (source, manifest) = &sources[idx];
+                build_one(
+                    source,
+                    manifest,
+                    &out_dir,
+                    target_install.as_deref(),
+                    check,
+                    &dep_dirs,
+                )?;
             }
         }
         Cmd::Dump { pexe } => {
@@ -256,10 +292,10 @@ fn main() -> Result<()> {
                 action,
                 middleware,
             } => {
-                inspect::predicates(&target, action.as_deref(), middleware)?;
+                inspect::predicates(&target.as_inspect(), action.as_deref(), middleware)?;
             }
             InspectCmd::Classes { target, class } => {
-                inspect::classes(&target, class.as_deref())?;
+                inspect::classes(&target.as_inspect(), class.as_deref())?;
             }
             InspectCmd::Graph {
                 target,
@@ -271,7 +307,7 @@ fn main() -> Result<()> {
                     GraphFormat::Mermaid if link => inspect::GraphOutput::MermaidLink,
                     GraphFormat::Mermaid => inspect::GraphOutput::Mermaid,
                 };
-                inspect::graph(&target, mode)?;
+                inspect::graph(&target.as_inspect(), mode)?;
             }
             InspectCmd::Prove {
                 target,
@@ -281,7 +317,7 @@ fn main() -> Result<()> {
                 if let Some(seed) = seed {
                     pod2utils::set_seed(seed);
                 }
-                inspect::prove_action(&target, &action)?;
+                inspect::prove_action(&target.as_inspect(), &action)?;
             }
             InspectCmd::Plan {
                 target,
@@ -329,51 +365,84 @@ fn main() -> Result<()> {
                     PlanFormat::MermaidFull if link => inspect::PlanOutput::MermaidLinkFull,
                     PlanFormat::MermaidFull => inspect::PlanOutput::MermaidFull,
                 };
-                inspect::plan(&target, &action, mode)?;
+                inspect::plan(&target.as_inspect(), &action, mode)?;
             }
         },
     }
     Ok(())
 }
 
+/// Format a hash as lowercase hex without a prefix, as stored in manifests.
+fn hash_hex(hash: Hash) -> String {
+    format!("{hash:#}").trim_start_matches("0x").to_lowercase()
+}
+
+/// Return whether a manifest hash must be updated, or report a mismatch in
+/// `--check` mode.
+fn needs_stamp(check: bool, what: &str, declared: Hash, real: Hash) -> Result<bool> {
+    if declared == real {
+        return Ok(false);
+    }
+    if check {
+        return Err(anyhow!(
+            "{what} mismatch: manifest says {}, compiled value is {} (re-run without --check to rewrite)",
+            hash_hex(declared),
+            hash_hex(real),
+        ));
+    }
+    log::info!(
+        "  rewriting {what}: {} -> {}",
+        hash_hex(declared),
+        hash_hex(real)
+    );
+    Ok(true)
+}
+
 fn build_one(
-    plugin_dir: &Path,
+    source: &PluginSource,
+    manifest: &Manifest,
     out_dir: &Path,
     install_dir: Option<&Path>,
     check: bool,
+    dep_dirs: &[PathBuf],
 ) -> Result<()> {
-    log::info!("building {}", plugin_dir.display());
-    let source = PluginSource::read(plugin_dir)?;
-    let manifest = source.parse_manifest()?;
+    log::info!("building {}", source.root.display());
     let plugin_name = manifest.plugin.name.clone();
 
-    // Compile the script to derive the real module hash from the pod2 batch id.
-    let real_hash = compile_module_hash(&manifest, &source.script)?;
-    let declared_hash = format!("{:#}", manifest.plugin.module_hash);
-    let declared_hash = declared_hash.trim_start_matches("0x").to_lowercase();
-    let real_hash_clean = real_hash.trim_start_matches("0x").to_lowercase();
+    // Dependencies are validated against their own manifests. This plugin's
+    // import pins are updated below.
+    let sdk = Sdk::default();
+    // Source pins may be stale, so builds resolve dependencies by name.
+    let imports = resolve_manifest_imports(&sdk, manifest, dep_dirs, ImportLookup::DeclaredName)?;
 
-    let manifest_toml = if declared_hash == real_hash_clean {
-        source.manifest_toml.clone()
-    } else if check {
-        return Err(anyhow!(
-            "module_hash mismatch in {name}: manifest says {declared}, compiled script yields {real} (re-run without --check to rewrite)",
-            name = plugin_name,
-            declared = declared_hash,
-            real = real_hash_clean,
-        ));
-    } else {
-        log::info!(
-            "  rewriting module_hash in source manifest: {} -> {}",
-            declared_hash,
-            real_hash_clean,
-        );
-        let rewritten = set_manifest_hash(&source.manifest_toml, &real_hash_clean)?;
+    let mut manifest_toml = source.manifest_toml.clone();
+    let mut manifest_rewritten = false;
+    for (declared, resolved) in manifest.imports.iter().zip(imports.iter()) {
+        let real = resolved.module.module().batch.id();
+        let what = format!("[[imports]] {} module_hash", declared.name);
+        if needs_stamp(check, &what, declared.module_hash, real)
+            .with_context(|| format!("in {plugin_name}"))?
+        {
+            manifest_toml =
+                set_manifest_import_hash(&manifest_toml, &declared.name, &hash_hex(real))?;
+            manifest_rewritten = true;
+        }
+    }
+
+    // Compile the script to derive the real module hash from the pod2 batch id.
+    let module = pexe::compile_module(&sdk, manifest, &source.script, &imports)?;
+    let real_hash = module.module().batch.id();
+    if needs_stamp(check, "module_hash", manifest.plugin.module_hash, real_hash)
+        .with_context(|| format!("in {plugin_name}"))?
+    {
+        manifest_toml = set_manifest_hash(&manifest_toml, &hash_hex(real_hash))?;
+        manifest_rewritten = true;
+    }
+    if manifest_rewritten {
         let manifest_path = source.root.join(MANIFEST_FILE);
-        std::fs::write(&manifest_path, &rewritten)
+        std::fs::write(&manifest_path, &manifest_toml)
             .with_context(|| format!("failed to write back {}", manifest_path.display()))?;
-        rewritten
-    };
+    }
 
     let bytes = pack(&manifest_toml, &source.script)?;
     let out_path = out_dir.join(format!("{plugin_name}.{PEXE_EXTENSION}"));
@@ -383,7 +452,7 @@ fn build_one(
         "  wrote {} ({} bytes, hash={})",
         out_path.display(),
         bytes.len(),
-        real_hash_clean,
+        hash_hex(real_hash),
     );
 
     if let Some(dir) = install_dir {

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use pod2::middleware::{EMPTY_HASH, EMPTY_VALUE, Hash, StrKey, Value, containers::Array};
 use pod2utils::{dict, rand_raw_value};
-use sdk::{SdkModule, SpendableObject};
+use sdk::{ActionObjectRef, SdkModule, SpendableObject};
 use txlib::{GroundingWitness, StateHeader, with_stable_identifier};
 
 use crate::inspect::derive_class_signature;
@@ -30,21 +30,22 @@ pub fn mint_class(
     mint_with_signature(module, class_name, &signature)
 }
 
-/// Mint one synthetic instance per class name. Class signatures are
-/// memoized so repeating a class (e.g. `[Wire, Wire, Steel]`) doesn't
-/// re-derive the same signature.
-pub fn mint_classes(
+/// Mint one synthetic instance per object reference, using the class's
+/// defining module. Repeated class signatures are cached.
+pub fn mint_classes<'a>(
     module: &SdkModule,
-    class_names: &[String],
+    refs: impl IntoIterator<Item = &'a ActionObjectRef>,
 ) -> Result<Vec<pod2::middleware::containers::Dictionary>> {
-    let batch = &module.module().batch;
-    let mut cache: HashMap<&str, crate::inspect::ClassSignature> = HashMap::new();
-    let mut out = Vec::with_capacity(class_names.len());
-    for class in class_names {
-        let sig = cache
-            .entry(class.as_str())
-            .or_insert_with(|| derive_class_signature(module, batch, class));
-        out.push(mint_with_signature(module, class, sig)?);
+    // Class identity is the defining module's batch ID plus the class name.
+    let mut cache: HashMap<(Hash, &str), crate::inspect::ClassSignature> = HashMap::new();
+    let mut out = Vec::new();
+    for object_ref in refs {
+        let (defining_batch, class) = module.class_identity(object_ref);
+        let defining = module.class_module(object_ref);
+        let signature = cache
+            .entry((defining_batch, class))
+            .or_insert_with(|| derive_class_signature(defining, &defining.module().batch, class));
+        out.push(mint_with_signature(defining, class, signature)?);
     }
     Ok(out)
 }
@@ -162,7 +163,7 @@ mod tests {
         let manifest = source.parse_manifest().unwrap();
         let action_names: Vec<&str> = manifest.actions.iter().map(|a| a.name.as_str()).collect();
         Sdk::default()
-            .load_module_from_src_actions(&source.script, &action_names)
+            .load_module_from_src_actions(&source.script, &action_names, &[])
             .unwrap()
     }
 
@@ -181,9 +182,7 @@ mod tests {
     fn every_action_plans_with_synthetic_inputs() {
         let module = load_craft_basics();
         for action in module.actions() {
-            let input_classes: Vec<String> =
-                action.total_inputs().map(|r| r.class.clone()).collect();
-            let minted = mint_classes(&module, &input_classes).unwrap();
+            let minted = mint_classes(&module, action.total_inputs()).unwrap();
             let state = build_synthetic_state(&minted).unwrap();
             let executor = module.executor(true, state.grounding_witness.clone());
             executor

@@ -166,6 +166,65 @@ chain later still. Treat time locks written against it as coarse-grained.
 limb reduced into a field element, see `pod2utils::b256_to_hash`) — suitable
 as opaque entropy, not for byte-exact comparison with the L1 hash.
 
+# Cross-plugin imports
+
+A plugin can call another plugin's actions as sub-actions. The manifest
+declares the dependency with an alias to bind it to and a pinned module hash
+(stamped by `pexe build`, like the plugin's own `module_hash`):
+
+```toml
+[[imports]]
+name = "craft-basics"
+module_hash = "d7edcb9150d12af76a54fbbac7b00b8bb24fab61bc1395b65da47547ad5d1b42"
+```
+
+and the script calls it through that alias:
+
+```rhai
+fn CraftTotem(action) {
+    var wood = action.subaction("craft-basics::CraftWood");
+    var totem = action.output("Totem");
+    totem.set([["seal", wood.key]]);
+}
+```
+
+Bare `subaction` names refer to the current module. Qualified names must use an
+alias declared by the current plugin; the same alias may refer to a different
+module in another plugin. The generated podlang imports the dependency by batch
+hash, so changing the dependency also changes the importer's `module_hash`.
+
+The sub-action executes in the caller's transaction. Its inputs and outputs are
+inserted into the caller's totals at the call site, preserving the order used
+to pair `total_outputs` with executed outputs.
+
+## What identifies an imported class
+
+An imported class is identified by its defining module's batch ID and its class
+name, not by an import alias. `ActionObjectRef::defining` retains that module;
+`SdkModule::class_module` and `class_identity` use it directly. Displayed class
+references include both the alias and a batch ID prefix, for example
+`craft-basics@d7edcb91::Log`.
+
+## How an import is resolved
+
+`ImportResolver` supports two lookup modes:
+
+- `Pin` matches `[[imports]].module_hash`. The driver and archive inspection
+  use this mode for built artifacts.
+- `DeclaredName` matches `[[imports]].name`. Builds and source inspection use
+  this mode because source pins may be placeholders or stale.
+
+In either mode, the match only selects a candidate. Compilation verifies its
+declared module hash and import pins. Dependencies load before importers, each
+candidate loads once, and cycles are rejected.
+
+An unused import loads with a warning. It still creates a runtime dependency,
+but contributes no predicate and therefore does not affect the batch ID.
+
+Foreign classes are closed: `input`, `output`, and `mutate` reject qualified
+class names. Plugins interact with foreign objects through actions exported by
+the defining plugin, whose replay guard controls valid state transitions.
+
 # Missing features
 
 - [ ] Literal Array
@@ -227,8 +286,8 @@ as opaque entropy, not for byte-exact comparison with the L1 hash.
   - [x] SetDelete
   - [x] ArrayUpdate
 - [ ] Execution time type checking without panics
-- [ ] operator+
-- [ ] operator\*
+- [x] operator+, operator-, operator\* (wildcard arithmetic, witness-only:
+      available inside `unsafe` blocks, pair with an `st_*` call)
 - [x] dependent action
 - [x] pexe.zip support (packaged by the `pexe` crate's CLI)
 - [x] manifest support

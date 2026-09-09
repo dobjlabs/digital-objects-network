@@ -8,11 +8,12 @@
 //! Wire-format helpers plus compile/install utilities used by the packaging CLI
 //! and by the driver at plugin-load time.
 
+use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use sdk::{Sdk, manifest::Manifest};
+use sdk::{ImportLookup, ModuleImport, Sdk, manifest::Manifest};
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 pub mod fixtures;
@@ -23,6 +24,10 @@ pub const SCRIPT_FILE: &str = "plugin.rhai";
 
 /// File extension (no leading dot) of a pexe archive.
 pub const PEXE_EXTENSION: &str = "pexe";
+
+/// Where `pexe build` writes archives, and where dependency resolution
+/// looks for them first.
+pub const DEFAULT_OUT_DIR: &str = "target/pexe";
 
 /// Largest `.pexe` file we will read from disk into memory. A packed bundled
 /// plugin is under 8 KiB; this bounds the compressed-side read for untrusted
@@ -127,15 +132,194 @@ fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> R
     String::from_utf8(out).map_err(|err| anyhow!("entry {name} in pexe is not valid UTF-8: {err}"))
 }
 
-/// Compile the script against its manifest's action names and return the hex-encoded
-/// module hash.
-pub fn compile_module_hash(manifest: &Manifest, script: &str) -> Result<String> {
-    let sdk = Sdk::default();
+/// Compile a script with the manifest's actions and resolved imports.
+/// Manifest hash pins are not validated because this function computes them.
+pub fn compile_module(
+    sdk: &Sdk,
+    manifest: &Manifest,
+    script: &str,
+    imports: &[ModuleImport],
+) -> Result<std::rc::Rc<sdk::SdkModule>> {
     let names: Vec<&str> = manifest.actions.iter().map(|a| a.name.as_str()).collect();
-    let module = sdk
-        .load_module_from_src_actions(script, &names)
-        .map_err(|err| anyhow!("failed to compile plugin: {err}"))?;
-    Ok(format!("{:#}", module.module().batch.id()))
+    sdk.load_module_from_src_actions(script, &names, imports)
+        .map_err(|err| anyhow!("failed to compile plugin: {err}"))
+}
+
+/// Return the `.pexe` files in `dir`, sorted by path.
+/// A missing directory is empty; other directory errors are reported.
+pub fn pexe_paths_in(dir: &Path) -> Result<Vec<PathBuf>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(anyhow!("failed to read {}: {err}", dir.display())),
+    };
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|err| anyhow!("failed to read an entry of {}: {err}", dir.display()))?
+            .path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some(PEXE_EXTENSION) {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+/// Build the dependency search path: explicit directories, output directory,
+/// then install directory.
+pub fn dep_search_dirs(
+    extra: &[PathBuf],
+    out_dir: &Path,
+    install_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = extra.to_vec();
+    dirs.push(out_dir.to_path_buf());
+    if let Some(dir) = install_dir {
+        dirs.push(dir.to_path_buf());
+    } else if let Ok(dir) = default_install_dir() {
+        dirs.push(dir);
+    }
+    dirs
+}
+
+/// Read dependency candidates from `dirs` in search-path order.
+/// Unreadable or malformed archives are skipped with a warning.
+///
+/// Candidates are not deduplicated because the resolver may select them by
+/// either name or hash. The first candidate for a given key wins.
+pub fn discover_dep_sources(dirs: &[PathBuf]) -> Vec<(Manifest, String)> {
+    let mut sources = Vec::new();
+    let dep_paths = dirs.iter().flat_map(|dir| {
+        pexe_paths_in(dir).unwrap_or_else(|err| {
+            // A bad optional search directory does not block other candidates.
+            log::warn!("skipping dependency search dir: {err}");
+            Vec::new()
+        })
+    });
+    for path in dep_paths {
+        match read_pexe_file(&path).and_then(|bytes| unpack(&bytes)) {
+            Ok((manifest, script)) => sources.push((manifest, script)),
+            Err(err) => {
+                log::warn!("skipping unreadable pexe {}: {err}", path.display());
+            }
+        }
+    }
+    sources
+}
+
+/// Return plugin indices in dependency-first build order.
+///
+/// Imports outside `plugins` do not affect the order. Cycles and duplicate
+/// plugin names are rejected.
+pub fn import_build_order(plugins: &[(String, Vec<String>)]) -> Result<Vec<usize>> {
+    let mut index_by_name: HashMap<&str, usize> = HashMap::new();
+    for (idx, (name, _)) in plugins.iter().enumerate() {
+        if index_by_name.insert(name.as_str(), idx).is_some() {
+            return Err(anyhow!("two plugins in this build are both named {name:?}"));
+        }
+    }
+    let mut marks = vec![Mark::Unvisited; plugins.len()];
+    let mut ordered = Vec::with_capacity(plugins.len());
+    for idx in 0..plugins.len() {
+        visit_imports(idx, plugins, &index_by_name, &mut marks, &mut ordered)?;
+    }
+    Ok(ordered)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mark {
+    Unvisited,
+    InProgress,
+    Done,
+}
+
+/// Add `idx` after all of its in-set dependencies.
+fn visit_imports(
+    idx: usize,
+    plugins: &[(String, Vec<String>)],
+    index_by_name: &HashMap<&str, usize>,
+    marks: &mut [Mark],
+    ordered: &mut Vec<usize>,
+) -> Result<()> {
+    if marks[idx] != Mark::Unvisited {
+        return Ok(());
+    }
+    marks[idx] = Mark::InProgress;
+    for import in &plugins[idx].1 {
+        let Some(&dep) = index_by_name.get(import.as_str()) else {
+            continue;
+        };
+        if marks[dep] == Mark::InProgress {
+            return Err(anyhow!(
+                "import cycle among the plugins being built: {} -> {}",
+                plugins[idx].0,
+                plugins[dep].0
+            ));
+        }
+        visit_imports(dep, plugins, index_by_name, marks, ordered)?;
+    }
+    marks[idx] = Mark::Done;
+    ordered.push(idx);
+    Ok(())
+}
+
+/// Resolve a manifest's imports from built archives in `dep_dirs`.
+///
+/// Use [`ImportLookup::Pin`] for built artifacts and
+/// [`ImportLookup::DeclaredName`] while updating source manifests.
+pub fn resolve_manifest_imports(
+    sdk: &Sdk,
+    manifest: &Manifest,
+    dep_dirs: &[PathBuf],
+    lookup: ImportLookup,
+) -> Result<Vec<ModuleImport>> {
+    if manifest.imports.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sources = discover_dep_sources(dep_dirs);
+    let mut resolver = sdk::ImportResolver::new(
+        sdk,
+        sources
+            .iter()
+            .map(|(manifest, script)| (manifest, script.as_str())),
+        lookup,
+    );
+    resolver.resolve_imports(manifest).map_err(|err| {
+        anyhow!(
+            "{}: failed to resolve imports (searched {dep_dirs:?}): {err}",
+            manifest.plugin.name
+        )
+    })
+}
+
+/// Default plugin install dir, resolved the same way as
+/// `driver::paths` (which this crate cannot depend on without a cycle):
+/// `$DOBJ_HOME/actions` when set, else `~/.dobj/actions`.
+pub fn default_install_dir() -> Result<PathBuf> {
+    if let Some(root) = std::env::var_os("DOBJ_HOME").filter(|root| !root.is_empty()) {
+        return Ok(PathBuf::from(root).join("actions"));
+    }
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory"))?;
+    Ok(home.join(".dobj").join("actions"))
+}
+
+/// Set `table["module_hash"]` to `clean`, preserving the existing value's
+/// surrounding whitespace and comments when the key is already there.
+fn write_module_hash(table: &mut dyn toml_edit::TableLike, clean: &str) {
+    if let Some(val) = table.get_mut("module_hash").and_then(|i| i.as_value_mut()) {
+        let decor = val.decor().clone();
+        *val = clean.into();
+        *val.decor_mut() = decor;
+    } else {
+        table.insert("module_hash", toml_edit::value(clean));
+    }
+}
+
+fn parse_manifest_doc(toml_src: &str) -> Result<toml_edit::DocumentMut> {
+    toml_src
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|err| anyhow!("invalid manifest toml: {err}"))
 }
 
 /// Rewrite the `module_hash` line in a manifest's TOML source to the given hash,
@@ -143,21 +327,48 @@ pub fn compile_module_hash(manifest: &Manifest, script: &str) -> Result<String> 
 /// absent.
 pub fn set_manifest_hash(toml_src: &str, new_hash_hex: &str) -> Result<String> {
     let clean = new_hash_hex.trim_start_matches("0x");
-    let mut doc = toml_src
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|err| anyhow!("invalid manifest toml: {err}"))?;
-    // If the key already exists, preserve its surrounding whitespace and comments
-    // by replacing only the inner string while keeping the value's decor.
-    if let Some(val) = doc["plugin"]
-        .get_mut("module_hash")
-        .and_then(|i| i.as_value_mut())
-    {
-        let decor = val.decor().clone();
-        *val = clean.into();
-        *val.decor_mut() = decor;
-    } else {
-        doc["plugin"]["module_hash"] = toml_edit::value(clean);
-    }
+    let mut doc = parse_manifest_doc(toml_src)?;
+    let plugin = doc["plugin"]
+        .as_table_like_mut()
+        .ok_or_else(|| anyhow!("manifest has no [plugin] table"))?;
+    write_module_hash(plugin, clean);
+    Ok(doc.to_string())
+}
+
+/// Rewrite the `module_hash` of one `[[imports]]` entry in a manifest's TOML
+/// source, preserving formatting of everything else.
+pub fn set_manifest_import_hash(
+    toml_src: &str,
+    import_name: &str,
+    new_hash_hex: &str,
+) -> Result<String> {
+    let clean = new_hash_hex.trim_start_matches("0x");
+    let mut doc = parse_manifest_doc(toml_src)?;
+    let imports = doc
+        .get_mut("imports")
+        .ok_or_else(|| anyhow!("manifest declares no imports"))?;
+    // Support both TOML forms accepted by `Manifest::imports`.
+    let tables: Vec<&mut dyn toml_edit::TableLike> = match imports {
+        toml_edit::Item::ArrayOfTables(tables) => tables
+            .iter_mut()
+            .map(|table| table as &mut dyn toml_edit::TableLike)
+            .collect(),
+        toml_edit::Item::Value(toml_edit::Value::Array(values)) => values
+            .iter_mut()
+            .filter_map(|value| value.as_inline_table_mut())
+            .map(|table| table as &mut dyn toml_edit::TableLike)
+            .collect(),
+        _ => {
+            return Err(anyhow!(
+                "manifest `imports` is neither [[imports]] tables nor an array of tables"
+            ));
+        }
+    };
+    let table = tables
+        .into_iter()
+        .find(|table| table.get("name").and_then(|name| name.as_str()) == Some(import_name))
+        .ok_or_else(|| anyhow!("manifest has no imports entry named {import_name:?}"))?;
+    write_module_hash(table, clean);
     Ok(doc.to_string())
 }
 
@@ -203,6 +414,132 @@ name = "craft-basics"
 version = "0.1.0"
 module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 "#;
+
+    fn build_order(plugins: &[(&str, &[&str])]) -> Result<Vec<String>> {
+        let owned: Vec<(String, Vec<String>)> = plugins
+            .iter()
+            .map(|(name, imports)| {
+                (
+                    name.to_string(),
+                    imports.iter().map(|i| i.to_string()).collect(),
+                )
+            })
+            .collect();
+        Ok(import_build_order(&owned)?
+            .into_iter()
+            .map(|idx| owned[idx].0.clone())
+            .collect())
+    }
+
+    #[test]
+    fn test_import_build_order_puts_dependencies_first() {
+        // Alphabetical input, reverse dependency order.
+        let order =
+            build_order(&[("craft-totem", &["craft-basics"]), ("craft-basics", &[])]).unwrap();
+        assert_eq!(order, vec!["craft-basics", "craft-totem"]);
+
+        // Transitive chain, worst-case input order.
+        let order = build_order(&[
+            ("builder", &["mason"]),
+            ("mason", &["quarry"]),
+            ("quarry", &[]),
+        ])
+        .unwrap();
+        assert_eq!(order, vec!["quarry", "mason", "builder"]);
+
+        // A diamond emits each plugin once, dependencies first.
+        let order = build_order(&[
+            ("top", &["left", "right"]),
+            ("left", &["base"]),
+            ("right", &["base"]),
+            ("base", &[]),
+        ])
+        .unwrap();
+        assert_eq!(order.len(), 4);
+        let position = |name: &str| order.iter().position(|n| n == name).unwrap();
+        assert!(position("base") < position("left"));
+        assert!(position("base") < position("right"));
+        assert!(position("left") < position("top"));
+        assert!(position("right") < position("top"));
+    }
+
+    #[test]
+    fn test_import_build_order_ignores_imports_outside_the_set() {
+        // `installed` is not being built here: it resolves from disk,
+        // and the given order is kept.
+        let order = build_order(&[("a", &["installed"]), ("b", &[])]).unwrap();
+        assert_eq!(order, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_import_build_order_rejects_cycles() {
+        let err = build_order(&[("a", &["b"]), ("b", &["a"])]).unwrap_err();
+        assert!(err.to_string().contains("import cycle"), "got: {err}");
+
+        let err = build_order(&[("a", &["a"])]).unwrap_err();
+        assert!(err.to_string().contains("import cycle"), "got: {err}");
+    }
+
+    #[test]
+    fn test_import_build_order_rejects_duplicate_names() {
+        let err = build_order(&[("a", &[]), ("a", &[])]).unwrap_err();
+        assert!(err.to_string().contains("both named"), "got: {err}");
+    }
+
+    #[test]
+    fn test_set_manifest_import_hash_accepts_either_toml_form() {
+        let stamped = "1111111111111111111111111111111111111111111111111111111111111111";
+        let table_form = r#"
+classes = []
+actions = []
+
+[plugin]
+name = "craft-totem"
+version = "0.1.0"
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[imports]]
+name = "craft-basics"
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+"#;
+        let out = set_manifest_import_hash(table_form, "craft-basics", stamped).unwrap();
+        assert!(out.contains(stamped), "not stamped:\n{out}");
+
+        // Root-level key, so it has to precede the first table header.
+        let inline_form = r#"
+classes = []
+actions = []
+imports = [{ name = "craft-basics", module_hash = "0000000000000000000000000000000000000000000000000000000000000000" }]
+
+[plugin]
+name = "craft-totem"
+version = "0.1.0"
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+"#;
+        let out = set_manifest_import_hash(inline_form, "craft-basics", stamped).unwrap();
+        assert!(out.contains(stamped), "not stamped:\n{out}");
+        // Both forms parse back into the same declared imports.
+        let manifest: Manifest = toml::from_str(&out).unwrap();
+        assert_eq!(manifest.imports.len(), 1);
+        assert_eq!(manifest.imports[0].name, "craft-basics");
+
+        let err = set_manifest_import_hash(table_form, "ghost", stamped).unwrap_err();
+        assert!(err.to_string().contains("no imports entry"), "got: {err}");
+    }
+
+    #[test]
+    fn test_pexe_paths_in_reports_unreadable_dirs() {
+        let missing = std::path::Path::new("/definitely/not/here/actions");
+        assert_eq!(pexe_paths_in(missing).unwrap(), Vec::<PathBuf>::new());
+
+        // A non-directory path must report an error rather than appear empty.
+        let mut file = std::env::temp_dir();
+        file.push(format!("pexe-paths-in-{}.not-a-dir", std::process::id()));
+        std::fs::write(&file, b"x").unwrap();
+        let err = pexe_paths_in(&file).unwrap_err();
+        std::fs::remove_file(&file).unwrap();
+        assert!(err.to_string().contains("failed to read"), "got: {err}");
+    }
 
     #[test]
     fn test_pack_unpack_round_trip() {
@@ -279,5 +616,47 @@ module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
         let out = set_manifest_hash(src, "cafe").unwrap();
         assert!(out.contains("cafe"));
         assert!(out.contains("# pinned by CI"));
+    }
+
+    const EXAMPLES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
+
+    /// Verify that committed example module hashes and import pins match their
+    /// sources. This catches drift that a normal build would rewrite.
+    #[test]
+    fn every_example_manifest_hash_is_current() {
+        let mut sources: Vec<(Manifest, String)> = Vec::new();
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(EXAMPLES_DIR)
+            .expect("examples dir readable")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.is_dir())
+            .collect();
+        dirs.sort();
+        assert!(!dirs.is_empty(), "no example plugins found");
+        for dir in &dirs {
+            let source = PluginSource::read(dir).expect("example source readable");
+            let manifest = source
+                .parse_manifest()
+                .unwrap_or_else(|err| panic!("{}: {err}", dir.display()));
+            sources.push((manifest, source.script));
+        }
+
+        // Resolve from committed sources rather than previously built archives.
+        let sdk = Sdk::default();
+        let mut resolver = sdk::ImportResolver::new(
+            &sdk,
+            sources
+                .iter()
+                .map(|(manifest, script)| (manifest, script.as_str())),
+            ImportLookup::Pin,
+        );
+        for (manifest, _) in &sources {
+            let name = &manifest.plugin.name;
+            // Pin lookup checks import pins; compilation checks module hashes.
+            resolver
+                .load_pinned(manifest.plugin.module_hash)
+                .unwrap_or_else(|err| {
+                    panic!("{name}: stale manifest? re-run `pexe build examples/*`: {err}")
+                });
+        }
     }
 }
