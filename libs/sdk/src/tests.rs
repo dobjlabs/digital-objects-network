@@ -1302,3 +1302,55 @@ fn test_set_guards() {
         assert!(err.contains(expected), "{action}: {err}");
     }
 }
+
+/// Verifies that accessing or updating an absent field returns a runtime error rather than panicking.
+#[test]
+fn test_missing_field_is_an_error_not_a_panic() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let src = r#"
+        fn MakeWidget(action) {
+            var w = action.output("Widget");
+            w.set([["grade", 1]]);
+        }
+
+        fn ReadInSet(action) {
+            var w = action.input("Widget");
+            var g = action.output("Gadget");
+            g.set([["grade", w.absent]]);
+        }
+
+        fn ReadInStatement(action) {
+            var w = action.mutate("Widget");
+            action.st_sum(w.absent, 0, 1);
+        }
+
+        fn UpdateAbsent(action) {
+            var w = action.mutate("Widget");
+            w.update("absent", 1);
+        }
+    "#;
+    let actions = &["MakeWidget", "ReadInSet", "ReadInStatement", "UpdateAbsent"];
+    let module = Sdk::default()
+        .load_module_from_src_actions(src, actions)
+        .unwrap();
+
+    let mut state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MakeWidget", vec![]).unwrap();
+    let widget_tx = res.tx.clone();
+    let [widget] = res.objs();
+    apply_tx(&mut state, &widget_tx);
+
+    for (action, expected) in [
+        ("ReadInSet", "object `w` has no field `absent`"),
+        ("ReadInStatement", "object `w` has no field `absent`"),
+        ("UpdateAbsent", "updating `w.absent`"),
+    ] {
+        let executor = module.executor(true, grounding_witness(&state, &[widget.obj.commitment()]));
+        let err = match executor.action(action, vec![widget.clone()]) {
+            Ok(_) => panic!("expected {action} to fail on the absent field"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains(expected), "{action}: {err}");
+    }
+}

@@ -3,37 +3,15 @@
 //! path that is either a `.pexe` archive or a source directory holding
 //! `manifest.toml` + `plugin.rhai`.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
-use std::sync::LazyLock;
 
 use anyhow::{Result, anyhow};
 use pod2::lang::PrettyPrint;
-use pod2::middleware::{
-    CustomPredicateBatch, Hash, NativePredicate, Predicate, PredicateOrWildcard, StatementTmpl,
-    StatementTmplArg, Wildcard,
-};
-use sdk::{Dependency, Sdk, SdkModule, manifest::Manifest};
+use pod2::middleware::{Hash, Predicate, PredicateOrWildcard};
+use sdk::{Dependency, FieldWrites, ObjectIdentity, Pin, Sdk, SdkModule, manifest::Manifest};
 
 use crate::{PluginSource, read_pexe_file, unpack};
-
-/// txlib's compiled chain-primitive module. Building it isn't free, so
-/// we share one instance between the two event-hash statics below.
-static TX_EVENTS_MODULE: LazyLock<pod2::lang::Module> =
-    LazyLock::new(txlib::predicates::events_module);
-
-/// Hashes of `Predicate::Custom(txlib::TxInsert)` and `TxMutate`. Used
-/// to identify txlib events regardless of which batch referenced them.
-static TX_INSERT_HASH: LazyLock<Hash> = LazyLock::new(|| txlib_event_hash("TxInsert"));
-static TX_MUTATE_HASH: LazyLock<Hash> = LazyLock::new(|| txlib_event_hash("TxMutate"));
-
-fn txlib_event_hash(name: &str) -> Hash {
-    let custom_ref = TX_EVENTS_MODULE
-        .batch
-        .predicate_ref_by_name(name)
-        .unwrap_or_else(|| panic!("tx_events module is missing predicate {name}"));
-    Predicate::Custom(custom_ref).hash()
-}
 
 /// Resolve a target path to its parsed manifest and plugin script.
 /// Directories are read via `PluginSource::read`; anything else is
@@ -301,7 +279,7 @@ fn prepare_run(target: &Path, action_name: &str) -> Result<ActionRun> {
         .ok_or_else(|| anyhow!("no action named {action_name} in this plugin"))?;
     let input_classes: Vec<String> = action.total_inputs().map(|r| r.class.clone()).collect();
     let output_classes: Vec<String> = action.total_outputs().map(|r| r.class.clone()).collect();
-    let minted = crate::fixtures::mint_classes(&module, &input_classes)?;
+    let minted = crate::fixtures::mint_action_inputs(&module, action)?;
     let state = crate::fixtures::build_synthetic_state(&minted)?;
     Ok(ActionRun {
         module,
@@ -1109,8 +1087,9 @@ fn build_class_graph_mermaid(module: &SdkModule) -> String {
 pub fn classes(target: &Path, class_filter: Option<&str>) -> Result<()> {
     let (manifest, script) = load_target(target)?;
     let module = load_sdk_module(&manifest, &script)?;
-    let batch: &std::sync::Arc<CustomPredicateBatch> = &module.module().batch;
+    let signatures = class_signatures(&module);
 
+    let empty = ClassSignature::default();
     let mut first = true;
     let mut matched = false;
     for class in module.classes() {
@@ -1124,8 +1103,8 @@ pub fn classes(target: &Path, class_filter: Option<&str>) -> Result<()> {
             println!();
         }
         first = false;
-        let signature = derive_class_signature(&module, batch, &class.name);
-        println!("{}", render_signature(&signature));
+        let signature = signatures.get(&class.name).unwrap_or(&empty);
+        println!("{}", render_signature(&class.name, signature));
     }
     if let Some(name) = class_filter
         && !matched
@@ -1135,406 +1114,67 @@ pub fn classes(target: &Path, class_filter: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Per-class collected info: fields and crypto provenance flags.
-pub(crate) struct ClassSignature {
-    pub(crate) name: String,
-    pub(crate) fields: BTreeMap<String, FieldInfo>,
-    pub(crate) uses_vdf: bool,
-    pub(crate) uses_pow: bool,
+/// Derives class signatures by aggregating field writes across all creating
+/// and mutating actions in the module.
+fn class_signatures(module: &SdkModule) -> BTreeMap<String, ClassSignature> {
+    let mut out: BTreeMap<String, ClassSignature> = BTreeMap::new();
+    for action in module.actions() {
+        for obj in action.total_outputs() {
+            let sig = out.entry(obj.class.clone()).or_default();
+            sig.identity.absorb(obj.identity());
+            for (field, writes) in obj.field_writes() {
+                sig.fields
+                    .entry(field.to_string())
+                    .or_default()
+                    .ever
+                    .absorb(writes);
+            }
+        }
+        for obj in action.total_created() {
+            let sig = out.entry(obj.class.clone()).or_default();
+            for (field, writes) in obj.field_writes() {
+                sig.fields
+                    .entry(field.to_string())
+                    .or_default()
+                    .at_mint
+                    .absorb(writes);
+            }
+        }
+    }
+    out
 }
 
+/// Aggregated field signatures and identity constraints for a class.
 #[derive(Default)]
-pub(crate) struct FieldInfo {
-    /// Literal string values ever assigned to this field.
-    pub(crate) string_literals: BTreeSet<String>,
-    /// Integer literals ever assigned.
-    pub(crate) int_literals: BTreeSet<i64>,
-    /// True if any assignment was a wildcard whose source is a VDF intro.
-    pub(crate) from_vdf: bool,
-    /// True if any assignment was a wildcard with no other inferable provenance.
-    pub(crate) from_witness: bool,
+struct ClassSignature {
+    fields: BTreeMap<String, ClassField>,
+    identity: ObjectIdentity,
 }
 
-pub(crate) fn derive_class_signature(
-    module: &SdkModule,
-    batch: &std::sync::Arc<CustomPredicateBatch>,
-    class_name: &str,
-) -> ClassSignature {
-    let mut sig = ClassSignature {
-        name: class_name.to_string(),
-        fields: BTreeMap::new(),
-        uses_vdf: false,
-        uses_pow: false,
-    };
-    let class_hash = match module.class_hash(class_name) {
-        Some(h) => h,
-        None => return sig,
-    };
-
-    for predicate in batch.predicates() {
-        // Iterate the inlined scope, not just the direct body. Some
-        // actions get split so the TxInsert / TxMutate event lands in
-        // a `<Action>_N` helper while the dict-construction (Contains /
-        // ContainerUpdate linking output[i] to its inner wildcard)
-        // stays in the caller. We need both to be visible to one
-        // chain-tracing pass.
-        let scope = inline_action(predicate, batch);
-        let vdf_producers = collect_intro_outputs(&scope, &VDF_VD_HASH);
-        let scope_uses_pow = scope_uses_intro(&scope, &LT_EQ_U256_VD_HASH);
-        let mut scope_targets_class = false;
-        for stmt in &scope {
-            let focused = match tx_producer_focused(stmt, batch, class_hash) {
-                Some(arg) => arg,
-                None => continue,
-            };
-            let chain = trace_state_chain(&scope, &focused);
-            collect_fields_into_scope(&scope, &chain, &vdf_producers, &mut sig);
-            scope_targets_class = true;
-        }
-        if scope_targets_class {
-            if !vdf_producers.is_empty() {
-                sig.uses_vdf = true;
-            }
-            if scope_uses_pow {
-                sig.uses_pow = true;
-            }
-        }
-    }
-
-    sig
+/// Tracks field writes partitioned by object creation versus subsequent mutations.
+#[derive(Default)]
+struct ClassField {
+    /// Values written when the object is created (minted).
+    at_mint: FieldWrites,
+    /// Values written by any action (creation or mutation).
+    ever: FieldWrites,
 }
 
-static VDF_VD_HASH: LazyLock<Hash> = LazyLock::new(|| *vdfpod::STANDARD_VDF_VD_HASH);
-static LT_EQ_U256_VD_HASH: LazyLock<Hash> =
-    LazyLock::new(|| *lt_eq_u256_pod::STANDARD_LT_EQ_U256_VD_HASH);
-
-/// Inline an action predicate's `BatchSelf(N)` calls into a flat list
-/// of statements, substituting the helper's parameter wildcards with
-/// the call-site args and offsetting the helper's private wildcards so
-/// they cannot collide with the caller's. After this, the returned
-/// statements all share one wildcard namespace: structural equality on
-/// `StatementTmplArg` is sound for chain tracing.
-fn inline_action(
-    predicate: &pod2::middleware::CustomPredicate,
-    batch: &std::sync::Arc<CustomPredicateBatch>,
-) -> Vec<StatementTmpl> {
-    let mut out: Vec<StatementTmpl> = predicate.statements().to_vec();
-    // Offset slots are spaced large enough that helpers never collide
-    // with the caller's wildcards or with each other. 10_000 is well
-    // beyond the wildcard count of any plausible predicate.
-    let caller_offset: usize = 0;
-    let mut next_helper_offset: usize = caller_offset + 10_000;
-    for stmt in predicate.statements() {
-        if let PredicateOrWildcard::Predicate(Predicate::BatchSelf(idx)) = &stmt.pred_or_wc {
-            let Some(sub) = batch.predicates().get(*idx) else {
-                continue;
-            };
-            let bindings: &[StatementTmplArg] = &stmt.args;
-            let offset = next_helper_offset;
-            next_helper_offset += 10_000;
-            for sub_stmt in sub.statements() {
-                out.push(substitute_statement(sub_stmt, bindings, offset));
-            }
-        }
-    }
-    out
-}
-
-fn substitute_statement(
-    stmt: &StatementTmpl,
-    bindings: &[StatementTmplArg],
-    offset: usize,
-) -> StatementTmpl {
-    let args = stmt
-        .args
-        .iter()
-        .map(|a| substitute_arg(a, bindings, offset))
-        .collect();
-    StatementTmpl {
-        pred_or_wc: stmt.pred_or_wc.clone(),
-        args,
-    }
-}
-
-fn substitute_arg(
-    arg: &StatementTmplArg,
-    bindings: &[StatementTmplArg],
-    offset: usize,
-) -> StatementTmplArg {
-    match arg {
-        StatementTmplArg::Wildcard(wc) => {
-            if wc.index < bindings.len() {
-                bindings[wc.index].clone()
-            } else {
-                StatementTmplArg::Wildcard(Wildcard {
-                    name: wc.name.clone(),
-                    index: wc.index + offset,
-                })
-            }
-        }
-        StatementTmplArg::AnchoredKey(wc, key) => {
-            if wc.index < bindings.len() {
-                // The wildcard is a parameter; substitute it. If the
-                // call-site binding is itself a Wildcard, we can rewrite
-                // the AnchoredKey to reference the caller's wildcard.
-                // For other binding shapes (Literal, AnchoredKey,
-                // SelfPredicateHash) the construct isn't expressible and
-                // we leave the arg as-is (best-effort fallback).
-                match &bindings[wc.index] {
-                    StatementTmplArg::Wildcard(w) => {
-                        StatementTmplArg::AnchoredKey(w.clone(), key.clone())
-                    }
-                    _ => arg.clone(),
-                }
-            } else {
-                StatementTmplArg::AnchoredKey(
-                    Wildcard {
-                        name: wc.name.clone(),
-                        index: wc.index + offset,
-                    },
-                    key.clone(),
-                )
-            }
-        }
-        _ => arg.clone(),
-    }
-}
-
-/// If `stmt` is a txlib producer event (TxInsert or TxMutate) whose
-/// `@self_predicate(IsX)` arg resolves to the given `class_hash`, return
-/// the focused state arg. Compares predicates by hash, not name, so a
-/// rename of TxInsert/TxMutate upstream is harmless. TxDelete is
-/// excluded because deletion doesn't define the object's shape.
-fn tx_producer_focused(
-    stmt: &StatementTmpl,
-    batch: &std::sync::Arc<CustomPredicateBatch>,
-    class_hash: Hash,
-) -> Option<StatementTmplArg> {
-    let custom_ref = match &stmt.pred_or_wc {
-        PredicateOrWildcard::Predicate(Predicate::Custom(c)) => c,
-        _ => return None,
-    };
-    let event_hash = Predicate::Custom(custom_ref.clone()).hash();
-    if event_hash != *TX_INSERT_HASH && event_hash != *TX_MUTATE_HASH {
-        return None;
-    }
-    // TxInsert(chain0, chain, state, type_hash);
-    // TxMutate(chain0, chain, old_state, new_state, type_hash).
-    // The third arg is always the focused-state for the producer event.
-    let state = stmt.args.get(2)?.clone();
-    let actual_class_hash = stmt.args.iter().find_map(|a| match a {
-        StatementTmplArg::SelfPredicateHash(idx) => batch
-            .predicate_ref_by_index(*idx)
-            .map(|cref| Predicate::Custom(cref).hash()),
-        _ => None,
-    })?;
-    if actual_class_hash != class_hash {
-        return None;
-    }
-    Some(state)
-}
-
-/// Set of dict states semantically equivalent to `focused` within the
-/// inlined scope. Follows dict-transition `new = f(old)` links until
-/// fixed point. After inlining, wildcards have a single global scope
-/// so structural equality on `StatementTmplArg` is correct.
-fn trace_state_chain(
-    scope: &[StatementTmpl],
-    focused: &StatementTmplArg,
-) -> HashSet<StatementTmplArg> {
-    let mut chain: HashSet<StatementTmplArg> = HashSet::new();
-    chain.insert(focused.clone());
-    loop {
-        let mut grew = false;
-        for stmt in scope {
-            if let Some((new, old)) = dict_transition(stmt)
-                && (chain.contains(&new) || chain.contains(&old))
-            {
-                if chain.insert(new.clone()) {
-                    grew = true;
-                }
-                if chain.insert(old.clone()) {
-                    grew = true;
-                }
-            }
-        }
-        if !grew {
-            break;
-        }
-    }
-    chain
-}
-
-/// If `stmt` is a dict transition op (Insert/Update/Delete), return
-/// `(new_state, old_state)`. Matches the elaborated middleware forms
-/// (`ContainerInsert`/`ContainerUpdate`/`ContainerDelete`) since
-/// `DictInsert` etc. are syntactic sugar lowered during compilation.
-fn dict_transition(stmt: &StatementTmpl) -> Option<(StatementTmplArg, StatementTmplArg)> {
-    let native = native_predicate(&stmt.pred_or_wc)?;
-    // Arg order is (old, key, value, new) for insert/update and
-    // (old, key, new) for delete: old root first, new root last.
-    let (old, new) = match native {
-        NativePredicate::ContainerInsert
-        | NativePredicate::ContainerUpdate
-        | NativePredicate::DictInsert
-        | NativePredicate::DictUpdate => (stmt.args.first()?.clone(), stmt.args.get(3)?.clone()),
-        NativePredicate::ContainerDelete | NativePredicate::DictDelete => {
-            (stmt.args.first()?.clone(), stmt.args.get(2)?.clone())
-        }
-        _ => return None,
-    };
-    Some((new, old))
-}
-
-fn native_predicate(pred_or_wc: &PredicateOrWildcard) -> Option<NativePredicate> {
-    match pred_or_wc {
-        PredicateOrWildcard::Predicate(Predicate::Native(n)) => Some(*n),
-        _ => None,
-    }
-}
-
-/// Find wildcard *names* that a named intro produces (e.g. "Vdf"'s
-/// third arg is the work output). Cross-predicate, name-based to match
-/// the chain tracing strategy.
-/// True if any statement in `scope` invokes the intro predicate with
-/// the given verifier-data hash. Hash-based so a name change in the
-/// intro pod registration doesn't silently break detection.
-fn scope_uses_intro(scope: &[StatementTmpl], vd_hash: &Hash) -> bool {
-    scope.iter().any(|stmt| {
-        matches!(
-            &stmt.pred_or_wc,
-            PredicateOrWildcard::Predicate(Predicate::Intro(intro))
-                if &intro.verifier_data_hash == vd_hash
-        )
-    })
-}
-
-/// Collect the output wildcards produced by an intro identified by its
-/// verifier-data hash. The convention is that the *last* arg of an
-/// intro statement is its output wildcard (e.g., Vdf's `work`).
-fn collect_intro_outputs(scope: &[StatementTmpl], vd_hash: &Hash) -> HashSet<Wildcard> {
-    let mut out = HashSet::new();
-    for stmt in scope {
-        if let PredicateOrWildcard::Predicate(Predicate::Intro(intro)) = &stmt.pred_or_wc
-            && &intro.verifier_data_hash == vd_hash
-            && let Some(StatementTmplArg::Wildcard(wc)) = stmt.args.last()
-        {
-            out.insert(wc.clone());
-        }
-    }
-    out
-}
-
-fn collect_fields_into_scope(
-    scope: &[StatementTmpl],
-    chain: &HashSet<StatementTmplArg>,
-    vdf_producers: &HashSet<Wildcard>,
-    sig: &mut ClassSignature,
-) {
-    for stmt in scope {
-        let native = match native_predicate(&stmt.pred_or_wc) {
-            Some(n) => n,
-            None => continue,
-        };
-        let (state_arg, key_arg, value_arg) = match native {
-            NativePredicate::Contains | NativePredicate::DictContains => {
-                (stmt.args.first(), stmt.args.get(1), stmt.args.get(2))
-            }
-            NativePredicate::ContainerInsert
-            | NativePredicate::ContainerUpdate
-            | NativePredicate::DictInsert
-            | NativePredicate::DictUpdate => {
-                // New order (old, key, value, new): new root last,
-                // key/value in the middle, old root first (checked below).
-                (stmt.args.get(3), stmt.args.get(1), stmt.args.get(2))
-            }
-            _ => continue,
-        };
-        let Some(state_arg) = state_arg else {
-            continue;
-        };
-        let is_transition = matches!(
-            native,
-            NativePredicate::ContainerInsert
-                | NativePredicate::ContainerUpdate
-                | NativePredicate::DictInsert
-                | NativePredicate::DictUpdate
-        );
-        let mut in_chain = chain.contains(state_arg);
-        if !in_chain
-            && is_transition
-            && let Some(old) = stmt.args.first()
-        {
-            in_chain = chain.contains(old);
-        }
-        if !in_chain {
-            continue;
-        }
-        let (Some(key_arg), Some(value_arg)) = (key_arg, value_arg) else {
-            continue;
-        };
-        let field_name = match literal_string(key_arg) {
-            Some(s) => s,
-            None => continue,
-        };
-        let info = sig.fields.entry(field_name).or_default();
-        record_value(value_arg, vdf_producers, info);
-    }
-}
-
-fn literal_string(arg: &StatementTmplArg) -> Option<String> {
-    match arg {
-        StatementTmplArg::Literal(v) => v.as_string(),
-        _ => None,
-    }
-}
-
-fn record_value(arg: &StatementTmplArg, vdf_producers: &HashSet<Wildcard>, info: &mut FieldInfo) {
-    match arg {
-        StatementTmplArg::Literal(v) => {
-            if let Some(s) = v.as_string() {
-                info.string_literals.insert(s);
-            } else if let Some(i) = v.as_int() {
-                info.int_literals.insert(i);
-            } else {
-                info.from_witness = true;
-            }
-        }
-        StatementTmplArg::Wildcard(wc) => {
-            if vdf_producers.contains(wc) {
-                info.from_vdf = true;
-            } else {
-                info.from_witness = true;
-            }
-        }
-        _ => {
-            info.from_witness = true;
-        }
-    }
-}
-
-fn render_signature(sig: &ClassSignature) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("class {} {{\n", sig.name));
-    let mut field_lines: Vec<(String, String)> = Vec::new();
-    for (name, info) in &sig.fields {
-        field_lines.push((name.clone(), render_field_value(info)));
-    }
-    let name_width = field_lines.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
-    for (name, value) in &field_lines {
+fn render_signature(name: &str, sig: &ClassSignature) -> String {
+    let mut out = format!("class {name} {{\n");
+    let width = sig.fields.keys().map(|f| f.len()).max().unwrap_or(0);
+    for (field, summary) in &sig.fields {
         out.push_str(&format!(
-            "  {:width$}  {}\n",
-            name,
-            value,
-            width = name_width
+            "  {field:width$}  {}\n",
+            render_field_value(summary)
         ));
     }
-    if sig.uses_vdf || sig.uses_pow {
+    if sig.identity.is_constrained() {
         out.push_str("  // identity:");
-        if sig.uses_pow {
+        if sig.identity.proof_of_work {
             out.push_str(" PoW (lt_eq_u256)");
         }
-        if sig.uses_vdf {
+        if sig.identity.vdf {
             out.push_str(" VDF");
         }
         out.push('\n');
@@ -1543,54 +1183,53 @@ fn render_signature(sig: &ClassSignature) -> String {
     out
 }
 
-fn render_field_value(info: &FieldInfo) -> String {
-    let strings: Vec<String> = info.string_literals.iter().cloned().collect();
-    let ints: Vec<i64> = info.int_literals.iter().copied().collect();
+fn render_field_value(field: &ClassField) -> String {
+    let mint = &field.at_mint.values;
+    let later: BTreeSet<&Pin> = field.ever.values.difference(mint).collect();
 
-    let parts: Vec<String> = match (strings.is_empty(), ints.is_empty()) {
-        (false, true) => {
-            let union = strings
-                .iter()
-                .map(|s| format!("\"{s}\""))
-                .collect::<Vec<_>>()
-                .join(" | ");
-            vec![union]
-        }
-        (true, false) => {
-            let union = ints
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<_>>()
-                .join(" | ");
-            vec![format!("Int  // at mint: {union}")]
-        }
-        (false, false) => {
-            let strs = strings
-                .iter()
-                .map(|s| format!("\"{s}\""))
-                .collect::<Vec<_>>()
-                .join(" | ");
-            let nums = ints
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<_>>()
-                .join(" | ");
-            vec![format!("{strs} | {nums}")]
-        }
-        (true, true) => Vec::new(),
+    let kind = match kind_of(field.ever.values.iter()) {
+        Some(kind) => kind,
+        None if field.ever.from_vdf => return "Raw  // VDF-derived".to_string(),
+        // Unconstrained field supplied by witness.
+        None => return "Raw  // witness".to_string(),
     };
 
-    if !parts.is_empty() {
-        return parts.into_iter().next().unwrap();
+    let mut clauses: Vec<String> = Vec::new();
+    if !mint.is_empty() {
+        clauses.push(format!("at mint: {}", join_pins(mint.iter())));
     }
+    if !later.is_empty() {
+        clauses.push(format!("updated to {}", join_pins(later.into_iter())));
+    }
+    format!("{kind}  // {}", clauses.join("; "))
+}
 
-    if info.from_vdf {
-        "Raw  // VDF-derived".to_string()
-    } else if info.from_witness {
-        "Raw  // witness".to_string()
-    } else {
-        "?".to_string()
+/// Infers the field type representation from written literals, or `None` if unconstrained.
+fn kind_of<'a>(values: impl Iterator<Item = &'a Pin>) -> Option<&'static str> {
+    let (mut text, mut int) = (false, false);
+    for v in values {
+        match v {
+            Pin::Text(_) => text = true,
+            Pin::Int(_) => int = true,
+        }
     }
+    match (text, int) {
+        (false, false) => None,
+        (true, false) => Some("Str"),
+        (false, true) => Some("Int"),
+        // Field contains both string and integer writes across producers.
+        (true, true) => Some("Str | Int"),
+    }
+}
+
+fn join_pins<'a>(values: impl Iterator<Item = &'a Pin>) -> String {
+    let (texts, ints): (Vec<&Pin>, Vec<&Pin>) = values.partition(|p| matches!(p, Pin::Text(_)));
+    texts
+        .into_iter()
+        .chain(ints)
+        .map(Pin::to_string)
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// Extract the text of a top-level predicate definition by name.
@@ -1693,21 +1332,56 @@ CraftWood(in, out) = AND(
         assert_eq!(sanitize("PlainName"), "PlainName");
     }
 
+    fn written(values: &[Pin], from_vdf: bool) -> FieldWrites {
+        FieldWrites {
+            values: values.iter().cloned().collect(),
+            from_vdf,
+        }
+    }
+
+    /// Verifies distinct labels for initial creation values versus mutation updates.
     #[test]
-    fn render_signature_labels_int_literal_as_at_mint() {
-        let mut fields = BTreeMap::new();
-        let mut durability = FieldInfo::default();
-        durability.int_literals.insert(100);
-        fields.insert("durability".to_string(), durability);
-        let sig = ClassSignature {
-            name: "WoodPick".to_string(),
-            fields,
-            uses_vdf: false,
-            uses_pow: false,
-        };
-        let rendered = render_signature(&sig);
-        assert!(rendered.contains("// at mint: 100"));
-        assert!(!rendered.contains("// initial"));
+    fn render_signature_separates_mint_from_later_values() {
+        let mut sig = ClassSignature::default();
+        sig.fields.insert(
+            "durability".to_string(),
+            ClassField {
+                at_mint: written(&[Pin::Int(100)], false),
+                ever: written(&[Pin::Int(100)], false),
+            },
+        );
+        sig.fields.insert(
+            "authorized".to_string(),
+            ClassField {
+                at_mint: written(&[Pin::Int(0)], false),
+                ever: written(&[Pin::Int(0), Pin::Int(1)], false),
+            },
+        );
+        sig.fields.insert(
+            "revealed".to_string(),
+            ClassField {
+                at_mint: written(&[], false),
+                ever: written(&[Pin::Int(1)], false),
+            },
+        );
+        sig.fields.insert(
+            "work".to_string(),
+            ClassField {
+                at_mint: written(&[], true),
+                ever: written(&[], true),
+            },
+        );
+        sig.identity.vdf = true;
+
+        let rendered = render_signature("WoodPick", &sig);
+        assert!(rendered.contains("Int  // at mint: 100"), "{rendered}");
+        assert!(
+            rendered.contains("Int  // at mint: 0; updated to 1"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("Int  // updated to 1"), "{rendered}");
+        assert!(rendered.contains("Raw  // VDF-derived"), "{rendered}");
+        assert!(rendered.contains("// identity: VDF"), "{rendered}");
     }
 
     #[test]
