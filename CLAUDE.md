@@ -34,7 +34,7 @@ The workspace is declared in `Cargo.toml`. Crate-by-crate:
 | `mcp` (crate name `dobj-mcp`)    | MCP server exposing driver as tools to AI agents. Embedded by dobjd on the adjacent port.                                                                                                            |
 | `libs/intro-pods/vdfpod`         | VDF intro pod (PoW gating via iterated hashing).                                                                                                                                                     |
 | `libs/intro-pods/lt-eq-u256-pod` | 256-bit `<=` intro pod (PoW difficulty checks). Crate name `lt-eq-u256-pod`.                                                                                                                         |
-| `examples/*`                     | Example plugin sources: `craft-basics` (Log, Wood, Stick, Stone, WoodPick, StonePick + 9 actions) and `craft-rocket`.                                                                                |
+| `examples/*`                     | Example plugin sources: `craft-basics` (Log, Wood, Stick, Stone, WoodPick, StonePick + 9 actions), `craft-rocket`, and `nanoverse` (one action per SDK feature; see its README).                     |
 | `devtools/beacon-shim`           | **Dev only, never shipped.** Beacon REST shim over a local anvil devnet; backs `just dev-local`. Keep it out of `images.yml` and `deploy/compose.yaml`.                                              |
 
 ## Build / test / dev
@@ -160,14 +160,15 @@ The driver does not cache compiled modules between calls — every `Driver::exec
 
 **Rhai custom syntax** (search `register_custom_syntax` in `libs/sdk/src/lib.rs`):
 
-- `var <ident> = <expr>` — declare a wildcard. Operations on it generate constraining statements.
+- `var <ident> = <expr>` — declare a wildcard. Operations on it generate constraining statements. Binding a literal (a container literal, `set_of(...)`, a scalar) declares no wildcard: it names the value for the script and every use site renders it inline.
 - `let <ident> = <expr>` — plain Rhai, literal known at both phases. No statements emitted.
 - `unsafe { <expr> }` — compute a wildcard value without emitting constraints. Pair with an explicit `action.st_*` call afterward, or a malicious prover can put anything there. `+`, `-` and `*` on wildcards are only available inside such a block, so that a given expression always means the same thing (the flag covers the block's dynamic extent, script function calls included).
 
 **Host API** (registered via `register_fn` in `libs/sdk/src/lib.rs`):
 
 - On `action`: `input(class)`, `output(class)`, `mutate(class)`, `subaction(name)`, `random()`, `intro_vdf(iters, obj)`, `intro_lt_eq_u256(obj, target)`, `pow_obj_grind(obj, target)`, `top_limb_u256(n)`, plus one `st_*` per pod2 native predicate (`st_gt`, `st_sum`, `st_dict_contains`, `st_set_insert`, ... — the table in `libs/sdk/README.md` lists all of them; `SignedBy` and `PublicKey` have no host method).
-- On object handles: `set([[k,v],...])` (literal initializer, only on an untouched output), `update(k,v)` (writes a witness-derived value), indexer `obj.<field>`. A `get(k)` method is registered but unimplemented; field reads go through the indexer.
+- Container literals: a Rhai array promotes to a pod2 Array and a Rhai object map to a Dictionary wherever a statement takes a value, at any depth, and `set_of([...])` names a Set (Rhai has none). `dict_get(dict, key)` / `array_get(array, index)` bind what the container holds and emit the `DictContains` / `ArrayContains` that ties the binding to it, so the key can be a wildcard. That pair is how a table lives in one predicate instead of one predicate per row; see `libs/sdk/README.md`.
+- On object handles: `set([[k,v],...])` (literal initializer, only on an untouched output), `update(k,v)` (writes a witness-derived value), indexer `obj.<field>`. `get(k)` is the object-side spelling of `dict_get(obj, k)`, so its key may be a var; the `obj.<field>` indexer instead reads the field as an anchored key and emits no statement.
 - In scope as a constant: `state_header` — the grounding state root as a record (`block_number`, `block_timestamp`, `block_hash`, `created`, `nullifiers`, `prior_state_history`). Field reads (`state_header.block_timestamp`) emit anchored statements against the action's public `state_header` arg, which txlib pins from `TxFinalized` down through guards and bridges. Note it describes the (recent) grounding root, not the inclusion block — see `libs/sdk/README.md` for the timing caveat.
 
 **Constraint:** the event tree must be the same shape every run. Branching that emits _different events_ on different inputs is unsupported. Branching on wildcard values inside `unsafe { ... }` is fine.

@@ -757,6 +757,73 @@ fn test_cross_read_into_update() {
     let [_ship2, _sector2] = res.objs();
 }
 
+/// Verifies that object-valued writes capture the object before later
+/// mutations. Covers both `set` and `update`.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_whole_object_written_before_mutation() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn SpawnShip(action) {
+            var ship = action.output("Ship");
+            ship.set([["fuel", 10]]);
+        }
+
+        fn LogViaSet(action) {
+            var ship = action.mutate("Ship");
+            var log = action.output("Log");
+            log.set([["ship_before", ship]]);
+            var fuel = unsafe { ship.fuel - 1 };
+            action.st_sum(fuel, 1, ship.fuel);
+            ship.update("fuel", fuel);
+        }
+
+        fn LogViaUpdate(action) {
+            var ship = action.mutate("Ship");
+            var log = action.output("Log");
+            log.set([["ship_before", 0]]);
+            log.update("ship_before", ship);
+            var fuel = unsafe { ship.fuel - 1 };
+            action.st_sum(fuel, 1, ship.fuel);
+            ship.update("fuel", fuel);
+        }
+    "#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["SpawnShip", "LogViaSet", "LogViaUpdate"])
+        .unwrap();
+    println!("{}", module.podlang_src);
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("SpawnShip", vec![]).unwrap();
+    let spawn_tx = res.tx.clone();
+    let [ship] = res.objs();
+    apply_tx(&mut state, &spawn_tx);
+    let ship_before = ship.obj.clone();
+
+    for action in ["LogViaSet", "LogViaUpdate"] {
+        let executor =
+            module.executor(true, grounding_witness(&state, &[ship_before.commitment()]));
+        let res = executor
+            .action(
+                action,
+                vec![SpendableObject {
+                    obj: ship_before.clone(),
+                }],
+            )
+            .unwrap();
+        let [_ship2, log] = res.objs();
+        let logged = log.obj.get(&StrKey::from("ship_before")).unwrap().unwrap();
+        assert_eq!(
+            logged,
+            Value::from(ship_before.clone()),
+            "{action} recorded the post-mutation ship"
+        );
+    }
+}
+
 /// Parent reads values off an object created (not mutated) by a
 /// sub-action, exercising the post-identity rebinding of the alias.
 #[allow(clippy::cloned_ref_to_slice_refs)]
@@ -1301,4 +1368,751 @@ fn test_set_guards() {
         };
         assert!(err.contains(expected), "{action}: {err}");
     }
+}
+
+/// Verifies variable-key lookup in a literal table and the constraints on
+/// the returned row.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_literal_table_lookup() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 2], ["x", 0], ["y", 0]]);
+        }
+
+        fn charts() {
+            [
+                #{"x": 11, "y": 12},
+                #{"x": 21, "y": 22},
+                #{"x": 31, "y": 32}
+            ]
+        }
+
+        fn RevealChart(action) {
+            var chart = action.mutate("Chart");
+            var row = action.array_get(charts(), chart.code);
+            chart.update("x", row.x);
+            chart.update("y", row.y);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "RevealChart"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            "ArrayContains([{",
+            r#""x": 11"#,
+            r#""y": 32"#,
+            "chart0.code, row)",
+            r#"DictUpdate(chart0, "x", row.x, chart1)"#,
+            r#"DictUpdate(chart1, "y", row.y, io.out_chart)"#,
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let res = executor.action("RevealChart", vec![chart]).unwrap();
+    let reveal_tx = res.tx.clone();
+    let [revealed] = res.objs();
+    apply_tx(&mut state, &reveal_tx);
+    assert_eq!(
+        revealed.obj.get(&StrKey::from("x")).unwrap().unwrap(),
+        Value::from(31)
+    );
+    assert_eq!(
+        revealed.obj.get(&StrKey::from("y")).unwrap().unwrap(),
+        Value::from(32)
+    );
+}
+
+/// Verifies construction and membership testing of literal sets.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_literal_set_membership() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+            ore.set([["grade", 5]]);
+        }
+
+        fn AssertGrade(action) {
+            var ore = action.input("Ore");
+            var metal = action.output("Metal");
+            action.st_set_contains(set_of([3, 5, 7]), ore.grade);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre", "AssertGrade"])
+        .unwrap();
+    assert_renders(&module, &["SetContains(#[", "ore.grade)"]);
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let ore_tx = res.tx.clone();
+    let [ore] = res.objs();
+    apply_tx(&mut state, &ore_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ore.obj.commitment()]));
+    let res = executor.action("AssertGrade", vec![ore]).unwrap();
+    let metal_tx = res.tx.clone();
+    apply_tx(&mut state, &metal_tx);
+}
+
+/// Verifies string-keyed dictionary lookup and recursive literal promotion.
+#[test]
+fn test_literal_dict_nested() {
+    let craft_src = r#"
+        fn ReadTiers(action) {
+            var ore = action.input("Ore");
+            var tier = action.dict_get(#{"small": #{"cost": 1}, "large": #{"cost": 9}}, "large");
+            var cost = action.dict_get(tier, "cost");
+            action.st_gt(ore.grade, cost);
+            action.st_gt(ore.grade, tier.cost);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["ReadTiers"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            r#""large": {"cost": 9}"#,
+            r#""large", tier)"#,
+            r#"DictContains(tier, "cost", cost)"#,
+            "Gt(ore.grade, tier.cost)",
+        ],
+    );
+}
+
+/// Rejects variables inside container literals because their values are not
+/// available during Load.
+#[test]
+fn test_literal_container_rejects_var() {
+    let craft_src = r#"
+        fn BadTable(action) {
+            var ore = action.input("Ore");
+            action.st_array_contains([ore.grade], 0, 3);
+        }
+"#;
+    let err = match Sdk::default().load_module_from_src_actions(craft_src, &["BadTable"]) {
+        Ok(_) => panic!("expected a var inside a container literal to be rejected"),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("is a var, not a literal"), "{err}");
+}
+
+/// Renders sparse arrays as commitments because the pinned pod2 version has no
+/// sparse-array literal syntax. Update this expectation once the dependency
+/// includes <https://github.com/0xPARC/pod2/pull/541>.
+#[test]
+fn test_sparse_array_literal_renders_as_commitment() {
+    let dense = Array::new(vec![Value::from(1), Value::from(2)]);
+    assert_eq!(
+        fmt_podlang::literal_podlang(&Value::from(dense)),
+        "[1, 2]".to_string()
+    );
+
+    let mut sparse = Array::empty_with_db(Box::new(pod2::middleware::db::mem::MemDB::new()));
+    sparse.insert(5, Value::from(1)).unwrap();
+    let sparse = Value::from(sparse);
+    assert_eq!(
+        fmt_podlang::literal_podlang(&sparse),
+        Value::from(sparse.raw()).to_string()
+    );
+}
+
+/// Reports an execution error when a variable-key lookup misses.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_container_get_rejects_missing_key() {
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 9], ["x", 0]]);
+        }
+
+        fn RevealChart(action) {
+            var chart = action.mutate("Chart");
+            var row = action.array_get([#{"x": 11}, #{"x": 21}], chart.code);
+            chart.update("x", row.x);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "RevealChart"])
+        .unwrap();
+
+    let mut state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let err = match executor.action("RevealChart", vec![chart]) {
+        Ok(_) => panic!("expected a lookup at a key outside the table to fail"),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("no entry at 9"), "{err}");
+}
+
+/// Verifies that lookup results can be used directly without an explicit
+/// `var` binding.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_inline_lookup_needs_no_var_binding() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 1], ["x", 0]]);
+        }
+
+        fn RevealChart(action) {
+            var chart = action.mutate("Chart");
+            chart.update("x", action.array_get([10, 20, 30], chart.code));
+            action.st_gt(action.dict_get(#{"floor": 3}, "floor"), 0);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "RevealChart"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            "ArrayContains([10, 20, 30], chart0.code, _get0)",
+            r#"DictUpdate(chart0, "x", _get0, io.out_chart)"#,
+            r#"DictContains({"floor": 3}, "floor", _get1)"#,
+            "Gt(_get1, 0)",
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let res = executor.action("RevealChart", vec![chart]).unwrap();
+    let reveal_tx = res.tx.clone();
+    let [revealed] = res.objs();
+    apply_tx(&mut state, &reveal_tx);
+    assert_eq!(
+        revealed.obj.get(&StrKey::from("x")).unwrap().unwrap(),
+        Value::from(20)
+    );
+}
+
+/// Naming a generated variable consumes its anonymous status, regardless of
+/// spelling. A later binding follows the existing named-variable rules and
+/// registers another wildcard instead of renaming the original registration.
+#[test]
+fn test_var_binding_names_generated_vars_once() {
+    for name in ["foo", "_foo", "_get0"] {
+        let action = ActionHandle::new("Bind".to_string(), None);
+        let mut scope = Scope::new();
+        scope.push("action", action.clone());
+        let _ = new_engine()
+            .eval_with_scope::<Dynamic>(
+                &mut scope,
+                &format!("var {name} = action.array_get([10, 20], 0); var rebound = {name};"),
+            )
+            .unwrap();
+        let ctx = action.0.borrow();
+        assert_eq!(ctx.vars, ["chain", name, "rebound"], "binding {name}");
+        assert!(!ctx.var_state[name].anonymous, "binding {name}");
+        assert!(!ctx.var_state["rebound"].anonymous);
+    }
+}
+
+/// An underscore name, including an unchanged generated name, must not let a
+/// script bypass the duplicate-name error by being treated as anonymous again.
+#[test]
+fn test_var_binding_rejects_duplicate_named_vars() {
+    for name in ["foo", "_foo", "_get0"] {
+        let src = format!(
+            "fn Bind(action) {{
+                var {name} = action.array_get([10, 20], 0);
+                var {name} = {name};
+            }}"
+        );
+        let err = match Sdk::default().load_module_from_src_actions(&src, &["Bind"]) {
+            Ok(_) => panic!("expected duplicate binding {name} to fail"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains(&format!("var {name} already exists")), "{err}");
+    }
+}
+
+/// Verifies that `var` can name a literal without creating a wildcard.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_var_names_a_literal() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+            ore.set([["grade", 5]]);
+        }
+
+        fn AssertGrade(action) {
+            var ore = action.input("Ore");
+            var metal = action.output("Metal");
+            var tiers = #{"small": #{"cost": 1}, "large": #{"cost": 9}};
+            var grades = set_of([3, 5, 7]);
+            var floor = 1;
+            var tier = action.dict_get(tiers, "small");
+            action.st_set_contains(grades, ore.grade);
+            action.st_gt(ore.grade, floor);
+            action.st_gt(ore.grade, tier.cost);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre", "AssertGrade"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            r#""small": {"cost": 1}"#,
+            r#""small", tier)"#,
+            "SetContains(#[",
+            "Gt(ore.grade, 1)",
+            "Gt(ore.grade, tier.cost)",
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let ore_tx = res.tx.clone();
+    let [ore] = res.objs();
+    apply_tx(&mut state, &ore_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ore.obj.commitment()]));
+    let res = executor.action("AssertGrade", vec![ore]).unwrap();
+    let metal_tx = res.tx.clone();
+    apply_tx(&mut state, &metal_tx);
+}
+
+/// Verifies that `o.get(k)` accepts computed keys and is equivalent to
+/// `dict_get`.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_object_get_emits_a_lookup() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+            ore.set([["grade", 5]]);
+        }
+
+        fn Weigh(action) {
+            var ore = action.input("Ore");
+            var metal = action.output("Metal");
+            var grade = ore.get("grade");
+            action.st_gt(grade, 0);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre", "Weigh"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[r#"DictContains(io.in_ore, "grade", grade)"#, "Gt(grade, 0)"],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let ore_tx = res.tx.clone();
+    let [ore] = res.objs();
+    apply_tx(&mut state, &ore_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ore.obj.commitment()]));
+    let res = executor.action("Weigh", vec![ore]).unwrap();
+    let metal_tx = res.tx.clone();
+    apply_tx(&mut state, &metal_tx);
+}
+
+/// Rejects field access on non-dictionary literals without panicking.
+#[test]
+fn test_field_read_on_non_dict_literal_rejected() {
+    let craft_src = r#"
+        fn BadRead(action) {
+            var ore = action.input("Ore");
+            action.st_gt(set_of([1, 2]).x, 0);
+        }
+"#;
+    let err = match Sdk::default().load_module_from_src_actions(craft_src, &["BadRead"]) {
+        Ok(_) => panic!("expected a field read on a set literal to be rejected"),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("'x'") && err.contains("Set"), "{err}");
+}
+
+/// Replays a lookup against the object's pre-update value.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_lookup_before_update_reads_the_pre_update_object() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 2], ["x", 7]]);
+        }
+
+        fn RevealChart(action) {
+            var chart = action.mutate("Chart");
+            action.st_gt(chart.code, 0);
+            var x = action.dict_get(chart, "x");
+            chart.update("x", 5);
+            action.st_gt_eq(x, 0);
+            action.st_gt(chart.code, 1);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "RevealChart"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            "Gt(chart0.code, 0)",
+            r#"DictContains(chart0, "x", x)"#,
+            r#"DictUpdate(chart0, "x", 5, chart)"#,
+            "GtEq(x, 0)",
+            "Gt(chart.code, 1)",
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let res = executor.action("RevealChart", vec![chart]).unwrap();
+    let reveal_tx = res.tx.clone();
+    let [revealed] = res.objs();
+    apply_tx(&mut state, &reveal_tx);
+    assert_eq!(
+        revealed.obj.get(&StrKey::from("x")).unwrap().unwrap(),
+        Value::from(5)
+    );
+}
+
+/// Verifies nested lookups where the first lookup returns a container.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_var_container_lookup_executes() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 1], ["cost", 0]]);
+        }
+
+        fn PriceChart(action) {
+            var chart = action.mutate("Chart");
+            var tiers = [#{"cost": 11}, #{"cost": 22}];
+            var tier = action.array_get(tiers, chart.code);
+            var cost = action.dict_get(tier, "cost");
+            action.st_gt(cost, 0);
+            chart.update("cost", cost);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "PriceChart"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            "chart0.code, tier)",
+            r#"DictContains(tier, "cost", cost)"#,
+            "Gt(cost, 0)",
+            r#"DictUpdate(chart0, "cost", cost, io.out_chart)"#,
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let res = executor.action("PriceChart", vec![chart]).unwrap();
+    let price_tx = res.tx.clone();
+    let [priced] = res.objs();
+    apply_tx(&mut state, &price_tx);
+    assert_eq!(
+        priced.obj.get(&StrKey::from("cost")).unwrap().unwrap(),
+        Value::from(22)
+    );
+}
+
+/// pod2 lowers `DictContains` and `ArrayContains` to the kind-agnostic
+/// `Contains` predicate. The SDK must therefore reject mismatched container
+/// kinds and key types during Load.
+#[test]
+fn test_container_get_checks_kind_and_key() {
+    for (action, expected, src) in [
+        (
+            "DictOnArray",
+            "DictContains: container is not a Dictionary",
+            r#"
+fn DictOnArray(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.dict_get([7, 8], 1), 0);
+}
+"#,
+        ),
+        (
+            "ArrayOnDict",
+            "ArrayContains: container is not an Array",
+            r#"
+fn ArrayOnDict(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.array_get(#{"k": 1}, 0), 0);
+}
+"#,
+        ),
+        (
+            "ArrayOnObject",
+            "ArrayContains: container is not an Array",
+            r#"
+fn ArrayOnObject(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.array_get(ore, 0), 0);
+}
+"#,
+        ),
+        (
+            "StringIndex",
+            "type check: expected Int",
+            r#"
+fn StringIndex(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.array_get([7, 8], "k"), 0);
+}
+"#,
+        ),
+        (
+            "IntKey",
+            "type check: expected Str",
+            r#"
+fn IntKey(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.dict_get(#{"grade": 7}, 0), 0);
+}
+"#,
+        ),
+        (
+            "IntKeyOnObject",
+            "type check: expected Str",
+            r#"
+fn IntKeyOnObject(action) {
+    var ore = action.input("Ore");
+    action.st_gt(ore.get(0), 0);
+}
+"#,
+        ),
+        (
+            "IndexPastEnd",
+            "ArrayContains: no entry at 5",
+            r#"
+fn IndexPastEnd(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.array_get([7, 8], 5), 0);
+}
+"#,
+        ),
+        (
+            "NegativeIndex",
+            "ArrayContains: no entry at -1",
+            r#"
+fn NegativeIndex(action) {
+    var ore = action.input("Ore");
+    action.st_gt(action.array_get([7, 8], -1), 0);
+}
+"#,
+        ),
+    ] {
+        let err = match Sdk::default().load_module_from_src_actions(src, &[action]) {
+            Ok(_) => panic!("{action}: expected the lookup to be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains(expected), "{action}: {err}");
+    }
+}
+
+/// Verifies that booleans in container literals become pod2 integer values.
+#[test]
+fn test_container_literal_takes_a_bool() {
+    let craft_src = r#"
+        fn ReadFlags(action) {
+            var ore = action.input("Ore");
+            action.st_dict_contains(#{"ok": true, "bad": false}, "ok", 1);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["ReadFlags"])
+        .unwrap();
+    assert_renders(&module, &[r#""ok": 1"#, r#""bad": 0"#]);
+}
+
+/// Reports invalid field access on a lookup result as a script error.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_field_read_on_non_dict_lookup_rejected() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn MintChart(action) {
+            var chart = action.output("Chart");
+            chart.set([["code", 0], ["x", 0]]);
+        }
+
+        fn RevealChart(action) {
+            var chart = action.mutate("Chart");
+            var row = action.array_get([[11, 12]], chart.code);
+            chart.update("x", row.x);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["MintChart", "RevealChart"])
+        .unwrap();
+
+    let mut state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("MintChart", vec![]).unwrap();
+    let mint_tx = res.tx.clone();
+    let [chart] = res.objs();
+    apply_tx(&mut state, &mint_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[chart.obj.commitment()]));
+    let err = match executor.action("RevealChart", vec![chart]) {
+        Ok(_) => panic!("expected a field read on an array row to be rejected"),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("not a dictionary"), "{err}");
+}
+
+/// Some container values can be interpreted as multiple kinds. The formatter
+/// chooses the first valid representation in this order: set, dictionary,
+/// array. Because the verifier compares raw values, this choice does not
+/// change statement semantics.
+#[test]
+fn test_ambiguous_nested_container_renders_as_one_kind() {
+    let craft_src = r#"
+        fn Probe(action) {
+            var ore = action.input("Ore");
+            action.st_array_contains([set_of([0]), [0]], 0, 1);
+            action.st_array_contains([#{"a": "a"}, set_of(["a"])], 0, 2);
+            action.st_array_contains([#{}], 0, 3);
+            action.st_array_contains([[7], #{"a": 1}], 1, 4);
+        }
+"#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(craft_src, &["Probe"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            // Set{0} and Array[0].
+            "ArrayContains([#[0], #[0]], 0, 1)",
+            // Dict{"a": "a"} and Set{"a"}.
+            r#"ArrayContains([#["a"], #["a"]], 0, 2)"#,
+            // An empty container reads as all three kinds.
+            "ArrayContains([#[]], 0, 3)",
+            // Unambiguous containers are unaffected.
+            r#"ArrayContains([[7], {"a": 1}], 1, 4)"#,
+        ],
+    );
+}
+
+/// Verifies lookups and set membership on containers returned by earlier
+/// lookups.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_var_array_get_and_var_set_contains() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+            ore.set([["grade", 5]]);
+        }
+
+        fn AssertGrade(action) {
+            var ore = action.input("Ore");
+            var metal = action.output("Metal");
+            var table = #{"rows": [7, 5], "allowed": set_of([3, 5, 7])};
+            var rows = action.dict_get(table, "rows");
+            var allowed = action.dict_get(table, "allowed");
+            action.st_array_contains(rows, 1, ore.grade);
+            action.st_set_contains(allowed, ore.grade);
+            var row = action.array_get(rows, 0);
+            action.st_gt(row, 0);
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre", "AssertGrade"])
+        .unwrap();
+    assert_renders(
+        &module,
+        &[
+            r#""rows", rows)"#,
+            r#""allowed", allowed)"#,
+            "ArrayContains(rows, 1, ore.grade)",
+            "SetContains(allowed, ore.grade)",
+            "ArrayContains(rows, 0, row)",
+            "Gt(row, 0)",
+        ],
+    );
+
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let ore_tx = res.tx.clone();
+    let [ore] = res.objs();
+    apply_tx(&mut state, &ore_tx);
+
+    let executor = module.executor(true, grounding_witness(&state, &[ore.obj.commitment()]));
+    let res = executor.action("AssertGrade", vec![ore]).unwrap();
+    let metal_tx = res.tx.clone();
+    apply_tx(&mut state, &metal_tx);
 }

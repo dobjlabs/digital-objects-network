@@ -13,6 +13,7 @@ use crate::{
     ActionContext, ActionMeta, ActionObjectRef, ClassMeta, Dependency, Inst, Intro, Loader,
     ObjectIO, Ref, VarOrValue,
 };
+use pod2::middleware::Value;
 use std::collections::HashMap;
 use std::fmt;
 use txlib::RECORD_STATE_HEADER_PODLANG;
@@ -184,11 +185,86 @@ struct ArgFmt<'a> {
     arg: &'a Ref,
 }
 
+/// Formats a value as a Podlang literal.
+///
+/// Scalars already use valid Podlang syntax, but `Value` formats containers
+/// using debug syntax. If a container can be interpreted as multiple kinds,
+/// prefer set, then dictionary, then array. Each representation has the same
+/// raw value, which is what statement arguments use.
+///
+/// The pinned pod2 version cannot represent sparse arrays in Podlang, so they
+/// are rendered as their commitment. Once the dependency includes
+/// <https://github.com/0xPARC/pod2/pull/541>, render them with sparse-array syntax.
+struct LiteralFmt<'a>(&'a Value);
+
+#[cfg(test)]
+pub(crate) fn literal_podlang(value: &Value) -> String {
+    LiteralFmt(value).to_string()
+}
+
+impl<'a> fmt::Display for LiteralFmt<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = self.0;
+        if value.is_raw() {
+            return write!(f, "{value}");
+        }
+        let Some(container) = value.as_container() else {
+            return write!(f, "{value}");
+        };
+        let kind = container.kind();
+        if kind.is_set() {
+            let set = container.as_set().expect("kind says set");
+            write!(f, "#[")?;
+            for (i, element) in set.iter().enumerate() {
+                let element = element.map_err(|_| fmt::Error)?;
+                let sep = if i == 0 { "" } else { ", " };
+                write!(f, "{sep}{}", LiteralFmt(&element))?;
+            }
+            return write!(f, "]");
+        }
+        if kind.is_dictionary() {
+            let dict = container.as_dictionary().expect("kind says dictionary");
+            write!(f, "{{")?;
+            for (i, entry) in dict.iter().enumerate() {
+                let (key, entry) = entry.map_err(|_| fmt::Error)?;
+                let sep = if i == 0 { "" } else { ", " };
+                let key = Value::from(key);
+                write!(f, "{sep}{key}: {}", LiteralFmt(&entry))?;
+            }
+            return write!(f, "}}");
+        }
+        if kind.is_array() {
+            let array = container.as_array().expect("kind says array");
+            let mut slots = array
+                .iter()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| fmt::Error)?;
+            slots.sort_by_key(|(index, _)| *index);
+            // Podlang array literals cannot represent gaps between indexes.
+            if slots.iter().enumerate().all(|(i, (index, _))| i == *index) {
+                write!(f, "[")?;
+                for (i, (_, element)) in slots.iter().enumerate() {
+                    let sep = if i == 0 { "" } else { ", " };
+                    write!(f, "{sep}{}", LiteralFmt(element))?;
+                }
+                return write!(f, "]");
+            } else {
+                log::warn!(
+                    "Rendering sparse array as its commitment: the pinned pod2 version \
+                     does not support sparse-array literals"
+                );
+                return write!(f, "{}", Value::from(value.raw()));
+            }
+        }
+        write!(f, "{}", Value::from(value.raw()))
+    }
+}
+
 impl<'a> fmt::Display for ArgFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let arg = self.arg.borrow();
         match &*arg {
-            VarOrValue::Value(value) => write!(f, "{value}"),
+            VarOrValue::Value(value) => write!(f, "{}", LiteralFmt(value)),
             VarOrValue::Var(var) => match &var.key {
                 Some(key) => write!(f, "{}.{key}", self.vars[var.name.as_str()]),
                 None => write!(f, "{}", self.vars[var.name.as_str()]),
@@ -510,7 +586,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 )?;
                 vars.get_mut(obj_name).expect("obj exists").inc();
             }
-            Inst::Statement { pred, args } => {
+            Inst::Statement { pred, args, .. } => {
                 write!(w, "  {pred}(")?;
                 for (i, arg) in args.iter().enumerate() {
                     if i != 0 {

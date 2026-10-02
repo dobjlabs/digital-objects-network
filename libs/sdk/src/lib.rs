@@ -126,6 +126,8 @@ enum Inst {
         obj: String,
         key: String,
         value: Ref,
+        /// Value captured during Execute in pod2 form; `None` during Load.
+        op_arg: Option<OperationArg>,
         /// Pre-update Object dict snapshot. Some at Execute, None at Load.
         old_dict: Option<Dictionary>,
         /// Post-update Object dict snapshot. Some at Execute, None at Load.
@@ -134,6 +136,8 @@ enum Inst {
     Set {
         obj: String,
         kvs: Vec<(String, Ref)>,
+        /// Values captured during Execute in pod2 form; `None` during Load.
+        op_args: Option<Vec<OperationArg>>,
         /// Post-set Object dict snapshot (after all kvs inserted).
         /// Some at Execute, None at Load.
         final_dict: Option<Dictionary>,
@@ -141,6 +145,8 @@ enum Inst {
     Statement {
         pred: NativePredicate,
         args: Vec<Ref>,
+        /// Arguments captured during Execute in pod2 form; `None` during Load.
+        op_args: Option<Vec<OperationArg>>,
     },
     Intro {
         pred: Intro,
@@ -148,6 +154,8 @@ enum Inst {
         /// Pod's first pub statement, cached at Rhai time. Some at
         /// Execute, None at Load.
         statement: Option<Statement>,
+        /// Arguments captured during Execute in pod2 form; `None` during Load.
+        op_args: Option<Vec<OperationArg>>,
     },
     /// Reference to another action executed as a sub-action. The
     /// sub-action's exe_action runs recursively during the parent's
@@ -175,6 +183,7 @@ enum Type {
     Unk,
     Raw,
     Int,
+    Str,
     Dict,
     // The Vec contains the optional Record field names
     Array(Arc<Vec<String>>),
@@ -224,6 +233,7 @@ impl VarOrValue {
                 Type::Unk => Some(()),
                 Type::Raw => Some(()),
                 Type::Int => v.as_int().map(|_| ()),
+                Type::Str => v.as_str().map(|_| ()),
                 Type::Dict => v.as_dictionary().map(|_| ()),
                 Type::Array(_) => v.as_array().map(|_| ()),
             }
@@ -284,26 +294,10 @@ impl VarOrValue {
                 typ,
                 key: Some(key),
                 ..
-            }) => match typ {
-                Type::Dict => {
-                    let dict = value
-                        .as_ref()
-                        .expect("has value at exec time")
-                        .as_dictionary()
-                        .expect("dict");
-                    dict.get(&StrKey::from(key)).unwrap().expect("key exists")
-                }
-                Type::Array(record) => {
-                    let array = value
-                        .as_ref()
-                        .expect("has value at exec time")
-                        .as_array()
-                        .expect("array");
-                    let idx = record.iter().position(|k| k == key).unwrap();
-                    array.get(idx).unwrap().expect("index exists")
-                }
-                _ => todo!("implement type {typ}"),
-            },
+            }) => {
+                let value = value.as_ref().expect("has value at exec time");
+                resolve_entry(typ, value, key).2
+            }
         }
     }
     // Only call this at exec time
@@ -329,21 +323,12 @@ impl VarOrValue {
             }) => {
                 let value = value.as_ref().expect("has value at exec time").clone();
                 if let Some(key) = key {
-                    let st_contains = match typ {
-                        Type::Dict => {
-                            let dict = value.as_dictionary().expect("dict");
-                            let value = dict.get(&key.into()).unwrap().unwrap();
-                            Statement::Contains(dict.into(), key.clone().into(), value.into())
-                        }
-                        Type::Array(record) => {
-                            let array = value.as_array().expect("array");
-                            let index = record.iter().position(|k| k == key).unwrap();
-                            let value = array.get(index).unwrap().unwrap();
-                            Statement::Contains(array.into(), (index as i64).into(), value.into())
-                        }
-                        _ => todo!("support other types"),
-                    };
-                    OperationArg::Statement(st_contains)
+                    let (container, key, entry) = resolve_entry(typ, &value, key);
+                    OperationArg::Statement(Statement::Contains(
+                        container.into(),
+                        key.into(),
+                        entry.into(),
+                    ))
                 } else {
                     OperationArg::Literal(value)
                 }
@@ -368,6 +353,146 @@ impl VarOrValue {
         *obj = Value::from(dict);
         output
     }
+}
+
+/// Resolves `value.key` to the `(container, key, entry)` tuple expected by
+/// `Contains`.
+///
+/// Record fields are converted to array indexes using the schema's field
+/// order. Other values are treated as dictionaries. Call this only during
+/// execution, after `ArgHandle::entry` has validated the access.
+fn resolve_entry(typ: &Type, value: &Value, key: &str) -> (Value, Value, Value) {
+    try_resolve_entry(typ, value, key).expect("entry checked where the script wrote it")
+}
+
+/// Fallible version of `resolve_entry` for script-controlled values.
+///
+/// Variables returned by container lookups have type `Unk`, so invalid field
+/// access must be reported as a script error instead of treated as an internal
+/// invariant violation.
+fn try_resolve_entry(typ: &Type, value: &Value, key: &str) -> RuntimeResult<(Value, Value, Value)> {
+    match typ {
+        Type::Array(record) => {
+            let array = value.as_array().ok_or_else::<Box<EvalAltResult>, _>(|| {
+                format!(".{key} on a record that is not an array").into()
+            })?;
+            let index = record
+                .iter()
+                .position(|k| k == key)
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!("record has no entry {key}").into()
+                })?;
+            let entry = array
+                .get(index)
+                .map_err::<Box<EvalAltResult>, _>(|err| format!(".{key}: {err}").into())?
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!("record slot {index} ({key}) is empty").into()
+                })?;
+            Ok((Value::from(array), Value::from(index as i64), entry))
+        }
+        _ => {
+            let dict = value
+                .as_dictionary()
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!(".{key} on a value that is not a dictionary").into()
+                })?;
+            let entry = dict
+                .get(&StrKey::from(key))
+                .map_err::<Box<EvalAltResult>, _>(|err| format!(".{key}: {err}").into())?
+                .ok_or_else::<Box<EvalAltResult>, _>(|| format!("no entry {key}").into())?;
+            Ok((Value::from(dict), Value::from(key.to_string()), entry))
+        }
+    }
+}
+
+/// Returns the entry at `key`.
+///
+/// During Load, this validates lookups whose container and key are literals.
+/// During Execute, it resolves the value assigned to the lookup result.
+fn container_lookup(pred: NativePredicate, container: &Value, key: &Value) -> RuntimeResult<Value> {
+    container
+        .as_container()
+        .ok_or_else::<Box<EvalAltResult>, _>(|| {
+            format!("{pred}: {container} is not a container").into()
+        })?
+        .get(key.raw())
+        .map_err::<Box<EvalAltResult>, _>(|err| format!("{pred}: {err}").into())?
+        .ok_or_else::<Box<EvalAltResult>, _>(|| format!("{pred}: no entry at {key}").into())
+}
+
+/// Container kinds supported by lookup operations.
+///
+/// Sets do not require a lookup operation because each element is also its
+/// key. Use `st_set_contains` to test set membership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lookup {
+    Dict,
+    Array,
+}
+
+impl Lookup {
+    /// Returns the containment predicate emitted by this lookup.
+    fn pred(self) -> NativePredicate {
+        match self {
+            Self::Dict => NativePredicate::DictContains,
+            Self::Array => NativePredicate::ArrayContains,
+        }
+    }
+    /// Returns the required key type: strings for dictionaries and integers
+    /// for arrays.
+    fn key_type(self) -> Type {
+        match self {
+            Self::Dict => Type::Str,
+            Self::Array => Type::Int,
+        }
+    }
+}
+
+/// Validates container kinds that are known during Load.
+///
+/// Literal containers and typed object or record variables can be checked
+/// immediately. Values of type `Unk` cannot be validated here.
+///
+/// This check is required because pod2 lowers both predicates to the
+/// kind-agnostic `Contains` predicate.
+fn check_container_kind(lookup: Lookup, container: &VarOrValue) -> RuntimeResult<()> {
+    let ok = match container {
+        VarOrValue::Value(v) => match lookup {
+            Lookup::Dict => v.as_dictionary().is_some(),
+            Lookup::Array => v.as_array().is_some(),
+        },
+        // An entry ref reads its kind off the entry, not off the var
+        // holding it, so Load knows nothing about it.
+        VarOrValue::Var(Var { key: Some(_), .. }) => true,
+        VarOrValue::Var(Var { typ, .. }) => match typ {
+            Type::Dict => lookup == Lookup::Dict,
+            Type::Array(_) => lookup == Lookup::Array,
+            Type::Unk | Type::Raw => true,
+            Type::Int | Type::Str => false,
+        },
+    };
+    if ok {
+        return Ok(());
+    }
+    let kind = match lookup {
+        Lookup::Dict => "a Dictionary",
+        Lookup::Array => "an Array",
+    };
+    Err(format!("{}: container is not {kind}", lookup.pred()).into())
+}
+
+/// Captures statement arguments during execution.
+///
+/// Object arguments share mutable `Ref`s, so a later `update` may change their
+/// values. Capturing them here ensures that replay uses the values from when
+/// the statement was evaluated. Returns `None` during Load.
+fn capture_op_args(args: &[Ref], is_exe: bool) -> Option<Vec<OperationArg>> {
+    is_exe.then(|| args.iter().map(|arg| arg.borrow().as_op_arg()).collect())
+}
+
+/// Single-argument version of `capture_op_args`.
+fn capture_op_arg(arg: &Ref, is_exe: bool) -> Option<OperationArg> {
+    is_exe.then(|| arg.borrow().as_op_arg())
 }
 
 fn type_check_args<const N: usize>(args_types: [(&ArgHandle, Type); N]) -> RuntimeResult<()> {
@@ -413,9 +538,18 @@ macro_rules! st_methods {
     };
 }
 
-/// Used to track how many updates from mutations a variable takes.
+/// Prefix for variables created by SDK host methods.
+///
+/// Generated variables render as wildcards until the script binds them with
+/// `var`, which renames them to the script-provided name.
+const ANON_VAR_PREFIX: char = '_';
+
+/// Tracks a variable's binding and mutation state.
 #[derive(Default, Debug)]
 struct VarState {
+    /// Created by `fresh_var` and not yet named by a script's `var` binding.
+    /// The spelling of the variable's name does not determine this state.
+    anonymous: bool,
     ts: usize,
     /// Set by an operation that consumes the var's dict without recording
     /// an `Inst` for it, which only `pow_obj_grind` does.
@@ -439,6 +573,8 @@ struct ActionContext {
     /// same `ts` machinery.
     vars: Vec<String>,
     var_state: HashMap<String, VarState>,
+    /// Counter used to generate unique variable names.
+    anon_seq: usize,
     exe_ctx: Option<Rc<RefCell<ExeContext>>>,
     unsafe_block: bool,
 }
@@ -450,6 +586,7 @@ impl ActionContext {
             insts: Vec::new(),
             vars: Vec::new(),
             var_state: HashMap::new(),
+            anon_seq: 0,
             exe_ctx,
             unsafe_block: false,
         };
@@ -463,6 +600,54 @@ impl ActionContext {
         }
         self.var_state.insert(var.clone(), VarState::default());
         self.vars.push(var);
+        Ok(())
+    }
+    /// Creates and immediately registers a generated variable so it can be
+    /// used inline.
+    fn fresh_var(&mut self, tag: &str, typ: Type) -> Ref {
+        let name = loop {
+            let name = format!("{ANON_VAR_PREFIX}{tag}{}", self.anon_seq);
+            self.anon_seq += 1;
+            if !self.var_state.contains_key(&name) {
+                break name;
+            }
+        };
+        let mut var = VarOrValue::var(typ);
+        var.set_var_name(name.clone())
+            .expect("a fresh var is a var");
+        self.add_var(name.clone()).expect("a fresh name is free");
+        self.var_state
+            .get_mut(&name)
+            .expect("just registered")
+            .anonymous = true;
+        Rc::new(RefCell::new(var))
+    }
+    /// Renames a generated variable without changing wildcard order.
+    fn rename_var(&mut self, old: &str, new: String) -> RuntimeResult<()> {
+        if old == new {
+            return Ok(());
+        }
+        if self.var_state.contains_key(&new) {
+            return Err(format!("var {new} already exists").into());
+        }
+        let state = self.var_state.remove(old).expect("renaming a live var");
+        self.var_state.insert(new.clone(), state);
+        let old_var = self
+            .vars
+            .iter_mut()
+            .find(|v| v.as_str() == old)
+            .expect("renaming a registered var");
+        *old_var = new.clone();
+        // `Update` and `Set` store the target name, so rename previously
+        // recorded instructions as well.
+        for inst in self.insts.iter_mut() {
+            match inst {
+                Inst::Update { obj, .. } | Inst::Set { obj, .. } if obj == old => {
+                    *obj = new.clone();
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
     fn inc_t_var(&mut self, var: &str) -> RuntimeResult<()> {
@@ -1125,21 +1310,16 @@ impl ActionHandle {
             .map(|o| (o.varname.clone(), 0usize))
             .collect();
 
-        // The anchored form of each arg of a body statement, in arg
-        // order, or None where the arg stays as proved. A whole-dict arg
-        // naming an Object collapsed at this ts lifts to its record slot;
-        // a dict-field arg (`var.key`) lifts to its entry, but only for
-        // callers whose statement was proved with every arg literal
-        // (`lift_keys`) -- ops built from `as_op_arg` already carry the
-        // entry form.
-        // The anchored form the compiled podlang gives this arg, or None
-        // when it renders as a literal or a loose wildcard. A dict-field
-        // ref (`var.key`) resolves to its entry; a whole-container ref
-        // resolves to the record slot its Object collapses to at this ts.
-        let arg_anchor = |arg: &Ref, current_ts: &HashMap<String, usize>| -> Option<OperationArg> {
-            let arg = arg.borrow();
-            match &*arg {
-                VarOrValue::Var(Var { key: Some(_), .. }) => Some(arg.as_op_arg()),
+        // Returns the argument's anchored form, or `None` if it remains a
+        // literal or wildcard. Field references reuse their captured entry;
+        // whole-object references use the object's record slot at the current
+        // timestamp.
+        let arg_anchor = |arg: &Ref,
+                          snap: &OperationArg,
+                          current_ts: &HashMap<String, usize>|
+         -> Option<OperationArg> {
+            match &*arg.borrow() {
+                VarOrValue::Var(Var { key: Some(_), .. }) => Some(snap.clone()),
                 VarOrValue::Var(Var {
                     key: None, name, ..
                 }) => current_ts.get(name).and_then(|ts| anchor_at(name, *ts)),
@@ -1153,16 +1333,21 @@ impl ActionHandle {
             for (i, inst) in ctx.insts.iter().enumerate() {
                 match inst {
                     Inst::Object { .. } => {}
-                    Inst::Statement { pred, args } => {
+                    Inst::Statement {
+                        pred,
+                        args,
+                        op_args,
+                    } => {
                         let op_type = OperationType::Native(native_pred_to_op(*pred));
+                        let snapshot = op_args.as_ref().expect("args captured at Rhai");
                         // Built with each arg already in the form the
                         // rendered podlang names it, so the statement
                         // needs no lifting afterwards.
                         let op_args = args
                             .iter()
-                            .map(|arg| {
-                                arg_anchor(arg, &current_ts)
-                                    .unwrap_or_else(|| arg.borrow().as_op_arg())
+                            .zip(snapshot)
+                            .map(|(arg, snap)| {
+                                arg_anchor(arg, snap, &current_ts).unwrap_or_else(|| snap.clone())
                             })
                             .collect();
                         let st = exe_ctx
@@ -1173,16 +1358,21 @@ impl ActionHandle {
                         body_sts.push(st);
                     }
                     Inst::Intro {
-                        statement, args, ..
+                        statement,
+                        args,
+                        op_args,
+                        ..
                     } => {
                         let st_literal =
                             statement.clone().expect("Intro statement captured at Rhai");
+                        let snapshot = op_args.as_ref().expect("args captured at Rhai");
                         // The pod proved its statement over literal
                         // values, so unlike a body statement this one
                         // cannot be built anchored and has to be lifted.
                         let replacements: Vec<Option<OperationArg>> = args
                             .iter()
-                            .map(|arg| arg_anchor(arg, &current_ts))
+                            .zip(snapshot)
+                            .map(|(arg, snap)| arg_anchor(arg, snap, &current_ts))
                             .collect();
                         let st = if replacements.iter().any(|r| r.is_some()) {
                             exe_ctx
@@ -1237,13 +1427,15 @@ impl ActionHandle {
                     Inst::Set {
                         obj,
                         kvs,
+                        op_args,
                         final_dict,
                     } => {
                         let dict = final_dict.clone().expect("Set final_dict captured at Rhai");
                         let ts = *current_ts.get(obj).unwrap_or(&0);
                         let dict_arg = anchor_or_literal(obj, &dict, ts);
-                        for (key, value) in kvs {
-                            let arg = value.borrow().as_op_arg().clone();
+                        let op_args = op_args.as_ref().expect("Set op_args captured at Rhai");
+                        for ((key, _), arg) in kvs.iter().zip(op_args) {
+                            let arg = arg.clone();
                             let st = exe_ctx
                                 .bld
                                 .builder
@@ -1259,13 +1451,14 @@ impl ActionHandle {
                     Inst::Update {
                         obj,
                         key,
-                        value,
+                        op_arg,
                         old_dict,
                         new_dict,
+                        ..
                     } => {
                         let old_dict = old_dict.clone().expect("Update old_dict captured at Rhai");
                         let new_dict = new_dict.clone().expect("Update new_dict captured at Rhai");
-                        let arg = value.borrow().as_op_arg().clone();
+                        let arg = op_arg.clone().expect("Update op_arg captured at Rhai");
                         let ts_before = *current_ts.get(obj).unwrap_or(&0);
                         let ts_after = ts_before + 1;
                         let new_dict_arg = anchor_or_literal(obj, &new_dict, ts_after);
@@ -1351,7 +1544,12 @@ impl ActionHandle {
     fn native_st(self, pred: NativePredicate, args: Vec<Ref>) -> RuntimeResult<()> {
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
-        ctx.insts.push(Inst::Statement { pred, args });
+        let op_args = capture_op_args(&args, ctx.exe_ctx.is_some());
+        ctx.insts.push(Inst::Statement {
+            pred,
+            args,
+            op_args,
+        });
         Ok(())
     }
     //
@@ -1436,7 +1634,7 @@ impl ActionHandle {
         Ok(ArgHandle::new(self.clone(), arg))
     }
     fn random(self) -> RuntimeResult<ArgHandle> {
-        let value = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
+        let value = self.0.borrow_mut().fresh_var("rand", Type::Raw);
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
             value.borrow_mut().set_value(exe_ctx.rand_value());
         }
@@ -1450,7 +1648,7 @@ impl ActionHandle {
             self.0.borrow_mut().mark_dict_read(&var.name);
         }
         // For now we assume that obj is var, and thus return a key that is also var
-        let key = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
+        let key = self.0.borrow_mut().fresh_var("grind", Type::Raw);
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
             // This is a copy of the object, we don't modify the obj argument.
             let mut obj = obj.borrow().to_dict();
@@ -1472,6 +1670,58 @@ impl ActionHandle {
         }
         Ok(ArgHandle::new(self.clone(), key))
     }
+    /// Returns the dictionary entry at `key` and emits `DictContains`.
+    fn dict_get(self, dict: Dynamic, key: Dynamic) -> RuntimeResult<ArgHandle> {
+        self.container_get(Lookup::Dict, dict, key)
+    }
+    /// Returns the array entry at `index` and emits `ArrayContains`.
+    fn array_get(self, array: Dynamic, index: Dynamic) -> RuntimeResult<ArgHandle> {
+        self.container_get(Lookup::Array, array, index)
+    }
+    /// Emits a containment statement and returns a variable bound to the
+    /// matching entry.
+    ///
+    /// The key may also be a variable, allowing a literal container to serve
+    /// as a lookup table without emitting one statement per entry.
+    fn container_get(
+        self,
+        lookup: Lookup,
+        container: Dynamic,
+        key: Dynamic,
+    ) -> RuntimeResult<ArgHandle> {
+        // The container is checked before the key, so a lookup that
+        // names the wrong kind is reported as that rather than as a key
+        // of the wrong type.
+        let [container] = validate_args([(container, Type::Unk)])?;
+        check_container_kind(lookup, &container.borrow())?;
+        let [key] = validate_args([(key, lookup.key_type())])?;
+        let pred = lookup.pred();
+        let mut ctx = self.0.borrow_mut();
+        ctx.assert_unsafe(false)?;
+        let entry = ctx.fresh_var("get", Type::Unk);
+        if ctx.exe_ctx.is_some() {
+            let found = container_lookup(
+                pred,
+                &container.borrow().as_value(),
+                &key.borrow().as_value(),
+            )?;
+            entry.borrow_mut().set_value(found);
+        } else if let (VarOrValue::Value(c), VarOrValue::Value(k)) =
+            (&*container.borrow(), &*key.borrow())
+        {
+            // Validate literal lookups during Load because their result cannot
+            // change during Execute.
+            container_lookup(pred, c, k)?;
+        }
+        let args = vec![container, key, entry.clone()];
+        let op_args = capture_op_args(&args, ctx.exe_ctx.is_some());
+        ctx.insts.push(Inst::Statement {
+            pred,
+            args,
+            op_args,
+        });
+        Ok(ArgHandle::new(self.clone(), entry))
+    }
     /// Build a u256 with `n` in the most-significant limb and zeros elsewhere.
     /// Useful as a difficulty target for [`pow_obj_grind`] and [`intro_lt_eq_u256`]:
     /// a u256 `x` satisfies `x <= top_limb_u256(n)` iff the top limb of `x` is
@@ -1492,9 +1742,9 @@ impl ActionHandle {
     fn intro_vdf(self, n_iters: Dynamic, input: Dynamic) -> RuntimeResult<ArgHandle> {
         let [n_iters, input] = validate_args([(n_iters, Type::Int), (input, Type::Raw)])?;
 
-        let work = Rc::new(RefCell::new(VarOrValue::var(Type::Raw)));
         let mut ctx = self.0.borrow_mut();
         ctx.assert_unsafe(false)?;
+        let work = ctx.fresh_var("vdf", Type::Raw);
         let mut statement: Option<Statement> = None;
         if let Some(exe_rc) = ctx.exe_ctx.as_ref() {
             let mut exe_ctx = exe_rc.borrow_mut();
@@ -1510,10 +1760,13 @@ impl ActionHandle {
             work.borrow_mut().set_value(st.args()[2].literal().unwrap());
             statement = Some(st);
         }
+        let args = vec![n_iters, input, work.clone()];
+        let op_args = capture_op_args(&args, statement.is_some());
         ctx.insts.push(Inst::Intro {
             pred: Intro::Vdf,
-            args: vec![n_iters, input, work.clone()],
+            args,
             statement,
+            op_args,
         });
         Ok(ArgHandle::new(self.clone(), work))
     }
@@ -1535,10 +1788,13 @@ impl ActionHandle {
             let st = add_intro_pod(&mut exe_ctx, pod);
             statement = Some(st);
         }
+        let args = vec![lhs, rhs];
+        let op_args = capture_op_args(&args, statement.is_some());
         ctx.insts.push(Inst::Intro {
             pred: Intro::LtEqU256,
-            args: vec![lhs, rhs],
+            args,
             statement,
+            op_args,
         });
         Ok(())
     }
@@ -1560,17 +1816,17 @@ st_methods! {
     st_hash, Hash, [v0: Type::Unk, v1: Type::Unk, v2: Type::Unk];
     st_contains, Contains, [c: Type::Unk, k: Type::Unk, v: Type::Unk];
     st_not_contains, NotContains, [c: Type::Unk, k: Type::Unk];
-    st_dict_contains, DictContains, [d: Type::Dict, k: Type::Unk, v: Type::Unk];
-    st_dict_not_contains, DictNotContains, [d: Type::Dict, k: Type::Unk];
+    st_dict_contains, DictContains, [d: Type::Dict, k: Type::Str, v: Type::Unk];
+    st_dict_not_contains, DictNotContains, [d: Type::Dict, k: Type::Str];
     st_set_contains, SetContains, [s: Type::Unk, v: Type::Unk];
     st_set_not_contains, SetNotContains, [s: Type::Unk, v: Type::Unk];
     st_array_contains, ArrayContains, [a: Type::Unk, i: Type::Int, v: Type::Unk];
     st_container_insert, ContainerInsert, [old: Type::Unk, k: Type::Unk, v: Type::Unk, new: Type::Unk];
     st_container_update, ContainerUpdate, [old: Type::Unk, k: Type::Unk, v: Type::Unk, new: Type::Unk];
     st_container_delete, ContainerDelete, [old: Type::Unk, k: Type::Unk, new: Type::Unk];
-    st_dict_insert, DictInsert, [old: Type::Dict, k: Type::Unk, v: Type::Unk, new: Type::Dict];
-    st_dict_update, DictUpdate, [old: Type::Dict, k: Type::Unk, v: Type::Unk, new: Type::Dict];
-    st_dict_delete, DictDelete, [old: Type::Dict, k: Type::Unk, new: Type::Dict];
+    st_dict_insert, DictInsert, [old: Type::Dict, k: Type::Str, v: Type::Unk, new: Type::Dict];
+    st_dict_update, DictUpdate, [old: Type::Dict, k: Type::Str, v: Type::Unk, new: Type::Dict];
+    st_dict_delete, DictDelete, [old: Type::Dict, k: Type::Str, new: Type::Dict];
     st_set_insert, SetInsert, [old: Type::Unk, v: Type::Unk, new: Type::Unk];
     st_set_delete, SetDelete, [old: Type::Unk, v: Type::Unk, new: Type::Unk];
     st_array_update, ArrayUpdate, [old: Type::Unk, i: Type::Int, v: Type::Unk, new: Type::Unk];
@@ -1656,6 +1912,8 @@ impl ArgHandle {
         let mut ctx = self.ctx.0.borrow_mut();
         ctx.assert_unsafe(false)?;
         ctx.check_settable(&var_name)?;
+        let written: Vec<Ref> = kvs.iter().map(|(_, value)| value.clone()).collect();
+        let op_args = capture_op_args(&written, ctx.exe_ctx.is_some());
         let mut final_dict: Option<Dictionary> = None;
         if ctx.exe_ctx.is_some() {
             let mut arg = self.arg.borrow_mut();
@@ -1670,22 +1928,16 @@ impl ArgHandle {
         ctx.insts.push(Inst::Set {
             obj: var_name,
             kvs,
+            op_args,
             final_dict,
         });
         Ok(())
     }
-    fn get(self, _key: String) -> RuntimeResult<ArgHandle> {
-        todo!();
-        // type_check_args([(&self, Type::Dict)])?;
-        // // For now we assume that obj is var, and thus return a value that is also var
-        // let value = Rc::new(RefCell::new(VarOrValue::var(Type::Unk)));
-        // let ctx = self.ctx.0.borrow();
-        // if ctx.exe_ctx.is_some() {
-        //     let obj = self.arg.borrow().as_value().as_dictionary().expect("dict");
-        //     let v = obj.get(&StrKey::from(key)).expect("TODO").expect("TODO");
-        //     value.borrow_mut().set_value(v);
-        // }
-        // Ok(ArgHandle::new(self.ctx.clone(), value))
+    /// Equivalent to `action.dict_get(o, k)`. Unlike `o.k`, this form accepts
+    /// a variable key.
+    fn get(self, key: Dynamic) -> RuntimeResult<ArgHandle> {
+        let ctx = self.ctx.clone();
+        ctx.dict_get(Dynamic::from(self), key)
     }
     fn update(self, key: String, value: Dynamic) -> RuntimeResult<()> {
         type_check_args([(&self, Type::Dict)])?;
@@ -1695,6 +1947,7 @@ impl ArgHandle {
             let value = try_ref_from_dynamic(value)?;
             let mut ctx = self.ctx.0.borrow_mut();
             ctx.assert_unsafe(false)?;
+            let op_arg = capture_op_arg(&value, ctx.exe_ctx.is_some());
             let mut old_dict: Option<Dictionary> = None;
             let mut new_dict: Option<Dictionary> = None;
             if ctx.exe_ctx.is_some() {
@@ -1712,6 +1965,7 @@ impl ArgHandle {
                 obj: var_name,
                 key,
                 value,
+                op_arg,
                 old_dict,
                 new_dict,
             });
@@ -1720,7 +1974,23 @@ impl ArgHandle {
     }
     fn entry(&mut self, index: String) -> RuntimeResult<ArgHandle> {
         let mut arg = self.arg.borrow().clone();
+        // Resolve literal access immediately; there is no variable on which to
+        // retain a field reference.
+        if let VarOrValue::Value(value) = &arg {
+            let (_, _, entry) = try_resolve_entry(&Type::Dict, value, &index)?;
+            return Ok(ArgHandle::literal(self.ctx.clone(), entry));
+        }
         let var = arg.as_mut_var();
+        // Validate known record fields during Load and runtime values during
+        // Execute before retaining the field reference.
+        if let Type::Array(record) = &var.typ
+            && !record.iter().any(|k| k == &index)
+        {
+            return Err(format!("record has no entry {index}").into());
+        }
+        if let Some(value) = &var.value {
+            try_resolve_entry(&var.typ, value, &index)?;
+        }
         var.key = Some(index);
         let arg = Rc::new(RefCell::new(arg));
         Ok(ArgHandle::new(self.ctx.clone(), arg))
@@ -1764,12 +2034,12 @@ impl ArithOp {
 /// constrain its result or not depending on the caller.
 fn arg_arith(op: ArithOp, a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle> {
     type_check_args([(&a, Type::Int), (&b, Type::Int)])?;
-    let value = Rc::new(RefCell::new(VarOrValue::var(Type::Int)));
     let is_exe = {
         let ctx = a.ctx.0.borrow();
         ctx.assert_unsafe(true)?;
         ctx.exe_ctx.is_some()
     };
+    let value = a.ctx.0.borrow_mut().fresh_var("arith", Type::Int);
     if is_exe {
         let int = |arg: &Ref| -> RuntimeResult<i64> {
             arg.borrow()
@@ -1787,45 +2057,96 @@ fn arg_arith(op: ArithOp, a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle
     Ok(ArgHandle::new(a.ctx.clone(), value))
 }
 
+/// Result of attempting to convert a Rhai `Dynamic` to a pod2 `Value`.
+enum ValueCast {
+    Value(Value),
+    /// Not a value; the caller may attempt another supported conversion.
+    Other(Dynamic),
+    /// A recognized value shape containing invalid data.
+    Err(Box<EvalAltResult>),
+}
+
 /// Try to get the pod2 Value or promote a native type to it.
-fn _try_value_from_dynamic(v: Dynamic) -> Result<Value, Dynamic> {
+fn _try_value_from_dynamic(v: Dynamic) -> ValueCast {
     let v = match v.try_cast_result::<Value>() {
-        Ok(v) => return Ok(v),
+        Ok(v) => return ValueCast::Value(v),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<String>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<i64>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
+        Err(v) => v,
+    };
+    // Rhai booleans promote to pod2 integer literals `0` and `1`.
+    let v = match v.try_cast_result::<bool>() {
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<RawValue>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<Dictionary>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<Set>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
     let v = match v.try_cast_result::<Array>() {
-        Ok(v) => return Ok(Value::from(v)),
+        Ok(v) => return ValueCast::Value(Value::from(v)),
         Err(v) => v,
     };
-    Err(v)
+    // Recursively convert Rhai arrays and maps to pod2 containers. Use
+    // `set_of` for sets because Rhai has no corresponding native type.
+    let v = match v.try_cast_result::<rhai::Array>() {
+        Ok(elements) => {
+            return match literals_from_rhai_array(elements) {
+                Ok(elements) => ValueCast::Value(Value::from(Array::new(elements))),
+                Err(err) => ValueCast::Err(err),
+            };
+        }
+        Err(v) => v,
+    };
+    let v = match v.try_cast_result::<rhai::Map>() {
+        Ok(entries) => {
+            return match entries
+                .into_iter()
+                .map(|(key, value)| Ok((StrKey::from(key.as_str()), literal_from_dynamic(value)?)))
+                .collect::<RuntimeResult<HashMap<StrKey, Value>>>()
+            {
+                Ok(entries) => ValueCast::Value(Value::from(Dictionary::new(entries))),
+                Err(err) => ValueCast::Err(err),
+            };
+        }
+        Err(v) => v,
+    };
+    ValueCast::Other(v)
 }
 
-/// Try to get a Ref or promote a native pod2 Value-compatible type to it.
-fn try_ref_from_dynamic(v: Dynamic) -> RuntimeResult<Ref> {
-    let v = match _try_value_from_dynamic(v) {
-        Ok(v) => return Ok(Rc::new(RefCell::new(VarOrValue::value(v)))),
-        Err(v) => v,
-    };
+/// Constructs a pod2 `Set` from a Rhai array.
+///
+/// This is a free function because it does not access action state.
+fn set_of(elements: Dynamic) -> RuntimeResult<Set> {
+    let elements = elements
+        .try_cast::<rhai::Array>()
+        .ok_or::<Box<EvalAltResult>>("set_of: expected an array of elements".into())?;
+    Ok(Set::new(HashSet::from_iter(literals_from_rhai_array(
+        elements,
+    )?)))
+}
+
+/// Converts the literal elements of a Rhai array to pod2 values.
+fn literals_from_rhai_array(elements: rhai::Array) -> RuntimeResult<Vec<Value>> {
+    elements.into_iter().map(literal_from_dynamic).collect()
+}
+
+/// Extracts a `Ref` from a `Dynamic` containing a `Ref` or `ArgHandle`.
+fn wrapped_ref(v: Dynamic) -> RuntimeResult<Ref> {
     let v = match v.try_cast_result::<Ref>() {
         Ok(v) => return Ok(v),
         Err(v) => v,
@@ -1834,28 +2155,44 @@ fn try_ref_from_dynamic(v: Dynamic) -> RuntimeResult<Ref> {
         Ok(v) => return Ok(v.arg),
         Err(v) => v,
     };
-    _ = v;
     Err(format!("invalid Ref type: {}", v.type_name()).into())
+}
+
+/// Converts one container-literal element. Variables are rejected because
+/// container contents must be known during Load.
+fn literal_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
+    let v = match _try_value_from_dynamic(v) {
+        ValueCast::Value(value) => return Ok(value),
+        ValueCast::Err(err) => return Err(err),
+        ValueCast::Other(v) => v,
+    };
+    let type_name = v.type_name().to_string();
+    match &*wrapped_ref(v)?.borrow() {
+        VarOrValue::Value(value) => Ok(value.clone()),
+        VarOrValue::Var(_) => {
+            Err(format!("container literal: {type_name} element is a var, not a literal").into())
+        }
+    }
+}
+
+/// Try to get a Ref or promote a native pod2 Value-compatible type to it.
+fn try_ref_from_dynamic(v: Dynamic) -> RuntimeResult<Ref> {
+    match _try_value_from_dynamic(v) {
+        ValueCast::Value(v) => Ok(Rc::new(RefCell::new(VarOrValue::value(v)))),
+        ValueCast::Err(err) => Err(err),
+        ValueCast::Other(v) => wrapped_ref(v),
+    }
 }
 
 /// Get the Value from a type that encapsulates VarOrValue, or promote a native pod2
 /// Value-compatible type to it.
 /// Only call this at exec time
 fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
-    let v = match _try_value_from_dynamic(v) {
-        Ok(v) => return Ok(v),
-        Err(v) => v,
-    };
-    let v = match v.try_cast_result::<Ref>() {
-        Ok(v) => return Ok(v.borrow().as_value().clone()),
-        Err(v) => v,
-    };
-    let v = match v.try_cast_result::<ArgHandle>() {
-        Ok(v) => return Ok(v.arg.borrow().as_value().clone()),
-        Err(v) => v,
-    };
-    _ = v;
-    Err(format!("invalid value type: {}", v.type_name()).into())
+    match _try_value_from_dynamic(v) {
+        ValueCast::Value(v) => Ok(v),
+        ValueCast::Err(err) => Err(err),
+        ValueCast::Other(v) => Ok(wrapped_ref(v)?.borrow().as_value().clone()),
+    }
 }
 
 /// One object reference in an action, in declaration order. Only
@@ -2794,10 +3131,39 @@ fn new_engine() -> Engine {
                     expr: &Expression,
                 ) -> RuntimeResult<Dynamic> {
                     let value = ctx.eval_expression_tree(expr)?;
-                    let arg_ctx = value.try_cast::<ArgHandle>().expect("TODO");
-
-                    arg_ctx.arg.borrow_mut().set_var_name(var_name.clone())?;
-                    arg_ctx.ctx.0.borrow_mut().add_var(var_name.clone())?;
+                    // Literals remain ordinary Rhai bindings and render inline. Only
+                    // variables receive the script-provided name.
+                    let Some(arg_ctx) = value.clone().try_cast::<ArgHandle>() else {
+                        ctx.scope_mut().push(var_name, value.clone());
+                        return Ok(value);
+                    };
+                    let old_name = match &*arg_ctx.arg.borrow() {
+                        VarOrValue::Value(_) => None,
+                        VarOrValue::Var(var) => Some(var.name.clone()),
+                    };
+                    if let Some(old_name) = old_name {
+                        {
+                            let mut ctx = arg_ctx.ctx.0.borrow_mut();
+                            // Preserve a generated variable's identity and wildcard
+                            // position when the script assigns it a name.
+                            if ctx
+                                .var_state
+                                .get(&old_name)
+                                .is_some_and(|state| state.anonymous)
+                            {
+                                ctx.rename_var(&old_name, var_name.clone())?;
+                                // A binding names the variable even when its name
+                                // is unchanged or still begins with `_`.
+                                ctx.var_state
+                                    .get_mut(&var_name)
+                                    .expect("renamed var exists")
+                                    .anonymous = false;
+                            } else {
+                                ctx.add_var(var_name.clone())?;
+                            }
+                        }
+                        arg_ctx.arg.borrow_mut().set_var_name(var_name.clone())?;
+                    }
                     ctx.scope_mut().push(var_name, arg_ctx.clone());
                     Ok(Dynamic::from(arg_ctx))
                 }
@@ -2834,6 +3200,8 @@ fn new_engine() -> Engine {
         .unwrap();
 
     engine
+        .register_type_with_name::<Set>("Set")
+        .register_fn("set_of", set_of)
         .register_type_with_name::<ActionHandle>("ActionContext")
         .register_fn("output", ActionHandle::output)
         .register_fn("input", ActionHandle::input)
@@ -2844,6 +3212,8 @@ fn new_engine() -> Engine {
         .register_fn("intro_lt_eq_u256", ActionHandle::intro_lt_eq_u256)
         .register_fn("pow_obj_grind", ActionHandle::pow_obj_grind)
         .register_fn("top_limb_u256", ActionHandle::top_limb_u256)
+        .register_fn("dict_get", ActionHandle::dict_get)
+        .register_fn("array_get", ActionHandle::array_get)
         .register_type_with_name::<ArgHandle>("ArgContext")
         .register_fn("set", ArgHandle::set)
         .register_fn("get", ArgHandle::get)
