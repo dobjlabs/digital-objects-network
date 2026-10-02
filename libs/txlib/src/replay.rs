@@ -14,7 +14,7 @@
 //! method here is a private helper it delegates to.
 
 use pod2::{
-    frontend::Operation,
+    frontend::{Operation, entry},
     middleware::{
         Hash, Statement, Value,
         containers::{Dictionary, Set},
@@ -563,7 +563,13 @@ impl<'a> Replayer<'a> {
             .ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![None, None, Some((&pair, "initial")), None, None],
+                vec![
+                    None,
+                    None,
+                    Some(entry(&pair, "initial").expect("referenced container entry exists")),
+                    None,
+                    None,
+                ],
                 tx_stmt,
             ))
             .unwrap();
@@ -571,12 +577,21 @@ impl<'a> Replayer<'a> {
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert((&btx, "live"), new, (&pair, "new_live"))))
+            .priv_op(op!(SetInsert(
+                entry(&btx, "live").expect("referenced container entry exists"),
+                new,
+                entry(&pair, "new_live").expect("referenced container entry exists")
+            )))
             .unwrap();
         let op_du = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(btx, "live", (&pair, "new_live"), atx)))
+            .priv_op(op!(DictUpdate(
+                btx,
+                "live",
+                entry(&pair, "new_live").expect("referenced container entry exists"),
+                atx
+            )))
             .unwrap();
         let rebound_evidence = self
             .ctx
@@ -585,8 +600,8 @@ impl<'a> Replayer<'a> {
                 vec![
                     None,
                     None,
-                    Some((&btx, "chain_start")),
-                    Some((&btx, "chain_end")),
+                    Some(entry(&btx, "chain_start").expect("referenced container entry exists")),
+                    Some(entry(&btx, "chain_end").expect("referenced container entry exists")),
                 ],
                 guard_evidence,
             ))
@@ -621,8 +636,14 @@ impl<'a> Replayer<'a> {
                 vec![
                     None,
                     None,
-                    Some((&scratch.btx, "chain_start")),
-                    Some((&scratch.btx, "chain_end")),
+                    Some(
+                        entry(&scratch.btx, "chain_start")
+                            .expect("referenced container entry exists"),
+                    ),
+                    Some(
+                        entry(&scratch.btx, "chain_end")
+                            .expect("referenced container entry exists"),
+                    ),
                 ],
                 guard_evidence,
             ))
@@ -662,7 +683,11 @@ impl<'a> Replayer<'a> {
         let op_h1 = self
             .ctx
             .builder
-            .priv_op(op!(Hash(old, (old, "key"), okh)))
+            .priv_op(op!(Hash(
+                old,
+                entry(old, "key").expect("referenced container entry exists"),
+                okh
+            )))
             .unwrap();
         let op_h2 = self
             .ctx
@@ -672,7 +697,11 @@ impl<'a> Replayer<'a> {
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert((mid_tx, "nullifiers"), nul, new_nullifiers)))
+            .priv_op(op!(SetInsert(
+                entry(mid_tx, "nullifiers").expect("referenced container entry exists"),
+                nul,
+                new_nullifiers
+            )))
             .unwrap();
         let op_du_null = self
             .ctx
@@ -722,7 +751,11 @@ impl<'a> Replayer<'a> {
         let op_sd = self
             .ctx
             .builder
-            .priv_op(op!(SetDelete((btx, "live"), old, live_minus_old)))
+            .priv_op(op!(SetDelete(
+                entry(btx, "live").expect("referenced container entry exists"),
+                old,
+                live_minus_old
+            )))
             .unwrap();
         let op_si = self
             .ctx
@@ -773,7 +806,11 @@ impl<'a> Replayer<'a> {
             .ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![Some((&pair, "mid_tx")), None, None],
+                vec![
+                    Some(entry(&pair, "mid_tx").expect("referenced container entry exists")),
+                    None,
+                    None,
+                ],
                 st_nullify.clone(),
             ))
             .unwrap();
@@ -781,7 +818,11 @@ impl<'a> Replayer<'a> {
         let op_sd = self
             .ctx
             .builder
-            .priv_op(op!(SetDelete((&btx, "live"), old, (&pair, "new_live"))))
+            .priv_op(op!(SetDelete(
+                entry(&btx, "live").expect("referenced container entry exists"),
+                old,
+                entry(&pair, "new_live").expect("referenced container entry exists")
+            )))
             .unwrap();
         let op_du_live = self
             .ctx
@@ -789,8 +830,8 @@ impl<'a> Replayer<'a> {
             .priv_op(op!(DictUpdate(
                 btx,
                 "live",
-                (&pair, "new_live"),
-                (&pair, "mid_tx")
+                entry(&pair, "new_live").expect("referenced container entry exists"),
+                entry(&pair, "mid_tx").expect("referenced container entry exists")
             )))
             .unwrap();
         let rebound_evidence = self
@@ -800,8 +841,8 @@ impl<'a> Replayer<'a> {
                 vec![
                     None,
                     None,
-                    Some((&btx, "chain_start")),
-                    Some((&btx, "chain_end")),
+                    Some(entry(&btx, "chain_start").expect("referenced container entry exists")),
+                    Some(entry(&btx, "chain_end").expect("referenced container entry exists")),
                 ],
                 guard_evidence,
             ))
@@ -861,14 +902,14 @@ impl<'a> Replayer<'a> {
                 btx,
                 "chain_start",
                 chain,
-                (&pair, "scope_mid")
+                entry(&pair, "scope_mid").expect("referenced container entry exists")
             )))
             .unwrap();
         let op_scope2 = self
             .ctx
             .builder
             .priv_op(op!(DictUpdate(
-                (&pair, "scope_mid"),
+                entry(&pair, "scope_mid").expect("referenced container entry exists"),
                 "chain_end",
                 chain_after,
                 itx
@@ -877,15 +918,20 @@ impl<'a> Replayer<'a> {
         let op_du1 = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(btx, "live", (&etx, "live"), (&pair, "mid"))))
+            .priv_op(op!(DictUpdate(
+                btx,
+                "live",
+                entry(&etx, "live").expect("referenced container entry exists"),
+                entry(&pair, "mid").expect("referenced container entry exists")
+            )))
             .unwrap();
         let op_du2 = self
             .ctx
             .builder
             .priv_op(op!(DictUpdate(
-                (&pair, "mid"),
+                entry(&pair, "mid").expect("referenced container entry exists"),
                 "nullifiers",
-                (&etx, "nullifiers"),
+                entry(&etx, "nullifiers").expect("referenced container entry exists"),
                 atx
             )))
             .unwrap();
@@ -951,7 +997,13 @@ impl<'a> Replayer<'a> {
             .ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![None, None, Some((&pair, "initial")), None, None],
+                vec![
+                    None,
+                    None,
+                    Some(entry(&pair, "initial").expect("referenced container entry exists")),
+                    None,
+                    None,
+                ],
                 tx_stmt.clone(),
             ))
             .unwrap();
@@ -959,12 +1011,21 @@ impl<'a> Replayer<'a> {
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert((&btx, "live"), new, (&pair, "new_live"))))
+            .priv_op(op!(SetInsert(
+                entry(&btx, "live").expect("referenced container entry exists"),
+                new,
+                entry(&pair, "new_live").expect("referenced container entry exists")
+            )))
             .unwrap();
         let op_du = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(btx, "live", (&pair, "new_live"), atx)))
+            .priv_op(op!(DictUpdate(
+                btx,
+                "live",
+                entry(&pair, "new_live").expect("referenced container entry exists"),
+                atx
+            )))
             .unwrap();
         let st = self
             .ctx

@@ -32,7 +32,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
-    frontend::Operation,
+    frontend::{Operation, entry},
     middleware::{
         EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
         containers::{Array, Dictionary, Set},
@@ -788,8 +788,8 @@ impl TxBuilder {
         let st_eq_stable_identifier = ctx
             .builder
             .priv_op(op!(Equal(
-                (old, STABLE_IDENTIFIER_FIELD),
-                (new, STABLE_IDENTIFIER_FIELD)
+                entry(old, STABLE_IDENTIFIER_FIELD).expect("referenced container entry exists"),
+                entry(new, STABLE_IDENTIFIER_FIELD).expect("referenced container entry exists")
             )))
             .unwrap();
         let st_h1 = ctx
@@ -910,7 +910,10 @@ impl TxBuilder {
         let st_inputs_rebound = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![Some((&before_tx, "live")), None],
+                vec![
+                    Some(entry(&before_tx, "live").expect("referenced container entry exists")),
+                    None,
+                ],
                 self.st_inputs_grounded.clone(),
             ))
             .unwrap();
@@ -920,7 +923,10 @@ impl TxBuilder {
             .priv_op(Operation::replace_value_with_entry(
                 vec![
                     None,
-                    Some((&state_header_arr, STATE_HEADER_CREATED_SLOT as i64)),
+                    Some(
+                        entry(&state_header_arr, STATE_HEADER_CREATED_SLOT as i64)
+                            .expect("referenced container entry exists"),
+                    ),
                 ],
                 st_inputs_rebound,
             ))
@@ -932,7 +938,11 @@ impl TxBuilder {
         let st_hash_rebound = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![Some((&before_tx, "live")), None, None],
+                vec![
+                    Some(entry(&before_tx, "live").expect("referenced container entry exists")),
+                    None,
+                    None,
+                ],
                 st_hash,
             ))
             .unwrap();
@@ -958,7 +968,12 @@ impl TxBuilder {
         let st_dict_insert = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![None, None, Some((&before_tx, "live")), None],
+                vec![
+                    None,
+                    None,
+                    Some(entry(&before_tx, "live").expect("referenced container entry exists")),
+                    None,
+                ],
                 st_dict_insert_lit,
             ))
             .unwrap();
@@ -1421,11 +1436,18 @@ mod tests {
             let (st_mutate, h_sub) = tx2.mutate(&mut ctx, &pick_new, &pick);
             let op_gt = ctx
                 .builder
-                .priv_op(op!(Gt((&pick, "durability"), 0_i64)))
+                .priv_op(op!(Gt(
+                    entry(&pick, "durability").expect("referenced container entry exists"),
+                    0_i64
+                )))
                 .unwrap();
             let op_sum = ctx
                 .builder
-                .priv_op(op!(Sum(99_i64, 1_i64, (&pick, "durability"))))
+                .priv_op(op!(Sum(
+                    99_i64,
+                    1_i64,
+                    entry(&pick, "durability").expect("referenced container entry exists")
+                )))
                 .unwrap();
             let op_du = ctx
                 .builder
@@ -1650,14 +1672,26 @@ mod tests {
         let st_ins_a_anchored = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![None, None, Some((&initials, "stick_a")), None, None],
+                vec![
+                    None,
+                    None,
+                    Some(entry(&initials, "stick_a").expect("referenced container entry exists")),
+                    None,
+                    None,
+                ],
                 st_ins_a,
             ))
             .unwrap();
         let st_ins_b_anchored = ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![None, None, Some((&initials, "stick_b")), None, None],
+                vec![
+                    None,
+                    None,
+                    Some(entry(&initials, "stick_b").expect("referenced container entry exists")),
+                    None,
+                    None,
+                ],
                 st_ins_b,
             ))
             .unwrap();
