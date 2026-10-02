@@ -169,8 +169,10 @@ representation in this order: set, dictionary, array. Because statement
 arguments are compared and hashed by raw value, this choice does not affect
 verification.
 
-Podlang array literals require contiguous indexes. Sparse arrays therefore
-cannot be represented as literals and are rendered as commitments instead.
+The pinned pod2 version requires contiguous indexes in Podlang array literals.
+Sparse arrays are rendered as commitments with a warning. Support for rendering
+them as literals can follow a dependency update that includes
+[pod2 #541](https://github.com/0xPARC/pod2/pull/541).
 
 ## Type checking
 

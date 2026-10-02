@@ -1517,8 +1517,9 @@ fn test_literal_container_rejects_var() {
     assert!(err.contains("is a var, not a literal"), "{err}");
 }
 
-/// Renders sparse arrays as commitments because Podlang has no sparse-array
-/// literal syntax.
+/// Renders sparse arrays as commitments because the pinned pod2 version has no
+/// sparse-array literal syntax. Update this expectation once the dependency
+/// includes <https://github.com/0xPARC/pod2/pull/541>.
 #[test]
 fn test_sparse_array_literal_renders_as_commitment() {
     let dense = Array::new(vec![Value::from(1), Value::from(2)]);
@@ -1621,6 +1622,47 @@ fn test_inline_lookup_needs_no_var_binding() {
         revealed.obj.get(&StrKey::from("x")).unwrap().unwrap(),
         Value::from(20)
     );
+}
+
+/// Naming a generated variable consumes its anonymous status, regardless of
+/// spelling. A later binding follows the existing named-variable rules and
+/// registers another wildcard instead of renaming the original registration.
+#[test]
+fn test_var_binding_names_generated_vars_once() {
+    for name in ["foo", "_foo", "_get0"] {
+        let action = ActionHandle::new("Bind".to_string(), None);
+        let mut scope = Scope::new();
+        scope.push("action", action.clone());
+        let _ = new_engine()
+            .eval_with_scope::<Dynamic>(
+                &mut scope,
+                &format!("var {name} = action.array_get([10, 20], 0); var rebound = {name};"),
+            )
+            .unwrap();
+        let ctx = action.0.borrow();
+        assert_eq!(ctx.vars, ["chain", name, "rebound"], "binding {name}");
+        assert!(!ctx.var_state[name].anonymous, "binding {name}");
+        assert!(!ctx.var_state["rebound"].anonymous);
+    }
+}
+
+/// An underscore name, including an unchanged generated name, must not let a
+/// script bypass the duplicate-name error by being treated as anonymous again.
+#[test]
+fn test_var_binding_rejects_duplicate_named_vars() {
+    for name in ["foo", "_foo", "_get0"] {
+        let src = format!(
+            "fn Bind(action) {{
+                var {name} = action.array_get([10, 20], 0);
+                var {name} = {name};
+            }}"
+        );
+        let err = match Sdk::default().load_module_from_src_actions(&src, &["Bind"]) {
+            Ok(_) => panic!("expected duplicate binding {name} to fail"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains(&format!("var {name} already exists")), "{err}");
+    }
 }
 
 /// Verifies that `var` can name a literal without creating a wildcard.

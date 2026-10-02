@@ -544,18 +544,12 @@ macro_rules! st_methods {
 /// `var`, which renames them to the script-provided name.
 const ANON_VAR_PREFIX: char = '_';
 
-/// Returns whether `name` uses the prefix assigned by `fresh_var`.
-///
-/// Script-provided names may also begin with this prefix. Treating them as
-/// generated allows a subsequent binding to rename the handle instead of
-/// creating an alias.
-fn is_anon_var(name: &str) -> bool {
-    name.starts_with(ANON_VAR_PREFIX)
-}
-
-/// Used to track how many updates from mutations a variable takes.
+/// Tracks a variable's binding and mutation state.
 #[derive(Default, Debug)]
 struct VarState {
+    /// Created by `fresh_var` and not yet named by a script's `var` binding.
+    /// The spelling of the variable's name does not determine this state.
+    anonymous: bool,
     ts: usize,
     /// Set by an operation that consumes the var's dict without recording
     /// an `Inst` for it, which only `pow_obj_grind` does.
@@ -621,7 +615,11 @@ impl ActionContext {
         let mut var = VarOrValue::var(typ);
         var.set_var_name(name.clone())
             .expect("a fresh var is a var");
-        self.add_var(name).expect("a fresh name is free");
+        self.add_var(name.clone()).expect("a fresh name is free");
+        self.var_state
+            .get_mut(&name)
+            .expect("just registered")
+            .anonymous = true;
         Rc::new(RefCell::new(var))
     }
     /// Renames a generated variable without changing wildcard order.
@@ -634,9 +632,12 @@ impl ActionContext {
         }
         let state = self.var_state.remove(old).expect("renaming a live var");
         self.var_state.insert(new.clone(), state);
-        for var in self.vars.iter_mut().filter(|v| v.as_str() == old) {
-            *var = new.clone();
-        }
+        let old_var = self
+            .vars
+            .iter_mut()
+            .find(|v| v.as_str() == old)
+            .expect("renaming a registered var");
+        *old_var = new.clone();
         // `Update` and `Set` store the target name, so rename previously
         // recorded instructions as well.
         for inst in self.insts.iter_mut() {
@@ -3145,8 +3146,18 @@ fn new_engine() -> Engine {
                             let mut ctx = arg_ctx.ctx.0.borrow_mut();
                             // Preserve a generated variable's identity and wildcard
                             // position when the script assigns it a name.
-                            if is_anon_var(&old_name) {
+                            if ctx
+                                .var_state
+                                .get(&old_name)
+                                .is_some_and(|state| state.anonymous)
+                            {
                                 ctx.rename_var(&old_name, var_name.clone())?;
+                                // A binding names the variable even when its name
+                                // is unchanged or still begins with `_`.
+                                ctx.var_state
+                                    .get_mut(&var_name)
+                                    .expect("renamed var exists")
+                                    .anonymous = false;
                             } else {
                                 ctx.add_var(var_name.clone())?;
                             }
