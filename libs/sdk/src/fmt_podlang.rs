@@ -192,9 +192,8 @@ struct ArgFmt<'a> {
 /// prefer set, then dictionary, then array. Each representation has the same
 /// raw value, which is what statement arguments use.
 ///
-/// The pinned pod2 version cannot represent sparse arrays in Podlang, so they
-/// are rendered as their commitment. Once the dependency includes
-/// <https://github.com/0xPARC/pod2/pull/541>, render them with sparse-array syntax.
+/// Sparse arrays use the indexed literal syntax added in
+/// <https://github.com/0xPARC/pod2/pull/541>.
 struct LiteralFmt<'a>(&'a Value);
 
 #[cfg(test)]
@@ -240,7 +239,6 @@ impl<'a> fmt::Display for LiteralFmt<'a> {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|_| fmt::Error)?;
             slots.sort_by_key(|(index, _)| *index);
-            // Podlang array literals cannot represent gaps between indexes.
             if slots.iter().enumerate().all(|(i, (index, _))| i == *index) {
                 write!(f, "[")?;
                 for (i, (_, element)) in slots.iter().enumerate() {
@@ -249,11 +247,12 @@ impl<'a> fmt::Display for LiteralFmt<'a> {
                 }
                 return write!(f, "]");
             } else {
-                log::warn!(
-                    "Rendering sparse array as its commitment: the pinned pod2 version \
-                     does not support sparse-array literals"
-                );
-                return write!(f, "{}", Value::from(value.raw()));
+                write!(f, "[")?;
+                for (i, (index, element)) in slots.iter().enumerate() {
+                    let sep = if i == 0 { "" } else { ", " };
+                    write!(f, "{sep}{index}: {}", LiteralFmt(element))?;
+                }
+                return write!(f, "]");
             }
         }
         write!(f, "{}", Value::from(value.raw()))

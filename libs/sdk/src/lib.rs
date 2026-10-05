@@ -11,7 +11,7 @@ use itertools::zip_eq;
 use lt_eq_u256_pod::{LtEqU256Pod, STANDARD_LT_EQ_U256_VD_HASH};
 use pod2::{
     backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
-    frontend::{MainPod, MultiPodBuilder, Operation, OperationArg},
+    frontend::{MainPod, MultiPodBuilder, Operation, OperationArg, entry},
     lang::{Module, load_module},
     middleware::{
         EMPTY_VALUE, F, Hash, MainPodProver, NativePredicate, OperationAux, OperationType, Params,
@@ -968,23 +968,25 @@ impl ActionHandle {
         // Resolve an Output's pre-identity dict to its slot in the
         // `<Action>Initials` record.
         let initials_anchor = |obj_name: &str| -> Option<OperationArg> {
-            let (slot, entry) = meta.initials_entry(obj_name)?;
-            if entry.needs_wildcard {
+            let (slot, shape) = meta.initials_entry(obj_name)?;
+            if shape.needs_wildcard {
                 return None;
             }
-            Some((initials_array.as_ref()?, slot as i64).into())
+            Some(entry(initials_array.as_ref()?, slot as i64).expect("initials slot exists"))
         };
 
         // Returns the anchored op-arg for the Object's collapsed side at
         // this ts, or None when the form stays an explicit wildcard.
         let anchor_at = |obj_name: &str, ts: usize| -> Option<OperationArg> {
             match meta.collapsed_at(obj_name, ts)? {
-                fmt_podlang::Collapse::IO(fmt_podlang::Side::In) => {
-                    Some((&io_array, meta.in_entry(obj_name).unwrap().0 as i64).into())
-                }
-                fmt_podlang::Collapse::IO(fmt_podlang::Side::Out) => {
-                    Some((&io_array, meta.out_entry(obj_name).unwrap().0 as i64).into())
-                }
+                fmt_podlang::Collapse::IO(fmt_podlang::Side::In) => Some(
+                    entry(&io_array, meta.in_entry(obj_name).unwrap().0 as i64)
+                        .expect("input slot exists"),
+                ),
+                fmt_podlang::Collapse::IO(fmt_podlang::Side::Out) => Some(
+                    entry(&io_array, meta.out_entry(obj_name).unwrap().0 as i64)
+                        .expect("output slot exists"),
+                ),
                 fmt_podlang::Collapse::Initials => {
                     Some(initials_anchor(obj_name).expect("collapsed_at promised an initials slot"))
                 }
@@ -1229,7 +1231,7 @@ impl ActionHandle {
         // for actions with no intermediates.
         let chain_step_anchor = |ts: usize| -> Option<OperationArg> {
             let slot = fmt_podlang::chain_step_at(ts, chain_max_ts)?;
-            Some((chain_steps_array.as_ref()?, slot as i64).into())
+            Some(entry(chain_steps_array.as_ref()?, slot as i64).expect("chain step slot exists"))
         };
 
         // Each pending Tx event is first proved with literal args. We then use
@@ -1247,14 +1249,14 @@ impl ActionHandle {
                     ObjectIO::Input | ObjectIO::Mutate => meta
                         .in_entry(varname)
                         .filter(|(_, e)| !e.needs_wildcard)
-                        .map(|(idx, _)| (&io_array, idx as i64).into()),
+                        .map(|(idx, _)| entry(&io_array, idx as i64).expect("input slot exists")),
                     ObjectIO::Output => None,
                 };
                 let new_anchor: Option<OperationArg> = match io {
                     ObjectIO::Output | ObjectIO::Mutate => meta
                         .out_entry(varname)
                         .filter(|(_, e)| !e.needs_wildcard)
-                        .map(|(idx, _)| (&io_array, idx as i64).into()),
+                        .map(|(idx, _)| entry(&io_array, idx as i64).expect("output slot exists")),
                     ObjectIO::Input => None,
                 };
                 let pre_ts = pending.post_ts - 1;

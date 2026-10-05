@@ -1517,11 +1517,10 @@ fn test_literal_container_rejects_var() {
     assert!(err.contains("is a var, not a literal"), "{err}");
 }
 
-/// Renders sparse arrays as commitments because the pinned pod2 version has no
-/// sparse-array literal syntax. Update this expectation once the dependency
-/// includes <https://github.com/0xPARC/pod2/pull/541>.
+/// Renders sparse arrays with the indexed syntax added in
+/// <https://github.com/0xPARC/pod2/pull/541>.
 #[test]
-fn test_sparse_array_literal_renders_as_commitment() {
+fn test_sparse_array_literal_renders_with_indexes() {
     let dense = Array::new(vec![Value::from(1), Value::from(2)]);
     assert_eq!(
         fmt_podlang::literal_podlang(&Value::from(dense)),
@@ -1530,11 +1529,21 @@ fn test_sparse_array_literal_renders_as_commitment() {
 
     let mut sparse = Array::empty_with_db(Box::new(pod2::middleware::db::mem::MemDB::new()));
     sparse.insert(5, Value::from(1)).unwrap();
+    sparse.insert(7, Value::from(2)).unwrap();
     let sparse = Value::from(sparse);
-    assert_eq!(
-        fmt_podlang::literal_podlang(&sparse),
-        Value::from(sparse.raw()).to_string()
-    );
+    let literal = fmt_podlang::literal_podlang(&sparse);
+    assert_eq!(literal, "[5: 1, 7: 2]");
+
+    // The rendered source must lower back to the same container, rather than
+    // merely pass the Podlang parser.
+    let source = format!("my_pred(A) = AND(Equal(A, {literal}))");
+    let module = pod2::lang::load_module(&source, "sparse_literal", &Params::default(), &[])
+        .expect("indexed array literal lowers");
+    let arg = &module.batch.predicates()[0].statements()[0].args()[1];
+    let pod2::middleware::StatementTmplArg::Literal(lowered) = arg else {
+        panic!("expected a literal, got {arg:?}");
+    };
+    assert_eq!(lowered.raw(), sparse.raw());
 }
 
 /// Reports an execution error when a variable-key lookup misses.

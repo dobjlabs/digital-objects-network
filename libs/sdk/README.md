@@ -169,9 +169,7 @@ representation in this order: set, dictionary, array. Because statement
 arguments are compared and hashed by raw value, this choice does not affect
 verification.
 
-The pinned pod2 version requires contiguous indexes in Podlang array literals.
-Sparse arrays are rendered as commitments with a warning. Support for rendering
-them as literals can follow a dependency update that includes
+Sparse arrays are rendered with the indexed Podlang literal syntax added in
 [pod2 #541](https://github.com/0xPARC/pod2/pull/541).
 
 ## Type checking
