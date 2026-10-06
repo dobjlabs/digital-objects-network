@@ -1663,9 +1663,24 @@ impl ActionHandle {
                 .expect("dict op")
                 .expect("obj has key");
             if !exe_ctx.mock {
+                let mut i = 0;
                 while u256_gt(&RawValue::from(obj.commitment()), &target_raw) {
                     k = exe_ctx.rand_value();
                     obj.update(&StrKey::from("key"), &k).unwrap();
+                    i += 1;
+                    // After 256 iterations, make a deep copy of the dictionary as a form of
+                    // garbage collection for old merkle tree nodes.
+                    if i >= 256 {
+                        let kvs = obj
+                            .iter()
+                            .map(|r| {
+                                let (key, value) = r.unwrap();
+                                (StrKey::from(key), value)
+                            })
+                            .collect();
+                        obj = Dictionary::new(kvs);
+                        i = 0;
+                    }
                 }
             }
             key.borrow_mut().set_value(k);
