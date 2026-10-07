@@ -132,13 +132,22 @@ _driver_ build time (see `driver/src/settings.rs`). They only apply when
 no `settings.json` exists yet.
 
 To point the frontend at a non-default `dobjd` instance, set
-`VITE_DOBJD_URL` at Vite/Tauri build time:
+`VITE_DOBJD_URL` when starting Vite or building the frontend:
 
 ```bash
 VITE_DOBJD_URL=http://127.0.0.1:7727 pnpm tauri dev
 ```
 
 (Default: `http://127.0.0.1:7717`.)
+
+During development, all API requests and SSE subscriptions use `/api` on
+the UI's origin. Vite proxies them to `VITE_DOBJD_URL` on the machine running
+Vite, so forwarding only port 1420 also works when the browser is on another
+machine. Production builds connect to the configured daemon URL directly.
+Restart Vite after changing `VITE_DOBJD_URL`.
+
+If initial loading fails, the UI displays the connection error and a Retry
+button rather than showing an empty object list.
 
 ## Prereqs
 

@@ -13,8 +13,9 @@
 // - process CPU sample for the desktop status bar (`sample_app_cpu`)
 // - native menu event for `Cmd+,` settings shortcut (`open-settings`)
 //
-// Override the dobjd URL with `VITE_DOBJD_URL` at build time. Default:
-// `http://127.0.0.1:7717`.
+// In development, Vite proxies `/api` to dobjd so browsers can also use
+// a forwarded UI port. `VITE_DOBJD_URL` selects the proxy's upstream.
+// Production builds use that URL directly (default: `http://127.0.0.1:7717`).
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -54,9 +55,10 @@ declare global {
 const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-const HTTP_BASE =
-  (import.meta.env.VITE_DOBJD_URL as string | undefined) ??
-  "http://127.0.0.1:7717";
+const HTTP_BASE = import.meta.env.DEV
+  ? "/api"
+  : ((import.meta.env.VITE_DOBJD_URL as string | undefined) ??
+    "http://127.0.0.1:7717").replace(/\/+$/, "");
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 

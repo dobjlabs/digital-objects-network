@@ -27,6 +27,8 @@ function App() {
   const [objectsDirPath, setObjectsDirPath] = useState("~/.dobj/objects");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [initialHydrationPending, setInitialHydrationPending] = useState(true);
+  const [hydrationError, setHydrationError] = useState<string | null>(null);
+  const [hydrationAttempt, setHydrationAttempt] = useState(0);
   const objects = useStore((state) => state.objects);
   const actions = useStore((state) => state.actions);
   const activeObjectContentHash = useStore(
@@ -58,9 +60,14 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    setInitialHydrationPending(true);
+    setHydrationError(null);
     hydrateData()
       .catch((error) => {
         console.error("Failed to load GUI objects:", error);
+        if (!cancelled) {
+          setHydrationError(error instanceof Error ? error.message : String(error));
+        }
       })
       .finally(() => {
         if (!cancelled) {
@@ -70,7 +77,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [hydrateData]);
+  }, [hydrateData, hydrationAttempt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -274,18 +281,25 @@ function App() {
           </div>
         </main>
 
-        {initialHydrationPending && (
+        {(initialHydrationPending || hydrationError) && (
           <div
             className="app-loading-overlay"
-            role="status"
+            role={hydrationError ? "alert" : "status"}
             aria-live="polite"
-            aria-label="Loading objects and actions"
+            aria-label={hydrationError ? "Unable to load objects and actions" : "Loading objects and actions"}
           >
             <div className="app-loading-card">
-              <span className="app-loading-spinner" aria-hidden="true" />
+              {initialHydrationPending && (
+                <span className="app-loading-spinner" aria-hidden="true" />
+              )}
               <span className="app-loading-label">
-                Loading objects and actions...
+                {hydrationError ?? "Loading objects and actions..."}
               </span>
+              {hydrationError && (
+                <button type="button" onClick={() => setHydrationAttempt((attempt) => attempt + 1)}>
+                  Retry
+                </button>
+              )}
             </div>
           </div>
         )}
