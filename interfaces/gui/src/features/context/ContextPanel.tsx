@@ -57,8 +57,7 @@ function validBinding(
   ) ? binding : null;
 }
 
-/** Parse one typed-in argument value by its declared pod2 type into the
- * JSON form dobjd accepts. Empty text means "use the script default". */
+/** Blank input selects the script default. */
 function parseArgValue(
   arg: ActionArgPayload,
   raw: string,
@@ -112,8 +111,7 @@ export function ContextPanel({
   proofStatus,
 }: ContextPanelProps) {
   const [argBindings, setArgBindings] = useState<Record<string, BoundArg>>({});
-  // Typed-in values for the selected action's declared arguments, keyed by
-  // `<action id>::<arg name>` so switching actions keeps each one's text.
+  // Preserve each action's edits when the selection changes.
   const [argValues, setArgValues] = useState<Record<string, string>>({});
   const [hoverArgKey, setHoverArgKey] = useState<string | null>(null);
   const [argErrors, setArgErrors] = useState<Record<string, string>>({});
@@ -268,7 +266,7 @@ export function ContextPanel({
     methodName: string;
     totalInputs: ClassRefPayload[];
     onRun: (boundArgs: BoundArg[]) => void;
-    /** When set, the run button is disabled and shows this label. */
+    /** Label shown on the disabled run button. */
     runBlocked?: string;
   }) =>
     (() => {

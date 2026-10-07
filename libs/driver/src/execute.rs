@@ -149,8 +149,6 @@ pub(crate) fn validate_execute_request(
     Ok(())
 }
 
-/// Decode caller-supplied argument values from their JSON form into
-/// pod2 values. The SDK then checks each against its declared type.
 pub(crate) fn decode_action_args(args: &ActionArgValues) -> Result<ActionArgs> {
     args.iter()
         .map(|(name, json)| {
@@ -165,7 +163,6 @@ pub(crate) fn decode_action_args(args: &ActionArgValues) -> Result<ActionArgs> {
         .collect()
 }
 
-/// Encode the values an execution's arguments took for the wire.
 pub(crate) fn encode_action_args(args: &ActionArgs) -> Result<ActionArgValues> {
     args.iter()
         .map(|(name, value)| Ok((name.clone(), serde_json::to_value(value)?)))

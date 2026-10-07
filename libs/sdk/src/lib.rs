@@ -555,8 +555,7 @@ struct VarState {
     /// Set by an operation that consumes the var's dict without recording
     /// an `Inst` for it, which only `pow_obj_grind` does.
     dict_read: bool,
-    /// The `fresh_var` tag naming the host method that generated this
-    /// var, so an `arg` declaration can report its default.
+    /// Generator tag, preserved when the variable is renamed.
     tag: Option<&'static str>,
 }
 
@@ -581,13 +580,11 @@ struct ActionContext {
     anon_seq: usize,
     exe_ctx: Option<Rc<RefCell<ExeContext>>>,
     unsafe_block: bool,
-    /// Arguments declared by this action's own `arg` statements, in
-    /// declaration order.
+    /// Declarations in evaluation order.
     args: Vec<ActionArg>,
     supplied_args: ActionArgs,
     resolved_args: ActionArgs,
-    /// Name of the `arg` whose default is being evaluated, so an
-    /// unsafe-flag violation reports the declaration it occurred in.
+    /// Set while evaluating a default, for argument-specific errors.
     arg_default: Option<String>,
 }
 
@@ -1662,14 +1659,7 @@ impl ActionHandle {
         ctx.inc_t_var("chain").expect("chain exists");
         Ok(ArgHandle::new(self.clone(), arg))
     }
-    /// Declare a prover-supplied argument
-    /// (`var <binding> = arg("<name>") else <default>`). `name` is what
-    /// callers supply the value under; `binding` names the wildcard.
-    /// `eval_default` evaluates the script's default expression. It runs
-    /// under the unsafe flag so a default that emits statements is
-    /// rejected, and it is skipped entirely when the caller supplied a
-    /// value for this argument, so an expensive default such as a PoW
-    /// grind never runs for nothing.
+    /// `name` identifies the caller's argument; `binding` names the private wildcard.
     fn declare_arg(
         &self,
         name: &str,
@@ -2362,31 +2352,24 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
     }
 }
 
-/// A prover-supplied argument declared by
-/// `var <binding> = arg("<name>") else <default>`. The argument is a
-/// private wildcard of the action's predicate, named by the binding: the
-/// caller may supply its value under `name`, otherwise `default`
-/// computes one.
+/// Metadata for a private witness that callers can supply by name.
 #[derive(Debug, Clone)]
 pub struct ActionArg {
-    /// The argument name given to `arg(...)`.
     pub name: String,
     pub(crate) typ: Type,
-    /// The host method that computes the value when none is supplied.
+    /// Default generator label: random, pow_obj_grind, or arithmetic.
     pub default: &'static str,
 }
 
 impl ActionArg {
-    /// The pod2 value type a supplied value must have.
     pub fn type_name(&self) -> String {
         self.typ.to_string()
     }
 }
 
-/// Values supplied for an action's arguments, keyed by argument name.
+/// Values keyed by caller-facing argument names.
 pub type ActionArgs = BTreeMap<String, Value>;
 
-/// Script-facing name of the host method behind a `fresh_var` tag.
 fn generator_label(tag: &str) -> &'static str {
     match tag {
         "rand" => "random",
@@ -2461,12 +2444,11 @@ pub struct ActionMeta {
     /// cached result of `ActionContext::max_ts_per_var`, so `collapsed_at`
     /// need not recompute it or take it as an argument.
     var_max_ts: HashMap<String, usize>,
-    /// This action's own `arg` declarations, in declaration order.
     pub(crate) args: Vec<ActionArg>,
 }
 
 impl ActionMeta {
-    /// Prover-supplied arguments declared by this action.
+    /// Arguments declared by this action, in declaration order.
     pub fn args(&self) -> &[ActionArg] {
         &self.args
     }
@@ -3092,8 +3074,7 @@ pub struct SpendableObjects {
     /// live/nullifiers/ctx for the SDK's own bookkeeping. Not part of
     /// the per-output wire format.
     pub tx: Tx,
-    /// The value each of the selected action's arguments took,
-    /// whether supplied by the caller or computed by its default.
+    /// Resolved arguments of the selected action, including computed defaults.
     pub args: ActionArgs,
 }
 
@@ -3194,9 +3175,6 @@ impl Executor {
     fn new_tx_builder(&self, ctx: &mut BuildContext, inputs: &[Dictionary]) -> TxBuilder {
         TxBuilder::new(ctx, inputs, self.grounding_witness.clone())
     }
-    /// Build the execution context for `action`: zip the caller's
-    /// inputs against the action's input slots and validate `args`
-    /// against its declared arguments.
     fn new_exe_ctx(
         &self,
         action: &str,
@@ -3234,8 +3212,7 @@ impl Executor {
             outputs: Vec::new(),
         })))
     }
-    /// Execute an action that consumes some input objects and produces some output objects.
-    /// Every declared argument takes its script default.
+    /// Execute an action using defaults for all declared arguments.
     pub fn action(
         &self,
         action: &str,
@@ -3243,10 +3220,8 @@ impl Executor {
     ) -> Result<SpendableObjects, SdkError> {
         self.action_with_args(action, inputs, &ActionArgs::new())
     }
-    /// Like [`Executor::action`], with caller-supplied values for some
-    /// of the action's declared arguments (see [`ActionMeta::args`]).
-    /// Arguments not in `args` take their script default. Sub-actions use
-    /// their defaults. The result's `args` holds this action's resolved values.
+    /// Execute an action with overrides for its declared arguments.
+    /// Omitted arguments and all sub-action arguments use their defaults.
     pub fn action_with_args(
         &self,
         action: &str,
@@ -3323,8 +3298,7 @@ impl Executor {
         self.plan_action_with_args(action, inputs, &ActionArgs::new())
     }
 
-    /// Like [`Executor::plan_action`], with caller-supplied argument
-    /// values as in [`Executor::action_with_args`].
+    /// Plan an action with overrides for its declared arguments.
     pub fn plan_action_with_args(
         &self,
         action: &str,
@@ -3380,12 +3354,10 @@ pub struct PlanData {
     pub statements: Vec<pod2::middleware::Statement>,
     pub operations: Vec<pod2::frontend::Operation>,
     pub solved: pod2::frontend::SolvedMultiPod,
-    /// The value every declared argument took, as in `SpendableObjects::args`.
+    /// Resolved arguments of the selected action, including computed defaults.
     pub args: ActionArgs,
 }
 
-/// Reject supplied arguments that match no declaration or whose value
-/// fails the declared type.
 fn validate_action_args(meta: &ActionMeta, args: &ActionArgs) -> Result<(), SdkError> {
     for (name, value) in args {
         let Some(decl) = meta.args.iter().find(|a| a.name == *name) else {
@@ -3412,10 +3384,6 @@ fn validate_action_args(meta: &ActionMeta, args: &ActionArgs) -> Result<(), SdkE
     Ok(())
 }
 
-/// Name the supplied arguments in an execution error: a value that
-/// fails the script's constraints surfaces as a failure of the
-/// statement that checks it, which alone does not say where the value
-/// came from.
 fn with_args_context(action: &str, args: &ActionArgs, err: Box<EvalAltResult>) -> SdkError {
     let err = SdkError::from(err);
     if args.is_empty() {
@@ -3438,17 +3406,9 @@ pub struct Sdk {
 fn new_engine() -> Engine {
     let mut engine = Engine::new();
 
-    // Register the custom syntax for bindings. Two tails share the keyword:
-    //   var $ident$ = $expr$                     bind a value, or name a generated var
-    //   var $ident$ = arg($expr$) else $block$   declare a prover-supplied argument named
-    //                                            by the string; the block is its default
-    // The parser callback picks the tail from the token after `=`, so `arg`
-    // is reserved in that position only. The default is a block rather than
-    // an expression so that the callback sees the token after the closing
-    // brace: Rhai would otherwise attach a following `[`, `.` or operator to
-    // the default as a postfix or binary operation, silently swallowing the
-    // next statement when the `;` is missing. The callback turns that into a
-    // compile error and leaves an ordinary following statement alone.
+    // Parse defaults as blocks so the callback can inspect the next token.
+    // With expression parsing, Rhai can attach a following indexer or operator
+    // to the default when a semicolon is omitted.
     engine.register_custom_syntax_with_state_raw(
         "var",
         |symbols: &[ImmutableString],
@@ -3469,9 +3429,7 @@ fn new_engine() -> Engine {
                 7 => Some("else".into()),
                 8 => Some("$block$".into()),
                 9 => match look_ahead {
-                    // The statement ends here, or the enclosing block does.
                     ";" | "}" | "" => None,
-                    // A statement follows on the next line.
                     s if s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') => None,
                     other => {
                         return Err(LexError::ImproperSymbol(
@@ -3492,8 +3450,6 @@ fn new_engine() -> Engine {
                 expr: &Expression,
             ) -> RuntimeResult<Dynamic> {
                 let value = ctx.eval_expression_tree(expr)?;
-                // Literals remain ordinary Rhai bindings and render inline. Only
-                // variables receive the script-provided name.
                 let Some(arg_ctx) = value.clone().try_cast::<ArgHandle>() else {
                     ctx.scope_mut().push(var_name, value.clone());
                     return Ok(value);
@@ -3505,16 +3461,13 @@ fn new_engine() -> Engine {
                 if let Some(old_name) = old_name {
                     {
                         let mut ctx = arg_ctx.ctx.0.borrow_mut();
-                        // Preserve a generated variable's identity and wildcard
-                        // position when the script assigns it a name.
                         if ctx
                             .var_state
                             .get(&old_name)
                             .is_some_and(|state| state.anonymous)
                         {
                             ctx.rename_var(&old_name, var_name.clone())?;
-                            // A binding names the variable even when its name
-                            // is unchanged or still begins with `_`.
+                            // Explicit bindings can retain names generated for anonymous variables.
                             ctx.var_state
                                 .get_mut(&var_name)
                                 .expect("renamed var exists")

@@ -194,8 +194,6 @@ pub async fn run(
 ) -> Result<()> {
     let action = parse_qualified(&action_id)?;
 
-    // Argument values are typed by the action's declarations, so fetch
-    // them first when any were given.
     let args = if raw_args.is_empty() {
         ActionArgValues::new()
     } else {
@@ -310,9 +308,6 @@ pub async fn run(
     }
 }
 
-/// Parse `NAME=VALUE` pairs into pod2 JSON values using the declared
-/// type of each argument: hex digits for a Raw, a decimal for an Int, the
-/// text itself for a string, and pod2's JSON form for anything else.
 fn parse_action_args(action: &ActionSummary, raw: &[String]) -> Result<ActionArgValues> {
     let declared = || {
         action
@@ -362,8 +357,6 @@ fn parse_action_args(action: &ActionSummary, raw: &[String]) -> Result<ActionArg
     Ok(args)
 }
 
-/// Render a pod2 JSON value compactly: `0x<hex>` for a Raw with leading
-/// zeros dropped, the number for an Int, JSON otherwise.
 fn render_arg_value(value: &Value) -> String {
     if let Some(hex) = value.get("Raw").and_then(Value::as_str) {
         let trimmed = hex.trim_start_matches('0');
