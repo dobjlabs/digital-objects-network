@@ -70,6 +70,67 @@ block, allowing the operators to emit constraints elsewhere would make their
 behavior depend on the caller. Keeping them unsafe-only gives them one
 consistent meaning: compute a witness without constraining it.
 
+## Prover-supplied arguments
+
+An action may compute a witness such as a proof-of-work key, a random nonce,
+or the result of an `unsafe` computation. Declaring it as a named argument
+lets callers supply their own value, for example a key ground by an external
+service.
+
+`var $ident$ = arg($name$) else { $expr$ }` declares a named argument with a
+default. `$name$` is the string callers use to supply the value, and `$ident$`
+names the private wildcard. Replacing a plain `var` declaration with this
+form, using the same binding and computation, preserves the predicate, its
+public arguments and the module hash. During Load, the default is evaluated
+symbolically to determine the argument's type. During Execute, it runs only
+when the caller has not supplied a value.
+
+```rhai
+fn CraftWood(action) {
+    var log = action.input("Log");
+    var wood = action.output("Wood");
+    let target = action.top_limb_u256(9007199254740992);
+    var key = arg("key") else { action.pow_obj_grind(wood, target) };
+    wood.update("key", key);
+    action.intro_lt_eq_u256(wood, target);
+}
+```
+
+The braces around the default are required. The trailing `;` can be omitted
+before an ordinary statement or the end of the enclosing block. A following
+`[` or operator requires the `;`; omitting it produces a compile error.
+
+The default must generate one fresh value without emitting statements:
+`action.random()`, `action.pow_obj_grind(...)`, or a single integer operation
+on existing `var` values. For example, `else { obj.count - 1 }` is valid.
+Literals, existing variables, and compound operations such as
+`obj.count - 1 - 1` are rejected. The default is already evaluated as unsafe;
+an explicit `unsafe` block inside it, or around the declaration, is rejected.
+Calls such as `action.intro_vdf(...)` are also rejected because they emit
+statements.
+
+As with any witness, constrain the argument after declaring it. In the
+example, `intro_lt_eq_u256` checks the updated object's commitment against
+the target, whether the key was supplied or computed. A key that fails this
+check causes execution to fail in real proof mode. In mock mode,
+`pow_obj_grind` skips grinding and the mock `LtEqU256` pod does not compare
+its operands, so this constraint is not checked.
+
+Argument names must be non-empty and unique within an action. The name can
+be any string-valued expression, so a helper can accept it as a parameter
+and declare a differently named argument for each calling action.
+
+`ActionMeta::args()` lists the action's arguments with their types and
+default generator names (`random`, `pow_obj_grind`, or `arithmetic`). These
+are the arguments declared by the selected action. Sub-actions use their
+defaults; to supply arguments to a sub-action, execute it directly.
+
+`Executor::action_with_args` accepts values by argument name.
+Unknown names and values of the wrong type are rejected before the action
+runs. Omitted arguments use their defaults. The result's `args` contains
+the value used for each of the selected action's arguments, whether supplied
+or computed.
+
 ## Native statements
 
 Each `action.st_*` method emits one pod2 native statement. Arguments follow

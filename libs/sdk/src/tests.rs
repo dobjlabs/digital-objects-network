@@ -2136,3 +2136,570 @@ fn test_var_array_get_and_var_set_contains() {
     let metal_tx = res.tx.clone();
     apply_tx(&mut state, &metal_tx);
 }
+
+/// `arg` renders exactly like `var`: the argument is a private wildcard
+/// named by the declaration and the public arguments are unchanged. The
+/// metadata lists it with its type and default generator.
+#[test]
+fn test_arg_declaration_renders_like_var() {
+    let src_var = r#"
+        fn CraftWood(action) {
+            var log = action.input("Log");
+            var wood = action.output("Wood");
+            let target = action.top_limb_u256(9007199254740992);
+            var key = action.pow_obj_grind(wood, target);
+            wood.update("key", key);
+            action.intro_lt_eq_u256(wood, target);
+        }
+    "#;
+    let src_arg = src_var.replace(
+        "var key = action.pow_obj_grind(wood, target);",
+        "var key = arg(\"key\") else { action.pow_obj_grind(wood, target) };",
+    );
+    assert_ne!(src_var, src_arg);
+    let sdk = Sdk::default();
+    let with_var = sdk
+        .load_module_from_src_actions(src_var, &["CraftWood"])
+        .unwrap();
+    let with_arg = sdk
+        .load_module_from_src_actions(&src_arg, &["CraftWood"])
+        .unwrap();
+    assert_eq!(with_var.podlang_src(), with_arg.podlang_src());
+    assert!(with_var.actions()[0].args().is_empty());
+    let args = with_arg.actions()[0].args();
+    assert_eq!(args.len(), 1);
+    assert_eq!(args[0].name, "key");
+    assert_eq!(args[0].type_name(), "Raw");
+    assert_eq!(args[0].default, "pow_obj_grind");
+}
+
+/// An `arg` default must be one fresh, statement-free generator call.
+#[test]
+fn test_arg_declaration_errors() {
+    for (action, expected, src) in [
+        (
+            "Literal",
+            "freshly generated value",
+            r#"
+        fn Literal(action) {
+            var ore = action.output("Ore");
+            var n = arg("n") else { 5 };
+            ore.update("n", n);
+        }
+"#,
+        ),
+        (
+            "Existing",
+            "freshly generated value",
+            r#"
+        fn Existing(action) {
+            var ore = action.output("Ore");
+            var k = action.random();
+            var n = arg("n") else { k };
+            ore.update("n", n);
+        }
+"#,
+        ),
+        (
+            "Emits",
+            "must not emit statements",
+            r#"
+        fn Emits(action) {
+            var ore = action.output("Ore");
+            var work = arg("work") else { action.intro_vdf(3, ore) };
+            ore.update("work", work);
+        }
+"#,
+        ),
+        (
+            "Compound",
+            "single generator call",
+            r#"
+        fn Compound(action) {
+            var ore = action.mutate("Ore");
+            var n = arg("n") else { ore.grade - 1 - 1 };
+            ore.update("grade", n);
+        }
+"#,
+        ),
+        (
+            "NestedUnsafe",
+            "drop the unsafe block",
+            r#"
+        fn NestedUnsafe(action) {
+            var ore = action.mutate("Ore");
+            var n = arg("n") else { unsafe { ore.grade - 1 } };
+            ore.update("grade", n);
+        }
+"#,
+        ),
+        (
+            "InUnsafe",
+            "inside an unsafe block",
+            r#"
+        fn InUnsafe(action) {
+            var ore = action.output("Ore");
+            var n = unsafe { var k = arg("k") else { action.random() }; k };
+            ore.update("n", n);
+        }
+"#,
+        ),
+        (
+            "Duplicate",
+            "already exists",
+            r#"
+        fn Duplicate(action) {
+            var ore = action.output("Ore");
+            var k = arg("k") else { action.random() };
+            var k = arg("k2") else { action.random() };
+            ore.update("k", k);
+        }
+"#,
+        ),
+        (
+            "DuplicateName",
+            "declared twice",
+            r#"
+        fn DuplicateName(action) {
+            var ore = action.output("Ore");
+            var k = arg("k") else { action.random() };
+            var k2 = arg("k") else { action.random() };
+            ore.update("k", k);
+            ore.update("k2", k2);
+        }
+"#,
+        ),
+        (
+            "NameNotString",
+            "name must be a string",
+            r#"
+        fn NameNotString(action) {
+            var ore = action.output("Ore");
+            var k = arg(5) else { action.random() };
+            ore.update("k", k);
+        }
+"#,
+        ),
+        (
+            "EmptyName",
+            "must be non-empty",
+            r#"
+        fn EmptyName(action) {
+            var ore = action.output("Ore");
+            var k = arg("") else { action.random() };
+            ore.update("k", k);
+        }
+"#,
+        ),
+        (
+            "BareDefault",
+            "Expecting '{'",
+            r#"
+        fn BareDefault(action) {
+            var ore = action.output("Ore");
+            var k = arg("k") else action.random();
+            ore.update("k", k);
+        }
+"#,
+        ),
+        (
+            "SwallowedStatement",
+            "missing `;` after the arg default block",
+            r#"
+        fn SwallowedStatement(action) {
+            var ore = action.output("Ore");
+            var k = arg("k") else { action.random() }
+            [k];
+            ore.update("k", k);
+        }
+"#,
+        ),
+    ] {
+        let err = match Sdk::default().load_module_from_src_actions(src, &[action]) {
+            Ok(_) => panic!("expected {action} to be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains(expected), "{action}: {err}");
+    }
+}
+
+#[test]
+fn test_arg_default_rejects_object_and_subaction_instructions() {
+    for operation in [
+        "action.input(\"Ore\")",
+        "action.output(\"Ore\")",
+        "action.mutate(\"Ore\")",
+        "action.subaction(\"Extra\")",
+    ] {
+        for default in [
+            format!("{operation}; action.random()"),
+            "generate(action)".to_string(),
+        ] {
+            let src = format!(
+                r#"
+                fn Extra(action) {{
+                    var extra = action.output("Ore");
+                }}
+                fn generate(action) {{
+                    {operation};
+                    action.random()
+                }}
+                fn Main(action) {{
+                    var out = action.output("Ore");
+                    var key = arg("key") else {{ {default} }};
+                }}
+                "#
+            );
+            let err = match Sdk::default().load_module_from_src_actions(&src, &["Extra", "Main"]) {
+                Ok(_) => panic!("expected default {default} using {operation} to be rejected"),
+                Err(err) => err.to_string(),
+            };
+            assert!(
+                err.contains("arg key: the default must not emit statements"),
+                "{default} using {operation}: {err}"
+            );
+        }
+    }
+}
+
+/// A supplied argument replaces the default's value and skips the
+/// default; an omitted one is computed and reported alongside it.
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_arg_supplied_and_default() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let src = r#"
+        fn FindLog(action) {
+            var log = action.output("Log");
+        }
+
+        fn CraftWood(action) {
+            var log = action.input("Log");
+            var wood = action.output("Wood");
+            wood.set([["grade", 3]]);
+            let target = action.top_limb_u256(9007199254740992);
+            var key = arg("key") else { action.pow_obj_grind(wood, target) };
+            wood.update("key", key);
+            action.intro_lt_eq_u256(wood, target);
+        }
+
+        fn Wear(action) {
+            var wood = action.mutate("Wood");
+            action.st_gt(wood.grade, 0);
+            var grade = arg("grade") else { wood.grade - 1 };
+            action.st_sum(grade, 1, wood.grade);
+            wood.update("grade", grade);
+        }
+    "#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(src, &["FindLog", "CraftWood", "Wear"])
+        .unwrap();
+    let wear = &module.actions()[2].args()[0];
+    assert_eq!(
+        (wear.name.as_str(), wear.type_name().as_str(), wear.default),
+        ("grade", "Int", "arithmetic")
+    );
+
+    let field =
+        |obj: &SpendableObject, key: &str| obj.obj.get(&StrKey::from(key)).unwrap().unwrap();
+    let mut state = TestState::default();
+
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindLog", vec![]).unwrap();
+    assert!(res.args.is_empty());
+    let [log_a] = res.objs();
+    apply_tx(&mut state, &res.tx);
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindLog", vec![]).unwrap();
+    let [log_b] = res.objs();
+    apply_tx(&mut state, &res.tx);
+
+    // Default: the key is ground (or random in mock mode) and reported.
+    let executor = module.executor(true, grounding_witness(&state, &[log_a.obj.commitment()]));
+    let res = executor.action("CraftWood", vec![log_a]).unwrap();
+    let [wood_a] = res.objs();
+    assert_eq!(res.args.get("key"), Some(&field(&wood_a, "key")));
+    apply_tx(&mut state, &res.tx);
+
+    // Supplied: the object carries the caller's key and the default is skipped.
+    let supplied = Value::from(RawValue([F(7), F(8), F(9), F(0)]));
+    let args = ActionArgs::from([("key".to_string(), supplied.clone())]);
+    let executor = module.executor(true, grounding_witness(&state, &[log_b.obj.commitment()]));
+    let res = executor
+        .action_with_args("CraftWood", vec![log_b], &args)
+        .unwrap();
+    let [wood_b] = res.objs();
+    assert_eq!(field(&wood_b, "key"), supplied);
+    assert_eq!(res.args, args);
+    apply_tx(&mut state, &res.tx);
+
+    // Unknown names and ill-typed values are rejected before the body runs.
+    let executor = module.executor(true, grounding_witness(&state, &[wood_a.obj.commitment()]));
+    let bad = ActionArgs::from([("nonce".to_string(), Value::from(1))]);
+    let err = executor
+        .action_with_args("Wear", vec![wood_a.clone()], &bad)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(err.contains("unknown argument `nonce`"), "{err}");
+    assert!(err.contains("declared arguments: [grade]"), "{err}");
+    let bad = ActionArgs::from([("grade".to_string(), Value::from("two"))]);
+    let err = executor
+        .action_with_args("Wear", vec![wood_a.clone()], &bad)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        err.contains("argument `grade` expects a value of type Int"),
+        "{err}"
+    );
+
+    // A well-typed value that fails the script's constraints fails the
+    // execution, naming the supplied arguments.
+    let bad = ActionArgs::from([("grade".to_string(), Value::from(5))]);
+    let err = executor
+        .action_with_args("Wear", vec![wood_a.clone()], &bad)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        err.contains("failed with supplied arguments [grade]"),
+        "{err}"
+    );
+
+    // An Int argument whose default is unsafe arithmetic.
+    let args = ActionArgs::from([("grade".to_string(), Value::from(2))]);
+    let res = executor
+        .action_with_args("Wear", vec![wood_a], &args)
+        .unwrap();
+    let [worn] = res.objs();
+    assert_eq!(field(&worn, "grade"), Value::from(2));
+    assert_eq!(res.args, args);
+}
+
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_args_are_local_to_the_selected_action() {
+    let src = r#"
+        fn FindLog(action) {
+            var log = action.output("Log");
+            log.set([["mark", 0]]);
+        }
+
+        fn Stamp(action) {
+            var log = action.mutate("Log");
+            var mark = arg("mark") else { log.mark + 1 };
+            log.update("mark", mark);
+        }
+
+        fn StampTwice(action) {
+            var first = action.subaction("Stamp");
+            var second = action.subaction("Stamp");
+            var chip = action.output("Chip");
+        }
+
+        fn StampOnce(action) {
+            var mark = arg("mark") else { state_header.block_number * 0 };
+            var stamped = action.subaction("Stamp");
+            var chip = action.output("Chip");
+        }
+
+        fn StampNested(action) {
+            var stamped = action.subaction("StampOnce");
+            var chip = action.output("Chip");
+        }
+    "#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(
+            src,
+            &["FindLog", "Stamp", "StampTwice", "StampOnce", "StampNested"],
+        )
+        .unwrap();
+    let names = |i: usize| -> Vec<&str> {
+        module.actions()[i]
+            .args()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect()
+    };
+    assert_eq!(names(1), vec!["mark"]);
+    assert!(names(2).is_empty());
+    assert_eq!(names(3), vec!["mark"]);
+    assert!(names(4).is_empty());
+
+    let field =
+        |obj: &SpendableObject, key: &str| obj.obj.get(&StrKey::from(key)).unwrap().unwrap();
+    let mut state = TestState::default();
+    let mut logs = Vec::new();
+    for _ in 0..2 {
+        let executor = module.executor(true, grounding_witness(&state, &[]));
+        let res = executor.action("FindLog", vec![]).unwrap();
+        let [log] = res.objs();
+        apply_tx(&mut state, &res.tx);
+        logs.push(log);
+    }
+    let [log_a, log_b] = logs.try_into().unwrap();
+    let executor = module.executor(
+        true,
+        grounding_witness(&state, &[log_a.obj.commitment(), log_b.obj.commitment()]),
+    );
+    for name in ["Stamp.mark", "Stamp#1.mark"] {
+        let args = ActionArgs::from([(name.to_string(), Value::from(99))]);
+        let err = executor
+            .action_with_args("StampTwice", vec![log_a.clone(), log_b.clone()], &args)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains(&format!("unknown argument `{name}`")), "{err}");
+    }
+    let inputs = vec![log_a.clone(), log_b.clone()];
+    let res = executor.action("StampTwice", inputs.clone()).unwrap();
+    let [first, second, _chip] = res.objs();
+    assert_eq!(field(&first, "mark"), Value::from(1));
+    assert_eq!(field(&second, "mark"), Value::from(1));
+    assert!(res.args.is_empty());
+    assert!(
+        executor
+            .plan_action("StampTwice", inputs)
+            .unwrap()
+            .args
+            .is_empty()
+    );
+
+    let executor = module.executor(true, grounding_witness(&state, &[log_a.obj.commitment()]));
+    for supplied in [false, true] {
+        let args = if supplied {
+            ActionArgs::from([("mark".to_string(), Value::from(99))])
+        } else {
+            ActionArgs::new()
+        };
+        let expected = ActionArgs::from([(
+            "mark".to_string(),
+            Value::from(if supplied { 99 } else { 0 }),
+        )]);
+        let inputs = vec![log_a.clone()];
+        let res = executor
+            .action_with_args("StampOnce", inputs.clone(), &args)
+            .unwrap();
+        let [stamped, _chip] = res.objs();
+        assert_eq!(field(&stamped, "mark"), Value::from(1));
+        assert_eq!(res.args, expected);
+        let plan = executor
+            .plan_action_with_args("StampOnce", inputs, &args)
+            .unwrap();
+        assert_eq!(plan.args, expected);
+    }
+
+    let executor = module.executor(true, grounding_witness(&state, &[log_a.obj.commitment()]));
+    let args = ActionArgs::from([("mark".to_string(), Value::from(77))]);
+    let res = executor
+        .action_with_args("Stamp", vec![log_a.clone()], &args)
+        .unwrap();
+    let [stamped] = res.objs();
+    assert_eq!(field(&stamped, "mark"), Value::from(77));
+    assert_eq!(res.args, args);
+
+    assert!(
+        executor
+            .action_with_args("StampNested", vec![log_a.clone()], &args)
+            .is_err()
+    );
+    let res = executor.action("StampNested", vec![log_a.clone()]).unwrap();
+    assert_eq!(field(&res.obj(0), "mark"), Value::from(1));
+    assert!(res.args.is_empty());
+    let plan = executor.plan_action("StampNested", vec![log_a]).unwrap();
+    assert!(plan.args.is_empty());
+}
+
+#[test]
+fn test_arg_names_are_literal_strings() {
+    let state = TestState::default();
+    for name in ["key", "Stamp.key", "Stamp#1.key", "__proto__"] {
+        let src = format!(
+            r#"
+            fn Main(action) {{
+                var out = action.output("Ore");
+                var key = arg("{name}") else {{ action.random() }};
+                out.update("key", key);
+            }}
+            "#
+        );
+        let module = Sdk::default()
+            .load_module_from_src_actions(&src, &["Main"])
+            .unwrap();
+        assert_eq!(module.actions()[0].args()[0].name, name);
+        let args = ActionArgs::from([(name.to_string(), Value::from(42))]);
+        let executor = module.executor(true, grounding_witness(&state, &[]));
+        let result = executor.action_with_args("Main", vec![], &args).unwrap();
+        let [out] = result.objs();
+        assert_eq!(
+            out.obj.get(&StrKey::from("key")).unwrap(),
+            Some(Value::from(42))
+        );
+        assert_eq!(result.args, args);
+    }
+}
+
+/// The argument name is the string given to `arg(...)`, independent of
+/// the binding that names the wildcard, so a helper can take the name
+/// as a parameter and each caller declares its own argument.
+#[test]
+fn test_arg_name_from_helper() {
+    let src = r#"
+        fn pow_proof(action, obj, name) {
+            let target = action.top_limb_u256(9007199254740992);
+            var k = arg(name) else { action.pow_obj_grind(obj, target) };
+            obj.update("key", k);
+            action.intro_lt_eq_u256(obj, target);
+        }
+
+        fn MineIron(action) {
+            var iron = action.output("Iron");
+            pow_proof(action, iron, "iron_key");
+        }
+
+        fn MineCopper(action) {
+            var copper = action.output("Copper");
+            pow_proof(action, copper, "copper_key");
+        }
+    "#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(src, &["MineIron", "MineCopper"])
+        .unwrap();
+    let names = |i: usize| -> Vec<&str> {
+        module.actions()[i]
+            .args()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect()
+    };
+    assert_eq!(names(0), vec!["iron_key"]);
+    assert_eq!(names(1), vec!["copper_key"]);
+    // The wildcard carries the binding, not the argument name.
+    assert_renders(&module, &["private: iron0, k, initials MineIronInitials"]);
+}
+
+/// The default block ends the statement like any block does: a following
+/// statement needs no `;`, while a token Rhai would attach to the block
+/// is a compile error rather than a silently swallowed statement.
+#[test]
+fn test_arg_default_block_terminates_statement() {
+    let src = r#"
+        fn Stamp(action) {
+            var ore = action.output("Ore");
+            var k = arg("k") else { action.random() }
+            ore.update("k", k);
+            var n = arg("n") else { action.random() }
+        }
+    "#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(src, &["Stamp"])
+        .unwrap();
+    let names: Vec<&str> = module.actions()[0]
+        .args()
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["k", "n"]);
+}

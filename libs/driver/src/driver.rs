@@ -18,8 +18,8 @@ use crate::clients::{
 };
 use crate::error::DriverError;
 use crate::execute::{
-    build_relayer_payload, obj_type_hash, reconcile_objects, resolve_inputs, save_results,
-    update_output_files, validate_execute_request,
+    build_relayer_payload, decode_action_args, encode_action_args, obj_type_hash,
+    reconcile_objects, resolve_inputs, save_results, update_output_files, validate_execute_request,
 };
 use crate::object_record::{ObjectRecord, parse_object_record_file};
 use crate::object_store::{
@@ -563,6 +563,7 @@ impl Driver {
             .ok_or_else(|| anyhow!("unknown action: {}", input.action))?;
 
         validate_execute_request(&input, &action)?;
+        let args = decode_action_args(&input.args)?;
 
         let no_ctx = ExecutionStepContext::default();
         reporter.on_step(ExecutionPhase::GenerateProof, "Verifying inputs", &no_ctx);
@@ -583,8 +584,13 @@ impl Driver {
             .iter()
             .map(|input| input.record.spendable())
             .collect::<Vec<_>>();
-        let spendable_outputs =
-            catalog.execute_action(input.action.clone(), grounding_witness, execution_inputs)?;
+        let spendable_outputs = catalog.execute_action(
+            input.action.clone(),
+            grounding_witness,
+            execution_inputs,
+            &args,
+        )?;
+        let resolved_args = encode_action_args(&spendable_outputs.args)?;
         reporter.on_done(ExecutionPhase::GenerateProof, None);
 
         let mut commit_ctx = ExecutionStepContext {
@@ -746,6 +752,7 @@ impl Driver {
             relayer_job_id: confirmation.job_id,
             tx_hash: Some(final_tx_hash.to_string()),
             block_number: confirmation.block_number,
+            args: resolved_args,
         };
         reporter.on_done(ExecutionPhase::Commit, Some(&result));
         Ok(result)

@@ -299,7 +299,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Start an action. Returns immediately with a runId and status=queued; proof generation and commit run in the background. Poll get_run(runId) until status is succeeded or failed (then read result / error). The daemon rejects requests while another action is running."
+        description = "Start an action. Returns immediately with a runId and status=queued; proof generation and commit run in the background. Poll get_run(runId) until status is succeeded or failed (then read result / error). The daemon rejects requests while another action is running. `args` optionally supplies values for the action's declared arguments (listed as `args` on list_actions items, e.g. a proof-of-work key computed elsewhere) by name, in pod2 JSON form: {\"Raw\": \"<64 hex chars>\"} or {\"Int\": \"<decimal>\"}; arguments left out take the script default, and the run result reports the value each one took."
     )]
     fn run_action(
         &self,
@@ -909,6 +909,7 @@ mod tests {
             .run_action(Parameters(RunActionInput {
                 action: craft_basics("FindLog"),
                 input_object_paths: vec![],
+                args: Default::default(),
             }))
             .unwrap();
         assert!(!accepted.run_id.is_empty());

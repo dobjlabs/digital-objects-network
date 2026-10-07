@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 use std::slice;
@@ -21,7 +21,8 @@ use pod2::{
 };
 use pod2utils::{dict, macros::BuildContext, map, rand_raw_value};
 use rhai::{
-    AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, Position, Scope,
+    AST, CallFnOptions, Dynamic, Engine, EvalAltResult, EvalContext, Expression, ImmutableString,
+    LexError, Position, Scope,
 };
 use txlib::{EventHandle, GroundingWitness, StateHeader, Tx, TxBuilder, with_stable_identifier};
 use vdfpod::{STANDARD_VDF_VD_HASH, VdfPod};
@@ -554,6 +555,9 @@ struct VarState {
     /// Set by an operation that consumes the var's dict without recording
     /// an `Inst` for it, which only `pow_obj_grind` does.
     dict_read: bool,
+    /// The `fresh_var` tag naming the host method that generated this
+    /// var, so an `arg` declaration can report its default.
+    tag: Option<&'static str>,
 }
 
 /// This handler is accessible in the action script function to define action operations.  It
@@ -577,6 +581,14 @@ struct ActionContext {
     anon_seq: usize,
     exe_ctx: Option<Rc<RefCell<ExeContext>>>,
     unsafe_block: bool,
+    /// Arguments declared by this action's own `arg` statements, in
+    /// declaration order.
+    args: Vec<ActionArg>,
+    supplied_args: ActionArgs,
+    resolved_args: ActionArgs,
+    /// Name of the `arg` whose default is being evaluated, so an
+    /// unsafe-flag violation reports the declaration it occurred in.
+    arg_default: Option<String>,
 }
 
 impl ActionContext {
@@ -589,6 +601,10 @@ impl ActionContext {
             anon_seq: 0,
             exe_ctx,
             unsafe_block: false,
+            args: Vec::new(),
+            supplied_args: ActionArgs::new(),
+            resolved_args: ActionArgs::new(),
+            arg_default: None,
         };
         ctx.add_var("chain".to_string())
             .expect("chain not yet defined");
@@ -604,7 +620,7 @@ impl ActionContext {
     }
     /// Creates and immediately registers a generated variable so it can be
     /// used inline.
-    fn fresh_var(&mut self, tag: &str, typ: Type) -> Ref {
+    fn fresh_var(&mut self, tag: &'static str, typ: Type) -> Ref {
         let name = loop {
             let name = format!("{ANON_VAR_PREFIX}{tag}{}", self.anon_seq);
             self.anon_seq += 1;
@@ -616,10 +632,9 @@ impl ActionContext {
         var.set_var_name(name.clone())
             .expect("a fresh var is a var");
         self.add_var(name.clone()).expect("a fresh name is free");
-        self.var_state
-            .get_mut(&name)
-            .expect("just registered")
-            .anonymous = true;
+        let state = self.var_state.get_mut(&name).expect("just registered");
+        state.anonymous = true;
+        state.tag = Some(tag);
         Rc::new(RefCell::new(var))
     }
     /// Renames a generated variable without changing wildcard order.
@@ -751,6 +766,13 @@ impl ActionContext {
     }
     fn assert_unsafe(&self, unsafe_block: bool) -> RuntimeResult<()> {
         if self.unsafe_block != unsafe_block {
+            if let Some(name) = &self.arg_default {
+                return Err(format!(
+                    "arg {name}: the default must not emit statements; declare the arg first \
+                     and state constraints on it afterwards"
+                )
+                .into());
+            }
             if self.unsafe_block {
                 return Err("unexpected unsafe block".into());
             } else {
@@ -855,6 +877,12 @@ impl ActionHandle {
     fn set_unsafe(&self, unsafe_block: bool) -> RuntimeResult<()> {
         let mut ctx = self.0.borrow_mut();
         if unsafe_block && ctx.unsafe_block {
+            if let Some(name) = &ctx.arg_default {
+                return Err(format!(
+                    "arg {name}: the default is already evaluated as unsafe; drop the unsafe block"
+                )
+                .into());
+            }
             Err("unsafe already set".into())
         } else {
             ctx.unsafe_block = unsafe_block;
@@ -1634,6 +1662,129 @@ impl ActionHandle {
         ctx.inc_t_var("chain").expect("chain exists");
         Ok(ArgHandle::new(self.clone(), arg))
     }
+    /// Declare a prover-supplied argument
+    /// (`var <binding> = arg("<name>") else <default>`). `name` is what
+    /// callers supply the value under; `binding` names the wildcard.
+    /// `eval_default` evaluates the script's default expression. It runs
+    /// under the unsafe flag so a default that emits statements is
+    /// rejected, and it is skipped entirely when the caller supplied a
+    /// value for this argument, so an expensive default such as a PoW
+    /// grind never runs for nothing.
+    fn declare_arg(
+        &self,
+        name: &str,
+        binding: &str,
+        eval_default: impl FnOnce() -> RuntimeResult<Dynamic>,
+    ) -> RuntimeResult<ArgHandle> {
+        if name.is_empty() {
+            return Err("arg: the argument name must be non-empty".into());
+        }
+        let supplied = {
+            let ctx = self.0.borrow();
+            if ctx.exe_ctx.is_none() && ctx.args.iter().any(|a| a.name == name) {
+                return Err(format!("arg {name}: declared twice in this action").into());
+            }
+            ctx.exe_ref().and_then(|exe| {
+                let value = ctx.supplied_args.get(name)?.clone();
+                let typ = exe
+                    .module
+                    .action_by_name(&ctx.name)
+                    .args
+                    .iter()
+                    .find(|a| a.name == name)
+                    .map(|a| a.typ.clone())
+                    .expect("supplied arguments were validated against the declarations");
+                Some((value, typ))
+            })
+        };
+        let fresh_error = || -> Box<EvalAltResult> {
+            format!(
+                "arg {name}: the default must be a freshly generated value such as \
+                 action.random() or action.pow_obj_grind(...), not a literal or an existing \
+                 variable"
+            )
+            .into()
+        };
+        let (arg, tag) = if let Some((value, typ)) = supplied {
+            let var = self.0.borrow_mut().fresh_var("arg", typ);
+            var.borrow_mut().set_value(value);
+            (ArgHandle::new(self.clone(), var), None)
+        } else {
+            let (num_vars, num_instructions) = {
+                let mut ctx = self.0.borrow_mut();
+                if ctx.unsafe_block {
+                    return Err(format!(
+                        "arg {name}: cannot be declared inside an unsafe block; the default is \
+                         already evaluated as unsafe"
+                    )
+                    .into());
+                }
+                ctx.unsafe_block = true;
+                ctx.arg_default = Some(name.to_string());
+                (ctx.vars.len(), ctx.insts.len())
+            };
+            let result = eval_default();
+            {
+                let mut ctx = self.0.borrow_mut();
+                ctx.unsafe_block = false;
+                ctx.arg_default = None;
+            }
+            let Some(arg) = result?.try_cast::<ArgHandle>() else {
+                return Err(fresh_error());
+            };
+            let ctx = self.0.borrow();
+            if ctx.insts.len() != num_instructions {
+                return Err(format!(
+                    "arg {name}: the default must not emit statements; declare the arg first \
+                     and state constraints on it afterwards"
+                )
+                .into());
+            }
+            let tag = match &*arg.arg.borrow() {
+                VarOrValue::Var(var) if var.key.is_none() => ctx
+                    .var_state
+                    .get(&var.name)
+                    .filter(|state| state.anonymous)
+                    .and_then(|state| state.tag),
+                _ => None,
+            };
+            let Some(tag) = tag else {
+                return Err(fresh_error());
+            };
+            if ctx.vars.len() != num_vars + 1 {
+                return Err(
+                    format!("arg {name}: the default must be a single generator call").into(),
+                );
+            }
+            (arg, Some(tag))
+        };
+        let old_name = arg.arg.borrow().var_name().to_string();
+        {
+            let mut ctx = self.0.borrow_mut();
+            ctx.rename_var(&old_name, binding.to_string())?;
+            ctx.var_state
+                .get_mut(binding)
+                .expect("renamed var exists")
+                .anonymous = false;
+            if let Some(tag) = tag
+                && ctx.exe_ctx.is_none()
+            {
+                let typ = arg.arg.borrow().as_var().typ.clone();
+                ctx.args.push(ActionArg {
+                    name: name.to_string(),
+                    typ,
+                    default: generator_label(tag),
+                });
+            }
+        }
+        arg.arg.borrow_mut().set_var_name(binding.to_string())?;
+        let mut ctx = self.0.borrow_mut();
+        if ctx.exe_ctx.is_some() {
+            let value = arg.arg.borrow().as_value();
+            ctx.resolved_args.insert(name.to_string(), value);
+        }
+        Ok(arg)
+    }
     fn random(self) -> RuntimeResult<ArgHandle> {
         let value = self.0.borrow_mut().fresh_var("rand", Type::Raw);
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
@@ -2211,6 +2362,40 @@ fn try_value_from_dynamic(v: Dynamic) -> RuntimeResult<Value> {
     }
 }
 
+/// A prover-supplied argument declared by
+/// `var <binding> = arg("<name>") else <default>`. The argument is a
+/// private wildcard of the action's predicate, named by the binding: the
+/// caller may supply its value under `name`, otherwise `default`
+/// computes one.
+#[derive(Debug, Clone)]
+pub struct ActionArg {
+    /// The argument name given to `arg(...)`.
+    pub name: String,
+    pub(crate) typ: Type,
+    /// The host method that computes the value when none is supplied.
+    pub default: &'static str,
+}
+
+impl ActionArg {
+    /// The pod2 value type a supplied value must have.
+    pub fn type_name(&self) -> String {
+        self.typ.to_string()
+    }
+}
+
+/// Values supplied for an action's arguments, keyed by argument name.
+pub type ActionArgs = BTreeMap<String, Value>;
+
+/// Script-facing name of the host method behind a `fresh_var` tag.
+fn generator_label(tag: &str) -> &'static str {
+    match tag {
+        "rand" => "random",
+        "grind" => "pow_obj_grind",
+        "arith" => "arithmetic",
+        _ => "generator",
+    }
+}
+
 /// One object reference in an action, in declaration order. Only
 /// `class` is exposed; `io` is internal, used by the
 /// `local_inputs()` / `local_outputs()` filters. `varname` is the
@@ -2276,9 +2461,16 @@ pub struct ActionMeta {
     /// cached result of `ActionContext::max_ts_per_var`, so `collapsed_at`
     /// need not recompute it or take it as an argument.
     var_max_ts: HashMap<String, usize>,
+    /// This action's own `arg` declarations, in declaration order.
+    pub(crate) args: Vec<ActionArg>,
 }
 
 impl ActionMeta {
+    /// Prover-supplied arguments declared by this action.
+    pub fn args(&self) -> &[ActionArg] {
+        &self.args
+    }
+
     /// Object refs consumed locally by this action (Inputs + Mutates),
     /// excluding any transitively-called sub-actions.
     pub fn local_inputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
@@ -2414,6 +2606,7 @@ impl ActionMeta {
             ..Self::default()
         };
         let referenced = body_referenced_vars(&ctx.insts);
+        meta.args = ctx.args.clone();
         for inst in &ctx.insts {
             match inst {
                 Inst::Object { io, obj, class, .. } => {
@@ -2899,6 +3092,9 @@ pub struct SpendableObjects {
     /// live/nullifiers/ctx for the SDK's own bookkeeping. Not part of
     /// the per-output wire format.
     pub tx: Tx,
+    /// The value each of the selected action's arguments took,
+    /// whether supplied by the caller or computed by its default.
+    pub args: ActionArgs,
 }
 
 impl SpendableObjects {
@@ -2998,24 +3194,27 @@ impl Executor {
     fn new_tx_builder(&self, ctx: &mut BuildContext, inputs: &[Dictionary]) -> TxBuilder {
         TxBuilder::new(ctx, inputs, self.grounding_witness.clone())
     }
-    /// Execute an action that consumes some input objects and produces some output objects
-    pub fn action(
+    /// Build the execution context for `action`: zip the caller's
+    /// inputs against the action's input slots and validate `args`
+    /// against its declared arguments.
+    fn new_exe_ctx(
         &self,
         action: &str,
         inputs: Vec<SpendableObject>,
-    ) -> Result<SpendableObjects, SdkError> {
+        args: &ActionArgs,
+    ) -> Result<Rc<RefCell<ExeContext>>, SdkError> {
         // TODO: In this function: return errors instead of panic from unwrap.
+        let meta = self.module.action_by_name(action);
+        validate_action_args(meta, args)?;
         let builder = self.new_builder();
         let mut bld = BuildContext {
             builder,
             modules: self.pod_modules.clone(),
         };
 
-        let total = &self.module.action_by_name(action).total_inputs;
-
         let mut tx_inputs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
         let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
-        for (input, _ref) in zip_eq(inputs, total.iter()) {
+        for (input, _ref) in zip_eq(inputs, meta.total_inputs.iter()) {
             let SpendableObject { obj } = input;
             tx_inputs.push(obj.clone());
             rhai_input_objs.push(obj);
@@ -3024,7 +3223,7 @@ impl Executor {
         rhai_input_objs.reverse();
 
         let tx_builder = self.new_tx_builder(&mut bld, &tx_inputs);
-        let exe_rc = Rc::new(RefCell::new(ExeContext {
+        Ok(Rc::new(RefCell::new(ExeContext {
             mock: self.mock,
             params: self.params.clone(),
             vd_set: self.vd_set.clone(),
@@ -3033,16 +3232,44 @@ impl Executor {
             tx_builder,
             module: self.module.clone(),
             outputs: Vec::new(),
-        }));
+        })))
+    }
+    /// Execute an action that consumes some input objects and produces some output objects.
+    /// Every declared argument takes its script default.
+    pub fn action(
+        &self,
+        action: &str,
+        inputs: Vec<SpendableObject>,
+    ) -> Result<SpendableObjects, SdkError> {
+        self.action_with_args(action, inputs, &ActionArgs::new())
+    }
+    /// Like [`Executor::action`], with caller-supplied values for some
+    /// of the action's declared arguments (see [`ActionMeta::args`]).
+    /// Arguments not in `args` take their script default. Sub-actions use
+    /// their defaults. The result's `args` holds this action's resolved values.
+    pub fn action_with_args(
+        &self,
+        action: &str,
+        inputs: Vec<SpendableObject>,
+        args: &ActionArgs,
+    ) -> Result<SpendableObjects, SdkError> {
+        let exe_rc = self.new_exe_ctx(action, inputs, args)?;
         let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
+        action_handle.0.borrow_mut().supplied_args = args.clone();
         log::info!("executing action {}", action);
         let start = std::time::Instant::now();
-        action_handle.exe_action()?;
+        action_handle
+            .exe_action()
+            .map_err(|err| with_args_context(action, args, err))?;
         log::info!("executing action {} took {:?}", action, start.elapsed());
 
         // Release the handle's Rc clone so `exe_rc` has a unique
         // owner for the `try_unwrap` below.
-        action_handle.0.borrow_mut().exe_ctx = None;
+        let resolved_args = {
+            let mut ctx = action_handle.0.borrow_mut();
+            ctx.exe_ctx = None;
+            std::mem::take(&mut ctx.resolved_args)
+        };
         let ExeContext {
             tx_builder,
             mut bld,
@@ -3075,7 +3302,12 @@ impl Executor {
             .map(|obj| SpendableObject { obj })
             .collect();
 
-        Ok(SpendableObjects { tx_pod, objs, tx })
+        Ok(SpendableObjects {
+            tx_pod,
+            objs,
+            tx,
+            args: resolved_args,
+        })
     }
 
     /// Run the action body up to (and including) the multi-pod
@@ -3088,37 +3320,28 @@ impl Executor {
         action: &str,
         inputs: Vec<SpendableObject>,
     ) -> Result<PlanData, SdkError> {
-        let builder = self.new_builder();
-        let mut bld = BuildContext {
-            builder,
-            modules: self.pod_modules.clone(),
-        };
+        self.plan_action_with_args(action, inputs, &ActionArgs::new())
+    }
 
-        let total = &self.module.action_by_name(action).total_inputs;
-
-        let mut tx_inputs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
-        let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
-        for (input, _ref) in zip_eq(inputs, total.iter()) {
-            let SpendableObject { obj } = input;
-            tx_inputs.push(obj.clone());
-            rhai_input_objs.push(obj);
-        }
-        rhai_input_objs.reverse();
-
-        let tx_builder = self.new_tx_builder(&mut bld, &tx_inputs);
-        let exe_rc = Rc::new(RefCell::new(ExeContext {
-            mock: self.mock,
-            params: self.params.clone(),
-            vd_set: self.vd_set.clone(),
-            inputs: rhai_input_objs,
-            bld,
-            tx_builder,
-            module: self.module.clone(),
-            outputs: Vec::new(),
-        }));
+    /// Like [`Executor::plan_action`], with caller-supplied argument
+    /// values as in [`Executor::action_with_args`].
+    pub fn plan_action_with_args(
+        &self,
+        action: &str,
+        inputs: Vec<SpendableObject>,
+        args: &ActionArgs,
+    ) -> Result<PlanData, SdkError> {
+        let exe_rc = self.new_exe_ctx(action, inputs, args)?;
         let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
-        action_handle.exe_action()?;
-        action_handle.0.borrow_mut().exe_ctx = None;
+        action_handle.0.borrow_mut().supplied_args = args.clone();
+        action_handle
+            .exe_action()
+            .map_err(|err| with_args_context(action, args, err))?;
+        let resolved_args = {
+            let mut ctx = action_handle.0.borrow_mut();
+            ctx.exe_ctx = None;
+            std::mem::take(&mut ctx.resolved_args)
+        };
         let ExeContext {
             tx_builder,
             mut bld,
@@ -3144,6 +3367,7 @@ impl Executor {
             statements,
             operations,
             solved,
+            args: resolved_args,
         })
     }
 }
@@ -3156,6 +3380,53 @@ pub struct PlanData {
     pub statements: Vec<pod2::middleware::Statement>,
     pub operations: Vec<pod2::frontend::Operation>,
     pub solved: pod2::frontend::SolvedMultiPod,
+    /// The value every declared argument took, as in `SpendableObjects::args`.
+    pub args: ActionArgs,
+}
+
+/// Reject supplied arguments that match no declaration or whose value
+/// fails the declared type.
+fn validate_action_args(meta: &ActionMeta, args: &ActionArgs) -> Result<(), SdkError> {
+    for (name, value) in args {
+        let Some(decl) = meta.args.iter().find(|a| a.name == *name) else {
+            let declared: Vec<&str> = meta.args.iter().map(|a| a.name.as_str()).collect();
+            return Err(anyhow!(
+                "action {}: unknown argument `{name}`; declared arguments: [{}]",
+                meta.name,
+                declared.join(", ")
+            )
+            .into());
+        };
+        if VarOrValue::value(value.clone())
+            .type_check(decl.typ.clone())
+            .is_err()
+        {
+            return Err(anyhow!(
+                "action {}: argument `{name}` expects a value of type {}, got {value}",
+                meta.name,
+                decl.typ
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Name the supplied arguments in an execution error: a value that
+/// fails the script's constraints surfaces as a failure of the
+/// statement that checks it, which alone does not say where the value
+/// came from.
+fn with_args_context(action: &str, args: &ActionArgs, err: Box<EvalAltResult>) -> SdkError {
+    let err = SdkError::from(err);
+    if args.is_empty() {
+        return err;
+    }
+    let names: Vec<&str> = args.keys().map(String::as_str).collect();
+    anyhow!(
+        "action {action} failed with supplied arguments [{}]: {err}",
+        names.join(", ")
+    )
+    .into()
 }
 
 /// The Sdk is the main entrypoint of this crate.  It's used to load modules from manifests and
@@ -3167,63 +3438,133 @@ pub struct Sdk {
 fn new_engine() -> Engine {
     let mut engine = Engine::new();
 
-    // Register the custom syntax: var $ident$ = $expr$
-    engine
-        .register_custom_syntax(
-            ["var", "$ident$", "=", "$expr$"],
-            true,
-            |ctx: &mut EvalContext, inputs: &[Expression]| -> RuntimeResult<Dynamic> {
-                fn f(
-                    ctx: &mut EvalContext,
-                    var_name: String,
-                    expr: &Expression,
-                ) -> RuntimeResult<Dynamic> {
-                    let value = ctx.eval_expression_tree(expr)?;
-                    // Literals remain ordinary Rhai bindings and render inline. Only
-                    // variables receive the script-provided name.
-                    let Some(arg_ctx) = value.clone().try_cast::<ArgHandle>() else {
-                        ctx.scope_mut().push(var_name, value.clone());
-                        return Ok(value);
-                    };
-                    let old_name = match &*arg_ctx.arg.borrow() {
-                        VarOrValue::Value(_) => None,
-                        VarOrValue::Var(var) => Some(var.name.clone()),
-                    };
-                    if let Some(old_name) = old_name {
-                        {
-                            let mut ctx = arg_ctx.ctx.0.borrow_mut();
-                            // Preserve a generated variable's identity and wildcard
-                            // position when the script assigns it a name.
-                            if ctx
-                                .var_state
-                                .get(&old_name)
-                                .is_some_and(|state| state.anonymous)
-                            {
-                                ctx.rename_var(&old_name, var_name.clone())?;
-                                // A binding names the variable even when its name
-                                // is unchanged or still begins with `_`.
-                                ctx.var_state
-                                    .get_mut(&var_name)
-                                    .expect("renamed var exists")
-                                    .anonymous = false;
-                            } else {
-                                ctx.add_var(var_name.clone())?;
-                            }
-                        }
-                        arg_ctx.arg.borrow_mut().set_var_name(var_name.clone())?;
-                    }
-                    ctx.scope_mut().push(var_name, arg_ctx.clone());
-                    Ok(Dynamic::from(arg_ctx))
+    // Register the custom syntax for bindings. Two tails share the keyword:
+    //   var $ident$ = $expr$                     bind a value, or name a generated var
+    //   var $ident$ = arg($expr$) else $block$   declare a prover-supplied argument named
+    //                                            by the string; the block is its default
+    // The parser callback picks the tail from the token after `=`, so `arg`
+    // is reserved in that position only. The default is a block rather than
+    // an expression so that the callback sees the token after the closing
+    // brace: Rhai would otherwise attach a following `[`, `.` or operator to
+    // the default as a postfix or binary operation, silently swallowing the
+    // next statement when the `;` is missing. The callback turns that into a
+    // compile error and leaves an ordinary following statement alone.
+    engine.register_custom_syntax_with_state_raw(
+        "var",
+        |symbols: &[ImmutableString],
+         look_ahead: &str,
+         state: &mut Dynamic|
+         -> Result<Option<ImmutableString>, rhai::ParseError> {
+            Ok(match symbols.len() {
+                1 => Some("$ident$".into()),
+                2 => Some("=".into()),
+                3 if look_ahead == "arg" => {
+                    *state = Dynamic::TRUE;
+                    Some("arg".into())
                 }
-                let var_name = inputs[0].get_string_value().expect("ident").to_string();
+                3 => Some("$expr$".into()),
+                4 if symbols[3] == "arg" => Some("(".into()),
+                5 => Some("$expr$".into()),
+                6 => Some(")".into()),
+                7 => Some("else".into()),
+                8 => Some("$block$".into()),
+                9 => match look_ahead {
+                    // The statement ends here, or the enclosing block does.
+                    ";" | "}" | "" => None,
+                    // A statement follows on the next line.
+                    s if s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') => None,
+                    other => {
+                        return Err(LexError::ImproperSymbol(
+                            other.into(),
+                            "missing `;` after the arg default block".into(),
+                        )
+                        .into_err(Position::NONE));
+                    }
+                },
+                _ => None,
+            })
+        },
+        true,
+        |ctx: &mut EvalContext, inputs: &[Expression], state: &Dynamic| -> RuntimeResult<Dynamic> {
+            fn bind(
+                ctx: &mut EvalContext,
+                var_name: String,
+                expr: &Expression,
+            ) -> RuntimeResult<Dynamic> {
+                let value = ctx.eval_expression_tree(expr)?;
+                // Literals remain ordinary Rhai bindings and render inline. Only
+                // variables receive the script-provided name.
+                let Some(arg_ctx) = value.clone().try_cast::<ArgHandle>() else {
+                    ctx.scope_mut().push(var_name, value.clone());
+                    return Ok(value);
+                };
+                let old_name = match &*arg_ctx.arg.borrow() {
+                    VarOrValue::Value(_) => None,
+                    VarOrValue::Var(var) => Some(var.name.clone()),
+                };
+                if let Some(old_name) = old_name {
+                    {
+                        let mut ctx = arg_ctx.ctx.0.borrow_mut();
+                        // Preserve a generated variable's identity and wildcard
+                        // position when the script assigns it a name.
+                        if ctx
+                            .var_state
+                            .get(&old_name)
+                            .is_some_and(|state| state.anonymous)
+                        {
+                            ctx.rename_var(&old_name, var_name.clone())?;
+                            // A binding names the variable even when its name
+                            // is unchanged or still begins with `_`.
+                            ctx.var_state
+                                .get_mut(&var_name)
+                                .expect("renamed var exists")
+                                .anonymous = false;
+                        } else {
+                            ctx.add_var(var_name.clone())?;
+                        }
+                    }
+                    arg_ctx.arg.borrow_mut().set_var_name(var_name.clone())?;
+                }
+                ctx.scope_mut().push(var_name, arg_ctx.clone());
+                Ok(Dynamic::from(arg_ctx))
+            }
+            fn declare(
+                ctx: &mut EvalContext,
+                binding: String,
+                name_expr: &Expression,
+                default_expr: &Expression,
+            ) -> RuntimeResult<Dynamic> {
+                let name = ctx
+                    .eval_expression_tree(name_expr)?
+                    .into_immutable_string()
+                    .map_err(|typ| -> Box<EvalAltResult> {
+                        let mut e: Box<EvalAltResult> =
+                            format!("arg: the argument name must be a string, got {typ}").into();
+                        e.set_position(name_expr.position());
+                        e
+                    })?;
+                let action_handle = ctx.tag().clone_cast::<ActionHandle>();
+                let arg = action_handle
+                    .declare_arg(&name, &binding, || ctx.eval_expression_tree(default_expr))
+                    .map_err(|mut e| {
+                        e.set_position(default_expr.position());
+                        e
+                    })?;
+                ctx.scope_mut().push(binding, arg.clone());
+                Ok(Dynamic::from(arg))
+            }
+            let binding = inputs[0].get_string_value().expect("ident").to_string();
+            if state.as_bool().unwrap_or(false) {
+                declare(ctx, binding, &inputs[1], &inputs[2])
+            } else {
                 let expr = &inputs[1];
-                f(ctx, var_name, expr).map_err(|mut e| {
+                bind(ctx, binding, expr).map_err(|mut e| {
                     e.set_position(expr.position());
                     e
                 })
-            },
-        )
-        .unwrap();
+            }
+        },
+    );
 
     // Register the custom syntax: unsafe $expr$
     engine
@@ -3326,7 +3667,10 @@ impl Sdk {
     ) -> Result<Rc<SdkModule>, SdkError> {
         let scope = Scope::new();
         let started = std::time::Instant::now();
-        let ast = self.engine.compile_with_scope(&scope, src).unwrap();
+        let ast = self
+            .engine
+            .compile_with_scope(&scope, src)
+            .map_err(Box::<EvalAltResult>::from)?;
         log::debug!("rhai compile: {:?}", started.elapsed());
 
         let started = std::time::Instant::now();

@@ -84,7 +84,12 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
     ensure_extra_pod_deserializers_registered();
     let catalog = make_catalog();
     let outputs = catalog
-        .execute_action(craft_basics("FindLog"), dummy_grounding_witness(), vec![])
+        .execute_action(
+            craft_basics("FindLog"),
+            dummy_grounding_witness(),
+            vec![],
+            &Default::default(),
+        )
         .unwrap();
     let source_tx = outputs.tx.clone();
     let spendable = outputs.obj(0);
@@ -304,6 +309,7 @@ fn test_execute_rolls_back_on_relayer_submit_failure() {
         .execute(ExecuteActionInput {
             action: craft_basics("CraftWood"),
             input_objects: vec!["log_1.dobj".to_string()],
+            args: Default::default(),
         })
         .unwrap_err();
     assert!(err.to_string().contains("relayer submit failed"));
@@ -346,6 +352,7 @@ fn test_execute_rejects_class_hash_mismatch_with_matching_class_id() {
         .execute(ExecuteActionInput {
             action: craft_basics("CraftSticks"),
             input_objects: vec!["forged_wood.dobj".to_string()],
+            args: Default::default(),
         })
         .unwrap_err();
     let msg = err.to_string();
@@ -371,6 +378,7 @@ fn test_execute_keeps_files_after_relayer_accepts() {
         .execute(ExecuteActionInput {
             action: craft_basics("CraftWood"),
             input_objects: vec!["log_1.dobj".to_string()],
+            args: Default::default(),
         })
         .unwrap_err();
     assert!(err.to_string().contains("relayer timeout"));
@@ -403,7 +411,12 @@ fn make_importable_log() -> (String, Hash, Hash) {
     ensure_extra_pod_deserializers_registered();
     let catalog = make_catalog();
     let outputs = catalog
-        .execute_action(craft_basics("FindLog"), dummy_grounding_witness(), vec![])
+        .execute_action(
+            craft_basics("FindLog"),
+            dummy_grounding_witness(),
+            vec![],
+            &Default::default(),
+        )
         .unwrap();
     let spendable = outputs.obj(0);
     let content_hash = spendable.obj.commitment();
