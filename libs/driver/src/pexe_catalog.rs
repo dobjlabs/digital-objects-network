@@ -24,11 +24,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use payload::decode_hash_hex;
 use pod2::middleware::Hash;
-use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
+use sdk::{ActionArgs, Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
 use txlib::GroundingWitness;
 
 use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
-use wire_types::{ActionSummary, ClassRef, MutatedObjectSlots, QualifiedName};
+use wire_types::{ActionArgSummary, ActionSummary, ClassRef, MutatedObjectSlots, QualifiedName};
 
 struct Plugin {
     path: PathBuf,
@@ -212,6 +212,15 @@ impl PexeCatalog {
                 // prefix like classes get).
                 let predicate_source = extract_predicate(&podlang_src, &bare)
                     .unwrap_or_else(|| format!("{bare}(state) = AND(...)"));
+                let args = action
+                    .args()
+                    .iter()
+                    .map(|a| ActionArgSummary {
+                        name: a.name.clone(),
+                        type_name: a.type_name(),
+                        default: a.default.to_string(),
+                    })
+                    .collect();
                 all_actions.push(ActionSummary {
                     action: qname,
                     emoji: meta.map_or("⚙️", |m| m.emoji.as_str()).to_string(),
@@ -231,6 +240,7 @@ impl PexeCatalog {
                         })
                         .collect(),
                     predicate_source,
+                    args,
                 });
             }
 
@@ -321,6 +331,7 @@ impl ActionCatalog for PexeCatalog {
         action: QualifiedName,
         grounding_witness: GroundingWitness,
         inputs: Vec<SpendableObject>,
+        args: &ActionArgs,
     ) -> Result<SpendableObjects> {
         let plugin_idx = *self
             .action_plugin_idx
@@ -337,7 +348,7 @@ impl ActionCatalog for PexeCatalog {
                 )
             })?;
         let executor = module.executor(self.mock_proofs, Arc::new(grounding_witness));
-        Ok(executor.action(&action.name, inputs)?)
+        Ok(executor.action_with_args(&action.name, inputs, args)?)
     }
 
     fn generated_podlang(&self) -> Option<String> {
@@ -674,6 +685,7 @@ description = "consume a Foo to make a Bar"
                 QualifiedName::new("alpha", "MakeFoo"),
                 dummy_grounding_witness(),
                 vec![],
+                &Default::default(),
             )
             .expect("alpha::MakeFoo runs");
         let alpha_type =
@@ -688,6 +700,7 @@ description = "consume a Foo to make a Bar"
                 QualifiedName::new("beta", "MakeFoo"),
                 dummy_grounding_witness(),
                 vec![],
+                &Default::default(),
             )
             .expect("beta::MakeFoo runs");
         let beta_type = obj_type_hash_for_test(&beta_out.obj(0).obj).expect("beta output has type");

@@ -10,7 +10,7 @@ fn CraftWood(action) {
     // intro_lt_eq_u256 consume the same u256, so the proved statement
     // matches what grinding produced.
     let target = action.top_limb_u256(9007199254740992);
-    var key = action.pow_obj_grind(wood, target);
+    var key = arg("key") else { action.pow_obj_grind(wood, target) };
     wood.update("key", key);
     action.intro_lt_eq_u256(wood, target);
 }

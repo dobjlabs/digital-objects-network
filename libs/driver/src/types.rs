@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use pod2::middleware::Hash;
 use serde::{Deserialize, Serialize};
-use wire_types::{ExecutionPhase, ObjectStatus, QualifiedName};
+use wire_types::{ActionArgValues, ExecutionPhase, ObjectStatus, QualifiedName};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverPaths {
@@ -38,6 +38,9 @@ pub struct ExecuteActionInput {
     /// (`Wood.dobj`) or a longer path — only the file name is used, and
     /// it must resolve to a live object inside `~/.dobj/objects/`.
     pub input_objects: Vec<String>,
+    /// Values for some of the action's declared arguments, by name, in
+    /// pod2's JSON form. Arguments left out take their script default.
+    pub args: ActionArgValues,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,6 +53,8 @@ pub struct ExecuteActionResult {
     pub relayer_job_id: String,
     pub tx_hash: Option<String>,
     pub block_number: Option<i64>,
+    /// The value each of the selected action's arguments took, supplied or computed.
+    pub args: ActionArgValues,
 }
 
 /// Optional context passed alongside execution progress steps.

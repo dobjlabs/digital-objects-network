@@ -21,8 +21,8 @@ use driver::{
     Driver, ExecuteActionInput, ExecuteActionResult, ExecutionReporter, ExecutionStepContext,
 };
 use wire_types::{
-    ExecutionPhase, ObjectStatus, ObjectSummary, ProofProgressStatus, QualifiedName, RunAccepted,
-    RunActionProgress, RunActionResult, RunState, RunStatus,
+    ActionArgValues, ExecutionPhase, ObjectStatus, ObjectSummary, ProofProgressStatus,
+    QualifiedName, RunAccepted, RunActionProgress, RunActionResult, RunState, RunStatus,
 };
 
 use crate::events::{Event, EventTx};
@@ -328,6 +328,7 @@ impl RunReporter {
             new_root: payload::encode_hash_hex(&result.new_root),
             output_files: result.output_files.clone(),
             nullified_files: result.nullified_files.clone(),
+            args: result.args.clone(),
         });
     }
 
@@ -415,10 +416,12 @@ pub fn spawn_run(
     events: EventTx,
     action: QualifiedName,
     input_objects: Vec<String>,
+    args: ActionArgValues,
 ) -> anyhow::Result<RunAccepted> {
     let exec_input = ExecuteActionInput {
         action: action.clone(),
         input_objects: input_objects.clone(),
+        args,
     };
     spawn_worker(registry, events, action, input_objects, move |reporter| {
         driver.execute_with_reporter(exec_input, reporter)
@@ -516,6 +519,7 @@ mod tests {
             new_root: "0xnew".to_string(),
             output_files: vec!["out.dobj".to_string()],
             nullified_files: vec!["in.dobj".to_string()],
+            args: Default::default(),
         }
     }
 
@@ -532,6 +536,7 @@ mod tests {
             relayer_job_id: "job".into(),
             tx_hash: None,
             block_number: None,
+            args: Default::default(),
         }
     }
 
@@ -981,6 +986,7 @@ mod tests {
             relayer_job_id: "job".to_string(),
             tx_hash: Some("0xtx".to_string()),
             block_number: Some(1),
+            args: Default::default(),
         });
 
         let snapshot = entry.snapshot();

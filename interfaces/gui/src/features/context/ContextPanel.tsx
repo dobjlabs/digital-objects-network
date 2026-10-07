@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DragEvent } from "react";
 import type {
+  ActionArgPayload,
+  ActionArgValues,
   ActionPayload as Action,
   ClassRefPayload,
   ObjectSummaryPayload as ObjectSummary,
@@ -30,6 +32,7 @@ interface ContextPanelProps {
       objectPath: string;
       label: string;
     }>;
+    args?: ActionArgValues;
   }) => Promise<void>;
   proofRunning: boolean;
   proofStatus: "idle" | "generating" | "committing" | "summary" | "error";
@@ -54,6 +57,50 @@ function validBinding(
   ) ? binding : null;
 }
 
+/** Parse one typed-in argument value by its declared pod2 type into the
+ * JSON form dobjd accepts. Empty text means "use the script default". */
+function parseArgValue(
+  arg: ActionArgPayload,
+  raw: string,
+): { value?: unknown; error?: string } {
+  const text = raw.trim();
+  if (!text) return {};
+  switch (arg.type) {
+    case "Raw": {
+      const hex = text.startsWith("0x") ? text.slice(2) : text;
+      if (!/^[0-9a-fA-F]{1,64}$/.test(hex)) {
+        return { error: "expected up to 64 hex digits" };
+      }
+      return { value: { Raw: hex.toLowerCase().padStart(64, "0") } };
+    }
+    case "Int":
+      if (!/^-?\d+$/.test(text)) return { error: "expected an integer" };
+      return { value: { Int: text } };
+    case "Str":
+      return { value: text };
+    default:
+      try {
+        return { value: JSON.parse(text) };
+      } catch {
+        return { error: "expected a pod2 value in JSON form" };
+      }
+  }
+}
+
+function parseActionArgs(
+  args: ActionArgPayload[],
+  values: Record<string, string>,
+): { args: ActionArgValues; errors: Record<string, string> } {
+  const parsed: ActionArgValues = Object.create(null);
+  const errors: Record<string, string> = Object.create(null);
+  for (const arg of args) {
+    const { value, error } = parseArgValue(arg, values[arg.name] ?? "");
+    if (error) errors[arg.name] = error;
+    else if (value !== undefined) parsed[arg.name] = value;
+  }
+  return { args: parsed, errors };
+}
+
 export function ContextPanel({
   selection,
   objects,
@@ -65,6 +112,9 @@ export function ContextPanel({
   proofStatus,
 }: ContextPanelProps) {
   const [argBindings, setArgBindings] = useState<Record<string, BoundArg>>({});
+  // Typed-in values for the selected action's declared arguments, keyed by
+  // `<action id>::<arg name>` so switching actions keeps each one's text.
+  const [argValues, setArgValues] = useState<Record<string, string>>({});
   const [hoverArgKey, setHoverArgKey] = useState<string | null>(null);
   const [argErrors, setArgErrors] = useState<Record<string, string>>({});
   const previousProofStatusRef = useRef(proofStatus);
@@ -218,6 +268,8 @@ export function ContextPanel({
     methodName: string;
     totalInputs: ClassRefPayload[];
     onRun: (boundArgs: BoundArg[]) => void;
+    /** When set, the run button is disabled and shows this label. */
+    runBlocked?: string;
   }) =>
     (() => {
       const hasInputs = config.totalInputs.length > 0;
@@ -333,13 +385,12 @@ export function ContextPanel({
               onClick={() =>
                 config.onRun(boundArgs.filter(Boolean) as BoundArg[])
               }
-              disabled={proofRunning || !allArgsBound}
+              disabled={proofRunning || !allArgsBound || !!config.runBlocked}
             >
               {proofRunning
                 ? "running..."
-                : allArgsBound
-                  ? config.methodName
-                  : "bind all inputs"}
+                : (config.runBlocked ??
+                  (allArgsBound ? config.methodName : "bind all inputs"))}
             </button>
           </div>
         </div>
@@ -507,6 +558,14 @@ export function ContextPanel({
   const actionHashRaw = action.hash.trim();
   const actionHashDisplay = truncateDisplayHash(actionHashRaw);
   const actionLabel = pluginScopedLabel(action.action);
+  const actionId = qualifiedId(action.action);
+  const declaredArgs = action.args ?? [];
+  const argValueKey = (name: string) => `${actionId}::${name}`;
+  const typedArgs = Object.fromEntries(
+    declaredArgs.map((arg) => [arg.name, argValues[argValueKey(arg.name)] ?? ""]),
+  );
+  const parsedArgs = parseActionArgs(declaredArgs, typedArgs);
+  const argErrorCount = Object.keys(parsedArgs.errors).length;
 
   return (
     <section className="context-panel">
@@ -535,10 +594,50 @@ export function ContextPanel({
 
       <div className="context-desc">{action.description}</div>
 
+      {declaredArgs.length > 0 && (
+        <div className="method-args-block">
+          <div className="method-args-title">
+            arguments (blank = script default)
+          </div>
+          {declaredArgs.map((arg) => {
+            const err = parsedArgs.errors[arg.name];
+            return (
+              <div key={arg.name} className="method-arg">
+                <div className="method-arg-row">
+                  <span
+                    className="method-arg-label"
+                    title={`${arg.type}; default: ${arg.default}`}
+                  >
+                    {arg.name}: {arg.type}
+                  </span>
+                  <input
+                    type="text"
+                    className={`method-arg-input ${err ? "error" : ""}`.trim()}
+                    value={typedArgs[arg.name]}
+                    placeholder={`default: ${arg.default}`}
+                    disabled={proofRunning}
+                    spellCheck={false}
+                    onChange={(event) => {
+                      const text = event.target.value;
+                      setArgValues((prev) => ({
+                        ...prev,
+                        [argValueKey(arg.name)]: text,
+                      }));
+                    }}
+                  />
+                </div>
+                {err && <div className="method-arg-error">{err}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {renderMethodCard({
-        methodId: qualifiedId(action.action),
+        methodId: actionId,
         methodName: actionLabel,
         totalInputs: action.totalInputs,
+        runBlocked: argErrorCount > 0 ? "fix arguments" : undefined,
         onRun: (boundArgs) =>
           onRunProof({
             action: action.action,
@@ -546,6 +645,7 @@ export function ContextPanel({
               objectPath: arg.objectPath,
               label: arg.label,
             })),
+            args: parsedArgs.args,
           }),
       })}
     </section>

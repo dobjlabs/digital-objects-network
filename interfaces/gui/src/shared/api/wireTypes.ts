@@ -54,17 +54,36 @@ export interface ClassRefPayload {
   hash: string;
 }
 
+/** A prover-supplied argument an action accepts (an `arg` declaration in
+ * its script). A value may be supplied with the run; otherwise the script's
+ * default computes one. */
+export interface ActionArgPayload {
+  /** Argument name declared by the action. */
+  name: string;
+  /** pod2 value type a supplied value must have: `Raw`, `Int`, ... */
+  type: string;
+  /** Script method that computes the value when none is supplied. */
+  default: string;
+}
+
 export interface ActionPayload {
   action: QualifiedNamePayload;
   emoji: string;
   hash: string;
   totalInputs: ClassRefPayload[];
   description: string;
+  args?: ActionArgPayload[];
 }
+
+/** Argument values by name in pod2's JSON form: `{ Raw: "<64 hex>" }`,
+ * `{ Int: "<decimal>" }` or a bare string. */
+export type ActionArgValues = Record<string, unknown>;
 
 export interface RunActionInput {
   action: QualifiedNamePayload;
   inputObjectPaths: string[];
+  /** Values for some declared arguments; the rest take the script default. */
+  args?: ActionArgValues;
 }
 
 export interface RunActionResult {
@@ -73,6 +92,8 @@ export interface RunActionResult {
   newRoot: string;
   outputFiles: string[];
   nullifiedFiles: string[];
+  /** The selected action's argument values, supplied or computed. */
+  args?: ActionArgValues;
 }
 
 /** `POST /actions/run` response: the run was accepted and is executing in the
