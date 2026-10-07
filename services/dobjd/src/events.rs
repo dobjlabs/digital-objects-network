@@ -12,7 +12,7 @@ use wire_types::RunActionProgress;
 /// variant wrapping a struct flattens that struct's fields alongside the
 /// discriminator, so `Event::RunActionProgress(progress)` serializes as
 /// `{"type": "run-action-progress", "runId": ..., "phase": ..., ...}` —
-/// matching the legacy Tauri payload plus a discriminator.
+/// matching the progress payload plus a discriminator.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Event {

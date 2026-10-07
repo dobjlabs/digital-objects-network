@@ -195,13 +195,17 @@ notes. Write `~/.dobj/settings.json` only to point somewhere else:
 
 | Command                      | Effect                                                    |
 | ---------------------------- | --------------------------------------------------------- |
+| `dobj ui`                    | start the daemon if needed and open its default browser UI |
 | `dobj start`                 | launch in the background (idempotent)                     |
 | `dobj status`                | pid + HTTP healthcheck                                    |
 | `dobj logs` / `dobj logs -f` | last 100 log lines / follow                               |
 | `dobj stop`                  | shut down (SIGTERM→SIGKILL on Unix; hard kill on Windows) |
 | `dobj update`                | upgrade to the latest release (plugins untouched)         |
 
-Logs live at `~/.dobj/dobjd.log`.
+Logs live at `~/.dobj/dobjd.log`. The release daemon embeds its default web UI
+at `http://127.0.0.1:7717/ui/`; no browser runtime or Node is installed.
+Alternative local GUIs can run on their own web servers and connect to the API.
+See [web UI documentation](services/dobjd/README.md#web-ui).
 
 ## Manual install (no installer script)
 

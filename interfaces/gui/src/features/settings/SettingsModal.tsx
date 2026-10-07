@@ -4,7 +4,7 @@ import {
   getAppSettings,
   saveAppSettings,
   type AppSettingsPayload,
-} from "../../shared/api/tauriClient";
+} from "../../shared/api/httpClient";
 import { normalizeErrorMessage } from "../../shared/error";
 
 interface SettingsModalProps {

@@ -10,6 +10,8 @@ mod mcp;
 mod routes;
 mod runs;
 mod state;
+mod ui;
+mod web_access;
 
 use runs::RunRegistry;
 use state::AppState;
@@ -40,6 +42,7 @@ async fn main() -> Result<()> {
     let mcp_port = mcp_port_for_http_port(port)?;
 
     let driver = Arc::new(Driver::open_default()?);
+    let web_access = web_access::WebAccess::new(port);
     let (event_tx, _initial_rx) = events::channel();
     let runs = RunRegistry::new();
 
@@ -57,7 +60,7 @@ async fn main() -> Result<()> {
         runs.clone(),
         mcp_runtime.clone(),
     );
-    let app = routes::router(state);
+    let app = routes::router(state, web_access);
 
     // Bind both ports up-front (HTTP here, MCP via `prebind`) so startup
     // fails fast and synchronously if a port is taken -- a half-running
@@ -102,6 +105,7 @@ async fn main() -> Result<()> {
     });
 
     tracing::info!("listening on http://{addr}");
+    tracing::info!("browser UI: http://{addr}/ui/");
     axum::serve(http_listener, app).await?;
     Ok(())
 }

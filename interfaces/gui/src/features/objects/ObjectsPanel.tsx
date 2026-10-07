@@ -6,7 +6,6 @@ import {
   displayPathInObjectsDir,
   isLiveObject,
   isNullifiedObject,
-  joinObjectsDirPath,
   pluginScopedLabel,
 } from "../../shared/objectUtils";
 
@@ -17,7 +16,7 @@ interface ObjectsPanelProps {
   showNullifiedItems: boolean;
   onSelectObject: (contentHash: string) => void;
   onToggleNullified: () => void;
-  onOpenObjectsDir: () => void;
+  onOpenSettings: () => void;
   onImportObject: (dobj: string) => Promise<void>;
 }
 
@@ -28,7 +27,7 @@ export function ObjectsPanel({
   showNullifiedItems,
   onSelectObject,
   onToggleNullified,
-  onOpenObjectsDir,
+  onOpenSettings,
   onImportObject,
 }: ObjectsPanelProps) {
   const isDraggingRef = useRef(false);
@@ -68,7 +67,7 @@ export function ObjectsPanel({
       event.preventDefault();
       return;
     }
-    const objectPath = joinObjectsDirPath(objectsDirPath, object.fileName);
+    const objectPath = object.fileName;
     const displayLabel = pluginScopedLabel(object.class);
 
     const payload = JSON.stringify({
@@ -135,15 +134,12 @@ export function ObjectsPanel({
 
   return (
     <section className="objects-panel">
-      <button
-        type="button"
-        className="panel-header panel-header-button"
-        onClick={onOpenObjectsDir}
-        title={displayedObjectsDir}
-        data-hover-label={`open ${displayedObjectsDir}/`}
-      >
-        Your Objects
-      </button>
+      <div className="panel-header objects-header" title={displayedObjectsDir}>
+        <span>Your Objects</span>
+        <button type="button" className="objects-settings" onClick={onOpenSettings}>
+          Settings
+        </button>
+      </div>
 
       <div className="objects-import">
         <input

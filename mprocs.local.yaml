@@ -26,5 +26,3 @@ procs:
     shell: just wait-health http://127.0.0.1:3200/healthz && just dobjd
   web:
     shell: just wait-health http://127.0.0.1:7717/healthz && just web
-  desktop:
-    shell: just wait-health http://localhost:1420 && just desktop-shell

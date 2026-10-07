@@ -269,8 +269,7 @@ pub struct RunActionInput {
     pub input_object_paths: Vec<String>,
 }
 
-/// Wrapper to keep parity with the legacy Tauri command shape
-/// (`{ "input": { ... } }`).
+/// Action request body: `{ "input": { ... } }`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 pub struct RunActionRequest {

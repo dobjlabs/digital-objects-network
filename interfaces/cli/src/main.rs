@@ -1,7 +1,7 @@
 //! `dobj` — terminal client for `dobjd`.
 //!
 //! Thin HTTP wrapper around the same `dobjd` HTTP server that powers the
-//! desktop GUI, the website, and the MCP transport. Run `dobjd` first; this
+//! browser GUI and the MCP transport. Run `dobjd` first; this
 //! CLI talks to it.
 
 use std::path::PathBuf;
@@ -120,6 +120,12 @@ enum Cmd {
     /// Start dobjd in the background. Idempotent — safe to run when
     /// dobjd is already up.
     Start,
+    /// Start dobjd if needed and open its default UI in your browser.
+    Ui {
+        /// Print the UI URL without opening a browser.
+        #[arg(long)]
+        no_open: bool,
+    },
     /// Stop the dobjd process started by `dobj start`.
     Stop,
     /// Show whether dobjd is running and reachable.
@@ -213,6 +219,15 @@ async fn main() -> Result<()> {
         } => commands::run(&client, qualified_id, inputs, quiet).await,
         Cmd::Events => commands::events(&client).await,
         Cmd::Start => with_update_notice(daemon::start(&client).await).await,
+        Cmd::Ui { no_open } => {
+            daemon::start(&client).await?;
+            let url = format!("{}/ui/", client.base_url());
+            println!("{url}");
+            if !no_open {
+                open::that(&url)?;
+            }
+            Ok(())
+        }
         Cmd::Stop => daemon::stop().await,
         Cmd::Status => with_update_notice(daemon::status(&client).await).await,
         Cmd::Logs { follow, lines } => daemon::logs(follow, lines).await,

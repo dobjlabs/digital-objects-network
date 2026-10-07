@@ -11,7 +11,7 @@ import {
   type QualifiedNamePayload,
   type RunActionProgress,
   type RunState,
-} from "../api/tauriClient";
+} from "../api/httpClient";
 import { normalizeErrorMessage } from "../error";
 import { qualifiedEq } from "../objectUtils";
 
@@ -64,8 +64,6 @@ interface ProofStep {
 }
 
 interface ProofStats {
-  cpuHistory: number[];
-  totalCpuSecs: number;
   stateRoot: string | null;
 }
 
@@ -111,7 +109,6 @@ export interface AppState {
   selectAction: (action: QualifiedNamePayload) => void;
   clearSelection: () => void;
   toggleNullified: () => void;
-  recordCpuSample: (usagePct: number, totalCpuSecs: number) => void;
   setStateRoot: (hash: string | null) => void;
   applyRunActionProgress: (event: RunActionProgress) => void;
   initProofPanel: (input: {
@@ -158,8 +155,6 @@ export const useStore = create<AppState>((set, get) => ({
     summary: null,
     error: null,
     stats: {
-      cpuHistory: Array.from({ length: 24 }, () => 0),
-      totalCpuSecs: 0,
       stateRoot: null,
     },
   },
@@ -235,22 +230,6 @@ export const useStore = create<AppState>((set, get) => ({
       ...prev,
       showNullifiedItems: !prev.showNullifiedItems,
     })),
-  recordCpuSample: (usagePct, totalCpuSecs) =>
-    set((prev) => {
-      const nextUsage = Math.max(0, Math.min(100, Math.round(usagePct)));
-      const nextTotal = Math.max(0, Math.floor(totalCpuSecs));
-      return {
-        ...prev,
-        proof: {
-          ...prev.proof,
-          stats: {
-            ...prev.proof.stats,
-            cpuHistory: [...prev.proof.stats.cpuHistory, nextUsage].slice(-24),
-            totalCpuSecs: nextTotal,
-          },
-        },
-      };
-    }),
   setStateRoot: (hash) =>
     set((prev) => {
       const nextHash = hash?.trim() || null;

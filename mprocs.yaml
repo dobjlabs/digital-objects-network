@@ -1,10 +1,9 @@
 # Keep in step with mprocs.local.yaml, which repeats this chain behind a local
 # anvil devnet (mprocs has no include mechanism).
 #
-# Launch order: synchronizer -> relayer -> dobjd -> web -> desktop. Each proc
+# Launch order: synchronizer -> relayer -> dobjd -> web. Each proc
 # waits for the previous one's health endpoint before starting, so they don't
-# race to cold-build the shared proving-circuit cache (and the desktop shell
-# opens only once its Vite server on :1420 is up). Ports are the service
+# race to cold-build the shared proving-circuit cache. Ports are the service
 # defaults (synchronizer :3000, relayer :3200, dobjd :7717).
 procs:
   archiver:
@@ -17,5 +16,3 @@ procs:
     shell: just wait-health http://127.0.0.1:3200/healthz && just dobjd
   web:
     shell: just wait-health http://127.0.0.1:7717/healthz && just web
-  desktop:
-    shell: just wait-health http://localhost:1420 && just desktop-shell

@@ -5,7 +5,6 @@ members = [
     "services/relayer",
     "services/archiver",
     "interfaces/cli",
-    "interfaces/gui/src-tauri",
     "interfaces/mcp",
     "libs/driver",
     "libs/sdk",

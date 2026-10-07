@@ -44,7 +44,7 @@ Each directory has its own README with the details.
 | Directory                                   | Role                                                                                                     |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | [interfaces/cli/](interfaces/cli/README.md) | The `dobj` terminal CLI. A thin HTTP/SSE client of dobjd.                                                |
-| [interfaces/gui/](interfaces/gui/README.md) | React frontend, runnable in a browser or wrapped in a Tauri desktop shell. Talks to dobjd over HTTP/SSE. |
+| [interfaces/gui/](interfaces/gui/README.md) | Default browser UI for dobjd. Developed with Vite; release builds are embedded in the daemon. Talks over HTTP/SSE. |
 | [interfaces/mcp/](interfaces/mcp/README.md) | MCP server library exposing the driver as tools to AI agents, plus the `dobj-mcp-proxy` stdio bridge.    |
 
 ### Libraries

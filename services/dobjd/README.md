@@ -1,8 +1,8 @@
 # `dobjd`
 
 The Digital Objects Network driver daemon. Wraps `Arc<driver::Driver>` behind an HTTP/SSE
-API and an MCP server so that every client (terminal CLI, desktop app,
-website, MCP-aware agents) talks to a single driver process per machine.
+API, a default browser UI, and an MCP server so every client (terminal CLI,
+browser, MCP-aware agents) talks to a single driver process per machine.
 
 `dobjd` owns `~/.dobj/` exclusively — the RocksDB lock, the in-memory
 catalog, and the broadcast event hub. The companion CLI
@@ -12,10 +12,9 @@ catalog, and the broadcast event hub. The companion CLI
 ## What it does
 
 ```
-        ┌─ desktop (Tauri webview shell) ─┐
-        ├─ browser tab ───────────────────┤   HTTP/SSE
-        ├─ `dobj` terminal CLI ───────────┼──────────►  dobjd  ──►  ~/.dobj/
-        └─ MCP agents (Claude, Cursor) ───┘            (this crate)
+browser UI ─┐
+CLI ────────┼── HTTP/SSE ──► dobjd ──► ~/.dobj/
+MCP agents ─┘               └─ /ui/ default or custom web assets
 ```
 
 Two concurrent listeners:
@@ -30,8 +29,8 @@ Two concurrent listeners:
   **off**); when off, the MCP port is not bound at all. See
   [Settings](#settings) for toggle semantics.
 
-dobjd is API-only — the UI is served separately (Vite on `:1420` in
-dev, Tauri's webview for the desktop app).
+Release builds serve the default UI at `/ui/`. Development uses Vite on
+`:1420`; custom GUIs can be served by dobjd or by their own frontend server.
 
 ## HTTP API
 
@@ -83,7 +82,7 @@ The `mcp` module ([`src/mcp.rs`](src/mcp.rs)) is the glue between this crate
 and [`mcp/`](../../interfaces/mcp). `DobjdOps` implements `DobjOps` against the same
 `Arc<Driver>` and run registry the HTTP routes use, so `run_action` starts a
 run (returning a `runId`) and `get_run` polls it — an MCP-driven action is the
-same run object the desktop GUI / website / `dobj` CLI can follow, and its
+same run object the browser UI / `dobj` CLI can follow, and its
 progress fans out over the shared SSE hub in real time.
 
 ## Hardware requirements
@@ -154,3 +153,35 @@ Both `PUT /settings` and the MCP `write_settings` tool take a partial
 body and merge it onto the current settings: any field you omit keeps
 its stored value, so a write that leaves out `mcpEnabled` will not stop
 a running MCP server.
+
+## Web UI
+
+Release builds embed the Vite app (`interfaces/gui/dist`) in the daemon via
+`--features bundled-ui`. `just build-dobjd` builds both. The browser UI is
+at `http://127.0.0.1:7717/ui/`; `/` redirects there. A plain Cargo build without
+that feature still serves the API, but `/ui/` reports that no default UI was
+bundled. It does not silently embed a stale build.
+
+The daemon serves its bundled default UI. Alternative GUIs run on their own
+local web servers, such as Python's HTTP server or Vite, and connect directly
+to the HTTP/SSE API. The frontend and API may use different ports. There is
+no custom asset-directory setting or automatic download of GUI code.
+
+HTTP(S) origins on `localhost`, `127.0.0.1`, or `[::1]` are trusted on any port,
+so a local frontend server can use the API and SSE directly. Cross-origin
+responses allow the requesting local origin. Remote and opaque `null` origins
+are rejected before handlers run. Host validation restricts requests to
+loopback plus the daemon's listening port. Native requests without Origin
+remain available to CLI clients. The MCP listener's policy is independent.
+
+The Vite dev proxy is a trusted local client and removes the browser Origin
+before forwarding requests, including when the UI port is forwarded remotely.
+Do not expose that development server to people you do not trust.
+
+A local GUI is **trusted executable code**, not a permission sandbox. It can
+access object data, including sensitive fields exposed by the API, and invoke
+actions. Treat shared GUI projects as other software with access to your
+objects. Browser restrictions can still apply to cross-origin local requests.
+
+See [the frontend README](../../interfaces/gui/README.md) for build-time and
+runtime API URL configuration, including hosting the default build separately.

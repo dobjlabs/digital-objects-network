@@ -1,0 +1,27 @@
+name: Browser UI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: interfaces/gui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: interfaces/gui
+      - run: pnpm build
+        working-directory: interfaces/gui
+      - run: pnpm test:proxy
+        working-directory: interfaces/gui

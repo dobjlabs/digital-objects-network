@@ -7,11 +7,8 @@ import { SettingsModal } from "./features/settings/SettingsModal";
 import {
   getStateRoot,
   getObjectsDir,
-  listenOpenSettings,
   listenRunActionProgress,
-  openObjectsDir,
-  sampleAppCpu,
-} from "./shared/api/tauriClient";
+} from "./shared/api/httpClient";
 import { useStore } from "./shared/state/store";
 import "./styles/tokens.css";
 import "./styles/base.css";
@@ -43,7 +40,6 @@ function App() {
   const selectAction = useStore((state) => state.selectAction);
   const clearSelection = useStore((state) => state.clearSelection);
   const toggleNullified = useStore((state) => state.toggleNullified);
-  const recordCpuSample = useStore((state) => state.recordCpuSample);
   const setStateRoot = useStore((state) => state.setStateRoot);
   const runProof = useStore((state) => state.runProof);
   const proofStatus = useStore((state) => state.proof.status);
@@ -148,32 +144,6 @@ function App() {
     let cancelled = false;
     const poll = async () => {
       try {
-        const sample = await sampleAppCpu();
-        if (!cancelled) {
-          recordCpuSample(sample.usagePct, sample.totalCpuSecs);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Failed to sample CPU usage:", error);
-        }
-      }
-    };
-
-    void poll();
-    const interval = window.setInterval(() => {
-      void poll();
-    }, 1000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [recordCpuSample]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
         const root = await getStateRoot();
         if (!cancelled) {
           setStateRoot(root);
@@ -198,6 +168,11 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === ",") {
+        event.preventDefault();
+        setSettingsOpen(true);
+        return;
+      }
       if (settingsOpen) return;
       if (event.key === "Escape") {
         clearSelection();
@@ -206,40 +181,6 @@ function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [clearSelection, settingsOpen]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    listenOpenSettings(() => {
-      if (!cancelled) {
-        setSettingsOpen(true);
-      }
-    })
-      .then((dispose) => {
-        if (cancelled) {
-          dispose();
-          return;
-        }
-        unlisten = dispose;
-      })
-      .catch((error) => {
-        console.error("Failed to subscribe to open-settings:", error);
-      });
-
-    return () => {
-      cancelled = true;
-      if (unlisten) unlisten();
-    };
-  }, []);
-
-  const handleOpenObjectsDir = async () => {
-    try {
-      const dir = await openObjectsDir();
-      setObjectsDirPath(dir);
-    } catch (error) {
-      console.error("Failed to open objects directory:", error);
-    }
-  };
 
   return (
     <>
@@ -252,7 +193,7 @@ function App() {
             showNullifiedItems={showNullifiedItems}
             onSelectObject={selectObject}
             onToggleNullified={toggleNullified}
-            onOpenObjectsDir={handleOpenObjectsDir}
+            onOpenSettings={() => setSettingsOpen(true)}
             onImportObject={importObject}
           />
 

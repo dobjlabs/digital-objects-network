@@ -6,7 +6,6 @@ import type {
   ObjectSummaryPayload as ObjectSummary,
   QualifiedNamePayload,
 } from "../../shared/api/wireTypes";
-import { pickDobjFilePath, readDobjFile } from "../../shared/api/tauriClient";
 import { truncateDisplayHash } from "../../shared/format";
 import {
   displayPathInObjectsDir,
@@ -164,102 +163,6 @@ export function ContextPanel({
     setHoverArgKey(null);
   };
 
-  const fileNameFromPath = (path: string) => {
-    const normalized = path.replace(/\\/g, "/");
-    const index = normalized.lastIndexOf("/");
-    if (index === -1) return normalized;
-    return normalized.slice(index + 1);
-  };
-
-  const handleBrowseArgFile = async (
-    methodId: string,
-    expected: QualifiedNamePayload,
-    expectedLabel: string,
-    index: number,
-  ) => {
-    const key = argKey(methodId, index);
-    let selectedPath = "";
-    try {
-      selectedPath = (await pickDobjFilePath()).trim();
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : "";
-      if (message.includes("No file selected")) {
-        return;
-      }
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: "Failed to open file picker",
-      }));
-      return;
-    }
-    if (!selectedPath) return;
-
-    const selectedName = fileNameFromPath(selectedPath);
-    if (!selectedName.toLowerCase().endsWith(".dobj")) {
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: "Only .dobj files are supported",
-      }));
-      return;
-    }
-
-    let parsed: {
-      class: QualifiedNamePayload;
-      status: string;
-    };
-    try {
-      parsed = await readDobjFile(selectedPath);
-    } catch {
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: `Invalid .dobj file: ${selectedName}`,
-      }));
-      return;
-    }
-
-    const objectIsLive = parsed.status === "live";
-    const fileLabel = selectedName;
-
-    if (!parsed.class) {
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: `Missing required fields in .dobj: ${selectedName}`,
-      }));
-      return;
-    }
-
-    if (!qualifiedEq(parsed.class, expected)) {
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: `Expected ${expectedLabel} but got ${pluginScopedLabel(parsed.class)}`,
-      }));
-      return;
-    }
-
-    if (!objectIsLive) {
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: "Only live objects can be bound",
-      }));
-      return;
-    }
-
-    setArgBindings((prev) => ({
-      ...prev,
-      [key]: { objectPath: selectedPath, label: fileLabel },
-    }));
-    setArgErrors((prev) => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
-  };
-
   const renderMetaRow = (label: string, value: ReactNode) => (
     <div className="context-meta-row">
       <span className="context-meta-key">{label}</span>
@@ -349,30 +252,41 @@ export function ContextPanel({
                             ? "release to drop"
                             : "drag .dobj here")}
                       </div>
-                      <button
-                        type="button"
+                      <select
                         className="method-arg-browse"
+                        aria-label={`Choose ${expectedClassLabel} for input ${index + 1}`}
                         disabled={proofRunning}
-                        onClick={() => {
-                          if (proofRunning) return;
-                          if (bound?.objectPath) {
-                            setArgBindings((prev) => {
-                              const next = { ...prev };
+                        value={bound?.objectPath ?? ""}
+                        onChange={(event) => {
+                          const fileName = event.target.value;
+                          setArgBindings((prev) => {
+                            const next = { ...prev };
+                            if (fileName) {
+                              next[key] = { objectPath: fileName, label: fileName };
+                            } else {
                               delete next[key];
-                              return next;
-                            });
-                            return;
-                          }
-                          void handleBrowseArgFile(
-                            config.methodId,
-                            required.class,
-                            expectedClassLabel,
-                            index,
-                          );
+                            }
+                            return next;
+                          });
+                          setArgErrors((prev) => {
+                            const next = { ...prev };
+                            delete next[key];
+                            return next;
+                          });
                         }}
                       >
-                        {bound?.objectPath ? "Clear" : "Browse..."}
-                      </button>
+                        <option value="">Choose object…</option>
+                        {bound && !objects.some((object) => object.fileName === bound.objectPath) && (
+                          <option value={bound.objectPath}>{bound.label}</option>
+                        )}
+                        {objects
+                          .filter((object) => object.status === "live" && qualifiedEq(object.class, required.class))
+                          .map((object) => (
+                            <option key={object.contentHash} value={object.fileName}>
+                              {object.fileName}
+                            </option>
+                          ))}
+                      </select>
                     </div>
                     {err && <div className="method-arg-error">{err}</div>}
                   </div>

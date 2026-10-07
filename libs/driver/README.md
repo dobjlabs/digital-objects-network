@@ -2,7 +2,7 @@
 
 Headless Rust library for working with local digital objects.
 
-This crate is the non-Tauri backend used by `gui`. It owns:
+This crate is the backend used by `dobjd`. It owns:
 
 - local object storage under `~/.dobj/objects`
 - settings loading/saving

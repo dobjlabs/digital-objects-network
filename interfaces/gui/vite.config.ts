@@ -1,24 +1,15 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 
-// @ts-expect-error process is a nodejs global
-const host = process.env.TAURI_DEV_HOST;
-
-// https://vite.dev/config/
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, ".", "VITE_");
   return {
     plugins: [react()],
-
-    // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-    //
-    // 1. prevent Vite from obscuring rust errors
+    base: command === "build" ? "./" : "/",
     clearScreen: false,
-    // 2. tauri expects a fixed port, fail if that port is not available
     server: {
       port: 1420,
       strictPort: true,
-      host: host || false,
       // Keep HTTP and SSE on the UI's origin. The daemon's loopback address
       // belongs to the Vite host, which may differ from the browser's machine.
       proxy: {
@@ -26,18 +17,17 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_DOBJD_URL || "http://127.0.0.1:7717",
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api(?=\/|$)/, ""),
+          configure: (proxy) => {
+            // The dev proxy is a trusted local client. Forwarded browser
+            // origins belong to the UI host, not the daemon's origin.
+            proxy.on("proxyReq", (request) => request.removeHeader("origin"));
+            // The upstream connection's lifetime must not close the browser's
+            // connection while a local port-forwarder is still flushing data.
+            proxy.on("proxyRes", (response) => {
+              delete response.headers.connection;
+            });
+          },
         },
-      },
-      hmr: host
-        ? {
-            protocol: "ws",
-            host,
-            port: 1421,
-          }
-        : undefined,
-      watch: {
-        // 3. tell Vite to ignore watching `src-tauri`
-        ignored: ["**/src-tauri/**"],
       },
     },
   };

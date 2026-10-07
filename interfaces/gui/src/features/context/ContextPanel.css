@@ -343,3 +343,10 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* Object choices come from the daemon inventory, not filesystem paths. */
+select.method-arg-browse {
+  max-width: 150px;
+  min-width: 0;
+  text-overflow: ellipsis;
+}

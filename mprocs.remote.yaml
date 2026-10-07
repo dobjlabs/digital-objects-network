@@ -1,11 +1,8 @@
 # dev-remote uses the hosted synchronizer + relayer, so dobjd is the only local
-# prover (no cross-process cache race). Still launch dobjd -> web -> desktop in
-# order so the UI doesn't flash connection errors while dobjd warms, and the
-# desktop shell opens only after its Vite server on :1420 is up.
+# prover (no cross-process cache race). Still launch dobjd -> web in
+# order so the UI doesn't flash connection errors while dobjd warms.
 procs:
   dobjd:
     shell: just dobjd
   web:
     shell: just wait-health http://127.0.0.1:7717/healthz && just web
-  desktop:
-    shell: just wait-health http://localhost:1420 && just desktop-shell

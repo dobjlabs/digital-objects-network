@@ -111,11 +111,6 @@ export interface RunActionProgress {
   nullifiedFiles: string[] | null;
 }
 
-export interface CpuSample {
-  usagePct: number;
-  totalCpuSecs: number;
-}
-
 export interface AppSettingsPayload {
   synchronizerApiUrl: string;
   relayerApiUrl: string;

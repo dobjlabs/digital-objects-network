@@ -9,7 +9,6 @@ export function ProofRunnerPanel() {
   const selectAction = useStore((state) => state.selectAction);
   const prevStatusRef = useRef(proof.status);
   const [idleFadeIn, setIdleFadeIn] = useState(false);
-  const [showCpuDuringRun, setShowCpuDuringRun] = useState(false);
 
   useLayoutEffect(() => {
     const prev = prevStatusRef.current;
@@ -23,31 +22,10 @@ export function ProofRunnerPanel() {
     return undefined;
   }, [proof.status]);
 
-  const runActive =
-    proof.status === "generating" ||
-    proof.status === "committing" ||
-    proof.status === "summary";
-
-  useLayoutEffect(() => {
-    if (!runActive) {
-      setShowCpuDuringRun(false);
-    }
-  }, [runActive, proof.action]);
-
   const stateRootRaw = proof.stats.stateRoot?.trim() ?? "";
   const globalRootDisplay = stateRootRaw
     ? truncateDisplayHash(stateRootRaw)
     : "0x----...----";
-
-  const formatCpuDuration = (totalSecs: number) => {
-    const secs = Math.max(0, Math.floor(totalSecs));
-    const hours = Math.floor(secs / 3600);
-    const minutes = Math.floor((secs % 3600) / 60);
-    const seconds = secs % 60;
-    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
-    if (minutes > 0) return `${minutes}m ${seconds}s`;
-    return `${seconds}s`;
-  };
 
   const canReturnToAction =
     proof.action !== null &&
@@ -64,19 +42,8 @@ export function ProofRunnerPanel() {
     selectAction(proof.action);
   };
 
-  const toggleProofPanelView = () => {
-    setShowCpuDuringRun((current) => !current);
-  };
-
   const controlsRow = (
     <div className="proof-jump-row proof-controls-row">
-      <button
-        type="button"
-        className="proof-jump-btn"
-        onClick={toggleProofPanelView}
-      >
-        {showCpuDuringRun ? "Show Action" : "Show CPU Chart"}
-      </button>
       {canReturnToAction && (
         <button
           type="button"
@@ -90,37 +57,10 @@ export function ProofRunnerPanel() {
     </div>
   );
 
-  const showCpuPanel =
-    proof.status === "idle" || (runActive && showCpuDuringRun);
-  const idlePanelClass =
-    proof.status === "idle" && idleFadeIn ? " idle-fade-in" : "";
-
-  if (showCpuPanel) {
+  if (proof.status === "idle") {
     return (
-      <section
-        className={`cpu-panel proof-panel proof-panel-idle${idlePanelClass}`}
-      >
-        {runActive && showCpuDuringRun ? controlsRow : null}
-        <div className="idle-section idle-cpu">
-          <div className="proof-title cpu-title">CPU Usage</div>
-          <div className="dash-cpu-bars">
-            {proof.stats.cpuHistory.map((value, index) => (
-              <div
-                key={`${index}-${value}`}
-                className="dash-cpu-bar"
-                style={{
-                  height: `${Math.max(4, Math.min(100, Math.round(value)))}%`,
-                }}
-              />
-            ))}
-          </div>
-          <div className="proof-line cpu-total">
-            Total:{" "}
-            <span className="proof-muted">
-              {formatCpuDuration(proof.stats.totalCpuSecs)}
-            </span>
-          </div>
-        </div>
+      <section className={`proof-panel-frame proof-panel proof-panel-idle${idleFadeIn ? " idle-fade-in" : ""}`}>
+        <div className="proof-title">Ready to run an action</div>
         <div className="idle-section idle-roots">
           <div className="root-row">
             <span className="root-row-left">
@@ -138,7 +78,7 @@ export function ProofRunnerPanel() {
 
   if (proof.status === "error") {
     return (
-      <section className="cpu-panel proof-panel">
+      <section className="proof-panel-frame proof-panel">
         <div className="proof-title">Proof Failed</div>
         <div className="proof-error">{proof.error}</div>
       </section>
@@ -166,7 +106,7 @@ export function ProofRunnerPanel() {
       (proof.status === "committing" ? "running" : "pending");
 
     return (
-      <section className="cpu-panel proof-panel proof-run-card">
+      <section className="proof-panel-frame proof-panel proof-run-card">
         {controlsRow}
         <div className={stageHeaderClass(generateState)}>
           <span className={`stage-num ${stageClass(generateState)}`}>1</span>
@@ -212,7 +152,7 @@ export function ProofRunnerPanel() {
     const live = proof.summary?.live ?? [];
 
     return (
-      <section className="cpu-panel proof-panel proof-summary-card">
+      <section className="proof-panel-frame proof-panel proof-summary-card">
         {controlsRow}
         <div className="summary-stage">
           <div className="summary-title">

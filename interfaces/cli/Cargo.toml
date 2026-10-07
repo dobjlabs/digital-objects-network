@@ -21,6 +21,7 @@ dirs = "6"
 urlencoding = "2"
 uuid = { version = "1.18.1", features = ["v4"] }
 wire-types = { workspace = true }
+open = "5"
 
 # `dobj update`: release tag ordering + tarball extraction.
 semver = "1"
