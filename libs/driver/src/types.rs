@@ -38,8 +38,7 @@ pub struct ExecuteActionInput {
     /// (`Wood.dobj`) or a longer path — only the file name is used, and
     /// it must resolve to a live object inside `~/.dobj/objects/`.
     pub input_objects: Vec<String>,
-    /// Values for some of the action's declared arguments, by name, in
-    /// pod2's JSON form. Arguments left out take their script default.
+    /// Overrides by name in pod2 JSON format. Omitted arguments use defaults.
     pub args: ActionArgValues,
 }
 
@@ -53,7 +52,7 @@ pub struct ExecuteActionResult {
     pub relayer_job_id: String,
     pub tx_hash: Option<String>,
     pub block_number: Option<i64>,
-    /// The value each of the selected action's arguments took, supplied or computed.
+    /// Resolved arguments of the selected action, including computed defaults.
     pub args: ActionArgValues,
 }
 

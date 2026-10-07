@@ -222,20 +222,16 @@ pub struct MutatedObjectSlots {
     pub output_index: usize,
 }
 
-/// A prover-supplied argument an action accepts: an `arg` declaration
-/// in its script. The caller may supply a value with the run; otherwise
-/// the script's default computes one.
+/// Metadata for an optional caller-supplied witness.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ActionArgSummary {
-    /// Argument name declared by the action.
     pub name: String,
-    /// pod2 value type a supplied value must have (`Raw`, `Int`, ...).
+    /// Required pod2 value type, such as Raw or Int.
     #[serde(rename = "type")]
     pub type_name: String,
-    /// The script method that computes the value when none is supplied,
-    /// such as `pow_obj_grind` or `random`.
+    /// Default generator label: random, pow_obj_grind, or arithmetic.
     pub default: String,
 }
 
@@ -318,9 +314,7 @@ pub struct CheckActionReport {
 pub struct RunActionInput {
     pub action: QualifiedName,
     pub input_object_paths: Vec<String>,
-    /// Values for some of the action's declared arguments (see
-    /// `ActionSummary::args`), by name. Arguments left out take their
-    /// script default.
+    /// Overrides by name. Omitted arguments use their script defaults.
     #[serde(default)]
     pub args: ActionArgValues,
 }
@@ -345,8 +339,7 @@ pub struct RunActionResult {
     pub new_root: String,
     pub output_files: Vec<String>,
     pub nullified_files: Vec<String>,
-    /// The value each of the selected action's arguments took, supplied or
-    /// computed by its default.
+    /// Resolved arguments of the selected action, including computed defaults.
     #[serde(default)]
     pub args: ActionArgValues,
 }

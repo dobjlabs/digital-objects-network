@@ -54,15 +54,12 @@ export interface ClassRefPayload {
   hash: string;
 }
 
-/** A prover-supplied argument an action accepts (an `arg` declaration in
- * its script). A value may be supplied with the run; otherwise the script's
- * default computes one. */
+/** Metadata for an optional caller-supplied witness. */
 export interface ActionArgPayload {
-  /** Argument name declared by the action. */
   name: string;
-  /** pod2 value type a supplied value must have: `Raw`, `Int`, ... */
+  /** Required pod2 value type, such as Raw or Int. */
   type: string;
-  /** Script method that computes the value when none is supplied. */
+  /** Default generator label: random, pow_obj_grind, or arithmetic. */
   default: string;
 }
 
@@ -82,7 +79,7 @@ export type ActionArgValues = Record<string, unknown>;
 export interface RunActionInput {
   action: QualifiedNamePayload;
   inputObjectPaths: string[];
-  /** Values for some declared arguments; the rest take the script default. */
+  /** Overrides by name. Omitted arguments use their script defaults. */
   args?: ActionArgValues;
 }
 
@@ -92,7 +89,7 @@ export interface RunActionResult {
   newRoot: string;
   outputFiles: string[];
   nullifiedFiles: string[];
-  /** The selected action's argument values, supplied or computed. */
+  /** Resolved arguments of the selected action, including computed defaults. */
   args?: ActionArgValues;
 }
 

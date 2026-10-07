@@ -26,8 +26,7 @@ pub trait ActionCatalog: Send + Sync {
     fn list_classes(&self) -> Vec<CatalogClass>;
     fn get_class(&self, class: &QualifiedName) -> Option<CatalogClass>;
     fn get_class_by_hash(&self, class_hash: &Hash) -> Option<CatalogClass>;
-    /// Execute `action` over `inputs`. `args` supplies values for some
-    /// of its declared arguments; the rest take their script default.
+    /// Omitted arguments use their script defaults.
     fn execute_action(
         &self,
         action: QualifiedName,

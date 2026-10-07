@@ -111,11 +111,10 @@ enum Cmd {
         /// Input object filenames or paths. Filenames must exist in
         /// `~/.dobj/objects/` (the driver looks them up by basename).
         inputs: Vec<String>,
-        /// Value for one of the action's declared arguments, as
-        /// `NAME=VALUE`; repeatable. Hex for a Raw (such as a
-        /// proof-of-work key), decimal for an Int. `dobj action
-        /// PLUGIN::ACTION` lists the arguments; those left out take the
-        /// script default.
+        /// Supply an argument as NAME=VALUE. Repeat for multiple arguments.
+        /// Use hex for Raw values and decimal for Int values. Omitted
+        /// arguments use their script defaults. Run `dobj action
+        /// PLUGIN::ACTION` to list the accepted arguments.
         #[arg(long = "arg", value_name = "NAME=VALUE")]
         args: Vec<String>,
         /// Don't print per-step progress messages.

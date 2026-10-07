@@ -2137,9 +2137,6 @@ fn test_var_array_get_and_var_set_contains() {
     apply_tx(&mut state, &metal_tx);
 }
 
-/// `arg` renders exactly like `var`: the argument is a private wildcard
-/// named by the declaration and the public arguments are unchanged. The
-/// metadata lists it with its type and default generator.
 #[test]
 fn test_arg_declaration_renders_like_var() {
     let src_var = r#"
@@ -2173,7 +2170,6 @@ fn test_arg_declaration_renders_like_var() {
     assert_eq!(args[0].default, "pow_obj_grind");
 }
 
-/// An `arg` default must be one fresh, statement-free generator call.
 #[test]
 fn test_arg_declaration_errors() {
     for (action, expected, src) in [
@@ -2362,8 +2358,6 @@ fn test_arg_default_rejects_object_and_subaction_instructions() {
     }
 }
 
-/// A supplied argument replaces the default's value and skips the
-/// default; an omitted one is computed and reported alongside it.
 #[allow(clippy::cloned_ref_to_slice_refs)]
 #[test]
 fn test_arg_supplied_and_default() {
@@ -2415,14 +2409,12 @@ fn test_arg_supplied_and_default() {
     let [log_b] = res.objs();
     apply_tx(&mut state, &res.tx);
 
-    // Default: the key is ground (or random in mock mode) and reported.
     let executor = module.executor(true, grounding_witness(&state, &[log_a.obj.commitment()]));
     let res = executor.action("CraftWood", vec![log_a]).unwrap();
     let [wood_a] = res.objs();
     assert_eq!(res.args.get("key"), Some(&field(&wood_a, "key")));
     apply_tx(&mut state, &res.tx);
 
-    // Supplied: the object carries the caller's key and the default is skipped.
     let supplied = Value::from(RawValue([F(7), F(8), F(9), F(0)]));
     let args = ActionArgs::from([("key".to_string(), supplied.clone())]);
     let executor = module.executor(true, grounding_witness(&state, &[log_b.obj.commitment()]));
@@ -2434,7 +2426,6 @@ fn test_arg_supplied_and_default() {
     assert_eq!(res.args, args);
     apply_tx(&mut state, &res.tx);
 
-    // Unknown names and ill-typed values are rejected before the body runs.
     let executor = module.executor(true, grounding_witness(&state, &[wood_a.obj.commitment()]));
     let bad = ActionArgs::from([("nonce".to_string(), Value::from(1))]);
     let err = executor
@@ -2455,8 +2446,6 @@ fn test_arg_supplied_and_default() {
         "{err}"
     );
 
-    // A well-typed value that fails the script's constraints fails the
-    // execution, naming the supplied arguments.
     let bad = ActionArgs::from([("grade".to_string(), Value::from(5))]);
     let err = executor
         .action_with_args("Wear", vec![wood_a.clone()], &bad)
@@ -2468,7 +2457,6 @@ fn test_arg_supplied_and_default() {
         "{err}"
     );
 
-    // An Int argument whose default is unsafe arithmetic.
     let args = ActionArgs::from([("grade".to_string(), Value::from(2))]);
     let res = executor
         .action_with_args("Wear", vec![wood_a], &args)
@@ -2641,9 +2629,6 @@ fn test_arg_names_are_literal_strings() {
     }
 }
 
-/// The argument name is the string given to `arg(...)`, independent of
-/// the binding that names the wildcard, so a helper can take the name
-/// as a parameter and each caller declares its own argument.
 #[test]
 fn test_arg_name_from_helper() {
     let src = r#"
@@ -2676,13 +2661,9 @@ fn test_arg_name_from_helper() {
     };
     assert_eq!(names(0), vec!["iron_key"]);
     assert_eq!(names(1), vec!["copper_key"]);
-    // The wildcard carries the binding, not the argument name.
     assert_renders(&module, &["private: iron0, k, initials MineIronInitials"]);
 }
 
-/// The default block ends the statement like any block does: a following
-/// statement needs no `;`, while a token Rhai would attach to the block
-/// is a compile error rather than a silently swallowed statement.
 #[test]
 fn test_arg_default_block_terminates_statement() {
     let src = r#"
