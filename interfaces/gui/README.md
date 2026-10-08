@@ -64,9 +64,10 @@ VITE_DOBJD_URL=http://127.0.0.1:7727 pnpm build
 ```
 
 Alternatively, add `<meta name="dobjd-api-url" content="http://127.0.0.1:7727">`
-to the served index's head without rebuilding. The build-time URL takes
-precedence over the meta tag. The API base is shared by fetches and SSE streams;
-it never relies on a separately hosted frontend having the daemon's port.
+to the served index's head without rebuilding. The meta tag takes precedence
+over the build-time URL, so a daemon-served UI always uses its own origin even
+if the build selected a different daemon. The API base is shared by fetches and
+SSE streams; it never relies on a separately hosted frontend having the daemon's port.
 
 ## Browser controls
 

@@ -28,8 +28,8 @@ export type {
 type UnlistenFn = () => void;
 
 const apiUrl =
-  (import.meta.env.VITE_DOBJD_URL as string | undefined) ||
   document.querySelector<HTMLMetaElement>('meta[name="dobjd-api-url"]')?.content ||
+  (import.meta.env.VITE_DOBJD_URL as string | undefined) ||
   "http://127.0.0.1:7717";
 const HTTP_BASE = import.meta.env.DEV
   ? "/api"

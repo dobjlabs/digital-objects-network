@@ -23,8 +23,11 @@ test("dev proxy delivers a large UTF-8 catalogue and streams SSE", { timeout: 15
     requests.push({ path: request.url, origin: request.headers.origin, host: request.headers.host });
     if (request.url === "/events") {
       eventResponse = response;
-      response.writeHead(200, { "Content-Type": "text/event-stream" });
-      response.write('data: {"status":"running"}\n\n');
+      response.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+      });
+      response.flushHeaders();
     } else {
       response.writeHead(200, {
         "Content-Type": "application/json",
@@ -46,9 +49,10 @@ test("dev proxy delivers a large UTF-8 catalogue and streams SSE", { timeout: 15
       root: fileURLToPath(new URL("..", import.meta.url)),
       cacheDir: cache,
       logLevel: "silent",
-      server: { host: "127.0.0.1", port: 0 },
+      server: { port: 0 },
     });
     await vite.listen();
+    assert.equal(vite.httpServer.address().address, "127.0.0.1");
     const base = `http://127.0.0.1:${vite.httpServer.address().port}/api`;
     const options = { headers: { Origin: "https://forwarded-ui.example" }, signal: AbortSignal.timeout(5000) };
     const response = await fetch(`${base}/actions`, options);
@@ -60,7 +64,10 @@ test("dev proxy delivers a large UTF-8 catalogue and streams SSE", { timeout: 15
     assert.deepEqual(JSON.parse(received.toString()), actions);
 
     const events = await fetch(`${base}/events`, options);
+    assert.equal(events.status, 200);
     assert.equal(events.headers.get("content-type"), "text/event-stream");
+    assert.equal(events.headers.get("cache-control"), "no-cache");
+    eventResponse.write('data: {"status":"running"}\n\n');
     const reader = events.body.getReader();
     const first = await reader.read();
     assert.equal(Buffer.from(first.value).toString(), 'data: {"status":"running"}\n\n');

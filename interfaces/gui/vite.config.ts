@@ -8,6 +8,7 @@ export default defineConfig(({ mode, command }) => {
     base: command === "build" ? "./" : "/",
     clearScreen: false,
     server: {
+      host: "127.0.0.1",
       port: 1420,
       strictPort: true,
       // Keep HTTP and SSE on the UI's origin. The daemon's loopback address
@@ -23,8 +24,16 @@ export default defineConfig(({ mode, command }) => {
             proxy.on("proxyReq", (request) => request.removeHeader("origin"));
             // The upstream connection's lifetime must not close the browser's
             // connection while a local port-forwarder is still flushing data.
-            proxy.on("proxyRes", (response) => {
+            proxy.on("proxyRes", (response, _request, downstream) => {
               delete response.headers.connection;
+              if (response.headers["content-type"]?.startsWith("text/event-stream")) {
+                // The proxy copies status and headers after this callback.
+                queueMicrotask(() => {
+                  if (!downstream.destroyed && !downstream.headersSent) {
+                    downstream.flushHeaders();
+                  }
+                });
+              }
             });
           },
         },

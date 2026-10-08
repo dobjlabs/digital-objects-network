@@ -1,13 +1,9 @@
 # Keep the build context small and free of secrets.
 
-# interfaces/gui: only the src-tauri crate is a Cargo workspace member, so cargo needs
-# its manifest to resolve the workspace - keep that, drop the rest of the
-# frontend (TypeScript, assets, build output); none of it builds the servers.
+# The frontend is not needed to build the chain-side services.
 interfaces/gui/**
-!interfaces/gui/src-tauri/**
 
-# Build outputs and node_modules anywhere (listed after the interfaces/gui rule so they
-# still apply under src-tauri). The workspace shares one target/ at the root.
+# The workspace shares one target/ at the root.
 target
 **/target
 **/node_modules

@@ -103,6 +103,9 @@ Install either example, or run both commands to load both.
 & "$env:USERPROFILE\.dobj\bin\dobj.exe" actions
 ```
 
+After installing a plugin, reload the browser tab opened by `dobj ui` to load
+its actions. The daemon does not need to restart.
+
 ### Connect an agent (MCP)
 
 dobjd can serve MCP at `http://127.0.0.1:7718/mcp`, but it's **off by

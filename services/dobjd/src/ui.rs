@@ -54,17 +54,16 @@ async fn serve(assets: Assets, name: &str) -> Response {
     };
     let (name, bytes) = match asset(name) {
         Some(bytes) => (name, bytes),
-        None if std::path::Path::new(name).extension().is_none() => {
+        None if name == "index.html" || std::path::Path::new(name).extension().is_none() => {
             // Keep SPA fallback confined to /ui/ and preserve missing-asset errors.
             match asset("index.html") {
                 Some(bytes) => ("index.html", bytes),
-                None => return StatusCode::NOT_FOUND.into_response(),
+                None => return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "This dobjd was built without a UI. Use Vite for development, or rebuild with --features bundled-ui after building interfaces/gui.",
+                ).into_response(),
             }
         }
-        None if name == "index.html" => return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "This dobjd was built without a UI. Use Vite for development, or rebuild with --features bundled-ui after building interfaces/gui.",
-        ).into_response(),
         None => return StatusCode::NOT_FOUND.into_response(),
     };
     let bytes = if name == "index.html" {
@@ -85,6 +84,8 @@ async fn serve(assets: Assets, name: &str) -> Response {
             (header::CONTENT_TYPE, content_type(name)),
             (header::CACHE_CONTROL, "no-cache"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::CONTENT_SECURITY_POLICY, "frame-ancestors 'none'"),
+            (header::X_FRAME_OPTIONS, "DENY"),
         ],
         bytes,
     )
@@ -162,6 +163,51 @@ mod tests {
             assert!(asset_count > 0, "built index must reference bundled assets");
         } else {
             assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        }
+    }
+
+    #[tokio::test]
+    async fn ui_documents_cannot_be_embedded_by_another_page() {
+        for path in ["/ui/", "/ui/index.html", "/ui/profile"] {
+            let response = request(ASSETS, path).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers()[header::CONTENT_SECURITY_POLICY],
+                "frame-ancestors 'none'",
+                "{path}"
+            );
+            assert_eq!(
+                response.headers()[header::X_FRAME_OPTIONS],
+                "DENY",
+                "{path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_ui_explains_navigation_failures_but_preserves_asset_errors() {
+        for path in [
+            "/ui/",
+            "/ui/index.html",
+            "/ui/profile",
+            "/ui/settings/nested",
+        ] {
+            let response = request(&[], path).await;
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            let body = to_bytes(response.into_body(), 1024).await.unwrap();
+            assert!(String::from_utf8_lossy(&body).contains("built without a UI"));
+        }
+        for path in [
+            "/ui/missing.js",
+            "/ui/.hidden",
+            "/ui/invalid:path",
+            "/objects",
+        ] {
+            assert_eq!(
+                request(&[], path).await.status(),
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
         }
     }
 

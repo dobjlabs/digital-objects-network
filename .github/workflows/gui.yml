@@ -23,5 +23,5 @@ jobs:
         working-directory: interfaces/gui
       - run: pnpm build
         working-directory: interfaces/gui
-      - run: pnpm test:proxy
+      - run: pnpm test
         working-directory: interfaces/gui
