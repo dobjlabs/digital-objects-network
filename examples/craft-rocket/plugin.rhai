@@ -28,7 +28,6 @@ fn pow_proof(action, obj, pow_ms) {
 
 fn vdf_proof(action, obj, iters) {
     var work = action.intro_vdf(iters, obj);
-    obj.update("work", work);
 }
 
 // One use of a durability-bearing tool. The Gt(0) constraint fails when the

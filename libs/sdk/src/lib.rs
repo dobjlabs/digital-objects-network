@@ -14,8 +14,8 @@ use pod2::{
     frontend::{MainPod, MultiPodBuilder, Operation, OperationArg, entry},
     lang::{Module, load_module},
     middleware::{
-        EMPTY_VALUE, F, Hash, MainPodProver, NativePredicate, OperationAux, OperationType, Params,
-        Pod, Predicate, RawValue, Statement, StatementArg, StrKey, VDSet, Value,
+        F, Hash, MainPodProver, NativePredicate, OperationAux, OperationType, Params, Pod,
+        Predicate, RawValue, Statement, StatementArg, StrKey, VDSet, Value,
         containers::{Array, Dictionary, Set},
     },
 };
@@ -815,7 +815,6 @@ impl ActionHandle {
             .unwrap_or_else(|| panic!("no Is{class} predicate hash registered"));
         dict!({
             "type" => type_hash,
-            "work" => EMPTY_VALUE,
             "key" => exe_ctx.rand_value()
         })
     }

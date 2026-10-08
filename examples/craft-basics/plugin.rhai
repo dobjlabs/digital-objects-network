@@ -1,7 +1,6 @@
 fn FindLog(action) {
     var log = action.output("Log");
     var work = action.intro_vdf(3, log);
-    log.update("work", work);
 }
 
 fn CraftWood(action) {
@@ -39,7 +38,6 @@ fn use_pick(action, pick, vdf_iters) {
     var key = action.random();
     pick.update("key", key);
     var work = action.intro_vdf(vdf_iters, pick);
-    pick.update("work", work);
 }
 
 fn UseWoodPick(action) {

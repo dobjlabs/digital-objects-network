@@ -102,7 +102,7 @@ description = "Discover a log object by proving a short VDF."
 [[actions]]
 name = "UseWoodPick"
 emoji = "⛏️"
-description = "Internal durability/work update for wood pick usage."
+description = "Internal durability update and VDF proof for wood pick usage."
 hidden = true   # excluded from the user-facing action list
 ```
 

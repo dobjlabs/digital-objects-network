@@ -19,7 +19,7 @@ When you inspect a live object, you see:
 
 - **id**: a hash uniquely identifying this object state
 - **className**: determined by the predicate that certifies it
-- **fields**: the key-value pairs (durability, key, work, etc.)
+- **fields**: the key-value pairs (durability, key, etc.)
 - **predicateSource**: the podlang rule showing all valid transitions
 - **live**: true, meaning its nullifier has not been published
 

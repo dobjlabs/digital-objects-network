@@ -326,9 +326,8 @@ record MineStoneWithWoodPickInitials = (stone)
 
 // Actions
 
-FindLog(io FindLogIO, state_header StateHeader, chain0, chain, private: log0, work, initials FindLogInitials) = AND(
-  Vdf(3, log0, work)
-  DictUpdate(log0, "work", work, initials.log)
+FindLog(io FindLogIO, state_header StateHeader, chain0, chain, private: work, initials FindLogInitials) = AND(
+  Vdf(3, initials.log, work)
   tx::TxInsert(chain0, chain, initials.log, io.out_log, @self_predicate(IsLog))
 )
 
@@ -352,14 +351,13 @@ CraftWoodPick(io CraftWoodPickIO, state_header StateHeader, chain0, chain, priva
   tx::TxInsert(chain_steps.step_1, chain, initials.pick, io.out_pick, @self_predicate(IsWoodPick))
 )
 
-UseWoodPick(io UseWoodPickIO, state_header StateHeader, chain0, chain, private: wood_pick0, wood_pick1, wood_pick2, durability, key, work) = AND(
+UseWoodPick(io UseWoodPickIO, state_header StateHeader, chain0, chain, private: wood_pick0, wood_pick1, durability, key, work) = AND(
   ArrayContains(io, UseWoodPickIO::in_wood_pick, wood_pick0)
   Gt(wood_pick0.durability, 0)
   Sum(durability, 1, wood_pick0.durability)
   DictUpdate(wood_pick0, "durability", durability, wood_pick1)
-  DictUpdate(wood_pick1, "key", key, wood_pick2)
-  Vdf(10, wood_pick2, work)
-  DictUpdate(wood_pick2, "work", work, io.out_wood_pick)
+  DictUpdate(wood_pick1, "key", key, io.out_wood_pick)
+  Vdf(10, io.out_wood_pick, work)
   tx::TxMutate(chain0, chain, wood_pick0, io.out_wood_pick, @self_predicate(IsWoodPick))
 )
 

@@ -436,7 +436,7 @@ fn is_known_class(name: &str) -> bool {
 fn action_predicate_source_for(action_name: &str) -> String {
     match action_name {
         "FindLog" => {
-            "FindLog(log, chain0, chain, private: log0, work) = AND(\n  Vdf(3, log0, work)\n  DictUpdate(log0, \"work\", work, log)\n  DictContains(log, \"type\", @self_predicate(IsLog))\n  tx::TxInsert(chain0, chain, log)\n)"
+            "FindLog(log, chain0, chain, private: work) = AND(\n  Vdf(3, log, work)\n  DictContains(log, \"type\", @self_predicate(IsLog))\n  tx::TxInsert(chain0, chain, log)\n)"
                 .to_string()
         }
         "CraftWood" => {

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use pod2::middleware::{EMPTY_HASH, EMPTY_VALUE, Hash, StrKey, Value, containers::Array};
+use pod2::middleware::{EMPTY_HASH, Hash, StrKey, Value, containers::Array};
 use pod2utils::{dict, rand_raw_value};
 use sdk::{SdkModule, SpendableObject};
 use txlib::{GroundingWitness, StateHeader, with_stable_identifier};
@@ -19,7 +19,7 @@ use crate::inspect::derive_class_signature;
 /// Mint a synthetic instance of `class_name` whose dict shape matches
 /// the class's IsX rule. Fields the signature analyzer recognises
 /// (string literals, int initials, witnesses) are populated with a
-/// representative value; SDK-pre-populated keys (`type`, `key`, `work`)
+/// representative value; SDK-pre-populated keys (`type`, `key`)
 /// are added in all cases.
 pub fn mint_class(
     module: &SdkModule,
@@ -61,12 +61,11 @@ fn mint_with_signature(
     let mut d = dict!({
         "type" => Value::from(class_hash),
         "key" => Value::from(rand_raw_value()),
-        "work" => Value::from(EMPTY_VALUE),
     });
 
     for (field_name, info) in &signature.fields {
-        // `type`/`key`/`work` are SDK-pre-populated and already stamped.
-        if matches!(field_name.as_str(), "type" | "key" | "work") {
+        // `type`/`key` are SDK-pre-populated and already stamped.
+        if matches!(field_name.as_str(), "type" | "key") {
             continue;
         }
         let value: Value = if let Some(literal) = info.string_literals.iter().next() {
@@ -170,6 +169,7 @@ mod tests {
     fn mint_log_has_expected_shape() {
         let module = load_craft_basics();
         let log = mint_class(&module, "Log").unwrap();
+        assert_eq!(log.iter().count(), 3); // type, key, stable_identifier
         let class_hash = module.class_hash("Log").unwrap();
         let typ = log.get(&StrKey::from("type")).unwrap().unwrap();
         assert_eq!(typ.raw(), Value::from(class_hash).raw());

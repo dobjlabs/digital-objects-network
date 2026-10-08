@@ -59,7 +59,7 @@ description = "Combine wood and a stick to craft a wood pick."
 name = "UseWoodPick"
 fn_name = "UseWoodPick"
 emoji = "⛏️"
-description = "Internal durability/work update for wood pick usage."
+description = "Internal durability update and VDF proof for wood pick usage."
 hidden = true
         "#;
         let manifest: Manifest = toml::from_str(toml_str).unwrap();

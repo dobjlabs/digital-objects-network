@@ -72,7 +72,6 @@ fn BuildShip(action) {
         ["ready_at", 0]
     ]);
     var work = action.intro_vdf(3, ship);
-    ship.update("work", work);
 }
 
 // Look up next-tier data using the authenticated tier. The row also provides
@@ -86,7 +85,6 @@ fn UpgradeShip(action) {
     var row = action.array_get(ship_tiers(), next_tier);
     ship.update("tier", next_tier);
     var work = action.intro_vdf(row.vdf, ship);
-    ship.update("work", work);
     rekey(action, ship);
 }
 
@@ -207,7 +205,6 @@ fn ScanBody(action) {
         ["next_coordinate", 0]
     ]);
     var work = action.intro_vdf(row.vdf, body);
-    body.update("work", work);
     rekey(action, ship);
 }
 

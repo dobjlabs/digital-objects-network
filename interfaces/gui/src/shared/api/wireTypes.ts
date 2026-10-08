@@ -35,7 +35,7 @@ export interface ObjectSummaryPayload {
   status: ObjectStatus;
   txHash: string | null;
   description?: string;
-  /** Application-layer fields (e.g. `durability`, `key`, `work`). */
+  /** Application-layer fields (e.g. `durability`, `key`). */
   fields: Record<string, unknown>;
 }
 

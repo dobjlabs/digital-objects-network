@@ -47,7 +47,6 @@ fn test_sdk_1() {
         fn FindLog(action) {
             var log = action.output("Log");
             var work = action.intro_vdf(3, log);
-            log.update("work", work);
         }
 
         fn CraftWood(action) {
@@ -80,7 +79,6 @@ fn test_sdk_1() {
             var key = action.random();
             pick.update("key", key);
             var work = action.intro_vdf(vdf_iters, pick);
-            pick.update("work", work);
         }
 
         fn UseWoodPick(action) {
@@ -188,6 +186,7 @@ fn test_sdk_1() {
     let res = executor.action("FindLog", vec![]).unwrap();
     let log_a_tx = res.tx.clone();
     let [log_a] = res.objs();
+    assert_eq!(log_a.obj.iter().count(), 3); // type, key, stable_identifier
     apply_tx(&mut state, &log_a_tx);
 
     println!("exe CraftWood");
@@ -260,7 +259,7 @@ fn test_sdk_2() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "75119e01ece11fd33d43bb2f68239c92450d338140f6757dd286abbb628b5712"
+        module_hash = "b7492be2ac0298baddeb7647f0bace3a3127fc1e45e2b3219fcf0706ca7fd732"
 
         [[classes]]
         name = "Log"
@@ -287,7 +286,6 @@ fn test_sdk_2() {
         fn FindLog(action) {
             var log = action.output("Log");
             var work = action.intro_vdf(3, log);
-            log.update("work", work);
         }
 
         fn CraftWood(action) {
@@ -1068,7 +1066,7 @@ fn test_unsafe_product_paired_with_statement() {
             var ore = action.mutate("Ore");
             var doubled = unsafe { ore.grade * 2 };
             action.st_product(ore.grade, 2, doubled);
-            ore.update("work", doubled);
+            ore.update("grade", doubled);
         }
 "#;
     let sdk = Sdk::default();
@@ -1091,7 +1089,7 @@ fn test_unsafe_product_paired_with_statement() {
     let [mixed] = res.objs();
     apply_tx(&mut state, &mixed_tx);
     assert_eq!(
-        mixed.obj.get(&StrKey::from("work")).unwrap().unwrap(),
+        mixed.obj.get(&StrKey::from("grade")).unwrap().unwrap(),
         Value::from(14)
     );
 }
@@ -1107,8 +1105,9 @@ fn test_arithmetic_is_unsafe_only() {
         fn UnsafeMix(action) {
             var ore = action.input("Ore");
             var alloy = action.output("Alloy");
+            alloy.set([["grade", 0]]);
             var lowered = unsafe { ore.grade - 1 };
-            alloy.update("work", lowered);
+            alloy.update("grade", lowered);
         }
 "#;
     let sdk = Sdk::default();
@@ -1128,8 +1127,9 @@ fn test_arithmetic_is_unsafe_only() {
         fn BareSub(action) {
             var ore = action.input("Ore");
             var alloy = action.output("Alloy");
+            alloy.set([["grade", 0]]);
             var lowered = ore.grade - 1;
-            alloy.update("work", lowered);
+            alloy.update("grade", lowered);
         }
 "#,
         ),
@@ -1139,8 +1139,9 @@ fn test_arithmetic_is_unsafe_only() {
         fn BareMul(action) {
             var ore = action.input("Ore");
             var alloy = action.output("Alloy");
+            alloy.set([["grade", 0]]);
             var doubled = ore.grade * 2;
-            alloy.update("work", doubled);
+            alloy.update("grade", doubled);
         }
 "#,
         ),
@@ -1333,7 +1334,7 @@ fn test_set_guards() {
         fn SetAfterUpdate(action) {
             var ore = action.output("Ore");
             var key = action.random();
-            ore.update("work", key);
+            ore.update("key", key);
             ore.set([["grade", 1]]);
         }
 "#,
@@ -1344,7 +1345,8 @@ fn test_set_guards() {
             r#"
         fn SetAfterStatement(action) {
             var ore = action.output("Ore");
-            action.st_dict_contains(ore, "work", 0);
+            ore.set([["grade", 0]]);
+            action.st_dict_contains(ore, "grade", 0);
             ore.set([["grade", 1]]);
         }
 "#,
