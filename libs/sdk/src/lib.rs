@@ -2223,6 +2223,14 @@ pub struct ActionObjectRef {
     pub(crate) varname: String,
 }
 
+/// Where one mutated object sits in an action's `total_inputs` and
+/// `total_outputs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MutatedObjectSlots {
+    pub input_index: usize,
+    pub output_index: usize,
+}
+
 /// One slot in an action's `<Action>IO` record (in-entries first,
 /// then out-entries). A Mutate Object contributes one `EntryShape` to
 /// each side; Input/Output Objects contribute one to their side only.
@@ -2295,6 +2303,30 @@ impl ActionMeta {
     /// reporting and output-slot validation by the driver.
     pub fn total_outputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
         self.total_outputs.iter()
+    }
+
+    /// One entry per object that this action or a transitively-called
+    /// sub-action mutates, pairing its `total_inputs` position with its
+    /// `total_outputs` position.
+    pub fn total_mutations(&self) -> Vec<MutatedObjectSlots> {
+        let mutate_positions = |refs: &[ActionObjectRef]| -> Vec<usize> {
+            refs.iter()
+                .enumerate()
+                .filter(|(_, object_ref)| object_ref.io == ObjectIO::Mutate)
+                .map(|(position, _)| position)
+                .collect()
+        };
+        // A Mutate ref enters both lists at once, so the k-th Mutate on each
+        // side is the same object.
+        zip_eq(
+            mutate_positions(&self.total_inputs),
+            mutate_positions(&self.total_outputs),
+        )
+        .map(|(input_index, output_index)| MutatedObjectSlots {
+            input_index,
+            output_index,
+        })
+        .collect()
     }
 
     /// Find this Output's entry in the `<Action>Initials` record, with
