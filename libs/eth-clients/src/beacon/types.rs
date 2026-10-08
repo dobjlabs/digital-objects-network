@@ -73,13 +73,49 @@ pub struct Spec {
 }
 #[derive(Deserialize, Debug)]
 pub struct Block {
+    /// Commitments to the blobs of the payload in `execution_payload`.
     pub blob_kzg_commitments: Vec<KzgCommitment>,
-    /// From Gloas on the payload is revealed after the block and may be withheld, so the
-    /// execution layer can lag behind this hash or never learn it.
-    pub execution_block_hash: B256,
+    pub execution_payload: ExecutionPayloadRef,
     pub parent_root: B256,
     #[serde(deserialize_with = "deserialize_u32")]
     pub slot: u32,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionPayloadRef {
+    /// Up to Fulu a block carries its own payload, canonical along with the block.
+    Embedded { block_hash: B256 },
+    /// From Gloas a block carries a builder's bid. The payload is revealed separately, may be
+    /// withheld, and only becomes canonical when a child's bid builds on `block_hash`.
+    /// `parent_block_hash` is the latest canonical payload in this block's view of the chain.
+    Bid {
+        block_hash: B256,
+        parent_block_hash: B256,
+    },
+}
+
+impl ExecutionPayloadRef {
+    pub fn block_hash(&self) -> B256 {
+        match self {
+            Self::Embedded { block_hash } | Self::Bid { block_hash, .. } => *block_hash,
+        }
+    }
+}
+
+impl Block {
+    /// Whether this block makes `parent`'s bid payload canonical. Always false for an embedded
+    /// payload on either side: that payload became canonical with its own block.
+    pub fn builds_on_payload_of(&self, parent: &Block) -> bool {
+        match (self.execution_payload, parent.execution_payload) {
+            (
+                ExecutionPayloadRef::Bid {
+                    parent_block_hash, ..
+                },
+                ExecutionPayloadRef::Bid { block_hash, .. },
+            ) => parent_block_hash == block_hash,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -89,6 +125,7 @@ pub struct ExecutionPayload {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ExecutionPayloadBid {
+    pub parent_block_hash: B256,
     pub block_hash: B256,
     pub blob_kzg_commitments: Vec<KzgCommitment>,
 }
@@ -304,21 +341,29 @@ impl From<BlockHeaderResponse> for BlockHeader {
 impl From<BlockResponse> for Block {
     fn from(response: BlockResponse) -> Self {
         let message = response.data.message;
-        let (execution_block_hash, blob_kzg_commitments) = match message.body {
+        let (execution_payload, blob_kzg_commitments) = match message.body {
             BlockBody::Gloas {
-                signed_execution_payload_bid,
+                signed_execution_payload_bid: SignedExecutionPayloadBid { message: bid },
             } => (
-                signed_execution_payload_bid.message.block_hash,
-                signed_execution_payload_bid.message.blob_kzg_commitments,
+                ExecutionPayloadRef::Bid {
+                    block_hash: bid.block_hash,
+                    parent_block_hash: bid.parent_block_hash,
+                },
+                bid.blob_kzg_commitments,
             ),
             BlockBody::PreGloas {
                 execution_payload,
                 blob_kzg_commitments,
-            } => (execution_payload.block_hash, blob_kzg_commitments),
+            } => (
+                ExecutionPayloadRef::Embedded {
+                    block_hash: execution_payload.block_hash,
+                },
+                blob_kzg_commitments,
+            ),
         };
         Block {
             blob_kzg_commitments,
-            execution_block_hash,
+            execution_payload,
             parent_root: message.parent_root,
             slot: message.slot,
         }
@@ -374,6 +419,7 @@ mod tests {
                     body: BlockBody::Gloas {
                         signed_execution_payload_bid: SignedExecutionPayloadBid {
                             message: ExecutionPayloadBid {
+                                parent_block_hash: B256::repeat_byte(0x99),
                                 block_hash: B256::repeat_byte(0xaa),
                                 blob_kzg_commitments: vec![KzgCommitment::repeat_byte(0xbb)],
                             },
@@ -395,7 +441,13 @@ mod tests {
             .expect("the reader must accept what the writer produced")
             .into();
         assert_eq!(block.slot, 6);
-        assert_eq!(block.execution_block_hash, B256::repeat_byte(0xaa));
+        assert_eq!(
+            block.execution_payload,
+            ExecutionPayloadRef::Bid {
+                block_hash: B256::repeat_byte(0xaa),
+                parent_block_hash: B256::repeat_byte(0x99),
+            }
+        );
         assert_eq!(block.blob_kzg_commitments.len(), 1);
     }
 
@@ -438,10 +490,16 @@ mod tests {
             .into();
         assert_eq!(block.slot, 11_309_801);
         assert_eq!(
-            block.execution_block_hash,
-            "0x73a705057006f558f81cedcb43bfa466a10689ecf46dcf97676df51099f6334c"
-                .parse::<B256>()
-                .unwrap()
+            block.execution_payload,
+            ExecutionPayloadRef::Bid {
+                block_hash: "0x73a705057006f558f81cedcb43bfa466a10689ecf46dcf97676df51099f6334c"
+                    .parse()
+                    .unwrap(),
+                parent_block_hash:
+                    "0xe4aa36e0b9d517e631cce7f1d974885bb83f9b50a105d030bd1213d8971fbdb0"
+                        .parse()
+                        .unwrap(),
+            }
         );
         assert_eq!(block.blob_kzg_commitments.len(), 1);
     }
@@ -467,8 +525,61 @@ mod tests {
             .expect("parse pre-gloas block")
             .into();
         assert_eq!(block.slot, 42);
-        assert_eq!(block.execution_block_hash, B256::repeat_byte(0x33));
+        assert_eq!(
+            block.execution_payload,
+            ExecutionPayloadRef::Embedded {
+                block_hash: B256::repeat_byte(0x33)
+            }
+        );
         assert!(block.blob_kzg_commitments.is_empty());
+    }
+
+    fn block(slot: u32, execution_payload: ExecutionPayloadRef) -> Block {
+        Block {
+            blob_kzg_commitments: vec![],
+            execution_payload,
+            parent_root: B256::ZERO,
+            slot,
+        }
+    }
+
+    #[test]
+    fn child_bid_settles_parent_payload_only_when_it_builds_on_it() {
+        let revealed = B256::repeat_byte(0x01);
+        let older = B256::repeat_byte(0x02);
+        let parent = block(
+            10,
+            ExecutionPayloadRef::Bid {
+                block_hash: revealed,
+                parent_block_hash: older,
+            },
+        );
+        let full_child = block(
+            11,
+            ExecutionPayloadRef::Bid {
+                block_hash: B256::repeat_byte(0x03),
+                parent_block_hash: revealed,
+            },
+        );
+        let empty_child = block(
+            11,
+            ExecutionPayloadRef::Bid {
+                block_hash: B256::repeat_byte(0x03),
+                parent_block_hash: older,
+            },
+        );
+        assert!(full_child.builds_on_payload_of(&parent));
+        assert!(!empty_child.builds_on_payload_of(&parent));
+
+        let fulu_parent = block(9, ExecutionPayloadRef::Embedded { block_hash: older });
+        let first_gloas = block(
+            10,
+            ExecutionPayloadRef::Bid {
+                block_hash: revealed,
+                parent_block_hash: older,
+            },
+        );
+        assert!(!first_gloas.builds_on_payload_of(&fulu_parent));
     }
 
     #[test]
