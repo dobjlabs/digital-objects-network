@@ -6,6 +6,7 @@ use axum::{
     http::header,
     response::IntoResponse,
 };
+use driver::ObjectQuery;
 use wire_types::{ImportObjectRequest, ObjectSummary, ObjectsDirInfo};
 
 use crate::error::ApiResult;
@@ -70,11 +71,30 @@ pub async fn import_object(
 /// action catalog comes from `GET /actions` separately, so clients can
 /// fetch the two in parallel.
 pub async fn load_objects(State(state): State<AppState>) -> ApiResult<Json<Vec<ObjectSummary>>> {
+    synced_objects(state, None).await
+}
+
+/// `GET /objects/unspent` -- like `GET /objects`, minus nullified (spent)
+/// objects.
+pub async fn load_unspent_objects(
+    State(state): State<AppState>,
+) -> ApiResult<Json<Vec<ObjectSummary>>> {
+    let query = ObjectQuery {
+        exclude_nullified: true,
+        ..ObjectQuery::default()
+    };
+    synced_objects(state, Some(query)).await
+}
+
+async fn synced_objects(
+    state: AppState,
+    query: Option<ObjectQuery>,
+) -> ApiResult<Json<Vec<ObjectSummary>>> {
     let driver = state.driver.clone();
     let objects = tokio::task::spawn_blocking(move || {
-        driver.sync_objects(None).unwrap_or_else(|err| {
+        driver.sync_objects(query.as_ref()).unwrap_or_else(|err| {
             tracing::warn!("sync_objects failed, falling back to local: {err:#}");
-            driver.list_objects(None).unwrap_or_default()
+            driver.list_objects(query.as_ref()).unwrap_or_default()
         })
     })
     .await

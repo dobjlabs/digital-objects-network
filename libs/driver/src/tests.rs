@@ -20,7 +20,7 @@ use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
 };
 use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
-use crate::{ActionQuery, DriverPaths, ExecuteActionInput};
+use crate::{ActionQuery, DriverPaths, ExecuteActionInput, ObjectQuery};
 use wire_types::{ObjectStatus, QualifiedName};
 
 fn temp_paths() -> DriverPaths {
@@ -483,6 +483,30 @@ fn test_read_object_raw_missing_file_is_not_found() {
         err.downcast_ref::<crate::error::DriverError>(),
         Some(crate::error::DriverError::ObjectFileNotFound(_))
     ));
+}
+
+#[test]
+fn test_list_objects_can_exclude_nullified() {
+    let (json, _source_tx, _nullifier) = make_importable_log();
+    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let live_record: ObjectRecord = serde_json::from_str(&json).unwrap();
+    let nullified_record = ObjectRecord {
+        status: ObjectStatus::Nullified,
+        ..live_record.clone()
+    };
+    write_object_file(driver.paths(), &live_record, "live.dobj").unwrap();
+    write_object_file(driver.paths(), &nullified_record, "spent.dobj").unwrap();
+
+    let all = driver.list_objects(None).unwrap();
+    assert_eq!(all.len(), 2);
+
+    let query = ObjectQuery {
+        exclude_nullified: true,
+        ..ObjectQuery::default()
+    };
+    let unspent = driver.list_objects(Some(&query)).unwrap();
+    let file_names: Vec<&str> = unspent.iter().map(|o| o.file_name.as_str()).collect();
+    assert_eq!(file_names, vec!["live.dobj"]);
 }
 
 /// A driver with an empty catalog and mock chain deps. `install_plugin` only

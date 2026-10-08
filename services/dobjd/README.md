@@ -40,6 +40,7 @@ All routes return JSON unless noted; errors come back as
 | Method | Path                            | Driver call                                                  |
 | ------ | ------------------------------- | ------------------------------------------------------------ |
 | `GET`  | `/objects`                      | `sync_objects` (with fallback to `list_objects`)             |
+| `GET`  | `/objects/unspent`              | as `/objects`, excluding nullified (spent) objects           |
 | `GET`  | `/actions`                      | `list_actions`                                               |
 | `GET`  | `/state-root`                   | `get_state_root`                                             |
 | `GET`  | `/objects/dir`                  | `paths().objects_dir`                                        |
