@@ -341,6 +341,10 @@ impl Node {
                 let parent_block = self
                     .get_block(slot, beacon_block_header.parent_root)
                     .await?;
+                // This will happen if the current block builds on top of a payload older than
+                // the one referenced in the previous block because the previous block's payload
+                // was not included in the consensus (it may have been withheld, revealed too
+                // late or been invalid)
                 if !beacon_block.builds_on_payload_of(&parent_block) {
                     debug!("slot {} does not build on its parent's payload", slot);
                     return Ok(());
