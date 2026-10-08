@@ -181,7 +181,7 @@ pub struct ObjectSummary {
     pub tx_hash: Option<String>,
     /// The object's class description, when its class is known.
     pub description: Option<String>,
-    /// Application-layer fields (e.g. `durability`, `key`, `work`).
+    /// Application-layer fields (e.g. `durability`, `key`).
     pub fields: HashMap<String, serde_json::Value>,
 }
 

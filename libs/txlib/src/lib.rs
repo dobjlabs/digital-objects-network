@@ -291,7 +291,6 @@ pub fn rekey(obj: &mut Dictionary) {
 pub fn new_obj() -> Dictionary {
     let mut map = HashMap::new();
     map.insert(StrKey::from("key"), Value::from(rand_raw_value()));
-    map.insert(StrKey::from("work"), Value::from(EMPTY_VALUE));
     Dictionary::new(map)
 }
 
@@ -1297,6 +1296,7 @@ mod tests {
     #[test]
     fn object_nullifier_hash_matches_key_hash_path() {
         let obj = new_obj();
+        assert_eq!(obj.iter().count(), 1); // key
         let key_hash = object_key_hash(&obj).unwrap();
         let nullifier = object_nullifier_hash(&obj).unwrap();
         assert_eq!(nullifier, object_nullifier_from_key_hash(key_hash));

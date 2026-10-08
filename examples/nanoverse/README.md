@@ -33,7 +33,7 @@ just pexe build examples/nanoverse                       # compile and pack
 | `state_header` | `ClaimSector`, `MoveShipX` | Nothing in microverse: it never reads the header. `ClaimSector` records `block_number`; `MoveShipX` gates on `block_timestamp`, which describes the grounding root rather than the including block, so the lock it writes is coarse by construction. |
 | `subaction`, and reading its object | `WarpToCoordinate` | A script helper, which cannot hand the parent a proof-bound field of the object it touched. |
 
-Rendered, that is 16 actions, 48 predicates, 267 statements and an `Isship` OR of 8 branches, against microverse's 2,070 actions, 7,873 predicates, 85,973 statements and an `Isship` OR of 1,852.
+Rendered, that is 16 actions, 48 predicates, 264 statements and an `Isship` OR of 8 branches, against microverse's 2,070 actions, 7,873 predicates, 85,973 statements and an `Isship` OR of 1,852.
 
 ## The rule that decides whether a family collapses
 
@@ -103,27 +103,25 @@ record MergeResourcesIO = (in_destination, in_source, out_destination)
 The actions. Every pattern in the table above is visible here: `Equal` where microverse would write `Sum(x, 0, y)`, `GtEq` where it would write `Gt(x, -1)`, whole tables embedded as one `ArrayContains` or `DictContains` argument, `Raw(0x...)` bounds, `row.field` and `ship0.x` as anchored refs standing where a copied wildcard would otherwise go, and `Vdf(row.vdf, ...)` taking its iteration count out of a row.
 
 ```
-BuildShip(io BuildShipIO, state_header StateHeader, chain0, chain, private: ship0, work, initials BuildShipInitials) = AND(
-  DictContains(ship0, "v", 1)
-  DictContains(ship0, "tier", 0)
-  DictContains(ship0, "x", 0)
-  DictContains(ship0, "y", 0)
-  DictContains(ship0, "z", 0)
-  DictContains(ship0, "ready_at", 0)
-  Vdf(3, ship0, work)
-  DictUpdate(ship0, "work", work, initials.ship)
+BuildShip(io BuildShipIO, state_header StateHeader, chain0, chain, private: work, initials BuildShipInitials) = AND(
+  DictContains(initials.ship, "v", 1)
+  DictContains(initials.ship, "tier", 0)
+  DictContains(initials.ship, "x", 0)
+  DictContains(initials.ship, "y", 0)
+  DictContains(initials.ship, "z", 0)
+  DictContains(initials.ship, "ready_at", 0)
+  Vdf(3, initials.ship, work)
   tx::TxInsert(chain0, chain, initials.ship, io.out_ship, @self_predicate(Isship))
 )
 
-UpgradeShip(io UpgradeShipIO, state_header StateHeader, chain0, chain, private: ship0, ship1, ship2, next_tier, row, work, _rand3) = AND(
+UpgradeShip(io UpgradeShipIO, state_header StateHeader, chain0, chain, private: ship0, ship1, next_tier, row, work, _rand3) = AND(
   ArrayContains(io, UpgradeShipIO::in_ship, ship0)
   Equal(ship0.v, 1)
   Sum(ship0.tier, 1, next_tier)
   ArrayContains([{"extract_base": 10, "vdf": 3, "step": 1}, {"extract_base": 50, "vdf": 6, "step": 10}, {"extract_base": 250, "vdf": 9, "step": 100}], next_tier, row)
   DictUpdate(ship0, "tier", next_tier, ship1)
   Vdf(row.vdf, ship1, work)
-  DictUpdate(ship1, "work", work, ship2)
-  DictUpdate(ship2, "key", _rand3, io.out_ship)
+  DictUpdate(ship1, "key", _rand3, io.out_ship)
   tx::TxMutate(chain0, chain, ship0, io.out_ship, @self_predicate(Isship))
 )
 
@@ -202,23 +200,22 @@ DetectSignal(io DetectSignalIO, state_header StateHeader, chain0, chain, private
   tx::TxInsert(chain_steps.step_1, chain, initials.signal, io.out_signal, @self_predicate(Issignal))
 )
 
-ScanBody(io ScanBodyIO, state_header StateHeader, chain0, chain, private: ship0, signal, body0, row, work, _rand2, chain_steps ScanBodyChain, initials ScanBodyInitials) = AND(
+ScanBody(io ScanBodyIO, state_header StateHeader, chain0, chain, private: ship0, signal, row, work, _rand2, chain_steps ScanBodyChain, initials ScanBodyInitials) = AND(
   ArrayContains(io, ScanBodyIO::in_ship, ship0)
   ArrayContains(io, ScanBodyIO::in_signal, signal)
   Equal(ship0.v, 1)
   Equal(signal.v, 1)
   ArrayContains([{"body_type": 1, "kinds": #["ore", "slag"], "vdf": 4, "pool": 500, "richness": 1, "primary_kind": "ore"}, {"body_type": 2, "kinds": #["shard", "crystal", "dust"], "vdf": 8, "pool": 2000, "richness": 3, "primary_kind": "crystal"}, {"body_type": 3, "kinds": #["ice", "vapor"], "vdf": 12, "pool": 9000, "richness": 7, "primary_kind": "ice"}], signal.category, row)
-  DictContains(body0, "v", 1)
-  DictContains(body0, "body_type", row.body_type)
-  DictContains(body0, "richness", row.richness)
-  DictContains(body0, "primary_kind", row.primary_kind)
-  DictContains(body0, "kinds", row.kinds)
-  DictContains(body0, "remaining", row.pool)
-  DictContains(body0, "origin", signal.stable_identifier)
-  DictContains(body0, "slot", signal.slot)
-  DictContains(body0, "next_coordinate", 0)
-  Vdf(row.vdf, body0, work)
-  DictUpdate(body0, "work", work, initials.body)
+  DictContains(initials.body, "v", 1)
+  DictContains(initials.body, "body_type", row.body_type)
+  DictContains(initials.body, "richness", row.richness)
+  DictContains(initials.body, "primary_kind", row.primary_kind)
+  DictContains(initials.body, "kinds", row.kinds)
+  DictContains(initials.body, "remaining", row.pool)
+  DictContains(initials.body, "origin", signal.stable_identifier)
+  DictContains(initials.body, "slot", signal.slot)
+  DictContains(initials.body, "next_coordinate", 0)
+  Vdf(row.vdf, initials.body, work)
   DictUpdate(ship0, "key", _rand2, io.out_ship)
   tx::TxMutate(chain0, chain_steps.step_0, ship0, io.out_ship, @self_predicate(Isship))
   tx::TxDelete(chain_steps.step_0, chain_steps.step_1, signal, @self_predicate(Issignal))

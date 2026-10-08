@@ -2,7 +2,7 @@
 name = "craft-basics"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build examples/craft-basics`.
-module_hash = "d7edcb9150d12af76a54fbbac7b00b8bb24fab61bc1395b65da47547ad5d1b42"
+module_hash = "b66ac6e83701efa5fe92f9f669bc7ba28475e485a8e28d69c6fb5a1fee578378"
 
 [[classes]]
 name = "Log"
@@ -57,7 +57,7 @@ description = "Combine wood and a stick to craft a wood pick."
 [[actions]]
 name = "UseWoodPick"
 emoji = "⛏️"
-description = "Internal durability/work update for wood pick usage."
+description = "Internal durability update and VDF proof for wood pick usage."
 hidden = true
 
 [[actions]]
@@ -73,7 +73,7 @@ description = "Combine stone and a stick to craft a stone pick."
 [[actions]]
 name = "UseStonePick"
 emoji = "⛏️"
-description = "Internal durability/work update for stone pick usage."
+description = "Internal durability update and VDF proof for stone pick usage."
 hidden = true
 
 [[actions]]
