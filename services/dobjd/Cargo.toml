@@ -7,6 +7,10 @@ edition = "2024"
 name = "dobjd"
 path = "src/main.rs"
 
+[features]
+# Release builds require a completed Vite build before enabling this.
+bundled-ui = []
+
 [dependencies]
 driver = { path = "../../libs/driver" }
 payload = { path = "../../libs/payload" }
@@ -28,3 +32,6 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 futures-util = "0.3"
 uuid = { version = "1.18.1", features = ["v4"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

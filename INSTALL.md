@@ -4,6 +4,7 @@ Installing the driver gives you:
 
 - `~/.dobj/bin/dobjd` (`dobjd.exe` on Windows) — long-running driver daemon serving:
   - REST/SSE on `http://127.0.0.1:7717`
+  - Default browser UI on `http://127.0.0.1:7717/ui/`, opened with `dobj ui`
   - MCP on `http://127.0.0.1:7718/mcp` (off by default; see [Connect an agent](#connect-an-agent-mcp))
 - `~/.dobj/bin/dobj` — terminal CLI that talks to dobjd
 - `~/.dobj/bin/dobj-mcp-proxy` — stdio↔HTTP bridge for agents that only speak stdio (e.g. Claude Desktop)
@@ -43,14 +44,23 @@ installer, which also pulls the latest release).
 ## Start and verify
 
 ```bash
-~/.dobj/bin/dobj start         # first start builds ZK circuits — can take a few minutes
+~/.dobj/bin/dobj ui            # starts the daemon if needed and opens the browser UI
 ~/.dobj/bin/dobj status        # pid + HTTP healthcheck
 ~/.dobj/bin/dobj state-root    # confirms the hosted synchronizer is reachable (64-hex root)
 ```
 
-(Windows: `& "$env:USERPROFILE\.dobj\bin\dobj.exe" start` etc.)
+(Windows: `& "$env:USERPROFILE\.dobj\bin\dobj.exe" ui` etc.)
 
-`dobj actions` will be empty until you install a plugin — that's expected.
+`dobj ui` is the normal way to launch the GUI, including on later visits when
+the daemon is already running. The first start builds ZK circuits and can take
+a few minutes. The release daemon bundles the UI; no Node.js or Vite setup is
+needed. It opens `http://127.0.0.1:7717/ui/` by default.
+
+For CLI or agent use without opening a browser, run `dobj start` instead.
+Use `dobj ui --no-open` to start the daemon if needed and print the UI URL.
+
+The UI's action catalog and `dobj actions` will be empty until you install a
+plugin — that's expected. Continue with [Install example plugins](#install-example-plugins).
 
 **First-run note (Windows):** the binaries aren't codesigned yet, so Windows
 SmartScreen may show "Windows protected your PC" → click **More info → Run
@@ -92,6 +102,9 @@ Install either example, or run both commands to load both.
 
 & "$env:USERPROFILE\.dobj\bin\dobj.exe" actions
 ```
+
+After installing a plugin, reload the browser tab opened by `dobj ui` to load
+its actions. The daemon does not need to restart.
 
 ### Connect an agent (MCP)
 
@@ -195,13 +208,17 @@ notes. Write `~/.dobj/settings.json` only to point somewhere else:
 
 | Command                      | Effect                                                    |
 | ---------------------------- | --------------------------------------------------------- |
+| `dobj ui`                    | start the daemon if needed and open its default browser UI |
 | `dobj start`                 | launch in the background (idempotent)                     |
 | `dobj status`                | pid + HTTP healthcheck                                    |
 | `dobj logs` / `dobj logs -f` | last 100 log lines / follow                               |
 | `dobj stop`                  | shut down (SIGTERM→SIGKILL on Unix; hard kill on Windows) |
 | `dobj update`                | upgrade to the latest release (plugins untouched)         |
 
-Logs live at `~/.dobj/dobjd.log`.
+Logs live at `~/.dobj/dobjd.log`. The release daemon embeds its default web UI
+at `http://127.0.0.1:7717/ui/` and uses your existing browser.
+Alternative local GUIs can run on their own web servers and connect to the API.
+See [web UI documentation](services/dobjd/README.md#web-ui).
 
 ## Manual install (no installer script)
 

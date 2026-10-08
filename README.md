@@ -11,6 +11,14 @@ that can be passed between mutually untrusting Internet users while maintaining 
 - **Develop from source:** [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Self-host the services:** [deploy/](deploy/README.md).
 
+After installing, run `dobj ui` to start the daemon if needed and open the
+default browser UI. If `dobj` is not on your PATH yet, use
+`~/.dobj/bin/dobj ui` on macOS/Linux or
+`& "$env:USERPROFILE\.dobj\bin\dobj.exe" ui` in PowerShell.
+The UI is bundled with the release daemon; no Node.js installation is needed.
+Install an example plugin using [the install guide](INSTALL.md#install-example-plugins)
+to populate the action catalog.
+
 ## Minimum hardware requirements
 
 | Service        | CPU     | RAM    | Disk                                      |
@@ -44,7 +52,7 @@ Each directory has its own README with the details.
 | Directory                                   | Role                                                                                                     |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | [interfaces/cli/](interfaces/cli/README.md) | The `dobj` terminal CLI. A thin HTTP/SSE client of dobjd.                                                |
-| [interfaces/gui/](interfaces/gui/README.md) | React frontend, runnable in a browser or wrapped in a Tauri desktop shell. Talks to dobjd over HTTP/SSE. |
+| [interfaces/gui/](interfaces/gui/README.md) | Default browser UI for dobjd. Developed with Vite; release builds are embedded in the daemon. Talks over HTTP/SSE. |
 | [interfaces/mcp/](interfaces/mcp/README.md) | MCP server library exposing the driver as tools to AI agents, plus the `dobj-mcp-proxy` stdio bridge.    |
 
 ### Libraries

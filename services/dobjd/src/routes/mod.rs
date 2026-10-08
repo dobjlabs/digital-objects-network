@@ -1,13 +1,14 @@
 use axum::{
     Router,
     extract::DefaultBodyLimit,
+    middleware,
     routing::{get, post},
 };
-use tower_http::cors::CorsLayer;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::Level;
 
 use crate::state::AppState;
+use crate::web_access::WebAccess;
 
 mod actions;
 mod classes;
@@ -19,13 +20,13 @@ mod state;
 
 /// Build the axum router.
 ///
-/// dobjd is API-only — the UI is served separately (Vite on `:1420` in dev,
-/// Tauri's webview for the desktop app).
+/// The default UI is mounted at /ui/. API routes
+/// remain at their existing paths for CLI, MCP and third-party clients.
 ///
 /// Note: axum routes literal paths (e.g. `/objects/dir`) before
 /// parameterized ones (`/objects/{file_name}`), so the relative order
 /// isn't load-bearing — but the literals are listed first for readability.
-pub fn router(app_state: AppState) -> Router {
+pub fn router(app_state: AppState, access: WebAccess) -> Router {
     Router::new()
         .route("/healthz", get(health::healthz))
         .route("/events", get(events::stream))
@@ -55,7 +56,12 @@ pub fn router(app_state: AppState) -> Router {
         .route("/actions/{id}", get(actions::inspect_action))
         .route("/actions/{id}/feasibility", get(actions::check_feasibility))
         .with_state(app_state)
-        .layer(CorsLayer::permissive())
+        .merge(crate::ui::router())
+        .layer(access.cors())
+        .layer(middleware::from_fn_with_state(
+            access,
+            crate::web_access::guard,
+        ))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))

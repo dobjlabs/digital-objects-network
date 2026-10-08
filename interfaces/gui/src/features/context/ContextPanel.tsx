@@ -6,7 +6,6 @@ import type {
   ObjectSummaryPayload as ObjectSummary,
   QualifiedNamePayload,
 } from "../../shared/api/wireTypes";
-import { pickDobjFilePath, readDobjFile } from "../../shared/api/tauriClient";
 import { truncateDisplayHash } from "../../shared/format";
 import {
   displayPathInObjectsDir,
@@ -41,6 +40,20 @@ interface BoundArg {
   label: string;
 }
 
+function validBinding(
+  binding: BoundArg | undefined,
+  required: ClassRefPayload,
+  objects: ObjectSummary[],
+): BoundArg | null {
+  if (!binding) return null;
+  return objects.some(
+    (object) =>
+      object.fileName === binding.objectPath &&
+      object.status === "live" &&
+      qualifiedEq(object.class, required.class),
+  ) ? binding : null;
+}
+
 export function ContextPanel({
   selection,
   objects,
@@ -66,6 +79,22 @@ export function ContextPanel({
     setArgErrors({});
     setHoverArgKey(null);
   }, [selectionKey]);
+
+  useEffect(() => {
+    setArgBindings((previous) => {
+      const next: Record<string, BoundArg> = {};
+      for (const action of actions) {
+        action.totalInputs.forEach((required, index) => {
+          const key = `action:${qualifiedId(action.action)}:${index}`;
+          const binding = validBinding(previous[key], required, objects);
+          if (binding) next[key] = binding;
+        });
+      }
+      return Object.keys(next).length === Object.keys(previous).length
+        ? previous
+        : next;
+    });
+  }, [objects, actions]);
 
   useEffect(() => {
     const previous = previousProofStatusRef.current;
@@ -164,102 +193,6 @@ export function ContextPanel({
     setHoverArgKey(null);
   };
 
-  const fileNameFromPath = (path: string) => {
-    const normalized = path.replace(/\\/g, "/");
-    const index = normalized.lastIndexOf("/");
-    if (index === -1) return normalized;
-    return normalized.slice(index + 1);
-  };
-
-  const handleBrowseArgFile = async (
-    methodId: string,
-    expected: QualifiedNamePayload,
-    expectedLabel: string,
-    index: number,
-  ) => {
-    const key = argKey(methodId, index);
-    let selectedPath = "";
-    try {
-      selectedPath = (await pickDobjFilePath()).trim();
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : "";
-      if (message.includes("No file selected")) {
-        return;
-      }
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: "Failed to open file picker",
-      }));
-      return;
-    }
-    if (!selectedPath) return;
-
-    const selectedName = fileNameFromPath(selectedPath);
-    if (!selectedName.toLowerCase().endsWith(".dobj")) {
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: "Only .dobj files are supported",
-      }));
-      return;
-    }
-
-    let parsed: {
-      class: QualifiedNamePayload;
-      status: string;
-    };
-    try {
-      parsed = await readDobjFile(selectedPath);
-    } catch {
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: `Invalid .dobj file: ${selectedName}`,
-      }));
-      return;
-    }
-
-    const objectIsLive = parsed.status === "live";
-    const fileLabel = selectedName;
-
-    if (!parsed.class) {
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: `Missing required fields in .dobj: ${selectedName}`,
-      }));
-      return;
-    }
-
-    if (!qualifiedEq(parsed.class, expected)) {
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: `Expected ${expectedLabel} but got ${pluginScopedLabel(parsed.class)}`,
-      }));
-      return;
-    }
-
-    if (!objectIsLive) {
-      setArgErrors((prev) => ({
-        ...prev,
-        [key]: "Only live objects can be bound",
-      }));
-      return;
-    }
-
-    setArgBindings((prev) => ({
-      ...prev,
-      [key]: { objectPath: selectedPath, label: fileLabel },
-    }));
-    setArgErrors((prev) => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
-  };
-
   const renderMetaRow = (label: string, value: ReactNode) => (
     <div className="context-meta-row">
       <span className="context-meta-key">{label}</span>
@@ -289,7 +222,10 @@ export function ContextPanel({
     (() => {
       const hasInputs = config.totalInputs.length > 0;
       const boundArgs = config.totalInputs.map(
-        (_, index) => argBindings[argKey(config.methodId, index)] ?? null,
+        (required, index) =>
+          validBinding(
+            argBindings[argKey(config.methodId, index)], required, objects,
+          ),
       );
       const filledCount = boundArgs.filter(
         (value) => value?.objectPath?.trim().length,
@@ -303,7 +239,7 @@ export function ContextPanel({
             <div className="method-card-body">
               {config.totalInputs.map((required, index) => {
                 const key = argKey(config.methodId, index);
-                const bound = argBindings[key];
+                const bound = boundArgs[index];
                 const isDropActive = hoverArgKey === key;
                 const err = argErrors[key];
                 const expectedClassLabel = pluginScopedLabel(required.class);
@@ -349,30 +285,38 @@ export function ContextPanel({
                             ? "release to drop"
                             : "drag .dobj here")}
                       </div>
-                      <button
-                        type="button"
+                      <select
                         className="method-arg-browse"
+                        aria-label={`Choose ${expectedClassLabel} for input ${index + 1}`}
                         disabled={proofRunning}
-                        onClick={() => {
-                          if (proofRunning) return;
-                          if (bound?.objectPath) {
-                            setArgBindings((prev) => {
-                              const next = { ...prev };
+                        value={bound?.objectPath ?? ""}
+                        onChange={(event) => {
+                          const fileName = event.target.value;
+                          setArgBindings((prev) => {
+                            const next = { ...prev };
+                            if (fileName) {
+                              next[key] = { objectPath: fileName, label: fileName };
+                            } else {
                               delete next[key];
-                              return next;
-                            });
-                            return;
-                          }
-                          void handleBrowseArgFile(
-                            config.methodId,
-                            required.class,
-                            expectedClassLabel,
-                            index,
-                          );
+                            }
+                            return next;
+                          });
+                          setArgErrors((prev) => {
+                            const next = { ...prev };
+                            delete next[key];
+                            return next;
+                          });
                         }}
                       >
-                        {bound?.objectPath ? "Clear" : "Browse..."}
-                      </button>
+                        <option value="">Choose object…</option>
+                        {objects
+                          .filter((object) => object.status === "live" && qualifiedEq(object.class, required.class))
+                          .map((object) => (
+                            <option key={object.contentHash} value={object.fileName}>
+                              {object.fileName}
+                            </option>
+                          ))}
+                      </select>
                     </div>
                     {err && <div className="method-arg-error">{err}</div>}
                   </div>

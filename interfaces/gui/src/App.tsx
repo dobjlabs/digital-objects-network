@@ -7,11 +7,8 @@ import { SettingsModal } from "./features/settings/SettingsModal";
 import {
   getStateRoot,
   getObjectsDir,
-  listenOpenSettings,
   listenRunActionProgress,
-  openObjectsDir,
-  sampleAppCpu,
-} from "./shared/api/tauriClient";
+} from "./shared/api/httpClient";
 import { useStore } from "./shared/state/store";
 import "./styles/tokens.css";
 import "./styles/base.css";
@@ -27,6 +24,8 @@ function App() {
   const [objectsDirPath, setObjectsDirPath] = useState("~/.dobj/objects");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [initialHydrationPending, setInitialHydrationPending] = useState(true);
+  const [hydrationError, setHydrationError] = useState<string | null>(null);
+  const [hydrationAttempt, setHydrationAttempt] = useState(0);
   const objects = useStore((state) => state.objects);
   const actions = useStore((state) => state.actions);
   const activeObjectContentHash = useStore(
@@ -41,7 +40,6 @@ function App() {
   const selectAction = useStore((state) => state.selectAction);
   const clearSelection = useStore((state) => state.clearSelection);
   const toggleNullified = useStore((state) => state.toggleNullified);
-  const recordCpuSample = useStore((state) => state.recordCpuSample);
   const setStateRoot = useStore((state) => state.setStateRoot);
   const runProof = useStore((state) => state.runProof);
   const proofStatus = useStore((state) => state.proof.status);
@@ -58,9 +56,14 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    setInitialHydrationPending(true);
+    setHydrationError(null);
     hydrateData()
       .catch((error) => {
         console.error("Failed to load GUI objects:", error);
+        if (!cancelled) {
+          setHydrationError(error instanceof Error ? error.message : String(error));
+        }
       })
       .finally(() => {
         if (!cancelled) {
@@ -70,7 +73,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [hydrateData]);
+  }, [hydrateData, hydrationAttempt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,32 +144,6 @@ function App() {
     let cancelled = false;
     const poll = async () => {
       try {
-        const sample = await sampleAppCpu();
-        if (!cancelled) {
-          recordCpuSample(sample.usagePct, sample.totalCpuSecs);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Failed to sample CPU usage:", error);
-        }
-      }
-    };
-
-    void poll();
-    const interval = window.setInterval(() => {
-      void poll();
-    }, 1000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [recordCpuSample]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
         const root = await getStateRoot();
         if (!cancelled) {
           setStateRoot(root);
@@ -191,6 +168,11 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === ",") {
+        event.preventDefault();
+        setSettingsOpen(true);
+        return;
+      }
       if (settingsOpen) return;
       if (event.key === "Escape") {
         clearSelection();
@@ -199,40 +181,6 @@ function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [clearSelection, settingsOpen]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    listenOpenSettings(() => {
-      if (!cancelled) {
-        setSettingsOpen(true);
-      }
-    })
-      .then((dispose) => {
-        if (cancelled) {
-          dispose();
-          return;
-        }
-        unlisten = dispose;
-      })
-      .catch((error) => {
-        console.error("Failed to subscribe to open-settings:", error);
-      });
-
-    return () => {
-      cancelled = true;
-      if (unlisten) unlisten();
-    };
-  }, []);
-
-  const handleOpenObjectsDir = async () => {
-    try {
-      const dir = await openObjectsDir();
-      setObjectsDirPath(dir);
-    } catch (error) {
-      console.error("Failed to open objects directory:", error);
-    }
-  };
 
   return (
     <>
@@ -245,7 +193,7 @@ function App() {
             showNullifiedItems={showNullifiedItems}
             onSelectObject={selectObject}
             onToggleNullified={toggleNullified}
-            onOpenObjectsDir={handleOpenObjectsDir}
+            onOpenSettings={() => setSettingsOpen(true)}
             onImportObject={importObject}
           />
 
@@ -274,18 +222,25 @@ function App() {
           </div>
         </main>
 
-        {initialHydrationPending && (
+        {(initialHydrationPending || hydrationError) && (
           <div
             className="app-loading-overlay"
-            role="status"
+            role={hydrationError ? "alert" : "status"}
             aria-live="polite"
-            aria-label="Loading objects and actions"
+            aria-label={hydrationError ? "Unable to load objects and actions" : "Loading objects and actions"}
           >
             <div className="app-loading-card">
-              <span className="app-loading-spinner" aria-hidden="true" />
+              {initialHydrationPending && (
+                <span className="app-loading-spinner" aria-hidden="true" />
+              )}
               <span className="app-loading-label">
-                Loading objects and actions...
+                {hydrationError ?? "Loading objects and actions..."}
               </span>
+              {hydrationError && (
+                <button type="button" onClick={() => setHydrationAttempt((attempt) => attempt + 1)}>
+                  Retry
+                </button>
+              )}
             </div>
           </div>
         )}

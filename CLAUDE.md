@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repository is the reference implementation of the Digital Objects Network: a decentralized network for creating, executing, and exchanging Digital Objects -- fully programmable state machines owned and operated by Internet users, that can be passed between mutually untrusting users while keeping their integrity and consistency, without relying on any central trusted authority. Objects are privately held files on disk; their state transitions are proved with POD2/Plonky2 and anchored to Ethereum blob data availability, so the chain sees only opaque commitments.
 
-The repo ships a headless daemon (`dobjd`) that owns all driver state, several clients that drive it over HTTP/SSE/MCP (a React GUI servable in a browser or wrapped in a Tauri shell, the `dobj` CLI, an MCP server for AI agents), and the chain-side services that anchor and sync objects. The bundled `craft-basics` plugin (a small crafting game) is the demonstrated end-to-end flow.
+The repo ships a headless daemon (`dobjd`) that owns all driver state, several clients that drive it over HTTP/SSE/MCP (a default React browser GUI bundled with the daemon, the `dobj` CLI, an MCP server for AI agents), and the chain-side services that anchor and sync objects. The bundled `craft-basics` plugin (a small crafting game) is the demonstrated end-to-end flow.
 
 This file focuses on navigating the code, building/testing, and gotchas.
 
@@ -18,7 +18,6 @@ The workspace is declared in `Cargo.toml`. Crate-by-crate:
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `dobjd`                          | **The daemon.** Headless HTTP server on `:7717` wrapping the driver. Every client talks to it.                                                                                                       |
 | `cli`                            | `dobj` CLI binary. Thin HTTP/SSE client of dobjd. No `Driver` of its own.                                                                                                                            |
-| `interfaces/gui/src-tauri`       | Tauri 2 shell. Holds **no** driver state — webview talks to dobjd over HTTP. Native conveniences only.                                                                                               |
 | `interfaces/gui/src` (TS)        | React/Vite frontend. Component-based: `features/{actions,objects,context,proof-runner,settings}`.                                                                                                    |
 | `driver`                         | Headless Rust orchestration library. **The core.** Owns `~/.dobj/` (or `$DOBJ_HOME`), runs actions end-to-end.                                                                                        |
 | `sdk`                            | Rhai engine + two-phase Loader/Executor that compiles plugin scripts into pod2 modules.                                                                                                              |
@@ -43,7 +42,7 @@ Use `just` (recipes in `justfile`):
 
 | Recipe                   | What it does                                                                                                                                                                                                                                                                                  |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `just dev`               | Brings up archiver + synchronizer + relayer + **dobjd** + Vite + Tauri shell via `mprocs.yaml`, each gated on the previous one's health. Depends on `ensure-db` + `ensure-start-slot` + `ensure-plugins` + `ensure-mcp`. Open `http://localhost:1420` in a browser or use the desktop window. |
+| `just dev`               | Brings up archiver + synchronizer + relayer + **dobjd** + Vite via `mprocs.yaml`, each gated on the previous one's health. Depends on `ensure-db` + `ensure-start-slot` + `ensure-plugins` + `ensure-mcp`. Open `http://localhost:1420` in your browser. |
 | `just dev-remote`        | Like `just dev` but skips the local archiver/synchronizer/relayer and points dobjd at the hosted public endpoints (via `ensure-remote-settings`). Uses `mprocs.remote.yaml`. No local Postgres needed.                                                                                        |
 | `just dev-local`         | Like `just dev` but against a local anvil devnet plus `beacon-shim`, so nothing reaches the network. Uses `mprocs.local.yaml`, its own Postgres databases / RocksDB path / blobs directory, and exported chain vars. Needs anvil. See `devtools/beacon-shim/README.md`.                        |
 | `just anvil`             | Runs the local devnet: 2s blocks, state persisted to `data/anvil-state.json`. The block time is load-bearing, see "Local devnet" below.                                                                                                                                                       |
@@ -54,8 +53,7 @@ Use `just` (recipes in `justfile`):
 | `just relayer`           | Runs the relayer (loads `services/relayer/.env`).                                                                                                                                                                                                                                             |
 | `just archiver`          | Runs the archiver (loads `services/archiver/.env`).                                                                                                                                                                                                                                           |
 | `just dobjd`             | Runs the headless HTTP daemon. Default port `7717` (override via `DOBJD_PORT`).                                                                                                                                                                                                               |
-| `just desktop`           | Standalone Tauri window — Tauri spawns its own Vite on `:1420`.                                                                                                                                                                                                                               |
-| `just desktop-shell`     | Tauri shell pointing at an already-running Vite (used inside `just dev`). Skips `beforeDevCommand`.                                                                                                                                                                                           |
+| `just build-dobjd`      | Builds the default browser UI and embeds it into a release daemon (`bundled-ui` feature). |
 | `just web`               | Vite dev server alone on `:1420`. Talks to `dobjd` at `:7717`.                                                                                                                                                                                                                                |
 | `just ensure-db`         | Creates the local `synchronizer` + `relayer` Postgres DBs if absent. Idempotent. Run before `just sync` / `just relayer` standalone.                                                                                                                                                          |
 | `just ensure-start-slot` | Rewrites a fresh synchronizer/archiver `.env` `INIT_START_SLOT` to the current beacon head (no-op once the store exists and the var is set).                                                                                                                                                  |
@@ -94,13 +92,12 @@ State isolation between the two modes runs all the way through the driver: `dev-
 ## Architecture in 30 seconds
 
 ```
-   Tauri desktop       Browser tab        dobj CLI         AI agents
-   (webview, no        (Vite :1420)       (HTTP/SSE)       (MCP client)
-    Driver of its own)
-            \              |                  |                 /
-             \             |                  |                /
-              \            ▼                  ▼               /
-               └───────►  dobjd HTTP :7717  ◄─────────────────┘
+                      Browser tab        dobj CLI         AI agents
+                      (/ui/ or Vite)     (HTTP/SSE)       (MCP client)
+                           |                  |                 /
+                           |                  |                /
+                           ▼                  ▼               /
+                          dobjd HTTP :7717  ◄─────────────────┘
                            │       │
                            │       └─► MCP :7718 (DOBJD_PORT + 1)
                            ▼
@@ -116,7 +113,7 @@ State isolation between the two modes runs all the way through the driver: `dev-
                                            synchronizer (reads blobs, builds state roots)
 ```
 
-`dobjd` is the **single owner of `Arc<Driver>`** in the running system. Desktop, browser, MCP, and CLI all talk to it over HTTP/SSE; the Tauri shell holds no driver state of its own.
+`dobjd` is the **single owner of `Arc<Driver>`** in the running system. Browser, MCP, and CLI clients all talk to it over HTTP/SSE.
 
 `Driver::execute` is the central call: validate inputs -> fetch grounding witness -> re-parse plugin script through SDK -> drive `txlib::TxBuilder` -> produce `(tx_pod, obj_pods)` -> shrink + post via relayer -> poll for confirmation -> reconcile via `sync_objects`.
 
@@ -134,12 +131,11 @@ State isolation between the two modes runs all the way through the driver: `dev-
 - **`libs/payload/src/payload.rs`** — blob payload encoding (`PAYLOAD_MAGIC`, proof type, `tx_final`, state root, nullifiers, and the `live` object commitments).
 - **`interfaces/mcp/src/lib.rs`** — `DEFAULT_PORT = 7718`; crate is named `dobj-mcp` (depend on it as `dobj-mcp = { path = "../mcp" }`). dobjd runs MCP at `DOBJD_PORT + 1`.
 - **`services/dobjd/src/main.rs`** — daemon entry point. Binds listeners up-front (fail-fast if a port is taken; MCP only when enabled), constructs `Arc<Driver>` once via `Driver::open_default()`, shares it with the embedded `dobj-mcp` server (start/stop lives in `src/mcp.rs::McpRuntime`). `DEFAULT_HTTP_PORT = 7717`, override via `DOBJD_PORT`.
-- **`services/dobjd/src/routes/mod.rs`** — axum routes: `/healthz`, `/objects`, `/state-root`, `/objects/{dir,file_name}`, `/classes[/{name}]`, `/settings`, `/actions[/run,/{id}[/feasibility]]`, `/actions/runs/{id}[/events]` (run-status poll + per-run replayable SSE), `/events` (SSE). dobjd is API-only; the UI is served separately.
+- **`services/dobjd/src/routes/mod.rs`** — axum routes: `/healthz`, `/objects`, `/state-root`, `/objects/{dir,file_name}`, `/classes[/{name}]`, `/settings`, `/actions[/run,/{id}[/feasibility]]`, `/actions/runs/{id}[/events]` (run-status poll + per-run replayable SSE), `/events` (SSE). The default UI is served at `/ui/`; Vite serves it separately during development.
 - **`services/dobjd/src/runs.rs`** — the run registry. `POST /actions/run` is non-blocking: it registers a run, spawns a background worker, and returns a `runId`. The worker records status + progress + terminal result/error into an in-memory, TTL-reaped registry that backs `/actions/runs/{id}` (poll) and its SSE. Shared by the HTTP routes and the MCP server.
 - **`services/dobjd/src/events.rs`** — broadcast hub behind SSE `/events`, shared with the MCP server so progress updates fan out to every client.
 - **`interfaces/cli/src/main.rs`** — `dobj` CLI. Thin reqwest/SSE client of dobjd; no driver state.
 - **`libs/wire-types/src/lib.rs`** — shared HTTP/MCP/SSE/CLI payload types (`QualifiedName`, etc.). Optional `schemars` feature for JSON Schema generation.
-- **`interfaces/gui/src-tauri/src/lib.rs`** — Tauri shell, no driver state. Sub-modules: `cpu`, `error`, `objects`, `settings`. Commands cover only desktop-native conveniences; every state-touching call goes through dobjd over HTTP.
 
 ## txlib and the SDK
 

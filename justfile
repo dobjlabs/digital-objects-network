@@ -8,8 +8,8 @@
 # of its devnet one.
 DOBJ_ROOT := env_var_or_default("DOBJ_HOME", home_directory() / ".dobj")
 
-# Devnet counterpart, passed by `just dev-local`. Absolute, because the Tauri
-# shell resolves it from interfaces/gui.
+# Devnet counterpart, passed by `just dev-local`. Absolute so every client
+# and service resolves the same root.
 LOCAL_DOBJ_ROOT := justfile_directory() / "data/dobj-local"
 
 # Run the synchronizer (loads env from services/synchronizer/.env if present)
@@ -38,36 +38,29 @@ anvil:
 beacon-shim:
     RUST_LOG=info cargo run -p beacon-shim --release
 
-# Run the desktop app standalone (Tauri spawns its own Vite on :1420).
-# Use this when you only want the desktop window. Inside `just dev` we use
-# `desktop-shell` instead so a shared Vite serves both desktop and browser.
-desktop:
-    cd interfaces/gui && RUST_BACKTRACE=1 RUST_LOG=info pnpm tauri dev --release
-
-# Run the Tauri shell pointing at an *already-running* Vite at :1420.
-# Skips Tauri's `beforeDevCommand` so it doesn't fight the standalone web
-# pane for the port. Pair with `just web`.
-desktop-shell:
-    cd interfaces/gui && RUST_LOG=info pnpm tauri dev --release -c '{"build":{"beforeDevCommand":""}}'
-
-# Run the Vite dev server alone on :1420. Reachable from any browser tab
-# or from the Tauri shell. Talks to dobjd at :7717 over HTTP for everything
-# driver-related.
+# Run the browser UI development server on :1420. HTTP/SSE requests are
+# proxied to dobjd, so forwarding just the UI port also works.
 web:
     cd interfaces/gui && pnpm install && pnpm dev
+
+# Build the default UI and embed it into the release daemon binary.
+build-ui:
+    cd interfaces/gui && pnpm install --frozen-lockfile && pnpm build
+
+build-dobjd: build-ui
+    cargo build --release -p dobjd --features bundled-ui
 
 # Run the documentation site (Vocs dev server) with hot reload
 docs:
     cd docs && pnpm install && pnpm dev
 
 # Run the headless HTTP server that exposes the driver API to every client
-# (desktop window, browser tab, MCP, dobj CLI).
+# (browser UI, MCP, dobj CLI).
 dobjd:
     RUST_LOG=info cargo run -p dobjd --release
 
-# Bring up everything: synchronizer, relayer, dobjd, Vite, and the Tauri
-# shell — all backed by one dobjd process. Open http://localhost:1420 in a
-# browser to use the website client; the desktop window opens automatically.
+# Bring up synchronizer, relayer, dobjd, and the Vite browser UI.
+# Open http://localhost:1420 once the web server is ready.
 # https://github.com/pvolok/mprocs
 dev: ensure-db ensure-start-slot ensure-plugins ensure-mcp ensure-mcp-enabled
     mprocs --config mprocs.yaml
@@ -145,7 +138,7 @@ ensure-local-settings ROOT=DOBJ_ROOT:
     echo "$f -> local sync + relayer"
 
 # Block (up to ~5 min) until an HTTP endpoint responds, then return. mprocs
-# uses this to launch synchronizer -> relayer -> dobjd -> web -> desktop in
+# uses this to launch synchronizer -> relayer -> dobjd -> web in
 # order, each gated on the previous one's health, so they don't race to
 # cold-build the shared proving-circuit cache on first run.
 wait-health URL:

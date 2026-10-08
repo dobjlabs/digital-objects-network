@@ -1,23 +1,24 @@
 ---
 title: Install the driver
 showAskAi: false
-description: Set up the Digital Objects driver - install the binaries, start the daemon, add a plugin, and you're on the network.
+description: Set up the Digital Objects driver - install the binaries, open the browser UI with dobj ui, and add a plugin.
 ---
 
 # Install the driver
 
 The driver is a service that manages the digital objects themselves. Installing
-it puts three binaries under `~/.dobj/bin/`:
+it puts four binaries under `~/.dobj/bin/`:
 
 | What                                                                                   | Where          |
 | -------------------------------------------------------------------------------------- | -------------- |
-| `dobjd` — driver daemon (REST/SSE on `:7717`, MCP on `:7718`)                          | `~/.dobj/bin/` |
+| `dobjd` — driver daemon with bundled browser UI (REST/SSE on `:7717`, optional MCP on `:7718`) | `~/.dobj/bin/` |
 | `dobj` — terminal CLI                                                                  | `~/.dobj/bin/` |
 | `dobj-mcp-proxy` — stdio bridge for agents that only speak stdio (e.g. Claude Desktop) | `~/.dobj/bin/` |
+| `pexe` — packaging tool for `.pexe` plugin archives                                      | `~/.dobj/bin/` |
 
 The driver installs with an **empty action catalog** — applications ship
 separately as plugins (`.pexe` files). The steps below install the binaries,
-start the daemon, and add an example plugin such as
+open the browser UI with `dobj ui`, and add an example plugin such as
 [craft-basics](/applications/craft-basics) or
 [craft-rocket](/applications/craft-rocket).
 
@@ -61,19 +62,27 @@ irm https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/inst
 "Windows protected your PC" — click **More info → Run anyway**.
 :::
 
-### Start the daemon
+### Open the browser UI
 
 :::code-group
 
 ```bash [macOS / Linux]
-~/.dobj/bin/dobj start
+~/.dobj/bin/dobj ui
 ```
 
 ```powershell [Windows]
-& "$env:USERPROFILE\.dobj\bin\dobj.exe" start
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" ui
 ```
 
 :::
+
+`dobj ui` starts the daemon if needed and opens its default UI at
+`http://127.0.0.1:7717/ui/`. Run it again whenever you want to return to the UI.
+The release daemon bundles the frontend, so no Node.js or Vite setup is needed.
+The action catalog is empty until you install a plugin in the next step.
+
+For CLI or agent use without opening a browser, use `dobj start` instead.
+`dobj ui --no-open` starts the daemon if needed and prints the URL.
 
 :::info
 The first start builds ZK circuits and can take a few minutes. Later starts
@@ -112,6 +121,9 @@ Install either example, or run both commands to load both.
 
 :::
 
+After installing a plugin, reload the browser tab opened by `dobj ui` to load
+its actions. The daemon does not need to restart.
+
 ### Verify
 
 :::code-group
@@ -134,9 +146,15 @@ Install either example, or run both commands to load both.
 
 Every client talks to the same daemon:
 
+- **Browser UI** — `dobj ui` (starts the daemon if needed and opens your browser)
 - **CLI** — `~/.dobj/bin/dobj` (add `~/.dobj/bin` to your PATH)
 - **Claude Code / MCP agents** — `claude mcp add --transport http dobj http://127.0.0.1:7718/mcp`
 - **Stdio-only agents (e.g. Claude Desktop)** — point them at `~/.dobj/bin/dobj-mcp-proxy`
+
+MCP is off by default. Before connecting an agent, enable it with
+`dobj settings set --mcp on` (use the full binary path if it is not on your
+PATH yet). See [INSTALL.md](https://github.com/dobjlabs/digital-objects-network/blob/main/INSTALL.md#connect-an-agent-mcp)
+for agent-specific setup.
 
 :::info
 **Optional command UX:** after connecting MCP and starting a fresh agent
@@ -158,7 +176,7 @@ All MCP tools remain available without starting the command interface.
 ## Manual install
 
 Prefer to fetch the archives yourself? Detect your platform's target triple,
-then download the two tarballs from the
+then download the three tarballs from the
 [releases page](https://github.com/dobjlabs/digital-objects-network/releases)
 (the `dobjd` tarball bundles `dobj-mcp-proxy`):
 
@@ -176,7 +194,8 @@ RELEASE=https://github.com/dobjlabs/digital-objects-network/releases/latest/down
 mkdir -p ~/.dobj/bin
 curl -fsSL "$RELEASE/dobjd-$TARGET.tar.gz" | tar -xz -C ~/.dobj/bin
 curl -fsSL "$RELEASE/dobj-$TARGET.tar.gz"  | tar -xz -C ~/.dobj/bin
-chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj ~/.dobj/bin/dobj-mcp-proxy
+curl -fsSL "$RELEASE/pexe-$TARGET.tar.gz"  | tar -xz -C ~/.dobj/bin
+chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj ~/.dobj/bin/dobj-mcp-proxy ~/.dobj/bin/pexe
 ```
 
 ```powershell [Windows]
@@ -184,7 +203,7 @@ $TARGET  = "x86_64-pc-windows-msvc"     # the only Windows target built
 $RELEASE = "https://github.com/dobjlabs/digital-objects-network/releases/latest/download"
 $DOBJ    = "$env:USERPROFILE\.dobj"
 New-Item -ItemType Directory -Force -Path "$DOBJ\bin" | Out-Null
-foreach ($name in @("dobjd", "dobj")) {
+foreach ($name in @("dobjd", "dobj", "pexe")) {
     $tmp = "$DOBJ\$name-$TARGET.tar.gz"
     curl.exe -fsSL "$RELEASE/$name-$TARGET.tar.gz" -o $tmp
     tar -xzf $tmp -C "$DOBJ\bin"
@@ -194,7 +213,7 @@ foreach ($name in @("dobjd", "dobj")) {
 
 :::
 
-Then continue from [Start the daemon](/install#start-the-daemon) above.
+Then continue from [Open the browser UI](/install#open-the-browser-ui) above.
 
 ## Point at different infrastructure
 

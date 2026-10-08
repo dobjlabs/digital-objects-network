@@ -1,28 +1,10 @@
-// Frontend client for the driver.
-//
-// All driver-related operations (objects, actions, run_action, state-root,
-// settings, /events) go to a single `dobjd` process over HTTP, regardless of
-// whether the page is loaded inside Tauri or a plain browser. The driver
-// lives in exactly one process; every client is thin.
-//
-// The few remaining `isTauri` branches are for desktop-only conveniences
-// that don't touch the driver at all:
-//
-// - native file picker for `.dobj` (`pick_dobj_file_path`)
-// - in-memory parse of a picked file (`read_dobj_file`)
-// - process CPU sample for the desktop status bar (`sample_app_cpu`)
-// - native menu event for `Cmd+,` settings shortcut (`open-settings`)
-//
-// Override the dobjd URL with `VITE_DOBJD_URL` at build time. Default:
-// `http://127.0.0.1:7717`.
+// Browser HTTP/SSE client for dobjd. Development requests use Vite's
+// /api proxy. A standalone production build defaults to localhost:7717.
+// VITE_DOBJD_URL or an index meta tag can select a different daemon URL.
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ActionPayload,
   AppSettingsPayload,
-  CpuSample,
-  ObjectRecordPayload,
   ObjectSummaryPayload,
   RunAccepted,
   RunActionInput,
@@ -33,8 +15,6 @@ import type {
 export type {
   ActionPayload,
   AppSettingsPayload,
-  CpuSample,
-  ObjectRecordPayload,
   ObjectSummaryPayload,
   QualifiedNamePayload,
   RunAccepted,
@@ -45,18 +25,15 @@ export type {
   RunStatus,
 } from "./wireTypes";
 
-declare global {
-  interface Window {
-    __TAURI_INTERNALS__?: unknown;
-  }
-}
+type UnlistenFn = () => void;
 
-const isTauri =
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-const HTTP_BASE =
-  (import.meta.env.VITE_DOBJD_URL as string | undefined) ??
+const apiUrl =
+  document.querySelector<HTMLMetaElement>('meta[name="dobjd-api-url"]')?.content ||
+  (import.meta.env.VITE_DOBJD_URL as string | undefined) ||
   "http://127.0.0.1:7717";
+const HTTP_BASE = import.meta.env.DEV
+  ? "/api"
+  : new URL(apiUrl, window.location.origin).href.replace(/\/+$/, "");
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -72,7 +49,11 @@ async function dobjdFetch(
   const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchInit } = init;
   const signal = timeoutMs != null ? AbortSignal.timeout(timeoutMs) : undefined;
   try {
-    return await fetch(`${HTTP_BASE}${path}`, { ...fetchInit, signal });
+    return await fetch(`${HTTP_BASE}${path}`, {
+      cache: "no-store",
+      ...fetchInit,
+      signal,
+    });
   } catch (err) {
     if (err instanceof DOMException && err.name === "TimeoutError") {
       throw new Error(
@@ -81,7 +62,7 @@ async function dobjdFetch(
     }
     if (err instanceof TypeError) {
       throw new Error(
-        `dobjd unreachable at ${HTTP_BASE} — is the daemon running?`,
+        `dobjd unreachable at ${HTTP_BASE || window.location.origin} — is the daemon running?`,
       );
     }
     throw err;
@@ -99,7 +80,14 @@ async function httpJson<T>(res: Response): Promise<T> {
     }
     throw new Error(message);
   }
-  return (await res.json()) as T;
+  try {
+    return (await res.json()) as T;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `dobjd ${new URL(res.url).pathname} response body could not be read: ${message}`,
+    );
+  }
 }
 
 // === Driver-backed operations: always HTTP ==================================
@@ -159,13 +147,6 @@ export function getObjectsDir(): Promise<string> {
     .then((r) => r.path);
 }
 
-export function openObjectsDir(): Promise<string> {
-  if (isTauri) return invoke<string>("open_objects_dir");
-  // Browsers can't reveal native folders. Fall back to returning the path
-  // so the UI can show / copy it.
-  return getObjectsDir();
-}
-
 export function getAppSettings(): Promise<AppSettingsPayload> {
   return dobjdFetch("/settings").then(httpJson<AppSettingsPayload>);
 }
@@ -180,32 +161,12 @@ export function saveAppSettings(
   }).then(httpJson<AppSettingsPayload>);
 }
 
-// === Desktop-only conveniences (not driver-backed): Tauri IPC, no fallback ==
-
-export function pickDobjFilePath(): Promise<string> {
-  if (isTauri) return invoke<string>("pick_dobj_file_path");
-  return Promise.reject(new Error("File picker unavailable in browser mode"));
-}
-
-export function readDobjFile(path: string): Promise<ObjectRecordPayload> {
-  if (isTauri) return invoke<ObjectRecordPayload>("read_dobj_file", { path });
-  return Promise.reject(new Error("readDobjFile by path is desktop-only"));
-}
-
-export function sampleAppCpu(): Promise<CpuSample> {
-  if (isTauri) return invoke<CpuSample>("sample_app_cpu");
-  // The desktop status bar widget only makes sense inside Tauri. Return
-  // zeros in browser so any code that polls this keeps rendering.
-  return Promise.resolve({ usagePct: 0, totalCpuSecs: 0 });
-}
-
 // === Event subscriptions ====================================================
 //
 // The global `/events` stream is a firehose used for coarse refresh triggers.
 // The active proof panel follows its own replayable `/actions/runs/{id}/events`
 // stream so it cannot miss early progress emitted before the frontend learned
-// the daemon-assigned run id. The `open-settings` event comes from the Tauri
-// native menu and is desktop-only.
+// the daemon-assigned run id.
 
 type Handler<T> = (payload: T) => void;
 
@@ -293,16 +254,4 @@ export function listenRunActionProgressForRun(
     // replay from the run's buffered progress log.
   };
   return Promise.resolve(close);
-}
-
-export function listenOpenSettings(handler: () => void): Promise<UnlistenFn> {
-  if (isTauri) {
-    return listen("open-settings", () => {
-      handler();
-    });
-  }
-  // No native menu in browser; nothing to listen for. Return a no-op
-  // unlisten so callers can still pattern-match cleanup the same way.
-  void handler;
-  return Promise.resolve(() => {});
 }

@@ -41,10 +41,8 @@ one's health so they don't race to cold-build the shared proving-circuit cache:
 | `relayer`      | submits proof payloads as EIP-4844 blobs                |
 | `dobjd`        | the driver daemon -- HTTP on `:7717`, MCP on `:7718`    |
 | `web`          | Vite on `:1420`, hot-reload for the React app           |
-| `desktop`      | Tauri shell pointing at the standalone Vite             |
 
-The desktop window opens automatically. Open `http://localhost:1420` in any
-browser to use the website client. MCP-aware agents can connect via
+Open `http://localhost:1420` in your browser. MCP-aware agents can connect via
 `claude mcp add --transport http dobj http://127.0.0.1:7718/mcp`.
 
 ### Without local chain-side services
@@ -59,8 +57,12 @@ hosted public endpoints. Faster spin-up; no local Postgres or beacon needed.
 ### Standalone pieces
 
 Run individual components with `just sync`, `just relayer`, `just archiver`,
-`just dobjd`, `just web`, `just desktop`. Before running `just sync` /
+`just dobjd`, `just web`. Before running `just sync` /
 `just relayer` standalone, run `just ensure-db` once to create their databases.
+
+For a daemon with the default UI embedded, run `just build-dobjd`. Release
+builds serve it at `/ui/`; `dobj ui` starts the daemon and opens your browser.
+See [the GUI README](interfaces/gui/README.md) for separately hosted frontends.
 
 ## Plugins
 

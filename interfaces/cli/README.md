@@ -42,6 +42,7 @@ for the raw payload (suitable for `jq`).
 
 | Command            | What it does                                                                                       |
 | ------------------ | -------------------------------------------------------------------------------------------------- |
+| `ui [--no-open]`   | starts dobjd if needed and opens `/ui/` in the default browser (or prints the URL) |
 | `start`            | spawns dobjd as a detached child (`setsid` on Unix), writes `~/.dobj/dobjd.pid`, polls until ready |
 | `stop`             | reads the pidfile, sends `SIGTERM`, waits up to 10s, escalates to `SIGKILL` if needed              |
 | `status`           | prints whether the pid is alive and HTTP responds; surfaces stale pidfiles                         |

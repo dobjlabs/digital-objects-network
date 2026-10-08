@@ -1,4 +1,4 @@
-.cpu-panel {
+.proof-panel-frame {
   border-right: 2px solid var(--col-border);
   background: var(--panel-alt);
   display: flex;
@@ -167,10 +167,10 @@
 }
 
 .proof-panel-idle.idle-fade-in {
-  animation: cpu-chart-fade-in 0.42s ease;
+  animation: proof-idle-fade-in 0.42s ease;
 }
 
-@keyframes cpu-chart-fade-in {
+@keyframes proof-idle-fade-in {
   from {
     opacity: 0;
   }
@@ -184,15 +184,6 @@
   flex-direction: column;
   gap: 8px;
   width: 100%;
-}
-
-.idle-cpu {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
 }
 
 .idle-roots {
@@ -229,32 +220,9 @@
   white-space: nowrap;
 }
 
-.dash-cpu-bars {
-  min-height: 92px;
-  flex: 1;
-  width: 100%;
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  border: none;
-  padding: 0;
-  background: transparent;
-}
-
-.dash-cpu-bar {
-  flex: 1;
-  min-width: 3px;
-  background: #3f7f2c;
-  opacity: 0.75;
-}
-
 .proof-title {
   color: var(--text-bright);
   font-size: 12px;
-}
-
-.cpu-title {
-  color: var(--text-dim);
 }
 
 .proof-line {
@@ -265,14 +233,6 @@
 
 .proof-muted {
   color: var(--text-dim);
-}
-
-.cpu-total {
-  color: var(--text-dim);
-}
-
-.cpu-total .proof-muted {
-  color: var(--text);
 }
 
 .proof-log {

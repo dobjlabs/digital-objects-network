@@ -7,7 +7,7 @@ name: Images
 # Linux runners are amd64, so the build is native - no QEMU emulation. The
 # whole compile happens inside the Dockerfile's debian builder, scoped to
 # `-p synchronizer -p relayer -p archiver`, so unlike the Rust CI workflows this
-# needs no Tauri/GTK packages on the runner - it only drives buildx.
+# needs no desktop packages on the runner - it only drives buildx.
 
 on:
   push:
