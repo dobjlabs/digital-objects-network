@@ -71,6 +71,8 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
   `runId` immediately (the proof + commit run in the background). See
   "running actions" below.
 - `get_run({ run_id })` — poll a run's status, result/error, and progress log.
+- `list_runs({ active_only? })` — the runs the daemon still holds, oldest
+  first; use it to find a run whose `runId` you no longer have.
 
 ### Configuration
 

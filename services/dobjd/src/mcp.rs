@@ -224,6 +224,10 @@ impl DobjOps for DobjdOps {
             .ok_or_else(|| anyhow::anyhow!("unknown run: {run_id}"))
     }
 
+    fn list_runs(&self, active_only: bool) -> anyhow::Result<Vec<mcp::RunState>> {
+        Ok(self.runs.list(active_only))
+    }
+
     fn check_feasibility(
         &self,
         action: &mcp::QualifiedName,

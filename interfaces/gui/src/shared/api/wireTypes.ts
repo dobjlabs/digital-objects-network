@@ -77,6 +77,7 @@ export interface RunActionResult {
 export interface RunAccepted {
   runId: string;
   status: RunStatus;
+  createdAtMs?: number;
 }
 
 /** `GET /actions/runs/{runId}` response: current state of a run. */
@@ -84,6 +85,10 @@ export interface RunState {
   runId: string;
   action: QualifiedNamePayload;
   status: RunStatus;
+  inputObjectPaths?: string[];
+  createdAtMs?: number;
+  startedAtMs?: number | null;
+  finishedAtMs?: number | null;
   result: RunActionResult | null;
   error: string | null;
   progress: RunActionProgress[];
@@ -109,6 +114,7 @@ export interface RunActionProgress {
   outputFiles: string[] | null;
   outputStatus: ObjectStatus | null;
   nullifiedFiles: string[] | null;
+  atMs?: number;
 }
 
 export interface AppSettingsPayload {

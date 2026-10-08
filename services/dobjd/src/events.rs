@@ -52,6 +52,7 @@ mod tests {
             output_files: None,
             output_status: None,
             nullified_files: None,
+            at_ms: 0,
         });
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(

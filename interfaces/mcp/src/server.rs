@@ -163,6 +163,13 @@ pub struct ImportObjectFileParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListRunsParams {
+    /// When true, list only runs that have not yet succeeded or failed.
+    #[serde(default)]
+    pub active_only: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetRunParams {
     /// The `runId` returned by `run_action`.
     pub run_id: String,
@@ -317,6 +324,19 @@ impl<T: DobjOps> DobjMcpService<T> {
         self.ops
             .get_run(&params.run_id)
             .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "List the runs the daemon still holds, oldest first: runs in progress plus finished runs kept for about 10 minutes. Each entry has the same shape as get_run. Set active_only to list just the runs still in progress. Runs live in memory, so a daemon restart clears the list."
+    )]
+    fn list_runs(
+        &self,
+        Parameters(params): Parameters<ListRunsParams>,
+    ) -> Result<Json<RunList>, String> {
+        self.ops
+            .list_runs(params.active_only)
+            .map(|runs| Json(RunList { runs }))
             .map_err(|e| e.to_string())
     }
 
@@ -607,6 +627,7 @@ mod tests {
         assert!(tools.contains(&"inspect_action".to_string()));
         assert!(tools.contains(&"run_action".to_string()));
         assert!(tools.contains(&"get_run".to_string()));
+        assert!(tools.contains(&"list_runs".to_string()));
         assert!(tools.contains(&"check_feasibility".to_string()));
         assert!(tools.contains(&"list_classes".to_string()));
         assert!(tools.contains(&"read_doc".to_string()));
@@ -619,7 +640,7 @@ mod tests {
         assert!(tools.contains(&"delete_command".to_string()));
         assert!(tools.contains(&"get_command".to_string()));
         assert!(tools.contains(&"invoke_prompt".to_string()));
-        assert_eq!(tools.len(), 20);
+        assert_eq!(tools.len(), 21);
     }
 
     #[test]
@@ -903,6 +924,19 @@ mod tests {
             .unwrap();
         assert_eq!(state.run_id, "run-1");
         assert_eq!(state.status, RunStatus::Succeeded);
+    }
+
+    #[test]
+    fn test_list_runs_via_handler() {
+        let service = make_service();
+        let Json(all) = service
+            .list_runs(Parameters(ListRunsParams { active_only: false }))
+            .unwrap();
+        assert_eq!(all.runs.len(), 1);
+        let Json(active) = service
+            .list_runs(Parameters(ListRunsParams { active_only: true }))
+            .unwrap();
+        assert!(active.runs.is_empty());
     }
 
     #[test]

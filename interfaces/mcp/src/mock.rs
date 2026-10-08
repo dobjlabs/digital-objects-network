@@ -173,6 +173,7 @@ impl DobjOps for MockDobjOps {
             // wall-clock or randomness. Real `DobjdOps` mints a UUID v4.
             run_id: "00000000-0000-4000-8000-000000000000".to_string(),
             status: RunStatus::Queued,
+            created_at_ms: 0,
         })
     }
 
@@ -183,6 +184,10 @@ impl DobjOps for MockDobjOps {
             run_id: run_id.to_string(),
             action: qname("CraftWood"),
             status: RunStatus::Succeeded,
+            input_object_paths: vec!["craft-basics__log_0xmock.dobj".to_string()],
+            created_at_ms: 0,
+            started_at_ms: Some(0),
+            finished_at_ms: Some(0),
             result: Some(RunActionInner {
                 run_id: run_id.to_string(),
                 old_root: "0xmockoldroot".to_string(),
@@ -193,6 +198,14 @@ impl DobjOps for MockDobjOps {
             error: None,
             progress: vec![],
         })
+    }
+
+    fn list_runs(&self, active_only: bool) -> anyhow::Result<Vec<RunState>> {
+        // The mock's one run has finished, so the active list is empty.
+        if active_only {
+            return Ok(Vec::new());
+        }
+        Ok(vec![self.get_run("run-1")?])
     }
 
     fn check_feasibility(&self, action: &QualifiedName) -> anyhow::Result<FeasibilityReport> {

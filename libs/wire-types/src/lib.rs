@@ -308,6 +308,23 @@ pub enum RunStatus {
     Failed,
 }
 
+/// `GET /actions/runs` query: `?status=active` limits the list to runs that
+/// have not yet succeeded or failed.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RunListQuery {
+    #[serde(default)]
+    pub status: Option<RunListFilter>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum RunListFilter {
+    Active,
+}
+
 /// `POST /actions/run` response. The run was accepted and now executes in the
 /// background; follow it via `GET /actions/runs/{runId}` (poll) or
 /// `GET /actions/runs/{runId}/events` (SSE, replayable via `Last-Event-ID`).
@@ -317,6 +334,9 @@ pub enum RunStatus {
 pub struct RunAccepted {
     pub run_id: String,
     pub status: RunStatus,
+    /// When dobjd accepted the run, in Unix epoch milliseconds.
+    #[serde(default)]
+    pub created_at_ms: u64,
 }
 
 /// `GET /actions/runs/{runId}` response: the current state of a run. The
@@ -329,6 +349,19 @@ pub struct RunState {
     pub run_id: String,
     pub action: QualifiedName,
     pub status: RunStatus,
+    /// The `.dobj` files the run was given as inputs, as submitted.
+    #[serde(default)]
+    pub input_object_paths: Vec<String>,
+    /// When dobjd accepted the run, in Unix epoch milliseconds.
+    #[serde(default)]
+    pub created_at_ms: u64,
+    /// When the first progress event was recorded, i.e. when the run left
+    /// `queued`. Absent while queued.
+    #[serde(default)]
+    pub started_at_ms: Option<u64>,
+    /// When the run reached `succeeded` or `failed`. Absent until then.
+    #[serde(default)]
+    pub finished_at_ms: Option<u64>,
     /// Populated once `status` is `succeeded`.
     pub result: Option<RunActionResult>,
     /// Populated once `status` is `failed`.
@@ -379,6 +412,9 @@ pub struct RunActionProgress {
     pub output_files: Option<Vec<String>>,
     pub output_status: Option<ObjectStatus>,
     pub nullified_files: Option<Vec<String>>,
+    /// When the event was recorded, in Unix epoch milliseconds.
+    #[serde(default)]
+    pub at_ms: u64,
 }
 
 // ===========================================================================

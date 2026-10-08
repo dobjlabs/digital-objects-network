@@ -6,7 +6,7 @@ use axum::http::HeaderMap;
 use axum::{
     Json,
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{
         IntoResponse, Response,
@@ -15,7 +15,8 @@ use axum::{
 };
 use tokio_stream::wrappers::ReceiverStream;
 use wire_types::{
-    ActionSummary, CheckActionReport, QualifiedName, RunAccepted, RunActionRequest, RunState,
+    ActionSummary, CheckActionReport, QualifiedName, RunAccepted, RunActionRequest, RunListFilter,
+    RunListQuery, RunState,
 };
 
 use crate::error::{ApiError, ApiResult};
@@ -49,6 +50,17 @@ pub async fn run_action(
         input_objects,
     )?;
     Ok((StatusCode::ACCEPTED, Json(accepted)))
+}
+
+/// `GET /actions/runs` -- every run dobjd still holds, oldest first: runs in
+/// flight plus finished runs not yet reaped. `?status=active` keeps only the
+/// runs that have not succeeded or failed.
+pub async fn list_runs(
+    State(state): State<AppState>,
+    Query(query): Query<RunListQuery>,
+) -> Json<Vec<RunState>> {
+    let active_only = query.status == Some(RunListFilter::Active);
+    Json(state.runs.list(active_only))
 }
 
 /// `GET /actions/runs/{run_id}` — current state of a run: status, the result
