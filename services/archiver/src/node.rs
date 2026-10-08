@@ -25,7 +25,6 @@ use alloy::{
 };
 use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
-use chrono::{DateTime, Utc};
 use tracing::{debug, info};
 
 use crate::config::Config;
@@ -340,17 +339,10 @@ impl Node {
             .ok_or_else(|| {
                 anyhow!("Beacon header exists for slot {slot} but full block {beacon_block_root} was not found")
             })?;
-        let execution_payload = beacon_block.execution_payload;
-        debug!(
-            "slot {} has execution block {} at height {}",
-            slot, execution_payload.block_hash, execution_payload.block_number
-        );
-
+        let execution_block_hash = beacon_block.execution_block_hash;
         info!(
-            "processing slot {} from {}",
-            slot,
-            DateTime::<Utc>::from_timestamp_secs(execution_payload.timestamp as i64)
-                .unwrap_or_default(),
+            "processing slot {} with execution block {}",
+            slot, execution_block_hash
         );
 
         let kzg_blob_commitments: Vec<_> = beacon_block
@@ -362,8 +354,6 @@ impl Node {
             debug!("slot {} has no blobs", slot);
             return Ok(());
         }
-
-        let execution_block_hash = execution_payload.block_hash;
 
         let execution_block_id = alloy_eips::eip1898::BlockId::Hash(execution_block_hash.into());
         let execution_block = self

@@ -51,6 +51,11 @@ struct SlotContext {
     kzg_blob_commitments: Vec<(B256, KzgCommitment)>,
 }
 
+pub(crate) struct ExecutionHeader {
+    number: u32,
+    timestamp: u64,
+}
+
 /// Outcome of processing one beacon slot, ready to be committed.
 pub enum ProcessedSlot {
     /// Beacon produced no block for the slot. With no execution block there is
@@ -257,31 +262,61 @@ impl Node {
         let block = self
             .get_beacon_block_by_hash_with_retry(slot, header.root)
             .await?;
-        let execution_payload = &block.execution_payload;
+        let execution_header = self
+            .get_execution_header_with_retry(slot, block.execution_block_hash)
+            .await?;
 
         Ok(CommittedSlotRecord {
             slot,
             block_root: Some(header.root),
             parent_root: Some(block.parent_root),
-            block_number: Some(execution_payload.block_number),
+            block_number: Some(execution_header.number),
             current_state_root: None,
             is_empty: false,
         })
     }
 
+    /// The beacon block names its execution payload only by hash, so the number and timestamp
+    /// are read from the execution layer.
+    pub(crate) async fn get_execution_header_with_retry(
+        &self,
+        slot: u32,
+        execution_block_hash: B256,
+    ) -> Result<ExecutionHeader> {
+        self.retry_rpc(
+            "execution block header",
+            format!("slot {slot}, block_hash {execution_block_hash}"),
+            || async {
+                let block = self
+                    .rpc_cli
+                    .get_block_by_hash(execution_block_hash)
+                    .await?
+                    .ok_or_else(|| anyhow!("Execution block {execution_block_hash} not found"))?;
+                Ok(ExecutionHeader {
+                    number: block.header.number.try_into()?,
+                    timestamp: block.header.timestamp,
+                })
+            },
+        )
+        .await
+    }
+
     /// Build a `SlotContext` from a beacon header and its full block.
     ///
-    /// Failure to extract the execution payload is treated as an error rather than as an empty
+    /// Failure to resolve the execution payload is treated as an error rather than as an empty
     /// slot. This forces the sync loop to retry instead of silently advancing past a real slot
-    /// when the beacon provider is temporarily inconsistent.
-    fn slot_context_from_block(
+    /// when the beacon or execution provider is temporarily inconsistent.
+    async fn slot_context_from_block(
+        &self,
         beacon_block_header: &BlockHeader,
         beacon_block: &Block,
     ) -> Result<SlotContext> {
         let slot = beacon_block_header.slot;
         let beacon_block_root = beacon_block_header.root;
 
-        let execution_payload = &beacon_block.execution_payload;
+        let execution_header = self
+            .get_execution_header_with_retry(slot, beacon_block.execution_block_hash)
+            .await?;
 
         let kzg_blob_commitments = beacon_block
             .blob_kzg_commitments
@@ -294,9 +329,9 @@ impl Node {
             slot,
             beacon_block_root,
             parent_root: beacon_block.parent_root,
-            execution_block_hash: execution_payload.block_hash,
-            execution_block_number: execution_payload.block_number,
-            execution_block_timestamp: execution_payload.timestamp,
+            execution_block_hash: beacon_block.execution_block_hash,
+            execution_block_number: execution_header.number,
+            execution_block_timestamp: execution_header.timestamp,
             kzg_blob_commitments,
         })
     }
@@ -306,7 +341,8 @@ impl Node {
         let beacon_block = self
             .get_beacon_block_by_hash_with_retry(beacon_block_header.slot, beacon_block_header.root)
             .await?;
-        Self::slot_context_from_block(beacon_block_header, &beacon_block)
+        self.slot_context_from_block(beacon_block_header, &beacon_block)
+            .await
     }
 
     /// Derive the full per-slot update from beacon/execution data and return it for commit.
@@ -324,7 +360,9 @@ impl Node {
         beacon_block_header: &BlockHeader,
         beacon_block: &Block,
     ) -> Result<ProcessedSlot> {
-        let slot_ctx = Self::slot_context_from_block(beacon_block_header, beacon_block)?;
+        let slot_ctx = self
+            .slot_context_from_block(beacon_block_header, beacon_block)
+            .await?;
         self.derive_from_context(slot_ctx).await
     }
 

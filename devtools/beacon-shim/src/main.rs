@@ -170,11 +170,9 @@ async fn get_block(
     Ok(Json(BlockResponse {
         data: BlockData {
             message: BlockMessage {
-                body: BlockBody {
+                body: BlockBody::PreGloas {
                     execution_payload: ExecutionPayload {
                         block_hash: block.header.hash,
-                        block_number: slot,
-                        timestamp: block.header.timestamp,
                     },
                     blob_kzg_commitments: commitments,
                 },
