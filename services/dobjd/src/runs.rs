@@ -343,7 +343,6 @@ where
     tokio::spawn(async move {
         let worker = reporter.clone();
         let join = tokio::task::spawn_blocking(move || {
-            // Keep the gate held if the supervisor is dropped while execution continues.
             let _permit = permit;
             execute(&worker)
         });
