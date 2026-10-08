@@ -24,7 +24,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use payload::decode_hash_hex;
 use pod2::middleware::Hash;
-use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
+use sdk::{ActionKind, Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
 use txlib::GroundingWitness;
 
 use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
@@ -209,17 +209,25 @@ impl PexeCatalog {
                     .action_hash(&bare)
                     .map(|h| format!("{:#}", h))
                     .unwrap_or_default();
-                // Action predicates use the bare action name (no `Is`
-                // prefix like classes get).
-                let predicate_source = extract_predicate(&podlang_src, &bare)
-                    .unwrap_or_else(|| format!("{bare}(state) = AND(...)"));
+                let (predicate_source, default_description) = match action.kind {
+                    ActionKind::Script => (
+                        extract_predicate(&podlang_src, &bare)
+                            .unwrap_or_else(|| format!("{bare}(state) = AND(...)")),
+                        "Pexe action".to_string(),
+                    ),
+                    ActionKind::Rekey => (
+                        txlib::predicates::rekey_podlang_src(),
+                        format!(
+                            "Replace the key of a {} object with a fresh random key.",
+                            total_inputs[0].class.name
+                        ),
+                    ),
+                };
                 all_actions.push(ActionSummary {
                     action: qname,
                     emoji: meta.map_or("⚙️", |m| m.emoji.as_str()).to_string(),
                     hash: action_hash,
-                    description: meta
-                        .map_or("Pexe action", |m| m.description.as_str())
-                        .to_string(),
+                    description: meta.map_or(default_description, |m| m.description.clone()),
                     total_inputs,
                     total_outputs,
                     predicate_source,
@@ -437,6 +445,79 @@ mod tests {
             .collect();
         assert!(classes.contains(&craft_basics("Log")));
         assert!(classes.contains(&craft_basics("WoodPick")));
+    }
+
+    #[test]
+    fn test_builtin_rekey_catalog_metadata() {
+        let catalog = test_catalog();
+        let mut shared_hash = None;
+        for class in catalog.list_classes() {
+            let name = QualifiedName::new(
+                &class.class.plugin_name,
+                format!("Rekey{}", class.class.name),
+            );
+            let action = catalog
+                .get_action(&name)
+                .expect("every class has a Rekey action");
+            assert_eq!(action.total_inputs.len(), 1);
+            assert_eq!(action.total_inputs, action.total_outputs);
+            assert_eq!(action.total_inputs[0].class, class.class);
+            assert_eq!(action.total_inputs[0].hash, class.hash);
+            assert!(class.produced_by.contains(&name));
+            assert!(class.consumed_by.contains(&name));
+            assert!(catalog.list_actions().iter().any(|a| a.action == name));
+            assert!(action.description.contains("fresh random key"));
+            assert!(
+                action
+                    .predicate_source
+                    .contains("Rekey(new, chain_start, chain_end, type")
+            );
+            assert!(!action.predicate_source.contains("TX_EVENTS_MODULE_HASH"));
+            assert!(!action.hash.is_empty());
+            assert_eq!(shared_hash.get_or_insert(action.hash.clone()), &action.hash);
+        }
+    }
+
+    #[test]
+    fn test_builtin_rekey_routes_to_own_plugin() {
+        let catalog = alpha_beta_catalog();
+        let minted = catalog
+            .execute_action(
+                QualifiedName::new("alpha", "MakeFoo"),
+                dummy_grounding_witness(),
+                vec![],
+            )
+            .unwrap();
+        let foo = minted.obj(0);
+        let state = pexe::fixtures::build_synthetic_state(&[foo.obj.clone()]).unwrap();
+        let result = catalog
+            .execute_action(
+                QualifiedName::new("alpha", "RekeyFoo"),
+                (*state.grounding_witness).clone(),
+                vec![foo.clone()],
+            )
+            .unwrap();
+        assert_eq!(
+            obj_type_hash_for_test(&result.obj(0).obj).unwrap(),
+            obj_type_hash_for_test(&foo.obj).unwrap()
+        );
+        let key = pod2::middleware::StrKey::from("key");
+        assert_ne!(
+            result.obj(0).obj.get(&key).unwrap(),
+            foo.obj.get(&key).unwrap()
+        );
+        let err = catalog
+            .execute_action(
+                QualifiedName::new("beta", "RekeyFoo"),
+                (*state.grounding_witness).clone(),
+                vec![foo],
+            )
+            .err()
+            .expect("another plugin's Foo must be rejected");
+        assert!(
+            err.to_string().contains("requires an input of class Foo"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -721,19 +802,31 @@ description = "consume a Foo to make a Bar"
 
         assert_eq!(
             alpha_foo.produced_by,
-            vec![QualifiedName::new("alpha", "MakeFoo")]
+            vec![
+                QualifiedName::new("alpha", "MakeFoo"),
+                QualifiedName::new("alpha", "RekeyFoo")
+            ]
         );
         assert_eq!(
             alpha_foo.consumed_by,
-            vec![QualifiedName::new("alpha", "ConsumeFoo")]
+            vec![
+                QualifiedName::new("alpha", "ConsumeFoo"),
+                QualifiedName::new("alpha", "RekeyFoo")
+            ]
         );
         assert_eq!(
             beta_foo.produced_by,
-            vec![QualifiedName::new("beta", "MakeFoo")]
+            vec![
+                QualifiedName::new("beta", "MakeFoo"),
+                QualifiedName::new("beta", "RekeyFoo")
+            ]
         );
         assert_eq!(
             beta_foo.consumed_by,
-            vec![QualifiedName::new("beta", "ConsumeFoo")]
+            vec![
+                QualifiedName::new("beta", "ConsumeFoo"),
+                QualifiedName::new("beta", "RekeyFoo")
+            ]
         );
 
         // The predicate source string is also non-empty and looks like an

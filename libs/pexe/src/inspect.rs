@@ -13,7 +13,7 @@ use pod2::middleware::{
     CustomPredicateBatch, Hash, NativePredicate, Predicate, PredicateOrWildcard, StatementTmpl,
     StatementTmplArg, Wildcard,
 };
-use sdk::{Dependency, Sdk, SdkModule, manifest::Manifest};
+use sdk::{ActionKind, Dependency, Sdk, SdkModule, manifest::Manifest};
 
 use crate::{PluginSource, read_pexe_file, unpack};
 
@@ -79,7 +79,17 @@ pub fn predicates(target: &Path, action: Option<&str>, middleware: bool) -> Resu
 }
 
 fn print_middleware(module: &SdkModule, action: Option<&str>) -> Result<()> {
-    let batch = &module.module().batch;
+    let builtin = action.is_some_and(|name| {
+        module
+            .actions()
+            .iter()
+            .any(|a| a.name == name && a.kind == ActionKind::Rekey)
+    });
+    let (batch, action) = if builtin {
+        (&module.rekey_module().batch, Some("Rekey"))
+    } else {
+        (&module.module().batch, action)
+    };
     let predicates = batch.predicates();
     // Render the whole batch once with batch context so each
     // `BatchSelf(N)` reference inside a statement gets resolved to the
@@ -150,6 +160,15 @@ fn print_middleware(module: &SdkModule, action: Option<&str>) -> Result<()> {
 }
 
 fn print_frontend(module: &SdkModule, action: Option<&str>) -> Result<()> {
+    if action.is_some_and(|name| {
+        module
+            .actions()
+            .iter()
+            .any(|a| a.name == name && a.kind == ActionKind::Rekey)
+    }) {
+        print!("{}", txlib::predicates::rekey_podlang_src());
+        return Ok(());
+    }
     let src = module.podlang_src();
     match action {
         None => {

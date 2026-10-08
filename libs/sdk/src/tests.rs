@@ -2219,3 +2219,166 @@ fn test_generated_class_rekey() {
     }
     assert_eq!(tx_out.nullifiers.iter().count(), 1);
 }
+
+#[test]
+fn test_builtin_rekey_discovery_execution_and_planning() {
+    let src = r#"
+        fn SpawnFoo(action) {
+            var foo = action.output("Foo");
+            foo.set([["durability", 100]]);
+        }
+        fn SpawnBar(action) {
+            var bar = action.output("Bar");
+        }
+        fn UseFoo(action) {
+            var foo = action.mutate("Foo");
+            foo.update("durability", 99);
+        }
+    "#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(src, &["SpawnFoo", "SpawnBar", "UseFoo"])
+        .unwrap();
+    let builtins: Vec<_> = module
+        .actions()
+        .iter()
+        .filter(|a| a.kind == ActionKind::Rekey)
+        .collect();
+    assert_eq!(builtins.len(), 2);
+    for action in builtins {
+        let inputs: Vec<_> = action.total_inputs().map(|r| &r.class).collect();
+        let outputs: Vec<_> = action.total_outputs().map(|r| &r.class).collect();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs, outputs);
+        assert_eq!(action.name, format!("Rekey{}", inputs[0]));
+        assert!(
+            module
+                .module()
+                .predicate_ref_by_name(&action.name)
+                .is_none()
+        );
+    }
+    assert_eq!(
+        module.action_hash("RekeyFoo"),
+        module.action_hash("RekeyBar")
+    );
+    let shared = module
+        .rekey_module()
+        .predicate_ref_by_name("Rekey")
+        .unwrap();
+    assert_eq!(
+        module.action_hash("RekeyFoo"),
+        Some(Predicate::Custom(shared).hash())
+    );
+    assert_eq!(module.class_by_name("Foo").actions.len(), 2);
+    assert!(!module.podlang_src().contains("RekeyFoo("));
+
+    let mut state = TestState::default();
+    let minted = module
+        .executor(true, grounding_witness(&state, &[]))
+        .action("SpawnFoo", vec![])
+        .unwrap();
+    apply_tx(&mut state, &minted.tx);
+    let mut foo = minted.obj(0);
+    for _ in 0..2 {
+        let executor = module.executor(true, grounding_witness(&state, &[foo.obj.commitment()]));
+        executor.plan_action("RekeyFoo", vec![foo.clone()]).unwrap();
+        let result = executor.action("RekeyFoo", vec![foo.clone()]).unwrap();
+        result.tx_pod.pod.verify().unwrap();
+        assert_eq!(result.tx_pod.public_statements.len(), 1);
+        assert_eq!(result.objs.len(), 1);
+        let new = result.obj(0);
+        assert_ne!(
+            new.obj.get(&StrKey::from("key")).unwrap(),
+            foo.obj.get(&StrKey::from("key")).unwrap()
+        );
+        for entry in foo.obj.iter() {
+            let (key, value) = entry.unwrap();
+            if key != "key" {
+                assert_eq!(new.obj.get(&StrKey::from(key)).unwrap().unwrap(), value);
+            }
+        }
+        assert!(
+            result
+                .tx
+                .live
+                .contains(&Value::from(new.obj.clone()))
+                .unwrap()
+        );
+        assert!(
+            !result
+                .tx
+                .live
+                .contains(&Value::from(foo.obj.commitment()))
+                .unwrap()
+        );
+        assert_eq!(result.tx.nullifiers.iter().count(), 1);
+        assert!(
+            result
+                .tx
+                .nullifiers
+                .contains(&Value::from(txlib::compute_nullifier(&foo.obj)))
+                .unwrap()
+        );
+        apply_tx(&mut state, &result.tx);
+        foo = new;
+    }
+    let used = module
+        .executor(true, grounding_witness(&state, &[foo.obj.commitment()]))
+        .action("UseFoo", vec![foo])
+        .unwrap();
+    assert_eq!(
+        used.obj(0)
+            .obj
+            .get(&StrKey::from("durability"))
+            .unwrap()
+            .unwrap(),
+        Value::from(99)
+    );
+}
+
+#[test]
+fn test_builtin_rekey_rejects_wrong_inputs() {
+    let module = Sdk::default()
+        .load_module_from_src_actions(
+            r#"fn SpawnFoo(action) { var foo = action.output("Foo"); }
+           fn SpawnBar(action) { var bar = action.output("Bar"); }"#,
+            &["SpawnFoo", "SpawnBar"],
+        )
+        .unwrap();
+    let state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let bar = executor.action("SpawnBar", vec![]).unwrap().obj(0);
+    for (name, inputs, expected) in [
+        ("RekeyFoo", vec![], "expects 1 input objects, got 0"),
+        (
+            "RekeyFoo",
+            vec![bar.clone(), bar.clone()],
+            "expects 1 input objects, got 2",
+        ),
+        ("RekeyFoo", vec![bar], "requires an input of class Foo"),
+        ("RekeyMissing", vec![], "unknown action"),
+    ] {
+        let err = executor
+            .action(name, inputs.clone())
+            .err()
+            .expect("invalid execution should fail");
+        assert!(err.to_string().contains(expected), "{err}");
+        let err = executor
+            .plan_action(name, inputs)
+            .err()
+            .expect("invalid planning should fail");
+        assert!(err.to_string().contains(expected), "{err}");
+    }
+}
+
+#[test]
+fn test_builtin_rekey_name_is_reserved() {
+    let err = Sdk::default()
+        .load_module_from_src_actions(
+            r#"fn RekeyFoo(action) { var foo = action.output("Foo"); }"#,
+            &["RekeyFoo"],
+        )
+        .err()
+        .expect("script must not shadow the built-in");
+    assert!(err.to_string().contains("RekeyFoo is reserved"), "{err}");
+}

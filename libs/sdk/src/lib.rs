@@ -2235,7 +2235,16 @@ pub(crate) struct EntryShape {
     pub needs_wildcard: bool,
 }
 
-/// Collected metadata that declares an Action.
+/// How an SDK action is executed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ActionKind {
+    #[default]
+    Script,
+    /// Change one object's key using the shared Rekey predicate.
+    Rekey,
+}
+
+/// Metadata for a scripted or built-in SDK action.
 ///
 /// `object_refs` lists the action's direct Object instructions in
 /// declaration order, matching the action predicate's public-arg
@@ -2249,6 +2258,7 @@ pub(crate) struct EntryShape {
 #[derive(Debug, Default)]
 pub struct ActionMeta {
     pub name: String,
+    pub kind: ActionKind,
     pub(crate) object_refs: Vec<ActionObjectRef>,
     total_inputs: Vec<ActionObjectRef>,
     total_outputs: Vec<ActionObjectRef>,
@@ -2271,6 +2281,22 @@ pub struct ActionMeta {
 }
 
 impl ActionMeta {
+    fn rekey(class: &str) -> Self {
+        let object = ActionObjectRef {
+            io: ObjectIO::Mutate,
+            class: class.to_string(),
+            varname: "state".to_string(),
+        };
+        Self {
+            name: format!("Rekey{class}"),
+            kind: ActionKind::Rekey,
+            object_refs: vec![object.clone()],
+            total_inputs: vec![object.clone()],
+            total_outputs: vec![object],
+            ..Self::default()
+        }
+    }
+
     /// Object refs consumed locally by this action (Inputs + Mutates),
     /// excluding any transitively-called sub-actions.
     pub fn local_inputs(&self) -> impl Iterator<Item = &ActionObjectRef> {
@@ -2639,6 +2665,12 @@ impl Loader {
             actions_meta.push(meta);
         }
         let classes = Self::actions_to_classes(&actions_meta);
+        for class in &classes {
+            let name = format!("Rekey{}", class.name);
+            if actions_meta.iter().any(|a| a.name == name) {
+                return Err(anyhow!("action {name} is reserved for built-in rekeying"));
+            }
+        }
         Ok(Self {
             tx_events_mod,
             rekey_mod,
@@ -2697,12 +2729,16 @@ impl Loader {
                     .map(|p| (c.name.clone(), Predicate::Custom(p).hash()))
             })
             .collect();
+        // Built-ins reuse the already compiled class guards. They must not
+        // participate in Podlang generation or alter class branch indices.
+        let mut actions = self.actions_meta;
+        actions.extend(self.classes.iter().map(|c| ActionMeta::rekey(&c.name)));
         SdkModule {
             tx_events_mod: self.tx_events_mod,
             rekey_mod: self.rekey_mod,
             txlib_mod: self.txlib_mod,
             podlang_src,
-            actions: self.actions_meta,
+            actions,
             classes: self.classes,
             object_index_class_st_index,
             module,
@@ -2758,13 +2794,23 @@ impl SdkModule {
     pub fn module(&self) -> &Arc<Module> {
         &self.module
     }
+    /// Shared predicate module used by every built-in Rekey action.
+    pub fn rekey_module(&self) -> &Arc<Module> {
+        &self.rekey_mod
+    }
     pub fn dependencies(&self) -> &[Dependency] {
         &self.dependencies
     }
-    /// Hash of the action's custom predicate in the loaded module.
+    /// Hash of the action's custom predicate. Built-in Rekey actions share
+    /// the imported Rekey predicate; their class is bound by its guard.
     pub fn action_hash(&self, action_name: &str) -> Option<Hash> {
-        self.module
-            .predicate_ref_by_name(action_name)
+        let action = self.actions.iter().find(|a| a.name == action_name)?;
+        let (module, name) = match action.kind {
+            ActionKind::Script => (&self.module, action.name.as_str()),
+            ActionKind::Rekey => (&self.rekey_mod, "Rekey"),
+        };
+        module
+            .predicate_ref_by_name(name)
             .map(Predicate::Custom)
             .map(|p| p.hash())
     }
@@ -2976,68 +3022,106 @@ impl Executor {
     fn new_tx_builder(&self, ctx: &mut BuildContext, inputs: &[Dictionary]) -> TxBuilder {
         TxBuilder::new(ctx, inputs, self.grounding_witness.clone())
     }
+    /// Build either a Rhai action or a built-in operation. Execution and
+    /// planning use the same path through transaction finalization.
+    fn build_action(
+        &self,
+        action: &str,
+        inputs: Vec<SpendableObject>,
+    ) -> Result<(BuildContext, Tx, Vec<Dictionary>), SdkError> {
+        let meta = self
+            .module
+            .actions
+            .iter()
+            .find(|a| a.name == action)
+            .ok_or_else(|| anyhow!("unknown action: {action}"))?;
+        if inputs.len() != meta.total_inputs.len() {
+            return Err(anyhow!(
+                "action {action} expects {} input objects, got {}",
+                meta.total_inputs.len(),
+                inputs.len()
+            )
+            .into());
+        }
+        for (input, reference) in zip_eq(inputs.iter(), meta.total_inputs.iter()) {
+            let expected = Value::from(self.module.class_hashes[&reference.class]);
+            if input
+                .obj
+                .get(&StrKey::from("type"))
+                .map_err(|err| anyhow!(err))?
+                != Some(expected)
+            {
+                return Err(anyhow!(
+                    "action {action} requires an input of class {}",
+                    reference.class
+                )
+                .into());
+            }
+        }
+        let mut bld = BuildContext {
+            builder: self.new_builder(),
+            modules: self.pod_modules.clone(),
+        };
+        let tx_inputs: Vec<Dictionary> = inputs.into_iter().map(|i| i.obj).collect();
+        let mut tx_builder = self.new_tx_builder(&mut bld, &tx_inputs);
+        let outputs = match meta.kind {
+            ActionKind::Rekey => {
+                let class = &meta.total_inputs[0].class;
+                let scope = tx_builder.begin_action();
+                let (new, st_rekey, handle) =
+                    tx_builder.rekey(&mut bld, &tx_inputs[0], Value::from(rand_raw_value()));
+                let n_actions = self.module.class_by_name(class).actions.len();
+                let mut premises = vec![Statement::None; n_actions + 1];
+                premises[n_actions] = st_rekey;
+                let guard = bld.apply_custom_pred(
+                    false,
+                    &class_predicate_name(class),
+                    map!({"state_header" => tx_builder.state_header().array()}),
+                    premises,
+                )?;
+                tx_builder.set_guard(handle, guard);
+                tx_builder.end_action(scope);
+                vec![new]
+            }
+            ActionKind::Script => {
+                let mut rhai_inputs = tx_inputs;
+                rhai_inputs.reverse();
+                let exe_rc = Rc::new(RefCell::new(ExeContext {
+                    mock: self.mock,
+                    params: self.params.clone(),
+                    vd_set: self.vd_set.clone(),
+                    inputs: rhai_inputs,
+                    bld,
+                    tx_builder,
+                    module: self.module.clone(),
+                    outputs: Vec::new(),
+                }));
+                let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
+                action_handle.exe_action()?;
+                action_handle.0.borrow_mut().exe_ctx = None;
+                let context = Rc::try_unwrap(exe_rc)
+                    .ok()
+                    .expect("unique ExeContext reference after rhai")
+                    .into_inner();
+                bld = context.bld;
+                tx_builder = context.tx_builder;
+                context.outputs
+            }
+        };
+        let (st_tx_finalize, tx, _stats) = tx_builder.finalize(&mut bld);
+        bld.builder
+            .reveal(&st_tx_finalize)
+            .map_err(|err| anyhow!(err))?;
+        Ok((bld, tx, outputs))
+    }
     /// Execute an action that consumes some input objects and produces some output objects
     pub fn action(
         &self,
         action: &str,
         inputs: Vec<SpendableObject>,
     ) -> Result<SpendableObjects, SdkError> {
-        // TODO: In this function: return errors instead of panic from unwrap.
-        let builder = self.new_builder();
-        let mut bld = BuildContext {
-            builder,
-            modules: self.pod_modules.clone(),
-        };
-
-        let total = &self.module.action_by_name(action).total_inputs;
-
-        let mut tx_inputs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
-        let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
-        for (input, _ref) in zip_eq(inputs, total.iter()) {
-            let SpendableObject { obj } = input;
-            tx_inputs.push(obj.clone());
-            rhai_input_objs.push(obj);
-        }
-        // Reverse so rhai pops in declaration order (last-declared on top).
-        rhai_input_objs.reverse();
-
-        let tx_builder = self.new_tx_builder(&mut bld, &tx_inputs);
-        let exe_rc = Rc::new(RefCell::new(ExeContext {
-            mock: self.mock,
-            params: self.params.clone(),
-            vd_set: self.vd_set.clone(),
-            inputs: rhai_input_objs,
-            bld,
-            tx_builder,
-            module: self.module.clone(),
-            outputs: Vec::new(),
-        }));
-        let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
-        log::info!("executing action {}", action);
-        let start = std::time::Instant::now();
-        action_handle.exe_action()?;
-        log::info!("executing action {} took {:?}", action, start.elapsed());
-
-        // Release the handle's Rc clone so `exe_rc` has a unique
-        // owner for the `try_unwrap` below.
-        action_handle.0.borrow_mut().exe_ctx = None;
-        let ExeContext {
-            tx_builder,
-            mut bld,
-            outputs,
-            ..
-        } = Rc::try_unwrap(exe_rc)
-            .ok()
-            .expect("unique ExeContext reference after rhai")
-            .into_inner();
-
-        let (st_tx_finalize, tx, _stats) = tx_builder.finalize(&mut bld);
-        bld.builder.reveal(&st_tx_finalize).unwrap();
-
-        // The action body's `st_action` and any sub-action `st_sub`
-        // statements are not revealed: they would force a wrapping pod
-        // to mask them from the relayer / synchronizer's `ProofParser`,
-        // which expects a single public statement.
+        let (bld, tx, outputs) = self.build_action(action, inputs)?;
+        // Only TxFinalized is revealed, as required by the proof parser.
         log::info!("proving tx_pod for action {}", action);
         let start = std::time::Instant::now();
         let tx_pod = prove(bld.builder, &*self.prover);
@@ -3066,48 +3150,7 @@ impl Executor {
         action: &str,
         inputs: Vec<SpendableObject>,
     ) -> Result<PlanData, SdkError> {
-        let builder = self.new_builder();
-        let mut bld = BuildContext {
-            builder,
-            modules: self.pod_modules.clone(),
-        };
-
-        let total = &self.module.action_by_name(action).total_inputs;
-
-        let mut tx_inputs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
-        let mut rhai_input_objs: Vec<Dictionary> = Vec::with_capacity(inputs.len());
-        for (input, _ref) in zip_eq(inputs, total.iter()) {
-            let SpendableObject { obj } = input;
-            tx_inputs.push(obj.clone());
-            rhai_input_objs.push(obj);
-        }
-        rhai_input_objs.reverse();
-
-        let tx_builder = self.new_tx_builder(&mut bld, &tx_inputs);
-        let exe_rc = Rc::new(RefCell::new(ExeContext {
-            mock: self.mock,
-            params: self.params.clone(),
-            vd_set: self.vd_set.clone(),
-            inputs: rhai_input_objs,
-            bld,
-            tx_builder,
-            module: self.module.clone(),
-            outputs: Vec::new(),
-        }));
-        let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
-        action_handle.exe_action()?;
-        action_handle.0.borrow_mut().exe_ctx = None;
-        let ExeContext {
-            tx_builder,
-            mut bld,
-            ..
-        } = Rc::try_unwrap(exe_rc)
-            .ok()
-            .expect("unique ExeContext reference after rhai")
-            .into_inner();
-
-        let (st_tx_finalize, _tx, _stats) = tx_builder.finalize(&mut bld);
-        bld.builder.reveal(&st_tx_finalize).unwrap();
+        let (bld, _tx, _outputs) = self.build_action(action, inputs)?;
 
         // Snapshot the statements + operations before `solve` consumes
         // the builder. Operations let downstream consumers spot e.g.
