@@ -169,7 +169,9 @@ impl DobjOps for DobjdOps {
     fn list_objects(&self) -> anyhow::Result<Vec<mcp::ObjectSummary>> {
         // The driver folds each object's class metadata (emoji, description)
         // into the summary, so clients need no `/classes` round-trip.
-        self.driver.sync_objects(None)
+        let mut objects = self.driver.sync_objects(None)?;
+        self.runs.fill_held_by_run_ids(&mut objects);
+        Ok(objects)
     }
 
     fn list_actions(&self) -> anyhow::Result<Vec<mcp::ActionSummary>> {
@@ -185,7 +187,10 @@ impl DobjOps for DobjdOps {
     }
 
     fn inspect_object(&self, file_name: &str) -> anyhow::Result<mcp::ObjectSummary> {
-        self.driver.read_object(std::path::Path::new(file_name))
+        let mut summary = self.driver.read_object(std::path::Path::new(file_name))?;
+        self.runs
+            .fill_held_by_run_ids(std::slice::from_mut(&mut summary));
+        Ok(summary)
     }
 
     fn inspect_class(&self, class: &mcp::QualifiedName) -> anyhow::Result<mcp::ClassSummary> {

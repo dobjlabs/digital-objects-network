@@ -12,6 +12,7 @@
 //! on this state surviving -- `sync_objects` reconciles those independently.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -20,7 +21,7 @@ use driver::{
     Driver, ExecuteActionInput, ExecuteActionResult, ExecutionReporter, ExecutionStepContext,
 };
 use wire_types::{
-    ExecutionPhase, ObjectStatus, ProofProgressStatus, QualifiedName, RunAccepted,
+    ExecutionPhase, ObjectStatus, ObjectSummary, ProofProgressStatus, QualifiedName, RunAccepted,
     RunActionProgress, RunActionResult, RunState, RunStatus,
 };
 
@@ -247,6 +248,42 @@ impl RunRegistry {
             .collect();
         entries.sort_by_key(|entry| entry.sequence);
         entries.iter().map(|entry| entry.snapshot()).collect()
+    }
+
+    /// Maps the basename of each `.dobj` file held as an input by a run that
+    /// has not yet succeeded or failed to that run's id. A file given to more
+    /// than one such run maps to the oldest of them.
+    pub fn held_input_run_ids(&self) -> HashMap<String, String> {
+        let mut in_flight: Vec<Arc<RunEntry>> = self
+            .runs
+            .read()
+            .unwrap()
+            .values()
+            .filter(|entry| !entry.is_finished())
+            .cloned()
+            .collect();
+        in_flight.sort_by_key(|entry| entry.sequence);
+        let mut run_ids_by_file = HashMap::new();
+        for entry in &in_flight {
+            for path in &entry.input_object_paths {
+                if let Some(file_name) = Path::new(path).file_name().and_then(|name| name.to_str())
+                {
+                    run_ids_by_file
+                        .entry(file_name.to_string())
+                        .or_insert_with(|| entry.run_id.clone());
+                }
+            }
+        }
+        run_ids_by_file
+    }
+
+    /// Sets `held_by_run_id` on each object that an in-flight run holds as
+    /// an input, and clears it on every other object.
+    pub fn fill_held_by_run_ids(&self, objects: &mut [ObjectSummary]) {
+        let run_ids_by_file = self.held_input_run_ids();
+        for object in objects {
+            object.held_by_run_id = run_ids_by_file.get(&object.file_name).cloned();
+        }
     }
 
     /// Drop terminal runs older than [`RUN_RETENTION`].
@@ -827,6 +864,93 @@ mod tests {
         };
         assert_eq!(run_ids(registry.list(false)), ["first", "second", "third"]);
         assert_eq!(run_ids(registry.list(true)), ["first", "third"]);
+    }
+
+    fn object(file_name: &str) -> ObjectSummary {
+        ObjectSummary {
+            content_hash: String::new(),
+            file_name: file_name.to_string(),
+            file_size: None,
+            class: action("Thing"),
+            class_hash: String::new(),
+            emoji: String::new(),
+            status: ObjectStatus::Live,
+            tx_hash: None,
+            description: None,
+            fields: HashMap::new(),
+            held_by_run_id: None,
+        }
+    }
+
+    #[test]
+    fn inputs_are_held_only_while_their_run_is_in_flight() {
+        let registry = RunRegistry::new();
+        let running = registry.start(
+            "running".to_string(),
+            action("A"),
+            vec![
+                "/elsewhere/held.dobj".to_string(),
+                "also-held.dobj".to_string(),
+            ],
+        );
+        let done = registry.start(
+            "done".to_string(),
+            action("A"),
+            vec!["released.dobj".to_string()],
+        );
+        done.succeed(ok_result());
+
+        let held = registry.held_input_run_ids();
+        assert_eq!(held.get("held.dobj").map(String::as_str), Some("running"));
+        assert_eq!(
+            held.get("also-held.dobj").map(String::as_str),
+            Some("running")
+        );
+        assert!(!held.contains_key("released.dobj"));
+
+        running.fail("boom".to_string());
+        assert!(registry.held_input_run_ids().is_empty());
+    }
+
+    #[test]
+    fn a_file_given_to_two_runs_is_held_by_the_older() {
+        let registry = RunRegistry::new();
+        for run_id in ["older", "newer"] {
+            registry.start(
+                run_id.to_string(),
+                action("A"),
+                vec!["shared.dobj".to_string()],
+            );
+        }
+        assert_eq!(
+            registry
+                .held_input_run_ids()
+                .get("shared.dobj")
+                .map(String::as_str),
+            Some("older")
+        );
+    }
+
+    #[test]
+    fn fill_sets_and_clears_held_by_run_id_without_touching_status() {
+        let registry = RunRegistry::new();
+        registry.start(
+            "running".to_string(),
+            action("A"),
+            vec!["held.dobj".to_string()],
+        );
+        let mut stale = object("idle.dobj");
+        stale.held_by_run_id = Some("long-gone".to_string());
+        let mut objects = vec![object("held.dobj"), stale];
+        registry.fill_held_by_run_ids(&mut objects);
+
+        assert_eq!(objects[0].held_by_run_id.as_deref(), Some("running"));
+        assert_eq!(objects[1].held_by_run_id, None);
+        assert!(
+            objects
+                .iter()
+                .all(|object| object.status == ObjectStatus::Live)
+        );
     }
 
     #[test]

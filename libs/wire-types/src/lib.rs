@@ -187,6 +187,11 @@ pub struct ObjectSummary {
     pub description: Option<String>,
     /// Application-layer fields (e.g. `durability`, `key`).
     pub fields: HashMap<String, serde_json::Value>,
+    /// The run holding this object as an input, while that run has not yet
+    /// succeeded or failed. Reported by dobjd from its run registry and
+    /// never stored; `status` still gives the object's on-chain state.
+    #[serde(default)]
+    pub held_by_run_id: Option<String>,
 }
 
 /// `POST /objects/import` body — the raw JSON contents of an external `.dobj`

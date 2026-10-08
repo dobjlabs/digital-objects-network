@@ -38,6 +38,8 @@ export interface ObjectSummaryPayload {
   description?: string;
   /** Application-layer fields (e.g. `durability`, `key`). */
   fields: Record<string, unknown>;
+  /** The run holding this object as an input while that run is in flight. */
+  heldByRunId?: string | null;
 }
 
 /** `POST /objects/import` request body — the raw JSON contents of an external
