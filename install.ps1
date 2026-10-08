@@ -95,8 +95,9 @@ if ($userPath -notlike "*$BinDir*") {
 }
 
 Write-Host ""
-Write-Host "next step: start the daemon (the first start builds ZK circuits, ~2-5 min):"
-Write-Host "  & `"$BinDir\dobj.exe`" start"
+Write-Host "next step: open the browser UI (the first start builds ZK circuits, ~2-5 min):"
+Write-Host "  & `"$BinDir\dobj.exe`" ui"
+Write-Host "for CLI or agent use without opening a browser, use 'dobj start'."
 Write-Host ""
 Write-Host "first-run note: the binaries aren't codesigned yet, so SmartScreen may show"
 Write-Host "'Windows protected your PC' -> More info -> Run anyway."

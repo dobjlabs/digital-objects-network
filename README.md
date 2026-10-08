@@ -11,6 +11,14 @@ that can be passed between mutually untrusting Internet users while maintaining 
 - **Develop from source:** [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Self-host the services:** [deploy/](deploy/README.md).
 
+After installing, run `dobj ui` to start the daemon if needed and open the
+default browser UI. If `dobj` is not on your PATH yet, use
+`~/.dobj/bin/dobj ui` on macOS/Linux or
+`& "$env:USERPROFILE\.dobj\bin\dobj.exe" ui` in PowerShell.
+The UI is bundled with the release daemon; no Node.js installation is needed.
+Install an example plugin using [the install guide](INSTALL.md#install-example-plugins)
+to populate the action catalog.
+
 ## Minimum hardware requirements
 
 | Service        | CPU     | RAM    | Disk                                      |

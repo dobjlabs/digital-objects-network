@@ -101,8 +101,9 @@ esac
 say ""
 if [ -n "$RUNNING" ]; then
   say "restart the daemon to pick up this version:"
-  say "  $BIN_DIR/dobj stop && $BIN_DIR/dobj start"
+  say "  $BIN_DIR/dobj stop && $BIN_DIR/dobj ui"
 else
-  say "next step: start the daemon (the first start builds ZK circuits, ~2-5 min):"
-  say "  $BIN_DIR/dobj start"
+  say "next step: open the browser UI (the first start builds ZK circuits, ~2-5 min):"
+  say "  $BIN_DIR/dobj ui"
 fi
+say "for CLI or agent use without opening a browser, use 'dobj start'."
