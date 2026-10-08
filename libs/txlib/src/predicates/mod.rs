@@ -30,9 +30,18 @@ pub fn events_module() -> lang::Module {
 pub fn rekey_module() -> lang::Module {
     let params = pod2::middleware::Params::default();
     let events = Arc::new(events_module());
-    let events_hash = format!("{:#}", events.batch.id());
-    let source = include_str!("tx_rekey.podlang").replace(TX_EVENTS_HASH_PLACEHOLDER, &events_hash);
+    let source = rekey_source(&events);
     load_module(&source, "txrk", &params, &[events]).expect("tx_rekey.podlang compiles")
+}
+
+/// Podlang source of the shared Rekey predicate, with its import resolved.
+pub fn rekey_podlang_src() -> String {
+    rekey_source(&events_module())
+}
+
+fn rekey_source(events: &lang::Module) -> String {
+    let events_hash = format!("{:#}", events.batch.id());
+    include_str!("tx_rekey.podlang").replace(TX_EVENTS_HASH_PLACEHOLDER, &events_hash)
 }
 
 /// The replay/grounding/finalize predicates. Imports [`events_module`]
