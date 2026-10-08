@@ -29,7 +29,7 @@ use crate::state::AppState;
 pub async fn run_action(
     State(state): State<AppState>,
     Json(req): Json<RunActionRequest>,
-) -> (StatusCode, Json<RunAccepted>) {
+) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
     let input = req.input;
 
     // Pass strings through verbatim — the driver extracts basenames via
@@ -47,8 +47,8 @@ pub async fn run_action(
         state.events.clone(),
         input.action,
         input_objects,
-    );
-    (StatusCode::ACCEPTED, Json(accepted))
+    )?;
+    Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
 
 /// `GET /actions/runs/{run_id}` — current state of a run: status, the result

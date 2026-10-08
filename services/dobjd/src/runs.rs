@@ -162,6 +162,7 @@ impl RunEntry {
 #[derive(Clone, Default)]
 pub struct RunRegistry {
     runs: Arc<RwLock<HashMap<String, Arc<RunEntry>>>>,
+    execution_gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl RunRegistry {
@@ -306,15 +307,34 @@ pub fn spawn_run(
     events: EventTx,
     action: QualifiedName,
     input_objects: Vec<String>,
-) -> RunAccepted {
-    let run_id = uuid::Uuid::new_v4().to_string();
-    let entry = registry.start(run_id.clone(), action.clone());
-
-    let reporter = RunReporter::new(events, entry, run_id.clone());
+) -> anyhow::Result<RunAccepted> {
     let exec_input = ExecuteActionInput {
-        action,
+        action: action.clone(),
         input_objects,
     };
+    spawn_worker(registry, events, action, move |reporter| {
+        driver.execute_with_reporter(exec_input, reporter)
+    })
+}
+
+fn spawn_worker<F>(
+    registry: &RunRegistry,
+    events: EventTx,
+    action: QualifiedName,
+    execute: F,
+) -> anyhow::Result<RunAccepted>
+where
+    F: FnOnce(&RunReporter) -> anyhow::Result<ExecuteActionResult> + Send + 'static,
+{
+    let permit = registry
+        .execution_gate
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| driver::DriverError::Conflict("another action is already running".into()))?;
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let entry = registry.start(run_id.clone(), action);
+
+    let reporter = RunReporter::new(events, entry, run_id.clone());
 
     // A supervisor task drives the blocking pipeline and records the terminal
     // state on every exit path -- including a panic -- so a run can never get
@@ -322,8 +342,10 @@ pub fn spawn_run(
     // async runtime's worker threads.
     tokio::spawn(async move {
         let worker = reporter.clone();
-        let join =
-            tokio::task::spawn_blocking(move || driver.execute_with_reporter(exec_input, &worker));
+        let join = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            execute(&worker)
+        });
         match join.await {
             Ok(Ok(result)) => reporter.finish_success(&result),
             Ok(Err(err)) => reporter.finish_failure(format!("{err:#}")),
@@ -331,10 +353,10 @@ pub fn spawn_run(
         }
     });
 
-    RunAccepted {
+    Ok(RunAccepted {
         run_id,
         status: RunStatus::Queued,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -383,6 +405,137 @@ mod tests {
             output_files: vec!["out.dobj".to_string()],
             nullified_files: vec!["in.dobj".to_string()],
         }
+    }
+
+    fn execution_result() -> ExecuteActionResult {
+        let root = payload::decode_hash_hex(
+            "0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        .unwrap();
+        ExecuteActionResult {
+            old_root: root,
+            new_root: root,
+            output_files: vec![],
+            nullified_files: vec![],
+            relayer_job_id: "job".into(),
+            tx_hash: None,
+            block_number: None,
+        }
+    }
+
+    async fn wait_terminal(registry: &RunRegistry, run: &RunAccepted) -> RunState {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let state = registry.get(&run.run_id).unwrap().snapshot();
+                if matches!(state.status, RunStatus::Succeeded | RunStatus::Failed) {
+                    return state;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("run should finish")
+    }
+
+    #[tokio::test]
+    async fn concurrent_runs_are_rejected_through_synchronizer_wait() {
+        let registry = RunRegistry::new();
+        let (events, _receiver) = crate::events::channel();
+        let (first_started, first_start) = tokio::sync::oneshot::channel();
+        let (confirm, confirmed) = std::sync::mpsc::channel();
+        let first = spawn_worker(
+            &registry,
+            events.clone(),
+            action("first"),
+            move |reporter| {
+                reporter.on_step(
+                    ExecutionPhase::Commit,
+                    "Waiting for synchronizer",
+                    &Default::default(),
+                );
+                first_started.send(()).unwrap();
+                confirmed.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(execution_result())
+            },
+        )
+        .unwrap();
+        let rejected = spawn_worker(&registry.clone(), events.clone(), action("early"), |_| {
+            panic!("rejected action must not execute");
+        })
+        .unwrap_err();
+        assert!(matches!(
+            rejected.downcast_ref::<driver::DriverError>(),
+            Some(driver::DriverError::Conflict(_))
+        ));
+        tokio::time::timeout(Duration::from_secs(5), first_start)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let rejected = spawn_worker(&registry.clone(), events.clone(), action("second"), |_| {
+            panic!("rejected action must not execute");
+        })
+        .unwrap_err();
+        assert!(matches!(
+            rejected.downcast_ref::<driver::DriverError>(),
+            Some(driver::DriverError::Conflict(_))
+        ));
+        assert_eq!(
+            axum::response::IntoResponse::into_response(crate::error::ApiError::from(rejected))
+                .status(),
+            axum::http::StatusCode::CONFLICT
+        );
+        assert_eq!(
+            registry.get(&first.run_id).unwrap().status(),
+            RunStatus::Committing
+        );
+        assert_eq!(registry.runs.read().unwrap().len(), 1);
+
+        confirm.send(()).unwrap();
+        assert_eq!(
+            wait_terminal(&registry, &first).await.status,
+            RunStatus::Succeeded
+        );
+        let second = spawn_worker(&registry, events, action("second"), |_| {
+            Ok(execution_result())
+        })
+        .unwrap();
+        assert_eq!(
+            wait_terminal(&registry, &second).await.status,
+            RunStatus::Succeeded
+        );
+    }
+
+    #[tokio::test]
+    async fn errors_and_panics_release_the_execution_gate() {
+        let registry = RunRegistry::new();
+        let (events, _receiver) = crate::events::channel();
+        let timed_out = spawn_worker(&registry, events.clone(), action("timeout"), |_| {
+            Err(anyhow::anyhow!("synchronizer timeout"))
+        })
+        .unwrap();
+        assert_eq!(
+            wait_terminal(&registry, &timed_out).await.error.as_deref(),
+            Some("synchronizer timeout")
+        );
+        let panicked = spawn_worker(&registry, events.clone(), action("panic"), |_| {
+            panic!("worker panic");
+        })
+        .unwrap();
+        let state = wait_terminal(&registry, &panicked).await;
+        assert_eq!(state.status, RunStatus::Failed);
+        assert!(state.error.unwrap().contains("worker panic"));
+        let next = spawn_worker(
+            &registry,
+            events,
+            action("next"),
+            |_| Ok(execution_result()),
+        )
+        .unwrap();
+        assert_eq!(
+            wait_terminal(&registry, &next).await.status,
+            RunStatus::Succeeded
+        );
     }
 
     #[test]

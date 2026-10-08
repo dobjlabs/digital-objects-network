@@ -60,6 +60,11 @@ All routes return JSON unless noted; errors come back as
 
 `POST /actions/run` registers the run, kicks off a background worker, and
 returns a `runId` immediately; the proof + commit pipeline runs on the worker.
+HTTP and MCP share an execution gate: one action runs at a time, while later
+requests are rejected (HTTP `409 Conflict`, or an MCP tool error) without
+creating a run. The gate covers the entire pipeline, including the
+existing wait for synchronizer confirmation, and releases when execution
+returns success, an error (including a timeout), or panics.
 The worker records the run's status, ordered progress log, and terminal
 result/error in an in-memory registry. Follow a run either way:
 
@@ -70,8 +75,8 @@ result/error in an in-memory registry. Follow a run either way:
   progress (honoring `Last-Event-ID` on reconnect) then tails live events
   until the run is terminal.
 
-Each `POST` mints a fresh `runId`; clients don't choose it. Terminal runs are
-retained for a short TTL then reaped; runs are in-memory only (on-chain state
+Each accepted `POST` mints a fresh `runId`; clients don't choose it. Terminal
+runs are retained for a short TTL then reaped; runs are in-memory only (on-chain state
 and local `.dobj` files reconcile via sync regardless). The global `/events`
 stream carries every run's progress (`type: run-action-progress`) for firehose
 subscribers.

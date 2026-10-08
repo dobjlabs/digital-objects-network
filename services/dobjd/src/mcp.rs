@@ -208,13 +208,13 @@ impl DobjOps for DobjdOps {
 
         // The run shares the same registry as the HTTP routes, so the GUI and
         // an agent can both follow the daemon-assigned run id.
-        Ok(crate::runs::spawn_run(
+        crate::runs::spawn_run(
             &self.runs,
             self.driver.clone(),
             self.events.clone(),
             input.action,
             input_objects,
-        ))
+        )
     }
 
     fn get_run(&self, run_id: &str) -> anyhow::Result<mcp::RunState> {
