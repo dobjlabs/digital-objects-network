@@ -28,10 +28,9 @@ use sdk::{Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
 use txlib::GroundingWitness;
 
 use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
-use wire_types::{ActionSummary, ClassRef, QualifiedName};
+use wire_types::{ActionSummary, ClassRef, MutatedObjectSlots, QualifiedName};
 
 struct Plugin {
-    #[allow(dead_code)]
     path: PathBuf,
     manifest: Manifest,
     script: String,
@@ -222,6 +221,15 @@ impl PexeCatalog {
                         .to_string(),
                     total_inputs,
                     total_outputs,
+                    source_path: plugin.path.to_string_lossy().to_string(),
+                    mutated_objects: action
+                        .total_mutations()
+                        .into_iter()
+                        .map(|slots| MutatedObjectSlots {
+                            input_index: slots.input_index,
+                            output_index: slots.output_index,
+                        })
+                        .collect(),
                     predicate_source,
                 });
             }
@@ -425,6 +433,23 @@ mod tests {
             .collect();
         assert!(names.contains(&craft_basics("CraftWood")));
         assert!(!names.contains(&craft_basics("UseWoodPick")));
+    }
+
+    #[test]
+    fn test_pexe_catalog_reports_mutated_objects() {
+        let catalog = test_catalog();
+        let mine = catalog
+            .get_action(&craft_basics("MineStoneWithWoodPick"))
+            .unwrap();
+        assert_eq!(
+            mine.mutated_objects,
+            vec![MutatedObjectSlots {
+                input_index: 0,
+                output_index: 0,
+            }]
+        );
+        let craft = catalog.get_action(&craft_basics("CraftWoodPick")).unwrap();
+        assert!(craft.mutated_objects.is_empty());
     }
 
     #[test]

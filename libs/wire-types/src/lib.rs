@@ -207,6 +207,16 @@ pub struct ImportObjectRequest {
 // Catalog
 // ===========================================================================
 
+/// One object an action mutates: its position in `total_inputs` and its
+/// position in `total_outputs`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct MutatedObjectSlots {
+    pub input_index: usize,
+    pub output_index: usize,
+}
+
 /// Summary view of an action declared by a plugin.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
@@ -218,6 +228,13 @@ pub struct ActionSummary {
     pub description: String,
     pub total_inputs: Vec<ClassRef>,
     pub total_outputs: Vec<ClassRef>,
+    /// Path of the `.pexe` archive that declares this action.
+    #[serde(default)]
+    pub source_path: String,
+    /// Objects the action consumes and produces again in updated form,
+    /// keeping their stable identifier. Every other output is a new object.
+    #[serde(default)]
+    pub mutated_objects: Vec<MutatedObjectSlots>,
     /// Podlang source for this action's predicate. Empty if the catalog
     /// can't locate it (shouldn't happen for compiled plugins).
     pub predicate_source: String,

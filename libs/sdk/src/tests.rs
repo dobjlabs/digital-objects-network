@@ -176,6 +176,15 @@ fn test_sdk_1() {
     assert_eq!(classes(action.total_inputs()), vec!["WoodPick"]);
     assert_eq!(classes(action.local_outputs()), vec!["Stone"]);
     assert_eq!(classes(action.total_outputs()), vec!["WoodPick", "Stone"]);
+    // The pick is mutated through the UseWoodPick sub-action.
+    assert_eq!(
+        action.total_mutations(),
+        vec![MutatedObjectSlots {
+            input_index: 0,
+            output_index: 0,
+        }]
+    );
+    assert_eq!(actions[3].total_mutations(), Vec::new());
 
     println!("{}", module.podlang_src);
 
