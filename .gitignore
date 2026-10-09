@@ -24,3 +24,5 @@ target
 .env
 /data/
 *.log
+# Claude Code local config
+/.claude/
