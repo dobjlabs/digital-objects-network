@@ -70,3 +70,28 @@ objects.
 ## Cosmetic
 
 - **Page title:** "Bitcraft Inventory".
+- **Class icons:** `class-icons.json` maps each bitcraft class name to a
+  16x16 PNG in `assets/` (paths relative to this folder), or to `null` for
+  a class with no icon yet (every class currently has one). All three
+  bucket classes share `bucket.png`, and every level of `Quarry` and
+  `MiningDrill` uses the one icon for its class, since level is a field,
+  not a class. The object
+  list shows each object's icon in place of the page icon, on a 16x16
+  rounded white tile with a light shadow; the same small icon sits to the
+  left of every class name the Details pane shows (object summary lines,
+  an action's selected inputs and expected outputs); and the Details pane
+  for a single
+  selected object draws it at 6x (96x96 CSS px) on the large page icon,
+  centered across it and just below its folded corner (`CLASS_ICONS_URL`
+  and `classIconPaths` in `index.html`). A class with no icon, or a
+  missing or unreadable file, keeps the plain page icon. Keep the file's
+  keys in step with the classes in `../manifest.toml`. Generic behavior:
+  plain page icons only, since the API reports no icons.
+
+## Action icons
+
+Each action gets a 32x32 app-style graphic, chosen by its category (tool
+interaction, material creation or raw resource gathering), in the Available
+actions list and in the Details pane for a selected action or job. The
+rules, and how to add to them, are in `ACTION_ICONS.md`; the data is
+`action-icons.json`. Generic behavior: no action graphics.

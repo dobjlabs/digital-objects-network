@@ -20,3 +20,6 @@ knows something about the `bitcraft` plugin that the API does not report
   plugin-agnostic.
 - If a change to `examples/bitcraft/plugin.rhai` alters an action's input
   constraints, update both `ACTION_INPUT_RULES` and the file.
+- Action icon rules live in `ACTION_ICONS.md` (bitcraft-specific). When
+  actions are added or changed, update `action-icons.json` and that file
+  together.
