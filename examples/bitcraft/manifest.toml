@@ -2,7 +2,7 @@
 name = "bitcraft"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build game`.
-module_hash = "94fdc66d9db7b23c9a8970596c5a3146ec2590328b455139ef6c6f008b6c3a73"
+module_hash = "3e2386d05af51831e5fa3eec02897bed98951ec3af8ce60998d8030bb2c91d62"
 
 [[classes]]
 name = "Wood"
