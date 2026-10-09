@@ -58,7 +58,7 @@ enum Cmd {
     /// Inspect a single object by its `.dobj` file name.
     InspectObject {
         /// The `.dobj` basename in `~/.dobj/objects/` (e.g.
-        /// `wood_0xabc….dobj`). See `dobj objects`.
+        /// `craft-basics__wood_1a2b3c4d5e6f7a8b_9c0d1e2f3a4b5c6d.dobj`). See `dobj objects`.
         file_name: String,
     },
     /// Inspect a single class (with predicate source).

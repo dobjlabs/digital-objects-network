@@ -1,13 +1,43 @@
 use anyhow::{Result, anyhow};
+use hex::ToHex;
+use pod2::middleware::{Hash, StrKey, containers::Dictionary};
 use std::{collections::HashMap, fs, path::Path};
+use wire_types::QualifiedName;
 
 use crate::object_record::ObjectRecord;
+use crate::paths::DOBJ_EXTENSION;
 use crate::types::{DriverPaths, ObjectQuery};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ObjectFileEntry {
     pub(crate) file_name: String,
     pub(crate) record: ObjectRecord,
+}
+
+fn hash_hex_prefix(hash: &Hash, num_bytes: usize) -> String {
+    let full_hex: String = hash.encode_hex();
+    full_hex[..num_bytes * 2].to_string()
+}
+
+/// Objects carrying a stable identifier are named
+/// `<prefix>_<stable id, 8 bytes>_<commitment, 8 bytes>`, so every version of
+/// one object shares a leading token; others get `<prefix>_<commitment, 8 bytes>`.
+pub(crate) fn object_file_name(class: &QualifiedName, obj: &Dictionary) -> String {
+    let content_hash = obj.commitment();
+    let stable_identifier = obj
+        .get(&StrKey::from(txlib::STABLE_IDENTIFIER_FIELD))
+        .ok()
+        .flatten()
+        .map(|value| Hash(value.raw().0));
+    let hash_part = match stable_identifier {
+        Some(stable_identifier) => format!(
+            "{}_{}",
+            hash_hex_prefix(&stable_identifier, 8),
+            hash_hex_prefix(&content_hash, 8)
+        ),
+        None => hash_hex_prefix(&content_hash, 8),
+    };
+    format!("{}_{hash_part}.{DOBJ_EXTENSION}", class.file_prefix())
 }
 
 pub(crate) fn ensure_store_dirs(paths: &DriverPaths) -> Result<()> {
@@ -181,7 +211,7 @@ mod tests {
     use crate::types::DriverPaths;
     use wire_types::ObjectStatus;
 
-    use super::{load_object_files, write_object_file};
+    use super::{load_object_files, object_file_name, write_object_file};
     use crate::object_record::{
         ObjectRecord, ensure_extra_pod_deserializers_registered, parse_object_record_file,
     };
@@ -252,6 +282,53 @@ mod tests {
         write_object_file(&paths, &record, "log_test.dobj").unwrap();
         let loaded = parse_object_record_file(&paths.objects_dir.join("log_test.dobj")).unwrap();
         assert_eq!(loaded.content_hash, record.content_hash);
+    }
+
+    #[test]
+    fn test_object_file_name_without_stable_identifier() {
+        let class = wire_types::QualifiedName::new("craft-basics", "Log");
+        let obj = txlib::new_obj();
+        let content_hex = format!("{:#}", obj.commitment());
+        assert_eq!(
+            object_file_name(&class, &obj),
+            format!("craft-basics__log_{}.dobj", &content_hex[2..18])
+        );
+    }
+
+    #[test]
+    fn test_object_file_name_with_stable_identifier() {
+        let class = wire_types::QualifiedName::new("craft-basics", "Log");
+        let initial = txlib::new_obj();
+        let obj = txlib::with_stable_identifier(&initial);
+        let stable_hex = format!("{:#}", initial.commitment());
+        let content_hex = format!("{:#}", obj.commitment());
+        assert_eq!(
+            object_file_name(&class, &obj),
+            format!(
+                "craft-basics__log_{}_{}.dobj",
+                &stable_hex[2..18],
+                &content_hex[2..18]
+            )
+        );
+
+        let mut mutated = obj.clone();
+        txlib::rekey(&mut mutated);
+        let mutated_name = object_file_name(&class, &mutated);
+        assert!(mutated_name.starts_with(&format!("craft-basics__log_{}_", &stable_hex[2..18])));
+        assert_ne!(mutated_name, object_file_name(&class, &obj));
+    }
+
+    #[test]
+    fn test_executed_output_file_name_uses_stable_identifier() {
+        let record = make_record();
+        let name = object_file_name(&record.class, &record.obj);
+        let token = name
+            .strip_prefix("craft-basics__log_")
+            .and_then(|rest| rest.strip_suffix(".dobj"))
+            .unwrap();
+        let (stable_part, content_part) = token.split_once('_').unwrap();
+        assert_eq!(stable_part.len(), 16);
+        assert_eq!(content_part.len(), 16);
     }
 
     #[test]

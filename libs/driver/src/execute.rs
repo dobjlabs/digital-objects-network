@@ -15,8 +15,7 @@ use std::path::Path;
 use crate::driver::extract_basename;
 use crate::error::DriverError;
 use crate::object_record::ObjectRecord as StoredObjectRecord;
-use crate::object_store::{ObjectFileEntry, write_object_file};
-use crate::paths::DOBJ_EXTENSION;
+use crate::object_store::{ObjectFileEntry, object_file_name, write_object_file};
 use crate::types::{DriverPaths, ExecuteActionInput};
 use wire_types::{ActionSummary, ObjectStatus};
 
@@ -235,11 +234,7 @@ pub(crate) fn save_results(
     for (index, output) in action.total_outputs.iter().enumerate() {
         let spendable = spendable_outputs.obj(index);
         let content_hash = spendable.obj.commitment();
-        let file_name = format!(
-            "{}_{}.{DOBJ_EXTENSION}",
-            output.class.file_prefix(),
-            format!("{content_hash:#}").to_ascii_lowercase()
-        );
+        let file_name = object_file_name(&output.class, &spendable.obj);
         output_files.push(file_name.clone());
 
         let live_record = StoredObjectRecord {

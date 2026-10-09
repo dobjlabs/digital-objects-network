@@ -23,7 +23,8 @@ use crate::execute::{
 };
 use crate::object_record::{ObjectRecord, parse_object_record_file};
 use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, write_object_file,
+    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, object_file_name,
+    write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
 use crate::settings::{default_settings, read_settings, write_settings};
@@ -481,12 +482,7 @@ impl Driver {
         //    trust the sender's. The content hash is self-certifying -- it IS
         //    the commitment.
         let commitment = record.obj.commitment();
-        let file_name = format!(
-            "{}_{}.{}",
-            record.class.file_prefix(),
-            format!("{commitment:#}").to_ascii_lowercase(),
-            crate::paths::DOBJ_EXTENSION
-        );
+        let file_name = object_file_name(&record.class, &record.obj);
         record.content_hash = commitment;
 
         // 3. Reject if we already hold this object (live or nullified).
