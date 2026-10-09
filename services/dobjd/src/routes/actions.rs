@@ -48,6 +48,7 @@ pub async fn run_action(
         state.events.clone(),
         input.action,
         input_objects,
+        input.args,
     )?;
     Ok((StatusCode::ACCEPTED, Json(accepted)))
 }

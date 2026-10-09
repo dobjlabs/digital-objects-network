@@ -111,6 +111,12 @@ enum Cmd {
         /// Input object filenames or paths. Filenames must exist in
         /// `~/.dobj/objects/` (the driver looks them up by basename).
         inputs: Vec<String>,
+        /// Supply an argument as NAME=VALUE. Repeat for multiple arguments.
+        /// Use hex for Raw values and decimal for Int values. Omitted
+        /// arguments use their script defaults. Run `dobj action
+        /// PLUGIN::ACTION` to list the accepted arguments.
+        #[arg(long = "arg", value_name = "NAME=VALUE")]
+        args: Vec<String>,
         /// Don't print per-step progress messages.
         #[arg(long)]
         quiet: bool,
@@ -215,8 +221,9 @@ async fn main() -> Result<()> {
         Cmd::Run {
             qualified_id,
             inputs,
+            args,
             quiet,
-        } => commands::run(&client, qualified_id, inputs, quiet).await,
+        } => commands::run(&client, qualified_id, inputs, args, quiet).await,
         Cmd::Events => commands::events(&client).await,
         Cmd::Start => with_update_notice(daemon::start(&client).await).await,
         Cmd::Ui { no_open } => {

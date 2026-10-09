@@ -6,8 +6,8 @@ use payload::{
     payload::{Payload, PayloadProof},
     shrink::{ShrunkMainPodSetup, shrink_compress_pod},
 };
-use pod2::middleware::{Hash, Params, StrKey};
-use sdk::SpendableObjects;
+use pod2::middleware::{Hash, Params, StrKey, Value};
+use sdk::{ActionArgs, SpendableObjects};
 use txlib::object_nullifier_hash;
 
 use std::path::Path;
@@ -18,7 +18,7 @@ use crate::object_record::ObjectRecord as StoredObjectRecord;
 use crate::object_store::{ObjectFileEntry, write_object_file};
 use crate::paths::DOBJ_EXTENSION;
 use crate::types::{DriverPaths, ExecuteActionInput};
-use wire_types::{ActionSummary, ObjectStatus};
+use wire_types::{ActionArgValues, ActionSummary, ObjectStatus};
 
 pub(crate) fn reconcile_objects(
     paths: &DriverPaths,
@@ -135,7 +135,38 @@ pub(crate) fn validate_execute_request(
         }
     }
 
+    for name in input.args.keys() {
+        if !action.args.iter().any(|a| a.name == *name) {
+            let declared: Vec<&str> = action.args.iter().map(|a| a.name.as_str()).collect();
+            return Err(anyhow!(
+                "{} has no argument `{name}`; declared arguments: [{}]",
+                input.action,
+                declared.join(", ")
+            ));
+        }
+    }
+
     Ok(())
+}
+
+pub(crate) fn decode_action_args(args: &ActionArgValues) -> Result<ActionArgs> {
+    args.iter()
+        .map(|(name, json)| {
+            let value: Value = serde_json::from_value(json.clone()).map_err(|err| {
+                anyhow!(
+                    "argument `{name}`: not a pod2 value ({err}); use {{\"Raw\": \"<64 hex \
+                     chars>\"}}, {{\"Int\": \"<decimal>\"}} or a string"
+                )
+            })?;
+            Ok((name.clone(), value))
+        })
+        .collect()
+}
+
+pub(crate) fn encode_action_args(args: &ActionArgs) -> Result<ActionArgValues> {
+    args.iter()
+        .map(|(name, value)| Ok((name.clone(), serde_json::to_value(value)?)))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -302,4 +333,72 @@ pub(crate) fn build_relayer_payload(
     };
 
     Ok(payload.to_bytes())
+}
+
+#[cfg(test)]
+mod action_args_tests {
+    use super::*;
+    use wire_types::{ActionArgSummary, QualifiedName};
+
+    fn summary(args: &[(&str, &str)]) -> ActionSummary {
+        ActionSummary {
+            action: QualifiedName::new("p", "A"),
+            emoji: String::new(),
+            hash: String::new(),
+            description: String::new(),
+            total_inputs: vec![],
+            total_outputs: vec![],
+            source_path: String::new(),
+            mutated_objects: vec![],
+            predicate_source: String::new(),
+            args: args
+                .iter()
+                .map(|(name, typ)| ActionArgSummary {
+                    name: name.to_string(),
+                    type_name: typ.to_string(),
+                    default: "random".to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn unknown_argument_is_rejected_before_execution() {
+        let action = summary(&[("key", "Raw")]);
+        let input = ExecuteActionInput {
+            action: action.action.clone(),
+            input_objects: vec![],
+            args: [("nonce".to_string(), serde_json::json!({"Int": "1"}))].into(),
+        };
+        let err = validate_execute_request(&input, &action)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no argument `nonce`"), "{err}");
+        assert!(err.contains("[key]"), "{err}");
+
+        let ok = ExecuteActionInput {
+            args: [("key".to_string(), serde_json::json!({"Raw": "00"}))].into(),
+            ..input
+        };
+        validate_execute_request(&ok, &action).unwrap();
+    }
+
+    #[test]
+    fn argument_values_round_trip_through_json() {
+        let json: ActionArgValues = [
+            (
+                "key".to_string(),
+                serde_json::json!({"Raw": format!("{:0>64}", "beef")}),
+            ),
+            ("n".to_string(), serde_json::json!({"Int": "42"})),
+        ]
+        .into();
+        let decoded = decode_action_args(&json).unwrap();
+        assert_eq!(decoded["n"], Value::from(42));
+        assert_eq!(encode_action_args(&decoded).unwrap(), json);
+
+        let bad: ActionArgValues = [("key".to_string(), serde_json::json!({"Int": 7}))].into();
+        let err = decode_action_args(&bad).unwrap_err().to_string();
+        assert!(err.contains("argument `key`"), "{err}");
+    }
 }

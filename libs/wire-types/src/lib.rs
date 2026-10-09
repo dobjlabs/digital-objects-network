@@ -21,7 +21,7 @@ pub mod relayer;
 #[cfg(feature = "chain")]
 pub mod synchronizer;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -222,6 +222,24 @@ pub struct MutatedObjectSlots {
     pub output_index: usize,
 }
 
+/// Metadata for an optional caller-supplied witness.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ActionArgSummary {
+    pub name: String,
+    /// Required pod2 value type, such as Raw or Int.
+    #[serde(rename = "type")]
+    pub type_name: String,
+    /// Default generator label: random, pow_obj_grind, or arithmetic.
+    pub default: String,
+}
+
+/// Argument values by name, in pod2's JSON form for a value: a Raw is
+/// `{"Raw": "<64 hex chars, big-endian>"}`, an Int is `{"Int": "<decimal>"}`
+/// and a string is a bare JSON string.
+pub type ActionArgValues = BTreeMap<String, serde_json::Value>;
+
 /// Summary view of an action declared by a plugin.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
@@ -243,6 +261,9 @@ pub struct ActionSummary {
     /// Podlang source for this action's predicate. Empty if the catalog
     /// can't locate it (shouldn't happen for compiled plugins).
     pub predicate_source: String,
+    /// Prover-supplied arguments declared by this action.
+    #[serde(default)]
+    pub args: Vec<ActionArgSummary>,
 }
 
 /// Summary view of a class declared by a plugin.
@@ -293,6 +314,9 @@ pub struct CheckActionReport {
 pub struct RunActionInput {
     pub action: QualifiedName,
     pub input_object_paths: Vec<String>,
+    /// Overrides by name. Omitted arguments use their script defaults.
+    #[serde(default)]
+    pub args: ActionArgValues,
 }
 
 /// Action request body: `{ "input": { ... } }`.
@@ -315,6 +339,9 @@ pub struct RunActionResult {
     pub new_root: String,
     pub output_files: Vec<String>,
     pub nullified_files: Vec<String>,
+    /// Resolved arguments of the selected action, including computed defaults.
+    #[serde(default)]
+    pub args: ActionArgValues,
 }
 
 /// Lifecycle state of a run tracked in the daemon's run registry.

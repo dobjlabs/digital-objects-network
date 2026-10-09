@@ -213,6 +213,39 @@
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.method-args-block {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  margin-top: 10px;
+  padding: 12px;
+}
+
+.method-args-title {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.method-arg-input {
+  flex: 1;
+  min-height: 24px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-bright);
+  font-size: 10px;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.method-arg-input::placeholder {
+  color: var(--text-dim);
+}
+
+.method-arg-input.error {
+  border-color: var(--danger);
+}
+
 .from-action-label {
   position: relative;
   cursor: default;

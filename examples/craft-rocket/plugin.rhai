@@ -21,7 +21,7 @@ fn pow_proof(action, obj, pow_ms) {
     // (2^53 / pow_ms) * 60000 instead of (2^53 * 60000) / pow_ms.
     let target_n = 9007199254740992 / pow_ms * 60000;
     let target = action.top_limb_u256(target_n);
-    var key = action.pow_obj_grind(obj, target);
+    var key = arg("key") else { action.pow_obj_grind(obj, target) };
     obj.update("key", key);
     action.intro_lt_eq_u256(obj, target);
 }

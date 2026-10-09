@@ -6,6 +6,7 @@ import {
   loadObjects,
   listenRunActionProgressForRun,
   runAction,
+  type ActionArgValues,
   type ActionPayload as Action,
   type ObjectSummaryPayload as ObjectSummary,
   type QualifiedNamePayload,
@@ -123,6 +124,7 @@ export interface AppState {
       objectPath: string;
       label: string;
     }>;
+    args?: ActionArgValues;
   }) => Promise<void>;
 }
 
@@ -370,7 +372,7 @@ export const useStore = create<AppState>((set, get) => ({
         },
       };
     }),
-  runProof: async ({ action, inputBindings }) => {
+  runProof: async ({ action, inputBindings, args }) => {
     const postDoneHoldMs = 2800;
     const verifyTargets =
       inputBindings.length > 0
@@ -386,6 +388,7 @@ export const useStore = create<AppState>((set, get) => ({
       const { runId } = await runAction({
         action,
         inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
+        ...(args && Object.keys(args).length > 0 ? { args } : {}),
       });
       get().initProofPanel({ runId, action, args: verifyTargets });
       stopRunEvents = await listenRunActionProgressForRun(runId, (event) => {

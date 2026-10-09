@@ -220,6 +220,7 @@ mod tests {
                 wire_types::QualifiedName::new("craft-basics", "FindLog"),
                 dummy_grounding_witness(),
                 vec![],
+                &Default::default(),
             )
             .unwrap();
         let tx_final = outputs.tx.dict().commitment();

@@ -54,17 +54,33 @@ export interface ClassRefPayload {
   hash: string;
 }
 
+/** Metadata for an optional caller-supplied witness. */
+export interface ActionArgPayload {
+  name: string;
+  /** Required pod2 value type, such as Raw or Int. */
+  type: string;
+  /** Default generator label: random, pow_obj_grind, or arithmetic. */
+  default: string;
+}
+
 export interface ActionPayload {
   action: QualifiedNamePayload;
   emoji: string;
   hash: string;
   totalInputs: ClassRefPayload[];
   description: string;
+  args?: ActionArgPayload[];
 }
+
+/** Argument values by name in pod2's JSON form: `{ Raw: "<64 hex>" }`,
+ * `{ Int: "<decimal>" }` or a bare string. */
+export type ActionArgValues = Record<string, unknown>;
 
 export interface RunActionInput {
   action: QualifiedNamePayload;
   inputObjectPaths: string[];
+  /** Overrides by name. Omitted arguments use their script defaults. */
+  args?: ActionArgValues;
 }
 
 export interface RunActionResult {
@@ -73,6 +89,8 @@ export interface RunActionResult {
   newRoot: string;
   outputFiles: string[];
   nullifiedFiles: string[];
+  /** Resolved arguments of the selected action, including computed defaults. */
+  args?: ActionArgValues;
 }
 
 /** `POST /actions/run` response: the run was accepted and is executing in the
