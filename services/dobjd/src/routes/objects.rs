@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use axum::{
     Json,
     extract::{Path, State},
+    http::header,
+    response::IntoResponse,
 };
+use driver::ObjectQuery;
 use wire_types::{ImportObjectRequest, ObjectSummary, ObjectsDirInfo};
 
 use crate::error::ApiResult;
@@ -33,6 +36,20 @@ pub async fn inspect_object(
     Ok(Json(summary))
 }
 
+/// `GET /objects/{file_name}/raw` -- the object file's bytes verbatim, served
+/// as JSON. Resolves `file_name` the same way as `GET /objects/{file_name}`.
+pub async fn read_object_raw(
+    State(state): State<AppState>,
+    Path(file_name): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let driver = state.driver.clone();
+    let contents =
+        tokio::task::spawn_blocking(move || driver.read_object_raw(&PathBuf::from(&file_name)))
+            .await
+            .map_err(|err| anyhow::anyhow!("read_object_raw task panicked: {err}"))??;
+    Ok(([(header::CONTENT_TYPE, "application/json")], contents))
+}
+
 /// `POST /objects/import` — adopt an external `.dobj` (one not produced by
 /// this driver, e.g. from outside `~/.dobj/`) into the local object store. Body is `{ "dobj": "<json>" }`;
 /// the driver validates class identity + on-chain grounding and files it
@@ -54,11 +71,30 @@ pub async fn import_object(
 /// action catalog comes from `GET /actions` separately, so clients can
 /// fetch the two in parallel.
 pub async fn load_objects(State(state): State<AppState>) -> ApiResult<Json<Vec<ObjectSummary>>> {
+    synced_objects(state, None).await
+}
+
+/// `GET /objects/unspent` -- like `GET /objects`, minus nullified (spent)
+/// objects.
+pub async fn load_unspent_objects(
+    State(state): State<AppState>,
+) -> ApiResult<Json<Vec<ObjectSummary>>> {
+    let query = ObjectQuery {
+        exclude_nullified: true,
+        ..ObjectQuery::default()
+    };
+    synced_objects(state, Some(query)).await
+}
+
+async fn synced_objects(
+    state: AppState,
+    query: Option<ObjectQuery>,
+) -> ApiResult<Json<Vec<ObjectSummary>>> {
     let driver = state.driver.clone();
     let objects = tokio::task::spawn_blocking(move || {
-        driver.sync_objects(None).unwrap_or_else(|err| {
+        driver.sync_objects(query.as_ref()).unwrap_or_else(|err| {
             tracing::warn!("sync_objects failed, falling back to local: {err:#}");
-            driver.list_objects(None).unwrap_or_default()
+            driver.list_objects(query.as_ref()).unwrap_or_default()
         })
     })
     .await

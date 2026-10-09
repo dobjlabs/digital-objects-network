@@ -173,6 +173,10 @@ impl fmt::Display for ObjectStatus {
 pub struct ObjectSummary {
     pub content_hash: String,
     pub file_name: String,
+    /// Size in bytes of the object's file on disk; absent when it could not
+    /// be read.
+    #[serde(default)]
+    pub file_size: Option<u64>,
     pub class: QualifiedName,
     pub class_hash: String,
     /// The object's class display emoji (`📦` when the class is unknown).

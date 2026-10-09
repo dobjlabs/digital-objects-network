@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -219,6 +220,18 @@ impl Driver {
         }
         let record = parse_object_record_file(&resolved)?;
         Ok(self.object_summary(&ObjectFileEntry { file_name, record }))
+    }
+
+    /// The object file's contents exactly as stored on disk, resolved the
+    /// same way as [`Self::read_object`].
+    pub fn read_object_raw(&self, path: &Path) -> Result<String> {
+        let file_name = extract_basename(path)?;
+        let resolved = self.resolve_managed_path(&file_name);
+        if !resolved.exists() {
+            return Err(DriverError::ObjectFileNotFound(file_name).into());
+        }
+        fs::read_to_string(&resolved)
+            .with_context(|| format!("failed to read object file {file_name}"))
     }
 
     /// Look up a basename in the live dir, falling back to the nullified
@@ -747,6 +760,9 @@ impl Driver {
         ObjectSummary {
             content_hash: encode_hash_hex(&entry.record.content_hash),
             file_name: entry.file_name.clone(),
+            file_size: fs::metadata(self.resolve_managed_path(&entry.file_name))
+                .ok()
+                .map(|metadata| metadata.len()),
             class: entry.record.class.clone(),
             class_hash: class_info
                 .as_ref()

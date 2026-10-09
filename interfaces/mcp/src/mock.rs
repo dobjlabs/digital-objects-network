@@ -236,6 +236,7 @@ impl DobjOps for MockDobjOps {
         Ok(ObjectSummary {
             content_hash: "0ximported0000000000".to_string(),
             file_name: "craft-basics__log_0ximported.dobj".to_string(),
+            file_size: None,
             class: qname("Log"),
             class_hash: format!("0x{}", "0".repeat(64)),
             emoji: emoji_for("Log").to_string(),
@@ -287,6 +288,7 @@ fn make_obj(
     ObjectSummary {
         content_hash: content_hash.to_string(),
         file_name: file_name.to_string(),
+        file_size: None,
         class: qname(class_name),
         class_hash: format!("0x{}", "0".repeat(64)),
         emoji: emoji_for(class_name).to_string(),

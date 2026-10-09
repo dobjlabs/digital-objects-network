@@ -20,6 +20,7 @@ pub struct DriverPaths {
 pub struct ObjectQuery {
     pub class: Option<QualifiedName>,
     pub status: Option<ObjectStatus>,
+    pub exclude_nullified: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

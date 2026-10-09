@@ -165,7 +165,7 @@ pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> boo
     {
         return false;
     }
-    true
+    !(query.exclude_nullified && entry.record.is_nullified())
 }
 
 #[cfg(test)]
