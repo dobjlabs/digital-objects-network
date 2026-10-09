@@ -370,6 +370,7 @@ fn make_action(name: &str, description: &str, inputs: &[&str], outputs: &[&str])
         description: description.to_string(),
         total_inputs: inputs.iter().map(|c| class_ref(c)).collect(),
         total_outputs: outputs.iter().map(|c| class_ref(c)).collect(),
+        source_path: String::new(),
         predicate_source: action_predicate_source_for(name),
     }
 }

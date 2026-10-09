@@ -31,7 +31,6 @@ use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
 use wire_types::{ActionSummary, ClassRef, QualifiedName};
 
 struct Plugin {
-    #[allow(dead_code)]
     path: PathBuf,
     manifest: Manifest,
     script: String,
@@ -222,6 +221,7 @@ impl PexeCatalog {
                         .to_string(),
                     total_inputs,
                     total_outputs,
+                    source_path: plugin.path.to_string_lossy().to_string(),
                     predicate_source,
                 });
             }

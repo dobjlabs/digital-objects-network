@@ -214,6 +214,9 @@ pub struct ActionSummary {
     pub description: String,
     pub total_inputs: Vec<ClassRef>,
     pub total_outputs: Vec<ClassRef>,
+    /// Path of the `.pexe` archive that declares this action.
+    #[serde(default)]
+    pub source_path: String,
     /// Podlang source for this action's predicate. Empty if the catalog
     /// can't locate it (shouldn't happen for compiled plugins).
     pub predicate_source: String,
