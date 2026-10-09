@@ -6,7 +6,7 @@ use payload::{
     shrink::{ShrunkMainPodBuild, ShrunkMainPodSetup, shrink_compress_pod},
 };
 use pod2::middleware::{Hash, Params};
-use sdk::SpendableObjects;
+use sdk::{SpendableObject, SpendableObjects};
 use txlib::GroundingWitness;
 use wire_types::QualifiedName;
 
@@ -18,10 +18,14 @@ pub fn find_log_action() -> QualifiedName {
     QualifiedName::new(PLUGIN_NAME, "FindLog")
 }
 
-/// A proved transaction, encoded for the relayer, with the hashes that show it landed.
+pub fn burn_logs_action() -> QualifiedName {
+    QualifiedName::new(PLUGIN_NAME, "BurnLogs")
+}
+
+/// A proved transaction encoded for the relayer, with the objects it creates and spends.
 pub struct PreparedTx {
     pub payload: Vec<u8>,
-    pub created: Vec<Hash>,
+    pub outputs: Vec<SpendableObject>,
     pub nullifiers: Vec<Hash>,
 }
 
@@ -40,11 +44,17 @@ impl Prover {
         }
     }
 
-    pub fn prove(&self, action: &QualifiedName, witness: GroundingWitness) -> PreparedTx {
+    /// The witness must ground every input.
+    pub fn prove(
+        &self,
+        action: &QualifiedName,
+        witness: GroundingWitness,
+        inputs: Vec<SpendableObject>,
+    ) -> PreparedTx {
         let state_root = witness.state_header.hash();
         let outputs = self
             .catalog
-            .execute_action(action.clone(), witness, Vec::new())
+            .execute_action(action.clone(), witness, inputs)
             .unwrap();
         prepare_tx(&self.shrink_build, state_root, &outputs)
     }
@@ -85,11 +95,7 @@ fn prepare_tx(
     };
     PreparedTx {
         payload: payload.to_bytes(),
-        created: outputs
-            .objs
-            .iter()
-            .map(|spendable| spendable.obj.commitment())
-            .collect(),
+        outputs: outputs.objs.clone(),
         nullifiers,
     }
 }
@@ -98,6 +104,7 @@ fn prepare_tx(
 mod tests {
     use std::collections::HashMap;
 
+    use payload::test_state::TestState;
     use pod2::middleware::EMPTY_HASH;
     use txlib::StateHeader;
 
@@ -124,5 +131,46 @@ mod tests {
             outputs.objs[0].obj.commitment()
         };
         assert_ne!(run(), run());
+    }
+
+    #[test]
+    fn burn_logs_spends_fifty_grounded_logs() {
+        let catalog = load_catalog(true);
+        let mut state = TestState::empty(1);
+        let logs: Vec<SpendableObject> = (0..50)
+            .map(|_| {
+                let outputs = catalog
+                    .execute_action(find_log_action(), dummy_grounding_witness(), Vec::new())
+                    .unwrap();
+                state.apply_tx(
+                    outputs.tx.live_commitments().unwrap(),
+                    outputs.tx.nullifier_hashes().unwrap(),
+                );
+                outputs.objs[0].clone()
+            })
+            .collect();
+        let log_commitments: Vec<Hash> = logs.iter().map(|log| log.obj.commitment()).collect();
+        let witness = state.build_grounding_witness(
+            &log_commitments,
+            |block, created_root, nullifiers_root, prior_state_history_root, created_proofs| {
+                GroundingWitness::new(
+                    StateHeader::new(
+                        block.number as i64,
+                        block.timestamp as i64,
+                        block.hash,
+                        created_root,
+                        nullifiers_root,
+                        prior_state_history_root,
+                    ),
+                    created_proofs,
+                )
+            },
+        );
+
+        let outputs = catalog
+            .execute_action(burn_logs_action(), witness, logs)
+            .unwrap();
+        assert!(outputs.objs.is_empty());
+        assert_eq!(outputs.tx.nullifier_hashes().unwrap().len(), 50);
     }
 }

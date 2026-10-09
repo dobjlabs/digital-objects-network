@@ -27,7 +27,7 @@ fn main() {
     let prepared: Vec<PreparedTx> = (0..num_txs)
         .map(|index| {
             let started = Instant::now();
-            let prepared = prover.prove(&action, services.grounding_witness_without_inputs());
+            let prepared = prover.prove(&action, services.grounding_witness(&[]), Vec::new());
             println!(
                 "proved tx {}/{num_txs} in {:.1?}",
                 index + 1,
@@ -39,7 +39,7 @@ fn main() {
 
     let timer = Instant::now();
     let mut submitted: Vec<SubmittedTx> = prepared
-        .into_iter()
+        .iter()
         .enumerate()
         .map(|(index, tx)| {
             let submitted = services.submit(tx);

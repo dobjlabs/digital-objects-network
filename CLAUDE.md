@@ -36,7 +36,7 @@ The workspace is declared in `Cargo.toml`. Crate-by-crate:
 | `libs/intro-pods/lt-eq-u256-pod` | 256-bit `<=` intro pod (PoW difficulty checks). Crate name `lt-eq-u256-pod`.                                                                                                                         |
 | `examples/*`                     | Example plugin sources: `craft-basics` (Log, Wood, Stick, Stone, WoodPick, StonePick + 9 actions), `craft-rocket`, and `nanoverse` (one action per SDK feature; see its README).                     |
 | `devtools/beacon-shim`           | **Dev only, never shipped.** Beacon REST shim over a local anvil devnet; backs `just dev-local`. Keep it out of `images.yml` and `deploy/compose.yaml`.                                              |
-| `devtools/tests` (crate `tests`) | **Dev only.** Live-network test binaries sharing a library that proves actions of its own `throughput` plugin and drives the relayer and synchronizer. `client-e2e` runs one FindLog end to end; `throughput <n>` proves n txs, then times their submission to the relayer and their landing on the synchronizer. Reads `devtools/tests/.env`. |
+| `devtools/tests` (crate `tests`) | **Dev only.** Live-network test binaries sharing a library that proves actions of its own `throughput` plugin and drives the relayer and synchronizer. `client-e2e <FindLog|BurnLogs>` runs one action end to end (BurnLogs first lands the 50 logs it spends); `throughput <n>` proves n txs, then times their submission to the relayer and their landing on the synchronizer. Reads `devtools/tests/.env`. |
 
 ## Build / test / dev
 
@@ -71,7 +71,7 @@ Use `just` (recipes in `justfile`):
 | `just test-ignored`      | Runs `--ignored` tests with `--nocapture`.                                                                                                                                                                                                                                                    |
 | `just test-e2e`          | Runs `synchronizer::test_e2e_real_proof` (slow, full real-proof flow).                                                                                                                                                                                                                        |
 | `just throughput-test N` | Runs `throughput N` from `devtools/tests` against the relayer and synchronizer named in `devtools/tests/.env`. |
-| `just client-e2e`        | Runs `client-e2e` from `devtools/tests`: one FindLog proved, relayed and landed on the synchronizer named in `devtools/tests/.env`. |
+| `just client-e2e-test ACTION` | Runs `client-e2e ACTION` from `devtools/tests`: `FindLog` or `BurnLogs` proved, relayed and landed on the synchronizer named in `devtools/tests/.env`. |
 | `just build`             | `cargo build --workspace`.                                                                                                                                                                                                                                                                    |
 
 **Infrastructure required for `just dev`:**

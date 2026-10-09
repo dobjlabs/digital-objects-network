@@ -13,3 +13,8 @@ description = "A log found for free, so proving it is as cheap as an action gets
 name = "FindLog"
 emoji = "🌲"
 description = "Create a log object without any proof of work."
+
+[[actions]]
+name = "BurnLogs"
+emoji = "🔥"
+description = "Spend 50 logs in one transaction."
