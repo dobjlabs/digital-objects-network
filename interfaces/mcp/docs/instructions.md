@@ -42,7 +42,9 @@ and what each action requires.
 publishes a nullifier (a hash derived from the object's key). This
 prevents double-spending. An object is "live" if its nullifier has not
 been published. Dead objects remain in objects for reference but
-cannot be used as inputs.
+cannot be used as inputs. While a run is in progress, each object it was
+given as an input reports that run's id in `heldByRunId`; the field clears
+once the run succeeds or fails.
 
 **State root.** A state root is a hash of all published
 transactions and nullifiers at a given Ethereum block. Actions must be

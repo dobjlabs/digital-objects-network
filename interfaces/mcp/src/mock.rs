@@ -260,6 +260,7 @@ impl DobjOps for MockDobjOps {
                 "blueprint".to_string(),
                 serde_json::Value::String("Log".to_string()),
             )]),
+            held_by_run_id: None,
         })
     }
 
@@ -309,6 +310,7 @@ fn make_obj(
         tx_hash: Some(tx_hash.to_string()),
         description: Some(format!("Mock {class_name}")),
         fields,
+        held_by_run_id: None,
     }
 }
 

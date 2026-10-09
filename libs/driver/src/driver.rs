@@ -776,6 +776,7 @@ impl Driver {
             tx_hash: entry.record.tx_hash.clone(),
             description: class_info.as_ref().map(|c| c.description.clone()),
             fields: entry.record.fields_map(),
+            held_by_run_id: None,
         }
     }
 

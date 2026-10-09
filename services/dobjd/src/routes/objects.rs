@@ -29,10 +29,13 @@ pub async fn inspect_object(
     Path(file_name): Path<String>,
 ) -> ApiResult<Json<ObjectSummary>> {
     let driver = state.driver.clone();
-    let summary =
+    let mut summary =
         tokio::task::spawn_blocking(move || driver.read_object(&PathBuf::from(&file_name)))
             .await
             .map_err(|err| anyhow::anyhow!("inspect_object task panicked: {err}"))??;
+    state
+        .runs
+        .fill_held_by_run_ids(std::slice::from_mut(&mut summary));
     Ok(Json(summary))
 }
 
@@ -91,7 +94,7 @@ async fn synced_objects(
     query: Option<ObjectQuery>,
 ) -> ApiResult<Json<Vec<ObjectSummary>>> {
     let driver = state.driver.clone();
-    let objects = tokio::task::spawn_blocking(move || {
+    let mut objects = tokio::task::spawn_blocking(move || {
         driver.sync_objects(query.as_ref()).unwrap_or_else(|err| {
             tracing::warn!("sync_objects failed, falling back to local: {err:#}");
             driver.list_objects(query.as_ref()).unwrap_or_default()
@@ -99,6 +102,7 @@ async fn synced_objects(
     })
     .await
     .map_err(|err| anyhow::anyhow!("load_objects task panicked: {err}"))?;
+    state.runs.fill_held_by_run_ids(&mut objects);
 
     Ok(Json(objects))
 }
