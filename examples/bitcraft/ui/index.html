@@ -446,6 +446,10 @@
       actions: /^UseMiningDrill(\d+)$/,
       accepts: (inputs, match) => inputFieldEquals(inputs, "MiningDrill", "level", match[1]),
     },
+    {
+      actions: /^(BucketOf(?:Wood|Stone|Iron))Take1$/,
+      accepts: (inputs, match) => inputFieldAtLeast(inputs, match[1], "n", 1),
+    },
   ];
 
   // Maps each class name to its icon's path relative to this page, or to
@@ -531,6 +535,11 @@
   function inputFieldEquals(inputs, className, fieldName, expected) {
     const input = inputs.find((object) => object.class.name === className);
     return input !== undefined && fieldValue(input, fieldName) === expected;
+  }
+
+  function inputFieldAtLeast(inputs, className, fieldName, minimum) {
+    const input = inputs.find((object) => object.class.name === className);
+    return input !== undefined && Number(fieldValue(input, fieldName)) >= minimum;
   }
 
   function passesActionInputRules(action, inputs) {
