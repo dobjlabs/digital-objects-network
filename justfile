@@ -318,6 +318,11 @@ test-ignored:
 test-e2e:
     cargo test -p synchronizer test_e2e_real_proof --release -- --ignored --nocapture
 
+# Prove N FindLog txs, then time how long the relayer and synchronizer take to
+# land them all. Reads RELAYER_URL and SYNCHRONIZER_URL from devtools/tests/.env.
+throughput-test N:
+    cargo run -p tests --bin throughput --release -- {{N}}
+
 # Build all workspace crates
 build:
     cargo build --workspace

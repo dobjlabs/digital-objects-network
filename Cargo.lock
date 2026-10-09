@@ -8638,6 +8638,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tests"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "dotenvy",
+ "driver",
+ "env_logger",
+ "payload",
+ "pexe",
+ "pod2",
+ "reqwest 0.12.28",
+ "sdk",
+ "toml 1.1.2+spec-1.1.0",
+ "txlib",
+ "wire-types",
+]
+
+[[package]]
 name = "thin-vec"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"

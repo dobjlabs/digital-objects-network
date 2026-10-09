@@ -36,6 +36,7 @@ The workspace is declared in `Cargo.toml`. Crate-by-crate:
 | `libs/intro-pods/lt-eq-u256-pod` | 256-bit `<=` intro pod (PoW difficulty checks). Crate name `lt-eq-u256-pod`.                                                                                                                         |
 | `examples/*`                     | Example plugin sources: `craft-basics` (Log, Wood, Stick, Stone, WoodPick, StonePick + 9 actions), `craft-rocket`, and `nanoverse` (one action per SDK feature; see its README).                     |
 | `devtools/beacon-shim`           | **Dev only, never shipped.** Beacon REST shim over a local anvil devnet; backs `just dev-local`. Keep it out of `images.yml` and `deploy/compose.yaml`.                                              |
+| `devtools/tests` (crate `tests`) | **Dev only.** Live-network test binaries. `throughput <n>` proves n txs of its own `throughput` plugin, then times their submission to the relayer and their landing on the synchronizer. Reads `devtools/tests/.env`. |
 
 ## Build / test / dev
 
@@ -69,6 +70,7 @@ Use `just` (recipes in `justfile`):
 | `just test`              | `cargo test --workspace --release`.                                                                                                                                                                                                                                                           |
 | `just test-ignored`      | Runs `--ignored` tests with `--nocapture`.                                                                                                                                                                                                                                                    |
 | `just test-e2e`          | Runs `synchronizer::test_e2e_real_proof` (slow, full real-proof flow).                                                                                                                                                                                                                        |
+| `just throughput-test N` | Runs `throughput N` from `devtools/tests` against the relayer and synchronizer named in `devtools/tests/.env`. |
 | `just build`             | `cargo build --workspace`.                                                                                                                                                                                                                                                                    |
 
 **Infrastructure required for `just dev`:**
