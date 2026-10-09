@@ -19,6 +19,10 @@
 // CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 // SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use std::{fmt::Display, str::FromStr, time::Duration};
 
 use backoff::ExponentialBackoff;
@@ -181,19 +185,30 @@ pub(crate) async fn json_get<ExpectedResponse: DeserializeOwned>(
         req = req.bearer_auth(auth_token);
     }
 
+    let retry_after_counter = Arc::new(AtomicUsize::new(0));
     let resp = if let Some(e) = exp_backoff {
         match backoff::future::retry_notify(
             e,
             || {
                 let req = req.try_clone().unwrap();
                 let url = url.clone();
+                let retry_after_counter = retry_after_counter.clone();
 
                 async move {
                     let resp = req.send().await.map_err(ClientError::from)?;
                     match retryable_status(resp, url).await {
                         Ok(resp) => Ok(resp),
                         Err((err, Some(retry_after))) => {
-                            Err(backoff::Error::retry_after(err, retry_after))
+                            // If the server asks for a long delay or keeps sending Retry-After
+                            // follow backoff policy
+                            if retry_after > Duration::from_mins(1)
+                                || retry_after_counter.load(Ordering::SeqCst) >= 8
+                            {
+                                Err(backoff::Error::transient(err))
+                            } else {
+                                retry_after_counter.fetch_add(1, Ordering::SeqCst);
+                                Err(backoff::Error::retry_after(err, retry_after))
+                            }
                         }
                         Err((err, None)) => Err(backoff::Error::transient(err)),
                     }
