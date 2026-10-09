@@ -50,6 +50,7 @@ objects.
 | --- | --- | --- |
 | `UseQuarry1` .. `UseQuarry6` | the selected `Quarry`'s `level` equals the number in the action name | `action.st_equal(quarry.level, N)` |
 | `UseMiningDrill1` .. `UseMiningDrill6` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
+| `BucketOfWoodTake1`, `BucketOfStoneTake1`, `BucketOfIronTake1` | the selected bucket's `n` is at least 1, so an empty bucket offers no take | `action.st_gt_eq(woodbucket.n, 1)` (and the stone and iron buckets) |
 
 - **Generic behavior:** offer every action whose input classes match the
   selection. A level-1 drill with 5 wood would show all six
@@ -62,8 +63,6 @@ objects.
   amount per action (e.g. `LevelUpQuarry1`: wood bucket 40, stone bucket
   20). They do **not** check the quarry's or drill's current level, so any
   of them can level up a tool of any level, given the matching buckets.
-- `BucketOfWoodTake1`, `BucketOfStoneTake1` and `BucketOfIronTake1`
-  require the bucket's `n` to be at least 1.
 - `UseWoodAxe`, `UseStoneAxe` and `UseIronAxe` require the axe's
   `durability` to be greater than 0.
 
