@@ -2,7 +2,7 @@ use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
 use eth_clients::beacon::{
     self,
-    types::{Block, BlockHeader, BlockId, KzgCommitment, Spec},
+    types::{Block, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment, Spec},
     BeaconClient,
 };
 
@@ -45,10 +45,24 @@ struct SlotContext {
     slot: u32,
     beacon_block_root: B256,
     parent_root: B256,
+    /// `None` when no payload becomes canonical with this block, which from Gloas on happens
+    /// when its bid does not build on the parent's payload (withheld or not revealed in time).
+    payload: Option<CanonicalPayload>,
+}
+
+/// An execution payload that becomes canonical with a slot's block, together with the beacon
+/// block whose bid committed to its blobs. From Gloas on that is the parent of the slot's block.
+struct CanonicalPayload {
+    committing_block_root: B256,
     execution_block_hash: B256,
     execution_block_number: u32,
     execution_block_timestamp: u64,
     kzg_blob_commitments: Vec<(B256, KzgCommitment)>,
+}
+
+pub(crate) struct ExecutionHeader {
+    number: u32,
+    timestamp: u64,
 }
 
 /// Outcome of processing one beacon slot, ready to be committed.
@@ -58,6 +72,14 @@ pub enum ProcessedSlot {
     /// forward unchanged, committed under the new slot number to keep the
     /// slot history contiguous.
     Missing { slot: u32, carried_head: StateHead },
+    /// Beacon produced a block, but no execution payload became canonical with it. The state
+    /// head is carried forward as for `Missing`, while the block root is kept for reorg checks.
+    WithoutPayload {
+        slot: u32,
+        block_root: B256,
+        parent_root: B256,
+        carried_head: StateHead,
+    },
     /// Beacon produced a block and the state machine derived the slot against
     /// it (deriving a fresh state root even when the block carries no usable blobs).
     Present {
@@ -257,47 +279,103 @@ impl Node {
         let block = self
             .get_beacon_block_by_hash_with_retry(slot, header.root)
             .await?;
-        let execution_payload = &block.execution_payload;
+        let payload = self.canonical_payload(&header, &block).await?;
 
         Ok(CommittedSlotRecord {
             slot,
             block_root: Some(header.root),
             parent_root: Some(block.parent_root),
-            block_number: Some(execution_payload.block_number),
+            block_number: payload.map(|payload| payload.execution_block_number),
             current_state_root: None,
             is_empty: false,
         })
     }
 
-    /// Build a `SlotContext` from a beacon header and its full block.
+    /// The beacon block names its execution payload only by hash, so the number and timestamp
+    /// are read from the execution layer.
+    pub(crate) async fn get_execution_header_with_retry(
+        &self,
+        slot: u32,
+        execution_block_hash: B256,
+    ) -> Result<ExecutionHeader> {
+        self.retry_rpc(
+            "execution block header",
+            format!("slot {slot}, block_hash {execution_block_hash}"),
+            || async {
+                let block = self
+                    .rpc_cli
+                    .get_block_by_hash(execution_block_hash)
+                    .await?
+                    .ok_or_else(|| anyhow!("Execution block {execution_block_hash} not found"))?;
+                Ok(ExecutionHeader {
+                    number: block.header.number.try_into()?,
+                    timestamp: block.header.timestamp,
+                })
+            },
+        )
+        .await
+    }
+
+    /// Resolve the execution payload that becomes canonical with `beacon_block`: its own
+    /// payload before Gloas, its parent's from Gloas on when its bid builds on it.
     ///
-    /// Failure to extract the execution payload is treated as an error rather than as an empty
-    /// slot. This forces the sync loop to retry instead of silently advancing past a real slot
-    /// when the beacon provider is temporarily inconsistent.
-    fn slot_context_from_block(
+    /// A payload that should be canonical but cannot be fetched is an error rather than an
+    /// empty slot. This forces the sync loop to retry instead of silently advancing past a real
+    /// payload when the beacon or execution provider is temporarily inconsistent.
+    async fn canonical_payload(
+        &self,
+        beacon_block_header: &BlockHeader,
+        beacon_block: &Block,
+    ) -> Result<Option<CanonicalPayload>> {
+        let slot = beacon_block_header.slot;
+        let parent_block;
+        let (committing_block_root, committing_block) = match beacon_block.execution_payload {
+            ExecutionPayloadRef::Embedded { .. } => (beacon_block_header.root, beacon_block),
+            ExecutionPayloadRef::Bid { .. } => {
+                parent_block = self
+                    .get_beacon_block_by_hash_with_retry(slot, beacon_block.parent_root)
+                    .await?;
+                if !beacon_block.builds_on_payload_of(&parent_block) {
+                    debug!(slot, "Block does not build on its parent's payload");
+                    return Ok(None);
+                }
+                (beacon_block.parent_root, &parent_block)
+            }
+        };
+
+        let execution_block_hash = committing_block.execution_payload.block_hash();
+        let execution_header = self
+            .get_execution_header_with_retry(slot, execution_block_hash)
+            .await?;
+
+        let kzg_blob_commitments = committing_block
+            .blob_kzg_commitments
+            .iter()
+            .map(|c| (kzg_to_versioned_hash(c.as_ref()), *c))
+            .collect();
+
+        Ok(Some(CanonicalPayload {
+            committing_block_root,
+            execution_block_hash,
+            execution_block_number: execution_header.number,
+            execution_block_timestamp: execution_header.timestamp,
+            kzg_blob_commitments,
+        }))
+    }
+
+    /// Build a `SlotContext` from a beacon header and its full block.
+    async fn slot_context_from_block(
+        &self,
         beacon_block_header: &BlockHeader,
         beacon_block: &Block,
     ) -> Result<SlotContext> {
-        let slot = beacon_block_header.slot;
-        let beacon_block_root = beacon_block_header.root;
-
-        let execution_payload = &beacon_block.execution_payload;
-
-        let kzg_blob_commitments = beacon_block
-            .blob_kzg_commitments
-            .clone()
-            .into_iter()
-            .map(|c| (kzg_to_versioned_hash(c.as_ref()), c))
-            .collect();
-
         Ok(SlotContext {
-            slot,
-            beacon_block_root,
+            slot: beacon_block_header.slot,
+            beacon_block_root: beacon_block_header.root,
             parent_root: beacon_block.parent_root,
-            execution_block_hash: execution_payload.block_hash,
-            execution_block_number: execution_payload.block_number,
-            execution_block_timestamp: execution_payload.timestamp,
-            kzg_blob_commitments,
+            payload: self
+                .canonical_payload(beacon_block_header, beacon_block)
+                .await?,
         })
     }
 
@@ -306,7 +384,8 @@ impl Node {
         let beacon_block = self
             .get_beacon_block_by_hash_with_retry(beacon_block_header.slot, beacon_block_header.root)
             .await?;
-        Self::slot_context_from_block(beacon_block_header, &beacon_block)
+        self.slot_context_from_block(beacon_block_header, &beacon_block)
+            .await
     }
 
     /// Derive the full per-slot update from beacon/execution data and return it for commit.
@@ -324,7 +403,9 @@ impl Node {
         beacon_block_header: &BlockHeader,
         beacon_block: &Block,
     ) -> Result<ProcessedSlot> {
-        let slot_ctx = Self::slot_context_from_block(beacon_block_header, beacon_block)?;
+        let slot_ctx = self
+            .slot_context_from_block(beacon_block_header, beacon_block)
+            .await?;
         self.derive_from_context(slot_ctx).await
     }
 
@@ -367,21 +448,34 @@ impl Node {
     async fn derive_from_context(&self, slot_ctx: SlotContext) -> Result<ProcessedSlot> {
         let base_head = self.sync_db.current_head().await?;
 
+        let Some(payload) = slot_ctx.payload else {
+            info!(
+                slot = slot_ctx.slot,
+                "No execution payload became canonical with this slot's block"
+            );
+            return Ok(ProcessedSlot::WithoutPayload {
+                slot: slot_ctx.slot,
+                block_root: slot_ctx.beacon_block_root,
+                parent_root: slot_ctx.parent_root,
+                carried_head: base_head,
+            });
+        };
+
         debug!(
             slot = slot_ctx.slot,
-            execution_block_hash = ?slot_ctx.execution_block_hash,
-            execution_block_number = slot_ctx.execution_block_number,
+            execution_block_hash = ?payload.execution_block_hash,
+            execution_block_number = payload.execution_block_number,
             "Resolved execution payload for slot"
         );
         info!(
             "Processing slot {} from {}",
             slot_ctx.slot,
-            DateTime::<Utc>::from_timestamp_secs(slot_ctx.execution_block_timestamp as i64)
+            DateTime::<Utc>::from_timestamp_secs(payload.execution_block_timestamp as i64)
                 .unwrap_or_default(),
         );
         self.state_machine.log_current_state(base_head);
 
-        let block_number = slot_ctx.execution_block_number;
+        let block_number = payload.execution_block_number;
         let min_block_number = base_head.metadata.current_block.map(|block_meta| {
             block_meta
                 .number
@@ -390,11 +484,11 @@ impl Node {
         let recent_state_roots = self.sync_db.recent_state_roots(min_block_number).await?;
 
         let block_meta = BlockMetadata {
-            number: slot_ctx.execution_block_number,
-            timestamp: slot_ctx.execution_block_timestamp,
-            hash: b256_to_hash(slot_ctx.execution_block_hash),
+            number: payload.execution_block_number,
+            timestamp: payload.execution_block_timestamp,
+            hash: b256_to_hash(payload.execution_block_hash),
         };
-        if slot_ctx.kzg_blob_commitments.is_empty() {
+        if payload.kzg_blob_commitments.is_empty() {
             debug!(slot = slot_ctx.slot, "Slot has no blob commitments");
             let derived = self
                 .derive_slot(
@@ -421,20 +515,17 @@ impl Node {
                 "execution block",
                 format!(
                     "slot {}, block_hash {}",
-                    slot_ctx.slot, slot_ctx.execution_block_hash
+                    slot_ctx.slot, payload.execution_block_hash
                 ),
                 || async {
                     let execution_block_id =
-                        alloy_eips::eip1898::BlockId::Hash(slot_ctx.execution_block_hash.into());
+                        alloy_eips::eip1898::BlockId::Hash(payload.execution_block_hash.into());
                     self.rpc_cli
                         .get_block(execution_block_id)
                         .full()
                         .await?
                         .ok_or_else(|| {
-                            anyhow!(
-                                "Execution block {} not found",
-                                slot_ctx.execution_block_hash
-                            )
+                            anyhow!("Execution block {} not found", payload.execution_block_hash)
                         })
                 },
             )
@@ -452,7 +543,7 @@ impl Node {
             None => {
                 return Err(anyhow!(
                     "Consensus block {} has blobs but the execution block doesn't have txs",
-                    slot_ctx.beacon_block_root
+                    payload.committing_block_root
                 ));
             }
         };
@@ -494,8 +585,8 @@ impl Node {
         let blobs = self
             .get_blobs(
                 slot_ctx.slot,
-                &slot_ctx.beacon_block_root,
-                &slot_ctx.kzg_blob_commitments,
+                &payload.committing_block_root,
+                &payload.kzg_blob_commitments,
                 &blob_versioned_hashes,
             )
             .await?;
@@ -514,7 +605,7 @@ impl Node {
             trace!(?hash, ?from, ?to);
 
             for (vh, blob) in tx_blobs.iter() {
-                let blob_index = slot_ctx
+                let blob_index = payload
                     .kzg_blob_commitments
                     .iter()
                     .position(|(vh0, _)| vh0 == vh)
@@ -565,6 +656,24 @@ impl Node {
                         carried_head,
                         &HashMap::new(),
                     )
+                    .await
+            }
+            ProcessedSlot::WithoutPayload {
+                slot,
+                block_root,
+                parent_root,
+                carried_head,
+            } => {
+                let record = CommittedSlotRecord {
+                    slot: *slot,
+                    block_root: Some(*block_root),
+                    parent_root: Some(*parent_root),
+                    block_number: None,
+                    current_state_root: None,
+                    is_empty: false,
+                };
+                self.sync_db
+                    .commit_slot(&record, carried_head, &HashMap::new())
                     .await
             }
             ProcessedSlot::Present {

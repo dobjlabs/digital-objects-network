@@ -73,31 +73,81 @@ pub struct Spec {
 }
 #[derive(Deserialize, Debug)]
 pub struct Block {
-    // Mandatory after "Deneb"
+    /// Commitments to the blobs of the payload in `execution_payload`.
     pub blob_kzg_commitments: Vec<KzgCommitment>,
-    // Mandatory after "Bellatrix/The Merge"
-    pub execution_payload: ExecutionPayload,
+    pub execution_payload: ExecutionPayloadRef,
     pub parent_root: B256,
     #[serde(deserialize_with = "deserialize_u32")]
     pub slot: u32,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-pub struct ExecutionPayload {
-    pub block_hash: B256,
-    #[serde(deserialize_with = "deserialize_u32", serialize_with = "serialize_u32")]
-    pub block_number: u32,
-    #[serde(deserialize_with = "deserialize_u64", serialize_with = "serialize_u64")]
-    pub timestamp: u64,
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionPayloadRef {
+    /// Up to Fulu a block carries its own payload, canonical along with the block.
+    Embedded { block_hash: B256 },
+    /// From Gloas a block carries a builder's bid. The payload is revealed separately, may be
+    /// withheld, and only becomes canonical when a child's bid builds on `block_hash`.
+    /// `parent_block_hash` is the latest canonical payload in this block's view of the chain.
+    Bid {
+        block_hash: B256,
+        parent_block_hash: B256,
+    },
+}
+
+impl ExecutionPayloadRef {
+    pub fn block_hash(&self) -> B256 {
+        match self {
+            Self::Embedded { block_hash } | Self::Bid { block_hash, .. } => *block_hash,
+        }
+    }
+}
+
+impl Block {
+    /// Whether this block makes `parent`'s bid payload canonical. Always false for an embedded
+    /// payload on either side: that payload became canonical with its own block.
+    pub fn builds_on_payload_of(&self, parent: &Block) -> bool {
+        match (self.execution_payload, parent.execution_payload) {
+            (
+                ExecutionPayloadRef::Bid {
+                    parent_block_hash, ..
+                },
+                ExecutionPayloadRef::Bid { block_hash, .. },
+            ) => parent_block_hash == block_hash,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-pub struct BlockBody {
-    // Mandatory after "Deneb"
-    pub execution_payload: ExecutionPayload,
-    // Mandatory after "Bellatrix/The Merge"
+pub struct ExecutionPayload {
+    pub block_hash: B256,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct ExecutionPayloadBid {
+    pub parent_block_hash: B256,
+    pub block_hash: B256,
     pub blob_kzg_commitments: Vec<KzgCommitment>,
 }
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct SignedExecutionPayloadBid {
+    pub message: ExecutionPayloadBid,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+#[serde(untagged)]
+pub enum BlockBody {
+    Gloas {
+        signed_execution_payload_bid: SignedExecutionPayloadBid,
+    },
+    /// Bellatrix through Fulu; the commitments are mandatory from Deneb.
+    PreGloas {
+        execution_payload: ExecutionPayload,
+        blob_kzg_commitments: Vec<KzgCommitment>,
+    },
+}
+
 #[derive(Deserialize, Serialize, Debug)]
 pub struct BlockMessage {
     pub body: BlockBody,
@@ -290,11 +340,32 @@ impl From<BlockHeaderResponse> for BlockHeader {
 
 impl From<BlockResponse> for Block {
     fn from(response: BlockResponse) -> Self {
+        let message = response.data.message;
+        let (execution_payload, blob_kzg_commitments) = match message.body {
+            BlockBody::Gloas {
+                signed_execution_payload_bid: SignedExecutionPayloadBid { message: bid },
+            } => (
+                ExecutionPayloadRef::Bid {
+                    block_hash: bid.block_hash,
+                    parent_block_hash: bid.parent_block_hash,
+                },
+                bid.blob_kzg_commitments,
+            ),
+            BlockBody::PreGloas {
+                execution_payload,
+                blob_kzg_commitments,
+            } => (
+                ExecutionPayloadRef::Embedded {
+                    block_hash: execution_payload.block_hash,
+                },
+                blob_kzg_commitments,
+            ),
+        };
         Block {
-            blob_kzg_commitments: response.data.message.body.blob_kzg_commitments,
-            execution_payload: response.data.message.body.execution_payload,
-            parent_root: response.data.message.parent_root,
-            slot: response.data.message.slot,
+            blob_kzg_commitments,
+            execution_payload,
+            parent_root: message.parent_root,
+            slot: message.slot,
         }
     }
 }
@@ -345,13 +416,14 @@ mod tests {
         let json = serde_json::to_string(&BlockResponse {
             data: BlockData {
                 message: BlockMessage {
-                    body: BlockBody {
-                        execution_payload: ExecutionPayload {
-                            block_hash: B256::repeat_byte(0xaa),
-                            block_number: 6,
-                            timestamp: 1_786_703_077,
+                    body: BlockBody::Gloas {
+                        signed_execution_payload_bid: SignedExecutionPayloadBid {
+                            message: ExecutionPayloadBid {
+                                parent_block_hash: B256::repeat_byte(0x99),
+                                block_hash: B256::repeat_byte(0xaa),
+                                blob_kzg_commitments: vec![KzgCommitment::repeat_byte(0xbb)],
+                            },
                         },
-                        blob_kzg_commitments: vec![KzgCommitment::repeat_byte(0xbb)],
                     },
                     parent_root: B256::repeat_byte(0xcc),
                     slot: 6,
@@ -361,7 +433,7 @@ mod tests {
         .expect("serialize");
 
         assert!(
-            json.contains(r#""block_number":"6""#),
+            json.contains(r#""slot":"6""#),
             "integers must serialize as strings: {json}"
         );
 
@@ -369,9 +441,145 @@ mod tests {
             .expect("the reader must accept what the writer produced")
             .into();
         assert_eq!(block.slot, 6);
-        assert_eq!(block.execution_payload.block_number, 6);
-        assert_eq!(block.execution_payload.timestamp, 1_786_703_077);
+        assert_eq!(
+            block.execution_payload,
+            ExecutionPayloadRef::Bid {
+                block_hash: B256::repeat_byte(0xaa),
+                parent_block_hash: B256::repeat_byte(0x99),
+            }
+        );
         assert_eq!(block.blob_kzg_commitments.len(), 1);
+    }
+
+    /// Trimmed from a Sepolia `/eth/v2/beacon/blocks` response; the bid's other fields and the
+    /// body's other containers are left in to check that they are ignored.
+    #[test]
+    fn reads_gloas_block() {
+        let json = r#"{
+            "version": "gloas",
+            "data": { "message": {
+                "slot": "11309801",
+                "proposer_index": "788",
+                "parent_root": "0x53311d735dba2728b50fb8590e552f857d5188772d63a713bddf5f347e363e97",
+                "state_root": "0x08c9cae4bf8697e0791bb345d898f1f4aab97daa76986dbcb4b2b38f99ed4987",
+                "body": {
+                    "graffiti": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                    "signed_execution_payload_bid": {
+                        "message": {
+                            "parent_block_hash": "0xe4aa36e0b9d517e631cce7f1d974885bb83f9b50a105d030bd1213d8971fbdb0",
+                            "parent_block_root": "0x53311d735dba2728b50fb8590e552f857d5188772d63a713bddf5f347e363e97",
+                            "block_hash": "0x73a705057006f558f81cedcb43bfa466a10689ecf46dcf97676df51099f6334c",
+                            "gas_limit": "200000000",
+                            "builder_index": "1",
+                            "slot": "11309801",
+                            "value": "67990829",
+                            "execution_payment": "0",
+                            "blob_kzg_commitments": [
+                                "0x81c1ea1c1c6ce77e0883db1b591a76c5f9fa78691bcda7d4de891fad80bb3a1fc789986e3ee9eec036517c243458d147"
+                            ]
+                        },
+                        "signature": "0x00"
+                    },
+                    "payload_attestations": [],
+                    "parent_execution_requests": { "deposits": [], "withdrawals": [], "consolidations": [] }
+                }
+            } }
+        }"#;
+        let block: Block = serde_json::from_str::<BlockResponse>(json)
+            .expect("parse gloas block")
+            .into();
+        assert_eq!(block.slot, 11_309_801);
+        assert_eq!(
+            block.execution_payload,
+            ExecutionPayloadRef::Bid {
+                block_hash: "0x73a705057006f558f81cedcb43bfa466a10689ecf46dcf97676df51099f6334c"
+                    .parse()
+                    .unwrap(),
+                parent_block_hash:
+                    "0xe4aa36e0b9d517e631cce7f1d974885bb83f9b50a105d030bd1213d8971fbdb0"
+                        .parse()
+                        .unwrap(),
+            }
+        );
+        assert_eq!(block.blob_kzg_commitments.len(), 1);
+    }
+
+    #[test]
+    fn reads_pre_gloas_block() {
+        let json = r#"{
+            "version": "fulu",
+            "data": { "message": {
+                "slot": "42",
+                "parent_root": "0x2222222222222222222222222222222222222222222222222222222222222222",
+                "body": {
+                    "execution_payload": {
+                        "block_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+                        "block_number": "7",
+                        "timestamp": "1786703077"
+                    },
+                    "blob_kzg_commitments": []
+                }
+            } }
+        }"#;
+        let block: Block = serde_json::from_str::<BlockResponse>(json)
+            .expect("parse pre-gloas block")
+            .into();
+        assert_eq!(block.slot, 42);
+        assert_eq!(
+            block.execution_payload,
+            ExecutionPayloadRef::Embedded {
+                block_hash: B256::repeat_byte(0x33)
+            }
+        );
+        assert!(block.blob_kzg_commitments.is_empty());
+    }
+
+    fn block(slot: u32, execution_payload: ExecutionPayloadRef) -> Block {
+        Block {
+            blob_kzg_commitments: vec![],
+            execution_payload,
+            parent_root: B256::ZERO,
+            slot,
+        }
+    }
+
+    #[test]
+    fn child_bid_settles_parent_payload_only_when_it_builds_on_it() {
+        let revealed = B256::repeat_byte(0x01);
+        let older = B256::repeat_byte(0x02);
+        let parent = block(
+            10,
+            ExecutionPayloadRef::Bid {
+                block_hash: revealed,
+                parent_block_hash: older,
+            },
+        );
+        let full_child = block(
+            11,
+            ExecutionPayloadRef::Bid {
+                block_hash: B256::repeat_byte(0x03),
+                parent_block_hash: revealed,
+            },
+        );
+        let empty_child = block(
+            11,
+            ExecutionPayloadRef::Bid {
+                block_hash: B256::repeat_byte(0x03),
+                parent_block_hash: older,
+            },
+        );
+        assert!(full_child.builds_on_payload_of(&parent));
+        assert!(!empty_child.builds_on_payload_of(&parent));
+
+        let fulu_parent = block(9, ExecutionPayloadRef::Embedded { block_hash: older });
+        let first_gloas = block(
+            10,
+            ExecutionPayloadRef::Bid {
+                block_hash: revealed,
+                parent_block_hash: older,
+            },
+        );
+        assert!(!first_gloas.builds_on_payload_of(&fulu_parent));
     }
 
     #[test]

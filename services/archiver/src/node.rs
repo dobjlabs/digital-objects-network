@@ -3,7 +3,7 @@ use std::time::Duration;
 use alloy::eips::eip4844::HeapBlob;
 use eth_clients::beacon::{
     self,
-    types::{BlockHeader, BlockId, KzgCommitment},
+    types::{Block, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment},
     BeaconClient,
 };
 use itertools::zip_eq;
@@ -25,7 +25,6 @@ use alloy::{
 };
 use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
-use chrono::{DateTime, Utc};
 use tracing::{debug, info};
 
 use crate::config::Config;
@@ -239,6 +238,7 @@ impl Store {
             root_dir,
             slot_path
         );
+        create_dir_all(&root_dir)?;
         for (index, vh, blob) in blobs {
             let name = blob_file_name(*index, vh);
             let blob_path = root_dir.join(&name);
@@ -327,30 +327,63 @@ impl Node {
         &self,
         beacon_block_header: &BlockHeader,
     ) -> Result<()> {
-        let beacon_block_root = beacon_block_header.root;
         let slot = beacon_block_header.slot;
+        let beacon_block = self.get_block(slot, beacon_block_header.root).await?;
+        match beacon_block.execution_payload {
+            ExecutionPayloadRef::Embedded { .. } => {
+                self.process_payload_blobs(beacon_block_header, beacon_block)
+                    .await
+            }
+            // The payload a Gloas block bids on is revealed later and may be withheld, so its
+            // blobs are archived only once a child builds on it, still under the root of the
+            // block that committed to them.
+            ExecutionPayloadRef::Bid { .. } => {
+                let parent_block = self
+                    .get_block(slot, beacon_block_header.parent_root)
+                    .await?;
+                // This will happen if the current block builds on top of a payload older than
+                // the one referenced in the previous block because the previous block's payload
+                // was not included in the consensus (it may have been withheld, revealed too
+                // late or been invalid)
+                if !beacon_block.builds_on_payload_of(&parent_block) {
+                    debug!("slot {} does not build on its parent's payload", slot);
+                    return Ok(());
+                }
+                let parent_header = BlockHeader {
+                    root: beacon_block_header.parent_root,
+                    parent_root: parent_block.parent_root,
+                    slot: parent_block.slot,
+                };
+                self.process_payload_blobs(&parent_header, parent_block)
+                    .await
+            }
+        }
+    }
 
-        // We already hold this slot's header, so a None body is a transient miss
-        // at the head, not an empty slot. Fail instead of committing the slot with
-        // no blobs; the restart reprocesses it once the body lands.
-        let beacon_block = self
-            .beacon_cli
-            .get_block(BlockId::Hash(beacon_block_root))
+    /// We already hold a header for `root`, so a None body is a transient miss at the head, not
+    /// an empty slot. Fail instead of committing the slot with no blobs; the restart reprocesses
+    /// it once the body lands.
+    async fn get_block(&self, slot: u32, root: B256) -> Result<Block> {
+        self.beacon_cli
+            .get_block(BlockId::Hash(root))
             .await?
             .ok_or_else(|| {
-                anyhow!("Beacon header exists for slot {slot} but full block {beacon_block_root} was not found")
-            })?;
-        let execution_payload = beacon_block.execution_payload;
-        debug!(
-            "slot {} has execution block {} at height {}",
-            slot, execution_payload.block_hash, execution_payload.block_number
-        );
+                anyhow!("Beacon header exists for slot {slot} but full block {root} was not found")
+            })
+    }
 
+    /// Archive the filtered blobs of the payload `beacon_block` committed to.
+    async fn process_payload_blobs(
+        &self,
+        beacon_block_header: &BlockHeader,
+        beacon_block: Block,
+    ) -> Result<()> {
+        let beacon_block_root = beacon_block_header.root;
+        let slot = beacon_block_header.slot;
+        let execution_block_hash = beacon_block.execution_payload.block_hash();
         info!(
-            "processing slot {} from {}",
-            slot,
-            DateTime::<Utc>::from_timestamp_secs(execution_payload.timestamp as i64)
-                .unwrap_or_default(),
+            "processing slot {} with execution block {}",
+            slot, execution_block_hash
         );
 
         let kzg_blob_commitments: Vec<_> = beacon_block
@@ -362,8 +395,6 @@ impl Node {
             debug!("slot {} has no blobs", slot);
             return Ok(());
         }
-
-        let execution_block_hash = execution_payload.block_hash;
 
         let execution_block_id = alloy_eips::eip1898::BlockId::Hash(execution_block_hash.into());
         let execution_block = self

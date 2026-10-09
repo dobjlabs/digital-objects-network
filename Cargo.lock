@@ -940,7 +940,6 @@ dependencies = [
  "axum",
  "axum-extra",
  "backoff",
- "chrono",
  "dotenvy",
  "eth-clients",
  "futures-util",
